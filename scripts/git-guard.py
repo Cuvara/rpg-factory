@@ -352,6 +352,12 @@ def classify(sub, args, branch, patterns, cfg):
     elif sub == "stash" and (not args or args[0] in {"push", "save", "drop", "clear", "pop"} or args[0].startswith("-")):
         ask("`git stash` moves or drops uncommitted changes that may belong to the user")
     elif sub == "branch":
+        names = [x for x in args if not x.startswith("-")]
+        if has_short_flag(args, "m") or has_short_flag(args, "M") or "--move" in a:
+            if any(is_protected(n, patterns) for n in names) or (len(names) < 2 and protected):
+                ask("`git branch -m` renames a protected branch")
+        if (has_short_flag(args, "d") or "--delete" in a) and any(is_protected(n, patterns) for n in names):
+            ask("`git branch -d` deletes a protected branch")
         if has_short_flag(args, "D") or ("--delete" in a and ("--force" in a or has_short_flag(args, "f"))):
             ask("`git branch -D` force-deletes a branch (unmerged work is lost)")
         elif has_short_flag(args, "f") or "--force" in a or has_short_flag(args, "M"):
@@ -381,6 +387,27 @@ def classify(sub, args, branch, patterns, cfg):
     elif sub == "pull":
         if protected and (a & {"--rebase", "-r", "--no-ff", "--squash"} or any(x.startswith("--rebase=") for x in args)):
             ask(f"`git pull --rebase/--no-ff/--squash` rewrites or merges into protected branch `{branch}`")
+        elif protected and "--ff-only" not in a:
+            ask(f"`git pull` may create a merge commit on protected branch `{branch}` - use `git pull --ff-only`")
+    elif sub == "fetch":
+        dsts = [x.split(":", 1)[1] for x in args if not x.startswith("-") and ":" in x]
+        if "--update-head-ok" in a or any(d and not d.lstrip("+").startswith("refs/remotes/") for d in dsts) \
+                or any(x.startswith("+") and ":" in x and not x.split(":", 1)[1].startswith("refs/remotes/") for x in args):
+            if any(re.match(TAG_REF, d.lstrip("+")) for d in dsts):
+                deny("`git fetch` into a tag ref - agents never tag")
+            else:
+                ask("`git fetch <src>:<dst>` writes a local branch directly (can force-move it)")
+    elif sub == "remote" and args and args[0] in {"add", "set-url", "remove", "rm", "rename", "set-branches", "set-head"}:
+        ask(f"`git remote {args[0]}` changes where this repo fetches from / pushes to")
+    elif sub == "config":
+        reading = a & {"--get", "--get-all", "--get-regexp", "-l", "--list", "--get-urlmatch", "--show-origin", "--show-scope"} \
+            or (args and args[0] in {"get", "list"})
+        keys = [x for x in args if not x.startswith("-")]
+        risky = r"^(alias\.|remote\..*\.(url|pushurl)$|url\..*\.(insteadof|pushinsteadof)$|core\.hookspath$|core\.sshcommand$|credential\.)"
+        if not reading and keys and re.match(risky, keys[1 if keys[0] in {"set", "unset"} and len(keys) > 1 else 0].lower()):
+            ask("`git config` changes an alias, remote URL, URL rewrite, hooks path or credential helper")
+    elif sub == "symbolic-ref" and len([x for x in args if not x.startswith("-")]) >= 2:
+        ask("`git symbolic-ref` repoints a ref (HEAD) directly")
     elif sub == "tag":
         listing = (not args) or a & {"-l", "--list", "-v", "--verify", "--contains", "--points-at"} or all(x.startswith("-n") for x in args)
         if not listing:
@@ -396,7 +423,7 @@ def classify(sub, args, branch, patterns, cfg):
         ask(f"`git reflog {args[0]}` removes the recovery history")
     elif sub == "prune":
         ask("`git prune` permanently deletes unreachable objects")
-    elif sub == "submodule" and args and args[0] in {"update", "deinit", "sync", "foreach"}:
+    elif sub == "submodule" and args and args[0] in {"update", "deinit", "sync", "foreach", "add", "set-url", "set-branch", "absorbgitdirs"}:
         ask(f"`git submodule {args[0]}` changes submodule checkouts (the client's com.gdk.* state belongs to the user)")
     elif sub == "rebase" and not a & {"--abort", "--continue", "--skip", "--quit"}:
         ask("`git rebase` rewrites branch history")
@@ -412,33 +439,108 @@ def classify(sub, args, branch, patterns, cfg):
     return R
 
 
+GH_READ = {  # gh <group> <verb> that only read
+    "pr": {"list", "view", "diff", "checks", "status"}, "run": {"list", "view", "watch", "download"},
+    "workflow": {"list", "view"}, "release": {"list", "view", "download"}, "repo": {"view", "list", "clone"},
+    "issue": {"list", "view", "status"}, "label": {"list"}, "cache": {"list"}, "secret": {"list"},
+    "variable": {"list", "get"}, "ruleset": {"list", "view", "check"}, "gist": {"list", "view"},
+    "extension": {"list"}, "config": {"get", "list"}, "auth": {"status", "token"}, "org": {"list"},
+    "project": {"list", "view", "field-list", "item-list"},
+}
+GH_READ_GROUPS = {"status", "search", "browse", "help", "version", "completion", "alias"}
+GH_FIELD_FLAGS = {"-f", "-F", "--field", "--raw-field", "--input"}
+TAGGISH = r"refs/tags|/git/tags\b|\bcreateTag\b|\bcreateRelease\b|\bupdateRelease\b|/releases\b"
+
+
+def gh_api_request(argv):
+    """(method, endpoint, text) of `gh api ...` as gh itself decides it: -X/--method wins, otherwise any
+    field / --input makes it POST, otherwise GET. `graphql` is a POST whose query says what it does."""
+    method, endpoint, fields = None, None, []
+    i = 2
+    while i < len(argv):
+        x = argv[i]
+        if x in {"-X", "--method"} and i + 1 < len(argv):
+            method = argv[i + 1].upper(); i += 2; continue
+        if x.startswith("--method="):
+            method = x.split("=", 1)[1].upper(); i += 1; continue
+        if x.startswith("-X") and len(x) > 2:
+            method = x[2:].upper(); i += 1; continue
+        if x in GH_FIELD_FLAGS and i + 1 < len(argv):
+            fields.append(argv[i + 1]); i += 2; continue
+        if x in {"-H", "--header", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"} and i + 1 < len(argv):
+            i += 2; continue
+        if not x.startswith("-") and endpoint is None:
+            endpoint = x
+        i += 1
+    if method is None:
+        method = "POST" if fields or "--input" in argv else "GET"
+    return method, endpoint or "", " ".join(fields)
+
+
 def classify_gh(argv):
-    """Tag / release creation through the GitHub CLI or its REST API."""
+    """GitHub CLI: reads pass; tag/release creation and repository deletion are denied (agents never tag,
+    never delete repos); every other remote mutation asks. Remote-only effects are invisible to the tripwire,
+    so this is the only line of defence for them."""
     R = []
     if len(argv) < 2:
         return R
-    sub = argv[1]
-    text = " ".join(argv[2:])
-    if sub == "release" and len(argv) > 2 and argv[2] in {"create", "upload", "edit"}:
-        R.append(("deny", f"`gh release {argv[2]}` creates or changes a tag/release - agents never tag"))
-    elif sub == "release" and len(argv) > 2 and argv[2] == "delete":
+    group = argv[1]
+    verb = argv[2] if len(argv) > 2 else ""
+    if group == "api":
+        method, endpoint, fields = gh_api_request(argv)
+        text = endpoint + " " + fields
+        if endpoint == "graphql":
+            if "--input" in argv or re.search(r"(^|\s)query=@", fields):
+                R.append(("ask", "`gh api graphql` query comes from a file - cannot be checked"))
+                return R
+            if not re.search(r"\bmutation\b", fields):
+                return R  # a graphql query reads
+            if re.search(TAGGISH, text) or re.search(r"\b(createRef|updateRef|updateRefs)\b", fields) and "refs/tags" in text:
+                R.append(("deny", "`gh api graphql` mutation creates/changes a tag or release - agents never tag"))
+            elif re.search(r"\b(deleteRepository|archiveRepository)\b", fields):
+                R.append(("deny", "`gh api graphql` deletes/archives a repository"))
+            else:
+                R.append(("ask", "`gh api graphql` mutation changes GitHub state (refs, branch protection, PRs, settings)"))
+            return R
+        if method in {"GET", "HEAD"}:
+            return R
+        path = re.sub(r"^/+", "", endpoint)
+        if re.search(TAGGISH, text):
+            R.append(("deny", f"`gh api -X {method} {path}` creates/changes a tag or release - agents never tag"))
+        elif method == "DELETE" and re.match(r"^repos/[^/]+/[^/]+/?$", path):
+            R.append(("deny", f"`gh api -X DELETE {path}` deletes a repository"))
+        elif "/protection" in path or "/rulesets" in path:
+            R.append(("ask", f"`gh api -X {method} {path}` changes branch protection / rulesets"))
+        elif "/git/refs" in path:
+            R.append(("ask", f"`gh api -X {method} {path}` writes a git ref on the remote"))
+        else:
+            R.append(("ask", f"`gh api -X {method} {path}` changes GitHub state"))
+        return R
+    if group == "release" and verb in {"create", "upload", "edit"}:
+        R.append(("deny", f"`gh release {verb}` creates or changes a tag/release - agents never tag"))
+    elif group == "release" and verb == "delete-asset":
+        R.append(("ask", "`gh release delete-asset` changes a published release"))
+    elif group == "release" and verb == "delete":
         R.append(("ask", "`gh release delete` removes a published release"))
-    elif sub == "api":
-        method = "GET"
-        for k, x in enumerate(argv):
-            if x in {"-X", "--method"} and k + 1 < len(argv):
-                method = argv[k + 1].upper()
-            elif x.startswith("--method=") or x.startswith("-X") and len(x) > 2:
-                method = x.split("=", 1)[-1].replace("-X", "").upper()
-        writes = method != "GET" or any(x in {"-f", "-F", "--field", "--raw-field", "--input"} for x in argv)
-        if writes:
-            if re.search(r"/git/tags\b", text) or (re.search(r"/git/refs\b", text) and re.search(r"refs/tags|/git/refs/tags", text)):
-                R.append(("deny", "`gh api` tag creation/deletion - agents never tag"))
-            elif re.search(r"/releases\b", text):
-                R.append(("deny", "`gh api` release write - agents never tag/release"))
-            elif re.search(r"/git/refs\b", text):
-                R.append(("ask", "`gh api` writes a git ref on the remote"))
+    elif group == "repo" and verb in {"delete", "archive"}:
+        R.append(("deny", f"`gh repo {verb}` deletes/archives a repository"))
+    elif group in GH_READ_GROUPS or verb in GH_READ.get(group, set()) or (group == "auth" and verb in {"login", "refresh", "setup-git", "logout", "switch"}):
+        return R
+    elif group == "repo" and verb in {"set-default"}:
+        return R
+    else:
+        R.append(("ask", f"`gh {group} {verb}`".strip() + " changes GitHub state"))
     return R
+
+
+def names_registry_repo(argv, registry):
+    slugs = set()
+    for r in registry.get("repos", {}).values():
+        m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", r.get("remote", ""))
+        if m:
+            slugs.add(m.group(1).lower())
+    text = " ".join(argv).lower()
+    return any(sl in text for sl in slugs)
 
 
 def new_branch_from(sub, args):
@@ -472,6 +574,10 @@ def evaluate(payload, registry):
                 cwd = os.path.normpath(os.path.join(cwd, os.path.expanduser(target.replace("\\", "/"))))
             continue
         ws = workspace or find_workspace(cwd, registry)
+        if p in {"gh", "gh.exe"} and (ws or names_registry_repo(argv, registry)):
+            for d, t in classify_gh(argv):
+                reasons.append((d, t))
+            continue
         if not ws:
             continue  # outside the workspace: not our business
         here = os.path.relpath(cwd, ws) if cwd.startswith(ws) else cwd
@@ -487,10 +593,6 @@ def evaluate(payload, registry):
         if argv[0].startswith("$") or argv[0].startswith("`"):
             if any(x.lower() in MUTATING_GIT_WORDS for x in argv[1:3]):
                 reasons.append(("ask", f"[{here}] the program is a variable/substitution (`{argv[0]}`) followed by a git verb - cannot be checked"))
-            continue
-        if p in {"gh", "gh.exe"}:
-            for d, t in classify_gh(argv):
-                reasons.append((d, f"[{here}] {t}"))
             continue
         parsed = parse_git(argv)
         if not parsed:

@@ -73,6 +73,7 @@ else skp "registry paths exist in workspace" "--no-workspace"; fi
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
 run "tripwire (script-driven mutations, latch, submodule work)" env -u TMPDIR tests/tripwire.test.sh
+run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh

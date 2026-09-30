@@ -185,6 +185,23 @@
         "Unity (fact unity-editor-version). No local test CLI: EditMode/PlayMode tests run in the Unity Test Runner (Editor via MCP) or CI 01-ci.yml.",
         "Packages/com.gdk.* and unity-build-workflows are git submodules. Packages/com.cuvara.* are gitignored embedded clones.",
         "Worktrees are discouraged here: each one needs its own multi-GB Library/ import."
+      ],
+      "embedded_clones": [
+        {
+          "path": "Packages/com.cuvara.netcode",
+          "of": "netcode",
+          "note": "gitignored clone Unity resolves instead of the git-URL pin when present (toggle-packages.sh dev); user state"
+        },
+        {
+          "path": "Packages/com.cuvara.dots",
+          "of": "unitydots",
+          "note": "gitignored clone; often dirty with the user's work in progress"
+        },
+        {
+          "path": "Packages/com.cuvara.uitoolkit",
+          "of": "uitoolkit",
+          "note": "gitignored clone; often dirty with the user's work in progress"
+        }
       ]
     },
     "netcode": {
@@ -3453,6 +3470,18 @@
           "repo": "uitoolkit",
           "path": "package.json",
           "how": "released version"
+        }
+      ],
+      "watchers": [
+        {
+          "repo": "netcode",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI installs com.cuvara.dots at a fixed tag"
+        },
+        {
+          "repo": "unitydots",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI installs com.cuvara.netcode at a fixed tag"
         }
       ]
     },

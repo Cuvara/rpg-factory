@@ -179,6 +179,29 @@
             "items": {
               "type": "string"
             }
+          },
+          "embedded_clones": {
+            "type": "array",
+            "description": "Gitignored nested clones of another registry repo inside this one (user state; never the canonical checkout).",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "of"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "of": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         }
       }

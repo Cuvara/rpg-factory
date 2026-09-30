@@ -18,7 +18,11 @@ The PreToolUse guard reads the command text, so git run *inside* a script file o
   --status / --ack   show / clear the latch. --ack is for the user (in their own terminal,
           or `! python3 <this> --ack`); the guard denies it for the agent while latched.
 
-State lives only in ${TMPDIR:-/tmp}/rpg-factory/<session>/ (never in a repo).
+  A latch is also written per WORKSPACE under the persistent state root (lib/fstate.py), so a STOP
+  survives a crashed or closed session: the next session starts latched and is told why.
+
+State: per-session scratch in fstate.scratch()/<session>/, the workspace latch in
+fstate.persistent()/latch/ - always absolute, never inside a repo.
 """
 import hashlib
 import json
@@ -29,6 +33,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(HERE, "lib"))
+import fstate  # noqa: E402
 READ_ONLY_PROGS = {"ls", "cat", "head", "tail", "grep", "egrep", "rg", "jq", "wc", "echo", "printf", "pwd", "stat", "file",
                    "which", "type", "diff", "cmp", "sort", "uniq", "cut", "tr", "less", "more", "tree", "du", "df", "date",
                    "basename", "dirname", "realpath", "readlink", "env", "printenv", "true", "false", "test", "[", "sha256sum",
@@ -53,9 +59,29 @@ def guard():
 
 def state_dir(payload):
     sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str((payload or {}).get("session_id") or "default"))
-    d = os.path.join(os.environ.get("TMPDIR", "/tmp"), "rpg-factory", sid)
+    d = os.path.join(fstate.scratch(), sid)
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def ws_latch_file(ws):
+    d = os.path.join(fstate.persistent(), "latch")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, fstate.workspace_key(ws) + ".json")
+
+
+def ws_latch(ws):
+    try:
+        return json.load(open(ws_latch_file(ws), encoding="utf-8")) if ws else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def payload_ws(payload):
+    registry = load_registry()
+    if not registry:
+        return None
+    return guard().find_workspace((payload or {}).get("cwd") or os.getcwd(), registry)
 
 
 def load_registry():
@@ -226,6 +252,10 @@ def repos(payload, registry):
         p = os.path.join(ws, r["path"])
         if os.path.exists(os.path.join(p, ".git")):
             tops[os.path.abspath(p)] = key
+        for c in r.get("embedded_clones", []):  # user state inside the repo: fingerprint + baseline them too
+            cp = os.path.join(p, c["path"])
+            if os.path.exists(os.path.join(cp, ".git")):
+                tops[os.path.abspath(cp)] = f"clone:{c['of']}@{key}/{c['path']}"
     # the worktree the command runs in, if it is not one of the main checkouts
     top = g.git_out(cwd, "rev-parse", "--show-toplevel") if os.path.isdir(cwd) else ""
     if top and os.path.abspath(top) not in tops and os.path.abspath(top).startswith(ws):
@@ -237,9 +267,24 @@ def slow_git(cwd, *args, timeout=50):
     import subprocess
     try:
         r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=timeout)
-        return r.stdout.strip() if r.returncode == 0 else ""
+        return r.stdout if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def porcelain(cwd, *extra):
+    """[(status, path)] from `git status --porcelain=v1 -z` - NUL-separated, so paths with spaces, quotes
+    or non-ASCII characters stay exact and the first entry keeps its leading status space."""
+    parts = slow_git(cwd, "status", "--porcelain=v1", "-z", *extra).split("\0")
+    out, i = [], 0
+    while i < len(parts):
+        e = parts[i]
+        if len(e) > 3:
+            out.append((e[:2], e[3:]))
+            i += 2 if e[0] in "RC" else 1  # rename/copy entries carry the original path next
+        else:
+            i += 1
+    return out
 
 
 def baseline(sd, tops):
@@ -250,12 +295,18 @@ def baseline(sd, tops):
     g = guard()
     data = {}
     for top in tops:
+        if str(tops[top]).startswith("clone:"):
+            # embedded clone (user state, often hundreds of dirty files): a spread sample only, compared
+            # pre/post each command so the user's own concurrent edits in Unity are not flagged
+            dirty = [p for _, p in porcelain(top)]
+            step = max(1, len(dirty) // 24)
+            data[top] = {"": ["clone-dirty", resolve_head(gitdir_of(top)) if gitdir_of(top) else "", len(dirty),
+                              [r for r in dirty[::step][:24] if os.path.isfile(os.path.join(top, r))]]}
+            continue
         # --ignore-submodules=all: the client's submodule scan alone costs ~10 s on /mnt/c;
         # submodule pointers are compared separately (gitlink in the index vs the submodule HEAD).
-        out = slow_git(top, "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=all")
         entries = {}
-        for line in out.splitlines():
-            path = line[3:].strip().strip('"')
+        for _st, path in porcelain(top, "--untracked-files=normal", "--ignore-submodules=all"):
             full = os.path.join(top, path)
             st = os.stat(full) if os.path.exists(full) else None
             entries[path] = [st.st_mtime_ns, st.st_size] if st and os.path.isfile(full) else ("dir" if st else None)
@@ -269,7 +320,7 @@ def baseline(sd, tops):
                 elif sgd:
                     # uncommitted work *inside* the submodule (the client's com.gdk.* hold ~1.9k files):
                     # remember its index stat + a spread sample of dirty files; a reset/checkout rewrites them
-                    dirty = [l[3:].strip().strip('"') for l in slow_git(os.path.join(top, path), "status", "--porcelain=v1").splitlines()]
+                    dirty = [p for _, p in porcelain(os.path.join(top, path))]
                     if dirty:
                         step = max(1, len(dirty) // 24)
                         sample = {}
@@ -282,6 +333,16 @@ def baseline(sd, tops):
         data[top] = entries
     json.dump(data, open(bf, "w", encoding="utf-8"))
     return data
+
+
+def clone_stats(base):
+    out = {}
+    for top, entries in (base or {}).items():
+        e = entries.get("")
+        if isinstance(e, list) and e[:1] == ["clone-dirty"]:
+            out[top] = {r: ([os.stat(os.path.join(top, r)).st_mtime_ns, os.stat(os.path.join(top, r)).st_size]
+                            if os.path.isfile(os.path.join(top, r)) else None) for r in e[3]}
+    return out
 
 
 def expected_repos(payload, registry, ws):
@@ -312,7 +373,14 @@ def expected_repos(payload, registry, ws):
 
 def latched(payload):
     lf = os.path.join(state_dir(payload), "LATCH")
-    return read(lf)
+    here = read(lf)
+    if here:
+        return here
+    wl = ws_latch(payload_ws(payload))
+    if wl:
+        return (f"{wl.get('message')} (detected {wl.get('at')} in session {wl.get('session')} - "
+                "unresolved from an earlier session)")
+    return None
 
 
 def pre(payload):
@@ -331,6 +399,7 @@ def pre(payload):
     snap = {"cmd": (payload.get("tool_input") or {}).get("command"), "tops": tops, "sig": sigs,
             "fp": {t: cached_fingerprint(sd, t, sigs[t]) for t in tops},
             "expected": expected_repos(payload, registry, ws),
+            "clones": clone_stats(baseline(sd, tops)),
             "ms": round((time.perf_counter() - t0) * 1000, 1)}
     json.dump(snap, open(os.path.join(sd, "pre.json"), "w", encoding="utf-8"))
     return 0
@@ -381,6 +450,14 @@ def post(payload):
             violations += diff(top, key, snap["fp"].get(top), cached_fingerprint(sd, top, sig), exp,
                                lambda br, p=pats: g.is_protected(br, p))
         git_restore = set(exp) & {"checkout", "restore", "reset", "stash", "clean", "switch", "merge", "rebase", "pull", "cherry-pick", "revert"}
+        if top in snap.get("clones", {}):
+            if top not in snap["expected"]:
+                now = clone_stats({top: base.get(top) or {}}).get(top, {})
+                changed = [r for r, v in snap["clones"][top].items() if now.get(r) != v]
+                if changed:
+                    violations.append(f"[{key}] the user's uncommitted work inside embedded clone {os.path.relpath(top, ws) if ws else top} "
+                                      f"changed during this command ({len(changed)} of {len(now)} sampled files, e.g. {changed[0]})")
+            continue
         for path, st in (base.get(top) or {}).items():
             full = os.path.join(top, path)
             if st is None or st == "dir":
@@ -409,6 +486,9 @@ def post(payload):
         return 0
     msg = "; ".join(violations)
     open(os.path.join(sd, "LATCH"), "w", encoding="utf-8").write(msg)
+    if ws:
+        json.dump({"workspace": ws, "session": payload.get("session_id"), "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                   "message": msg}, open(ws_latch_file(ws), "w", encoding="utf-8"))
     stop = ("STOP - rpg-factory tripwire: repository state changed outside the git guard: " + msg +
             ". Do not continue, do not try to repair or normalise this state. Report exactly what happened to the user. "
             "Further mutating commands are denied until the user runs: python3 " + os.path.join(PLUGIN_ROOT, "scripts", "tripwire.py") + " --ack")
@@ -428,6 +508,12 @@ def main():
             ws, tops = repos(payload, registry) if registry else (None, {})
             if ws:
                 baseline(state_dir(payload), tops)
+                wl = ws_latch(ws)
+                if wl:
+                    msg = (f"rpg-factory tripwire: an earlier session ({wl.get('session')}, {wl.get('at')}) hit a STOP that "
+                           f"was never cleared: {wl.get('message')}. Mutating commands stay denied. Tell the user; after "
+                           f"reviewing the repos they clear it with: ! python3 {os.path.join(PLUGIN_ROOT, 'scripts', 'tripwire.py')} --ack")
+                    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
         except Exception:
             pass
         return 0
@@ -443,7 +529,7 @@ def main():
         except Exception:
             return 0  # the tripwire must never break the session
     sid = sys.argv[2] if len(sys.argv) > 2 else None
-    root = os.path.join(os.environ.get("TMPDIR", "/tmp"), "rpg-factory")
+    root = fstate.scratch()
     sessions = [sid] if sid else (sorted(os.listdir(root)) if os.path.isdir(root) else [])
     found = False
     for s in sessions:
@@ -457,8 +543,22 @@ def main():
                 if os.path.exists(bf):
                     os.remove(bf)  # re-baseline after the user reviewed the state
                 print(f"session {s}: latch cleared by the user")
+    ldir = os.path.join(fstate.persistent(), "latch")
+    for f in sorted(os.listdir(ldir)) if os.path.isdir(ldir) else []:
+        p = os.path.join(ldir, f)
+        try:
+            wl = json.load(open(p, encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            wl = {}
+        if sid and wl.get("session") != sid:
+            continue
+        found = True
+        print(f"workspace {wl.get('workspace')}: LATCHED since {wl.get('at')} (session {wl.get('session')}) - {wl.get('message')}")
+        if mode == "--ack":
+            os.remove(p)
+            print(f"workspace {wl.get('workspace')}: latch cleared by the user")
     if not found:
-        print("no latched session")
+        print("no latched session or workspace")
     return 0
 
 
