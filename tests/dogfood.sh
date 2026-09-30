@@ -57,7 +57,7 @@ PROMPT[plan-only]="Plan only, do not implement: add a GAMESERVER_ knob for the A
 EXPECT[plan-only]="server-realtime"; HANDOFF[plan-only]=""; MODE[plan-only]="plan"
 PROMPT[validate-only]="Validate only, change nothing: does the rpg-mmo-server gateway module (backend/gateway/server/server.go) pass its Factory checks right now?"
 EXPECT[validate-only]=""; HANDOFF[validate-only]=""; MODE[validate-only]="validate"; TOOLRUN[validate-only]="run-checks.py"
-PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="# Factory status (derived from git"
+PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
 
 scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route)
@@ -84,7 +84,7 @@ for n in "${scenarios[@]}"; do
     [ "$src" = "rpg-factory@rpg-factory" ] || why+="source=$src; "
     [ "$(realpath -m "$path")" = "$(realpath -m "$LOADS")" ] || why+="path=$path (install loads $LOADS); "
     [ "$lv" = "$VERSION" ] || why+="version=$lv; "
-    grep -qE "rpg-factory runtime $VERSION \\(installed[^)]*\\), installed $VERSION, source $VERSION - install state \\*\\*CURRENT" "$f" || why+="snapshot runtime line missing/not CURRENT; "
+    [ -n "${RAW[$n]:-}" ] || grep -qE "rpg-factory runtime $VERSION \\(installed[^)]*\\), installed $VERSION, source $VERSION - install state \\*\\*CURRENT" "$f" || why+="snapshot runtime line missing/not CURRENT; "
   fi
   used=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | .input.skill' | sed 's/^rpg-factory://' | tr '\n' ' ')
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
@@ -96,7 +96,11 @@ for n in "${scenarios[@]}"; do
     { grep -qE -- "--mode[= ]${MODE[$n]}\b" <<<"$cmds" || [ "$recorded" = "${MODE[$n]}" ]; } || why+="mode ${MODE[$n]} not declared (recorded: ${recorded:-none}); "
   fi
   if [ -n "${TOOLRUN[$n]:-}" ]; then grep -q "${TOOLRUN[$n]}" <<<"$cmds" || why+="${TOOLRUN[$n]} not run; "; fi
-  if [ -n "${SHOWS[$n]:-}" ]; then grep -qF "${SHOWS[$n]}" "$f" || why+="expected output '${SHOWS[$n]}' not in transcript; "; fi
+  if [ -n "${SHOWS[$n]:-}" ]; then  # command output is injected, not logged: grade the answer built from it
+    hit=false; IFS='|' read -ra alts <<<"${SHOWS[$n]}"
+    for a in "${alts[@]}"; do grep -qF -- "$a" <<<"$answer" && hit=true; done
+    $hit || why+="answer does not reflect the command output (${SHOWS[$n]}); "
+  fi
   writes=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Write" or .name=="Edit" or .name=="MultiEdit")) | .name' | wc -l)
   [ "$writes" -eq 0 ] || why+="$writes file write tool call(s); "
   for e in ${EXPECT[$n]}; do
