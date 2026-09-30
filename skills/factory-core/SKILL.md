@@ -33,7 +33,10 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    results, not the code being measured).
    Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -
    also when the user only wants a plan or a review; naming the lead is not enough, its workflow,
-   validation and gates are in that skill. The lead runs its **legs**.
+   validation and gates are in that skill. The lead runs its **legs**. A task spanning repos has
+   **one** lead: the driver of the contract that links them (e.g. a Nakama RPC used by the client →
+   `server-services`; a wire field → `wire-contract`), shown as **Cross-repo** in the downstream
+   repo's routing; the other repos' skills are its follow-ups.
    **Co-leads** run after the lead in the order shown (code before deploy before measurement).
    **Follow-ups** are later work in other repos - name them in the report. **AMBIGUOUS** means the
    registry cannot decide: ask the user, or pass `--lead <skill>` (validated). `--explain` shows

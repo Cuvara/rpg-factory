@@ -59,6 +59,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   against a disposable workspace (63 cases incl. tripwire STOP and latch; part of
   `run-all --release`); `tests/dogfood.sh --installed` runs headless sessions against the installed
   plugin and asserts the loaded source/version/path and the invoked skills.
+- `--paths` normalisation: repo-prefixed (`rpg-mmo-server/backend/...`), absolute, comma-joined and
+  glob paths resolve to repo-relative files (they used to fall to the repo fallback and lose routing).
+  factory-core routes by the files the task writes (a benchmark writes the harness/BENCHMARK.md).
+- Cross-repo tasks have one lead: a downstream contract end (e.g. the client's `PartyService.cs` for
+  `nakama-rpc`) prints a **Cross-repo** line naming the upstream driver; factory-core says so.
 - Snapshot routing prints an explicit "Next: invoke the Skill tool with the lead" line (installed
   dogfood showed sessions naming the lead without invoking it).
 

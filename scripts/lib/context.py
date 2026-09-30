@@ -306,6 +306,15 @@ def render(snap, reg, args):
                 add(f"  **Next:** invoke the Skill tool with {code('rpg-factory:' + rt['lead'])} now - also for plan-only or "
                     "read-only requests; it owns this change's workflow, validation and gates"
                     + (f", then {', '.join(code('rpg-factory:' + c) for c in rt['co_leads'])}" if rt["co_leads"] else "") + ".")
+            regc = {c["id"]: c for c in reg.get("contracts", [])}
+            for c in r["contracts"]:
+                src_repo = (regc.get(c["id"], {}).get("source") or {}).get("repo")
+                if (src_repo and src_repo != r["repo"] and c["driver"] != rt["lead"]
+                        and all(h["role"] != "source" for h in c["hits"])):
+                    add(f"  **Cross-repo:** this repo is a downstream end of contract {code(c['id'])} (source in `{src_repo}`, "
+                        f"driver {code('rpg-factory:' + c['driver'])}). If the task also changes the `{src_repo}` side, the task's "
+                        f"lead is {code('rpg-factory:' + c['driver'])} - invoke it first; {code('rpg-factory:' + rt['lead'])} "
+                        "is its follow-up here.")
             if rt.get("lead_basis"):
                 add(f"  lead because: {'; '.join(rt['lead_basis']['reasons'][:3])} (class {rt['lead_basis']['class']}, order {rt['lead_basis']['order']})")
         add(f"Modules: {', '.join(r['touched']) or 'none'}" + (f"; dependents {', '.join(r['dependents'])}" if r["dependents"] else "")
