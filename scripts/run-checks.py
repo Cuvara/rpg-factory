@@ -11,14 +11,22 @@ through the routing engine, runs the local ones, parses their output and assigns
   NOT_AVAILABLE  not run: a required tool is missing on this machine
   HUMAN_REQUIRED not run: extended check without --approve, or an external check (CI, Unity
                  Editor, cluster, Docker stack) that a person must run or authorise
+  NOT_RUN        (--status) declared for this change, but no evidence was ever recorded
+  STALE          (--status) evidence exists but the tree changed since (HEAD, working-tree diff in
+                 the check's directory, untracked files there, or the check definition)
+
+Every executed check is stored with the identity of the tree it ran on (lib/evidence.py) and its
+full log; the table shows a summary only. `--status` grades the declared checks against the
+current tree WITHOUT running anything - a PASS from before an edit shows as STALE.
 
 Usage: run-checks.py --repo <key> [--paths <p>...] [--tier fast|extended|external|all]
                      [--approve <check-id>...] [--only <module/check-id>...] [--timeout SEC]
-                     [--dry-run] [--json]
+                     [--dry-run] [--json] [--status]
   --paths      the files the task changed (default: the repo's working tree + branch diff)
   --tier       default "fast"; extended/external are listed as HUMAN_REQUIRED unless approved
-Evidence JSON: ${TMPDIR:-/tmp}/rpg-factory/results/<repo>-<timestamp>.json (never inside a repo).
+Evidence: <state root>/evidence/<workspace>/<repo>/ (lib/fstate.py; never inside a repo).
 Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among required checks; 2 usage.
+      --status: 0 only when every fast check is PASS on the current tree.
 """
 import json
 import os
@@ -30,12 +38,16 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
+sys.path.insert(0, os.path.join(HERE, "lib"))
+import evidence  # noqa: E402
+import fstate  # noqa: E402
 
 
 def parse_args(argv):
-    a = {"repo": None, "paths": [], "tier": "fast", "approve": [], "only": [], "timeout": 1800, "dry": False, "json": False}
+    a = {"repo": None, "paths": [], "tier": "fast", "approve": [], "only": [], "timeout": 1800, "dry": False, "json": False,
+         "status": False}
     i, cur = 0, None
-    flags = {"--repo", "--paths", "--tier", "--approve", "--only", "--timeout", "--dry-run", "--json"}
+    flags = {"--repo", "--paths", "--tier", "--approve", "--only", "--timeout", "--dry-run", "--json", "--status"}
     while i < len(argv):
         x = argv[i]
         if x in ("--paths", "--approve", "--only"):
@@ -48,6 +60,8 @@ def parse_args(argv):
             a["dry"], cur = True, None
         elif x == "--json":
             a["json"], cur = True, None
+        elif x == "--status":
+            a["status"], cur = True, None
         elif cur and x not in flags:
             a[cur].append(x)
         else:
@@ -127,6 +141,37 @@ def grade(parser, code, out):
     return ("PASS", counts, None) if code == 0 else ("FAIL", counts, f"exit {code}")
 
 
+def status(a, ws, repo, rdir, meta, commit):
+    """Grade the declared checks against the current tree from stored evidence; runs nothing."""
+    rows = []
+    for c in repo["checks"]:
+        m = meta.get((c["module"], c["id"]), {})
+        if c["tier"] == "external":
+            st, detail = "HUMAN_REQUIRED", "external: " + c["run"]
+        else:
+            rec = evidence.latest(ws, a["repo"], c["module"], c["id"])
+            st, detail = evidence.assess(rec, rdir, {**m, **c})
+            if st == "NOT_RUN" and c["tier"] == "extended":
+                detail += " (extended: ask the user, then --approve " + c["id"] + ")"
+            if rec and st != "NOT_RUN":
+                detail += f"; log {rec.get('log')}"
+        rows.append({"tier": c["tier"], "module": c["module"], "check": c["id"], "state": st, "detail": detail})
+    out = {"repo": a["repo"], "branch": repo["branch"], "commit": commit, "mode": "status", "checks": rows}
+    if a["json"]:
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"Evidence for {a['repo']} @ {repo['branch']} {commit[:7]} against the CURRENT tree (nothing was run)")
+        print("| Tier | Module | Check | State | Detail |")
+        print("|---|---|---|---|---|")
+        for x in rows:
+            print(f"| {x['tier']} | {x['module']} | {x['check']} | **{x['state']}** | {x['detail']} |")
+        tally = {}
+        for x in rows:
+            tally[x["state"]] = tally.get(x["state"], 0) + 1
+        print("Summary: " + ", ".join(f"{k} {v}" for k, v in sorted(tally.items())))
+    return 0 if all(x["state"] == "PASS" for x in rows if x["tier"] == "fast") else 1
+
+
 def main():
     a = parse_args(sys.argv[1:])
     ws = REG["workspace"]["root_default"]
@@ -147,8 +192,11 @@ def main():
     rdir = repo["path"]
     meta = {(m["id"], c["id"]): c for m in REG["modules"] for t in ("fast", "extended", "external") for c in m["checks"][t]}
     commit = git(rdir, "rev-parse", "HEAD").strip()
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    if a["status"]:
+        return status(a, ws, repo, rdir, meta, commit)
     results, failed_ids = [], set()
-    seen = set()
+    seen = {}
     before = None
     for c in repo["checks"]:
         key = (c["module"], c["id"])
@@ -160,6 +208,9 @@ def main():
         full_id = f"{c['module']}/{c['id']}"
         if dedup in seen:
             res.update(state="SKIPPED", reason="same command already ran for another module in this run")
+            first = seen[dedup]
+            if first.get("identity"):  # same command + cwd = same evidence: record it for this module too
+                evidence.store(ws, a["repo"], dict(first, module=c["module"], check=c["id"]), open(first["log"], encoding="utf-8", errors="replace").read())
         elif a["only"] and full_id not in a["only"] and c["id"] not in a["only"]:
             res.update(state="SKIPPED", reason="not in --only")
         elif c["tier"] == "external":
@@ -176,7 +227,7 @@ def main():
         elif a["dry"]:
             res.update(state="SKIPPED", reason="--dry-run")
         else:
-            seen.add(dedup)
+            seen[dedup] = res
             cwd = os.path.normpath(os.path.join(rdir, c["cwd"]))
             if not os.path.isdir(cwd):
                 res.update(state="BLOCKED", reason=f"working directory {c['cwd']} does not exist in {rdir}")
@@ -185,6 +236,7 @@ def main():
                 continue
             if before is None:
                 before = worktree_state(rdir)
+            ident = evidence.identity(rdir, c["cwd"], {**m, **c})
             t0 = time.perf_counter()
             try:
                 p = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True, timeout=a["timeout"], errors="replace",
@@ -202,14 +254,16 @@ def main():
             if leftovers:
                 state = "FAIL"
                 reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
-            res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]))
+            res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
+                       identity=ident, timestamp=stamp,
+                       definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
+            res["log"] = evidence.store(ws, a["repo"], res, out)
         if res["state"] in ("FAIL", "BLOCKED", "NOT_AVAILABLE"):
             failed_ids.add(c["id"])
         results.append(res)
 
-    outdir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "rpg-factory", "results")
+    outdir = os.path.join(fstate.persistent(), "evidence", fstate.workspace_key(ws), "runs")
     os.makedirs(outdir, exist_ok=True)
-    stamp = time.strftime("%Y%m%dT%H%M%S")
     record = {"repo": a["repo"], "path": rdir, "branch": repo["branch"], "commit": commit, "timestamp": stamp,
               "paths": a["paths"] or [f["path"] for f in repo["files"]], "routing": repo["routing"], "results": results}
     rf = os.path.join(outdir, f"{a['repo']}-{stamp}.json")

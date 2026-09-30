@@ -26,7 +26,7 @@ jq --arg ws "$WS" '
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
   | (.modules[] | select(.id == "server.nakama")) |= (.tools = ["nosuchtool"] | .checks.fast = [{id: "t-tool", cwd: ".", run: "no-such-tool-xyz", evidence: "e"}])
 ' "$ROOT/registry.json" > "$P/registry.json"
-export RPG_FACTORY_WORKSPACE="$WS" CLAUDE_PLUGIN_ROOT="$P" TMPDIR="$TMP"
+export RPG_FACTORY_WORKSPACE="$WS" CLAUDE_PLUGIN_ROOT="$P" TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"
 pass=0; fail=0
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --json); rc=$?
 st() { jq -r --arg c "$1" '.results[] | select(.check == $c) | .state' <<<"$out" | head -1; }
@@ -48,7 +48,10 @@ c=$(jq -r '.results[] | select(.check == "t-dotnet") | "\(.counts.passed)/\(.cou
 [ "$c" = "12/1/13" ] && { pass=$((pass + 1)); echo "PASS  dotnet counts 12/1/13"; } || { fail=$((fail + 1)); echo "FAIL  dotnet counts $c"; }
 jq -e '.results[] | select(.check == "t-pollute") | .reason | test("leftover.txt")' <<<"$out" >/dev/null && { pass=$((pass + 1)); echo "PASS  pollution names the leftover file"; } || { fail=$((fail + 1)); echo "FAIL  pollution reason"; }
 [ $rc -eq 1 ] && { pass=$((pass + 1)); echo "PASS  exit 1 when a fast check fails"; } || { fail=$((fail + 1)); echo "FAIL  exit $rc"; }
-ls "$TMP"/rpg-factory/results/server-*.json >/dev/null 2>&1 && { pass=$((pass + 1)); echo "PASS  evidence JSON written outside the repo"; } || { fail=$((fail + 1)); echo "FAIL  no evidence file"; }
+ls "$TMP"/state/evidence/*/runs/server-*.json >/dev/null 2>&1 && { pass=$((pass + 1)); echo "PASS  run record written to the state root (outside the repo)"; } || { fail=$((fail + 1)); echo "FAIL  no run record"; }
+lg=$(jq -r '.results[] | select(.check == "t-pass") | .log' <<<"$out")
+grep -q -- "--- PASS: TestB" "$lg" 2>/dev/null && { pass=$((pass + 1)); echo "PASS  full log kept ($lg)"; } || { fail=$((fail + 1)); echo "FAIL  full log missing: $lg"; }
+jq -e '.results[] | select(.check == "t-pass") | .identity.tree and .identity.head' <<<"$out" >/dev/null && { pass=$((pass + 1)); echo "PASS  result carries the tree identity"; } || { fail=$((fail + 1)); echo "FAIL  no identity"; }
 rm -f "$S/leftover.txt"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-ext --approve t-ext --json)
 expect t-ext PASS
@@ -56,5 +59,28 @@ out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/nakama
 expect t-tool NOT_AVAILABLE
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-pass --json); rc=$?
 [ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  exit 0 when every executed check passes"; } || { fail=$((fail + 1)); echo "FAIL  exit $rc with --only t-pass"; }
+
+# ---- v0.4 evidence: --status grades stored evidence against the CURRENT tree, running nothing
+sts() { python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --status --json; }
+sget() { jq -r --arg c "$1" '.checks[] | select(.check == $c) | .state' <<<"$sout" | head -1; }
+sexp() { local g; g=$(sget "$1"); if [ "$g" = "$2" ]; then pass=$((pass + 1)); echo "PASS  status $1 -> $2 ($3)"; else fail=$((fail + 1)); echo "FAIL  status $1 expected $2 got ${g:-none} ($3)"; jq -c --arg c "$1" '.checks[] | select(.check == $c)' <<<"$sout"; fi; }
+sout=$(sts); src=$?
+sexp t-pass PASS "tree unchanged since the run"
+sexp t-fail FAIL "a stored FAIL stays FAIL"
+sexp t-needs NOT_RUN "declared, blocked, never executed"
+sexp t-ci HUMAN_REQUIRED "external"
+[ $src -eq 1 ] && { pass=$((pass + 1)); echo "PASS  --status exits 1 while a fast check is not PASS"; } || { fail=$((fail + 1)); echo "FAIL  --status exit $src"; }
+[ -z "$(git -C "$S" status --porcelain)" ] && { pass=$((pass + 1)); echo "PASS  --status ran nothing in the repo"; } || { fail=$((fail + 1)); echo "FAIL  --status touched the repo"; }
+echo "package x // edited" > "$S/backend/gateway/x.go"
+sout=$(sts)
+sexp t-pass STALE "tracked file edited after the PASS"
+jq -e '.checks[] | select(.check == "t-pass") | .detail | test("working tree changed")' <<<"$sout" >/dev/null && { pass=$((pass + 1)); echo "PASS  STALE names the reason"; } || { fail=$((fail + 1)); echo "FAIL  STALE reason"; }
+python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-pass --json >/dev/null
+sout=$(sts); sexp t-pass PASS "re-run on the edited tree"
+git -C "$S" -c user.email=t@t -c user.name=t commit -qam edit
+sout=$(sts); sexp t-pass STALE "HEAD moved (commit) - identity includes HEAD"
+touch "$S/new-untracked.txt"; python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-pass --json >/dev/null
+rm -f "$S/new-untracked.txt"; sout=$(sts); sexp t-pass STALE "untracked file removed after the run"
+
 total=$((pass + fail)); echo "run-checks tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

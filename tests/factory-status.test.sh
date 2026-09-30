@@ -5,7 +5,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
-export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT"
+export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; N="$WS/Netcode"; C="$WS/IndieRPGMMOAdventure"
 gc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 mkdir -p "$S/backend/gameserver-dotnet/GameServer/Net/Generated/RpgMmo/Wire/V1" "$S/backend/shared/proto/gen" "$S/backend/shared/messages" \
@@ -86,6 +86,47 @@ printf 'jobs:\n  a:\n    uses: Cuvara/unity-build-workflows/.github/workflows/pi
 gc "$C" add .github; gc "$C" commit -qm "ci: half-moved toolkit"
 s=$(status)
 expect "S8 workflow refs listed; mixed majors v5/v6 -> pin-bump pending" 'any(.pins[]; .package | test("workflow refs")) and any(.pending[]; .skill == "pin-bump" and (.what | test("mixed majors")))' "$s"
+
+# S9 (v0.4): a package CI installs another package at an old tag -> unity-package pending (watchers)
+D="$WS/UnityDots"; mkdir -p "$D/.github/workflows"
+printf '{"dependencies":{"com.cuvara.netcode":"https://github.com/Cuvara/Netcode.git#v1.0.0"}}\n' > "$D/.github/workflows/ci.yml"
+echo '{"name":"com.cuvara.dots","version":"0.1.0"}' > "$D/package.json"
+git -C "$D" init -q -b main; gc "$D" add -A; gc "$D" commit -qm init
+s=$(status)
+expect "S9 CI pin drift: unitydots CI on netcode v1.0.0 while the client pins v1.1.0" 'any(.ci_pins[]; .watcher == "unitydots:.github/workflows/ci.yml" and .ref == "v1.0.0" and .client_pin == "v1.1.0") and any(.pending[]; .skill == "unity-package" and (.what | test("netcode#v1.0.0")))' "$s"
+
+# S10 (v0.4): remote knowledge freshness - an origin/* integration ref with an old (or no) fetch is reported, never fetched
+git init -q --bare "$TMP/n-remote.git"; gc "$N" remote add origin "$TMP/n-remote.git"; gc "$N" push -q origin develop 2>/dev/null
+gc "$N" fetch -q origin; touch -d "3 days ago" "$N/.git/FETCH_HEAD"
+s=$(status)
+expect "S10 stale fetch (72h) flagged with the fetch command" '.freshness.netcode.stale == true and (.freshness.netcode.last_fetch_h > 48) and any(.pending[]; .skill == "factory-core" and (.what | test("fetch origin")))' "$s"
+touch "$N/.git/FETCH_HEAD"; s=$(status)
+expect "S10 fresh fetch -> not stale" '.freshness.netcode.stale == false' "$s"
+
+# S11 (v0.4): embedded clones are listed as user state, not as the canonical repo
+mkdir -p "$C/Packages"; git init -q -b main "$C/Packages/com.cuvara.dots"; echo x > "$C/Packages/com.cuvara.dots/a.cs"; gc "$C/Packages/com.cuvara.dots" add -A; gc "$C/Packages/com.cuvara.dots" commit -qm c
+s=$(status)
+expect "S11 embedded clone listed with its canonical repo" 'any(.clones[]; .path == "Packages/com.cuvara.dots" and .of == "unitydots" and (.canonical_head | length > 0))' "$s"
+
+# S12 (v0.4): uncommitted work is visible (interrupted implementation)
+echo "wip" >> "$S/backend/shared/messages/messages.go"; s=$(status)
+expect "S12 uncommitted tracked change in server is reported" '.worktrees.server.tracked_changes == 1' "$s"
+gc "$S" checkout -q -- backend/shared/messages/messages.go
+
+# S13 (v0.4): stored validation evidence is graded against the current tree (PASS -> STALE after an edit)
+python3 -B - "$ROOT" "$WS" "$S" <<'PY'
+import sys, time; sys.path.insert(0, sys.argv[1] + "/scripts/lib")
+import evidence
+chk = {"run": "go test ./...", "cwd": "backend/shared", "parser": "go-test", "evidence": "e"}
+res = {"module": "server.shared", "check": "go-test", "tier": "fast", "command": chk["run"], "cwd": chk["cwd"], "state": "PASS",
+       "timestamp": time.strftime("%Y%m%dT%H%M%S"), "identity": evidence.identity(sys.argv[3], chk["cwd"], chk), "definition": chk}
+evidence.store(sys.argv[2], "server", res, "--- PASS: TestX\nok x\n")
+PY
+s=$(status)
+expect "S13 fresh evidence -> PASS on the current tree" 'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "PASS")' "$s"
+echo "// edit" >> "$S/backend/shared/messages/messages.go"; s=$(status)
+expect "S13 edit after the run -> STALE" 'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "STALE")' "$s"
+gc "$S" checkout -q -- backend/shared/messages/messages.go
 
 # exit codes
 python3 -B "$ROOT/scripts/factory-status.py" >/dev/null; rc=$?

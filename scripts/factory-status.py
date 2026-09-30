@@ -14,12 +14,20 @@ Sections
   Packages    per package: latest tag, commits since it (unreleased), package.json vs tag,
               CHANGELOG section (READY_TO_TAG when bumped + dated + clean)
   Pins        client pin vs latest upstream tag (released, not propagated); SGL watchers (package CIs)
+  CI pins     package CIs that install another package / SGL at a fixed ref (contract watchers)
+              compared with the client pin and the latest tag
   In flight   local <type>/<area>/<topic> branches ahead of the default branch, grouped by topic
               across repos (one cross-repo task = one topic name)
+  Worktrees   uncommitted work per repo (where an interrupted implementation lives)
+  Clones      embedded package clones inside the client (user state, not the canonical checkout)
+  Evidence    stored check results per repo, graded against the current tree (STALE = outdated)
+  Freshness   age of each repo's last fetch: origin/* conclusions are only as new as that fetch.
+              Nothing is fetched here; run the printed `git fetch` yourself when it matters.
   Pending     ordered follow-ups with the owning skill
 
 Usage: factory-status.py [--json] [--strict] [--remote]
   --strict  exit 1 when anything is pending   --remote  also check unity-build-workflows via ls-remote
+  RPG_FACTORY_FETCH_MAX_AGE_H (default 24): older fetches are reported as stale remote knowledge
 """
 import hashlib
 import json
@@ -27,11 +35,21 @@ import os
 import re
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
 WS = os.environ.get(REG["workspace"]["root_env"]) or REG["workspace"]["root_default"]
+sys.path.insert(0, os.path.join(HERE, "lib"))
+import evidence  # noqa: E402
+REPO_BY_NAME = {}
+for _k, _r in REG["repos"].items():
+    _m = re.search(r"github\.com[:/][^/]+/([^/.]+)", _r.get("remote", ""))
+    if _m:
+        REPO_BY_NAME[_m.group(1).lower()] = _k
 
 SERVER_CS = "backend/gameserver-dotnet/GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs"
 NETCODE_CS = "Runtime/Protocol/Generated/Wire.cs"
@@ -62,6 +80,7 @@ def present(key):
     return os.path.isdir(os.path.join(rdir(key), ".git"))
 
 
+@lru_cache(maxsize=None)
 def integ(key):
     """Integration ref: origin/<default> if it exists, else the local default branch."""
     d = REG["repos"][key]["default_branch"]
@@ -72,6 +91,7 @@ def show(key, ref, path):
     return git(key, "show", f"{ref}:{path}")
 
 
+@lru_cache(maxsize=None)
 def tags(key, prefix):
     out = git(key, "tag", "-l", f"{prefix}*", "--sort=-v:refname") or ""
     return [t for t in out.split() if re.match(re.escape(prefix) + r"\d", t)]
@@ -84,6 +104,9 @@ def normalise_sql(text):
 
 def main():
     as_json, strict, remote = "--json" in sys.argv, "--strict" in sys.argv, "--remote" in sys.argv
+    keys = [k for k in REG["repos"] if present(k)]
+    pool = ThreadPoolExecutor(max_workers=len(keys) or 1)  # working-tree scans overlap with the ref work below
+    status_futures = {k: pool.submit(lambda k=k: git(k, "status", "--porcelain=v1", "--ignore-submodules=dirty") or "") for k in keys}
     st = {"workspace": WS, "contracts": [], "wire_rollout": [], "packages": [], "pins": [], "in_flight": [], "pending": []}
     pend = st["pending"]
 
@@ -231,9 +254,13 @@ def main():
     # ---- reusable-workflow refs (what client CI actually runs) - local, no network
     if present("client"):
         refs = {}
-        for f in (git("client", "ls-tree", "--name-only", integ("client"), ".github/workflows/") or "").split():
-            for m in re.finditer(r"uses:\s*Cuvara/unity-build-workflows/\S+@(\S+)", show("client", integ("client"), f) or ""):
-                refs.setdefault(m.group(1), []).append(f.rsplit("/", 1)[-1])
+        ref = integ("client")
+        hits = git("client", "grep", "-E", r"uses:\s*Cuvara/unity-build-workflows/", ref, "--", ".github/workflows/") or ""
+        for line in hits.splitlines():  # <ref>:<path>:<line>
+            parts = line.split(":", 2)
+            m = re.search(r"uses:\s*Cuvara/unity-build-workflows/\S+@(\S+)", parts[2] if len(parts) > 2 else "")
+            if m:
+                refs.setdefault(m.group(1), []).append(parts[1].rsplit("/", 1)[-1])
         if refs:
             st["pins"].append({"package": "unity-build-workflows (workflow refs)", "refs": {k: sorted(set(v)) for k, v in refs.items()}})
             majors = sorted({r for r in refs if re.match(r"^v\d+$", r)})
@@ -246,6 +273,83 @@ def main():
                 used = max(int(m[1:]) for m in majors)
                 if newest > used:
                     pend.append({"skill": "pin-bump", "repo": "client", "what": f"unity-build-workflows v{newest} released, client workflows use v{used}"})
+
+    # ---- package CIs pinning other packages / SGL (contract watchers): drift vs the client pin
+    lock_pins = {}
+    for pkg, v in client_lock.items():
+        if isinstance(v, dict) and "#" in str(v.get("version", "")):
+            lock_pins[pkg] = v["version"].rsplit("#", 1)[-1]
+    pkg_of = {k: v for k, v in PACKAGES.items()}
+    st["ci_pins"] = []
+    seen_w = set()
+    for c in REG["contracts"]:
+        for w in c.get("watchers") or []:
+            if (w["repo"], w["path"]) in seen_w or not present(w["repo"]):
+                continue
+            seen_w.add((w["repo"], w["path"]))
+            text = show(w["repo"], integ(w["repo"]), w["path"]) or ""
+            for m in re.finditer(r"github\.com/Cuvara/([A-Za-z0-9_-]+)\.git(\?path=[^#\"'\s]*)?#([\w.-]+)", text):
+                target = REPO_BY_NAME.get(m.group(1).lower())
+                if not target or target == w["repo"]:
+                    continue
+                pkg = "com.rpgmmo.shared-gamelogic" if m.group(2) else pkg_of.get(target)
+                ref = m.group(3)
+                client_pin = lock_pins.get(pkg)
+                latest = (tags(target, "sgl-v") if m.group(2) else tags(target, "v"))
+                entry = {"watcher": f"{w['repo']}:{w['path']}", "package": pkg, "ref": ref, "client_pin": client_pin,
+                         "latest": latest[0] if latest else None}
+                if entry not in st["ci_pins"]:
+                    st["ci_pins"].append(entry)
+    for e in st["ci_pins"]:
+        if e["client_pin"] and e["ref"] != e["client_pin"] and not e["package"].endswith("shared-gamelogic"):
+            pend.append({"skill": "unity-package", "repo": e["watcher"].split(":")[0],
+                         "what": f"package CI ({e['watcher']}) tests against {e['package']}#{e['ref']} while the client pins {e['client_pin']}"})
+
+    # ---- freshness of remote knowledge (no fetch here)
+    max_age = float(os.environ.get("RPG_FACTORY_FETCH_MAX_AGE_H", "24"))
+    st["freshness"] = {}
+    for key in REG["repos"]:
+        if not present(key):
+            continue
+        gd = (git(key, "rev-parse", "--path-format=absolute", "--git-dir") or "").strip()
+        fh = os.path.join(gd, "FETCH_HEAD") if gd else ""
+        age = round((time.time() - os.path.getmtime(fh)) / 3600, 1) if fh and os.path.exists(fh) else None
+        uses_origin = integ(key).startswith("origin/")
+        stale = uses_origin and (age is None or age > max_age)
+        st["freshness"][key] = {"integration_ref": integ(key), "last_fetch_h": age, "stale": stale}
+    stale_repos = [k for k, f in st["freshness"].items() if f["stale"]]
+    if stale_repos:
+        pend.append({"skill": "factory-core", "repo": ",".join(stale_repos),
+                     "what": "remote knowledge older than %sh (or never fetched): contract/rollout/package results use those origin/* refs. "
+                             "Refresh (read-only for working trees): %s" % (int(max_age), "; ".join(
+                                 f"git -C {rdir(k)} fetch origin" for k in stale_repos))})
+
+    # ---- uncommitted work per repo, embedded clones, stored evidence
+    st["worktrees"], st["clones"], st["evidence"] = {}, [], {}
+    statuses = {k: f.result() for k, f in status_futures.items()}
+    pool.shutdown()
+    for key in keys:
+        rep = REG["repos"][key]
+        porcelain = statuses[key].splitlines()
+        st["worktrees"][key] = {"branch": (git(key, "branch", "--show-current") or "").strip() or "(detached)",
+                                "tracked_changes": sum(1 for l in porcelain if not l.startswith("??")),
+                                "untracked": sum(1 for l in porcelain if l.startswith("??"))}
+        for cl in rep.get("embedded_clones", []):
+            cd = os.path.join(rdir(key), cl["path"])
+            if os.path.exists(os.path.join(cd, ".git")):
+                st["clones"].append({"in": key, "path": cl["path"], "of": cl["of"],
+                                     "head": (git(cd, "rev-parse", "--short", "HEAD") or "").strip(),
+                                     "branch": (git(cd, "branch", "--show-current") or "").strip(),
+                                     "canonical_head": (git(cl["of"], "rev-parse", "--short", "HEAD") or "").strip() if present(cl["of"]) else None})
+        recs = evidence.all_latest(WS, key)
+        if recs:
+            rows = []
+            defs = {(m["id"], c["id"]): c for m in REG["modules"] for t in ("fast", "extended") for c in m["checks"][t]}
+            for rec in recs:
+                chk = rec.get("definition") or {**defs.get((rec.get("module"), rec.get("check")), {}), "run": rec.get("command"), "cwd": rec.get("cwd")}
+                state, detail = evidence.assess(rec, rdir(key), chk)
+                rows.append({"check": f"{rec.get('module')}/{rec.get('check')}", "state": state, "detail": detail})
+            st["evidence"][key] = rows
 
     # ---- in-flight topic branches
     topics = {}
@@ -297,6 +401,24 @@ def main():
             print(f"- {p['package']}: client {p.get('pinned')} / latest {p.get('latest')}"
                   + (f" / SGL commits since tag {p['sgl_commits_since_tag']}" if "sgl_commits_since_tag" in p else "")
                   + (f" / CI watchers {p['ci_watchers']}" if p.get("ci_watchers") else ""))
+        if st["ci_pins"]:
+            print("\n## Package CI pins (watchers)")
+            for e in st["ci_pins"]:
+                print(f"- {e['watcher']}: {e['package']}#{e['ref']} (client {e['client_pin']}, latest {e['latest']})")
+        print("\n## Working trees (uncommitted work - where an interrupted task resumes)")
+        for k, w in st["worktrees"].items():
+            print(f"- {k}: {w['branch']}, {w['tracked_changes']} tracked change(s), {w['untracked']} untracked")
+        for c in st["clones"]:
+            print(f"- embedded clone {c['in']}/{c['path']} (of {c['of']}): {c['branch'] or 'detached'} @{c['head']} - user state, "
+                  f"not the canonical {c['of']} checkout (@{c['canonical_head']}); never edit or reset it")
+        if st["evidence"]:
+            print("\n## Validation evidence (graded against the current tree)")
+            for k, rows in st["evidence"].items():
+                for r in rows:
+                    print(f"- {k} {r['check']}: {r['state']} - {r['detail'].split('; log ')[0]}")
+        print("\n## Freshness (remote knowledge = last fetch; nothing fetched here)")
+        print("- " + "; ".join(f"{k} {f['integration_ref']} " + (f"fetched {f['last_fetch_h']}h ago" if f["last_fetch_h"] is not None else "never fetched")
+                               + (" STALE" if f["stale"] else "") for k, f in st["freshness"].items()))
         print("\n## In flight (local <type>/<area>/<topic> branches ahead of the default branch)")
         for t in st["in_flight"]:
             print(f"- {t['topic']}: " + "; ".join(f"{b['repo']} {b['branch']} +{b['ahead']}" + (" (wire)" if b["touches_wire"] else "") for b in t["branches"]))

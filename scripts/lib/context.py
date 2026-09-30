@@ -109,6 +109,19 @@ def cwd_repo(reg, ws):
     return None, None
 
 
+def cwd_clone(reg, ws):
+    """The embedded package clone (gitignored nested repo, user state) containing the cwd, if any."""
+    top = (git(os.getcwd(), "rev-parse", "--show-toplevel") or "").strip()
+    if not top:
+        return None
+    for key, r in reg["repos"].items():
+        for c in r.get("embedded_clones", []):
+            if os.path.abspath(os.path.join(ws, r["path"], c["path"])) == os.path.abspath(top):
+                return {"in": key, "path": c["path"], "of": c["of"], "dir": os.path.abspath(top),
+                        "canonical": os.path.abspath(os.path.join(ws, reg["repos"][c["of"]]["path"]))}
+    return None
+
+
 def which(cands):
     for c in cands:
         for d in os.environ.get("PATH", "").split(os.pathsep):
@@ -266,6 +279,11 @@ def render(snap, reg, args):
         for r in inst.get("reasons", [])[:3]:
             add(f"- {r}")
     add(f"Workspace `{snap['workspace']}`. Live snapshot: recompute per task; changed paths listed at task start are the user's baseline.")
+    cl = snap.get("cwd_clone")
+    if cl:
+        add(f"**The current directory is an embedded clone** `{cl['in']}/{cl['path']}` (of `{cl['of']}`): gitignored user state inside "
+            f"the {cl['in']} repo, NOT the canonical {cl['of']} checkout `{cl['canonical']}`. Factory snapshots, routes and validates "
+            f"the canonical repos below. Do not edit, commit, reset or clean the clone unless the user explicitly asks.")
     add("")
     add("**Rules:** " + "; ".join(f"**{g['id']}** {g['rule']}" if args["full"] else f"**{g['id']}**" for g in reg["global_rules"])
         + ("" if args["full"] else " (full text: `--full` or registry `global_rules`)"))
@@ -365,6 +383,7 @@ def main():
     if not ws:
         die("not inside the RPG MMO workspace (markers not found; set RPG_FACTORY_WORKSPACE)", 4)
     here_key, here_dir = cwd_repo(reg, ws)
+    clone = cwd_clone(reg, ws) if not here_key else None
     if args["repo"] and args["repo"] not in ("all", "auto") and args["repo"] not in reg["repos"]:
         die(f"unknown repo '{args['repo']}'; known: {', '.join(reg['repos'])}")
     if args["paths"] and (not args["repo"] or args["repo"] == "all") and not here_key:
@@ -409,7 +428,7 @@ def main():
         ver = tool_version(tools[name], t["version_args"]) if tools.get(name) and (args["toolchain"] or args["full"]) else None
         tc.append({"tool": name, "resolved": tools.get(name), "version": ver, "expected": t.get("expected")})
     snap = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "workspace": ws, "plugin_root": PLUGIN_ROOT,
-            "install": install_line(), "repos": repos, "toolchain": tc,
+            "install": install_line(), "repos": repos, "toolchain": tc, "cwd_clone": clone,
             "global_rules": reg["global_rules"], "human_gates": reg["human_gates"],
             "known_issues": reg.get("known_issues", [])}
     snap["elapsed_ms"] = round((time.perf_counter() - t0) * 1000)
