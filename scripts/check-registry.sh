@@ -44,6 +44,12 @@ problems=$(jq -r '
           (select(($c.driver // null) != null and ($r.skills[$c.driver] // null) == null) | "contract \($c.id): unknown driver skill \($c.driver)")),
       (($r.contracts // []) | map(.id) | group_by(.) | map(select(length > 1))[] | "duplicate contract id: \(.[0])"),
       (($r.skills // {}) | to_entries[] | select((.value.kind // "") | IN("repo","cross-repo","core") | not) | "skill \(.key): kind must be repo|cross-repo|core"),
+      (($r.skills // {}) | to_entries[] | select((.value.order | type) != "number") | "skill \(.key): order (number) missing - lead precedence needs it"),
+      (($r.skills // {}) | [to_entries[] | .value.order] | group_by(.) | map(select(length > 1))[] | "duplicate skill order \(.[0]) - routing would be ambiguous"),
+      ($r.modules | map(select(.fallback != true)) | [ .[] | .repo as $rp | .id as $id | .paths[] | {k: "\($rp)|\(.)", id: $id} ]
+        | group_by(.k) | map(select(length > 1))[] | "duplicate path \(.[0].k | split("|")[1]) in repo \(.[0].k | split("|")[0]): \(map(.id) | join(", ")) - mapping would depend on registry order"),
+      ($r.modules | map(select(.fallback == true)) | group_by(.repo) | map(select(length > 1))[] | "repo \(.[0].repo) has more than one fallback module"),
+      ($r.repos | keys[] as $k | select([$r.modules[] | select(.repo == $k and .fallback == true)] | length == 0) | "repo \($k) has no fallback (<repo>.root) module"),
       (($r.human_gates // [])[] | select(.id == null or .rule == null) | "human_gates entry missing id/rule"),
       (($r.human_gates // []) | map(.id)) as $gids
       | ($r.modules[] | .id as $mid | (.gates // [])[] | select(. as $g | $gids | index($g) | not) | "\($mid): unknown gate \(.)"),

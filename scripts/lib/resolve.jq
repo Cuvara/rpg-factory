@@ -27,13 +27,17 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
 . as $reg
 | $reg.modules as $all
 | ($all | map(select(.repo == $repo))) as $mods
+| ([ $mods[] | select(.fallback == true) | .id ][0] // null) as $fallback
 | ($files | map(
     . as $f
+    # a folder's Unity .meta sibling belongs to the folder: Runtime.meta -> Runtime
+    | ($f.path | if endswith(".meta") then .[:-5] else . end) as $key
     | ($mods
-       | map({id, len: ([.paths[] | select(path_matches(.; $f.path)) | length] | max // -1)})
+       | map(select(.fallback != true))
+       | map({id, len: ([.paths[] | select(path_matches(.; $key)) | length] | max // -1)})
        | map(select(.len >= 0))
        | max_by(.len) // null) as $best
-    | $f + {module: ($best.id // null)}
+    | $f + {module: ($best.id // $fallback), fallback: ($best == null and $fallback != null)}
   )) as $mapped
 | ($mapped | map(.module) | map(select(. != null)) | unique) as $direct
 | # transitive closure over depends_on across ALL repos: X depends_on Y => change in Y affects X
@@ -94,6 +98,7 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
       | {path: $f.path, status: $f.status, generated_by: .}
     ] | unique,
     unmapped: [ $mapped[] | select(.module == null) | .path ],
+    repo_level: [ $mapped[] | select(.fallback) | .path ],
     contracts: $contracts,
     suggested_skills: (
       def owner($r; $p): [ $all[] | select(.repo == $r)
@@ -106,9 +111,11 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
       | [ ($contracts[] | select(.driver != null) | . as $c
             | {skill: .driver,
                role: (if kind($c.driver) == "cross-repo" or any($c.hits[]; .role == "source") then "lead" else "leg" end),
+               class: (if kind($c.driver) == "cross-repo" then 0 else 1 end),
                reason: "contract \($c.id) (\([$c.hits[].role] | unique | join("/")) touched)"}),
-          ($mods[] | select(.id as $id | $direct | index($id)) | .id as $mid | (.skills // [])[]
-            | {skill: ., role: (if $driven then "leg" else "lead" end), reason: "owns touched module \($mid)"}),
+          ($mods[] | select(.id as $id | $direct | index($id)) | .id as $mid | (.skills // []) | to_entries[]
+            | {skill: .value, role: (if $driven then "leg" else "lead" end), class: (if .key == 0 then 2 else 3 end),
+               reason: ("owns touched module \($mid)" + (if .key > 0 then " (secondary owner)" else "" end))}),
           ($contracts[] | select(any(.hits[]; .role == "source")) | . as $c | .other_ends[] | select(.repo == $repo) | owner(.repo; .path) as $o
             | select($o != null) | $o.skills[] | {skill: ., role: "leg", reason: "owns \($o.id), other end of contract \($c.id)"}),
           ($contracts[] | select(any(.hits[]; .role == "source")) | . as $c | .other_ends[] | select(.repo != $repo) | owner(.repo; .path) as $o
@@ -121,10 +128,12 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
         ]
       | map(select(.skill != "factory-core"))
       | group_by(.skill)
-      | map({skill: .[0].skill,
-             role: (map(.role) | if index("lead") then "lead" elif index("leg") then "leg" else "follow-up" end),
-             reasons: (map(.reason) | unique)})
-      | sort_by({"lead": 0, "leg": 1, "follow-up": 2}[.role], .skill)
+      | map(. as $g | {skill: $g[0].skill,
+             role: ($g | map(.role) | if index("lead") then "lead" elif index("leg") then "leg" else "follow-up" end),
+             class: ([ $g[] | select(.role == "lead") | .class // 9 ] | min // 9),
+             order: ($reg.skills[$g[0].skill].order // 999),
+             reasons: ($g | map(.reason) | unique)})
+      | sort_by({"lead": 0, "leg": 1, "follow-up": 2}[.role], .class, .order, .skill)
     ),
     gates: (
       [ ($mods[] | select(.id as $id | $direct | index($id)) | (.gates // [])[] | {gate: ., source: "module"}),
@@ -132,3 +141,15 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
       | group_by(.gate) | map({gate: .[0].gate, sources: (map(.source) | unique)})
     )
   }
+| . as $o
+| ([ $o.suggested_skills[] | select(.role == "lead") ]) as $leads
+| $o + {routing: {
+    lead: ($leads[0].skill // null),
+    co_leads: [ $leads[1:][] | .skill ],
+    legs: [ $o.suggested_skills[] | select(.role == "leg") | .skill ],
+    follow_ups: [ $o.suggested_skills[] | select(.role == "follow-up") | .skill ],
+    ambiguous: (($leads | length) > 1 and $leads[0].class == $leads[1].class and $leads[0].order == $leads[1].order),
+    precedence: "class (0 cross-repo contract driver, 1 contract owner via source, 2 primary module owner, 3 secondary owner), then skills.<name>.order",
+    lead_basis: (if ($leads | length) == 0 then null else
+      {class: $leads[0].class, order: $leads[0].order, reasons: $leads[0].reasons} end)
+  }}

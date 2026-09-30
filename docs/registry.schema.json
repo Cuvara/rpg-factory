@@ -19,7 +19,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 2
+      "const": 3
     },
     "workspace": {
       "type": "object",
@@ -219,7 +219,8 @@
         "required": [
           "kind",
           "repos",
-          "summary"
+          "summary",
+          "order"
         ],
         "properties": {
           "kind": {
@@ -238,6 +239,10 @@
           },
           "summary": {
             "type": "string"
+          },
+          "order": {
+            "type": "number",
+            "description": "Lead precedence tie-break inside a precedence class (lower wins). Unique across skills."
           }
         }
       }
@@ -490,6 +495,10 @@
             "type": "string"
           },
           "description": "human_gates ids raised when this module is touched."
+        },
+        "fallback": {
+          "type": "boolean",
+          "description": "Repository-level catch-all (<repo>.root, paths ['./']): files no other module owns route here instead of 'unmapped'."
         }
       }
     },

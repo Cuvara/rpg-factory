@@ -1,6 +1,6 @@
 {
   "$schema": "./docs/registry.schema.json",
-  "schema_version": 2,
+  "schema_version": 3,
   "workspace": {
     "name": "UnityIndie RPG MMO",
     "root_default": "/mnt/c/Workspaces/UnityIndie",
@@ -978,7 +978,6 @@
       "repo": "server",
       "paths": [
         "backend/docs/",
-        "backend/content/",
         "backend/TEAM.md",
         "CLAUDE.md",
         "README.md"
@@ -1359,7 +1358,8 @@
       "docs": [],
       "changelog": null,
       "rules": [
-        "Change it in its own repo; the client only moves the submodule pointer (update-submodule.yml)."
+        "Change it in its own repo; the client only moves the submodule pointer (update-submodule.yml).",
+        "Submodule pointer bumps (update-submodule.yml, #95/#122/#137) are pin-bump work: move the gitlink to a released unity-build-workflows tag/commit, never edit the submodule's files from the client."
       ],
       "generated": [],
       "tools": [
@@ -1371,7 +1371,9 @@
         "external": []
       },
       "obligations": [],
-      "skills": []
+      "skills": [
+        "pin-bump"
+      ]
     },
     {
       "id": "client.ci",
@@ -2844,6 +2846,136 @@
         ]
       },
       "obligations": []
+    },
+    {
+      "id": "server.root",
+      "repo": "server",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "client.root",
+      "repo": "client",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.root",
+      "repo": "netcode",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.root",
+      "repo": "unitydots",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.root",
+      "repo": "uitoolkit",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
     }
   ],
   "known_issues": [
@@ -2984,7 +3116,8 @@
       "repos": [
         "*"
       ],
-      "summary": "Workflow contract, snapshot, validation, git safety, report. Always first."
+      "summary": "Workflow contract, snapshot, validation, git safety, report. Always first.",
+      "order": 0
     },
     "pin-bump": {
       "kind": "cross-repo",
@@ -2995,7 +3128,8 @@
         "unitydots",
         "uitoolkit"
       ],
-      "summary": "Move a client pin (manifest+lock, DOTS Sample) to a released sgl-v or package v* tag."
+      "summary": "Move a client pin (manifest+lock, DOTS Sample) to a released sgl-v or package v* tag.",
+      "order": 20
     },
     "wire-contract": {
       "kind": "cross-repo",
@@ -3004,7 +3138,8 @@
         "netcode",
         "client"
       ],
-      "summary": "Drive a wire/protocol/cross-language contract change: server -> Netcode -> ready to tag -> pin-bump."
+      "summary": "Drive a wire/protocol/cross-language contract change: server -> Netcode -> ready to tag -> pin-bump.",
+      "order": 10
     },
     "measure": {
       "kind": "cross-repo",
@@ -3012,28 +3147,32 @@
         "server",
         "client"
       ],
-      "summary": "Benchmarks, encoding sweeps, re-baselining and multi-client verification with expected value, control and run id."
+      "summary": "Benchmarks, encoding sweeps, re-baselining and multi-client verification with expected value, control and run id.",
+      "order": 80
     },
     "server-realtime": {
       "kind": "repo",
       "repos": [
         "server"
       ],
-      "summary": "C# game server + Shared.GameLogic: ECS systems, phases, replication, knobs, metrics, golden vectors, AOT."
+      "summary": "C# game server + Shared.GameLogic: ECS systems, phases, replication, knobs, metrics, golden vectors, AOT.",
+      "order": 30
     },
     "server-services": {
       "kind": "repo",
       "repos": [
         "server"
       ],
-      "summary": "Go gateway, Nakama RPCs, shared Redis store, persistence and migrations."
+      "summary": "Go gateway, Nakama RPCs, shared Redis store, persistence and migrations.",
+      "order": 40
     },
     "server-ops": {
       "kind": "repo",
       "repos": [
         "server"
       ],
-      "summary": "Docker, compose, k3s/k8s/Agones, monitoring, backups, CD workflows."
+      "summary": "Docker, compose, k3s/k8s/Agones, monitoring, backups, CD workflows.",
+      "order": 70
     },
     "unity-package": {
       "kind": "repo",
@@ -3042,14 +3181,16 @@
         "unitydots",
         "uitoolkit"
       ],
-      "summary": "Development inside Netcode, UnityDots, UIToolkit up to ready-to-tag."
+      "summary": "Development inside Netcode, UnityDots, UIToolkit up to ready-to-tag.",
+      "order": 50
     },
     "client-integration": {
       "kind": "repo",
       "repos": [
         "client"
       ],
-      "summary": "Unity client glue: VContainer scopes, Nakama/session, HUD/UI, DotsViews, build scripts."
+      "summary": "Unity client glue: VContainer scopes, Nakama/session, HUD/UI, DotsViews, build scripts.",
+      "order": 60
     }
   },
   "human_gates": [

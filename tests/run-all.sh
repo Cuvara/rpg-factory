@@ -51,8 +51,11 @@ msrc=$(jq -r '.plugins[0].source' .claude-plugin/marketplace.json)
 for ref in $(grep -o 'references/[a-z-]*\.md' skills/factory-core/SKILL.md | sort -u); do
   [ -f "skills/factory-core/$ref" ] && ok "skill reference exists: $ref" || bad "skill reference missing: $ref"
 done
-jq -e '.hooks.PreToolUse[0].matcher == "Bash" and (.hooks.PreToolUse[0].hooks[0].command | test("CLAUDE_PLUGIN_ROOT.*git-guard.py"))' hooks/hooks.json >/dev/null \
-  && ok "hooks: PreToolUse(Bash) -> git-guard.py" || bad "hooks: PreToolUse(Bash) -> git-guard.py"
+jq -e '(.hooks.PreToolUse[0].matcher == "Bash|PowerShell")
+        and ([.hooks.PreToolUse[0].hooks[].command] | any(test("git-guard.py")) and any(test("tripwire.py\" --pre")))
+        and (.hooks.PostToolUse[0].matcher == "Bash|PowerShell") and (.hooks.PostToolUse[0].hooks[0].command | test("tripwire.py\" --post"))
+        and ([.hooks.SessionStart[0].hooks[].command] | any(test("install-status.py\" --session")) and any(test("tripwire.py\" --session-start")))' hooks/hooks.json >/dev/null \
+  && ok "hooks: guard+tripwire on Bash|PowerShell, tripwire post, session install check + baseline" || bad "hooks wiring"
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
@@ -89,7 +92,7 @@ r=$(resolve client '[{"path":"Assets/Samples/Netcode/DOTS Sample/Scripts/A.cs","
 expect "DOTS Sample beats Assets/Samples" '.files[0].module == "client.dots-sample"' "$r"
 expect "untracked sample dir -> samples-imported" '.files[1].module == "client.samples-imported"' "$r"
 expect "submodule pointer -> gdk-submodules" '.files[2].module == "client.gdk-submodules"' "$r"
-expect "unknown path reported unmapped" '.unmapped == ["weird/file.txt"]' "$r"
+expect "unknown path -> repo-level (client.root), not unmapped" '.unmapped == [] and .repo_level == ["weird/file.txt"]' "$r"
 expect "{plugin_root} substituted in package-pins" 'any(.checks[]; .run == "python3 /p/scripts/checks/unity-package-pins.py .")' "$r"
 r=$(resolve server '[]')
 expect "no files -> no checks" '.checks == [] and .touched == []' "$r"
@@ -100,8 +103,9 @@ if $use_ws; then
     ok "factory-context --json: every registered repo"
     jq -e 'all(.repos[]; .error == null and (.branch | length) > 0)' <<<"$out" >/dev/null \
       && ok "factory-context: branch resolved for each repo" || bad "factory-context: branch per repo" "$out"
-    jq -e 'any(.toolchain[]; .tool == "dotnet" and .resolved != null)' <<<"$out" >/dev/null \
-      && ok "factory-context: dotnet resolved ($(jq -r '.toolchain[] | select(.tool=="dotnet") | .resolved' <<<"$out"))" \
+    out2=$(scripts/factory-context.sh --repo server --json --paths backend/gameserver-dotnet/GameServer/Program.cs 2>&1)
+    jq -e 'any(.toolchain[]; .tool == "dotnet" and .resolved != null)' <<<"$out2" >/dev/null \
+      && ok "factory-context: dotnet resolved lazily for a .NET change ($(jq -r '.toolchain[] | select(.tool=="dotnet") | .resolved' <<<"$out2"))" \
       || bad "factory-context: dotnet not resolved (dotnet / dotnet.exe)"
   else
     bad "factory-context --json" "$out"
@@ -112,7 +116,7 @@ if $use_ws; then
   scripts/factory-context.sh --paths x >/dev/null 2>&1; [ $? -eq 2 ] \
     && ok "factory-context --paths without --repo is rejected" || bad "factory-context --paths without --repo"
   md=$(scripts/factory-context.sh --repo client 2>&1)
-  grep -q '^## Repo `client`' <<<"$md" && ok "factory-context markdown renders" || bad "factory-context markdown" "$md"
+  grep -q "^## client:" <<<"$md" && ok "factory-context markdown renders" || bad "factory-context markdown" "$md"
 else
   skp "factory-context live checks" "--no-workspace"
 fi
