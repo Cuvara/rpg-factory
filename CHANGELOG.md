@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Documentation
+- README: plugin hooks bind at session start. A session running before rpg-factory was installed or
+  enabled has no Factory hooks at all (compaction does not load them); start or resume a session, and
+  check with `/rpg-factory:doctor`. Found in the post-release audit of the v0.4.0 tagging session;
+  fresh, resumed and `--plugin-dir` sessions were verified to deny tag creation and enforce modes.
+
 ## [0.4.0] - 2026-09-30
 
 ### Security

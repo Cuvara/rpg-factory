@@ -270,6 +270,14 @@ claude plugin update rpg-factory@rpg-factory      # picks up a new version; rest
 claude plugin uninstall rpg-factory@rpg-factory && claude plugin install rpg-factory@rpg-factory --scope user
 ```
 
+**Hooks bind when a Claude Code session starts.** A session that was already running when rpg-factory was
+installed or enabled has *no* Factory hooks - no guard, no file guard, no tripwire, no modes - and a
+compaction (`/compact`, auto-compact) does not load them either. Start a new session (resuming with
+`claude --resume` starts a new process and does load them). Check: in a protected session
+`/rpg-factory:doctor` exists and reports the runtime; if the command is unknown, the plugin is not loaded in
+this session. (Observed 2026-09-30: the session that built and tagged v0.4.0 had started before the first
+install and ran with no Factory hooks; fresh, resumed and `--plugin-dir` sessions denied the same tag.)
+
 `python3 scripts/install-status.py` reports the mode, what the install loads, the session's
 `CLAUDE_PLUGIN_ROOT`, and a state: `CURRENT`, `STALE` (record or copy older than the source),
 `CONTENT_MISMATCH` (cache mode, same version, different files), `RESTART_REQUIRED` (the session runs
