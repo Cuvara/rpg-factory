@@ -1,13 +1,46 @@
 {
-  "description": "rpg-factory git guard: asks for confirmation before destructive or high-impact git commands inside the RPG MMO workspace.",
+  "description": "rpg-factory safety: git guard + tripwire (Bash and PowerShell tools) and a stale-install check at session start.",
   "hooks": {
-    "PreToolUse": [
+    "SessionStart": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/git-guard.py\"",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/install-status.py\" --session",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --session-start",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/git-guard.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --pre",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --post",
             "timeout": 10
           }
         ]
