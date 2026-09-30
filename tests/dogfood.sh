@@ -30,7 +30,10 @@ LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r 
 
 # EXPECT: skills that must be invoked (space = all of, a|b = either).
 # HANDOFF: skills the final answer must name as later / follow-up work (space = all of).
-declare -A PROMPT EXPECT HANDOFF
+# MODE:    the Factory mode the session must declare (factory-context.sh --mode <m>), if set.
+# TOOLRUN: a script the session must run (e.g. run-checks.py), if set.
+# SHOWS:   text the transcript must contain (command output), if set; RAW scenarios send the prompt as-is.
+declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW
 PROMPT[realtime-knob]="Add a configurable GAMESERVER_ tick-rate knob to the rpg-mmo-server C# game server and expose the value in force on /status."
 EXPECT[realtime-knob]="server-realtime"; HANDOFF[realtime-knob]=""
 PROMPT[nakama-rpc]="Add a new Nakama RPC party_kick to rpg-mmo-server and call it from the Unity client's party service."
@@ -48,12 +51,24 @@ EXPECT[k8s]="server-ops"; HANDOFF[k8s]=""
 PROMPT[benchmark]="Benchmark whether the replication importance weighting in rpg-mmo-server improves bytes per player per tick."
 EXPECT[benchmark]="measure"; HANDOFF[benchmark]=""
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark)
+PROMPT[analyze-only]="Analyze only - do not plan or change anything: what would changing the gateway's redirect JSON (backend/gateway) in rpg-mmo-server touch?"
+EXPECT[analyze-only]="server-services|wire-contract"; HANDOFF[analyze-only]=""; MODE[analyze-only]="analyze"
+PROMPT[plan-only]="Plan only, do not implement: add a GAMESERVER_ knob for the AOI radius to the rpg-mmo-server C# game server."
+EXPECT[plan-only]="server-realtime"; HANDOFF[plan-only]=""; MODE[plan-only]="plan"
+PROMPT[validate-only]="Validate only, change nothing: does the rpg-mmo-server gateway module (backend/gateway/server/server.go) pass its Factory checks right now?"
+EXPECT[validate-only]=""; HANDOFF[validate-only]=""; MODE[validate-only]="validate"; TOOLRUN[validate-only]="run-checks.py"
+PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="# Factory status (derived from git"
+PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
+
+scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
-  (cd "$WS" && timeout 900 claude "${pd[@]}" -p "${PROMPT[$n]} Do NOT edit any file and do NOT run git commands that change state. Use the rpg-factory skills to plan it, then answer with: the lead skill, co-leads and follow-up skills (by name), the files that must change, the validation (tier + command) and the human gates. Under 250 words." \
+  local prompt="${PROMPT[$n]} Do NOT edit any file and do NOT run git commands that change state. Use the rpg-factory skills, then answer with: the lead skill, co-leads and follow-up skills (by name), the files that must change, the validation (tier + command) and the human gates. Under 250 words."
+  [ -n "${RAW[$n]:-}" ] && prompt="${PROMPT[$n]}"
+  (cd "$WS" && timeout 900 claude "${pd[@]}" -p "$prompt" \
     --model "$model" --output-format stream-json --verbose --allowedTools "Skill,Read,Grep,Glob" </dev/null > "$OUT/$n.jsonl" 2>/dev/null)
+  true
 }
 start=$(date +%s)
 for n in "${scenarios[@]}"; do run "$n" & done; wait
@@ -73,7 +88,13 @@ for n in "${scenarios[@]}"; do
   fi
   used=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | .input.skill' | sed 's/^rpg-factory://' | tr '\n' ' ')
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
-  grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
+  [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
+  cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
+  if [ -n "${MODE[$n]:-}" ]; then grep -qE -- "--mode[= ]${MODE[$n]}\b" <<<"$cmds" || why+="mode ${MODE[$n]} not declared; "; fi
+  if [ -n "${TOOLRUN[$n]:-}" ]; then grep -q "${TOOLRUN[$n]}" <<<"$cmds" || why+="${TOOLRUN[$n]} not run; "; fi
+  if [ -n "${SHOWS[$n]:-}" ]; then grep -qF "${SHOWS[$n]}" "$f" || why+="expected output '${SHOWS[$n]}' not in transcript; "; fi
+  writes=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Write" or .name=="Edit" or .name=="MultiEdit")) | .name' | wc -l)
+  [ "$writes" -eq 0 ] || why+="$writes file write tool call(s); "
   for e in ${EXPECT[$n]}; do
     hit=false; IFS='|' read -ra alts <<<"$e"
     for a in "${alts[@]}"; do grep -qw "$a" <<<"$used" && hit=true; done

@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"; cp -r "$ROOT/scripts" "$ROOT/.claude-plugin" "$P/"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
-mkdir -p "$S/backend/gateway" "$C/ProjectSettings"; touch "$S/backend/TEAM.md" "$S/backend/gateway/x.go" "$C/ProjectSettings/ProjectVersion.txt"
+mkdir -p "$S/backend/gateway" "$S/backend/shared" "$S/backend/deploy" "$C/ProjectSettings"; touch "$S/backend/TEAM.md" "$S/backend/gateway/x.go" "$S/backend/shared/s.go" "$S/backend/deploy/d.yaml" "$C/ProjectSettings/ProjectVersion.txt"
 for r in "$S" "$C"; do git -C "$r" init -q -b develop; git -C "$r" -c user.email=t@t -c user.name=t add -A; git -C "$r" -c user.email=t@t -c user.name=t commit -qm init; done
 jq --arg ws "$WS" '
   .workspace.root_default = $ws
@@ -20,7 +20,8 @@ jq --arg ws "$WS" '
         {id: "t-dotnet",   cwd: ".", run: "echo \"Passed!  - Failed:     0, Passed:    12, Skipped:     1, Total:    13\"", parser: "dotnet-test", evidence: "e"},
         {id: "t-needs",    cwd: ".", run: "echo should-not-run", evidence: "e", needs: ["t-fail"]},
         {id: "t-regex",    cwd: ".", run: "echo nothing-useful", parser: "regex:^OK: \\d+", evidence: "e"},
-        {id: "t-pollute",  cwd: ".", run: "touch leftover.txt", evidence: "e"}
+        {id: "t-pollute",  cwd: ".", run: "touch leftover.txt", evidence: "e"},
+        {id: "t-scoped",   cwd: "backend/gateway", run: "printf \"=== RUN TestS\\n--- PASS: TestS\\nok  s 0.1s\\n\"", parser: "go-test", evidence: "e"}
       ],
       extended: [{id: "t-ext", cwd: ".", run: "echo --- PASS: TestX", parser: "go-test", trigger: "always", evidence: "e"}],
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
@@ -81,6 +82,12 @@ git -C "$S" -c user.email=t@t -c user.name=t commit -qam edit
 sout=$(sts); sexp t-pass STALE "HEAD moved (commit) - identity includes HEAD"
 touch "$S/new-untracked.txt"; python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-pass --json >/dev/null
 rm -f "$S/new-untracked.txt"; sout=$(sts); sexp t-pass STALE "untracked file removed after the run"
+
+# the identity covers the module's dependencies: gateway depends on shared -> a shared edit makes it STALE
+python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-scoped --json >/dev/null
+sout=$(sts); sexp t-scoped PASS "scoped check fresh"
+echo "# unrelated" >> "$S/backend/deploy/d.yaml"; sout=$(sts); sexp t-scoped PASS "edit outside the check's dependency closure"
+echo "package shared // dependency edit" > "$S/backend/shared/s.go"; sout=$(sts); sexp t-scoped STALE "edit in a module the check's module depends on"
 
 total=$((pass + fail)); echo "run-checks tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

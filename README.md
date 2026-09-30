@@ -17,8 +17,28 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 0.3.0 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
+Version 0.4.0 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
 automated state of any release is **READY_TO_TAG**.
+
+## Commands
+
+| Command | What you get | Changes anything? |
+|---|---|---|
+| `/rpg-factory:status [--remote]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness | no |
+| `/rpg-factory:route <repo> <path>... [--lead <skill>]` | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
+| `/rpg-factory:check <repo> [<path>...] [--status]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
+| `/rpg-factory:doctor` | install state (what this session loads), tripwire latches, registry validity, repos, state paths, tools, hooks | no |
+
+Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
+works too).
+
+## Execution modes
+
+`analyze`, `plan`, `implement`, `validate`, `review`, `resume`. factory-core picks the mode from the request
+and declares it (`factory-context.sh --mode <m>`); the hooks then **enforce** it for the session: in
+`analyze` / `plan` / `review` every file write and state-changing command is denied, `validate` may only run
+`run-checks.py`. Every mode except validate/resume still invokes the lead skill - a plan comes from the
+lead's workflow. Switching (e.g. to `implement`) is only done when you ask for it.
 
 ### Plugin boundaries
 
@@ -119,6 +139,11 @@ independent of file order, no lead that is also a follow-up, full coverage).
 | `package-pins` | client manifest → lock + DOTS Sample; upstream package.json/tags | pin-bump |
 | `gamestate-migrations` | `Persistence/Migrations/` → `deploy/db/migrations/gamestate/`, `init-gamestate.sql` | server-services |
 | `server-knobs` | `ServerEnv.cs` → compose + Agones/k8s fleet env (co-edit clause for server-realtime) | server-realtime |
+| `transport-security` | gateway/Nakama TLS + `GAMESERVER_SEALED` switches (`k8s/app/40-gateway.yaml`, fleets, compose) ↔ gateway TLS flags, `NakamaTlsPin.cs`, smoketest/verify pins, Netcode sealed client, client pin loading. Capabilities first, then the switch | server-ops |
+
+Contract **watchers** are files that pin another repo without being a copy - the package CIs (Netcode CI
+installs UnityDots at a tag, UnityDots CI installs Netcode and Shared.GameLogic at tags). `factory-status`
+compares them with the client pin and the latest tag.
 
 ## Validation
 
@@ -133,16 +158,20 @@ modules and their dependents, runs them, and grades each one:
 | NOT_AVAILABLE | a required tool is missing on this machine |
 | HUMAN_REQUIRED | extended check not approved (`--approve <id>`), or external (Unity Editor, CI, Docker stack, cluster) |
 | SKIPPED | excluded on purpose (`--only`, duplicate command) |
+| NOT_RUN | (`--status`) declared for the change, never executed |
+| STALE | (`--status`) executed, but HEAD, the diff or untracked files in the check's directory, or the check definition changed since |
 
-Parsers: `go-test`, `dotnet-test`, `exit`, `regex:<pattern>`. The evidence JSON is written to
-`$TMPDIR/rpg-factory/results/`. The report template (`skills/factory-core/references/report.md`)
-takes the runner table verbatim.
+Parsers: `go-test`, `dotnet-test`, `exit`, `regex:<pattern>`. Every executed check is stored with the
+identity of the tree it ran on and its full log under `~/.local/state/rpg-factory/evidence/`;
+`--status` re-grades that evidence against the tree as it is now, without running anything. The report
+template (`skills/factory-core/references/report.md`) takes the runner table verbatim and requires a
+`--status` pass with nothing STALE.
 
 Read-only check scripts against the product repos:
 
 | Script | Purpose |
 |---|---|
-| `scripts/factory-status.py [--remote] [--strict]` | Derived cross-repo state: contract consistency, wire rollout stage, package release state (READY_TO_TAG), pins vs latest tags, CI SGL watchers, build-toolkit refs, in-flight topic branches, pending items with owning skill |
+| `scripts/factory-status.py [--remote] [--strict]` | Derived cross-repo state: contract consistency, wire rollout stage, package release state (READY_TO_TAG), pins vs latest tags, package-CI pins (watchers), build-toolkit refs, uncommitted work, embedded clones, validation evidence (current/STALE), fetch freshness, in-flight topic branches, pending items with owning skill. Never fetches: remote conclusions are labelled with the last fetch's age (stale after 24 h, with the `git fetch` to run) |
 | `scripts/checks/pin-status.py [--remote]` | For every client pin: manifest = lock, upstream tag exists, newer tags available, `.sample-source` |
 | `scripts/checks/pin-plan.py <pkg> <tag> [--client-ref REF]` | Exact manifest/lock edits (lock hash = tag commit), dependency changes, DOTS Sample files |
 | `scripts/checks/wire-parity.sh` | Netcode `Wire.cs` byte-identical to the server binding, and the protocol version equal in all three places |
@@ -152,14 +181,15 @@ Read-only check scripts against the product repos:
 
 ## Resuming interrupted work
 
-There is no workflow database: state is derived from git each time. `factory-status.py` answers
-"what is left" after a crash, a failed leg or a new session - e.g. `server bindings ✓ · Netcode copy ✓ ·
+There is no workflow database: state is derived from git each time (plus two small files outside the
+repos: the tripwire latch and the check evidence). `factory-status.py` answers "what is left" after a
+crash, a failed leg or a new session - including uncommitted work and which validation is STALE - e.g. `server bindings ✓ · Netcode copy ✓ ·
 Netcode release ✗ (READY_TO_TAG netcode v0.46.0) · client pin ✗`. Cross-repo tasks use one branch topic
 in every repo (`feat/wire/party` in server, Netcode and client) so the legs are linked.
 
 ## Git safety and human gates
 
-Three layers, all inside the workspace only:
+Four layers, all inside the workspace (plus `gh` commands naming a workspace repo, wherever they run):
 
 1. **Rules** in `skills/factory-core/references/git-safety.md` (baseline preservation, explicit
    staging, `<type>/<area>/<topic>` branches, never tag).
@@ -167,22 +197,44 @@ Three layers, all inside the workspace only:
    into what actually runs: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`,
    `xargs`, `find -exec`), nested shells (`bash -c`, `sh -c`, `eval`, `cmd /c`, `powershell -c`),
    repo git aliases, PowerShell quoting and the `&` call operator.
-   - **Denies:** creating, deleting or pushing tags; `gh api` on `git/refs` / `git/tags`;
-     `gh release create`.
+   - **Denies:** creating, deleting or pushing tags; tag/release creation through `gh` (REST
+     `git/tags`, tag refs, `/releases`; GraphQL `createRef refs/tags/...`, `createRelease`;
+     `gh release create/edit/upload`); repository deletion/archival (`gh repo delete/archive`,
+     `DELETE repos/<o>/<r>`).
+   - **Asks:** every other GitHub mutation - `gh api` writes (method as gh decides it), GraphQL
+     mutations or queries from a file, branch protection / rulesets, `gh repo edit/rename/sync`,
+     secrets, variables, workflows, runs, PR/issue mutations. Read-only `gh` passes.
    - **Asks:** destructive git (`reset --hard`, `clean -f`, `checkout --`, `restore`, `stash`,
      `branch -D/-f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`), any
      `push`, `add -A`, `commit`/`merge`/`cherry-pick`/`revert`/`am`/`pull --rebase`/`reset <commit>`
-     on protected branches (worktrees use their main checkout's list), history rewrites, submodule
-     updates, git hidden behind an interpreter one-liner or `$VAR`/`$(...)` as the program, and every
+     on protected branches (worktrees use their main checkout's list), `pull` without `--ff-only`,
+     renaming/deleting a protected branch, `fetch` into local branches, `remote add/set-url/remove`,
+     `config` writes to aliases / remote URLs / `insteadOf` / `hooksPath` / credential helpers,
+     `symbolic-ref` writes, history rewrites, submodule updates/additions, git hidden behind an interpreter one-liner or `$VAR`/`$(...)` as the program, and every
      registry `human_gates[].match` (kubectl/helm/ssh, `gh workflow run`, `gh pr create/merge`,
      `.env`/`kubeconfig.local`, `toggle-packages.sh`, Docker stack lifecycle, backups, load runs,
      Unity batch builds, `schema_migrations` writes).
-3. **Tripwire** - `scripts/tripwire.py`. SessionStart records the user's baseline (dirty files,
-   submodule pointers, a sample of dirty files inside submodules). Around every Bash/PowerShell
-   call it compares branch/tag/remote/stash/HEAD fingerprints; a change the command did not visibly
-   ask for (a tag from a script, a push from Python, a reset of a user file) returns
-   **"STOP - rpg-factory tripwire"** and latches the session: the guard then denies every
-   non-read-only command until the user runs `python3 scripts/tripwire.py --ack`.
+3. **File guard** - `scripts/file-guard.py`, PreToolUse on `Write|Edit|MultiEdit|NotebookEdit|Read`:
+   writes into embedded clones, submodule content, registry generated paths, the user's baseline files
+   or secrets ask; secret reads ask; writes while latched or in a read-only mode are denied.
+4. **Tripwire** - `scripts/tripwire.py`. SessionStart records the user's baseline (dirty files,
+   submodule pointers, samples of dirty files inside submodules and embedded clones). Around every
+   Bash/PowerShell call it compares branch/tag/remote/stash/HEAD fingerprints (embedded clones
+   included); a change the command did not visibly ask for (a tag from a script, a push from Python,
+   a reset of a user file) returns **"STOP - rpg-factory tripwire"** and latches the **workspace**:
+   writes and state-changing commands are denied - also in later sessions after a crash - until the
+   user runs `! python3 scripts/tripwire.py --ack` (denied to the agent). `/rpg-factory:doctor` shows it.
+
+Where Factory keeps state (`scripts/lib/fstate.py`, always absolute, never inside a repo): per-session
+scratch under `$TMPDIR` if it is a usable absolute directory, else `/tmp`; the workspace latch and
+check evidence under `$XDG_STATE_HOME/rpg-factory` (default `~/.local/state/rpg-factory`).
+
+Workspace model: the five **workspace repos** (registry), **git submodules** inside them (`com.gdk.*`,
+`unity-build-workflows`: pointers are user state), **embedded clones** (gitignored
+`IndieRPGMMOAdventure/Packages/com.cuvara.*`: user work in progress, never the canonical package checkout -
+a snapshot run inside one says so), **git worktrees** (resolved from the cwd), and **external repos**
+(e.g. `Cuvara/unity-build-workflows` itself: only its consumer side - submodule pointer and `@vN` refs -
+is modelled).
 
 The guard never approves anything and never crashes a session (errors mean "no opinion"); a broken
 registry regex disables only that gate. `RPG_FACTORY_GUARD=off` turns the guard off for a session.
@@ -278,7 +330,9 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
 - **Local protoc is not the CI pin** (registry fact `protoc-ci-pin`). `generate.sh` output would drift locally; leave regeneration to CI, or install the pinned version.
 - **No local cluster tooling.** kubectl, helm, promtool and kubeconform are not installed. Cluster checks are external and human-gated.
 - **Plugin evals with Bash are blocked on this machine** (`claude plugin eval` refuses Bash because of a symlink in `~/.docker`). Behaviour is verified with deterministic tests and headless dogfood sessions instead.
-- **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is caught by the tripwire after the fact (detection, not prevention). Another agent runtime (e.g. Codex) is outside both.
+- **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is caught by the tripwire after the fact (detection, not prevention). Remote-only GitHub changes are only controlled by the guard (the tripwire cannot see them). Another agent runtime (e.g. Codex) is outside all layers.
+- **MCP tools are not inspected.** Unity-MCP asset/scene edits are controlled by the `unity-asset-edit` human gate (policy), not by a hook.
+- **Evidence identity** covers the check's directory plus the paths of its module's same-repo dependencies (registry `depends_on`); untracked files count by name, size and mtime (not contents). Changes in *another* repo are not part of it (a package's new tag reaches a consumer through its pin file, which is in the consumer repo).
 - **Tripwire cost.** The session baseline takes ~13 s (submodule scan, once per session); each mutating command adds ~0.9 s, read-only commands ~0.17 s (measured on /mnt/c, 2026-09-30).
 - **Pre-existing project issues** are recorded in `registry.json` `known_issues` and printed for the touched repos. They include stale docs, package CI SGL pins lagging the client, and the embedded package clones.
 

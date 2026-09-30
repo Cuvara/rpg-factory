@@ -6,7 +6,9 @@ identity(repo_dir, scope, check) = sha256 of
   + untracked files under <scope>: name, size, mtime (contents are not hashed: the client's
     untracked Unity samples are large; any edit changes mtime)
   + the check definition (command, cwd, parser, evidence text)
-scope = the check's working directory inside the repo ("." = the whole repo).
+scope = the check's working directory inside the repo ("." = the whole repo) PLUS the paths of every
+module its module depends on (transitively, same repo) - a PASS of the gateway's tests goes STALE when
+backend/shared changes. scopes_for() computes it from the registry; the record stores it.
 
 A stored PASS whose identity differs from the current one is STALE - it proves nothing about
 the tree as it is now. A declared check with no stored evidence is NOT_RUN.
@@ -36,13 +38,32 @@ def definition_hash(check):
     return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def scopes_for(registry, module_id, cwd):
+    """The check's directory + the paths of its module's transitive same-repo dependencies."""
+    mods = {m["id"]: m for m in registry.get("modules", [])}
+    m0 = mods.get(module_id)
+    out, seen, todo = [cwd or "."], set(), [module_id]
+    while todo:
+        mid = todo.pop()
+        if mid in seen or mid not in mods:
+            continue
+        seen.add(mid)
+        m = mods[mid]
+        if m0 and m["repo"] != m0["repo"]:
+            continue
+        if mid != module_id:
+            out += [p for p in m.get("paths", []) if p not in ("./", ".")]
+        todo += m.get("depends_on", [])
+    return sorted(set(p.rstrip("/") or "." for p in out))
+
+
 def identity(repo_dir, scope, check):
-    scope = scope or "."
+    scopes = scope if isinstance(scope, list) else [scope or "."]
     h = hashlib.sha256()
     head = _git(repo_dir, "rev-parse", "HEAD").strip()
     h.update(b"HEAD " + head + b"\n")
-    h.update(_git(repo_dir, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-color", "--", scope))
-    for rel in sorted(_git(repo_dir, "ls-files", "--others", "--exclude-standard", "-z", "--", scope).split(b"\0")):
+    h.update(_git(repo_dir, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-color", "--", *scopes))
+    for rel in sorted(_git(repo_dir, "ls-files", "--others", "--exclude-standard", "-z", "--", *scopes).split(b"\0")):
         if not rel:
             continue
         p = os.path.join(repo_dir, rel.decode(errors="replace"))
@@ -101,7 +122,7 @@ def assess(rec, repo_dir, check):
     """Current state of a stored result against the tree as it is now: (state, detail)."""
     if not rec:
         return "NOT_RUN", "no evidence recorded"
-    now = identity(repo_dir, check.get("cwd", "."), check)
+    now = identity(repo_dir, rec.get("scopes") or check.get("cwd", "."), check)
     if rec.get("identity", {}).get("tree") == now["tree"]:
         return rec["state"], f"at {now['head'][:7]} (current tree)"
     why = "check definition changed" if rec.get("identity", {}).get("definition") != now["definition"] else \

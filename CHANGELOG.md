@@ -4,6 +4,80 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-30
+
+### Security
+- **GitHub mutations were unguarded.** `gh api graphql` could create tags (`createRef refs/tags/*`,
+  `createRelease`), `gh repo delete` and branch-protection writes were allowed. The guard now applies a
+  structural gh policy: the API method is derived the way gh does (`-X`, else POST when fields or
+  `--input` are given); reads pass; tag/release creation (REST and GraphQL) and repository
+  deletion/archival are denied; every other remote mutation (branch protection, rulesets, repo
+  settings, secrets, variables, workflows, runs, PR/issue changes, GraphQL mutations or queries from a
+  file) asks. `gh` commands naming a workspace repo are checked even outside the workspace. These
+  changes are remote-only, so the tripwire cannot see them - the guard is the only control.
+- Protected refs and remotes: `git pull` without `--ff-only` on a protected branch, renaming or
+  deleting a protected branch, `fetch <src>:<dst>` into local branches (forced or not; into tag refs =
+  deny), `remote add/set-url/remove/rename`, `config` writes to aliases / remote URLs / `insteadOf` /
+  `hooksPath` / credential helpers, `symbolic-ref` writes, `submodule add/set-url` now ask.
+- **File tools were unguarded.** New `scripts/file-guard.py` (PreToolUse
+  `Write|Edit|MultiEdit|NotebookEdit|Read`): writes into embedded package clones, submodule content,
+  registry generated paths, the user's baseline files or secrets ask; secret reads ask; writes while the
+  tripwire is latched or while a read-only mode is declared are denied. MCP tools are not inspected
+  (documented; the `unity-asset-edit` gate remains the control).
+- **A tripwire STOP vanished with its session.** The latch is now also written per workspace in the
+  persistent state root: a crashed or closed session leaves the next one latched, SessionStart says
+  why, and only the user's `--ack` clears it (the ack now rebuilds the baseline immediately).
+
+### Fixed
+- **State paths could be relative.** With `TMPDIR` empty (as in some shells), relative or invalid, the
+  tripwire and runner wrote `rpg-factory/<session>/` into the current directory. All state now resolves
+  through `scripts/lib/fstate.py` (always absolute; scratch under a usable `$TMPDIR` or `/tmp`,
+  persistent state under `$XDG_STATE_HOME/rpg-factory` / `~/.local/state/rpg-factory`);
+  `netcode-headless.sh` rejects a relative/invalid `TMPDIR`. Read paths no longer create directories.
+- **The first dirty file of each repo was not protected.** The tripwire baseline stripped the first
+  porcelain line and lost the first character of its path (and mangled quoted paths); it now parses
+  NUL-separated porcelain.
+- `is_read_only` treated `2>/dev/null` / `2>&1` as writes.
+- CHANGELOG 0.3.0 said 16 human gates; the registry has 15.
+
+### Added
+- **Execution modes** `analyze`, `plan`, `implement`, `validate`, `review`, `resume`: declared with
+  `factory-context.sh --mode <m>` (printed in the snapshot), recorded per session by the guard and
+  enforced by both guards (analyze/plan/review read-only; validate only `run-checks.py`). factory-core
+  owns the mode table; every skill honours it. Evidence: in v0.3.0 dogfood every missed lead
+  invocation came from a plan-only prompt.
+- **Commands** `/rpg-factory:status`, `/rpg-factory:route`, `/rpg-factory:check`, `/rpg-factory:doctor`
+  (one validating dispatcher, `scripts/factory-cmd.py`). No `ack` command: clearing a latch stays a
+  user action.
+- **Tree-bound evidence.** `run-checks.py` stores each executed check with the identity of the tree it
+  ran on (HEAD + diff and untracked files in the check's directory and its module's same-repo
+  dependencies + the check definition) and its full log; `--status` grades the declared checks against
+  the current tree without running anything: **STALE** after any relevant change, **NOT_RUN** when never
+  executed.
+- `factory-status.py`: package-CI pins from contract watchers (the real UnityDots CI -> Netcode v0.41.0
+  vs the client's v0.45.0 drift is now pending), remote-knowledge **freshness** per repo (never fetches;
+  prints the `git fetch` when older than 24 h), uncommitted work per repo, embedded clones, and stored
+  evidence graded against the current tree. Status scans run in parallel.
+- Workspace model: registry `repos.<key>.embedded_clones` (the client's gitignored
+  `Packages/com.cuvara.*`): tripwire fingerprints them and samples their dirty files before/after each
+  command (the user's own concurrent edits are not flagged); a snapshot run inside one says so
+  instead of silently showing the canonical repos.
+- Registry: contract `transport-security` (driver server-ops; TLS / `GAMESERVER_SEALED` switches vs the
+  server, Netcode, client-pin and smoketest/verify capabilities - history `ed090ab`, `437a3db`);
+  `package-pins` watchers; modules `server.bench` (measure leads benchmark harnesses) and
+  `netcode.measurement` (measure co-leads).
+- Skills: server-ops rollout order for security switches; unity-package package-CI pins;
+  client-integration Unity-MCP hand-off (`references/unity-mcp.md`); measure ownership; factory-core
+  game-ai-workflows hand-off.
+- Tests: guard 246 (GitHub, refs/remotes/config, modes), tripwire 40, file guard 26, commands 26,
+  run-checks 35 (evidence), factory-status 22, worktree 13 (clones), routing 51 (transport-security,
+  bench), installed-safety 83; dogfood gains analyze/plan/validate-only and command scenarios.
+
+### Changed
+- factory-status takes ~5 s (was ~4.4 s) for four new sections; SessionStart baselines embedded clones
+  (see README performance notes).
+- `git pull` on a protected branch now asks unless `--ff-only`.
+
 ## [0.3.0] - 2026-09-30
 
 ### Fixed
@@ -51,7 +125,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   unity-build-workflows refs and gitlink (`--remote`), in-flight `<type>/<area>/<topic>` branches
   linked across repos, and pending items with their owning skill. No stored state.
 - Registry schema v3: `skills.order`, fallback modules, check `parser` / `needs`, `facts[]` with
-  read-only probe commands (re-verified by `tests/facts.test.sh`), 16 human gates (`sgl-release`).
+  read-only probe commands (re-verified by `tests/facts.test.sh`), 15 human gates (incl. `sgl-release`; this entry originally said 16).
 - `VERSION` file; run-all checks VERSION == plugin.json == marketplace == CHANGELOG section.
 - Tests: guard bypass matrix (145 cases incl. PowerShell and wrappers), tripwire simulations,
   routing properties over real history, worktree, check runner, factory-status rollout fixtures,

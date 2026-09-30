@@ -35,5 +35,14 @@ expect "workspace root: all registered repos present in the fixture" '[.repos[] 
 p=$(ctx "$WS/wt-a" --paths backend/shared/proto/wire.proto)
 expect "worktree + --paths: contract routing still works" '.repos[0].routing.lead == "wire-contract"' "$p"
 
+# embedded clone (gitignored nested repo inside the client): named as such, never mistaken for a registered repo
+git init -q -b main "$C/Packages/com.cuvara.dots"; echo x > "$C/Packages/com.cuvara.dots/a.cs"
+git -C "$C/Packages/com.cuvara.dots" -c user.email=t@t -c user.name=t add -A; git -C "$C/Packages/com.cuvara.dots" -c user.email=t@t -c user.name=t commit -qm c
+e=$(ctx "$C/Packages/com.cuvara.dots")
+expect "embedded clone: cwd_clone names it (of unitydots)" '.cwd_clone.of == "unitydots" and .cwd_clone.path == "Packages/com.cuvara.dots"' "$e"
+expect "embedded clone: no repo block claims the clone's path" '[.repos[] | select(.path | test("com.cuvara.dots"))] | length == 0' "$e"
+md=$(cd "$C/Packages/com.cuvara.dots" && bash "$ROOT/scripts/factory-context.sh" 2>/dev/null)
+grep -q "The current directory is an embedded clone" <<<"$md" && { pass=$((pass + 1)); echo "PASS  embedded clone: warning in the markdown snapshot"; } || { fail=$((fail + 1)); echo "FAIL  no clone warning"; }
+
 total=$((pass + fail)); echo "worktree tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

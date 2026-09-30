@@ -19,7 +19,7 @@ REC=$(jq -r '.plugins["rpg-factory@rpg-factory"][0] | "\(.version) \(.gitCommitS
 VER=$(jq -r .version "$PR/.claude-plugin/plugin.json")
 TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP/tmpdir"; mkdir -p "$TMPDIR"
-export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$PR" PYTHONDONTWRITEBYTECODE=1
+export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$PR" PYTHONDONTWRITEBYTECODE=1 RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$RPG_FACTORY_WORKSPACE"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; OTHER="$TMP/elsewhere"
 gc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 mkdir -p "$S/backend" "$C/ProjectSettings" "$OTHER"
@@ -30,6 +30,15 @@ gc "$S" remote add origin "$TMP/remote.git"; gc "$S" push -q origin develop
 gc "$S" branch feat/x; echo "user wip" > "$S/user-wip.txt"          # a baseline (user) file
 SID="safety-$$"
 
+fdecide() { # tool path -> allow|ask|deny through the installed file-tool hooks
+  local d=allow out pd
+  while IFS= read -r h; do
+    out=$(jq -nc --arg s "$SID" --arg t "$1" --arg p "$2" --arg d "$S" '{session_id:$s,hook_event_name:"PreToolUse",tool_name:$t,tool_input:{file_path:$p,content:"x"},cwd:$d}' | (cd "$S" && bash -c "$h") 2>/dev/null)
+    pd=$(jq -r '.hookSpecificOutput.permissionDecision // empty' <<<"${out:-{\}}" 2>/dev/null)
+    case "$pd" in deny) d=deny;; ask) [ "$d" = allow ] && d=ask;; esac
+  done < <(hooks PreToolUse "$1")
+  echo "$d"
+}
 hooks() { # event matcher-tool -> hook commands (one per line)
   jq -r --arg e "$1" --arg t "$2" '.hooks[$e][]? | select((.matcher // "") as $m | $m == "" or ($t | test("^(" + $m + ")$"))) | .hooks[].command' "$PR/hooks/hooks.json"
 }
@@ -97,6 +106,20 @@ t PowerShell deny "$S" "Set-Location $S; git tag v9"
 t PowerShell ask  "$S" "git reset --hard HEAD"
 t PowerShell ask  "$S" "git push origin develop"
 EXEC=0 t PowerShell allow "$S" "git status"
+echo "== GitHub remote mutations (the tripwire cannot see these)"
+t Bash deny "$S" "gh api graphql -f query='mutation{createRef(input:{name:\"refs/tags/v9\"}){ref{name}}}'"
+t Bash deny "$S" "gh repo delete Cuvara/rpg-mmo-server --yes"
+t Bash deny "$OTHER" "gh repo delete Cuvara/Netcode --yes"
+t Bash ask  "$S" "gh api -X PUT repos/Cuvara/rpg-mmo-server/branches/develop/protection --input p.json"
+t Bash ask  "$S" "gh api graphql -f query='mutation{updateBranchProtectionRule(input:{}){clientMutationId}}'"
+t Bash ask  "$S" "gh repo edit --default-branch main"
+EXEC=0 t Bash allow "$S" "gh pr view 1"
+echo "== local ref / remote / config mutations"
+t Bash ask  "$S" "git fetch origin +refs/heads/develop:refs/heads/develop"
+t Bash ask  "$S" "git remote set-url origin https://evil.example/x.git"
+t Bash ask  "$S" "git config alias.t tag"
+t Bash ask  "$S" "git branch -m develop old"
+t Bash ask  "$S" "git pull origin develop"
 echo "== destructive / protected branch (ask)"
 t Bash ask "$S" "git push origin develop"
 t Bash ask "$S" "git push --force origin develop"
@@ -140,6 +163,17 @@ stop=$LASTPOST
 case "$stop" in *"STOP"*"user-wip.txt"*) pass=$((pass + 1)); row PASS Bash "(post) STOP: user baseline file modified" STOP STOP "";;
   *) fail=$((fail + 1)); row FAIL Bash "(post) STOP: user baseline file modified" STOP none "${stop:0:80}";; esac
 python3 -B "$PR/scripts/tripwire.py" --ack "$SID" >/dev/null 2>&1
+
+echo "== file tools and execution modes (installed file-guard + git-guard)"
+mkdir -p "$S/backend/shared/proto/gen"; touch "$S/backend/shared/proto/gen/wire.pb.go"
+f=$(fdecide Edit "$S/backend/shared/proto/gen/wire.pb.go"); [ "$f" = ask ] && { pass=$((pass + 1)); row PASS Edit "generated path" ask ask ""; } || { fail=$((fail + 1)); row FAIL Edit "generated path" ask "$f" ""; }
+f=$(fdecide Edit "$S/user-wip.txt"); [ "$f" = ask ] && { pass=$((pass + 1)); row PASS Edit "user baseline file" ask ask ""; } || { fail=$((fail + 1)); row FAIL Edit "user baseline file" ask "$f" ""; }
+f=$(fdecide Write "$S/new.txt"); [ "$f" = allow ] && { pass=$((pass + 1)); row PASS Write "ordinary new file" allow allow ""; } || { fail=$((fail + 1)); row FAIL Write "ordinary new file" allow "$f" ""; }
+EXEC=0 t Bash allow "$S" "bash $PR/scripts/factory-context.sh --mode plan --repo server"
+t Bash deny "$S" "touch plan-mode.txt"
+f=$(fdecide Write "$S/new.txt"); [ "$f" = deny ] && { pass=$((pass + 1)); row PASS Write "plan mode: no file changes" deny deny ""; } || { fail=$((fail + 1)); row FAIL Write "plan mode" deny "$f" ""; }
+EXEC=0 t Bash allow "$S" "bash $PR/scripts/factory-context.sh --mode implement --repo server"
+EXEC=0 t Bash allow "$S" "touch implement-mode.txt"
 
 echo "== outcome in the disposable repos"
 lt=$(git -C "$S" tag | tr '\n' ' '); rt=$(git -C "$TMP/remote.git" tag | tr '\n' ' ')

@@ -7,13 +7,16 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - `registry.json` is the source of truth for module knowledge. Never hard-code module paths,
   commands, or rules in `SKILL.md` or the references - put them in the registry and read them.
 - Keep `factory-context.sh`, `factory-status.py` and `scripts/checks/` read-only: no fetch (except
-  opt-in `--remote` ls-remote), no writes, no persisted state. State is derived from git.
+  opt-in `--remote` ls-remote), no writes into repos. State is derived from git; the only Factory
+  files are the latch and check evidence, resolved through `scripts/lib/fstate.py` (never `$TMPDIR`
+  directly, never relative). Tests set `RPG_FACTORY_STATE_DIR` and `TMPDIR` to a temp dir.
 - `run-checks.py` never runs a check in place when it would write into a product repo; pollution is FAIL.
 - Hooks must stay fast (guard + tripwire per command, measured: ~0.17 s read-only, ~0.9 s mutating) and must
   never crash a session. The tripwire only detects; it never repairs.
 - The git guard never approves and never crashes a session (errors mean "no opinion"); it denies only tag
   creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`). Every new bypass found gets a
-  case in `tests/git-guard.test.sh`. Each human gate regex and the git evaluation must fail independently.
+  case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
+  in `scripts/file-guard.py`; execution modes are enforced by both guards. Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a `CHANGELOG.md` entry under [Unreleased].
 - Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).

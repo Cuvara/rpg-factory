@@ -236,7 +236,8 @@ def main():
                 continue
             if before is None:
                 before = worktree_state(rdir)
-            ident = evidence.identity(rdir, c["cwd"], {**m, **c})
+            scopes = evidence.scopes_for(REG, c["module"], c["cwd"])
+            ident = evidence.identity(rdir, scopes, {**m, **c})
             t0 = time.perf_counter()
             try:
                 p = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True, timeout=a["timeout"], errors="replace",
@@ -255,7 +256,7 @@ def main():
                 state = "FAIL"
                 reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
             res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
-                       identity=ident, timestamp=stamp,
+                       identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
             res["log"] = evidence.store(ws, a["repo"], res, out)
         if res["state"] in ("FAIL", "BLOCKED", "NOT_AVAILABLE"):

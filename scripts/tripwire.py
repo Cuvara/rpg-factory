@@ -579,7 +579,16 @@ def main():
                 os.remove(lf)
                 bf = os.path.join(root, s, "baseline.json")
                 if os.path.exists(bf):
-                    os.remove(bf)  # re-baseline after the user reviewed the state
+                    # the reviewed state becomes the new baseline - rebuilt now, so file tools and the
+                    # next command are protected immediately (not only after the next shell command)
+                    try:
+                        old = json.load(open(bf, encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        old = {}
+                    os.remove(bf)
+                    tops = {t: ("clone:" if "" in e else "repo") for t, e in old.items() if os.path.isdir(t)}
+                    if tops:
+                        baseline(os.path.join(root, s), tops)
                 print(f"session {s}: latch cleared by the user")
     ldir = os.path.join(fstate.persistent(), "latch")
     for f in sorted(os.listdir(ldir)) if os.path.isdir(ldir) else []:

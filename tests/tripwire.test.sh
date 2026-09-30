@@ -159,6 +159,9 @@ pl=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash",tool_input:{command:"sh -c \"ec
 python3 -B "$TW" --pre <<<"$pl"; (cd "$SERVER" && sh -c "echo x > README"); out=$(python3 -B "$TW" --post <<<"$pl")
 case "$out" in *"pre-existing user file README was modified"*) pass=$((pass + 1)); echo "PASS  overwriting the first baseline file trips";; *) fail=$((fail + 1)); echo "FAIL  first-file overwrite: ${out:0:200}";; esac
 python3 -B "$TW" --ack >/dev/null
+[ -f "$TMP/rpg-factory/firstfile/baseline.json" ] && jq -e --arg t "$SERVER" '.[$t] | has("README")' "$TMP/rpg-factory/firstfile/baseline.json" >/dev/null \
+  && { pass=$((pass + 1)); echo "PASS  --ack rebuilds the baseline immediately (reviewed state protected before the next command)"; } \
+  || { fail=$((fail + 1)); echo "FAIL  no baseline after --ack"; }
 gc "$SERVER" checkout -q -- README "My Folder"
 
 # performance: pre+post overhead for a mutating command vs a read-only command, 2 repos
