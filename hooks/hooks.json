@@ -42,6 +42,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --skill",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -31,7 +31,8 @@ header says the install state is not CURRENT, tell the user (this session may ru
 | `review` | asks to review a diff / branch | lead skill's review checklist + registry rules | change files |
 | `resume` | asks to continue interrupted work | `factory-status.py`, then continue at the first incomplete step (implement rules) | redo finished legs |
 
-Declare it in the Route call: `factory-context.sh --mode <mode> ...`. The hooks then **enforce** it: in
+Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill arguments) and in the Route call
+(`factory-context.sh --mode <mode> ...`). The hooks then **enforce** it: in
 analyze/plan/review every file write and mutating command is denied; validate allows only `run-checks.py`.
 Switch mode only when the user asks for it (e.g. "now implement it") - never to get past a denial.
 Every mode except validate/resume invokes the lead skill: its workflow is where the plan comes from.
@@ -48,6 +49,8 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
 4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --mode <mode> --repo <key> --paths <files the task will write>`
+   - run Factory scripts with the **absolute path exactly as printed here** (the permission allowlist matches
+     it; a shortened relative path needs manual approval and stalls unattended sessions)
    (repo-relative; for a benchmark or measurement that is the bench harness / `docs/BENCHMARK.md` /
    results, not the code being measured).
    Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -

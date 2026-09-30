@@ -6,7 +6,7 @@ allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py:*)
 ---
 ## rpg-factory route (computed now, read-only)
 
-!`python3 -B "${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py" route $ARGUMENTS`
+!`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py route $ARGUMENTS`
 
 Summarise the routing above for the user: lead and why, co-leads, follow-ups in other repos, touched contracts,
 checks by tier, human gates. If it printed a usage error, show it and the accepted form. Do not start the task.

@@ -140,6 +140,37 @@ def record_mode(payload):
     return None
 
 
+MODE_PHRASES = [  # explicit phrases only - an unqualified request is not a mode declaration
+    (r"\bmode\s*[:=]?\s*(analy[sz]e|plan|implement|validate|review|resume)\b", None),
+    (r"\b(analy[sz]e|analysis)[- ]only\b|\bonly analy[sz]e\b", "analyze"),
+    (r"\bplan(ning)?[- ]only\b|\bonly plan\b|\bjust (a )?plan\b|\bdo not implement\b|\bdon'?t implement\b", "plan"),
+    (r"\bvalidat(e|ion)[- ]only\b|\bonly validate\b", "validate"),
+    (r"\breview[- ]only\b|\bonly review\b", "review"),
+]
+
+
+def mode_from_text(text):
+    t = (text or "").lower()
+    for pat, mode in MODE_PHRASES:
+        m = re.search(pat, t)
+        if m:
+            got = mode or m.group(1)
+            return "analyze" if got.startswith("analy") else got
+    return None
+
+
+def skill_hook(payload):
+    """PreToolUse(Skill): when a Factory skill is invoked with an explicit mode in its arguments ("plan only",
+    "mode: validate"), record it - so the mode holds even if the model never runs the Route command."""
+    ti = payload.get("tool_input") or {}
+    if not str(ti.get("skill", "")).startswith("rpg-factory:"):
+        return 0
+    m = mode_from_text(ti.get("args"))
+    if m in MODES:
+        open(os.path.join(state_dir(payload), "MODE"), "w", encoding="utf-8").write(m)
+    return 0
+
+
 def current_mode(payload):
     return (read(os.path.join(state_dir(payload), "MODE")) or "").strip() or None
 
@@ -597,6 +628,11 @@ def main():
         except Exception:
             pass
         return 0
+    if mode == "--skill":
+        try:
+            return skill_hook(json.load(sys.stdin))
+        except Exception:
+            return 0  # never break the session
     if mode in {"--pre", "--post"}:
         try:
             payload = json.load(sys.stdin)

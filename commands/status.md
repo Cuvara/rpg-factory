@@ -6,7 +6,7 @@ allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py:*)
 ---
 ## rpg-factory status (computed now, read-only)
 
-!`python3 -B "${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py" status $ARGUMENTS`
+!`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py status $ARGUMENTS`
 
 Show the report above to the user. Lead with the **Pending** items (each names its owning skill) and any STALE
 evidence or stale fetch. Do not run further commands, fetch, or change anything unless the user asks.

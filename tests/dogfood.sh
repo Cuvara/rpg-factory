@@ -90,7 +90,11 @@ for n in "${scenarios[@]}"; do
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
-  if [ -n "${MODE[$n]:-}" ]; then grep -qE -- "--mode[= ]${MODE[$n]}\b" <<<"$cmds" || why+="mode ${MODE[$n]} not declared; "; fi
+  if [ -n "${MODE[$n]:-}" ]; then  # declared via --mode, or recorded by the Skill hook in the session's state
+    sid=$(grep '^{' "$f" | jq -r 'select(.type=="system" and .subtype=="init") | .session_id' | head -1)
+    recorded=$(cat "/tmp/rpg-factory/$sid/MODE" 2>/dev/null)
+    { grep -qE -- "--mode[= ]${MODE[$n]}\b" <<<"$cmds" || [ "$recorded" = "${MODE[$n]}" ]; } || why+="mode ${MODE[$n]} not declared (recorded: ${recorded:-none}); "
+  fi
   if [ -n "${TOOLRUN[$n]:-}" ]; then grep -q "${TOOLRUN[$n]}" <<<"$cmds" || why+="${TOOLRUN[$n]} not run; "; fi
   if [ -n "${SHOWS[$n]:-}" ]; then grep -qF "${SHOWS[$n]}" "$f" || why+="expected output '${SHOWS[$n]}' not in transcript; "; fi
   writes=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Write" or .name=="Edit" or .name=="MultiEdit")) | .name' | wc -l)
@@ -100,9 +104,9 @@ for n in "${scenarios[@]}"; do
     for a in "${alts[@]}"; do grep -qw "$a" <<<"$used" && hit=true; done
     $hit || why+="expected $e not invoked; "
   done
-  for h in ${HANDOFF[$n]}; do grep -qw "$h" <<<"$used $answer" || why+="hand-off $h not named; "; done
+  for h in ${HANDOFF[$n]:-}; do grep -qw "$h" <<<"$used $answer" || why+="hand-off $h not named; "; done
   if [ -z "$why" ]; then pass=$((pass + 1)); r=PASS; else fail=$((fail + 1)); r="FAIL: $why"; fi
-  printf '%-20s | %-26s | %-28s | %-40s | %s\n' "$n" "${lv:-?} ${src:-?}" "${EXPECT[$n]}${HANDOFF[$n]:+ > ${HANDOFF[$n]}}" "${used:-none}" "$r"
+  printf '%-20s | %-26s | %-28s | %-40s | %s\n' "$n" "${lv:-?} ${src:-?}" "${EXPECT[$n]}${HANDOFF[$n]:+ > ${HANDOFF[$n]:-}}" "${used:-none}" "$r"
 done
 echo "dogfood: $((pass + fail)) run, $pass passed, $fail failed (model $model; $($installed && echo "installed $VERSION" || echo plugin-dir); ${elapsed}s wall, parallel; transcripts in $OUT)"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

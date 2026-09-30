@@ -14,7 +14,10 @@ for f in "$ROOT"/commands/*.md; do
   n=$(basename "$f" .md)
   head -1 "$f" | grep -q '^---$' && grep -q '^description: ' "$f" && grep -q '^disable-model-invocation: true$' "$f" \
     && ok "commands/$n.md frontmatter (description, user-only)" || no "commands/$n.md frontmatter"
-  grep -qE '^!`python3 -B "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/factory-cmd.py" '"$n"'( |`)' "$f" && ok "commands/$n.md runs factory-cmd.py $n" || no "commands/$n.md dispatch line"
+  grep -qE '^!`python3 \$\{CLAUDE_PLUGIN_ROOT\}/scripts/factory-cmd.py '"$n"'( |`)' "$f" && ok "commands/$n.md runs factory-cmd.py $n" || no "commands/$n.md dispatch line"
+  # the ! line must match the command's own allowed-tools pattern, or Claude Code refuses to run it
+  pat=$(sed -n 's/^allowed-tools: Bash(\(.*\):\*)$/\1/p' "$f"); line=$(sed -n 's/^!`\(.*\)`$/\1/p' "$f")
+  [ -n "$pat" ] && [ "${line#"$pat"}" != "$line" ] && ok "commands/$n.md ! line matches its allowed-tools prefix" || no "commands/$n.md: '$line' does not start with allowed '$pat'"
 done
 [ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 4 ] && ok "exactly 4 commands (status, route, check, doctor)" || no "command count"
 # -- argument validation (exit 2, no script run)

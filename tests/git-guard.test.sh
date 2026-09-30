@@ -251,6 +251,19 @@ mcheck allow "touch implement.txt"
 mcheck allow "git switch -c feat/x/impl"
 mcheck allow "bash $CTX --mode nonsense"                                   # unknown modes are not recorded
 mcheck allow "touch still-implement.txt"
+# the mode can also be declared through the Skill tool's arguments (hook on Skill)
+skill() { jq -cn --arg a "$1" --arg sk "${2:-rpg-factory:factory-core}" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:$a},cwd:$d,session_id:"modes"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/tripwire.py" --skill; }
+skill "Plan-only task: add an AOI radius knob. No edits."
+mcheck deny  "touch via-skill-plan.txt"
+skill "Validate only, change nothing"
+mcheck deny  "touch via-skill-validate.txt"
+mcheck allow "python3 $RC --repo server"
+skill "Add a knob to the server"                                         # no explicit mode: unchanged (validate)
+mcheck deny  "touch still-validate.txt"
+skill "mode: implement - the user approved the plan"
+mcheck allow "touch via-skill-implement.txt"
+skill "plan only" "other-plugin:skill"                                    # other plugins' skills never set a Factory mode
+mcheck allow "touch other-plugin.txt"
 
 # ---- v0.4: GitHub remote mutations (invisible to the tripwire - the guard is the only defence)
 check deny "$SERVER" "gh api graphql -f query='mutation{createRef(input:{repositoryId:\"R\",name:\"refs/tags/v9\",oid:\"abc\"}){ref{name}}}'"
