@@ -10,10 +10,16 @@ workspace and how to query the registry. It does not repeat module data.
 
 | Repo key | Path | Stack | Factory v1 |
 |---|---|---|---|
-| `server` | `rpg-mmo-server/` | Go 1.26 modules (no go.work) + C# .NET 10 game server | in registry |
-| `client` | `IndieRPGMMOAdventure/` | Unity 6 (DOTS, UI Toolkit, VContainer) | in registry |
-| - | `Netcode/`, `UIToolkit/`, `UnityDots/` | com.cuvara.* UPM package sources | not yet (see skill-contract.md) |
-| - | `game-art-mcp/`, `rpg-factory/` | tooling | out of scope |
+| `server` | `rpg-mmo-server/` | Go 1.26 modules (no go.work) + C# .NET 10 game server + Shared.GameLogic | registry |
+| `client` | `IndieRPGMMOAdventure/` | thin Unity 6 client: VContainer glue, Nakama/session, HUD, pins | registry |
+| `netcode` | `Netcode/` | com.cuvara.netcode: wire codec, transport, prediction, content client | registry |
+| `unitydots` | `UnityDots/` | com.cuvara.dots: ECS runtime, DI, views, netcode/physics bridges | registry |
+| `uitoolkit` | `UIToolkit/` | com.cuvara.uitoolkit: screens, flow, binding, UXML codegen | registry |
+| - | `game-art-mcp/`, `rpg-factory/`, `game-ai-workflows` (plugin) | tooling | out of scope |
+
+Most Unity code lives in the package repos (Netcode ~62k LOC, UnityDots ~31k, UIToolkit ~14.5k);
+the client repo holds ~55 C# files. The client consumes the packages as git-tag pins
+(`Packages/manifest.json` + `packages-lock.json`) - see contracts `package-pins` and `sgl-pin`.
 
 Communication: Unity client -> Nakama (auth/economy/social) and -> Gateway (auth +
 redirect only, ADR-3) -> Game server (direct TCP/KCP). Wire: 4-byte BE length prefix +
@@ -28,8 +34,10 @@ the client as a UPM git dependency `com.rpgmmo.shared-gamelogic#sgl-vX.Y.Z`.
   directive, verification rules), each module's `CLAUDE.md`,
   `backend/docs/ARCHITECTURE-DECISIONS.md` (authoritative ADRs; older docs may be stale),
   `backend/docs/MEASUREMENT.md` (incident catalogue behind verify-a-result).
+- Packages: no CLAUDE.md - `README.md`, `Documentation~/*.md`, `.github/workflows/ci.yml`, `release.yml`
+  (UnityDots `Documentation~/RELEASE.md`, UIToolkit `version-bump.yml`).
 - Client: `IndieRPGMMOAdventure/CLAUDE.md` (build, package pins, DOTS Sample, CI, conventions),
-  `.claude/agents/unity-netcode.md` (networking-layer agent), `.claude/skills/` (Unity MCP
+  `.claude/agents/unity-netcode.md` (networking-layer agent - stale since the package split, see `known_issues.unity-netcode-agent-stale`), `.claude/skills/` (Unity MCP
   tool skills + `verify-a-result`).
 
 ## How path -> module mapping works
@@ -53,11 +61,13 @@ jq '.modules[] | select(.id == "server.gateway")' "$R"                          
 jq -r '.modules[] | select(.depends_on | index("server.shared")) | .id' "$R"    # direct dependents
 jq -r '.repos.server | .default_branch, .branch_pattern, .commit_style' "$R"   # git conventions
 jq -r '.known_issues[] | "\(.id): \(.summary)"' "$R"                            # known issues
+jq '.contracts[] | {id, driver, source, copies}' "$R"                             # contracts
+jq -r '.skills | to_entries[] | "\(.key)\t\(.value.kind)\t\(.value.summary)"' "$R"  # skills
 ```
 
 ## Known issues that affect Factory work
 
-Read `.known_issues` in the registry. At v0.1.0 they cover: the dangling `verify-a-result`
+Read `.known_issues` in the registry (the snapshot prints them). They include: the dangling `verify-a-result`
 reference in `TEAM.md`, stale docs claiming the wire-compat E2E suite does not run on PRs
 (it does, via `ci.yml` `test-integration`), `toggle-packages.sh` not updating
 `packages-lock.json`, local `protoc` vs CI pin, and `dotnet.exe`-only WSL.

@@ -5,7 +5,7 @@
 # working tree, branch diff, touched modules (+ dependents), required checks by
 # tier, obligations, toolchain and service availability.
 #
-# Usage: factory-context.sh [--repo server|client|all] [--base <ref>] [--json]
+# Usage: factory-context.sh [--repo <key>|all] [--base <ref>] [--json]
 #                            [--paths <repo-relative path>...]
 #   --repo   limit to one repo (default: all)
 #   --paths  resolve ONLY these paths (requires --repo) instead of git status. Use it
@@ -35,7 +35,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ${#only_paths[@]} -gt 0 ] && [ "$want_repo" = "all" ]; then
-  echo "factory-context: --paths requires --repo server|client" >&2; exit 2
+  echo "factory-context: --paths requires --repo <$(jq -r '.repos | keys | join("|")' "$REGISTRY")>" >&2; exit 2
 fi
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -185,6 +185,7 @@ snapshot=$(jq -cn --arg w "$WORKSPACE" --arg t "$(date -Iseconds)" --arg pr "$PL
                 expected: ($reg[0].tools[.key].expected // null)}],
     services: $svc, repos: $repos,
     global_rules: $reg[0].global_rules,
+    human_gates: ($reg[0].human_gates // []),
     known_issues: ($reg[0].known_issues // [])}')
 
 if [ "$format" = "json" ]; then echo "$snapshot"; exit 0; fi
@@ -207,6 +208,9 @@ def code(s): "`" + s + "`";
 "",
 "## Project-wide rules (registry global_rules)",
 (.global_rules[] | bullet("**" + .id + "** - " + .rule + " _(source: " + .source + ")_")),
+"",
+"## Human gates (always require explicit user authorization)",
+(.human_gates[] | bullet("**" + .id + "** - " + .rule)),
 "",
 "## Known project issues (registry known_issues)",
 (.known_issues[] | bullet("**" + .id + "** (" + .scope + ") - " + .summary)),
@@ -231,6 +235,26 @@ def code(s): "`" + s + "`";
   bullet("Touched: " + (if (.touched | length) == 0 then "none" else (.touched | map(code(.)) | join(", ")) end)),
   bullet("Dependents (must also validate): " + (if (.dependents | length) == 0 then "none" else (.dependents | map(code(.)) | join(", ")) end)),
   (if (.unmapped | length) > 0 then bullet("Unmapped paths (no registry module - decide manually): " + (.unmapped | map(code(.)) | join(", "))) else empty end),
+  (if (.cross_repo_dependents | length) > 0 then
+    bullet("Cross-repo dependents (advisory - validate in that repo, via its skill): " + (.cross_repo_dependents | map(code(.id) + " [" + .repo + "]") | join(", ")))
+  else empty end),
+  (if (.suggested_skills | length) > 0 then
+    "", "### Suggested Factory skills (lead drives; legs run inside it; follow-ups belong to later tasks in other repos)",
+    (.suggested_skills[] | bullet("**" + .role + "** " + code("rpg-factory:" + .skill) + " - " + (.reasons | join("; "))))
+  else empty end),
+  (if (.contracts | length) > 0 then
+    "", "### Contracts touched (keep every end in sync; its driver skill coordinates the chain)",
+    (.contracts[] | bullet(code(.id) + " - " + .summary
+        + (if .driver then "  driver: " + code("rpg-factory:" + .driver) else "" end)),
+      (.hits[] | "  - " + .role + ": " + code(.path)),
+      (.other_ends[] | "  - other end: " + code(.path) + " [" + .repo + "]"),
+      (.upstream[] | "  - upstream: " + code(.path) + " [" + .repo + "] - " + (.how // "")),
+      (.watchers[] | "  - also pinned (informational): " + code(.path) + " [" + .repo + "] - " + (.how // "")))
+  else empty end),
+  (if (.gates | length) > 0 then
+    "", "### Human gates for this change",
+    (.gates[] | bullet(.gate + "  (" + (.sources | join(", ")) + ")"))
+  else empty end),
   (if (.generated_hits | length) > 0 then
     "", "### Generated paths touched (change only via their generator)",
     (.generated_hits[] | bullet(code(.path) + " (generated: " + .generated_by + ")"))

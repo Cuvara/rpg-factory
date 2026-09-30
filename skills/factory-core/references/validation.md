@@ -15,6 +15,19 @@ Use `--paths` with the files *you* changed. Without it the script resolves the w
 tree, which includes the user's pre-existing changes. The list covers touched modules and
 their dependents. Deduplicate identical commands. Run each in `<repo>/<cwd>`.
 
+## Factory check scripts (read-only against product repos)
+
+| Script | Answers |
+|---|---|
+| `scripts/checks/pin-status.py [--remote] [--json]` | every client git-URL pin: manifest == lock, tag exists upstream, newer tags, `.sample-source` agreement |
+| `scripts/checks/pin-plan.py <package> <tag> [--client-ref REF]` | exact manifest/lock edits (hash = tag commit), upstream dependency changes, DOTS Sample recopy files |
+| `scripts/checks/wire-parity.sh` | Netcode `Wire.cs` byte-identical to the server binding; protocol version equal in C#, Go, Netcode |
+| `scripts/checks/netcode-headless.sh` | runs Netcode's headless dotnet tests from a temp copy (Netcode has no .gitignore) and prints .trx counters |
+| `scripts/checks/package-ready.py <pkg-dir>` | release readiness of a package repo -> "READY to tag vX.Y.Z" or the exact reasons |
+| `scripts/checks/unity-package-pins.py <client>` | local mirror of client CI 02-package-pins step 1 + no `file:` pins |
+
+Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks `__pycache__`).
+
 ## Tiers
 
 - **fast** - vet / test / build / cheap static checks. Always run. A missing tool is

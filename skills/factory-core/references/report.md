@@ -27,6 +27,14 @@ every `passed` needs evidence.
 | extended | server.integration-test | integration-e2e | `go test -tags integration ...` | not-run:needs-confirmation | trigger: redirect contract changed |
 | external | server.* | ci | CI on PR | not-run:external | no PR opened (user did not ask) |
 
+<!-- Cross-repo tasks (a driver skill ran): one Validation table PER REPO in leg order, plus: -->
+## Contract evidence (cross-repo tasks only)
+| Contract | End (repo:path) | State (changed / byte-identical / pending leg) | Evidence |
+|---|---|---|---|
+
+## Routing
+- Lead skill: <skill> · legs run: <skills> · follow-ups left: <skill in repo> | none
+
 ## Verification notes
 - Expected vs observed for any measured number.
 - Zero readings proven able to be non-zero, or flagged.

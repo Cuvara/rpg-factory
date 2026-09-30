@@ -1,6 +1,6 @@
 ---
 name: factory-core
-description: Factory workflow for the UnityIndie RPG MMO workspace (rpg-mmo-server Go/C# backend + IndieRPGMMOAdventure Unity client). Use at the start of ANY code, config, CI, or docs change in those repos - features, fixes, refactors, tests, package bumps - and before reporting such work as done. Provides the live workspace snapshot, affected modules and dependents, required validation by tier, module rules, git safety, and the mandatory verify-a-result final report. Other rpg-factory skills build on it.
+description: Factory workflow for the UnityIndie RPG MMO workspace - rpg-mmo-server (Go/C# backend), IndieRPGMMOAdventure (Unity client) and the Netcode, UnityDots and UIToolkit package repos. Use at the start of ANY code, config, CI, deploy, measurement or docs change in those repos, and before reporting such work as done. Provides the live snapshot (modules, dependents, cross-repo impact, contracts, suggested specialised skill), required validation by tier, human gates, git safety and the mandatory verify-a-result report. Every other rpg-factory skill runs on top of it.
 argument-hint: "[task description]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 ---
@@ -30,24 +30,31 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    would invent a gameplay rule, stop and ask (**H**, rule `phase-plumbing-only`).
 2. **Baseline (M).** Record the snapshot's changed paths as the *user's baseline*. Never
    modify, stage, stash, clean, reset or commit baseline paths unless the user names them.
-3. **Branch (M).** If the repo is on a protected branch and the task will produce a
+   For a repo not in the default snapshot, run `factory-context.sh --repo <key>`.
+3. **Route (M).** Resolve the files the task will touch:
+   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <file>...` and read
+   **Suggested Factory skills**. You MUST invoke every **lead** skill with the Skill tool before
+   planning or editing (reading its guidance from the snapshot is not enough) and follow it; it runs its
+   **legs**. **Follow-ups** are later work in other repos: name them in the report. If nothing is
+   suggested, continue with Core alone. Skill map: `references/skill-contract.md` §Routing.
+4. **Branch (M).** If the repo is on a protected branch and the task will produce a
    commit, create `type/module/topic` from the default branch first. Branching is local
    and allowed; committing, pushing, PRs, merges and tags are **H** (only on request).
-4. **Plan (O/M).** Mandatory when the change spans modules, touches a cross-language
+5. **Plan (O/M).** Mandatory when the change spans modules, touches a cross-language
    contract, or a generated path. Use plan mode or a short written plan.
-5. **Implement (M).** Only the requested scope. Follow the module rules. Generated paths
+6. **Implement (M).** Only the requested scope. Follow the module rules. Generated paths
    change only through their generator. Never edit submodules or embedded package clones.
-6. **Resolve validation (M).** Re-run the context script for exactly the files you changed:
-   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <server|client> --paths <file>...`
+7. **Resolve validation (M).** Re-run the context script for exactly the files you changed:
+   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <file>...`
    This yields touched modules, dependents, checks by tier, and obligations for *your* change,
    untouched by the user's baseline.
-7. **Obligations (M).** CHANGELOG entry under `## [Unreleased]` per touched module; docs;
+8. **Obligations (M).** CHANGELOG entry under `## [Unreleased]` per touched module; docs;
    regenerated artifacts; both sides of cross-language contracts; `.meta` files for Unity
    and Shared.GameLogic assets; version bump without tag where required.
-8. **Validate (M).** Run by tier - see *Validation* below.
-9. **Verify (M).** Apply the verify-a-result checklist to every number you will report.
-10. **Review (O).** For non-trivial diffs run `/code-review` on the changed repo.
-11. **Report (M).** Use the template in `references/report.md`. No other format.
+9. **Validate (M).** Run by tier - see *Validation* below.
+10. **Verify (M).** Apply the verify-a-result checklist to every number you will report.
+11. **Review (O).** For non-trivial diffs run `/code-review` on the changed repo.
+12. **Report (M).** Use the template in `references/report.md`. No other format.
 
 ## Validation
 
@@ -74,12 +81,28 @@ Details, evidence parsing per tool, and environment caveats: `references/validat
 - Canonical checklist: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md` and
   `rpg-mmo-server/backend/docs/MEASUREMENT.md`. Never write "tests look good".
 
-## Git safety
+## Git safety and human gates
 
-The plugin's PreToolUse hook asks the user before destructive git (reset --hard, clean -f,
-checkout -- / restore, stash, branch -D, force/any push, rebase), `add -A`/`add .`, commit on
-protected branches, `commit -a/--amend`, tags, and submodule updates. The hook is a backstop,
-not the policy - the policy is in `references/git-safety.md`. Stage explicit paths only.
+The plugin's PreToolUse hook **denies** creating, deleting or pushing tags (agents never tag -
+stop at "ready to tag <repo> <tag>"). It **asks** before destructive git (reset --hard, clean -f,
+checkout -- / restore, stash, branch -D, rebase), any push, `add -A`/`add .`, commits on
+protected branches, `commit -a/--amend`, submodule updates, and before commands matching a
+registry `human_gates` entry (kubectl/helm/ssh, workflow dispatch, secrets, toggle-packages.sh,
+local stack). The hook is a backstop; the policy is `references/git-safety.md`. Stage explicit
+paths only.
+
+## Skills
+
+| Situation | Lead skill |
+|---|---|
+| wire message/field, protocol version, JSON encoding, Redis servers:id hash | `wire-contract` (drives server → Netcode → client) |
+| move a client pin to a released package / sgl tag | `pin-bump` |
+| C# game server, ECS systems, knobs, metrics, Shared.GameLogic, golden vectors | `server-realtime` |
+| Go gateway, Nakama RPCs, Redis store, persistence/migrations | `server-services` |
+| Docker, compose, k8s/Agones, monitoring, backups, CD | `server-ops` |
+| Netcode / UnityDots / UIToolkit package code, up to ready-to-tag | `unity-package` |
+| client VContainer wiring, Nakama/session, HUD/UI, DotsViews, build scripts | `client-integration` |
+| benchmark, encoding sweep, re-baseline, multi-client verification | `measure` |
 
 ## References - read when
 

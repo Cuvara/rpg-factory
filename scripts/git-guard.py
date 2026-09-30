@@ -6,8 +6,13 @@ workspace and are destructive or high-impact, prints a PreToolUse decision of
 "ask" with the reasons, so the user confirms even when an allow rule or a
 permissive permission mode would otherwise run the command silently.
 
-Never blocks ("deny") and never approves: no output + exit 0 means "no opinion",
-and the normal permission flow applies. Any internal error also means no opinion.
+Decisions:
+  - "deny" for creating/deleting tags and pushing tags (global rule: agents never tag).
+  - "ask" for every other guarded git operation and for Bash commands matching a
+    registry human_gates[].match regex (kubectl/helm/ssh, workflow dispatch, secrets,
+    toggle-packages.sh, local stack) - human_gates[].decision may raise it to "deny".
+Never approves: no output + exit 0 means "no opinion" and the normal permission flow
+applies. Any internal error also means no opinion.
 
 Disable for one session with RPG_FACTORY_GUARD=off.
 """
@@ -19,6 +24,7 @@ import subprocess
 import sys
 
 DEFAULT_PROTECTED = ["develop", "staging", "main", "master", "release-*"]
+TAG_REF = r"^(refs/tags/|v\d|sgl-v\d|core-baseline)"
 SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
 # git global options that take a separate value argument
 GLOBAL_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
@@ -184,12 +190,12 @@ def classify(sub, args, branch, patterns):
     elif sub == "branch" and (has_short_flag(args, "D") or ("--delete" in a and ("--force" in a or has_short_flag(args, "f")))):
         reasons.append("`git branch -D` force-deletes a branch (unmerged work is lost)")
     elif sub == "push":
+        if "--tags" in a or "--follow-tags" in a or any(re.match(TAG_REF, x.lstrip("+:")) for x in args):
+            reasons.append(("deny", "pushing tags is a release action reserved for the lead (agents never tag)"))
         if any(x == "--force" or x.startswith("--force-with-lease") or x.startswith("--force-if-includes") for x in args) or has_short_flag(args, "f") or any(x.startswith("+") for x in args):
             reasons.append("force push rewrites remote history")
         if "--delete" in a or has_short_flag(args, "d") or any(x.startswith(":") and len(x) > 1 for x in args):
             reasons.append("push deletes a remote ref")
-        if "--tags" in a or "--follow-tags" in a:
-            reasons.append("push publishes tags (tagging is reserved for the lead)")
         if not reasons:
             reasons.append("push publishes commits to the remote - only when the user asked for it")
     elif sub == "add" and (a & {"-A", "--all", ".", ":/", "*"} or has_short_flag(args, "A")):
@@ -204,7 +210,7 @@ def classify(sub, args, branch, patterns):
     elif sub == "tag":
         listing = (not args) or a & {"-l", "--list", "-v", "--verify", "--contains", "--points-at"} or all(x.startswith("-n") for x in args)
         if not listing:
-            reasons.append("creating/deleting tags is a release action reserved for the lead")
+            reasons.append(("deny", "creating/deleting tags is a release action reserved for the lead (agents never tag)"))
     elif sub == "submodule" and args and args[0] in {"update", "deinit", "sync", "foreach"}:
         reasons.append(f"`git submodule {args[0]}` changes submodule checkouts (the client's com.gdk.* state belongs to the user)")
     elif sub == "rebase" and not a & {"--abort", "--continue", "--skip", "--quit"}:
@@ -258,8 +264,32 @@ def evaluate(payload, registry):
             predicted_branch[top] = created
         where = os.path.relpath(top, ws) if top else os.path.relpath(eff, ws)
         for r in classify(sub, args, branch, patterns):
-            reasons.append(f"[{where}] {r}")
+            decision, text = r if isinstance(r, tuple) else ("ask", r)
+            reasons.append((decision, f"[{where}] {text}"))
     return reasons
+
+
+def human_gate_hits(payload, registry):
+    """Registry human_gates with a `match` regex, applied to each command segment inside the workspace."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    cwd = payload.get("cwd") or os.getcwd()
+    if not find_workspace(cwd, registry) and not any(find_workspace(os.path.expanduser(t), registry)
+                                                     for t in re.findall(r"(/[^\s'\"]+)", command)):
+        return []
+    hits = []
+    for seg in segments(tokenize(command)):
+        text = " ".join(seg)
+        for g in registry.get("human_gates", []):
+            m = g.get("match")
+            if not m:
+                continue
+            try:
+                matched = re.search(m, text)
+            except re.error:  # one bad registry regex must not disable the rest of the guard
+                continue
+            if matched:
+                hits.append((g.get("decision", "ask"), f"human gate '{g['id']}': {g['rule']}"))
+    return hits
 
 
 def main():
@@ -274,17 +304,20 @@ def main():
     registry = load_registry()
     if not registry:
         return 0
-    try:
-        reasons = evaluate(payload, registry)
-    except Exception:  # a guard bug must never break the session
-        return 0
+    reasons = []
+    for part in (evaluate, human_gate_hits):  # isolated: a failure in one never drops the other
+        try:
+            reasons += part(payload, registry)
+        except Exception:  # a guard bug must never break the session
+            pass
     if not reasons:
         return 0
+    decision = "deny" if any(d == "deny" for d, _ in reasons) else "ask"
     json.dump({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": "rpg-factory git guard: " + "; ".join(dict.fromkeys(reasons)),
+            "permissionDecision": decision,
+            "permissionDecisionReason": "rpg-factory guard: " + "; ".join(dict.fromkeys(t for _, t in reasons)),
         }
     }, sys.stdout)
     return 0

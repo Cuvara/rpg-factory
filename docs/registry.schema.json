@@ -4,34 +4,90 @@
   "title": "rpg-factory registry",
   "description": "Module-level source of truth for Factory Core. Unknown properties are allowed everywhere so future skills can add keys without a schema bump; consumers must ignore keys they do not understand. Enforced by scripts/check-registry.sh.",
   "type": "object",
-  "required": ["schema_version", "workspace", "tiers", "result_states", "tools", "repos", "modules", "global_rules"],
+  "required": [
+    "schema_version",
+    "workspace",
+    "tiers",
+    "result_states",
+    "tools",
+    "repos",
+    "modules",
+    "global_rules",
+    "skills",
+    "contracts",
+    "human_gates"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": {
+      "const": 2
+    },
     "workspace": {
       "type": "object",
-      "required": ["root_default", "root_env", "root_markers"],
+      "required": [
+        "root_default",
+        "root_env",
+        "root_markers"
+      ],
       "properties": {
-        "root_default": { "type": "string" },
-        "root_env": { "type": "string" },
-        "root_markers": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        "root_default": {
+          "type": "string"
+        },
+        "root_env": {
+          "type": "string"
+        },
+        "root_markers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
       }
     },
     "tiers": {
       "type": "object",
-      "required": ["fast", "extended", "external"],
-      "additionalProperties": { "type": "string" }
+      "required": [
+        "fast",
+        "extended",
+        "external"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
     },
-    "result_states": { "type": "array", "items": { "type": "string" } },
+    "result_states": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "tools": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["candidates", "version_args"],
+        "required": [
+          "candidates",
+          "version_args"
+        ],
         "properties": {
-          "candidates": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Tried in order; first found on PATH wins (e.g. dotnet, then dotnet.exe)." },
-          "version_args": { "type": "string" },
-          "expected": { "type": "string", "description": "Version CI pins, shown next to the local version." },
-          "note": { "type": "string" }
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Tried in order; first found on PATH wins (e.g. dotnet, then dotnet.exe)."
+          },
+          "version_args": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string",
+            "description": "Version CI pins, shown next to the local version."
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
@@ -39,86 +95,420 @@
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["probe"],
-        "properties": { "probe": { "type": "string", "pattern": "^tcp://" }, "purpose": { "type": "string" } }
+        "required": [
+          "probe"
+        ],
+        "properties": {
+          "probe": {
+            "type": "string",
+            "pattern": "^tcp://"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        }
       }
     },
     "global_rules": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "rule", "source"],
-        "properties": { "id": { "type": "string" }, "rule": { "type": "string" }, "source": { "type": "string" } }
+        "required": [
+          "id",
+          "rule",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
       }
     },
     "repos": {
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["path", "default_branch", "protected_branches", "instructions"],
+        "required": [
+          "path",
+          "default_branch",
+          "protected_branches",
+          "instructions"
+        ],
         "properties": {
-          "path": { "type": "string", "description": "Relative to the workspace root." },
-          "remote": { "type": "string" },
-          "default_branch": { "type": "string" },
-          "protected_branches": { "type": "array", "items": { "type": "string" }, "description": "Exact names or prefix globs ending in *." },
-          "branch_pattern": { "type": "string" },
-          "commit_style": { "type": "string" },
-          "merge": { "type": "string" },
-          "instructions": { "type": "array", "items": { "type": "string" } },
-          "notes": { "type": "array", "items": { "type": "string" } }
+          "path": {
+            "type": "string",
+            "description": "Relative to the workspace root."
+          },
+          "remote": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "protected_branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Exact names or prefix globs ending in *."
+          },
+          "branch_pattern": {
+            "type": "string"
+          },
+          "commit_style": {
+            "type": "string"
+          },
+          "merge": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       }
     },
     "modules": {
       "type": "array",
-      "items": { "$ref": "#/$defs/module" }
+      "items": {
+        "$ref": "#/$defs/module"
+      }
     },
     "known_issues": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "scope", "summary"],
-        "properties": { "id": { "type": "string" }, "scope": { "type": "string" }, "summary": { "type": "string" } }
+        "required": [
+          "id",
+          "scope",
+          "summary"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "description": "Every skill directory under skills/ must be registered here and vice versa (check-registry.sh).",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "kind",
+          "repos",
+          "summary"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "core",
+              "repo",
+              "cross-repo"
+            ],
+            "description": "cross-repo skills drive contracts and orchestrate legs; repo skills implement inside one repo."
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "human_gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "rule"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string",
+            "description": "Python regex applied by the git guard to each Bash command segment inside the workspace."
+          },
+          "decision": {
+            "enum": [
+              "ask",
+              "deny"
+            ],
+            "default": "ask"
+          }
+        }
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "summary",
+          "source",
+          "copies",
+          "driver",
+          "gate",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/contract_end"
+          },
+          "copies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/contract_end"
+            },
+            "description": "Ends that must change with the source; touching one routes to the driver."
+          },
+          "upstream": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/contract_end"
+            },
+            "description": "Where released versions come from (informational, never routes)."
+          },
+          "watchers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/contract_end"
+            },
+            "description": "Other consumers pinned independently (informational, never routes)."
+          },
+          "driver": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Skill that leads when this contract is touched (cross-repo drivers always lead; repo drivers lead when the source is touched)."
+          },
+          "gate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "human_gates id raised by this contract."
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
       }
     }
   },
   "$defs": {
     "check": {
       "type": "object",
-      "required": ["id", "run", "evidence"],
+      "required": [
+        "id",
+        "run",
+        "evidence"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "cwd": { "type": "string", "description": "Repo-relative working directory. Default '.'." },
-        "run": { "type": "string", "description": "Command (fast/extended) or instruction (external). Placeholders: {dotnet}, {plugin_root}." },
-        "trigger": { "type": "string", "description": "When an extended check becomes required." },
-        "evidence": { "type": "string", "description": "What counts as proof. Must name counts where the tool reports them." }
+        "id": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Repo-relative working directory. Default '.'."
+        },
+        "run": {
+          "type": "string",
+          "description": "Command (fast/extended) or instruction (external). Placeholders: {dotnet}, {plugin_root}."
+        },
+        "trigger": {
+          "type": "string",
+          "description": "When an extended check becomes required."
+        },
+        "evidence": {
+          "type": "string",
+          "description": "What counts as proof. Must name counts where the tool reports them."
+        }
       }
     },
     "module": {
       "type": "object",
-      "required": ["id", "repo", "paths", "responsibility", "depends_on", "checks", "rules", "generated", "tools", "obligations"],
+      "required": [
+        "id",
+        "repo",
+        "paths",
+        "responsibility",
+        "depends_on",
+        "checks",
+        "rules",
+        "generated",
+        "tools",
+        "obligations"
+      ],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z]+\\.[a-z0-9-]+$" },
-        "repo": { "type": "string" },
-        "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Repo-relative prefixes. Trailing / = directory. Longest match wins." },
-        "responsibility": { "type": "string" },
-        "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Module ids this module consumes. A change in any of them makes this module a dependent that must be validated." },
-        "claude_md": { "type": ["string", "null"] },
-        "docs": { "type": "array", "items": { "type": "string" } },
-        "changelog": { "type": ["string", "null"] },
-        "rules": { "type": "array", "items": { "type": "string" } },
-        "generated": { "type": "array", "items": { "type": "string" }, "description": "Paths (or **/*suffix globs) produced by a generator; never hand-edit." },
-        "tools": { "type": "array", "items": { "type": "string" } },
-        "checks": {
-          "type": "object",
-          "required": ["fast", "extended", "external"],
-          "properties": {
-            "fast": { "type": "array", "items": { "$ref": "#/$defs/check" } },
-            "extended": { "type": "array", "items": { "$ref": "#/$defs/check" } },
-            "external": { "type": "array", "items": { "$ref": "#/$defs/check" } }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z]+\\.[a-z0-9-]+$"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "Repo-relative prefixes. Trailing / = directory. Longest match wins."
+        },
+        "responsibility": {
+          "type": "string"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Module ids this module consumes. A change in any of them makes this module a dependent that must be validated."
+        },
+        "claude_md": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "docs": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         },
-        "obligations": { "type": "array", "items": { "type": "string" } }
+        "changelog": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generated": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Paths (or **/*suffix globs) produced by a generator; never hand-edit."
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checks": {
+          "type": "object",
+          "required": [
+            "fast",
+            "extended",
+            "external"
+          ],
+          "properties": {
+            "fast": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "extended": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            },
+            "external": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/check"
+              }
+            }
+          }
+        },
+        "obligations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Skills owning this module (registry.skills keys). Drives Suggested Factory skills."
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "human_gates ids raised when this module is touched."
+        }
+      }
+    },
+    "contract_end": {
+      "type": "object",
+      "required": [
+        "repo",
+        "path"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "how": {
+          "type": "string"
+        }
       }
     }
   }

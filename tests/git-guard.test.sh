@@ -64,9 +64,36 @@ check allow "$SERVER" "git checkout -b feat/gateway/y && git commit -m 'feat(gat
 check allow "$FEATURE" "git commit -m 'feat(gateway): x'"
 check ask "$FEATURE" "git commit --amend --no-edit"
 # tags + submodules
-check ask "$SERVER" "git tag sgl-v0.7.0"
-check ask "$SERVER" "git push origin --tags"
+check deny "$SERVER" "git tag sgl-v0.7.0"
+check deny "$SERVER" "git tag -a v1.2.3 -m release"
+check deny "$SERVER" "git tag -d v0.1.0"
+check deny "$SERVER" "git push origin --tags"
+check deny "$SERVER" "git push origin v1.2.3"
+check deny "$SERVER" "git push origin refs/tags/core-baseline-v2"
+check deny "$SERVER" "git status && git tag v9.9.9"
 check ask "$CLIENT" "git submodule update --init --recursive"
+# registry human gates (ask) inside the workspace
+check ask "$SERVER" "kubectl apply -f backend/deploy/k8s/app/50-fleet-map.yaml"
+check ask "$SERVER" "helm upgrade x y"
+check ask "$SERVER" "ssh deploy@vps.example"
+check ask "$SERVER" "gh workflow run cd.yml --ref develop"
+check ask "$SERVER" "gh pr create --fill"
+check ask "$WS" "./toggle-packages.sh dev"
+check ask "$SERVER" "cat backend/deploy/kubeconfig.local"
+check ask "$SERVER" "make flow-up"
+check ask "$CLIENT" "bash Tools/run-clients.sh 4"
+check allow "$SERVER" "make flow-check"
+check allow "$SERVER" "gh pr view 12"
+check allow "$SERVER" "echo kubectl is gated"
+check allow "$OUT" "kubectl get pods"
+check ask "$SERVER" "sudo kubectl get pods -n rpg"
+check ask "$SERVER" "KUBECONFIG=x kubectl apply -f a.yaml"
+check ask "$SERVER" "bash backend/deploy/k8s/verify/verify.sh --target k8s-dev"
+check ask "$SERVER" "bash backend/deploy/db/backup.sh"
+check ask "$SERVER" "JWT_SECRET=x ./scripts/bench.sh 50 60s cluster out"
+check ask "$CLIENT" "Unity.exe -batchmode -executeMethod PlayerBuilder.Build"
+check ask "$SERVER" "psql -c 'DELETE FROM schema_migrations'"
+check allow "$SERVER" "cat backend/deploy/.env.example"
 # quoted / heredoc content is data, not commands
 check allow "$FEATURE" "git commit -m \"\$(cat <<'EOF'
 docs: explain why git reset --hard is guarded
@@ -75,11 +102,18 @@ EOF
 check allow "$FEATURE" "git commit -F - <<'EOF'
 chore: mention git push --force in docs
 EOF"
+check allow "$FEATURE" "git commit -m 'docs: explain that agents never git tag'"
 # chained commands: one dangerous segment is enough
 check ask "$SERVER" "git status && git clean -fdx"
 # outside the workspace and opt-out
 check allow "$OUT" "git reset --hard"
 check allow "$SERVER" "git reset --hard" "RPG_FACTORY_GUARD=off"
+# a broken registry regex must not disable git protection (fail-open regression)
+BROKEN="$TMP/broken-plugin"; mkdir -p "$BROKEN/scripts"
+jq '.human_gates[1].match = "(("' "$ROOT/registry.json" > "$BROKEN/registry.json"
+payload=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash", tool_input:{command:"git reset --hard"}, cwd:$d}')
+got=$(CLAUDE_PLUGIN_ROOT="$BROKEN" python3 "$GUARD" <<<"$payload" | jq -r '.hookSpecificOutput.permissionDecision // "allow"')
+if [ "$got" = "ask" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL broken regex disabled git protection (got $got)"; fi
 # non-Bash payloads are ignored
 out=$(jq -cn '{tool_name:"Read", tool_input:{file_path:"x"}, cwd:"/"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
 if [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL non-Bash payload produced output: $out"; fi

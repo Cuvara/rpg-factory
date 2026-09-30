@@ -1,61 +1,134 @@
-# Skill contract - building on Factory Core
+# Skill contract
 
-Future rpg-factory skills (feature, fix, refactor, test, review, build, release, and
-domain workflows like "bump netcode") **specialise** the Factory workflow. They do not
-replace it.
+Every rpg-factory skill **specialises** Factory Core's workflow. None of them replaces it. This
+page is the contract that skill authors and skill runners follow.
 
-## What every skill gets for free
+## Layering
 
-| Need | Source | Do not |
+```
+factory-core  - scope, baseline, branch, plan, implement, obligations, validate, verify, review, report
+     │          (snapshot: modules, dependents, cross-repo dependents, contracts, suggested skills, gates)
+     ├── cross-repo drivers  - wire-contract, pin-bump, measure
+     │        own: ordering, contract evidence, hand-offs, human gates between legs, per-repo report
+     └── repo skills         - server-realtime, server-services, server-ops, unity-package, client-integration
+              own: implementation + validation inside one repo (one leg)
+```
+
+| Belongs in Core | Belongs in a specialised skill |
+|---|---|
+| snapshot, module resolution, dependents, contracts detection | domain architecture: where things live, how a feature is wired |
+| workflow steps and result states | domain rules and review checklist |
+| validation tiers, evidence rules, report template | the domain's validation delta: which extended/external checks matter and how to read their evidence |
+| git safety and the guard | domain human gates (kubectl, toggling client packages, ...) |
+| registry schema | registry *content* for its modules (`skills`, `rules`, `checks`) |
+
+## What every skill must do
+
+1. **Core first.** The first line of the body is:
+   > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
+   Skills never re-derive git state, modules, dependents or checks. They read the snapshot or run
+   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> [--json] [--paths ...]`.
+2. **Registry facts only.** Paths, commands, docs, changelogs and generated paths come from
+   `registry.json`. The prose in SKILL.md explains *how to work*. It does not restate facts
+   the registry holds. When you need a fact, query it with `jq`.
+3. **Own only its domain.** Declare the repos and modules in scope. Anything outside that list
+   is a hand-off to the owning skill (see `registry.skills`), not an edit.
+4. **Declare the validation delta.** Say which extended and external checks the domain triggers
+   and how to read their evidence. The fast tier is always Core's.
+5. **Declare protected and generated paths.** Name each one and its generator.
+6. **Declare human gates.** Use the registry `human_gates` plus any domain gates. Stop at each
+   gate and ask the user.
+7. **Produce domain evidence.** Examples: test counts, byte-identical diffs, pin agreement, a
+   measurement with a control.
+8. **Never tag.** Tags (`v*`, `sgl-v*`, `core-baseline-*`) are created by the lead. The guard
+   denies `git tag <name>` and pushing tags. Skills stop at **"ready to tag <repo> <version>"**.
+9. **Never bypass Core.** This covers the baseline, the guard, and the report template.
+10. **Never create another registry.** No feature lists, GDD state or task trackers. Feature and
+    GDD lifecycle belongs to `game-ai-workflows`. Module knowledge belongs to `registry.json`.
+
+## SKILL.md layout (at most about 150 lines)
+
+```markdown
+---
+name: <skill>
+description: <semantic: the developer situation it applies to, and what it is NOT for>
+argument-hint: "[task]"
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+---
+# <Skill title>
+> **Prerequisite:** follow `rpg-factory:factory-core` ...
+## Applies when / Not when
+## Scope            (repos, registry module ids; hand-offs)
+## Workflow delta   (only the steps that differ from or add to Core, numbered)
+## Rules            (domain rules not already in registry module rules; cite the source doc)
+## Generated & protected paths
+## Validation delta (extended/external checks and their evidence)
+## Human gates
+## Review checklist
+## Report additions (what the Core report must also contain)
+```
+
+`references/` is optional and holds at most 3 files, only for real domain content such as
+architecture maps or procedures. Every fact in them must be checked against the repository
+when it is written, and cite the file it came from.
+
+**Descriptions must be semantic.** A good example: "Use when changing a network message,
+protocol field, ...". A description that is only a list of keywords ("protobuf, redis") is not
+allowed.
+
+## Routing
+
+`factory-context.sh --paths ...` prints **Suggested Factory skills** with a role:
+
+| Role | Comes from | Meaning |
 |---|---|---|
-| Repo, branch, dirty state, baseline | `factory-context.sh` snapshot | run your own ad-hoc git survey |
-| Affected modules and dependents | `factory-context.sh --repo R --paths ...` | hand-map paths to modules |
-| Module rules, docs, changelog, generated paths | `registry.json` | hard-code module knowledge in SKILL.md |
-| Checks by tier + evidence format | `registry.json` via the snapshot | invent validation commands |
-| Git safety | `references/git-safety.md` + hook | re-implement guards |
-| Report format | `references/report.md` | invent a new report shape |
+| **lead** | the driver of a touched contract (cross-repo drivers always; repo-kind drivers when the contract **source** changed), otherwise the skills of touched modules | invoke it first; it owns ordering |
+| **leg** | owners of a touched contract's other ends in this repo, owners of first-hop dependents when a cross-repo driver leads, owners of touched modules when a driver leads | runs inside the lead's workflow |
+| **follow-up** | skills of cross-repo dependents and other-repo contract ends | later work in another repo; name it in the report |
 
-## How a skill depends on Core
+Several leads without a driver (e.g. a game-server change plus a benchmark write-up) run in
+dependency order: the code change before its deployment or measurement. The user can always
+name a skill explicitly (`/rpg-factory:<skill>`). `tests/routing.test.sh` pins this behaviour
+with task scenarios and real historical commits.
 
-1. **Skill** (`skills/<name>/SKILL.md` in this plugin). Begin the body with:
+## Composition (driver → legs)
 
-   > Follow `rpg-factory:factory-core` (invoke it first if it is not already loaded this
-   > task). This skill owns steps <n..m>; all other steps are Core's.
+- The driver plans the legs in contract order, for example server → netcode → client.
+- For each leg, the driver invokes the leg's skill (Skill tool) with the leg's scope. The leg
+  skill implements and validates in its repo, using `factory-context.sh --repo <key> --paths ...`,
+  and returns its validation table.
+- Between legs the driver checks **contract evidence**, for example that `Wire.cs` is
+  byte-identical to the server copy, and stops at human gates such as tags.
+- File ownership: every file maps to one module, and so to that module's skill. The driver
+  itself edits only files that no leg owns. **Exception - contract co-edits:** a contract may
+  carry a `co_edit` clause that names the exact lines another skill may touch in the same commit
+  (e.g. `server-knobs`: `server-realtime` adds only the `env:` passthrough lines in compose/fleet
+  manifests owned by `server-ops`). Nothing outside that clause.
+- Conflicting rules: **the stricter rule wins**. Precedence when rules are equally strict:
+  `global_rules` > `human_gates` > Core git safety > driver skill > leg skill > module rules.
+- The final report is Core's template with **one validation table per repo** plus a
+  **contract evidence** table.
 
-   Add a live snapshot line if the skill needs it immediately:
-   `` !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh" --repo server 2>&1` ``
-2. **Agent** (`agents/<name>.md`). Preload Core with `skills: [factory-core]` in the
-   frontmatter and scope the agent to one repo in its description (see the rpg-team
-   convention: one teammate per repo).
+## Extending the registry
 
-## What a skill must declare (at the top of its SKILL.md)
+- New module: add a `modules[]` entry with `skills`. Run `scripts/check-registry.sh`.
+- New contract: add a `contracts[]` entry `{id, summary, source, copies, driver, gate, evidence}` and
+  optionally `upstream` (where released versions come from), `watchers` (independent consumers) and
+  `co_edit` (exact lines another skill may touch); only `source`/`copies` route.
+  Every `path` must exist in its repo.
+- New skill: add `skills.<name>` = `{kind, repos, summary}` and `skills/<name>/SKILL.md`. The
+  checker fails when either one exists without the other.
+- New human gate: add `human_gates[]` `{id, rule, match?, decision?}`. When `match` (a Python
+  regex) is present, the git guard asks, or denies when `decision` is `deny`, for Bash commands
+  that match it inside the workspace.
 
-- **Task types** it handles (feature, fix, release, ...).
-- **Scope**: repos/modules it may change. Anything else is out of scope and needs asking.
-- **Owned steps**: which workflow steps it specialises (for example "Implement" and
-  "Validate: extended"), and what it adds (extra checks, extra obligations).
-- **Human gates** it adds beyond Core's.
-
-## Extending knowledge without touching Core logic
-
-- **New module or new path** -> add an entry to `registry.json` `modules`. The schema is
-  open: unknown keys are ignored by Core, so a skill may add its own keys
-  (`"release": {...}`) and read them with `jq`.
-- **New check** -> add it to the module's `checks.<tier>`. Placeholders: `{dotnet}`,
-  `{plugin_root}`. Put helper scripts in `scripts/checks/`.
-- **New repo** (for example Netcode/UIToolkit/UnityDots) -> add `repos.<key>` plus modules.
-  The context script and hook pick it up automatically.
-- Run `scripts/check-registry.sh` and `tests/run-all.sh` after every registry change.
-
-Change `factory-context.sh`, `resolve.jq`, the hook, or this contract only when a need is
-common to several skills. Record the reason in `CHANGELOG.md`.
+After any change run `tests/run-all.sh`. It must report 0 failed.
 
 ## Coexistence
 
-- Unity MCP tool skills and the `verify-a-result` skill live in the client repo's
-  `.claude/skills/` and remain there. Factory skills call them instead of duplicating them.
-- The client `.claude/agents/unity-netcode.md` owns the client networking layer. Factory
-  skills hand networking work to it.
-- `game-ai-workflows` (user-level plugin: GDD, feature registry) is independent. Factory
-  Core neither reads nor writes its state.
-- Built-in `/code-review` is the review step. Do not add a parallel reviewer to Core.
+- **Product repos:** their own `.claude` assets stay where they are: the client's Unity-MCP
+  tool skills, `verify-a-result`, and the `unity-netcode` agent, which is stale (see
+  `known_issues`). Skills call them. They do not copy them.
+- **`game-ai-workflows`:** independent. Factory never reads or writes `.ai/`, `docs/registry/`
+  or `docs/features/`.
+- **Review:** the built-in `/code-review` is the review step.

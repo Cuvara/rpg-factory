@@ -1,6 +1,6 @@
 {
   "$schema": "./docs/registry.schema.json",
-  "schema_version": 1,
+  "schema_version": 2,
   "workspace": {
     "name": "UnityIndie RPG MMO",
     "root_default": "/mnt/c/Workspaces/UnityIndie",
@@ -107,11 +107,6 @@
       "source": "rpg-mmo-server/backend/TEAM.md#current-phase"
     },
     {
-      "id": "no-tags",
-      "rule": "Tagging is a release action reserved for the lead. Agents never create tags (v*, sgl-v*, core-baseline-*).",
-      "source": "rpg-mmo-server/backend/TEAM.md"
-    },
-    {
       "id": "changelog",
       "rule": "Every change adds an entry under '## [Unreleased]' (Keep a Changelog: Added/Changed/Fixed/Removed/Deprecated/Security) in the CHANGELOG of every touched module.",
       "source": "rpg-mmo-server/backend/TEAM.md; IndieRPGMMOAdventure/CLAUDE.md#conventions"
@@ -135,6 +130,16 @@
       "id": "verify-a-result",
       "rule": "A result is evidence only after it passes the verify-a-result checklist: count passes (never infer from absence of failures), prove a zero can be non-zero, name the object measured, write the expected value before measuring.",
       "source": "IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md; rpg-mmo-server/backend/docs/MEASUREMENT.md"
+    },
+    {
+      "id": "no-tags",
+      "rule": "Agents never create or push tags in ANY workspace repo (v*, sgl-v*, core-baseline-*). Tags are release actions of the lead. Skills stop at 'ready to tag <repo> <tag>' with evidence; the git guard denies tag creation and tag pushes.",
+      "source": "rpg-mmo-server/backend/TEAM.md; user decision 2026-09-30 (package repos)"
+    },
+    {
+      "id": "no-feature-registry",
+      "rule": "Factory never creates feature registries, GDD state or task trackers (.ai/, docs/registry/, docs/features/) - that lifecycle belongs to the game-ai-workflows plugin.",
+      "source": "rpg-factory skill contract"
     }
   ],
   "repos": {
@@ -180,6 +185,74 @@
         "Unity 6000.3.9f1. No local test CLI: EditMode/PlayMode tests run in the Unity Test Runner (Editor via MCP) or CI 01-ci.yml.",
         "Packages/com.gdk.* and unity-build-workflows are git submodules. Packages/com.cuvara.* are gitignored embedded clones.",
         "Worktrees are discouraged here: each one needs its own multi-GB Library/ import."
+      ]
+    },
+    "netcode": {
+      "path": "Netcode",
+      "remote": "https://github.com/Cuvara/Netcode",
+      "default_branch": "develop",
+      "protected_branches": [
+        "develop",
+        "main",
+        "release/*",
+        "sync-main/*"
+      ],
+      "branch_pattern": "<type>/<area>/<slug> e.g. fix/prediction/replay-cap; release/vX.Y.Z by the lead",
+      "commit_style": "Conventional Commits with scope and (#PR): feat(view): ... (#163), chore(release): 0.45.0 (#176)",
+      "merge": "PR into develop; tag vX.Y.Z on develop (release.yml), sync-main.yml opens develop->main PR",
+      "instructions": [
+        "README.md",
+        "Documentation~/NETCODE.md",
+        "Documentation~/WIRE-PROTOCOL.md"
+      ],
+      "notes": [
+        "No CLAUDE.md in this repo.",
+        "No .gitignore: building/testing in place leaves bin/ obj/ untracked - use scripts/checks/netcode-headless.sh (temp copy).",
+        "Unity tests run only in CI (game-ci) or inside the client project with a local file: toggle (human gate)."
+      ]
+    },
+    "unitydots": {
+      "path": "UnityDots",
+      "remote": "https://github.com/Cuvara/UnityDots",
+      "default_branch": "main",
+      "protected_branches": [
+        "main",
+        "develop"
+      ],
+      "branch_pattern": "<type>/<topic>, PR into main (Documentation~/RELEASE.md)",
+      "commit_style": "Conventional Commits: feat: ..., fix(dots): ..., chore: release vX.Y.Z - ...",
+      "merge": "PR into main; bump package.json + dated CHANGELOG section in the tagged commit; tag vX.Y.Z (lead)",
+      "instructions": [
+        "README.md",
+        "Documentation~/OVERVIEW.md",
+        "Documentation~/RELEASE.md",
+        "Documentation~/SUPPORT-MATRIX.md"
+      ],
+      "notes": [
+        "No CLAUDE.md in this repo.",
+        "Local 'develop' has no upstream; GitHub default and release branch is main."
+      ]
+    },
+    "uitoolkit": {
+      "path": "UIToolkit",
+      "remote": "https://github.com/Cuvara/UIToolkit",
+      "default_branch": "main",
+      "protected_branches": [
+        "main",
+        "develop"
+      ],
+      "branch_pattern": "<type>/<topic>, PR into main",
+      "commit_style": "Conventional Commits: feat(uitoolkit): ..., chore: release vX.Y.Z - ...",
+      "merge": "PR into main; version-bump.yml (manual) bumps package.json + CHANGELOG heading; tag vX.Y.Z (lead)",
+      "instructions": [
+        "README.md",
+        "Documentation~/UXML-CODEGEN.md",
+        "Documentation~/CI.md",
+        "Documentation~/LIFECYCLE-PLAN.md"
+      ],
+      "notes": [
+        "No CLAUDE.md in this repo.",
+        "CHANGELOG.md is not valid UTF-8 (tools must read with replacement)."
       ]
     }
   },
@@ -233,6 +306,9 @@
       "obligations": [
         "Regenerate both bindings with the pinned toolchain and commit them with the .proto change.",
         "Update gameserver-dotnet/docs/API.md (normative wire reference)."
+      ],
+      "skills": [
+        "wire-contract"
       ]
     },
     {
@@ -279,7 +355,10 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-services"
+      ]
     },
     {
       "id": "server.gateway",
@@ -297,7 +376,9 @@
       ],
       "changelog": "backend/gateway/CHANGELOG.md",
       "rules": [
-        "Gateway never proxies gameplay traffic (ADR-3)."
+        "Gateway never proxies gameplay traffic (ADR-3).",
+        "One live server per map_id (ADR-2): a full map is refused, never second-allocated.",
+        "Session JWT verified locally; dungeon entry calls Nakama party_get over http_key (ADR-26) - backend/gateway/CLAUDE.md 'Nakama: NONE at runtime' is stale."
       ],
       "generated": [],
       "tools": [
@@ -327,7 +408,10 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-services"
+      ]
     },
     {
       "id": "server.nakama",
@@ -344,7 +428,10 @@
         "backend/nakama/docs/"
       ],
       "changelog": "backend/nakama/CHANGELOG.md",
-      "rules": [],
+      "rules": [
+        "Plugin ABI: Go toolchain and nakama-common must match the Nakama image in backend/deploy/nakama-plugin.Dockerfile.",
+        "Every RPC is registered in main.go InitModule, rate-limited, and documented in docs/API.md; the plugin makes no outbound calls."
+      ],
       "generated": [],
       "tools": [
         "go"
@@ -379,7 +466,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-services"
+      ]
     },
     {
       "id": "server.smoketest",
@@ -425,7 +515,10 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-ops"
+      ]
     },
     {
       "id": "server.loadtest",
@@ -438,7 +531,11 @@
         "server.shared"
       ],
       "claude_md": null,
-      "docs": [],
+      "docs": [
+        "backend/loadtest/README.md",
+        "backend/docs/BENCHMARK.md",
+        "backend/docs/MEASUREMENT.md"
+      ],
       "changelog": "backend/loadtest/CHANGELOG.md",
       "rules": [
         "Measurements follow backend/docs/MEASUREMENT.md and BENCHMARK.md; never quote a player-count ceiling (ADR-7)."
@@ -466,12 +563,30 @@
             "cwd": "backend/loadtest",
             "run": "go build -o /dev/null ./cmd/loadtest/",
             "evidence": "exit 0"
+          },
+          {
+            "id": "loadtest-shell-syntax",
+            "cwd": "backend/loadtest",
+            "run": "for f in scripts/*.sh; do bash -n \"$f\" || exit 1; done",
+            "evidence": "exit 0"
+          },
+          {
+            "id": "encoding-report-smoke",
+            "cwd": "backend/loadtest",
+            "run": "python3 -B scripts/encoding-report.py results/encoding > /dev/null",
+            "evidence": "exit 0"
           }
         ],
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "measure"
+      ],
+      "gates": [
+        "load-run"
+      ]
     },
     {
       "id": "server.verify-probe",
@@ -511,7 +626,10 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-ops"
+      ]
     },
     {
       "id": "server.shared-gamelogic",
@@ -545,8 +663,8 @@
           {
             "id": "check-metas",
             "cwd": ".",
-            "run": "python3 .github/scripts/check_metas.py backend/gameserver-dotnet/Shared.GameLogic",
-            "evidence": "exit 0 and script output lists files checked"
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py backend/gameserver-dotnet/Shared.GameLogic",
+            "evidence": "exit 0 with its one-line summary (it does not list files)"
           }
         ],
         "extended": [
@@ -570,6 +688,12 @@
         "Bump package.json version when releasing (no tag).",
         "Add .meta for every new file/folder.",
         "Golden fixtures committed with the behaviour change."
+      ],
+      "skills": [
+        "server-realtime"
+      ],
+      "gates": [
+        "sgl-release"
       ]
     },
     {
@@ -580,8 +704,9 @@
       ],
       "responsibility": "C# .NET 10 authoritative game server: combat, movement, world state, AOI. NativeAOT published.",
       "depends_on": [
-        "server.shared-gamelogic",
-        "server.proto"
+        "server.content",
+        "server.proto",
+        "server.shared-gamelogic"
       ],
       "claude_md": "backend/gameserver-dotnet/CLAUDE.md",
       "docs": [
@@ -592,7 +717,12 @@
         "XML doc comments on public APIs; no allocations in hot paths; NativeAOT-safe (System.Text.Json source generators, no reflection).",
         "Tests needing docker/Postgres/Redis use [SkippableFact] / SkipUnlessAvailable(), never an early return. Deadlines use Stopwatch, not DateTime.UtcNow.",
         "Movement-related changes need a test through the live socket path (pattern: GameServer.Tests/Server/SlowClientMovementTests.cs).",
-        "Redis hash servers:id:{id} is a cross-language contract with Go redisstore/registry.go."
+        "Redis hash servers:id:{id} is a cross-language contract with Go redisstore/registry.go.",
+        "Knobs: a new GAMESERVER_* const (ServerEnv.cs / *Settings) is reflected by GameServer.Tests/Deploy/DeclaredKnobs.cs and must be passed through in docker-compose.yml + docker-compose.override.yml and agones/fleet-map-dotnet-dev.yaml + k8s/app/50-fleet-map.yaml + k8s/app/60-fleet-dungeon.yaml (or excluded by name with a reason) - Compose/FleetEnvPassthroughTests fail otherwise. k8s/app/20-configmaps.yaml is not what those tests read.",
+        "Metrics: new instruments in Observability/GameMetrics.cs are documented in docs/METRICS.md (no test enforces this - review item).",
+        "Systems implement IEcsSystem with Group, unique Order and complete ComponentAccess (structural if spawn/reap); no mutable instance fields except [SimulationScratch] (SimulationStateArchitectureTests).",
+        "New component type -> World/ArchAotHints.cs line in the same commit (ArchAotHintTests). No CommandBuffer (ADR-11/12).",
+        "CLI args are space-separated (`--addr :9000`); the `--addr=:9000` form shown in root and gameserver CLAUDE.md is silently ignored (GetArg, Program.cs)."
       ],
       "generated": [
         "backend/gameserver-dotnet/GameServer/Net/Generated/"
@@ -613,12 +743,12 @@
             "id": "dotnet-test",
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} test -c Release --logger \"trx;LogFileName=test-results.trx\" --blame-hang --blame-hang-timeout 8m",
-            "evidence": "Summary line 'Failed: F, Passed: P, Skipped: S, Total: T' per test project; report all four numbers."
+            "evidence": "Failed/Passed/Skipped/Total per test project. Skips are expected only for Regenerate (GOLDEN_REGEN), benches (BENCH_TICK/BENCH_AOI/MEASURE_TIERING) and Docker-backed fixtures; any other skip is a finding."
           },
           {
             "id": "verify-test-counters",
             "cwd": ".",
-            "run": "python3 .github/scripts/verify-test-counters.py \"backend/gameserver-dotnet/**/test-results.trx\"",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/verify-test-counters.py \"backend/gameserver-dotnet/**/test-results.trx\"",
             "evidence": "exit 0 - proves the run selected and executed tests (dotnet test exits 0 on zero selected / all skipped)."
           }
         ],
@@ -628,7 +758,7 @@
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} publish GameServer/GameServer.csproj -c Release -o ./publish",
             "trigger": "New component types, serialization, reflection-adjacent code, or csproj changes",
-            "evidence": "Publish succeeds with no trim/AOT warnings AND the native binary survives a real join (TestDotnetInterop with GAMESERVER_NATIVE_BIN). A clean publish alone proves nothing (ADR-11 decision 4). Linux native binary requires a Linux dotnet; from WSL with dotnet.exe this produces a Windows binary."
+            "evidence": "Publish succeeds and the only AOT/trim warnings are the audited, deliberately unsuppressed Collections.Pooled set (37 IL2026/IL3050 + IL3053/IL2104 summary lines, docs/DESIGN.md 'Collections.Pooled AOT warnings'); any new warning is a finding. Native TestDotnetInterop (GAMESERVER_NATIVE_BIN) needs a Linux dotnet - from WSL with dotnet.exe report it not-run:external (CI ci-dotnet.yml)."
           }
         ],
         "external": [
@@ -639,7 +769,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-realtime"
+      ]
     },
     {
       "id": "server.integration-test",
@@ -694,7 +827,11 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-services",
+        "server-realtime"
+      ]
     },
     {
       "id": "server.deploy",
@@ -702,7 +839,7 @@
       "paths": [
         "backend/deploy/"
       ],
-      "responsibility": "Docker images, local stack, k3s/Agones manifests, DB migrations, monitoring.",
+      "responsibility": "Remaining backend/deploy content: docs, CLAUDE.md, CHANGELOG, misc.",
       "depends_on": [],
       "claude_md": "backend/deploy/CLAUDE.md",
       "docs": [
@@ -717,29 +854,14 @@
         "docker"
       ],
       "checks": {
-        "fast": [
-          {
-            "id": "shell-syntax",
-            "cwd": "backend/deploy",
-            "run": "for f in $(git ls-files '*.sh'); do bash -n \"$f\" || exit 1; done",
-            "evidence": "exit 0"
-          }
-        ],
+        "fast": [],
         "extended": [],
-        "external": [
-          {
-            "id": "local-stack",
-            "run": "cd backend/deploy && make up && make flow-check (Docker stack)",
-            "evidence": "Health endpoints and flow-check output, not container 'Up' status."
-          },
-          {
-            "id": "cd-pipeline",
-            "run": "cd.yml on push to develop/staging/release-* (self-hosted runners)",
-            "evidence": "post-deploy-smoke job pass."
-          }
-        ]
+        "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-ops"
+      ]
     },
     {
       "id": "server.ci",
@@ -779,7 +901,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "server-ops"
+      ]
     },
     {
       "id": "server.scripts",
@@ -804,6 +929,45 @@
             "evidence": "exit 0"
           }
         ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": []
+    },
+    {
+      "id": "server.measurement-docs",
+      "repo": "server",
+      "paths": [
+        "backend/docs/BENCHMARK.md",
+        "backend/docs/MEASUREMENT.md",
+        "backend/docs/CORE-BASELINE-V1.md",
+        "backend/loadtest/results/"
+      ],
+      "responsibility": "Measurement record: benchmark parts and run protocol, the measurement incident catalogue, the core baseline table, and committed loadtest results.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "backend/docs/BENCHMARK.md",
+        "backend/docs/MEASUREMENT.md",
+        "backend/docs/CORE-BASELINE-V1.md"
+      ],
+      "changelog": "backend/gameserver-dotnet/CHANGELOG.md",
+      "rules": [
+        "Every number comes from a named run with a control (BENCHMARK.md Run protocol; MEASUREMENT.md).",
+        "CORE-BASELINE-V1.md: re-baseline whenever a pin moves; never promote a row without naming the run that demonstrated it (section 6).",
+        "Do not quote a player-count ceiling (ADR-7)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [
+        "local-stack"
+      ],
+      "skills": [
+        "measure"
+      ],
+      "checks": {
+        "fast": [],
         "extended": [],
         "external": []
       },
@@ -836,7 +1000,8 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": []
     },
     {
       "id": "client.dots-sample",
@@ -846,7 +1011,8 @@
       ],
       "responsibility": "Tracked byte-for-byte copy of com.cuvara.netcode Samples~/DOTSSample at the version in .sample-source. What the play client builds.",
       "depends_on": [
-        "client.packages"
+        "client.packages",
+        "netcode.samples"
       ],
       "claude_md": "CLAUDE.md",
       "docs": [
@@ -884,6 +1050,9 @@
       },
       "obligations": [
         "Update .sample-source with the copied version."
+      ],
+      "skills": [
+        "pin-bump"
       ]
     },
     {
@@ -911,7 +1080,8 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": []
     },
     {
       "id": "client.scripts",
@@ -927,15 +1097,22 @@
       ],
       "claude_md": "CLAUDE.md",
       "docs": [
-        "docs/"
+        "docs/DOTS-WIRING.md",
+        "docs/HUD-BRIDGE.md",
+        "docs/ACCOUNT-RECOVERY.md",
+        "docs/DEVICE-BENCHMARK.md"
       ],
       "changelog": "CHANGELOG.md",
       "rules": [
         "Namespace mirrors folder path under Assets; one class per file; VContainer DI over singletons; UniTask over coroutines; prefer separate .asmdef assemblies.",
         "Every new asset/folder needs its Unity-generated .meta committed with it.",
-        "Networking layer is owned by the unity-netcode agent definition in .claude/agents/."
+        "Networking, ECS views and navigation live in com.cuvara.* packages (unity-package); .claude/agents/unity-netcode.md is stale (known issue).",
+        "One RegisterMessagePipe (inside RegisterDots); one IWireCodec (RegisterNetworking encoding:); scene components injected via RegisterBuildCallback, not RegisterComponentInHierarchy (except BenchmarkLifetimeScope).",
+        "[DOTSNet] log prefixes in Assets/Scripts/Session/MainSessionFlow.cs are a contract with Tools/verify-multiclient.sh."
       ],
-      "generated": [],
+      "generated": [
+        "Assets/Scripts/UI/Hud/Generated/"
+      ],
       "tools": [],
       "checks": {
         "fast": [],
@@ -953,7 +1130,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
     },
     {
       "id": "client.tests",
@@ -968,7 +1148,9 @@
       "claude_md": "CLAUDE.md",
       "docs": [],
       "changelog": "CHANGELOG.md",
-      "rules": [],
+      "rules": [
+        "EditMode: Assets/Tests/Editor (NDC.Tests.Editor); PlayMode: Assets/Tests/Runtime (NDC.Tests.Runtime)."
+      ],
       "generated": [],
       "tools": [],
       "checks": {
@@ -977,12 +1159,20 @@
         "external": [
           {
             "id": "unity-test-runner",
-            "run": "Unity Test Runner EditMode + PlayMode via Unity MCP",
-            "evidence": "total / passed / failed / skipped per mode."
+            "run": "Unity MCP tool tests-run (ai-game-developer, :23621) testMode EditMode then PlayMode, assemblies NDC.Tests.Editor / NDC.Tests.Runtime; save open scenes first",
+            "evidence": "total/passed/failed/skipped per mode; zero executed = failed"
+          },
+          {
+            "id": "ci-unity",
+            "run": "CI 01-ci.yml",
+            "evidence": "job pass + test count"
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
     },
     {
       "id": "client.ui",
@@ -996,11 +1186,13 @@
       ],
       "claude_md": "CLAUDE.md",
       "docs": [
-        "docs/UI-ARCHITECTURE.md"
+        "docs/UI-ARCHITECTURE.md",
+        "docs/HUD-BRIDGE.md"
       ],
       "changelog": "CHANGELOG.md",
       "rules": [
-        "*.uxml.g.cs are generated from UXML by com.cuvara.uitoolkit codegen; regenerate, never hand-edit."
+        "*.uxml.g.cs are generated from UXML by com.cuvara.uitoolkit codegen; regenerate, never hand-edit.",
+        "Never call RegisterScreenManager/RegisterGameFoundation; IScreenNavigator is the only navigation (docs/UI-ARCHITECTURE.md). New screens go under Assets/UI/Screens/<Name>/ (not created yet; the HUD lives in Assets/Scripts/UI/Hud by design, docs/HUD-BRIDGE.md)."
       ],
       "generated": [
         "**/*.uxml.g.cs"
@@ -1017,7 +1209,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
     },
     {
       "id": "client.buildscripts",
@@ -1034,7 +1229,9 @@
       ],
       "changelog": "CHANGELOG.md",
       "rules": [
-        "Unity.exe paths must be Windows paths; WSL env vars do not reach Unity.exe."
+        "Unity.exe paths must be Windows paths; WSL env vars do not reach Unity.exe.",
+        "SampleImporter uses -samplePackage (client CLAUDE.md example with -importPackage is stale); never commit EditorBuildSettings produced by -addToBuild 1.",
+        "DotsViewLibraryBuildCheck fails every build on a bad Assets/Resources/DotsViews/DotsViewLibrary.asset."
       ],
       "generated": [],
       "tools": [
@@ -1058,7 +1255,14 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ],
+      "gates": [
+        "unity-batch",
+        "workflow-dispatch"
+      ]
     },
     {
       "id": "client.packages",
@@ -1068,7 +1272,12 @@
         "Packages/packages-lock.json"
       ],
       "responsibility": "UPM dependency pins (com.cuvara.*, com.rpgmmo.shared-gamelogic, Unity packages).",
-      "depends_on": [],
+      "depends_on": [
+        "server.shared-gamelogic",
+        "netcode.package",
+        "unitydots.package",
+        "uitoolkit.package"
+      ],
       "claude_md": "CLAUDE.md",
       "docs": [
         "CLAUDE.md#package-pins-and-the-one-local-development-exception"
@@ -1102,7 +1311,13 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "pin-bump"
+      ],
+      "gates": [
+        "client-package-toggle"
+      ]
     },
     {
       "id": "client.gdk-submodules",
@@ -1126,7 +1341,11 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [],
+      "gates": [
+        "client-package-toggle"
+      ]
     },
     {
       "id": "client.build-workflows",
@@ -1151,7 +1370,8 @@
         "extended": [],
         "external": []
       },
-      "obligations": []
+      "obligations": [],
+      "skills": []
     },
     {
       "id": "client.ci",
@@ -1180,7 +1400,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
     },
     {
       "id": "client.tools",
@@ -1188,7 +1411,7 @@
       "paths": [
         "Tools/"
       ],
-      "responsibility": "WireConformance C# tool and multi-client run/verify scripts.",
+      "responsibility": "Multi-client run/verify scripts (run-clients.sh, verify-multiclient.sh) used for measurement against a running stack.",
       "depends_on": [],
       "claude_md": "CLAUDE.md",
       "docs": [
@@ -1197,9 +1420,7 @@
       "changelog": "CHANGELOG.md",
       "rules": [],
       "generated": [],
-      "tools": [
-        "dotnet"
-      ],
+      "tools": [],
       "checks": {
         "fast": [
           {
@@ -1207,7 +1428,49 @@
             "cwd": "Tools",
             "run": "for f in *.sh; do bash -n \"$f\" || exit 1; done",
             "evidence": "exit 0"
-          },
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": [
+        "measure"
+      ],
+      "gates": [
+        "multi-client"
+      ]
+    },
+    {
+      "id": "client.wire-conformance",
+      "repo": "client",
+      "paths": [
+        "Tools/WireConformance/"
+      ],
+      "responsibility": "Standalone dotnet console that compiles Netcode Protocol/Json/Codec/Snapshot/Transport sources (via Packages/com.cuvara.netcode) and asserts JSON codec output matches the Go struct tags.",
+      "depends_on": [
+        "netcode.protocol",
+        "netcode.codec"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Compiles the gitignored embedded Packages/com.cuvara.netcode clone (often older than the pin) - state which Netcode version the result describes.",
+        "dotnet build here writes Tools/WireConformance/bin|obj (already present; check they are gitignored before building)."
+      ],
+      "generated": [],
+      "tools": [
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "wire-contract"
+      ],
+      "checks": {
+        "fast": [
           {
             "id": "wireconformance-build",
             "cwd": "Tools/WireConformance",
@@ -1248,7 +1511,10 @@
           }
         ]
       },
-      "obligations": []
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
     },
     {
       "id": "client.docs",
@@ -1273,6 +1539,1309 @@
         "fast": [],
         "extended": [],
         "external": []
+      },
+      "obligations": [],
+      "skills": []
+    },
+    {
+      "id": "server.deploy-k8s",
+      "repo": "server",
+      "paths": [
+        "backend/deploy/k8s/",
+        "backend/deploy/k3s/",
+        "backend/deploy/agones/"
+      ],
+      "responsibility": "k3s/k8s app manifests, Agones fleets/autoscaler/allocation, k8s data + verify suite.",
+      "depends_on": [],
+      "claude_md": "backend/deploy/CLAUDE.md",
+      "docs": [
+        "backend/deploy/docs/K3S.md",
+        "backend/deploy/k8s/README.md",
+        "backend/deploy/k8s/app/README.md",
+        "backend/deploy/k8s/verify/README.md"
+      ],
+      "changelog": "backend/deploy/CHANGELOG.md",
+      "rules": [
+        "No CI validates these manifests (no validate-manifests.py/kubeconform in workflows): local validation is the only gate before cd.yml applies them.",
+        "Fleet env vars must stay in sync with GameServer knobs: GameServer.Tests/Deploy/FleetEnvPassthroughTests.cs reads agones/fleet-map-dotnet-dev.yaml, k8s/app/50-fleet-map.yaml, k8s/app/60-fleet-dungeon.yaml.",
+        "FleetAutoscaler must be Buffer policy (ADR-14, check_autoscaler).",
+        "Map-pinned fleets: replicas 1, never a FleetAutoscaler; the only autoscaler targets the dungeon fleet, policy Buffer (ADR-2, ADR-14).",
+        "validate-manifests.py checks Agones CRs plus Namespace/Secret/ConfigMap only; Deployments, Services and RBAC are skipped - review them by hand.",
+        "validate-manifests.py on k8s/app/*.yaml already reports 2 failures at server 5023a3d (namespace rpg-k8s-realtime vs expected rpg-realtime): judge a change by NEW failures vs the base commit, not by exit code."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [
+        "shared-infra",
+        "secrets"
+      ],
+      "skills": [
+        "server-ops"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "validate-manifests",
+            "cwd": "backend/deploy",
+            "run": "XDG_CACHE_HOME=${XDG_CACHE_HOME:-/tmp/rpgf-cache} python3 -B k3s/validate-manifests.py",
+            "evidence": "'6 document(s) validated, 0 failure(s)', exit 0 (pyyaml+jsonschema; first run downloads the pinned Agones install.yaml into the cache)"
+          },
+          {
+            "id": "autoscaler-rule-offline",
+            "cwd": "backend/deploy/k8s",
+            "run": "bash verify/tests/autoscaler_rule_test.sh",
+            "evidence": "last line RESULT=PASS, exit 0"
+          },
+          {
+            "id": "shell-syntax",
+            "cwd": "backend/deploy",
+            "run": "for f in $(git ls-files 'k8s/*.sh' 'k3s/*.sh'); do bash -n \"$f\" || exit 1; done",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [
+          {
+            "id": "validate-k8s-app",
+            "cwd": "backend/deploy",
+            "run": "XDG_CACHE_HOME=${XDG_CACHE_HOME:-/tmp/rpgf-cache} python3 -B k3s/validate-manifests.py k8s/app/*.yaml",
+            "evidence": "The [FAIL] set equals the base commit's (2 namespace failures at 5023a3d); any new failure is yours.",
+            "trigger": "k8s/app/*.yaml changed"
+          },
+          {
+            "id": "deploy-passthrough-tests",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} test GameServer.Tests --filter \"FullyQualifiedName~GameServer.Tests.Deploy\"",
+            "evidence": "Total > 0, Failed 0 (ComposeEnvPassthroughTests, FleetEnvPassthroughTests)",
+            "trigger": "env: blocks in fleet manifests changed"
+          }
+        ],
+        "external": [
+          {
+            "id": "server-dry-run",
+            "run": "kubectl apply --dry-run=server -f <file> (human gate shared-infra)",
+            "evidence": "no errors"
+          },
+          {
+            "id": "k8s-verify",
+            "run": "backend/deploy/k8s/verify/verify.sh --target dev-agones|k8s-dev|k8s-stg (human gate shared-infra)",
+            "evidence": "all 6 layers PASS"
+          },
+          {
+            "id": "cd-deploy",
+            "run": "cd.yml deploy + post-deploy-smoke (a merge to develop deploys to dev)",
+            "evidence": "post-deploy-smoke job pass"
+          }
+        ]
+      },
+      "obligations": [
+        "CHANGELOG backend/deploy/CHANGELOG.md.",
+        "Update backend/deploy/docs/K3S.md or k8s/README.md when behaviour changes."
+      ]
+    },
+    {
+      "id": "server.deploy-compose",
+      "repo": "server",
+      "paths": [
+        "backend/deploy/docker/",
+        "backend/deploy/docker-compose.yml",
+        "backend/deploy/docker-compose.override.yml",
+        "backend/deploy/docker-compose.agones.yml",
+        "backend/deploy/Makefile",
+        "backend/deploy/stack.sh",
+        "backend/deploy/preflight-isolation.sh",
+        "backend/deploy/environments.tsv",
+        "backend/deploy/nakama-plugin.Dockerfile",
+        "backend/deploy/modules/"
+      ],
+      "responsibility": "Dockerfiles, local compose stack, Makefile/stack.sh flows, environment table, committed nakama.so plugin artifact.",
+      "depends_on": [],
+      "claude_md": "backend/deploy/CLAUDE.md",
+      "docs": [
+        "backend/deploy/docs/RUNBOOK-local-dev.md",
+        "backend/deploy/docs/CICD.md"
+      ],
+      "changelog": "backend/deploy/CHANGELOG.md",
+      "rules": [
+        "Compose env must stay in sync with GameServer knobs: GameServer.Tests/Deploy/ComposeEnvPassthroughTests.cs reads docker-compose.yml (gameserver-dotnet) and docker-compose.override.yml (gameserver-dotnet-map02).",
+        "backend/deploy/modules/*.so is gitignored (backend/deploy/.gitignore:6); stack.sh up rebuilds nakama.so when older than the sources - never commit it."
+      ],
+      "generated": [],
+      "tools": [
+        "docker"
+      ],
+      "gates": [
+        "local-stack",
+        "secrets"
+      ],
+      "skills": [
+        "server-ops"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "shell-syntax",
+            "cwd": "backend/deploy",
+            "run": "bash -n stack.sh && bash -n preflight-isolation.sh",
+            "evidence": "exit 0"
+          },
+          {
+            "id": "compose-config",
+            "cwd": "backend/deploy",
+            "run": "for o in \"\" \"-f docker-compose.override.yml\" \"-f docker-compose.agones.yml\"; do docker compose --env-file .env.example -f docker-compose.yml $o config -q || exit 1; done",
+            "evidence": "exit 0, no output (uses .env.example so the real .env - a secrets gate - is never read)"
+          }
+        ],
+        "extended": [
+          {
+            "id": "compose-passthrough-tests",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} test GameServer.Tests --filter \"FullyQualifiedName~GameServer.Tests.Deploy\"",
+            "evidence": "Total > 0, Failed 0",
+            "trigger": "gameserver service environment edits"
+          }
+        ],
+        "external": [
+          {
+            "id": "flow-check",
+            "run": "cd backend/deploy && make flow-up && make flow-check (human gate local-stack)",
+            "evidence": "stack.sh check proves nakama -> gateway -> gameserver; health lines, not container status."
+          },
+          {
+            "id": "publish-images",
+            "run": "publish-images.yml (push to develop / core-baseline-* tags)",
+            "evidence": "GHCR images built"
+          }
+        ]
+      },
+      "obligations": [
+        "CHANGELOG backend/deploy/CHANGELOG.md."
+      ]
+    },
+    {
+      "id": "server.monitoring",
+      "repo": "server",
+      "paths": [
+        "backend/deploy/monitoring/"
+      ],
+      "responsibility": "Prometheus scrape config, alert rules, Grafana dashboards.",
+      "depends_on": [],
+      "claude_md": "backend/deploy/CLAUDE.md",
+      "docs": [
+        "backend/deploy/docs/MONITORING.md",
+        "backend/gameserver-dotnet/docs/METRICS.md"
+      ],
+      "changelog": "backend/deploy/CHANGELOG.md",
+      "rules": [
+        "Alert/dashboard metric names must exist in GameServer/Observability/GameMetrics.cs or the gateway metrics package.",
+        "promtool/amtool are not installed locally and no CI runs them - alert rule syntax is only proven when Prometheus loads it (external)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "server-ops"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "monitoring-parse",
+            "cwd": "backend/deploy",
+            "run": "python3 -c \"import yaml,json; [list(yaml.safe_load_all(open(f))) for f in ('monitoring/alerts.yaml','monitoring/prometheus.yaml','monitoring/grafana-dashboards.yaml')]; json.load(open('monitoring/dashboards/rpg-gameplay.json'))\"",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "monitoring-up",
+            "run": "cd backend/deploy && make monitoring-up && make monitoring-targets (human gate local-stack)",
+            "evidence": "All targets UP."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "server.db",
+      "repo": "server",
+      "paths": [
+        "backend/deploy/db/"
+      ],
+      "responsibility": "Deploy-side gamestate schema copies (init + numbered migrations) and Postgres/Redis backup/restore scripts.",
+      "depends_on": [
+        "server.persistence"
+      ],
+      "claude_md": "backend/deploy/CLAUDE.md",
+      "docs": [
+        "backend/deploy/docs/DATABASE.md",
+        "backend/deploy/docs/DISASTER-RECOVERY.md"
+      ],
+      "changelog": "backend/deploy/CHANGELOG.md",
+      "rules": [
+        "Migration SQL (db/migrations/gamestate/*.sql, init-gamestate.sql) is owned by server-services: verbatim copies of GameServer/Persistence/Migrations (contract gamestate-migrations); init-gamestate.sql mirrors 001 only.",
+        "Backup/restore scripts (backup.sh, restore.sh, redis-backup.sh, redis-restore.sh) and the cd.yml backup/db-migrate steps are owned by server-ops; running them is a human gate (db-backup-restore)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [
+        "shared-infra",
+        "secrets",
+        "db-backup-restore"
+      ],
+      "skills": [
+        "server-services",
+        "server-ops"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "shell-syntax",
+            "cwd": "backend/deploy",
+            "run": "for f in db/*.sh; do bash -n \"$f\" || exit 1; done",
+            "evidence": "exit 0"
+          },
+          {
+            "id": "migrator-tests",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} test GameServer.Tests/GameServer.Tests.csproj -c Release --filter \"FullyQualifiedName~GameServer.Tests.Persistence.MigratorTests\"",
+            "evidence": "Total 12; without Docker 4 pass / 8 skip. EmbeddedMigrations_MatchDeployCopies and InitGamestateSql_MatchesFirstMigration must be Passed - a Skip means the repo tree was not found and counts as failed."
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "cd-backup",
+            "run": "cd.yml db-migrate job ('Back up databases')",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": [
+        "Keep both migration copies identical (normalised)."
+      ]
+    },
+    {
+      "id": "server.persistence",
+      "repo": "server",
+      "paths": [
+        "backend/gameserver-dotnet/GameServer/Persistence/"
+      ],
+      "responsibility": "Game-state persistence: Postgres player store, async saver, embedded checksummed migrations.",
+      "depends_on": [],
+      "claude_md": "backend/gameserver-dotnet/CLAUDE.md",
+      "docs": [
+        "backend/deploy/docs/DATABASE.md",
+        "backend/gameserver-dotnet/docs/DESIGN.md"
+      ],
+      "changelog": "backend/gameserver-dotnet/CHANGELOG.md",
+      "rules": [
+        "Migrations/*.sql are embedded resources (GameServer.csproj) checksummed by Migrator.ComputeChecksum (normalised sha256): never edit an applied one; add a new numbered file and copy it to backend/deploy/db/migrations/gamestate/.",
+        "Postgres tests are SkippableFact - without a database they skip; report skips, never as passes.",
+        "A PlayerSpawn.cs change that alters spawn/movement behaviour is handed to server-realtime (needs the live socket-path test)."
+      ],
+      "generated": [],
+      "tools": [
+        "dotnet",
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "server-services"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "migrator-tests",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} test GameServer.Tests/GameServer.Tests.csproj -c Release --filter \"FullyQualifiedName~GameServer.Tests.Persistence.MigratorTests\"",
+            "evidence": "Total 12; without Docker 4 pass / 8 skip. EmbeddedMigrations_MatchDeployCopies and InitGamestateSql_MatchesFirstMigration must be Passed - a Skip means the repo tree was not found and counts as failed."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [
+        "Mirror new migrations into backend/deploy/db/migrations/gamestate/."
+      ]
+    },
+    {
+      "id": "server.content",
+      "repo": "server",
+      "paths": [
+        "backend/content/"
+      ],
+      "responsibility": "Server-authoritative content JSON (items.json) loaded by GameServer/Content/ContentLoader.cs and served at /content (ADR-19); parsed by the client into Shared.GameLogic ContentDatabase.",
+      "depends_on": [],
+      "claude_md": "backend/gameserver-dotnet/CLAUDE.md",
+      "docs": [
+        "backend/content/README.md"
+      ],
+      "changelog": "backend/gameserver-dotnet/CHANGELOG.md",
+      "rules": [
+        "Content values are gameplay content: phase-plumbing-only applies - do not invent numbers.",
+        "The server exits 1 on invalid content (ADR-19); ContentLoaderTests validates the shipped files inside dotnet test.",
+        "Copied into the gameserver image (Dockerfile.gameserver-dotnet COPY content/)."
+      ],
+      "generated": [],
+      "tools": [
+        "jq",
+        "dotnet"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "skills": [
+        "server-realtime"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "content-json",
+            "cwd": "backend/content",
+            "run": "jq empty items.json",
+            "evidence": "exit 0"
+          },
+          {
+            "id": "content-loader-tests",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} test GameServer.Tests --filter \"FullyQualifiedName~Content\"",
+            "evidence": "Passed/Total > 0"
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.protocol",
+      "repo": "netcode",
+      "paths": [
+        "Runtime/Protocol/"
+      ],
+      "responsibility": "Wire message types, MsgType, WireProtocolVersion, and the generated protobuf Wire.cs.",
+      "depends_on": [
+        "server.proto"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/WIRE-PROTOCOL.md",
+        "Documentation~/NETCODE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Runtime/Protocol/Generated/Wire.cs must be byte-identical to rpg-mmo-server GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs (CI job 'wire'); copy it, never regenerate or edit here.",
+        "WireProtocolVersion.Current must equal the server's (C# WireProtocol.ProtocolVersion, Go messages.WireProtocolVersion).",
+        "Runtime/Plugins vendors Google.Protobuf 3.29.3 and BouncyCastle.Cryptography.dll - version changes are wire-contract / security decisions."
+      ],
+      "generated": [
+        "Runtime/Protocol/Generated/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package",
+        "wire-contract"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "wire-parity",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/wire-parity.sh",
+            "evidence": "OK lines for Wire.cs bytes and protocol version"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-wire",
+            "run": "Netcode CI job 'wire' (compares with server develop, unpinned)",
+            "evidence": "job pass"
+          },
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.codec",
+      "repo": "netcode",
+      "paths": [
+        "Runtime/Codec/",
+        "Runtime/Json/",
+        "Runtime/Transport/",
+        "Runtime/Crypto/"
+      ],
+      "responsibility": "Protobuf/JSON codecs, encoding sniffing, framing/transport (TCP/KCP), sealed-frame crypto.",
+      "depends_on": [
+        "netcode.protocol"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/NETCODE.md",
+        "Documentation~/WIRE-PROTOCOL.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Headless tests compile only Runtime/Transport/{FrameBuffer,WireFraming,TransportException}.cs; everything else here is covered only by Unity tests."
+      ],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "headless-tests",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/netcode-headless.sh",
+            "evidence": "headless tests: discovered/executed/passed/failed from .trx; executed > 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          },
+          {
+            "id": "client-wire-conformance",
+            "run": "IndieRPGMMOAdventure Tools/WireConformance (compiles the embedded, possibly stale, package clone)",
+            "evidence": "exit 0 - note which Netcode version it compiled"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.runtime",
+      "repo": "netcode",
+      "paths": [
+        "Runtime/"
+      ],
+      "responsibility": "Client runtime: connection, client, prediction, interpolation, snapshot, content client, DI/bootstrap, view, world, diagnostics.",
+      "depends_on": [
+        "netcode.protocol",
+        "netcode.codec",
+        "server.shared-gamelogic"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/NETCODE.md",
+        "Documentation~/PREDICTION.md",
+        "Documentation~/INTERPOLATION.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Consumes Shared.GameLogic (com.rpgmmo.shared-gamelogic); Netcode CI bootstraps pin sgl-v0.5.0 while the client pins sgl-v0.6.0 (known issue)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.samples",
+      "repo": "netcode",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "18 package samples (17 with their own asmdef) incl. DOTSSample, which the client copies byte-for-byte.",
+      "depends_on": [
+        "netcode.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Samples~/DOTSSample is copied byte-for-byte into the client (client.dots-sample) at each netcode pin move."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-samples",
+            "run": "Netcode CI job 'samples' (compile in Unity)",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.tests",
+      "repo": "netcode",
+      "paths": [
+        "Tests/",
+        "Tests~/"
+      ],
+      "responsibility": "EditMode/PlayMode tests and the headless dotnet test project.",
+      "depends_on": [
+        "netcode.runtime",
+        "netcode.codec"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "headless-tests",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/netcode-headless.sh",
+            "evidence": "discovered/executed/passed/failed; executed > 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.package",
+      "repo": "netcode",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "Documentation~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, docs and CI/release workflows.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Documentation~/NETCODE.md (~line 359) still says nothing in CI diffs Wire.cs - stale (ci.yml job 'wire' does).",
+        "check_metas.py reads `git ls-files` and skips ~ folders: stage new files before trusting it, and check Samples~/Tests~ .meta by hand (UnityDots Samples~ has 8, UIToolkit 17 files without .meta today)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off."
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci",
+            "run": "Netcode ci.yml on the PR",
+            "evidence": "all jobs pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.runtime",
+      "repo": "unitydots",
+      "paths": [
+        "Runtime/",
+        "Runtime.DI/",
+        "Runtime.GameFoundation/",
+        "Runtime.GameLogic/",
+        "Runtime.Netcode/",
+        "Runtime.Netcode.Prediction/",
+        "Runtime.Physics/"
+      ],
+      "responsibility": "ECS runtime (Cuvara.DOTS.*): simulation groups, modules, provisioning, views, messaging, DI, GameFoundation/GameLogic/Netcode/Prediction/Physics bridges.",
+      "depends_on": [
+        "netcode.runtime",
+        "server.shared-gamelogic"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/OVERVIEW.md",
+        "Documentation~/MODULE-LIFECYCLE.md",
+        "Documentation~/NETCODE-INTEGRATION.md",
+        "Documentation~/SUPPORT-MATRIX.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI.",
+        "Define-constrained assemblies: behaviour must hold in all six CI matrix configurations (without/with netcode, core-only, physics, full-stack, gamefoundation)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml (6 configurations) Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.editor",
+      "repo": "unitydots",
+      "paths": [
+        "Editor/"
+      ],
+      "responsibility": "Editor tooling (Cuvara.DOTS.Editor).",
+      "depends_on": [
+        "unitydots.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.samples",
+      "repo": "unitydots",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "Samples: AnimationAndEvents, HybridViews, NetworkedPrediction, PhaseBShowcase, StressBenchmark.",
+      "depends_on": [
+        "unitydots.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.tests",
+      "repo": "unitydots",
+      "paths": [
+        "Tests/"
+      ],
+      "responsibility": "Tests per assembly (Editor, Editor.DI/GameLogic/Netcode/Physics/Prediction, Runtime).",
+      "depends_on": [
+        "unitydots.runtime",
+        "unitydots.editor"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "test-floor-selftest",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_assert_test_floors.py",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.package",
+      "repo": "unitydots",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "ROADMAP.md",
+        "LICENSE",
+        "Documentation~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, docs, CI/release.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI.",
+        "CHANGELOG has an undated '## [0.30.0]' while the last tag is v0.29.0 (package.json 0.30.0) - finish or revert before release.",
+        "check_metas.py reads `git ls-files` and skips ~ folders: stage new files before trusting it, and check Samples~/Tests~ .meta by hand (UnityDots Samples~ has 8, UIToolkit 17 files without .meta today)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off."
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci",
+            "run": "UnityDots ci.yml on the PR",
+            "evidence": "all jobs pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.runtime",
+      "repo": "uitoolkit",
+      "paths": [
+        "Runtime/"
+      ],
+      "responsibility": "UI framework runtime: core, view/viewmodel binding, flow/screen navigation, ECS bridge, VContainer integration, test support.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/HYBRID-DATA-BINDING.md",
+        "Documentation~/LIFECYCLE-PLAN.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "standalone",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_standalone.py",
+            "evidence": "exit 0"
+          },
+          {
+            "id": "uss-prefix",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_uss_prefix.py",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.editor",
+      "repo": "uitoolkit",
+      "paths": [
+        "Editor/"
+      ],
+      "responsibility": "Editor tooling incl. UXML codegen core (Editor/Codegen/Core, also compiled by the CLI).",
+      "depends_on": [
+        "uitoolkit.runtime"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/UXML-CODEGEN.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator.",
+        "Codegen core changes alter every *.uxml.g.cs in consumers: regenerate package fixtures (Tests/Runtime/Generated, Samples~/EcsHud/Generated) and expect client uxml-codegen-drift to need a regen after the pin moves."
+      ],
+      "generated": [
+        "**/*.uxml.g.cs"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          },
+          {
+            "id": "client-codegen-drift",
+            "run": "client uxml-codegen-drift.yml after the pin moves",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.codegen-cli",
+      "repo": "uitoolkit",
+      "paths": [
+        "Tools~/"
+      ],
+      "responsibility": "UxmlCodegenCli (net10.0) that compiles Editor/Codegen/Core for CI and consumers.",
+      "depends_on": [
+        "uitoolkit.editor"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator.",
+        "The CLI only checks, never writes. Regeneration = Editor menu 'Assets/Cuvara/Generate UXML Bindings' or UxmlBindingPostprocessor on reimport (external, Unity Editor)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [
+          {
+            "id": "uxml-drift",
+            "cwd": ".",
+            "run": "t=$(mktemp -d -p {plugin_root} .tmp-uxml-XXXXXX) && cp -r Editor Runtime Tests 'Samples~' 'Tools~' package.json \"$t\"/ && (cd \"$t\" && {dotnet} run --project 'Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj' -- .); rc=$?; rm -rf \"$t\"; exit $rc",
+            "trigger": "*.uxml, *.uxml.g.cs or Editor/Codegen/Core/ changed",
+            "evidence": "'uxml-codegen drift check: N enrolled UXML file(s) checked' then 'all generated bindings are up to date', exit 0. Runs from a temp copy because UIToolkit has no .gitignore (bin/obj would dirty the repo)."
+          }
+        ],
+        "external": [
+          {
+            "id": "client-codegen-drift",
+            "run": "client uxml-codegen-drift.yml",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.samples",
+      "repo": "uitoolkit",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "Samples: EcsHud, LoadingFlow, NotificationPopup, ScreenFlow.",
+      "depends_on": [
+        "uitoolkit.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator."
+      ],
+      "generated": [
+        "Samples~/EcsHud/Generated/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "samples",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_samples.py",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.tests",
+      "repo": "uitoolkit",
+      "paths": [
+        "Tests/"
+      ],
+      "responsibility": "Editor/Runtime/Ecs/Flow tests.",
+      "depends_on": [
+        "uitoolkit.runtime",
+        "uitoolkit.editor"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator."
+      ],
+      "generated": [
+        "Tests/Runtime/Generated/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity 6000.3.9f1) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.package",
+      "repo": "uitoolkit",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "Documentation~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, docs, CI/release/version-bump.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator.",
+        "CHANGELOG.md is not valid UTF-8.",
+        "Documentation~/UXML-CODEGEN.md refers to a drift workflow that lives in the client repo, not here.",
+        "check_metas.py reads `git ls-files` and skips ~ folders: stage new files before trusting it, and check Samples~/Tests~ .meta by hand (UnityDots Samples~ has 8, UIToolkit 17 files without .meta today)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+          },
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off."
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci",
+            "run": "UIToolkit ci.yml on the PR",
+            "evidence": "all jobs pass"
+          }
+        ]
       },
       "obligations": []
     }
@@ -1302,6 +2871,549 @@
       "id": "dotnet-wsl",
       "scope": "workspace",
       "summary": "WSL has no Linux dotnet; only Windows dotnet.exe. Build/test work through it; Linux AOT publish and env-var passing (GOLDEN_REGEN) need care (WSLENV)."
+    },
+    {
+      "id": "netcode-doc-wire-ci",
+      "scope": "netcode",
+      "summary": "Documentation~/NETCODE.md (~line 359) says nothing in CI diffs Wire.cs; ci.yml job 'wire' does (against server develop, unpinned)."
+    },
+    {
+      "id": "package-ci-sgl-pin",
+      "scope": "netcode,unitydots",
+      "summary": "Netcode CI (ci.yml:225,323,504) and UnityDots CI (ci.yml:173,325,693) bootstrap sgl-v0.5.0 while the client pins sgl-v0.6.0 - package CI tests against an older SGL than the client ships. UIToolkit CI has no SGL pin. UnityDots CI rows also pin Netcode v0.41.0 (client pins v0.45.0)."
+    },
+    {
+      "id": "unity-netcode-agent-stale",
+      "scope": "client",
+      "summary": ".claude/agents/unity-netcode.md predates the package split (code now in com.cuvara.netcode), references a non-existent unity-prediction agent and /mnt/e paths."
+    },
+    {
+      "id": "embedded-package-clones-stale",
+      "scope": "client",
+      "summary": "Gitignored Packages/com.cuvara.* clones in the client are old (netcode v0.30.0-3, dots v0.27.1-1) and override the manifest pins in the Editor; Tools/WireConformance compiles against them."
+    },
+    {
+      "id": "netcode-no-gitignore",
+      "scope": "netcode",
+      "summary": "Netcode has no .gitignore; building the headless tests in place leaves bin/obj untracked. Factory runs them from a temp copy (scripts/checks/netcode-headless.sh)."
+    },
+    {
+      "id": "deploy-manifests-no-ci",
+      "scope": "server",
+      "summary": "No workflow runs validate-manifests.py, kubeconform, promtool or compose config; deploy manifests are validated only locally before cd.yml applies them."
+    },
+    {
+      "id": "unitydots-undated-release",
+      "scope": "unitydots",
+      "summary": "CHANGELOG '## [0.30.0]' undated and package.json 0.30.0 while the last tag is v0.29.0."
+    },
+    {
+      "id": "uitoolkit-changelog-encoding",
+      "scope": "uitoolkit",
+      "summary": "CHANGELOG.md is not valid UTF-8."
+    },
+    {
+      "id": "unitydots-tracked-pycache",
+      "scope": "unitydots",
+      "summary": "UnityDots tracks .github/scripts/__pycache__/*.pyc; running its scripts without PYTHONDONTWRITEBYTECODE=1 rewrites tracked files. Factory commands set it."
+    },
+    {
+      "id": "k8s-app-namespace-validation",
+      "scope": "server",
+      "summary": "validate-manifests.py k8s/app/*.yaml reports 2 failures at 5023a3d: expects namespace rpg-realtime, k8s/app uses rpg-k8s-realtime (overridden via ALLOCATOR_NAMESPACE in 40-gateway.yaml)."
+    },
+    {
+      "id": "nakama-so-stale",
+      "scope": "server",
+      "summary": "backend/deploy/modules/nakama.so is gitignored (not committed); the local copy may be stale - stack.sh up rebuilds it when older than the sources."
+    },
+    {
+      "id": "deploy-doc-drift",
+      "scope": "server",
+      "summary": "MONITORING.md misses alerts.yaml; cd.yml bundle file list omits monitoring/alerts.yaml and does not copy docker-compose.override.yml; stack.sh says no flow-check-sealed but Makefile:101 defines it; deploy CLAUDE.md 'File Structure Target' differs from the tree."
+    },
+    {
+      "id": "gateway-claude-nakama",
+      "scope": "server",
+      "summary": "backend/gateway/CLAUDE.md says the gateway calls Nakama at runtime NONE; transfer/party.go calls party_get (ADR-26)."
+    },
+    {
+      "id": "client-claude-stale",
+      "scope": "client",
+      "summary": "Client CLAUDE.md: SampleImporter example uses -importPackage (code needs -samplePackage) and E:\\SecretProject paths; Unity MCP section describes Docker :8080 (real: .mcp.json HTTP :23621); Assembly Structure lists 3 of 13 asmdefs. Workspace CLAUDE.md 'gh workflow run unity-build.yml' names a removed workflow."
+    },
+    {
+      "id": "dots-wiring-doc-stale",
+      "scope": "client",
+      "summary": "docs/DOTS-WIRING.md still describes the primitive view fallback as the deliberate default; LeasedViewAssetProvider over Addressables is now the default."
+    },
+    {
+      "id": "bench-freshness",
+      "scope": "server",
+      "summary": "BENCHMARK.md/loadtest README say restart the server before each load level; the 2026-09-18 control used -cooldown 40s. BENCHMARK.md reads secrets from deploy/.env (a secrets gate) - export them instead."
+    },
+    {
+      "id": "gameserver-addr-flag-docs",
+      "scope": "server",
+      "summary": "Root and gameserver-dotnet CLAUDE.md show `--addr=:9000`; GetArg only matches the space-separated form, so the `=` form is silently ignored."
+    },
+    {
+      "id": "gameserver-claude-wire-json",
+      "scope": "server",
+      "summary": "gameserver-dotnet/CLAUDE.md describes the wire as 4-byte BE + JSON; ADR-9 moved it to Protobuf (JSON still accepted)."
+    },
+    {
+      "id": "uitoolkit-no-gitignore",
+      "scope": "uitoolkit",
+      "summary": "UIToolkit has no .gitignore; running the codegen CLI in place leaves Tools~/UxmlCodegenCli/bin|obj untracked. Factory runs it from a temp copy. Documentation~/CI.md says Samples~ is not compiled (stale: ci.yml has a samples job); ScreenFlow sample asmdef name differs from its file name."
+    },
+    {
+      "id": "check-metas-blind-spots",
+      "scope": "netcode,unitydots,uitoolkit",
+      "summary": "check_metas.py reads git ls-files (untracked files invisible) and skips ~ folders; UnityDots Samples~ has 8 and UIToolkit Samples~ 17 files without .meta."
+    },
+    {
+      "id": "client-claude-package-clones",
+      "scope": "client",
+      "summary": "Client CLAUDE.md names package clones at /mnt/e/CuvaraPackages (absent here), says the lock must point at them, and duplicates the file: pinning section (~lines 281 and 332)."
+    }
+  ],
+  "skills": {
+    "factory-core": {
+      "kind": "core",
+      "repos": [
+        "*"
+      ],
+      "summary": "Workflow contract, snapshot, validation, git safety, report. Always first."
+    },
+    "pin-bump": {
+      "kind": "cross-repo",
+      "repos": [
+        "client",
+        "server",
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "summary": "Move a client pin (manifest+lock, DOTS Sample) to a released sgl-v or package v* tag."
+    },
+    "wire-contract": {
+      "kind": "cross-repo",
+      "repos": [
+        "server",
+        "netcode",
+        "client"
+      ],
+      "summary": "Drive a wire/protocol/cross-language contract change: server -> Netcode -> ready to tag -> pin-bump."
+    },
+    "measure": {
+      "kind": "cross-repo",
+      "repos": [
+        "server",
+        "client"
+      ],
+      "summary": "Benchmarks, encoding sweeps, re-baselining and multi-client verification with expected value, control and run id."
+    },
+    "server-realtime": {
+      "kind": "repo",
+      "repos": [
+        "server"
+      ],
+      "summary": "C# game server + Shared.GameLogic: ECS systems, phases, replication, knobs, metrics, golden vectors, AOT."
+    },
+    "server-services": {
+      "kind": "repo",
+      "repos": [
+        "server"
+      ],
+      "summary": "Go gateway, Nakama RPCs, shared Redis store, persistence and migrations."
+    },
+    "server-ops": {
+      "kind": "repo",
+      "repos": [
+        "server"
+      ],
+      "summary": "Docker, compose, k3s/k8s/Agones, monitoring, backups, CD workflows."
+    },
+    "unity-package": {
+      "kind": "repo",
+      "repos": [
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "summary": "Development inside Netcode, UnityDots, UIToolkit up to ready-to-tag."
+    },
+    "client-integration": {
+      "kind": "repo",
+      "repos": [
+        "client"
+      ],
+      "summary": "Unity client glue: VContainer scopes, Nakama/session, HUD/UI, DotsViews, build scripts."
+    }
+  },
+  "human_gates": [
+    {
+      "id": "tag",
+      "rule": "Creating, deleting or pushing tags in any repo - the lead only. The guard denies it.",
+      "decision": "deny"
+    },
+    {
+      "id": "publish",
+      "rule": "git push, opening/merging PRs, GitHub releases - only when the user explicitly asks in this task.",
+      "match": "^gh\\s+(pr\\s+(create|merge)|release\\s+create)\\b"
+    },
+    {
+      "id": "workflow-dispatch",
+      "rule": "Dispatching CI/CD or release workflows (cd.yml, publish-images, client 10/11/20-24 builds, package version-bump) - explicit user authorization.",
+      "match": "\\bgh\\s+(workflow\\s+run|run\\s+rerun)\\b"
+    },
+    {
+      "id": "shared-infra",
+      "rule": "kubectl/helm against any cluster, ssh/scp to a VPS, applying manifests, anything touching staging or production - explicit user authorization; never automatic.",
+      "match": "^(sudo\\s+)?([A-Za-z_]+=\\S*\\s+)*(kubectl|helm|k3d|k3s|ssh|scp|rsync)\\b|(dev-up|rollback-to-compose|setup-dev|teardown-dev)\\.sh\\b|k8s/(data/apply|registry/push)\\.sh\\b|verify/verify\\.sh\\b"
+    },
+    {
+      "id": "secrets",
+      "rule": "Never read, print or commit backend/deploy/kubeconfig.local, .env files, secret manifests with values, or credentials.",
+      "match": "(kubeconfig\\.local|(^|[\\s/])\\.env(\\.local)?(\\s|$))"
+    },
+    {
+      "id": "client-package-toggle",
+      "rule": "Pointing the client at local package clones (toggle-packages.sh dev) edits the user's client tree: only with explicit consent; back up Packages/manifest.json and packages-lock.json first and restore them byte-identical (cmp) afterwards - never 'restore' with toggle-packages.sh release (it pins each package to its newest local tag, not the previous pin); never commit its output.",
+      "match": "toggle-packages\\.sh"
+    },
+    {
+      "id": "local-stack",
+      "rule": "Starting/stopping/resetting the local Docker stack (make up/flow-up/reset/down, stack.sh up/down, docker compose up/down) - heavy and stateful; ask first. Health checks (make flow-check) are fine.",
+      "match": "\\bstack\\.sh\\s+(up|down)\\b|\\bmake\\s+(flow-up\\S*|flow-down|flow-reset|up|down|reset|monitoring-(up|down))\\b|\\bdocker(\\.exe)?\\s+compose\\b[^;&|]*\\s(up|down|restart|stop|rm|kill)\\b"
+    },
+    {
+      "id": "gameplay-rules",
+      "rule": "Inventing gameplay rules/numbers/content is out of phase (plumbing only) - stop and ask."
+    },
+    {
+      "id": "db-backup-restore",
+      "rule": "Running database/Redis backup or restore scripts - explicit user authorization.",
+      "match": "\\b(backup|restore|redis-backup|redis-restore)\\.sh\\b"
+    },
+    {
+      "id": "load-run",
+      "rule": "Load generation (bench.sh, encoding-sweep.sh, the loadtest binary) against any stack - ask first; never against staging/production without authorization.",
+      "match": "\\b(bench|encoding-sweep)\\.sh\\b|(^|\\s)\\./loadtest(\\s|$)"
+    },
+    {
+      "id": "multi-client",
+      "rule": "Launching or verifying multiple Unity players on the user's machine.",
+      "match": "\\b(run-clients|verify-multiclient)\\.sh\\b"
+    },
+    {
+      "id": "unity-batch",
+      "rule": "Unity batch-mode builds/imports (PlayerBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) change project state; ask first.",
+      "match": "-executeMethod\\s+(PlayerBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\."
+    },
+    {
+      "id": "db-schema-write",
+      "rule": "Running the migrator standalone or writing schema_migrations by hand.",
+      "match": "--migrate-only|(?i:(update|delete\\s+from|truncate|insert\\s+into)\\s+schema_migrations)"
+    },
+    {
+      "id": "unity-asset-edit",
+      "rule": "Scene/prefab/asset edits through Unity MCP tools need an explicit yes (the Editor state is the user's)."
+    },
+    {
+      "id": "sgl-release",
+      "rule": "Only the lead releases Shared.GameLogic: package.json version bump for release, sgl-v* tags, dispatching publish-shared-gamelogic.yml. Skills stop at 'ready to tag server sgl-vX.Y.Z'.",
+      "match": "\\bgh\\s+workflow\\s+run\\s+\\S*publish-shared-gamelogic"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "wire-generated",
+      "summary": "wire.proto is the single source; Go and C# server bindings are generated from it and Netcode carries a byte-identical copy of the C# binding.",
+      "source": {
+        "repo": "server",
+        "path": "backend/shared/proto/wire.proto"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/proto/gen/",
+          "how": "backend/shared/proto/generate.sh (protoc 29.3 + protoc-gen-go v1.36.6)"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Net/Generated/",
+          "how": "generate.sh"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Protocol/Generated/Wire.cs",
+          "how": "byte copy of the server C# binding"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": "tag",
+      "evidence": "scripts/checks/wire-parity.sh; server CI proto-generated; Netcode CI wire; TestDotnetInterop."
+    },
+    {
+      "id": "protocol-version",
+      "summary": "The wire protocol version constant must agree in the C# server, Go shared/messages and Netcode; the gateway --min-protocol-version flag decides admission.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/Net/WireProtocol.cs"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/messages/messages.go",
+          "how": "const WireProtocolVersion"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Protocol/WireProtocolVersion.cs",
+          "how": "WireProtocolVersion.Current"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/cmd/gateway/main.go",
+          "how": "--min-protocol-version flag (admission policy)"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": "tag",
+      "evidence": "scripts/checks/wire-parity.sh; gateway/server/protocol_version_test.go; ProtocolVersionHandshakeTests."
+    },
+    {
+      "id": "redis-server-registry",
+      "summary": "Redis hash servers:id:{id} is written by the C# game server and read by the Go gateway; both sides change in the same commit.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/Registry/RedisServerRegistry.cs"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/storage/redisstore/registry.go",
+          "how": "hand-maintained Go reader"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": null,
+      "evidence": "Registry tests on both sides + integration e2e (TestDotnetInterop)."
+    },
+    {
+      "id": "sgl-pin",
+      "summary": "Shared.GameLogic releases (package.json + lead-created sgl-vX.Y.Z tag) are pinned by the client in manifest AND lock; package CIs bootstrap their own sgl pin.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/Shared.GameLogic/package.json"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Packages/manifest.json",
+          "how": "com.rpgmmo.shared-gamelogic git URL #sgl-vX.Y.Z"
+        },
+        {
+          "repo": "client",
+          "path": "Packages/packages-lock.json",
+          "how": "same pin"
+        }
+      ],
+      "driver": "pin-bump",
+      "gate": "tag",
+      "evidence": "scripts/checks/pin-status.py; client CI sgl-pin-check.yml + 02-package-pins.yml.",
+      "watchers": [
+        {
+          "repo": "netcode",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI bootstrap pin (currently sgl-v0.5.0)"
+        },
+        {
+          "repo": "unitydots",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI bootstrap pin (currently sgl-v0.5.0)"
+        }
+      ]
+    },
+    {
+      "id": "package-pins",
+      "summary": "Client pins of com.cuvara.{netcode,dots,uitoolkit} must name released tags, agree between manifest and lock, and (netcode) match the DOTS Sample copy.",
+      "source": {
+        "repo": "client",
+        "path": "Packages/manifest.json"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Packages/packages-lock.json",
+          "how": "identical pin"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Samples/Netcode/DOTS Sample/",
+          "how": "byte copy of Netcode Samples~/DOTSSample + .sample-source"
+        }
+      ],
+      "driver": "pin-bump",
+      "gate": "tag",
+      "evidence": "scripts/checks/pin-status.py (+ --remote); unity-package-pins.py; client CI 02-package-pins.yml.",
+      "upstream": [
+        {
+          "repo": "netcode",
+          "path": "package.json",
+          "how": "released version (tag vX.Y.Z by the lead)"
+        },
+        {
+          "repo": "unitydots",
+          "path": "package.json",
+          "how": "released version"
+        },
+        {
+          "repo": "uitoolkit",
+          "path": "package.json",
+          "how": "released version"
+        }
+      ]
+    },
+    {
+      "id": "gamestate-migrations",
+      "summary": "Embedded server migrations and the deploy copies must stay identical (normalised); applied migrations are immutable (checksummed).",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/Persistence/Migrations/"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/deploy/db/migrations/gamestate/",
+          "how": "copy"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/db/init-gamestate.sql",
+          "how": "must match the first migration"
+        }
+      ],
+      "driver": "server-services",
+      "gate": null,
+      "evidence": "MigratorTests EmbeddedMigrations_MatchDeployCopies + InitGamestateSql_MatchesFirstMigration Passed (not Skipped)."
+    },
+    {
+      "id": "server-knobs",
+      "summary": "Every GAMESERVER_* knob declared in code is passed through (or excluded by name) in compose and Agones/k8s fleet manifests.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/ServerEnv.cs"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/deploy/docker-compose.yml",
+          "how": "service gameserver-dotnet environment"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/docker-compose.override.yml",
+          "how": "service gameserver-dotnet-map02"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/agones/fleet-map-dotnet-dev.yaml",
+          "how": "env"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/50-fleet-map.yaml",
+          "how": "env"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/60-fleet-dungeon.yaml",
+          "how": "env"
+        }
+      ],
+      "driver": "server-realtime",
+      "gate": null,
+      "evidence": "GameServer.Tests/Deploy (DeclaredKnobs, ComposeEnvPassthroughTests, FleetEnvPassthroughTests) Passed counts.",
+      "co_edit": "server-realtime may edit ONLY the env: passthrough lines of the five copies (plus a backend/deploy/CHANGELOG.md entry) in the same commit as the knob; values (.env.example, 20-configmaps.yaml keys) and everything else in those files stay with server-ops."
+    },
+    {
+      "id": "join-token",
+      "summary": "JoinToken / session JWT claims (sid, jti, keyring) minted by the Go gateway and validated by the C# game server; both sides change in one commit.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gateway/transfer/join_token.go"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/jwt/",
+          "how": "shared JWT/keyring helpers"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Server/JwtValidator.cs",
+          "how": "C# validator"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": null,
+      "evidence": "Go transfer/jwt tests + C# JwtValidator tests + integration e2e (TestDotnetInterop)."
+    },
+    {
+      "id": "nakama-rpc",
+      "summary": "Nakama RPC names and payloads (party_*, reward_kills, economy) registered in the Go plugin and called by the client, the gateway and the game server.",
+      "source": {
+        "repo": "server",
+        "path": "backend/nakama/main.go"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/nakama/social/",
+          "how": "party RPC handlers/payloads"
+        },
+        {
+          "repo": "server",
+          "path": "backend/nakama/economy/",
+          "how": "economy/reward RPC handlers"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/transfer/party.go",
+          "how": "party_get caller"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Nakama/NakamaClient.cs",
+          "how": "reward_kills caller"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Nakama/Social/PartyService.cs",
+          "how": "party RPC caller"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Nakama/Auth/NakamaAuthProvider.cs",
+          "how": "auth caller"
+        },
+        {
+          "repo": "server",
+          "path": "backend/nakama/auth/token.go",
+          "how": "gateway_token RPC minting the gateway session JWT"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/session/jwt.go",
+          "how": "gateway verifies the Nakama-minted session JWT"
+        }
+      ],
+      "driver": "server-services",
+      "gate": null,
+      "evidence": "nakama social/economy tests, gateway party tests, client EditMode tests (external), backend/nakama/docs/API.md."
     }
   ]
 }
