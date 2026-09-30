@@ -1,0 +1,19 @@
+{
+  "name": "rpg-factory",
+  "version": "0.1.0",
+  "description": "Factory Core for the UnityIndie RPG MMO workspace (rpg-mmo-server + IndieRPGMMOAdventure): module registry, live workspace context, tiered validation discovery, verify-a-result reporting, and a git safety guard.",
+  "author": {
+    "name": "Cuvara",
+    "url": "https://github.com/Cuvara"
+  },
+  "homepage": "https://github.com/Cuvara/rpg-factory",
+  "repository": "https://github.com/Cuvara/rpg-factory",
+  "keywords": [
+    "factory",
+    "workflow",
+    "validation",
+    "git-safety",
+    "rpg-mmo"
+  ],
+  "skills": "./skills/"
+}

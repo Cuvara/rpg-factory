@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/registry.schema.json",
+  "title": "rpg-factory registry",
+  "description": "Module-level source of truth for Factory Core. Unknown properties are allowed everywhere so future skills can add keys without a schema bump; consumers must ignore keys they do not understand. Enforced by scripts/check-registry.sh.",
+  "type": "object",
+  "required": ["schema_version", "workspace", "tiers", "result_states", "tools", "repos", "modules", "global_rules"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "workspace": {
+      "type": "object",
+      "required": ["root_default", "root_env", "root_markers"],
+      "properties": {
+        "root_default": { "type": "string" },
+        "root_env": { "type": "string" },
+        "root_markers": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "tiers": {
+      "type": "object",
+      "required": ["fast", "extended", "external"],
+      "additionalProperties": { "type": "string" }
+    },
+    "result_states": { "type": "array", "items": { "type": "string" } },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["candidates", "version_args"],
+        "properties": {
+          "candidates": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Tried in order; first found on PATH wins (e.g. dotnet, then dotnet.exe)." },
+          "version_args": { "type": "string" },
+          "expected": { "type": "string", "description": "Version CI pins, shown next to the local version." },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["probe"],
+        "properties": { "probe": { "type": "string", "pattern": "^tcp://" }, "purpose": { "type": "string" } }
+      }
+    },
+    "global_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "rule", "source"],
+        "properties": { "id": { "type": "string" }, "rule": { "type": "string" }, "source": { "type": "string" } }
+      }
+    },
+    "repos": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["path", "default_branch", "protected_branches", "instructions"],
+        "properties": {
+          "path": { "type": "string", "description": "Relative to the workspace root." },
+          "remote": { "type": "string" },
+          "default_branch": { "type": "string" },
+          "protected_branches": { "type": "array", "items": { "type": "string" }, "description": "Exact names or prefix globs ending in *." },
+          "branch_pattern": { "type": "string" },
+          "commit_style": { "type": "string" },
+          "merge": { "type": "string" },
+          "instructions": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "known_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "scope", "summary"],
+        "properties": { "id": { "type": "string" }, "scope": { "type": "string" }, "summary": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "required": ["id", "run", "evidence"],
+      "properties": {
+        "id": { "type": "string" },
+        "cwd": { "type": "string", "description": "Repo-relative working directory. Default '.'." },
+        "run": { "type": "string", "description": "Command (fast/extended) or instruction (external). Placeholders: {dotnet}, {plugin_root}." },
+        "trigger": { "type": "string", "description": "When an extended check becomes required." },
+        "evidence": { "type": "string", "description": "What counts as proof. Must name counts where the tool reports them." }
+      }
+    },
+    "module": {
+      "type": "object",
+      "required": ["id", "repo", "paths", "responsibility", "depends_on", "checks", "rules", "generated", "tools", "obligations"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z]+\\.[a-z0-9-]+$" },
+        "repo": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Repo-relative prefixes. Trailing / = directory. Longest match wins." },
+        "responsibility": { "type": "string" },
+        "depends_on": { "type": "array", "items": { "type": "string" }, "description": "Module ids this module consumes. A change in any of them makes this module a dependent that must be validated." },
+        "claude_md": { "type": ["string", "null"] },
+        "docs": { "type": "array", "items": { "type": "string" } },
+        "changelog": { "type": ["string", "null"] },
+        "rules": { "type": "array", "items": { "type": "string" } },
+        "generated": { "type": "array", "items": { "type": "string" }, "description": "Paths (or **/*suffix globs) produced by a generator; never hand-edit." },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "checks": {
+          "type": "object",
+          "required": ["fast", "extended", "external"],
+          "properties": {
+            "fast": { "type": "array", "items": { "$ref": "#/$defs/check" } },
+            "extended": { "type": "array", "items": { "$ref": "#/$defs/check" } },
+            "external": { "type": "array", "items": { "$ref": "#/$defs/check" } }
+          }
+        },
+        "obligations": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
