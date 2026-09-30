@@ -34,6 +34,9 @@ t ask   Write "$C/Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"    # genera
 t ask   MultiEdit "$C/Assets/Scripts/Foo.uxml.g.cs"                     # generated glob
 t ask   Write "$S/backend/deploy/.env"                                   # secrets
 t ask   Read  "$S/backend/deploy/kubeconfig.local"
+t ask   Read  "$S/backend/deploy/.env.local"
+t allow Read  "$S/backend/deploy/.env.example"                            # documentation, not a secret
+t allow Edit  "$S/backend/deploy/.env.example"
 t allow Read  "$S/backend/TEAM.md"
 t allow Read  "$C/Packages/com.cuvara.dots/a.cs"                         # reading user state is fine
 t allow Write "$TMP/outside/file.txt"                                     # outside the workspace

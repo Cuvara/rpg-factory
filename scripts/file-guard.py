@@ -30,7 +30,7 @@ sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-SECRET = re.compile(r"(^|/)(\.env(\.[A-Za-z0-9_-]+)?|kubeconfig\.local)$")
+SECRET = re.compile(r"(^|/)(\.env(\.(?!example$|sample$|template$|dist$)[A-Za-z0-9_-]+)?|kubeconfig\.local)$")
 
 
 def target(payload):
