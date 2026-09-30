@@ -659,6 +659,27 @@ def latch_hits(payload, registry):
     return []
 
 
+def mode_hits(payload, registry):
+    """Factory execution mode (declared with `factory-context.sh --mode <m>`): analyze/plan/review are
+    read-only; validate may additionally run run-checks.py. implement/resume (or no mode) = normal rules."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import tripwire  # noqa: E402
+    ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
+    if not ws:
+        return []
+    declared = tripwire.record_mode(payload)
+    mode = declared or tripwire.current_mode(payload)
+    if not mode or declared or tripwire.is_read_only(payload):
+        return []
+    how = ("switch only when the user asked for it: `bash " + os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh")
+           + " --mode implement` (or validate)")
+    if mode in tripwire.READ_ONLY_MODES:
+        return [("deny", f"Factory mode is `{mode}` (read-only): this command changes state - {how}")]
+    if mode == "validate" and not tripwire.runs_checks(payload):
+        return [("deny", "Factory mode is `validate`: only read-only commands and run-checks.py - " + how)]
+    return []
+
+
 def main():
     if os.environ.get("RPG_FACTORY_GUARD", "").lower() in {"off", "0", "false"}:
         return 0
@@ -672,7 +693,7 @@ def main():
     if not registry:
         return 0
     reasons = []
-    for part in (latch_hits, evaluate, human_gate_hits):  # isolated: a failure in one never drops the others
+    for part in (latch_hits, mode_hits, evaluate, human_gate_hits):  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)
         except Exception:  # a guard bug must never break the session

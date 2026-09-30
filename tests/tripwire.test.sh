@@ -113,6 +113,7 @@ for td in "" "relative/dir" "/nonexistent/x" "$TMP/tmpok"; do
   if [ -z "$(ls -A "$PROBE")" ] && [ "${root:0:1}" = "/" ]; then pass=$((pass + 1)); echo "PASS  TMPDIR='$td' -> $root (nothing written in the cwd)"
   else fail=$((fail + 1)); echo "FAIL  TMPDIR='$td' root=$root cwd has: $(ls -A "$PROBE")"; fi
 done
+rm -rf /tmp/rpg-factory/tmpdir-case                                   # fallback cases used the real /tmp: clean up
 (cd "$PROBE" && env -u TMPDIR python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate; print(fstate.scratch())") | grep -q '^/' && { pass=$((pass + 1)); echo "PASS  TMPDIR unset -> absolute"; } || { fail=$((fail + 1)); echo "FAIL  TMPDIR unset"; }
 
 # ---- v0.4: embedded package clones (gitignored nested repos inside the client) are user state

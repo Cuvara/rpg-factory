@@ -23,7 +23,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... 
   `regex:<pattern>`); `needs` makes a check BLOCKED when a prerequisite failed.
 - Before/after `git status` of the product repo is compared: a check that leaves files behind
   is FAIL (pollution), even if it passed.
-- Evidence JSON goes to `$TMPDIR/rpg-factory/results/`; cite its path in the report.
+- Every executed check is stored with the **identity of the tree it ran on** (HEAD, diff and untracked
+  files in the check's directory, check definition) and its full log, under
+  `~/.local/state/rpg-factory/evidence/`. Cite the log path; the table carries the summary.
+- `run-checks.py ... --status` grades the declared checks against the current tree **without running
+  anything**: the stored state when nothing changed, **STALE** after any change, **NOT_RUN** when never
+  executed. Run it before reporting: a PASS from before your last edit is not evidence.
 - Exit 1 when any fast check is not PASS or anything FAILed.
 
 ## Factory check scripts (read-only against product repos)
@@ -58,6 +63,8 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
 | `NOT_AVAILABLE` | A required tool is not resolved on this machine | no - say so |
 | `HUMAN_REQUIRED` | Extended check not approved, or an external environment | open item |
 | `SKIPPED` | Excluded on purpose (`--only`, duplicate command) | n/a |
+| `NOT_RUN` | (`--status`) declared for this change, never executed | no |
+| `STALE` | (`--status`) executed, but the tree or the check changed since | no - rerun |
 
 No registered check for the touched modules is reported as "none registered", not as PASS.
 

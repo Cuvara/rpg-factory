@@ -64,9 +64,10 @@ def state_dir(payload):
     return d
 
 
-def ws_latch_file(ws):
+def ws_latch_file(ws, create=False):
     d = os.path.join(fstate.persistent(), "latch")
-    os.makedirs(d, exist_ok=True)
+    if create:
+        os.makedirs(d, exist_ok=True)
     return os.path.join(d, fstate.workspace_key(ws) + ".json")
 
 
@@ -91,10 +92,45 @@ def load_registry():
         return None
 
 
+MODES = ("analyze", "plan", "implement", "validate", "review", "resume")
+READ_ONLY_MODES = {"analyze", "plan", "review"}
+
+
+def record_mode(payload):
+    """`factory-context.sh --mode <m>` declares the Factory execution mode for this session (seen by the
+    PreToolUse hook, which knows the session id). Returns the mode it recorded, if any."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    if "--mode" not in command:
+        return None
+    g = guard()
+    shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    for argv in g.expand(command, shell=shell):
+        if any(os.path.basename(a) in ("factory-context.sh", "context.py") for a in argv[:3]):
+            for i, a in enumerate(argv):
+                m = a.split("=", 1)[1] if a.startswith("--mode=") else (argv[i + 1] if a == "--mode" and i + 1 < len(argv) else None)
+                if m in MODES:
+                    open(os.path.join(state_dir(payload), "MODE"), "w", encoding="utf-8").write(m)
+                    return m
+    return None
+
+
+def current_mode(payload):
+    return (read(os.path.join(state_dir(payload), "MODE")) or "").strip() or None
+
+
+def runs_checks(payload):
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    g = guard()
+    argvs = list(g.expand(command, shell="powershell" if payload.get("tool_name") == "PowerShell" else "bash"))
+    return bool(argvs) and all(any(os.path.basename(a) in ("run-checks.py", "factory-cmd.py") for a in argv[:3]) or
+                               g.prog(argv[0]) in READ_ONLY_PROGS for argv in argvs)
+
+
 def is_read_only(payload):
     command = (payload.get("tool_input") or {}).get("command") or ""
     if not command.strip():
         return True
+    command = re.sub(r"\d*>{1,2}\s*/dev/null|\d*>&\d", " ", command)  # discarding output is not a write
     if re.search(r"(^|[^>])>{1,2}[^>&]|\btee\b|\bsed\b[^|;]*\s-i|\bmv\b|\brm\b|\bcp\b|\btouch\b|\bmkdir\b", command):
         return False
     g = guard()
@@ -125,6 +161,8 @@ def is_read_only(payload):
             continue
         script = next((a for a in argv[:3] if "/" in a or a.endswith((".py", ".sh"))), "")
         if os.path.basename(script) in READ_ONLY_FACTORY and "--ack" not in argv:
+            continue
+        if os.path.basename(script) == "factory-cmd.py" and not ("check" in argv and "--status" not in argv):
             continue
         if p not in READ_ONLY_PROGS:
             return False
@@ -488,7 +526,7 @@ def post(payload):
     open(os.path.join(sd, "LATCH"), "w", encoding="utf-8").write(msg)
     if ws:
         json.dump({"workspace": ws, "session": payload.get("session_id"), "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                   "message": msg}, open(ws_latch_file(ws), "w", encoding="utf-8"))
+                   "message": msg}, open(ws_latch_file(ws, create=True), "w", encoding="utf-8"))
     stop = ("STOP - rpg-factory tripwire: repository state changed outside the git guard: " + msg +
             ". Do not continue, do not try to repair or normalise this state. Report exactly what happened to the user. "
             "Further mutating commands are denied until the user runs: python3 " + os.path.join(PLUGIN_ROOT, "scripts", "tripwire.py") + " --ack")

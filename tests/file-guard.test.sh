@@ -39,6 +39,13 @@ t allow Read  "$C/Packages/com.cuvara.dots/a.cs"                         # readi
 t allow Write "$TMP/outside/file.txt"                                     # outside the workspace
 t allow Edit  "Assets/Scripts/Net/Other.cs"                               # relative path resolved against cwd
 t ask   Edit  "Assets/Scripts/Net/Client.cs"
+# modes: analyze/plan/review/validate forbid file changes (declared through the shell guard, same session)
+declare_mode() { jq -cn --arg c "bash $ROOT/scripts/factory-context.sh --mode $1" --arg d "$C" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"fg"}' | python3 -B "$ROOT/scripts/git-guard.py" >/dev/null; }
+declare_mode plan;      t deny  Write "$C/Assets/Scripts/Net/NewFile.cs"; t allow Read "$C/Assets/Scripts/Net/Client.cs"
+declare_mode validate;  t deny  Edit  "$S/backend/deploy/compose.yml"
+declare_mode review;    t deny  MultiEdit "$C/Assets/Scripts/Net/NewFile.cs"
+declare_mode implement; t allow Write "$C/Assets/Scripts/Net/NewFile.cs"
+
 # latch: an unresolved STOP (even from an earlier session) denies every write
 mkdir -p "$TMP/state/latch"
 python3 -B - "$ROOT" "$WS" <<'PY'

@@ -59,9 +59,10 @@ def _slug(s):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s)
 
 
-def repo_dir_for(ws, repo):
+def repo_dir_for(ws, repo, create=True):
     d = os.path.join(fstate.persistent(), "evidence", fstate.workspace_key(ws), _slug(repo))
-    os.makedirs(os.path.join(d, "logs"), exist_ok=True)
+    if create:
+        os.makedirs(os.path.join(d, "logs"), exist_ok=True)
     return d
 
 
@@ -77,7 +78,7 @@ def store(ws, repo, result, output):
 
 
 def latest(ws, repo, module, check_id):
-    p = os.path.join(repo_dir_for(ws, repo), f"{_slug(module)}__{_slug(check_id)}.json")
+    p = os.path.join(repo_dir_for(ws, repo, create=False), f"{_slug(module)}__{_slug(check_id)}.json")
     try:
         return json.load(open(p, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -85,9 +86,9 @@ def latest(ws, repo, module, check_id):
 
 
 def all_latest(ws, repo):
-    d = repo_dir_for(ws, repo)
+    d = repo_dir_for(ws, repo, create=False)
     out = []
-    for f in sorted(os.listdir(d)):
+    for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         if f.endswith(".json"):
             try:
                 out.append(json.load(open(os.path.join(d, f), encoding="utf-8")))

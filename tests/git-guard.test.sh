@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUARD="$ROOT/scripts/git-guard.py"
 TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1
 trap 'rm -rf "$TMP"' EXIT
-export TMPDIR="$TMP"   # tripwire latch state stays inside this test
+export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"   # tripwire latch/mode state stays inside this test
 
 WS="$TMP/ws"
 OUT="$TMP/outside"
@@ -223,6 +223,34 @@ if [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL n
 # malformed stdin never breaks the session
 out=$(echo 'not json' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; echo "exit=$?")
 if [ "$out" = "exit=0" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL malformed stdin: $out"; fi
+
+# ---- v0.4: execution modes - declared with factory-context.sh --mode, enforced per session
+mcheck() { # expected command [tool]
+  local out got; out=$(jq -cn --arg c "$2" --arg d "$SERVER" --arg t "${3:-Bash}" '{tool_name:$t,tool_input:{command:$c},cwd:$d,session_id:"modes"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
+  got=$(jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${out:-{\}}")
+  if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL mode expected=%s got=%s cmd=%s\n  out=%s\n' "$1" "$got" "$2" "$out"; fi
+}
+CTX="$ROOT/scripts/factory-context.sh"; RC="$ROOT/scripts/run-checks.py"
+mcheck allow "touch before-any-mode.txt"                                  # no mode declared: normal rules
+mcheck allow "bash $CTX --mode plan --repo server --paths backend/x.go"    # declaring is read-only
+mcheck deny  "touch plan.txt"
+mcheck deny  "git switch -c feat/x/plan"
+mcheck deny  "python3 $RC --repo server"
+mcheck allow "git status 2>/dev/null"
+mcheck allow "git log --oneline -3 2>&1 | head -3"
+mcheck allow "python3 $ROOT/scripts/factory-status.py"
+mcheck deny  "touch x" PowerShell
+mcheck allow "bash $CTX --mode=validate --repo server"
+mcheck allow "python3 $RC --repo server --paths backend/x.go"
+mcheck allow "python3 $RC --repo server --status | head -20"
+mcheck deny  "touch validate.txt"
+mcheck allow "bash $CTX --mode analyze"
+mcheck deny  "git commit -m x"
+mcheck allow "bash $CTX --mode implement --repo server"
+mcheck allow "touch implement.txt"
+mcheck allow "git switch -c feat/x/impl"
+mcheck allow "bash $CTX --mode nonsense"                                   # unknown modes are not recorded
+mcheck allow "touch still-implement.txt"
 
 # ---- v0.4: GitHub remote mutations (invisible to the tripwire - the guard is the only defence)
 check deny "$SERVER" "gh api graphql -f query='mutation{createRef(input:{repositoryId:\"R\",name:\"refs/tags/v9\",oid:\"abc\"}){ref{name}}}'"

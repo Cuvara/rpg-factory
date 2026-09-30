@@ -15,5 +15,6 @@
     "git-safety",
     "rpg-mmo"
   ],
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "commands": "./commands/"
 }

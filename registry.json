@@ -797,6 +797,54 @@
       ]
     },
     {
+      "id": "server.bench",
+      "repo": "server",
+      "paths": [
+        "backend/gameserver-dotnet/GameServer.Tests/Bench/"
+      ],
+      "responsibility": "Benchmark and measurement harnesses inside the game-server test project (BENCH_TICK / BENCH_AOI / MEASURE_TIERING gated). The harness is measure's; numbers quoted from it follow verify-a-result.",
+      "depends_on": [
+        "server.gameserver-dotnet"
+      ],
+      "claude_md": "backend/gameserver-dotnet/CLAUDE.md",
+      "docs": [
+        "backend/docs/BENCHMARK.md",
+        "backend/docs/MEASUREMENT.md"
+      ],
+      "changelog": "backend/gameserver-dotnet/CHANGELOG.md",
+      "rules": [
+        "Benches skip without their env gate (BENCH_TICK, BENCH_AOI, MEASURE_TIERING); a skipped bench is not a measurement. Measurement runs and the numbers they produce go through the measure skill (expected value, control, run id)."
+      ],
+      "generated": [],
+      "tools": [
+        "dotnet",
+        "python3"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "dotnet-build",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} build -c Release",
+            "evidence": "'Build succeeded' with 0 Error(s)"
+          },
+          {
+            "id": "dotnet-test",
+            "cwd": "backend/gameserver-dotnet",
+            "run": "{dotnet} test -c Release --logger \"trx;LogFileName=test-results.trx\" --blame-hang --blame-hang-timeout 8m",
+            "evidence": "Failed/Passed/Skipped/Total per test project. Skips are expected only for Regenerate (GOLDEN_REGEN), benches (BENCH_TICK/BENCH_AOI/MEASURE_TIERING) and Docker-backed fixtures; any other skip is a finding."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": [
+        "measure",
+        "server-realtime"
+      ]
+    },
+    {
       "id": "server.integration-test",
       "repo": "server",
       "paths": [
@@ -2237,6 +2285,59 @@
       "obligations": []
     },
     {
+      "id": "netcode.measurement",
+      "repo": "netcode",
+      "paths": [
+        "Tests/Runtime/PredictionLatencyMeasurement.cs"
+      ],
+      "responsibility": "Prediction/latency measurement harness in the Netcode test suite.",
+      "depends_on": [
+        "netcode.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "A measurement harness change is package code (unity-package); a number quoted from it is measure's (verify-a-result)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "headless-tests",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/netcode-headless.sh",
+            "evidence": "discovered/executed/passed/failed; executed > 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "unity-package",
+        "measure"
+      ],
+      "gates": []
+    },
+    {
       "id": "netcode.package",
       "repo": "netcode",
       "paths": [
@@ -3622,6 +3723,84 @@
       "driver": "server-services",
       "gate": null,
       "evidence": "nakama social/economy tests, gateway party tests, client EditMode tests (external), backend/nakama/docs/API.md."
+    },
+    {
+      "id": "transport-security",
+      "summary": "Transport security switches and the capabilities they require: gateway/Nakama TLS and GAMESERVER_SEALED=require in the deploy manifests need the game server, gateway, smoketest/verify pins, the Netcode sealed client and the client's certificate pin loading to support them FIRST. Turning a switch on goes capability -> switch; turning it off goes switch -> capability.",
+      "source": {
+        "repo": "server",
+        "path": "backend/deploy/k8s/app/40-gateway.yaml"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/50-fleet-map.yaml",
+          "how": "GAMESERVER_SEALED on the map fleet"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/60-fleet-dungeon.yaml",
+          "how": "GAMESERVER_SEALED on the dungeon fleet"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/data/nakama.yaml",
+          "how": "Nakama (meta hop) TLS"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/docker-compose.yml",
+          "how": "local stack TLS/sealed settings"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/cmd/gateway/main.go",
+          "how": "gateway TLS flags"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Nakama/NakamaTlsPin.cs",
+          "how": "game server -> Nakama pin"
+        },
+        {
+          "repo": "server",
+          "path": "backend/smoketest/smoke/",
+          "how": "smoketest/killprobe pins and sealed sessions (must pin the TARGET cluster's certificate)"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/verify/",
+          "how": "deployment verification (probe + checks_flow.sh pin the target cluster's certificate)"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Client/SealedHandshakeClient.cs",
+          "how": "client sealed handshake (ADR-22/25)"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Client/NetworkSettings.cs",
+          "how": "client transport security settings"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/DI/TransportSecurityReport.cs",
+          "how": "loads the gateway / Nakama certificate pins per backend"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Session/BackendCommandLine.cs",
+          "how": "backend settings incl. pin paths"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Nakama/Tls/",
+          "how": "pinned HTTP adapter (no accept-any mode)"
+        }
+      ],
+      "driver": "server-ops",
+      "evidence": "Before a switch goes on: the Netcode tag the client pins supports it (factory-status pins), the client loads a pin for that backend, smoketest/verify pin the target cluster's certificate. History: ed090ab (every dungeon entry failed once meta-hop TLS went on), 437a3db (verify pinned dev's certificate against another cluster).",
+      "gate": "shared-infra"
     }
   ],
   "facts": [

@@ -31,7 +31,6 @@ def persistent():
         root = os.path.join(base, "rpg-factory")
     if not os.path.isabs(root):  # HOME unset/relative: never fall back to the cwd
         root = os.path.join(tempfile.gettempdir() if os.path.isabs(tempfile.gettempdir()) else "/tmp", "rpg-factory-state")
-    os.makedirs(root, exist_ok=True)
     return root
 
 
@@ -42,6 +41,7 @@ def scratch():
             break
     else:
         root = os.path.join(persistent(), "tmp")
+        os.makedirs(os.path.dirname(root), exist_ok=True)
     os.makedirs(root, exist_ok=True)
     return root
 

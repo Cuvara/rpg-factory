@@ -58,42 +58,65 @@ quoting (`` ` `` escape, `&` call operator, `git.exe`).
 
 | Command | Decision | Why |
 |---|---|---|
-| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`), `gh api .../git/refs\|tags`, `gh release create` | **deny** | agents never tag |
+| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing or fetching into tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`) | **deny** | agents never tag |
+| `gh release create/upload/edit`, `gh api` REST writes to `/git/tags`, tag refs or `/releases`, `gh api graphql` mutations creating a tag ref or release | **deny** | agents never tag |
+| `gh repo delete/archive`, `gh api -X DELETE repos/<o>/<r>` (or the GraphQL equivalents) | **deny** | irreversible |
+| any other `gh api` write (method from `-X`, else POST when fields/`--input` are given), GraphQL mutations, GraphQL from a file; mutating `gh` verbs (repo edit/rename/sync, secret/variable set, workflow enable/disable, run cancel, pr close/comment/edit, label create...) | ask | remote-only change the tripwire cannot see |
 | `reset --hard/--merge/--keep`, `reset <commit>` on a protected branch, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | ask | discards work or moves a protected branch |
 | `clean -f...` | ask | deletes untracked files |
 | `stash` (push/save/pop/drop/clear) | ask | moves or drops uncommitted changes |
 | `branch -D`, `branch -f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`, `prune` | ask | rewrites or drops refs |
 | `push` (any; force and delete-ref variants named) | ask | publishes or rewrites remote state |
 | `add -A/--all/./:/`, `commit -a` | ask | stages the user's changes |
-| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull --rebase` on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | ask | protected branch |
+| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull` (unless `--ff-only`) on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | ask | protected branch |
+| `branch -m/-d` of a protected branch; `fetch <src>:<dst>` into a local branch (`+` forced or not) | ask | moves or drops a protected/local branch |
+| `remote add/set-url/remove/rename`, `config` writes to `alias.*`, `remote.*.url/pushurl`, `url.*.insteadOf`, `core.hooksPath`, `credential.*`; `symbolic-ref` writes | ask | redirects fetch/push or hides what runs |
 | `commit --amend`, `rebase`, `filter-branch/filter-repo` | ask | rewrites history |
-| `submodule update/deinit/sync/foreach` | ask | changes submodule checkouts |
+| `submodule update/deinit/sync/foreach/add/set-url` | ask | changes submodule checkouts or sources |
 | `worktree remove/prune --force` | ask | deletes a worktree with its changes |
 | git run through an interpreter one-liner, or a program that is `$VAR` / `$(...)` / backticks | ask | the guard cannot see what runs |
 | any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | ask (or the gate's `decision`) | human gate |
 
 The guard ignores quoted text and heredoc bodies (a commit message mentioning `git tag` is fine),
 follows `cd <dir> &&` and `git -C <dir>`, knows that `git checkout -b feat/x && git commit`
-commits on the new branch, and stays silent outside the workspace. `RPG_FACTORY_GUARD=off`
+commits on the new branch, and stays silent outside the workspace - except `gh` commands that name a
+registry repo (`Cuvara/<repo>`), which are checked wherever they run. `RPG_FACTORY_GUARD=off`
 disables it for a session - never set it yourself.
+
+Read-only `gh` (view/list/checks/diff/status/search, `gh api` GET, GraphQL queries) always passes.
+
+## File tools and modes
+
+- `scripts/file-guard.py` (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Read`, workspace only): writes into an
+  embedded clone, submodule content, a registry generated path, a file that was already dirty/untracked when
+  the session started, or secrets **ask**; secret reads ask; writes while latched are **denied**.
+- The Factory mode declared with `factory-context.sh --mode <m>` is enforced by both guards: `analyze`, `plan`,
+  `review` deny writes and mutating commands; `validate` allows only `run-checks.py` (and read-only commands).
+- Not inspected: MCP tools that write files (Unity-MCP asset/scene tools) - the `unity-asset-edit` gate is the
+  control there.
 
 ## Tripwire
 
-- **SessionStart** records a baseline: the user's dirty/untracked files, submodule pointers and a
-  sample of dirty files inside submodules (the client's `com.gdk.*`).
+- **SessionStart** records a baseline: the user's dirty/untracked files, submodule pointers, a
+  sample of dirty files inside submodules (the client's `com.gdk.*`) and inside embedded clones
+  (`Packages/com.cuvara.*`, compared before/after each command so the user's own edits in Unity are
+  not flagged).
 - **Pre/PostToolUse** (Bash, PowerShell) compare ref fingerprints (branches, tags,
   remote-tracking refs, stash, HEAD) around every command. Changes are expected only in a repo
   the command visibly ran git in.
 - **Violations:** any tag change; ref/HEAD/stash/push changes without a visible git command in
   that repo; a baseline file modified or deleted; a user submodule moved or its dirty files
   changed.
-- On a violation the tool result carries **"STOP - rpg-factory tripwire: ..."** and the session is
-  latched: the guard denies every non-read-only command.
+- On a violation the tool result carries **"STOP - rpg-factory tripwire: ..."** and the **workspace** is
+  latched: every non-read-only command and file write is denied - in this session and in every later
+  one (a crash does not clear it; SessionStart reports it) - until the user acknowledges.
 
 After a STOP: do nothing else. Do not repair, reset, delete the tag, re-push or "normalise"
 anything. Report the message verbatim to the user. Only the user clears the latch
-(`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py --ack`) after reviewing the state.
+(`! python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py --ack`) after reviewing the state; the guard
+denies `--ack` to the agent while latched. `/rpg-factory:doctor` shows latches.
 
 Limits: git run by a background process started earlier, or by another agent runtime, is only
-seen at the next command; file edits by Write/Edit tools are not checked against the baseline
-until the next Bash/PowerShell call.
+seen at the next command; remote-only GitHub changes are invisible to it (the guard is the only
+control); state lives outside the repos (`lib/fstate.py`: scratch under `$TMPDIR` or `/tmp`, the latch
+and evidence under `~/.local/state/rpg-factory`).

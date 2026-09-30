@@ -5,7 +5,8 @@ The shell guard (git-guard.py) and the tripwire only see Bash/PowerShell. File t
 this hook applies the same workspace rules to the target path. Inside the workspace only; it never
 approves anything and never crashes a session (any error = no opinion).
 
-  deny  any write while the tripwire is latched (an unresolved STOP, this or an earlier session)
+  deny  any write while the tripwire is latched (an unresolved STOP, this or an earlier session), or while the
+        declared Factory mode is analyze/plan/review/validate
   ask   a write to:
           - an embedded package clone (client Packages/com.cuvara.*): the user's work, not the canonical repo
           - a git submodule's content (client com.gdk.*, unity-build-workflows): changes belong in its own repo
@@ -74,6 +75,10 @@ def evaluate(payload, registry):
     latch = tripwire.latched(payload)
     if latch:
         R.append(("deny", f"tripwire latched - {latch}. Stop and report it to the user"))
+    mode = tripwire.current_mode(payload)
+    if mode in tripwire.READ_ONLY_MODES or mode == "validate":
+        R.append(("deny", f"Factory mode is `{mode}`: no file changes. Switch only when the user asked to implement: "
+                          f"`bash {os.path.join(tripwire.PLUGIN_ROOT, 'scripts', 'factory-context.sh')} --mode implement`"))
     for key, r in registry["repos"].items():
         rdir = os.path.abspath(os.path.join(ws, r["path"]))
         if not (path == rdir or path.startswith(rdir + os.sep)):

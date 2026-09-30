@@ -69,6 +69,10 @@ assert "repo-prefixed path routes like repo-relative" server "(.routing.lead == 
 assert "comma-joined paths are split" server "(.routing.lead == \"server-services\") and ([.files[].path] | length == 2)" "backend/gateway/server/server.go,backend/nakama/main.go"
 assert "benchmark docs -> measure is the lead" server "(.routing.lead == \"measure\")" backend/docs/BENCHMARK.md
 assert "client end of nakama-rpc names the upstream driver" client "any(.contracts[]; .id == \"nakama-rpc\" and .driver == \"server-services\")" Assets/Scripts/Nakama/Social/PartyService.cs
+assert "bench harness only -> measure leads, server-realtime co-leads" server "(.routing.lead == \"measure\") and (.routing.co_leads | index(\"server-realtime\"))" backend/gameserver-dotnet/GameServer.Tests/Bench/TickAllocationBench.cs
+assert "netcode measurement test -> unity-package leads, measure co-leads" netcode "(.routing.lead == \"unity-package\") and (.routing.co_leads | index(\"measure\"))" Tests/Runtime/PredictionLatencyMeasurement.cs
+assert "gateway TLS/sealed manifest -> server-ops drives transport-security; client + netcode follow up" server "(.routing.lead == \"server-ops\") and $(contract transport-security) and $(followup client-integration) and $(followup unity-package)" backend/deploy/k8s/app/40-gateway.yaml
+assert "client pin loader is an end of transport-security" client "$(contract transport-security) and (.routing.lead == \"client-integration\")" Assets/Scripts/DI/TransportSecurityReport.cs
 assert "submodule gitlink bump -> pin-bump is the primary lead" client "(.routing.lead == \"pin-bump\") and (.routing.ambiguous | not)" unity-build-workflows
 assert "DOTS Sample recopy -> pin-bump" client "$(lead pin-bump)" "Assets/Samples/Netcode/DOTS Sample/DOTSNetworkBridge.cs"
 assert "k8s deployment -> server-ops; shared-infra gate" server \
@@ -110,6 +114,8 @@ history "Nakama TLS pinning in client"        client IndieRPGMMOAdventure  a949b
 history "Netcode TCP transport cancellation"  netcode Netcode              c38c763 "$(lead unity-package) and $(nolead wire-contract)"
 history "UnityDots entity pose / events"      unitydots UnityDots          77f671c "$(lead unity-package)"
 history "UIToolkit SettingsModel fix"         uitoolkit UIToolkit          24161a2 "$(lead unity-package)"
+history "meta-hop TLS broke dungeon entry"      server rpg-mmo-server       ed090ab "$(contract transport-security)"
+history "verify pinned the wrong cluster cert"   server rpg-mmo-server       437a3db "(.routing.lead == \"server-ops\") and $(contract transport-security)"
 history "toolkit submodule auto-bump (#137)"  client IndieRPGMMOAdventure  285a5a2 "(.routing.lead == \"pin-bump\")"
 history "toolkit v5.7.0 gitlink + CHANGELOG"  client IndieRPGMMOAdventure  525cf5b "(.routing.lead == \"pin-bump\") and $(nolead client-integration)"
 

@@ -7,7 +7,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 
 # Measure - benchmarks, sweeps, baselines, multi-client proof
 
-> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
+> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
 Task: $ARGUMENTS
 
@@ -53,6 +53,13 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo client --paths Tool
 8. **Write back** through the owning doc only with the run named: `backend/docs/BENCHMARK.md` part/section, results
    README, `CORE-BASELINE-V1.md` row. Re-baseline per its section 6 when a pin moves; stop at
    "ready to tag core-baseline-vX" (tags are the lead's).
+
+## Ownership
+
+`measure` is the lead for measurement **harnesses** as well as write-ups: `GameServer.Tests/Bench/`
+(module `server.bench`, server-realtime co-leads), `backend/loadtest/`, the measurement docs, client `Tools/`;
+it co-leads Netcode's `PredictionLatencyMeasurement.cs` (`netcode.measurement`). A harness change still runs the
+game server's build/test checks; a number quoted from a harness always follows the workflow below.
 
 ## Rules
 

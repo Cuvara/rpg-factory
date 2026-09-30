@@ -3,10 +3,12 @@
 Every Factory task ends with this report. Keep the section order. Write "none" rather than
 dropping a section. Validation rows come from `run-checks.py` output (copy its table; cite the evidence JSON path).
 Every PASS needs the runner's evidence; states other than PASS stay as the runner reported them.
+Before writing the table run `run-checks.py ... --status`: nothing you report as PASS may be STALE.
 
 ```markdown
 ## Summary
 <1-3 sentences: what changed and why. Name the task.>
+Mode: <analyze | plan | implement | validate | review | resume> (as declared with --mode)
 
 ## Scope
 - Repo(s) / branch: <repo> on <branch> (created from <base> | existing)
@@ -20,7 +22,7 @@ Every PASS needs the runner's evidence; states other than PASS stay as the runne
 - [ ] Generated artifacts / .meta / contract other side / version bump (state each or "n/a")
 
 ## Validation
-Runner: `run-checks.py --repo <key> --paths ...` · evidence: `$TMPDIR/rpg-factory/results/<file>.json`
+Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: all current (no STALE/NOT_RUN) · logs: `~/.local/state/rpg-factory/evidence/...`
 | Tier | Check | Cwd | State | Evidence |
 |---|---|---|---|---|
 | fast | server.gateway:go-test | backend/gateway | PASS | 304 passed, 0 failed, 0 skipped |

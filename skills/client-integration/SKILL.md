@@ -6,7 +6,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 ---
 # Client integration (IndieRPGMMOAdventure)
 
-> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
+> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
 Task: $ARGUMENTS
 
@@ -77,6 +77,12 @@ This skill is often the **last leg** of someone else's chain, or starts one:
 - Use the same `<type>/<area>/<topic>` branch topic as the upstream legs; name open hand-offs and
   their owning skill in the report.
 
+## Unity-MCP hand-off
+
+Editor-owned files (scenes, prefabs, ScriptableObjects, `.meta`) change only through the client's Unity-MCP
+skills, behind the `unity-asset-edit` gate; tests run through `tests-run`. Factory's hooks do not inspect MCP
+calls - ask before every asset edit. Table and rules: `references/unity-mcp.md`.
+
 ## Rules
 
 - **One `RegisterMessagePipe()`**, the first thing `RegisterDots` does; new MessagePipe consumers
@@ -118,12 +124,8 @@ This skill is often the **last leg** of someone else's chain, or starts one:
 
 Fast (Core) only covers `BuildConfig` JSON. The domain checks are external:
 
-- **Unity Test Runner** (`unity-test-runner`): if the snapshot shows `unity-mcp` reachable and the
-  session has the client's `ai-game-developer` MCP server, run the `tests-run` tool with
-  `testMode` EditMode then PlayMode, filtered by `testAssembly` `NDC.Tests.Editor` /
-  `NDC.Tests.Runtime`. Save open scenes first (dirty scenes abort the run). `unity-mcp-cli` is
-  not installed in WSL; the tool call is the MCP one. Evidence: total/passed/failed/skipped per
-  mode; zero executed = FAIL. Otherwise HUMAN_REQUIRED (external) (Editor closed).
+- **Unity Test Runner** (`unity-test-runner`): `tests-run` (EditMode then PlayMode, `NDC.Tests.Editor` /
+  `NDC.Tests.Runtime`) when `unity-mcp` is reachable - details in `references/unity-mcp.md`; zero executed = FAIL.
 - **CI** `01-ci.yml` (tests, no player; ignores `**.md` and `docs/**`) and
   `uxml-codegen-drift.yml` (any `*.uxml`/`*.uxml.g.cs`/lock change) on the PR. Count jobs.
 - **Player build** only if the change is build-affecting: `10-build-development.yml` is a

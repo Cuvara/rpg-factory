@@ -18,6 +18,7 @@ done
 [ -f "$src/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj" ] || { echo "ERROR: no headless project under $src"; exit 2; }
 
 if command -v dotnet >/dev/null 2>&1; then dotnet=dotnet; base="${TMPDIR:-/tmp}"
+  case "$base" in /*) [ -d "$base" ] && [ -w "$base" ] || base=/tmp ;; *) base=/tmp ;; esac   # never a relative/invalid TMPDIR
 elif command -v dotnet.exe >/dev/null 2>&1; then dotnet=dotnet.exe; base="$PLUGIN_ROOT"   # Windows dotnet needs a /mnt/c path
 else echo "NOT-RUN(tool-missing): neither dotnet nor dotnet.exe on PATH"; exit 2; fi
 

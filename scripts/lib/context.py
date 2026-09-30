@@ -30,6 +30,16 @@ REGISTRY = os.path.join(PLUGIN_ROOT, "registry.json")
 RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 
 
+MODES = {  # the Factory execution-mode contract (enforced by the hooks once declared)
+    "analyze":   "read-only. Explain what exists and what a change would touch. Invoke the lead skill for its domain rules; change nothing.",
+    "plan":      "read-only. Invoke the lead skill, then produce the plan from its workflow: files, legs, obligations, checks (tier + command), gates. Change nothing.",
+    "implement": "full workflow: branch, implement, obligations, validate with run-checks.py, verify, report.",
+    "validate":  "run and grade checks only (run-checks.py; --status first). No file changes.",
+    "review":    "read-only review of existing changes against the lead skill's review checklist and registry rules.",
+    "resume":    "factory-status.py first, then continue the interrupted task at its first incomplete step (implement rules).",
+}
+
+
 def die(msg, code=2):
     print(f"factory-context: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -45,19 +55,21 @@ def git(cwd, *args, timeout=60):
 
 def parse_args(argv):
     a = {"repo": None, "paths": [], "base": None, "json": False, "lead": None, "explain": False,
-         "full": False, "toolchain": False, "submodules": False}
+         "full": False, "toolchain": False, "submodules": False, "mode": None}
     i = 0
     while i < len(argv):
         x = argv[i]
         if x == "--paths":
-            known = {"--repo", "--base", "--lead", "--json", "--explain", "--full", "--toolchain", "--submodules"}
+            known = {"--repo", "--base", "--lead", "--json", "--explain", "--full", "--toolchain", "--submodules", "--mode"}
             j = i + 1
             while j < len(argv) and argv[j] not in known:
                 a["paths"] += [p for p in argv[j].split(",") if p.strip()]
                 j += 1
             i = j
             continue
-        if x in ("--repo", "--base", "--lead"):
+        if x.startswith("--mode="):
+            x, argv = "--mode", argv[:i] + ["--mode", x.split("=", 1)[1]] + argv[i + 1:]
+        if x in ("--repo", "--base", "--lead", "--mode"):
             if i + 1 >= len(argv):
                 die(f"{x} needs a value")
             a[x[2:]] = argv[i + 1]
@@ -279,6 +291,8 @@ def render(snap, reg, args):
         for r in inst.get("reasons", [])[:3]:
             add(f"- {r}")
     add(f"Workspace `{snap['workspace']}`. Live snapshot: recompute per task; changed paths listed at task start are the user's baseline.")
+    if snap.get("mode"):
+        add(f"**Mode: {snap['mode']}** - {MODES[snap['mode']]} (the hooks enforce read-only modes; switch with `--mode implement` only when the user asked)")
     cl = snap.get("cwd_clone")
     if cl:
         add(f"**The current directory is an embedded clone** `{cl['in']}/{cl['path']}` (of `{cl['of']}`): gitignored user state inside "
@@ -398,6 +412,8 @@ def main():
         die("--paths requires a single repo")
     if args["lead"] and len(keys) != 1:
         die("--lead requires a single repo")
+    if args["mode"] and args["mode"] not in MODES:
+        die(f"unknown mode '{args['mode']}'; modes: {', '.join(MODES)}")
 
     tools = {}
     for name, t in reg["tools"].items():
@@ -428,7 +444,7 @@ def main():
         ver = tool_version(tools[name], t["version_args"]) if tools.get(name) and (args["toolchain"] or args["full"]) else None
         tc.append({"tool": name, "resolved": tools.get(name), "version": ver, "expected": t.get("expected")})
     snap = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "workspace": ws, "plugin_root": PLUGIN_ROOT,
-            "install": install_line(), "repos": repos, "toolchain": tc, "cwd_clone": clone,
+            "install": install_line(), "repos": repos, "toolchain": tc, "cwd_clone": clone, "mode": args["mode"],
             "global_rules": reg["global_rules"], "human_gates": reg["human_gates"],
             "known_issues": reg.get("known_issues", [])}
     snap["elapsed_ms"] = round((time.perf_counter() - t0) * 1000)

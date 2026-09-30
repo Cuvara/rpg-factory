@@ -7,7 +7,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 
 # Server ops - deploy, infra, CI/CD
 
-> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
+> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
 Task: $ARGUMENTS
 
@@ -55,6 +55,21 @@ Order when combined with a code change: code skill first, then this skill for it
    already red at HEAD. Never "fix" a pre-existing failure silently; report it.
 5. **Stop before any live action** and hand the user the exact command (Human gates).
 6. Obligations: `backend/deploy/CHANGELOG.md` `[Unreleased]`; the matching `backend/deploy/docs/*.md`.
+
+## Transport security switches (contract `transport-security`, this skill drives)
+
+Gateway / Nakama TLS and `GAMESERVER_SEALED=require` live in the deploy manifests
+(`k8s/app/40-gateway.yaml` is the contract source; fleets, compose, `k8s/data/nakama.yaml` follow).
+A switch only goes **on** after every capability it needs exists; it goes **off** in reverse:
+
+1. Server code supports it (gateway TLS flags, `NakamaTlsPin.cs`, sealed sessions) - `server-services` / `server-realtime`.
+2. The Netcode tag the client pins supports it (`SealedHandshakeClient`, `factory-status.py` pins) - `unity-package` → `pin-bump`.
+3. The client loads a pin for that backend (`TransportSecurityReport.cs`, `BackendCommandLine.cs`) - `client-integration`.
+4. Smoketest / verify pin the **target** cluster's certificate (`smoke/`, `k8s/verify/`).
+5. Then flip the manifest, and validate end to end (killprobe / dungeonprobe / verify) - external, human-gated.
+
+History: `ed090ab` (every dungeon entry failed once meta-hop TLS went on), `437a3db` (verify pinned dev's
+certificate against another cluster). Report which of 1-4 are done, with evidence, before flipping.
 
 ## Rules
 

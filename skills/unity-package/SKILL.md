@@ -6,7 +6,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 ---
 # Unity package development (Netcode, UnityDots, UIToolkit)
 
-> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
+> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
 Task: $ARGUMENTS
 
@@ -53,6 +53,14 @@ has a CLAUDE.md: read the package's `README.md` and the `Documentation~` pages n
    project (human gate `client-package-toggle`).
 7. **Release prep (only when asked):** bump `package.json` `version`, turn `[Unreleased]` into
    `## [X.Y.Z] - YYYY-MM-DD` in the same commit, then stop: **"ready to tag <repo> vX.Y.Z"**.
+
+## Package CIs pin each other (contract watchers)
+
+Netcode CI installs `com.cuvara.dots` at a fixed tag and UnityDots CI installs `com.cuvara.netcode` at a
+fixed tag (and both bootstrap Shared.GameLogic). `factory-status.py` lists these CI pins against the client
+pin and the latest tag; a lagging CI pin tests the package against a peer the client no longer uses. When a
+release changes behaviour a peer depends on, update the peer's CI pin in the peer repo (its own task, same
+topic name) - never by hand-editing the client.
 
 ## Rules
 
