@@ -2,16 +2,17 @@
 # run-all.sh — every local validation for the plugin. Read-only against the workspace.
 # Prints one line per check and a final count; exits non-zero if anything failed.
 #
-# Usage: tests/run-all.sh [--no-workspace] [--no-claude]
+# Usage: tests/run-all.sh [--no-workspace] [--no-claude] [--release]
+#   --release       the installed plugin must equal the source (install-status CURRENT)
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
-use_ws=true; use_claude=true
+use_ws=true; use_claude=true; release=false
 for a in "$@"; do
-  case "$a" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; esac
+  case "$a" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;; esac
 done
 
 pass=0; fail=0; skip=0
@@ -65,6 +66,13 @@ else skp "registry paths exist in workspace" "--no-workspace"; fi
 # ---- git guard, skill contract lint, routing (task + historical replay)
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
+run "tripwire (script-driven mutations, latch, submodule work)" env -u TMPDIR tests/tripwire.test.sh
+run "worktree-aware context" tests/worktree.test.sh
+run "check runner state model" tests/run-checks.test.sh
+run "factory-status rollout / resume fixture" tests/factory-status.test.sh
+run "install-status stale-install detection" tests/install-status.test.sh
+if $use_ws; then run "routing properties over real history" python3 -B tests/routing-properties.test.py
+else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "routing + history replay" tests/routing.test.sh
 else run "routing (task scenarios only)" tests/routing.test.sh --no-history; fi
 
@@ -139,6 +147,17 @@ if $use_ws; then
     out=$(bash scripts/checks/netcode-headless.sh 2>&1); rc=$?
     [ $rc -eq 0 ] && ok "netcode headless tests: $(grep -oE 'discovered=[0-9]+ executed=[0-9]+ passed=[0-9]+ failed=[0-9]+' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
   else skp "netcode headless tests" "no dotnet/dotnet.exe"; fi
+fi
+
+# ---- live derived status + install state
+if $use_ws; then
+  run "factory-status on the real workspace (read-only)" python3 -B scripts/factory-status.py
+fi
+ist=$(python3 -B scripts/install-status.py --json 2>/dev/null | jq -r .state)
+if $release; then
+  [ "$ist" = "CURRENT" ] && ok "installed plugin == source (release gate)" || bad "installed plugin == source (release gate)" "$(python3 -B scripts/install-status.py)"
+else
+  skp "installed plugin == source" "install state $ist; required only with --release"
 fi
 
 # ---- package pins checker behaviour

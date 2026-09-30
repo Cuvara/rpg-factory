@@ -368,6 +368,17 @@
         "evidence": {
           "type": "string",
           "description": "What counts as proof. Must name counts where the tool reports them."
+        },
+        "parser": {
+          "type": "string",
+          "description": "How run-checks.py grades the output: go-test | dotnet-test | exit | regex:<pattern> (default inferred from the command)."
+        },
+        "needs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Check ids in the same run that must PASS first; otherwise this check is BLOCKED."
         }
       }
     },

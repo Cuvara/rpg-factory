@@ -27,7 +27,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def git(repo, *args):
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=20)
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
         return r.stdout.strip() if r.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
         return None

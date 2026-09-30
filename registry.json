@@ -664,7 +664,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py backend/gameserver-dotnet/Shared.GameLogic",
-            "evidence": "exit 0 with its one-line summary (it does not list files)"
+            "evidence": "exit 0 with its one-line summary (it does not list files)",
+            "parser": "exit"
           }
         ],
         "extended": [
@@ -749,7 +750,11 @@
             "id": "verify-test-counters",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/verify-test-counters.py \"backend/gameserver-dotnet/**/test-results.trx\"",
-            "evidence": "exit 0 - proves the run selected and executed tests (dotnet test exits 0 on zero selected / all skipped)."
+            "evidence": "exit 0 - proves the run selected and executed tests (dotnet test exits 0 on zero selected / all skipped).",
+            "parser": "exit",
+            "needs": [
+              "dotnet-test"
+            ]
           }
         ],
         "extended": [
@@ -1035,7 +1040,8 @@
             "id": "package-pins",
             "cwd": ".",
             "run": "python3 {plugin_root}/scripts/checks/unity-package-pins.py .",
-            "evidence": "Prints 'OK: N git-URL dependencies pinned identically' with N > 0."
+            "evidence": "Prints 'OK: N git-URL dependencies pinned identically' with N > 0.",
+            "parser": "regex:^OK: [1-9]\\d* git-URL"
           }
         ],
         "extended": [],
@@ -1298,7 +1304,8 @@
             "id": "package-pins",
             "cwd": ".",
             "run": "python3 {plugin_root}/scripts/checks/unity-package-pins.py .",
-            "evidence": "Prints 'OK: N git-URL dependencies pinned identically' with N > 0 and no file: paths."
+            "evidence": "Prints 'OK: N git-URL dependencies pinned identically' with N > 0 and no file: paths.",
+            "parser": "regex:^OK: [1-9]\\d* git-URL"
           }
         ],
         "extended": [],
@@ -1588,13 +1595,15 @@
             "id": "validate-manifests",
             "cwd": "backend/deploy",
             "run": "XDG_CACHE_HOME=${XDG_CACHE_HOME:-/tmp/rpgf-cache} python3 -B k3s/validate-manifests.py",
-            "evidence": "'6 document(s) validated, 0 failure(s)', exit 0 (pyyaml+jsonschema; first run downloads the pinned Agones install.yaml into the cache)"
+            "evidence": "'6 document(s) validated, 0 failure(s)', exit 0 (pyyaml+jsonschema; first run downloads the pinned Agones install.yaml into the cache)",
+            "parser": "regex:\\b0 failure\\(s\\)"
           },
           {
             "id": "autoscaler-rule-offline",
             "cwd": "backend/deploy/k8s",
             "run": "bash verify/tests/autoscaler_rule_test.sh",
-            "evidence": "last line RESULT=PASS, exit 0"
+            "evidence": "last line RESULT=PASS, exit 0",
+            "parser": "regex:RESULT=PASS"
           },
           {
             "id": "shell-syntax",
@@ -1616,7 +1625,8 @@
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} test GameServer.Tests --filter \"FullyQualifiedName~GameServer.Tests.Deploy\"",
             "evidence": "Total > 0, Failed 0 (ComposeEnvPassthroughTests, FleetEnvPassthroughTests)",
-            "trigger": "env: blocks in fleet manifests changed"
+            "trigger": "env: blocks in fleet manifests changed",
+            "parser": "dotnet-test"
           }
         ],
         "external": [
@@ -1701,7 +1711,8 @@
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} test GameServer.Tests --filter \"FullyQualifiedName~GameServer.Tests.Deploy\"",
             "evidence": "Total > 0, Failed 0",
-            "trigger": "gameserver service environment edits"
+            "trigger": "gameserver service environment edits",
+            "parser": "dotnet-test"
           }
         ],
         "external": [
@@ -1812,7 +1823,8 @@
             "id": "migrator-tests",
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} test GameServer.Tests/GameServer.Tests.csproj -c Release --filter \"FullyQualifiedName~GameServer.Tests.Persistence.MigratorTests\"",
-            "evidence": "Total 12; without Docker 4 pass / 8 skip. EmbeddedMigrations_MatchDeployCopies and InitGamestateSql_MatchesFirstMigration must be Passed - a Skip means the repo tree was not found and counts as failed."
+            "evidence": "Total 12; without Docker 4 pass / 8 skip. EmbeddedMigrations_MatchDeployCopies and InitGamestateSql_MatchesFirstMigration must be Passed - a Skip means the repo tree was not found and counts as failed.",
+            "parser": "dotnet-test"
           }
         ],
         "extended": [],
@@ -1862,7 +1874,8 @@
             "id": "migrator-tests",
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} test GameServer.Tests/GameServer.Tests.csproj -c Release --filter \"FullyQualifiedName~GameServer.Tests.Persistence.MigratorTests\"",
-            "evidence": "Total 12; without Docker 4 pass / 8 skip. EmbeddedMigrations_MatchDeployCopies and InitGamestateSql_MatchesFirstMigration must be Passed - a Skip means the repo tree was not found and counts as failed."
+            "evidence": "Total 12; without Docker 4 pass / 8 skip. EmbeddedMigrations_MatchDeployCopies and InitGamestateSql_MatchesFirstMigration must be Passed - a Skip means the repo tree was not found and counts as failed.",
+            "parser": "dotnet-test"
           }
         ],
         "extended": [],
@@ -1913,7 +1926,8 @@
             "id": "content-loader-tests",
             "cwd": "backend/gameserver-dotnet",
             "run": "{dotnet} test GameServer.Tests --filter \"FullyQualifiedName~Content\"",
-            "evidence": "Passed/Total > 0"
+            "evidence": "Passed/Total > 0",
+            "parser": "dotnet-test"
           }
         ],
         "extended": [],
@@ -1961,13 +1975,15 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           },
           {
             "id": "wire-parity",
             "cwd": ".",
             "run": "bash {plugin_root}/scripts/checks/wire-parity.sh",
-            "evidence": "OK lines for Wire.cs bytes and protocol version"
+            "evidence": "OK lines for Wire.cs bytes and protocol version",
+            "parser": "regex:^OK: Wire.cs byte-identical"
           }
         ],
         "extended": [],
@@ -2025,7 +2041,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           },
           {
             "id": "headless-tests",
@@ -2088,7 +2105,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2134,7 +2152,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2179,7 +2198,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           },
           {
             "id": "headless-tests",
@@ -2234,16 +2254,19 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
-          },
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
           {
             "id": "release-ready",
             "cwd": ".",
             "run": "python3 {plugin_root}/scripts/checks/package-ready.py .",
-            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off."
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
           }
         ],
-        "extended": [],
         "external": [
           {
             "id": "ci",
@@ -2299,7 +2322,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2345,7 +2369,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2391,7 +2416,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2438,7 +2464,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           },
           {
             "id": "test-floor-selftest",
@@ -2496,16 +2523,19 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
-          },
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
           {
             "id": "release-ready",
             "cwd": ".",
             "run": "python3 {plugin_root}/scripts/checks/package-ready.py .",
-            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off."
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
           }
         ],
-        "extended": [],
         "external": [
           {
             "id": "ci",
@@ -2549,7 +2579,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           },
           {
             "id": "standalone",
@@ -2612,7 +2643,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2665,7 +2697,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [
@@ -2721,7 +2754,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           },
           {
             "id": "samples",
@@ -2776,7 +2810,8 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
           }
         ],
         "extended": [],
@@ -2827,16 +2862,19 @@
             "id": "check-metas",
             "cwd": ".",
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py",
-            "evidence": "exit 0 (every Unity-visible file has a .meta)"
-          },
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
           {
             "id": "release-ready",
             "cwd": ".",
             "run": "python3 {plugin_root}/scripts/checks/package-ready.py .",
-            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off."
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
           }
         ],
-        "extended": [],
         "external": [
           {
             "id": "ci",
