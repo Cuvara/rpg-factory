@@ -64,6 +64,13 @@ PY2
 )
 if [ -z "$dups" ]; then ok; else bad "skill text duplicates registry rules:"; echo "$dups" | head -5; fi
 
+# plugin boundaries: factory-core must hand design work to game-ai-workflows and web projects to
+# web-game-factory, and no Factory skill may claim their triggers
+desc=$(sed -n 's/^description: //p' "$ROOT/skills/factory-core/SKILL.md")
+case "$desc" in *game-ai-workflows*web-game-factory*) ok;; *) bad "factory-core description lacks the game-ai-workflows / web-game-factory boundary";; esac
+claims=$(grep -lE "^description: .*(game design document|GDD|feature registry|web game)" "$ROOT"/skills/*/SKILL.md | grep -v factory-core || true)
+if [ -z "$claims" ]; then ok; else bad "skills claim other plugins' triggers: $claims"; fi
+
 total=$((pass + fail))
 echo "skills lint: $total checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

@@ -79,6 +79,14 @@ printf "CREATE TABLE b (id int);\n" > "$S/backend/deploy/db/migrations/gamestate
 s=$(status)
 expect "S7 migration drift -> server-services pending" 'any(.contracts[]; .id == "gamestate-migrations" and .ok == false) and any(.pending[]; .skill == "server-services")' "$s"
 
+# S8: client workflows call the build toolkit at mixed majors -> pin-bump pending
+mkdir -p "$C/.github/workflows"
+printf 'jobs:\n  a:\n    uses: Cuvara/unity-build-workflows/.github/workflows/unity-pipeline.yml@v6\n' > "$C/.github/workflows/01-ci.yml"
+printf 'jobs:\n  a:\n    uses: Cuvara/unity-build-workflows/.github/workflows/pipeline-android-release.yml@v5\n' > "$C/.github/workflows/20-release-android.yml"
+gc "$C" add .github; gc "$C" commit -qm "ci: half-moved toolkit"
+s=$(status)
+expect "S8 workflow refs listed; mixed majors v5/v6 -> pin-bump pending" 'any(.pins[]; .package | test("workflow refs")) and any(.pending[]; .skill == "pin-bump" and (.what | test("mixed majors")))' "$s"
+
 # exit codes
 python3 -B "$ROOT/scripts/factory-status.py" >/dev/null; rc=$?
 [ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  default exit 0 (informational)"; } || { fail=$((fail + 1)); echo "FAIL  exit $rc"; }

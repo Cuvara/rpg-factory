@@ -1,8 +1,8 @@
 ---
 name: pin-bump
-description: Use when the Unity client must move to a released upstream version - a new com.cuvara.netcode, com.cuvara.dots or com.cuvara.uitoolkit tag, or a new Shared.GameLogic sgl-v tag - or when Packages/manifest.json, packages-lock.json or the imported DOTS Sample must be brought back in line with a pin. Cross-repo driver of the sgl-pin and package-pins contracts. Not for changing package code (unity-package), not for local file: testing (a human-gated toggle), never for creating the tag itself.
+description: Use when the Unity client must move to a released upstream version - a new com.cuvara.netcode, com.cuvara.dots or com.cuvara.uitoolkit tag, or a new Shared.GameLogic sgl-v tag - or when Packages/manifest.json, packages-lock.json or the imported DOTS Sample must be brought back in line with a pin; also moving the client's unity-build-workflows CI toolkit (submodule pointer and the reusable-workflow @vN refs). Cross-repo driver of the sgl-pin and package-pins contracts. Not for changing package code (unity-package), not for local file: testing (a human-gated toggle), never for creating the tag itself.
 argument-hint: "<package> <tag>  e.g. com.cuvara.netcode v0.46.0"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-plan.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-plan.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
 ---
 
 # Pin bump - move a client pin to a released tag
@@ -11,12 +11,12 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 
 ## Applies when / Not when
 
-- **Applies:** "move the client to Netcode vX.Y.Z", "pin sgl-vX.Y.Z", a manifest/lock mismatch, a stale DOTS Sample, or the final leg of `wire-contract` or `unity-package` after the lead tagged.
+- **Applies:** "move the client to Netcode vX.Y.Z", "pin sgl-vX.Y.Z", "bump the build toolkit to vN", a manifest/lock mismatch, a stale DOTS Sample, or the final leg of `wire-contract` or `unity-package` after the lead tagged.
 - **Not:** editing package code (`unity-package`); editing Shared.GameLogic (`server-realtime`); testing unreleased package code in the client (`client-package-toggle` human gate, never committed); creating or pushing tags (the lead - denied by the guard).
 
 ## Scope
 
-- Repo `client`, modules `client.packages`, `client.dots-sample`. Contracts `package-pins` and `sgl-pin` (this skill is their driver).
+- Repo `client`, modules `client.packages`, `client.dots-sample`, `client.build-workflows` (gitlink only) and the `uses: Cuvara/unity-build-workflows/...@<ref>` lines in `.github/workflows/`. Contracts `package-pins` and `sgl-pin` (this skill is their driver).
 - Upstream repos (`netcode`, `unitydots`, `uitoolkit`, `server` for SGL) are **read only** here: tags, `package.json`, `Samples~/DOTSSample`.
 - Hand-offs: compile/test fallout in client code → `client-integration`; a bug in the new package version → `unity-package` (and a new tag by the lead).
 
@@ -39,6 +39,31 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 5. **CHANGELOG** (`CHANGELOG.md` `[Unreleased]` → `### Changed`): the plan's line plus one sentence of what the
    new version changes for the client (from the upstream CHANGELOG section of that version).
 6. **Validate** (below), then Core steps 8-12 (obligations, validate, verify, review, report). One pin per commit unless the user asks to batch.
+
+## Build toolkit (unity-build-workflows) - a different pin model
+
+The client pins the toolkit in **two independent places**; `factory-status.py` lists both
+(`--remote` adds the upstream tags):
+
+| Pin | Moved by | What it controls |
+|---|---|---|
+| reusable-workflow refs `uses: Cuvara/unity-build-workflows/.github/workflows/<wf>.yml@vN` (major tag; license workflows use `@main`) | a PR editing every calling workflow in `.github/workflows/` together | what client CI actually runs |
+| submodule gitlink `unity-build-workflows` | `update-submodule.yml` (bot PR to the latest `main`), or by hand | local toolkit scripts/tests only |
+
+1. **Status.** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py --remote` - refs per workflow and the
+   newest upstream major; `git -C <client> ls-tree HEAD unity-build-workflows` - the pinned commit.
+2. **Read the upstream CHANGELOG** between the old and new ref (inputs that became required, renamed
+   artifacts, removed jobs) - a major move usually needs caller changes (e.g. v6 made
+   `artifact-name` required for promotion, client #139).
+3. **Refs:** change `@vOld` → `@vNew` in **every** calling workflow in one commit (mixed majors are a
+   pending item in `factory-status`); keep `@main` callers as they are unless the user asks.
+4. **Gitlink:** move it only to a commit on upstream `main` (or a tag): `git -C <client>/unity-build-workflows
+   fetch origin`, check out the target commit inside the submodule, then `git add unity-build-workflows`
+   (the gitlink path only). Only when the submodule is clean - a dirty or already-moved submodule is the
+   user's state (baseline) and stops the task. Never edit files inside the submodule.
+5. **CHANGELOG** `### Changed`: old → new ref and the caller changes it required.
+6. Validation is external: the client CI jobs that call the toolkit on the PR (HUMAN_REQUIRED
+   until a PR exists). `git diff --submodule=log` shows the gitlink range for the report.
 
 ## Rules
 
@@ -74,9 +99,10 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 - [ ] Lock `dependencies` block matches the new upstream `package.json` (or re-resolved in the Editor).
 - [ ] Netcode: DOTS Sample recopied byte-identical, `.sample-source` version+commit updated.
 - [ ] CHANGELOG entry names old → new and the client-visible change; skipped versions' migrations handled.
+- [ ] Toolkit: every calling workflow on one major; gitlink on an upstream `main` commit or tag; no files edited inside the submodule.
 - [ ] Baseline untouched: the user's `com.gdk.*` pointers and untracked Samples are not staged.
 
 ## Report additions
 
 A **pin table**: package, old → new tag, tag commit, manifest = lock (yes/no), sample-source (n/a / updated),
-dependency changes, and the external checks still owed (Unity tests, CI) with `not-run:external` reasons.
+dependency changes, and the external checks still owed (Unity tests, CI) with HUMAN_REQUIRED (external) reasons.

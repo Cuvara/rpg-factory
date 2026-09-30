@@ -228,6 +228,25 @@ def main():
         st["pins"].append({"package": "unity-build-workflows (submodule)", "pinned": sha[:10] if sha else None,
                            "tags_at_pin": at, "latest": sorted(tagmap, key=lambda x: [int(n) for n in re.findall(r"\d+", x)] or [0])[-1] if tagmap else None})
 
+    # ---- reusable-workflow refs (what client CI actually runs) - local, no network
+    if present("client"):
+        refs = {}
+        for f in (git("client", "ls-tree", "--name-only", integ("client"), ".github/workflows/") or "").split():
+            for m in re.finditer(r"uses:\s*Cuvara/unity-build-workflows/\S+@(\S+)", show("client", integ("client"), f) or ""):
+                refs.setdefault(m.group(1), []).append(f.rsplit("/", 1)[-1])
+        if refs:
+            st["pins"].append({"package": "unity-build-workflows (workflow refs)", "refs": {k: sorted(set(v)) for k, v in refs.items()}})
+            majors = sorted({r for r in refs if re.match(r"^v\d+$", r)})
+            if len(majors) > 1:
+                pend.append({"skill": "pin-bump", "repo": "client", "what": f"client workflows call unity-build-workflows at mixed majors {majors}"})
+            if remote and majors:
+                out = subprocess.run(["git", "ls-remote", "--tags", "https://github.com/Cuvara/unity-build-workflows"],
+                                     capture_output=True, text=True, timeout=60).stdout
+                newest = max([int(t) for t in re.findall(r"refs/tags/v(\d+)$", out, re.M)] or [0])
+                used = max(int(m[1:]) for m in majors)
+                if newest > used:
+                    pend.append({"skill": "pin-bump", "repo": "client", "what": f"unity-build-workflows v{newest} released, client workflows use v{used}"})
+
     # ---- in-flight topic branches
     topics = {}
     for key, rep in REG["repos"].items():
@@ -272,6 +291,9 @@ def main():
                   f"package.json {p['package_json']}, client pins {p['client_pin']})")
         print("\n## Pins")
         for p in st["pins"]:
+            if "refs" in p:
+                print(f"- {p['package']}: " + ", ".join(f"@{r} in {len(fs)} workflow(s)" for r, fs in p["refs"].items()))
+                continue
             print(f"- {p['package']}: client {p.get('pinned')} / latest {p.get('latest')}"
                   + (f" / SGL commits since tag {p['sgl_commits_since_tag']}" if "sgl_commits_since_tag" in p else "")
                   + (f" / CI watchers {p['ci_watchers']}" if p.get("ci_watchers") else ""))

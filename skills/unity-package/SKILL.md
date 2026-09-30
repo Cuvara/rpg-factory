@@ -120,7 +120,7 @@ has a CLAUDE.md: read the package's `README.md` and the `Documentation~` pages n
 
 - Per repo: branch + integration base, package version before/after, `[Unreleased]` entry.
 - Test evidence: headless trx counters, Unity Test Runner totals per assembly (and UnityDots
-  floors), or `not-run:external` with the reason.
+  floors), or HUMAN_REQUIRED (external) with the reason.
 - Wire leg: `md5sum` of both `Wire.cs` copies and `WireProtocolVersion.Current` before/after.
 - Toggle gate: confirmation that `Packages/manifest.json` and `packages-lock.json` were restored
   byte-identical (`cmp` against the backup).

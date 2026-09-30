@@ -78,7 +78,7 @@ allowed.
 
 ## Routing
 
-`factory-context.sh --paths ...` prints **Suggested Factory skills** with a role:
+`factory-context.sh --paths ...` prints the **routing** (lead, co-leads, legs, follow-ups) with a role per skill:
 
 | Role | Comes from | Meaning |
 |---|---|---|
@@ -86,10 +86,25 @@ allowed.
 | **leg** | owners of a touched contract's other ends in this repo, owners of first-hop dependents when a cross-repo driver leads, owners of touched modules when a driver leads | runs inside the lead's workflow |
 | **follow-up** | skills of cross-repo dependents and other-repo contract ends | later work in another repo; name it in the report |
 
-Several leads without a driver (e.g. a game-server change plus a benchmark write-up) run in
-dependency order: the code change before its deployment or measurement. The user can always
-name a skill explicitly (`/rpg-factory:<skill>`). `tests/routing.test.sh` pins this behaviour
-with task scenarios and real historical commits.
+Among several lead candidates exactly one becomes the **primary lead** (deterministic, from
+`routing.precedence` in the JSON output):
+
+| Class | Rule |
+|---|---|
+| 0 | a cross-repo contract driver (`wire-contract`, `pin-bump`) |
+| 1 | a repo-kind contract driver whose contract **source** was touched |
+| 2 | the primary owner of a touched module (first skill in its `skills` list) |
+| 3 | a secondary owner |
+| tie | lower `skills.<name>.order` (wire-contract 10 … measure 80) |
+
+The other lead candidates become **co-leads**, run after the lead in that order (code before
+deploy before measurement). **AMBIGUOUS** is printed only when the registry cannot order the
+candidates; ask the user or pass `--lead <skill>` (rejected with exit 2 unless it is a candidate).
+`--explain` prints why each registered skill was or was not selected. Files that match no module
+map to the repo fallback `<repo>.root` (repo-level files); `X.meta` routes like `X`. The user can
+always name a skill explicitly (`/rpg-factory:<skill>`). `tests/routing.test.sh` and
+`tests/routing-properties.test.py` (real history: one lead, order-independent, no lead that is
+also a follow-up) pin this behaviour.
 
 ## Composition (driver → legs)
 

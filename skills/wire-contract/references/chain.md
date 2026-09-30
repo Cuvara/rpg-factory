@@ -72,6 +72,19 @@ Other chains that followed the same order:
 3. The lead tags Netcode `vX.Y.Z`. `release.yml` requires the tag to equal `package.json` and a `## [X.Y.Z]` CHANGELOG section.
 4. The client pin-bump PR runs `02-package-pins`, and `01-ci` runs the Unity tests.
 
+## Compatibility
+
+- Protobuf: unknown fields are skipped, so an **additive** field or message is compatible both ways; reusing or
+  renumbering a field number is never compatible (reserve removed numbers in `wire.proto`).
+- Legacy JSON (ADR-9): absent fields decode to defaults; a renamed JSON key is breaking for JSON peers.
+- Version gate: `--min-protocol-version` exists on the gateway (`gateway/cmd/gateway/main.go`) and the game server
+  (`GAMESERVER_MIN_PROTOCOL_VERSION`), both default 0 (unversioned clients admitted). Raise it only after
+  `gateway_unversioned_handshakes_total` stays flat at zero and every released client advertises the new version;
+  it is a production decision (human gate).
+- Players run old builds for days: the server must accept the previous protocol version until the client pin that
+  carries the new one has shipped. `factory-status.py` shows where the rollout stands; a stage marked incomplete
+  means some peers still run the old side.
+
 ## Security-sensitive wire changes
 
 Read these before touching sealed frames, handshakes or identity:

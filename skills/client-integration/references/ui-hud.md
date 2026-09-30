@@ -44,7 +44,7 @@ Verified 2026-09-30. Sources: `docs/UI-ARCHITECTURE.md` (authoritative, set 2026
   `dotnet run --project <pkg>/Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj -- <pkg> Assets`.
 - Local reproduction is only meaningful with a UIToolkit checkout at the pinned commit; the
   workspace `UIToolkit/` clone may be at another commit, and `dotnet run` writes `bin/obj` into it.
-  Default: leave it to CI and report `not-run:external`.
+  Default: leave it to CI and report HUMAN_REQUIRED (external).
 - Renaming an element in UXML breaks compilation in `HudView.Bind`/`AssignQueries` - that is the
   intended failure, fix the View, not the generated file.
 

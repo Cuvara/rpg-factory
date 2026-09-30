@@ -98,7 +98,7 @@ Fast Go checks come from the registry via Core. This skill adds:
   Expected total: fact `migrator-tests-count`; without Docker the Docker-backed ones skip (`docker unavailable`). Passed only if
   `EmbeddedMigrations_AreDiscoveredAndWellFormed`, `EmbeddedMigrations_MatchDeployCopies`,
   `InitGamestateSql_MatchesFirstMigration`, `Normalize_IgnoresCommentsAndWhitespace_ButNotStatements`
-  all passed - a skip of either sync test means the repo tree was not found, report `failed`.
+  all passed - a skip of either sync test means the repo tree was not found, report FAIL.
   Then Core's full `dotnet-test` for `server.gameserver-dotnet` still applies.
 - **integration-e2e** (extended, ask): trigger = join token, redirect, registry, party check,
   kick, session or Streams behaviour changed. Always `-tags integration`; count `--- PASS`.
@@ -127,4 +127,4 @@ Fast Go checks come from the registry via Core. This skill adds:
 
 - Contracts touched and the file of each side (or "none").
 - Migration table: version, name, both paths, MigratorTests counts.
-- Whether the Nakama plugin was rebuilt/loaded, or `not-run:external`.
+- Whether the Nakama plugin was rebuilt/loaded, or HUMAN_REQUIRED (external).

@@ -2,7 +2,7 @@
 name: client-integration
 description: Use when changing the game's own code in the thin Unity client IndieRPGMMOAdventure - how packages are composed in VContainer scopes, the Nakama login/party/TLS-pin path, the MainScene session flow, the HUD or a new UI Toolkit screen, DOTS view prefabs and the view library, build scripts and BuildConfig, or the client's EditMode/PlayMode tests. Not for changing the com.cuvara.* packages themselves (netcode, dots, uitoolkit), package pins or the DOTS Sample copy, or server code.
 argument-hint: "[client task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
 ---
 # Client integration (IndieRPGMMOAdventure)
 
@@ -34,16 +34,19 @@ Repo `client`. Modules: `client.scripts`, `client.tests`, `client.ui`, `client.b
 `client.samples-imported`, `client.gdk-submodules`, `client.build-workflows`, `client.tools`
 (`measure`), `client.wire-conformance` (`wire-contract`); `client.docs` is updated as an obligation.
 
-Query facts, do not copy them: `jq '.modules[] | select(.id|startswith("client."))' "${CLAUDE_PLUGIN_ROOT}/registry.json"`.
+Module rules come from the registry (the snapshot prints them for touched modules). Repo-level
+files (`.gitignore`, `.claude/`, root configs) map to the fallback `client.root`.
 
 ## Workflow delta
 
 1. **Find the layer.** Place the change with `references/composition.md` (scopes, what each
    registers, which asmdef and define guards it). New code goes in the asmdef that already owns
    the folder; a new folder gets its own `.asmdef` (repo convention) plus `.meta`.
-2. **Check the package boundary.** If the change needs a new public API in a package, stop the
-   client leg and hand off to `unity-package`; resume against the released tag via `pin-bump`.
-   Never edit gitignored `Packages/com.cuvara.*` clones.
+2. **Check the package boundary.** Know which package version the client compiles against:
+   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py` (the pinned tag, not the gitignored
+   embedded clone and not package `develop`). Code against that tag's API only. If the change needs
+   a new or changed package API, stop the client leg and hand off (below). Never edit gitignored
+   `Packages/com.cuvara.*` clones.
 3. **UI work:** run the 10 questions in `docs/UI-ARCHITECTURE.md` "Before implementing
    anything" and follow `references/ui-hud.md`. Edit `.uxml` in a way that regenerates the
    `Generated/*.uxml.g.cs` (Editor save through the codegen) and commit both.
@@ -56,6 +59,23 @@ Query facts, do not copy them: `jq '.modules[] | select(.id|startswith("client."
    against fakes (`MainSessionFlowTests`, `HudPresenterTests` are the pattern).
 6. **Docs.** Wiring changes update `docs/DOTS-WIRING.md` / `docs/HUD-BRIDGE.md` /
    `docs/UI-ARCHITECTURE.md` as applicable, plus the root `CHANGELOG.md` `[Unreleased]`.
+
+## Cross-repo hand-offs
+
+This skill is often the **last leg** of someone else's chain, or starts one:
+
+| Situation | Hand to | Client resumes when |
+|---|---|---|
+| needs a package API or fix | `unity-package` (package repo, stops at READY_TO_TAG) → lead tags → `pin-bump` | the pin moved to that tag (`factory-status.py` shows no pin-bump pending) |
+| server message / field needed | `wire-contract` (server → Netcode → client) | the rollout reaches `client pin`; then wire the new field here |
+| Nakama RPC changed | `server-services` drives `nakama-rpc` | server side merged; update `PartyService.cs` / `NakamaAuthProvider.cs` callers |
+| compile/test fallout after a pin move | this skill, as `pin-bump`'s follow-up | now |
+
+- Before starting, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`: a pending pin-bump or an
+  incomplete wire rollout means the client code you need may not be pinned yet - say so instead of
+  coding against unreleased package code.
+- Use the same `<type>/<area>/<topic>` branch topic as the upstream legs; name open hand-offs and
+  their owning skill in the report.
 
 ## Rules
 
@@ -103,7 +123,7 @@ Fast (Core) only covers `BuildConfig` JSON. The domain checks are external:
   `testMode` EditMode then PlayMode, filtered by `testAssembly` `NDC.Tests.Editor` /
   `NDC.Tests.Runtime`. Save open scenes first (dirty scenes abort the run). `unity-mcp-cli` is
   not installed in WSL; the tool call is the MCP one. Evidence: total/passed/failed/skipped per
-  mode; zero executed = `failed`. Otherwise `not-run:external` (Editor closed).
+  mode; zero executed = FAIL. Otherwise HUMAN_REQUIRED (external) (Editor closed).
 - **CI** `01-ci.yml` (tests, no player; ignores `**.md` and `docs/**`) and
   `uxml-codegen-drift.yml` (any `*.uxml`/`*.uxml.g.cs`/lock change) on the PR. Count jobs.
 - **Player build** only if the change is build-affecting: `10-build-development.yml` is a
@@ -133,6 +153,6 @@ Fast (Core) only covers `BuildConfig` JSON. The domain checks are external:
 
 ## Report additions
 
-- Unity Test Runner table per mode (or `not-run:external` + why), and the CI job count.
+- Unity Test Runner table per mode (or HUMAN_REQUIRED (external) + why), and the CI job count.
 - For asset edits: asset path, how it was edited (MCP tool / Editor), `.meta` included.
 - Any hand-off opened (`unity-package`, `pin-bump`, `wire-contract`) and its state.

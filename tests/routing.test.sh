@@ -65,6 +65,7 @@ assert "Nakama session flow in client -> client-integration" client \
   "$(lead client-integration) and (.contracts | length == 0)" Assets/Scripts/Session/MainSessionFlow.cs Assets/Scripts/Nakama/NakamaSessionService.cs
 assert "move client to Netcode vX -> pin-bump leads; tag gate" client \
   "$(lead pin-bump) and $(contract package-pins) and $(gate tag)" Packages/manifest.json Packages/packages-lock.json
+assert "submodule gitlink bump -> pin-bump is the primary lead" client "(.routing.lead == \"pin-bump\") and (.routing.ambiguous | not)" unity-build-workflows
 assert "DOTS Sample recopy -> pin-bump" client "$(lead pin-bump)" "Assets/Samples/Netcode/DOTS Sample/DOTSNetworkBridge.cs"
 assert "k8s deployment -> server-ops; shared-infra gate" server \
   "$(lead server-ops) and $(gate shared-infra) and $(nolead server-realtime)" backend/deploy/k8s/app/40-gateway.yaml
@@ -105,6 +106,8 @@ history "Nakama TLS pinning in client"        client IndieRPGMMOAdventure  a949b
 history "Netcode TCP transport cancellation"  netcode Netcode              c38c763 "$(lead unity-package) and $(nolead wire-contract)"
 history "UnityDots entity pose / events"      unitydots UnityDots          77f671c "$(lead unity-package)"
 history "UIToolkit SettingsModel fix"         uitoolkit UIToolkit          24161a2 "$(lead unity-package)"
+history "toolkit submodule auto-bump (#137)"  client IndieRPGMMOAdventure  285a5a2 "(.routing.lead == \"pin-bump\")"
+history "toolkit v5.7.0 gitlink + CHANGELOG"  client IndieRPGMMOAdventure  525cf5b "(.routing.lead == \"pin-bump\") and $(nolead client-integration)"
 
 total=$((pass + fail + skip))
 echo "routing tests: $total run, $pass passed, $fail failed, $skip skipped"

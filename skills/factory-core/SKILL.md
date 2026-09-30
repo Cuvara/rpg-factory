@@ -1,115 +1,104 @@
 ---
 name: factory-core
-description: Factory workflow for the UnityIndie RPG MMO workspace - rpg-mmo-server (Go/C# backend), IndieRPGMMOAdventure (Unity client) and the Netcode, UnityDots and UIToolkit package repos. Use at the start of ANY code, config, CI, deploy, measurement or docs change in those repos, and before reporting such work as done. Provides the live snapshot (modules, dependents, cross-repo impact, contracts, suggested specialised skill), required validation by tier, human gates, git safety and the mandatory verify-a-result report. Every other rpg-factory skill runs on top of it.
+description: Engineering workflow for the UnityIndie RPG MMO workspace - rpg-mmo-server (Go/C# backend), IndieRPGMMOAdventure (Unity client) and the Netcode, UnityDots and UIToolkit package repos. Use at the start of ANY code, config, CI, deploy, measurement or docs change in those repos, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic routing to the specialised skill, cross-repo status, Factory-run validation with evidence, human gates, git safety and the verify-a-result report. Not for game design / GDD / feature-registry lifecycle (game-ai-workflows) or web game projects (web-game-factory).
 argument-hint: "[task description]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*)
 ---
 
 # Factory Core - RPG MMO workspace
 
-You are running the Factory workflow for this workspace. It is the contract every
-rpg-factory skill builds on. Task: $ARGUMENTS
+The Factory workflow every rpg-factory skill builds on. Task: $ARGUMENTS
 
-## Live snapshot (computed now - pre-existing changes shown here belong to the user)
-
-The snapshot below includes the project-wide rules (`global_rules`) and known issues from
-the registry. Follow those rules for every task.
+## Live snapshot (computed now - changed paths shown are the user's baseline)
 
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh`
 
-Module-level rules, docs, changelogs, generated paths, dependencies and checks live in
-`${CLAUDE_PLUGIN_ROOT}/registry.json`. Do not restate or guess them - read the snapshot,
-or re-run the context script.
+Module rules, docs, changelogs, generated paths, dependencies, checks, contracts and facts live
+in `${CLAUDE_PLUGIN_ROOT}/registry.json`; read them through the scripts, never guess them. If the
+header says the install state is not CURRENT, tell the user (this session may run an old copy).
 
 ## Workflow
 
 Steps are **M** mandatory, **O** optional, **H** need the user.
 
-1. **Scope (M).** Name the repo(s) and module(s) the task touches. Read each touched
-   module's `claude_md` and the repo instructions listed in the registry. If the task
-   would invent a gameplay rule, stop and ask (**H**, rule `phase-plumbing-only`).
-2. **Baseline (M).** Record the snapshot's changed paths as the *user's baseline*. Never
-   modify, stage, stash, clean, reset or commit baseline paths unless the user names them.
-   For a repo not in the default snapshot, run `factory-context.sh --repo <key>`.
-3. **Route (M).** Resolve the files the task will touch:
-   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <file>...` and read
-   **Suggested Factory skills**. You MUST invoke every **lead** skill with the Skill tool before
-   planning or editing (reading its guidance from the snapshot is not enough) and follow it; it runs its
-   **legs**. **Follow-ups** are later work in other repos: name them in the report. If nothing is
-   suggested, continue with Core alone. Skill map: `references/skill-contract.md` §Routing.
-4. **Branch (M).** If the repo is on a protected branch and the task will produce a
-   commit, create `type/module/topic` from the default branch first. Branching is local
-   and allowed; committing, pushing, PRs, merges and tags are **H** (only on request).
-5. **Plan (O/M).** Mandatory when the change spans modules, touches a cross-language
-   contract, or a generated path. Use plan mode or a short written plan.
-6. **Implement (M).** Only the requested scope. Follow the module rules. Generated paths
-   change only through their generator. Never edit submodules or embedded package clones.
-7. **Resolve validation (M).** Re-run the context script for exactly the files you changed:
-   `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <file>...`
-   This yields touched modules, dependents, checks by tier, and obligations for *your* change,
-   untouched by the user's baseline.
-8. **Obligations (M).** CHANGELOG entry under `## [Unreleased]` per touched module; docs;
-   regenerated artifacts; both sides of cross-language contracts; `.meta` files for Unity
-   and Shared.GameLogic assets; version bump without tag where required.
-9. **Validate (M).** Run by tier - see *Validation* below.
-10. **Verify (M).** Apply the verify-a-result checklist to every number you will report.
-11. **Review (O).** For non-trivial diffs run `/code-review` on the changed repo.
-12. **Report (M).** Use the template in `references/report.md`. No other format.
+1. **Resume (M for cross-repo or interrupted work).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`
+   lists pending work derived from the repos (wire rollout stage, READY_TO_TAG packages,
+   released-but-unpinned, in-flight `<type>/<area>/<topic>` branches) with the owning skill.
+2. **Scope (M).** Name repos and modules; read each touched module's `claude_md`. A task that
+   would invent gameplay rules or numbers stops here (**H**, `phase-plumbing-only`).
+3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
+   commit them unless named. Submodule contents are user state unless the task is about them.
+4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <files the task will touch>`.
+   Invoke the **lead** with the Skill tool before planning or editing; it runs its **legs**.
+   **Co-leads** run after the lead in the order shown (code before deploy before measurement).
+   **Follow-ups** are later work in other repos - name them in the report. **AMBIGUOUS** means the
+   registry cannot decide: ask the user, or pass `--lead <skill>` (validated). `--explain` shows
+   why every skill was or was not selected.
+5. **Branch (M).** On a protected branch, create `<type>/<area>/<topic>` from the default branch
+   before committing; reuse the **same topic** in every repo of a cross-repo task (factory-status
+   links them). Commit, push, PR, merge are **H** (only on request); tags are never done by agents.
+6. **Plan (O/M).** Mandatory across modules, contracts or generated paths.
+7. **Implement (M).** Requested scope only; module rules; generated paths only via their generator.
+8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
+   both sides of contracts, `.meta` files, version bump (never a tag).
+9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
+   The runner executes and grades the checks; its table and evidence file are the only
+   acceptable evidence. Extended checks: ask the user, then rerun with `--approve <check-id>`.
+10. **Verify (M).** verify-a-result on every number you report (below).
+11. **Review (O).** `/code-review` on non-trivial diffs.
+12. **Report (M).** `references/report.md`, including the runner table and routing. A release
+    ends at **READY_TO_TAG** - the lead creates the tag.
 
-## Validation
+## Validation states (from run-checks.py)
 
-| Tier | Policy | If not run, report |
+| State | Meaning | Done? |
 |---|---|---|
-| **fast** | Always run for touched modules **and dependents**. | `failed` or `not-run:tool-missing` - never silently skip |
-| **extended** | Required when its `trigger` applies. Ask the user first (slow, environment-sensitive). | `not-run:needs-confirmation` |
-| **external** | Unity Test Runner, CI, Docker stack, deploys. Ask, or state what is needed. | `not-run:external` + reason |
+| PASS | ran, exit 0, evidence found (tests executed > 0, expected line present) | yes |
+| FAIL | failed, no evidence (0 tests / all skipped), or left files in a product repo | no - fix |
+| BLOCKED | a needed check failed, or its directory is missing | no |
+| NOT_AVAILABLE | a required tool is missing here | no - say so |
+| HUMAN_REQUIRED | extended check not approved, or external (CI, Unity Editor, cluster, Docker stack) | report as open |
+| SKIPPED | excluded on purpose (`--only`, duplicate command) | n/a |
 
-Result states: `not-required`, `passed`, `failed`, `skipped`, `not-run:needs-confirmation`,
-`not-run:external`, `not-run:tool-missing`. A check is `passed` only with the evidence its
-registry entry names (counts, exit code, summary line). Commands use `cwd` relative to the repo
-root; `{dotnet}` is already resolved in the snapshot (WSL often has only `dotnet.exe`).
-
-Details, evidence parsing per tool, and environment caveats: `references/validation.md`.
+Never write PASS yourself; never convert NOT_AVAILABLE / HUMAN_REQUIRED into success. Details and
+per-tool evidence: `references/validation.md`.
 
 ## verify-a-result (non-negotiable)
 
-- Count passes. `go test` / `dotnet test` exit 0 on zero selected tests; report discovered /
-  passed / failed / skipped, and treat zero executed as a failure.
-- Prove a zero can be non-zero before trusting it. Name the object a number describes.
-- Write the expected result before running. Compare, do not rationalise.
-- CI: count jobs that passed; an absent check is not a pass.
-- Canonical checklist: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md` and
-  `rpg-mmo-server/backend/docs/MEASUREMENT.md`. Never write "tests look good".
+Count passes (exit 0 on zero tests is not a pass); prove a zero can be non-zero; name the object a
+number describes; write the expected value before running; an absent CI check is not a pass.
+Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-mmo-server/backend/docs/MEASUREMENT.md`.
 
 ## Git safety and human gates
 
-The plugin's PreToolUse hook **denies** creating, deleting or pushing tags (agents never tag -
-stop at "ready to tag <repo> <tag>"). It **asks** before destructive git (reset --hard, clean -f,
-checkout -- / restore, stash, branch -D, rebase), any push, `add -A`/`add .`, commits on
-protected branches, `commit -a/--amend`, submodule updates, and before commands matching a
-registry `human_gates` entry (kubectl/helm/ssh, workflow dispatch, secrets, toggle-packages.sh,
-local stack). The hook is a backstop; the policy is `references/git-safety.md`. Stage explicit
-paths only.
+- The guard (Bash **and** PowerShell) **denies** tag creation/deletion/push, `gh api` tag refs and
+  `gh release create`; it **asks** before destructive git, any push, `add -A`, commits/merges/
+  cherry-picks/reverts on protected branches, ref rewrites, submodule updates, commands it cannot
+  see through (interpreters, `$VAR`/`$(...)` as the program) and registry `human_gates`.
+- If a tool result contains **"STOP - rpg-factory tripwire"**, stop immediately: do not repair,
+  reset or retry anything. Report what it says to the user. Mutating commands stay denied until
+  the user acknowledges (`tripwire.py --ack`).
+- Stage explicit paths only. Policy: `references/git-safety.md`.
 
 ## Skills
 
 | Situation | Lead skill |
 |---|---|
-| wire message/field, protocol version, JSON encoding, Redis servers:id hash | `wire-contract` (drives server → Netcode → client) |
-| move a client pin to a released package / sgl tag | `pin-bump` |
-| C# game server, ECS systems, knobs, metrics, Shared.GameLogic, golden vectors | `server-realtime` |
+| wire message/field, protocol version, JSON encoding, JoinToken claims, Redis servers:id | `wire-contract` (server → Netcode → client) |
+| move a client pin (package / sgl tag) or the unity-build-workflows submodule | `pin-bump` |
+| C# game server, ECS systems, knobs, metrics, content, Shared.GameLogic | `server-realtime` |
 | Go gateway, Nakama RPCs, Redis store, persistence/migrations | `server-services` |
 | Docker, compose, k8s/Agones, monitoring, backups, CD | `server-ops` |
-| Netcode / UnityDots / UIToolkit package code, up to ready-to-tag | `unity-package` |
+| Netcode / UnityDots / UIToolkit package code, up to READY_TO_TAG | `unity-package` |
 | client VContainer wiring, Nakama/session, HUD/UI, DotsViews, build scripts | `client-integration` |
 | benchmark, encoding sweep, re-baseline, multi-client verification | `measure` |
 
 ## References - read when
 
-- `references/repos.md` - first time in a repo, or the snapshot shows unmapped paths.
+- `references/repos.md` - first time in a repo, unmapped or repo-level paths.
 - `references/validation.md` - before running or reporting any check.
-- `references/git-safety.md` - before any branch, stage, commit, or cleanup action.
-- `references/report.md` - before writing the final report (always).
-- `references/skill-contract.md` - when writing or running another rpg-factory skill.
+- `references/git-safety.md` - before any branch, stage, commit, cleanup, or after a tripwire STOP.
+- `references/report.md` - before the final report (always).
+- `references/skill-contract.md` - routing precedence and how skills compose.
 
 All paths above are relative to `${CLAUDE_SKILL_DIR}`.

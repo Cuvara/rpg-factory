@@ -1,8 +1,8 @@
 # Final report template
 
 Every Factory task ends with this report. Keep the section order. Write "none" rather than
-dropping a section. Every validation row needs a state from the result-state list, and
-every `passed` needs evidence.
+dropping a section. Validation rows come from `run-checks.py` output (copy its table; cite the evidence JSON path).
+Every PASS needs the runner's evidence; states other than PASS stay as the runner reported them.
 
 ```markdown
 ## Summary
@@ -20,12 +20,13 @@ every `passed` needs evidence.
 - [ ] Generated artifacts / .meta / contract other side / version bump (state each or "n/a")
 
 ## Validation
-| Tier | Module | Check | Command (cwd) | Result | Evidence |
-|---|---|---|---|---|---|
-| fast | server.gateway | go-test | `go test ./... -v -race -timeout 60s` (backend/gateway) | passed | 42 discovered: 42 pass, 0 fail, 0 skip |
-| fast | server.gameserver-dotnet | dotnet-test | `dotnet.exe test ...` | passed | Total 812: 790 pass, 0 fail, 22 skip (SkippableFact: no Redis) + verify-test-counters exit 0 |
-| extended | server.integration-test | integration-e2e | `go test -tags integration ...` | not-run:needs-confirmation | trigger: redirect contract changed |
-| external | server.* | ci | CI on PR | not-run:external | no PR opened (user did not ask) |
+Runner: `run-checks.py --repo <key> --paths ...` · evidence: `$TMPDIR/rpg-factory/results/<file>.json`
+| Tier | Check | Cwd | State | Evidence |
+|---|---|---|---|---|
+| fast | server.gateway:go-test | backend/gateway | PASS | 304 passed, 0 failed, 0 skipped |
+| fast | server.gameserver-dotnet:dotnet-test | backend/gameserver-dotnet | PASS | Total N: P passed, 0 failed, S skipped (SkippableFact: no Redis) |
+| extended | integration-e2e | backend/integration_test | HUMAN_REQUIRED | trigger: redirect contract changed; not approved |
+| external | ci | - | HUMAN_REQUIRED | no PR opened (user did not ask) |
 
 <!-- Cross-repo tasks (a driver skill ran): one Validation table PER REPO in leg order, plus: -->
 ## Contract evidence (cross-repo tasks only)
@@ -33,7 +34,12 @@ every `passed` needs evidence.
 |---|---|---|---|
 
 ## Routing
-- Lead skill: <skill> · legs run: <skills> · follow-ups left: <skill in repo> | none
+- Lead: <skill> (basis: <lead_basis> | override `--lead`) · co-leads: <skills | none> · legs run: <skills>
+- Follow-ups left: <skill in repo> | none · AMBIGUOUS resolved by: <user | --lead | n/a>
+
+## Pending (cross-repo / release)
+- `factory-status.py` pending items this task created or left: <item -> owning skill> | none
+- Release state: <READY_TO_TAG repo vX.Y.Z (lead tags) | n/a>
 
 ## Verification notes
 - Expected vs observed for any measured number.
@@ -51,7 +57,8 @@ every `passed` needs evidence.
 Rules:
 
 - **Never** write "tests pass", "looks good", or "all green" without the counts in the table.
-- If a fast check could not run, the task is not done. Say so in the Summary.
+- If a fast check is not PASS, the task is not done. Say so in the Summary.
+- Include any tripwire STOP verbatim, and never claim a task done after one.
 - Report pre-existing failures separately from failures your change introduced. Prove
   which is which by running the same check on the base commit in a separate worktree
   (server). Never stash the user's baseline to do it.

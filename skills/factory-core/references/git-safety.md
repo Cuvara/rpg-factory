@@ -1,8 +1,10 @@
 # Git safety
 
-The policy has two layers: the rules below, which you follow, and the plugin's PreToolUse
-hook (`scripts/git-guard.py`), which asks the user (or denies, for tags) when a command would break them. The
-hook is a backstop. Following the rules means it never has to fire.
+The policy has three layers: the rules below, which you follow; the PreToolUse guard
+(`scripts/git-guard.py`, Bash **and** PowerShell), which asks the user (or denies, for tags) when a
+command would break them; and the tripwire (`scripts/tripwire.py`), which detects git state changes
+the guard could not see (scripts, interpreters) and stops the session. Following the rules means
+neither ever fires.
 
 ## Rules
 
@@ -13,8 +15,10 @@ hook is a backstop. Following the rules means it never has to fire.
 2. **Right repo.** The workspace root is not a repo. Run git with `git -C <repo>` or from
    inside the repo, and check the snapshot's repo and branch before acting.
 3. **Branch.** Default and protected branches are per repo in `registry.json` `repos.<key>`
-   (server/client/Netcode: develop; UnityDots/UIToolkit: main). Commits go to `type/module/topic`
-   branches created from an up-to-date default branch (`feat/gateway/redirect-ttl`).
+   (server/client/Netcode: develop; UnityDots/UIToolkit: main). Commits go to `<type>/<area>/<topic>`
+   branches created from an up-to-date default branch (`feat/gateway/redirect-ttl`). A cross-repo
+   task uses the **same topic** in every repo (`feat/wire/party` in server, Netcode, client) so
+   `factory-status.py` links the legs and can resume them.
 4. **Stage explicit paths.** `git add <path>...` only. Never `add -A`, `add .`, `add :/`,
    `commit -a`.
 5. **Commit, push, PR, merge only on request; never tag.** Commit messages follow Conventional
@@ -44,26 +48,52 @@ hook is a backstop. Following the rules means it never has to fire.
 11. **Leave the tree as you found it plus your change.** Before reporting, `git status` in
     each touched repo must show exactly the baseline plus your files.
 
-## What the hook does
+## What the guard does
 
-Inside the workspace (any repo under it), per command segment:
+Inside the workspace (any repo or worktree under it), for Bash and PowerShell. The command is
+expanded first: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`, `xargs`,
+`find -exec`) are peeled, nested shells (`bash/sh -c`, `eval`, `cmd /c`, `powershell -c`) are
+parsed recursively, repo git aliases are expanded, and PowerShell is tokenized with its own
+quoting (`` ` `` escape, `&` call operator, `git.exe`).
 
 | Command | Decision | Why |
 |---|---|---|
-| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing `refs/tags/*` / `v*` / `sgl-v*` / `core-baseline*` refs | **deny** | agents never tag |
-| `reset --hard/--merge/--keep`, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | ask | discards working-tree changes |
+| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`), `gh api .../git/refs\|tags`, `gh release create` | **deny** | agents never tag |
+| `reset --hard/--merge/--keep`, `reset <commit>` on a protected branch, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | ask | discards work or moves a protected branch |
 | `clean -f...` | ask | deletes untracked files |
 | `stash` (push/save/pop/drop/clear) | ask | moves or drops uncommitted changes |
-| `branch -D` | ask | force-deletes a branch |
+| `branch -D`, `branch -f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`, `prune` | ask | rewrites or drops refs |
 | `push` (any; force and delete-ref variants named) | ask | publishes or rewrites remote state |
 | `add -A/--all/./:/`, `commit -a` | ask | stages the user's changes |
-| `commit` on a protected branch (per repo in the registry: server/client develop, staging, main; Netcode develop, main, release/*, sync-main/*; UnityDots/UIToolkit main, develop) | ask | protected branch |
+| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull --rebase` on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | ask | protected branch |
 | `commit --amend`, `rebase`, `filter-branch/filter-repo` | ask | rewrites history |
 | `submodule update/deinit/sync/foreach` | ask | changes submodule checkouts |
 | `worktree remove/prune --force` | ask | deletes a worktree with its changes |
-| any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `gh release create`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`) | ask (or the gate's `decision`) | human gate |
+| git run through an interpreter one-liner, or a program that is `$VAR` / `$(...)` / backticks | ask | the guard cannot see what runs |
+| any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | ask (or the gate's `decision`) | human gate |
 
-The hook ignores quoted text and heredoc bodies (a commit message mentioning `git tag` is fine),
+The guard ignores quoted text and heredoc bodies (a commit message mentioning `git tag` is fine),
 follows `cd <dir> &&` and `git -C <dir>`, knows that `git checkout -b feat/x && git commit`
 commits on the new branch, and stays silent outside the workspace. `RPG_FACTORY_GUARD=off`
 disables it for a session - never set it yourself.
+
+## Tripwire
+
+- **SessionStart** records a baseline: the user's dirty/untracked files, submodule pointers and a
+  sample of dirty files inside submodules (the client's `com.gdk.*`).
+- **Pre/PostToolUse** (Bash, PowerShell) compare ref fingerprints (branches, tags,
+  remote-tracking refs, stash, HEAD) around every command. Changes are expected only in a repo
+  the command visibly ran git in.
+- **Violations:** any tag change; ref/HEAD/stash/push changes without a visible git command in
+  that repo; a baseline file modified or deleted; a user submodule moved or its dirty files
+  changed.
+- On a violation the tool result carries **"STOP - rpg-factory tripwire: ..."** and the session is
+  latched: the guard denies every non-read-only command.
+
+After a STOP: do nothing else. Do not repair, reset, delete the tag, re-push or "normalise"
+anything. Report the message verbatim to the user. Only the user clears the latch
+(`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py --ack`) after reviewing the state.
+
+Limits: git run by a background process started earlier, or by another agent runtime, is only
+seen at the next command; file edits by Write/Edit tools are not checked against the baseline
+until the next Bash/PowerShell call.

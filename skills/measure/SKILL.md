@@ -86,7 +86,7 @@ Fast: `bash -n` on `backend/loadtest/scripts/*.sh`;
 Bench micro-tests: `BENCH_TICK=1` / `BENCH_AOI=1` / `MEASURE_TIERING=1` gate them; under WSL pass
 `WSLENV=<VAR>` to `dotnet.exe` or every bench **skips** and the run exits 0 - a skip is not a result.
 External: load/sweep legs (stack up), multi-client (Windows player + stack), device runs (phone),
-reported `not-run:external` with the exact command when not run.
+reported HUMAN_REQUIRED (external) with the exact command when not run.
 
 ## Human gates
 

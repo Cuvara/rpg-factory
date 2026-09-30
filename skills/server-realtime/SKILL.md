@@ -20,9 +20,8 @@ Task: $ARGUMENTS
 Repo `server`. Modules: `server.gameserver-dotnet`, `server.shared-gamelogic`, `server.content`.
 `server.content` belongs here. The game server is its only reader: it loads and validates at boot and serves `/content` (ADR-19). Its schema and validator are in `Shared.GameLogic/Content/`, its loader is `GameServer/Content/`, and `ContentLoaderTests` validates the shipped `items.json`. Its changes go in `backend/gameserver-dotnet/CHANGELOG.md` (the ADR-19 commit cc217b9 did this).
 
-Facts come from the registry:
-`jq '.modules[]|select(.id|test("gameserver-dotnet|shared-gamelogic|content"))' ${CLAUDE_PLUGIN_ROOT}/registry.json`.
-The architecture map and wiring recipes are in `references/gameserver.md`.
+Module rules, checks and obligations come from the registry (the snapshot prints them for touched
+modules); architecture map and wiring recipes: `references/gameserver.md`.
 
 | Touches | Owner | This skill |
 |---|---|---|
@@ -41,21 +40,17 @@ The architecture map and wiring recipes are in `references/gameserver.md`.
 2. **Place the code.** See `references/gameserver.md`. The core (Server, World, Net, Snapshot, Input) stays content-agnostic, and content goes behind `ISimulationPhase` in `Scaffolding/`, wired only in `Program.cs`. A new system implements `IEcsSystem` with `Group`, a unique `Order` and honest `ComponentAccess`. It keeps state on components, not in fields.
 3. **Knob change = server-knobs obligation.** Follow `references/gameserver.md#knobs`. Declare the name as a `const string` and parse it strictly (exit 2). Then the passthrough lines must land in the **same commit**. The manifests belong to `server.deploy`, so for a single-repo server task this skill co-edits them (only the `environment:`/`env:` entries) and puts a `backend/deploy/CHANGELOG.md` entry in the same commit. Values (`.env.example`, ConfigMap keys) and anything else in those files are hand-offs to server-ops.
 4. **Metric or /status change.** Update `docs/METRICS.md` in the same change. No test enforces parity. Then check the consumers: `deploy/monitoring/{prometheus,alerts}.yaml` and `dashboards/rpg-gameplay.json` (server-ops), and `/status` field names read by the client DOTS sample (client-integration).
-5. **SGL change.** Add a `.meta` for every new file or folder. An intended behaviour change regenerates the golden vectors in the same commit (extended tier). A signature or behaviour change is a two-repo contract (ADR-10), so name the client impact in the report. Do not bump `package.json` unless the user asks for a release (Human gates).
-6. **Movement-adjacent change.** Add a live socket-path test alongside the unit tests, modelled on `GameServer.Tests/Server/SlowClientMovementTests.cs` (TEAM.md).
+5. **SGL change.** Registry rules apply (`.meta`, golden vectors, release). A signature or behaviour change is a two-repo contract (ADR-10): name the client impact and the `pin-bump` follow-up in the report.
 
 ## Rules
 
 Module rules are in the registry. These are the additions, each with its source:
 
 - Systems declare frequency only through `IEcsSystem.Group`. Never count ticks, test `tick % n` or read Hz. Group order Critical, World, Background is fixed (ADR-13; `Server/SimulationSchedule.cs`).
-- `ComponentAccess` must list every type a system reads or writes. Set `structural: true` when it creates or destroys entities. `IsDisjointFrom` is the future parallel predicate, so an under-declared set is a latent race (`Server/SystemSchedule.cs`).
-- Phases and systems keep no mutable instance fields. The exception is a `[SimulationScratch]` buffer that holds nothing across ticks, enforced by `SimulationStateArchitectureTests` (ADR-12).
-- Never use `CommandBuffer`. Structural changes go through the world's deferred phase (ADR-11 d3, ADR-12 d2). A new component type gets its `World/ArchAotHints.cs` line in the same commit, enforced by `ArchAotHintTests` (ADR-12 d3).
-- JSON goes through source-generated `JsonTypeInfo` only, guarded by `Aot/JsonReflectionGuardTests.cs`. Never add `NoWarn` for the audited Collections.Pooled AOT warnings (`GameServer.csproj`).
+- An under-declared `ComponentAccess` is a latent race: `IsDisjointFrom` is the future parallel predicate (`Server/SystemSchedule.cs`). Structural changes go through the world's deferred phase (ADR-11 d3, ADR-12 d2).
+- Never add `NoWarn` for the audited Collections.Pooled AOT warnings (`GameServer.csproj`); reflection JSON is caught by `Aot/JsonReflectionGuardTests.cs`.
 - ECS staging must not change the wire, and snapshot output stays byte-identical (ADR-12 d6; `Snapshot/SnapshotByteIdentityTests.cs`). Importance orders what is sent. It does not budget or gate interest. It is off by default (ADR-27).
 - No synchronous I/O on the tick loop. Persistence is an async background task (`gameserver-dotnet/CLAUDE.md`).
-- Run the server with space-separated flags (`--addr :9000`). `--addr=:9000` is silently ignored (`docs/README.md`, `Program.cs` `GetArg`).
 - Read `docs/BENCHMARK.md` Part XI (AOI gate and sort) and Parts XIII-XIV (importance baseline and cost) before changing AOI, gather or replication. Parts X and earlier are superseded for AOI ratios.
 
 ## Generated & protected paths
@@ -69,9 +64,9 @@ Module rules are in the registry. These are the additions, each with its source:
 
 ## Validation delta
 
-- **fast:** Core's `dotnet-build`, `dotnet-test`, `verify-test-counters`, `check-metas`. The dotnet-test skip count is **non-zero by design**. `Regenerate` skips without `GOLDEN_REGEN`, benches skip without `BENCH_TICK`/`BENCH_AOI`/`MEASURE_TIERING`, and the Docker fixtures skip without Docker. Name each skip family. Anything else that skipped is a finding. While iterating on knobs, `--filter "FullyQualifiedName~GameServer.Tests.Deploy"` is a quick targeted run, but it does not replace the full run.
+- **fast:** `run-checks.py` runs the registry's `dotnet-build`, `dotnet-test`, `verify-test-counters`, `check-metas`. The dotnet-test skip count is **non-zero by design**. `Regenerate` skips without `GOLDEN_REGEN`, benches skip without `BENCH_TICK`/`BENCH_AOI`/`MEASURE_TIERING`, and the Docker fixtures skip without Docker. Name each skip family. Anything else that skipped is a finding. While iterating on knobs, `--filter "FullyQualifiedName~GameServer.Tests.Deploy"` is a quick targeted run, but it does not replace the full run.
 - **extended `golden-regen`:** run only for an intended behaviour change. Evidence: the `git diff --stat` of `GoldenVectors/`, with every changed case explained, and the non-regen suite passing afterwards.
-- **extended `aot-publish`:** triggered by a new component, serialization, a new package or a csproj change. Evidence: the publish succeeds and the only AOT/trim warnings are the audited `Collections.Pooled.PooledEnumerableJsonConverter` set (IL2026/IL3050 warnings, count = fact `aot-audited-warnings`, plus the IL3053/IL2104 summary lines, `docs/DESIGN.md`) - any new warning is a finding. The native interop run is Linux-only, so from WSL report it `not-run:external` (covered by `ci-dotnet.yml`).
+- **extended `aot-publish`:** triggered by a new component, serialization, a new package or a csproj change. Evidence: the publish succeeds and the only AOT/trim warnings are the audited `Collections.Pooled.PooledEnumerableJsonConverter` set (IL2026/IL3050 warnings, count = fact `aot-audited-warnings`, plus the IL3053/IL2104 summary lines, `docs/DESIGN.md`) - any new warning is a finding. The native interop run is Linux-only, so from WSL report it HUMAN_REQUIRED (external) (covered by `ci-dotnet.yml`).
 - **extended `integration-e2e`:** for a handshake, join or snapshot framing change (registry trigger).
 - **external:** `ci-dotnet.yml`. Count its two jobs (Test & Build, Publish AOT), and then `ci.yml` integration when a wire change is involved.
 
@@ -84,15 +79,11 @@ Module rules are in the registry. These are the additions, each with its source:
 ## Review checklist
 
 - [ ] Hot paths (tick, input, snapshot, gather) allocate nothing new: no LINQ, no closures, no boxing, no per-tick `new`. The buffers are `[SimulationScratch]` or caller-provided `Span<T>`.
-- [ ] Every new or changed system has `Group`, a unique `Order` and a complete `ComponentAccess` (with `structural` if it spawns or reaps). There are no mutable fields.
-- [ ] Every new component is in `ArchAotHints`. There is no reflection JSON and no `CommandBuffer`.
+- [ ] Registry rules for the touched modules hold (systems, ArchAotHints, knob passthrough, SGL constraints, `[SkippableFact]`, live socket-path test for movement).
 - [ ] The core added no new reference to `GameServer.Scaffolding`, and content wiring lives in `Program.cs`.
 - [ ] Every knob is a `const string` and strictly parsed (exit 2). The value in force is on `/status` when an operator must confirm it (the pattern is `aoi_radius`, `enemy_ai`). It is in the `docs/README.md` configuration table and in all 5 gated manifests, or excluded with a reason.
 - [ ] Every new or renamed metric or `/status` field is in `docs/METRICS.md`. The monitoring and client consumers are checked.
-- [ ] SGL: `netstandard2.1;net10.0`, no ECS or Unity types, allowed float ops only, integer entity handles, `.meta` present.
 - [ ] Behaviour change: golden fixtures are committed and each diff is explained. No change means an unchanged `GoldenVectors/`.
-- [ ] Movement-adjacent change: there is a live socket-path test.
-- [ ] Tests use `[SkippableFact]` for dependencies and `Stopwatch` for deadlines.
 - [ ] CHANGELOG `[Unreleased]` entries exist: `gameserver-dotnet/CHANGELOG.md` and/or `Shared.GameLogic/CHANGELOG.md`, plus `deploy/CHANGELOG.md` when manifests changed. The `docs/DESIGN.md` note is dated for an architecture change.
 
 ## Report additions
@@ -101,4 +92,4 @@ Module rules are in the registry. These are the additions, each with its source:
 - Knob table: name, default, parse rule, and the manifests edited or excluded.
 - Golden diff summary, or "GoldenVectors unchanged".
 - SGL: the API or behaviour change and its client impact, or "no SGL change". Whether it is ready to tag.
-- AOT: the warning set compared with the audited baseline, or `not-run` with the trigger.
+- AOT: the warning set compared with the audited baseline, or HUMAN_REQUIRED with the trigger.

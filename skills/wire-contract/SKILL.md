@@ -2,7 +2,7 @@
 name: wire-contract
 description: Use when changing anything that must stay byte- or value-compatible between the Go gateway, the C# game server, the Netcode package and the Unity client - a network message or protobuf field in wire.proto, the legacy JSON encoding, the wire protocol version, the JoinToken/JWT claims, or the Redis servers:id registry hash shared by C# and Go. Cross-repo driver that orders the server leg, the Netcode resync leg and the client pin leg, and collects the contract evidence. Not for server-only gameplay logic that does not touch the wire (server-realtime) or package-internal changes that keep the wire format (unity-package).
 argument-hint: "[describe the wire change]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/wire-parity.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/wire-parity.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*)
 ---
 
 # Wire contract - server → Netcode → client
@@ -34,14 +34,28 @@ This skill **drives**; legs implement. It edits only `server.proto` (the `.proto
 
 ## Workflow (driver)
 
+0. **Where is the rollout? (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py` shows the chain
+   `server bindings → Netcode copy (develop) → Netcode release (tag) → client pin` with the first
+   incomplete stage and its owning skill, plus in-flight `<type>/wire/<topic>` branches per repo. Resume
+   at that stage - never redo a finished leg. Start a new change only when the previous rollout is
+   complete, or tell the user two wire changes will share one Netcode release.
 1. **Contract plan (M).** Name the change per contract end (`references/chain.md` §Co-change set). Decide:
    - **Compatibility**: additive field (old peers ignore it) vs breaking (removal/renumber/semantics) - breaking
      needs a `WireProtocolVersion` bump in all three constants and a gateway `--min-protocol-version` rollout plan.
    - **Legacy JSON**: does the field also exist in the JSON encoding (Go struct tags in `shared/messages`, C# `WireJson.cs`, Netcode `Runtime/Json`)? ADR-9 keeps JSON accepted.
    - **Ordering**: server leg must land on `develop` before the Netcode leg can pass Netcode CI job `wire` (it diffs
      against server **develop**).
+   - **Rollout order and rollback** (`references/chain.md` §Compatibility):
+
+     | Change | Deploy order | Old clients | Rollback |
+     |---|---|---|---|
+     | additive field / new message | server → Netcode tag → client pin | keep working (field ignored / message never sent) | revert any leg alone |
+     | new server→client message | server first, but send it only when the peer's protocol version says it understands it | must not receive it | stop sending, then revert |
+     | breaking (remove, renumber, semantics) | version bump in all three constants; server accepts old + new until the client pin moved; gateway and game-server `--min-protocol-version` raised **last** (human) | locked out only after the raise | lower `--min-protocol-version` first |
+     | JoinToken claim / `servers:id` field | readers tolerate absent claims/fields before writers emit them (both languages, one commit) | n/a (server-side) | writers first |
+   - Use one topic name for all legs (`feat/wire/<topic>` in server, Netcode, client) so status links them.
 2. **Leg 1 - server.** Invoke `server-services` and/or `server-realtime` with the per-end list. Evidence required:
-   `generate.sh` run with protoc + protoc-gen-go at the CI pins (registry facts `protoc-ci-pin`, `protoc-gen-go-ci-pin`; snapshot toolchain row; a mismatch = `not-run:tool-missing`,
+   `generate.sh` run with protoc + protoc-gen-go at the CI pins (registry facts `protoc-ci-pin`, `protoc-gen-go-ci-pin`; snapshot toolchain row; a mismatch = NOT_AVAILABLE,
    propose letting CI regenerate only if the user agrees), both generated trees in the diff, Go + C# fast tier,
    `backend/gameserver-dotnet/docs/API.md` (the normative wire reference) updated, CHANGELOGs (`backend/shared`, `backend/gameserver-dotnet`, gateway if touched), and the
    extended integration suite (`TestDotnetInterop*`) - ask before running.
@@ -56,7 +70,9 @@ This skill **drives**; legs implement. It edits only `server.proto` (the `.proto
 6. **Report.** Core template + one validation table per repo + the contract evidence table below.
 
 A task may stop after any leg (e.g. "server side only"); the report must then list the remaining legs as open, and
-the contract as **not yet consistent** if `wire-parity.sh` fails.
+the contract as **not yet consistent** if `wire-parity.sh` fails. `factory-status.py` then shows the rollout as
+incomplete (e.g. server ✓ · Netcode copy ✗ · client ✗) until the last leg lands - that is the resume point for
+the next session, not a failure to hide.
 
 ## Rules
 
@@ -92,8 +108,9 @@ the contract as **not yet consistent** if `wire-parity.sh` fails.
 - [ ] Go (`shared/messages` + generated), C# (handlers, `WireJson.cs`), Netcode (codec/JSON) all handle the new field.
 - [ ] Protocol version bumped iff breaking; all three constants equal.
 - [ ] `backend/gameserver-dotnet/docs/API.md` (normative wire reference) and CHANGELOGs in every touched module/repo.
-- [ ] Interop evidence (TestDotnetInterop) or an explicit `not-run:needs-confirmation`.
-- [ ] Legs not done are listed as open; no tag was created by an agent.
+- [ ] Interop evidence (TestDotnetInterop) or an explicit HUMAN_REQUIRED (not approved).
+- [ ] Rollout order respected (table above); old clients keep working until their pin moves.
+- [ ] Legs not done are listed as open (factory-status pending items quoted); no tag was created by an agent.
 
 ## Report additions
 

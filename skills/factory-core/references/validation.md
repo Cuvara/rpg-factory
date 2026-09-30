@@ -1,19 +1,30 @@
 # Validation
 
-Factory Core **discovers** what must be validated (registry + context script). The agent,
-or the skill that owns the task, **executes** it and reports evidence. Core never marks a
-check as passed on its own.
+Factory Core **discovers** the checks (registry + context script) and **runs and grades** them
+with `scripts/run-checks.py`. The runner's table and evidence JSON are the validation record;
+the agent never writes a state itself.
 
-## Deriving the check list
+## Running checks
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh" --repo server --paths backend/gateway/redirect.go
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh" --repo server --json --paths ... | jq '.repos[0].checks'
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths backend/gateway/redirect.go
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... --dry-run      # list only
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... --approve integration-e2e
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... --json         # machine record
 ```
 
-Use `--paths` with the files *you* changed. Without it the script resolves the whole working
-tree, which includes the user's pre-existing changes. The list covers touched modules and
-their dependents. Deduplicate identical commands. Run each in `<repo>/<cwd>`.
+- Use `--paths` with the files *you* changed. Without it the runner resolves the whole working
+  tree, which includes the user's pre-existing changes.
+- The list covers touched modules and their dependents; identical commands run once (the second
+  is SKIPPED as a duplicate).
+- `--tier fast` (default) runs fast checks and reports extended/external ones as HUMAN_REQUIRED.
+  `--approve <id>` runs a named extended check after the user agreed. `--only <id>` narrows.
+- Each check is graded by its registry `parser` (`go-test`, `dotnet-test`, `exit`,
+  `regex:<pattern>`); `needs` makes a check BLOCKED when a prerequisite failed.
+- Before/after `git status` of the product repo is compared: a check that leaves files behind
+  is FAIL (pollution), even if it passed.
+- Evidence JSON goes to `$TMPDIR/rpg-factory/results/`; cite its path in the report.
+- Exit 1 when any fast check is not PASS or anything FAILed.
 
 ## Factory check scripts (read-only against product repos)
 
@@ -30,27 +41,27 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
 
 ## Tiers
 
-- **fast** - vet / test / build / cheap static checks. Always run. A missing tool is
-  `not-run:tool-missing` and blocks a "done" claim.
+- **fast** - vet / test / build / cheap static checks. Always run by the runner.
 - **extended** - integration E2E, AOT publish, proto regeneration, golden-vector regeneration.
-  Required when the `trigger` applies. Ask before running; if the user declines or is not
-  asked, report `not-run:needs-confirmation` and say which trigger applied.
-- **external** - Unity Test Runner, GitHub CI, Docker stack, deploy pipeline. Ask, or report
-  `not-run:external` with what is needed (Editor open, PR opened, stack up).
+  Required when the `trigger` applies. Ask the user, then `--approve <id>`; otherwise it stays
+  HUMAN_REQUIRED and the report names the trigger.
+- **external** - Unity Test Runner, GitHub CI, Docker stack, deploy pipeline. Always
+  HUMAN_REQUIRED from the runner; report what is needed (Editor open, PR opened, stack up).
 
-## Result states
+## Result states (run-checks.py)
 
-| State | Meaning |
-|---|---|
-| `passed` | Ran, evidence matches the registry `evidence` field (counts where available) |
-| `failed` | Ran and failed, or ran and produced no evidence (for example 0 tests executed) |
-| `skipped` | Deliberately not run for a stated reason the user accepted |
-| `not-required` | No check registered for the affected modules |
-| `not-run:needs-confirmation` | Extended check whose trigger applied; awaiting the user |
-| `not-run:external` | Needs an environment outside this shell |
-| `not-run:tool-missing` | Required tool not resolved in the snapshot toolchain |
+| State | Meaning | Done? |
+|---|---|---|
+| `PASS` | Ran, exit 0, parser evidence found (tests executed > 0, expected line present), no pollution | yes |
+| `FAIL` | Ran and failed; or exit 0 with no evidence (0 tests, all skipped); or left files in the repo | no |
+| `BLOCKED` | A `needs` prerequisite failed, or the check's directory is missing | no |
+| `NOT_AVAILABLE` | A required tool is not resolved on this machine | no - say so |
+| `HUMAN_REQUIRED` | Extended check not approved, or an external environment | open item |
+| `SKIPPED` | Excluded on purpose (`--only`, duplicate command) | n/a |
 
-## Evidence per tool
+No registered check for the touched modules is reported as "none registered", not as PASS.
+
+## Evidence per tool (what the parsers check; use it for manual external evidence too)
 
 - **go test -v**: count lines `--- PASS:`, `--- FAIL:`, `--- SKIP:` (subtests included) and
   packages `ok` / `FAIL` / `[no test files]`. Report `discovered = pass + fail + skip`.
@@ -63,12 +74,12 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
   Then `python3 .github/scripts/verify-test-counters.py "backend/gameserver-dotnet/**/test-results.trx"`
   (run from the repo root). It fails a run that selected nothing or skipped everything.
   `[SkippableFact]` tests skip without Docker/Postgres/Redis. Report skips with their reason;
-  they are not passes.
+  they are not passes (the `dotnet-test` parser counts them separately).
 - **dotnet build**: `Build succeeded` and `0 Error(s)`. Report the warning count if non-zero.
 - **check_metas.py / unity-package-pins.py / bash -n / jq empty**: exit 0 plus the script's
   own summary line (for example `OK: 6 git-URL dependencies ...`).
 - **Unity Test Runner** (via Unity MCP when `unity-mcp` is reachable): total / passed /
-  failed / skipped per EditMode and PlayMode. Zero executed means `failed`.
+  failed / skipped per EditMode and PlayMode. Zero executed means FAIL.
 - **CI**: `gh pr checks <n>`. Count the jobs that passed against the jobs expected. A PR with
   a merge conflict lists **no** checks, and an absent check is not a pass. For log-level
   proof: `gh run view <id> --log | grep -c -- '--- PASS'`.
@@ -81,14 +92,14 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
     Use `GOLDEN_REGEN=1 WSLENV=GOLDEN_REGEN dotnet.exe test --filter Regenerate` (verified:
     without WSLENV the variable does not reach the Windows process; the registry command sets it).
   - AOT publish through `dotnet.exe` produces a Windows binary. The CI native interop check
-    (Linux) is not reproduced locally, so report it `not-run:external`.
+    (Linux) is not reproduced locally, so it is HUMAN_REQUIRED (CI).
   - The Go integration suite starts the C# server itself and needs a dotnet it can call.
-    If that fails in WSL, report `failed` with the error. Don't reclassify it as skipped.
+    If that fails in WSL it is FAIL with the error. Don't reclassify it as skipped.
 - **go**: `go.mod` requires 1.26.x. `GOTOOLCHAIN=auto` fetches it or uses the cached
   toolchain, so a lower local `go` is fine.
 - **protoc**: CI pins protoc and protoc-gen-go (registry facts `protoc-ci-pin`, `protoc-gen-go-ci-pin`). The snapshot shows local vs
   expected. Regenerating with a different version rewrites version headers. Either install
-  the pinned version, or leave regeneration to CI and report `not-run:tool-missing`.
+  the pinned version, or leave regeneration to CI and report NOT_AVAILABLE.
 
 ## CI coverage facts (verified 2026-09-30)
 

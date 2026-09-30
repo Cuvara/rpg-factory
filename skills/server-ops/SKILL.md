@@ -100,10 +100,10 @@ in `references/manifests-and-checks.md`):
 | fast | `docker compose --env-file .env.example ... config -q` | compose edits | exit 0, no output, for base + override + agones |
 | extended | Deploy passthrough tests (`FullyQualifiedName~GameServer.Tests.Deploy`) | `env:` in fleet or compose | dotnet counts, Total > 0, 0 failed |
 | fast (server-services leg) | `MigratorTests` (`EmbeddedMigrations_MatchDeployCopies`, `InitGamestateSql_MatchesFirstMigration`) | `db/*.sql` (server-services leg) | passed counts |
-| fast | monitoring yaml/json parse | `monitoring/` | exit 0; **no promtool locally** - rule semantics `not-run:tool-missing` |
+| fast | monitoring yaml/json parse | `monitoring/` | exit 0; **no promtool locally** - rule semantics NOT_AVAILABLE |
 
 External (never self-run): `kubectl apply --dry-run=server`, `k8s/verify/verify.sh --target ...`,
-`make flow-up && make flow-check`, `cd.yml` `post-deploy-smoke`. Report `not-run:external` with the
+`make flow-up && make flow-check`, `cd.yml` `post-deploy-smoke`. Report HUMAN_REQUIRED (external) with the
 command the user should run.
 
 ## Human gates
@@ -134,5 +134,5 @@ Ask before, and never run unasked:
 
 - Target environments affected and which gates are pending, each with the exact command for the user.
 - Validator output delta vs base commit (FAIL/warn lines), autoscaler test `RESULT=` line.
-- For compose/fleet env edits: passthrough test counts or `not-run` state.
+- For compose/fleet env edits: passthrough test counts or the runner state.
 - "Deploys on merge to develop: yes/no" for the change.
