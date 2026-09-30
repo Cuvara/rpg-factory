@@ -188,8 +188,12 @@ def prog(tok):
 
 
 def peel(seg):
-    """Strip env assignments and wrapper programs; return the argv that really runs."""
+    """Strip env assignments and wrapper programs; return the argv that really runs.
+
+    xargs appends its stdin items to the command, so `echo v9 | xargs git tag` runs `git tag v9`:
+    a placeholder argument is appended to keep `git tag` from looking like a tag listing."""
     i = 0
+    via_xargs = False
     while i < len(seg):
         t = seg[i]
         p = prog(t)
@@ -217,12 +221,13 @@ def peel(seg):
             while i < len(seg) and (seg[i].startswith("-") or re.match(r"^\d+$", seg[i])):
                 i += 1
         elif p == "xargs":
+            via_xargs = True
             i += 1
             while i < len(seg) and seg[i].startswith("-"):
                 i += 2 if seg[i] in {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"} else 1
         else:
             break
-    return seg[i:]
+    return seg[i:] + (["__xargs_input__"] if via_xargs and seg[i:] else [])
 
 
 def expand(command, depth=0, shell="bash"):

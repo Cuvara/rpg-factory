@@ -3,7 +3,8 @@
 # Prints one line per check and a final count; exits non-zero if anything failed.
 #
 # Usage: tests/run-all.sh [--no-workspace] [--no-claude] [--release]
-#   --release       the installed plugin must equal the source (install-status CURRENT)
+#   --release       the installed plugin must equal the source (install-status CURRENT), the source
+#                   must be committed, and tests/installed-safety.sh must pass against the installed hooks
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
 set -uo pipefail
@@ -163,6 +164,8 @@ fi
 ist=$(python3 -B scripts/install-status.py --json 2>/dev/null | jq -r .state)
 if $release; then
   [ "$ist" = "CURRENT" ] && ok "installed plugin == source (release gate)" || bad "installed plugin == source (release gate)" "$(python3 -B scripts/install-status.py)"
+  [ -z "$(git status --porcelain)" ] && ok "source is committed (release gate)" || bad "source is committed (release gate)" "uncommitted changes"
+  run "safety through the installed hooks (disposable workspace)" env -u TMPDIR tests/installed-safety.sh
 else
   skp "installed plugin == source" "install state $ist; required only with --release"
 fi

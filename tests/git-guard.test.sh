@@ -131,6 +131,12 @@ check ask "$SERVER" "timeout -s KILL 30 git stash"
 check ask "$SERVER" "nohup git push &"
 check ask "$SERVER" "nice -n 10 git gc --prune=now"
 check ask "$SERVER" "xargs git reset --hard < /dev/null"
+check deny "$SERVER" "echo v9 | xargs git tag"              # xargs appends the tag name (found by installed-safety)
+check deny "$SERVER" "echo v9 | xargs -n1 git tag"
+check deny "$SERVER" "printf a | xargs -I{} git tag {}"
+check ask "$SERVER" "echo develop | xargs git push origin"
+check allow "$SERVER" "xargs git tag -l < /dev/null"
+check allow "$SERVER" "echo f | xargs git log --oneline"
 check ask "$SERVER" 'find . -name x -exec git checkout -- {} \;'
 check ask "$SERVER" "cmd.exe /c git reset --hard"
 check ask "$SERVER" 'powershell.exe -c "git reset --hard"'

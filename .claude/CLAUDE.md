@@ -20,9 +20,10 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`.
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json` and `marketplace.json` together with a
-  `CHANGELOG.md` section (run-all checks it). Installed copies only change when the version changes:
-  after a release run `claude plugin marketplace update rpg-factory && claude plugin update
-  rpg-factory@rpg-factory`, restart, then `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
+  `CHANGELOG.md` section (run-all checks it). The local directory marketplace loads this checkout in
+  place (what is checked out is what sessions run); the install record only updates on a version
+  change: `claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`,
+  restart, then `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
   Never create the tag - the maintainer does (READY_TO_TAG).
 - Point-in-time values go in registry `facts[]` with a probe, never in skill prose.
 - Registry facts must be verified against the product repos (file paths, CI workflow

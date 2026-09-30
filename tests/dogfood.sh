@@ -4,8 +4,10 @@
 # stream-json transcript) and which skills its answer hands work to.
 #
 #   --installed   use the INSTALLED plugin (no --plugin-dir) and assert the session loaded
-#                 rpg-factory@rpg-factory from the version-keyed cache at the source version, and
-#                 that the snapshot header says "runtime <version> (installed-cache)".
+#                 rpg-factory@rpg-factory (not @inline) at the source version from the install's
+#                 load path (directory marketplace: the marketplace dir in place; otherwise the
+#                 version-keyed cache copy), and that the snapshot header says
+#                 "runtime <version> (installed ...)" with install state CURRENT.
 #   (default)     load the working tree with --plugin-dir (development).
 #
 # Opt-in: it spends model tokens and takes minutes. Not part of run-all.sh.
@@ -24,6 +26,7 @@ while [ $# -gt 0 ]; do case "$1" in
   *) break;;
 esac; done
 VERSION=$(jq -r .version "$ROOT/.claude-plugin/plugin.json")
+LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r '.installed.loads_from // empty')
 
 # EXPECT: skills that must be invoked (space = all of, a|b = either).
 # HANDOFF: skills the final answer must name as later / follow-up work (space = all of).
@@ -64,9 +67,9 @@ for n in "${scenarios[@]}"; do
   lv=${loaded%% *}; src=${loaded#* }; src=${src%%|*}; path=${loaded#*|}
   if $installed; then
     [ "$src" = "rpg-factory@rpg-factory" ] || why+="source=$src; "
-    case "$path" in */plugins/cache/rpg-factory/rpg-factory/"$VERSION") ;; *) why+="path=$path; ";; esac
+    [ "$(realpath -m "$path")" = "$(realpath -m "$LOADS")" ] || why+="path=$path (install loads $LOADS); "
     [ "$lv" = "$VERSION" ] || why+="version=$lv; "
-    grep -q "rpg-factory runtime $VERSION (installed-cache)" "$f" || why+="snapshot runtime line missing; "
+    grep -qE "rpg-factory runtime $VERSION \\(installed[^)]*\\), installed $VERSION, source $VERSION - install state \\*\\*CURRENT" "$f" || why+="snapshot runtime line missing/not CURRENT; "
   fi
   used=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | .input.skill' | sed 's/^rpg-factory://' | tr '\n' ' ')
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')

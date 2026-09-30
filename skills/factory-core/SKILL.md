@@ -29,7 +29,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
 4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <files the task will touch>`.
-   Invoke the **lead** with the Skill tool before planning or editing; it runs its **legs**.
+   Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -
+   also when the user only wants a plan or a review; naming the lead is not enough, its workflow,
+   validation and gates are in that skill. The lead runs its **legs**.
    **Co-leads** run after the lead in the order shown (code before deploy before measurement).
    **Follow-ups** are later work in other repos - name them in the report. **AMBIGUOUS** means the
    registry cannot decide: ask the user, or pass `--lead <skill>` (validated). `--explain` shows

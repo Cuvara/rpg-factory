@@ -278,6 +278,10 @@ def render(snap, reg, args):
                 + (f" · follow-ups {', '.join(rt['follow_ups'])}" if rt["follow_ups"] else "")
                 + (" · **AMBIGUOUS** (same precedence class and order) - ask the user or pass --lead" if rt["ambiguous"] else "")
                 + (" · (override)" if rt.get("override") else ""))
+            if rt["lead"] and not rt["ambiguous"]:
+                add(f"  **Next:** invoke the Skill tool with {code('rpg-factory:' + rt['lead'])} now - also for plan-only or "
+                    "read-only requests; it owns this change's workflow, validation and gates"
+                    + (f", then {', '.join(code('rpg-factory:' + c) for c in rt['co_leads'])}" if rt["co_leads"] else "") + ".")
             if rt.get("lead_basis"):
                 add(f"  lead because: {'; '.join(rt['lead_basis']['reasons'][:3])} (class {rt['lead_basis']['class']}, order {rt['lead_basis']['order']})")
         add(f"Modules: {', '.join(r['touched']) or 'none'}" + (f"; dependents {', '.join(r['dependents'])}" if r["dependents"] else "")

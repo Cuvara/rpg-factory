@@ -202,26 +202,28 @@ claude plugin install rpg-factory@rpg-factory --scope user
 claude --plugin-dir /mnt/c/Workspaces/UnityIndie/rpg-factory
 ```
 
-### Updating (read this - installs are copies)
+### Updating - what a session actually loads
 
-An installed plugin is a **copy** in `~/.claude/plugins/cache/rpg-factory/rpg-factory/<version>/`,
-keyed by the `version` in `.claude-plugin/plugin.json`. Edits to the source - even for a local
-directory marketplace - do **not** reach sessions until the plugin is updated, and
-`claude plugin update` is a **no-op when the version did not change**.
+Observed with Claude Code 2.1.280 (`tests/dogfood.sh --installed` checks it on every release):
+
+| Marketplace | Sessions load | New content reaches sessions | `claude plugin update` |
+|---|---|---|---|
+| **directory** (`marketplace add /path/to/rpg-factory`, this workspace) | the marketplace directory **in place** (`installLocation` in `known_marketplaces.json`); the cache copy under `~/.claude/plugins/cache/` is not what runs | at the next session start - including uncommitted edits in that checkout | refreshes the install **record** (`claude plugin list` version); a no-op while `plugin.json`'s version is unchanged |
+| **GitHub** (`marketplace add Cuvara/rpg-factory`) - *not verified here* | expected: the version-keyed cache copy `~/.claude/plugins/cache/rpg-factory/rpg-factory/<version>/` | only after a version bump + update (or uninstall + install) and a restart | a no-op while the version is unchanged |
 
 ```bash
 claude plugin marketplace update rpg-factory
-claude plugin update rpg-factory@rpg-factory      # picks up a new version
-# same version, new content: reinstall
+claude plugin update rpg-factory@rpg-factory      # picks up a new version; restart Claude Code afterwards
+# same version, new content (GitHub marketplace): reinstall
 claude plugin uninstall rpg-factory@rpg-factory && claude plugin install rpg-factory@rpg-factory --scope user
-# then restart Claude Code - running sessions keep the old copy
 ```
 
-`python3 scripts/install-status.py` compares the source, the installed copy and the running
-session: `CURRENT`, `STALE` (older version installed), `CONTENT_MISMATCH` (same version, different
-files), `RESTART_REQUIRED` (installed, but this session runs another copy) or `NOT_INSTALLED`. The
-SessionStart hook prints a warning in any state other than CURRENT, and the snapshot header shows
-`rpg-factory runtime <version> (installed-cache | plugin-dir)`.
+`python3 scripts/install-status.py` reports the mode, what the install loads, the session's
+`CLAUDE_PLUGIN_ROOT`, and a state: `CURRENT`, `STALE` (record or copy older than the source),
+`CONTENT_MISMATCH` (cache mode, same version, different files), `RESTART_REQUIRED` (the session runs
+another copy) or `NOT_INSTALLED`. The SessionStart hook warns when it is not CURRENT, and the
+snapshot header shows `rpg-factory runtime <version> (<how it was loaded>)`. With a directory
+marketplace, keep the checkout on a released commit: whatever is checked out is what sessions run.
 
 Requirements:
 

@@ -7,12 +7,18 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [0.3.0] - 2026-09-30
 
 ### Fixed
-- **Sessions ran a stale install.** Installed plugins are version-keyed cache copies and
-  `claude plugin update` is a no-op while `plugin.json`'s version is unchanged, so v0.2.0 sessions
-  loaded v0.1.0. `scripts/install-status.py` compares source, installed copy and the running session
-  (CURRENT / STALE / CONTENT_MISMATCH / RESTART_REQUIRED / NOT_INSTALLED); a SessionStart hook warns
-  when not CURRENT and the snapshot header shows the runtime version. The README's claim that local
-  edits apply without reinstalling was false and is corrected (Updating section).
+- **Install state was invisible.** `claude plugin list` still reported 0.1.0 while the source was
+  0.2.0, and nothing checked what sessions load. `scripts/install-status.py` reports the load mode
+  and state (CURRENT / STALE / CONTENT_MISMATCH / RESTART_REQUIRED / NOT_INSTALLED); a SessionStart
+  hook warns when not CURRENT and the snapshot header shows the runtime version and load path.
+  Observed with Claude Code 2.1.280: a **directory** marketplace (this workspace) loads the plugin
+  in place from the marketplace directory - the version-keyed cache copy is only used by other
+  marketplace types, where `claude plugin update` is a no-op until the version changes. README
+  "Updating" documents both; the v0.3 roadmap's premise that v0.2.0 sessions ran v0.1.0 content is
+  not supported by this evidence (only the install record was stale).
+- **Guard: `xargs` tag creation** (`echo v9 | xargs git tag`) was allowed because the peeled command
+  looked like a tag listing; xargs input is now modelled as an extra argument (deny). Found by
+  `tests/installed-safety.sh`; the tripwire had caught it after the fact.
 - **Guard bypasses.** The guard now covers the PowerShell tool (matcher `Bash|PowerShell`,
   PowerShell tokenizer with backtick escapes and the `&` call operator) and expands commands before
   classifying: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`, `xargs`,
@@ -49,8 +55,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `VERSION` file; run-all checks VERSION == plugin.json == marketplace == CHANGELOG section.
 - Tests: guard bypass matrix (145 cases incl. PowerShell and wrappers), tripwire simulations,
   routing properties over real history, worktree, check runner, factory-status rollout fixtures,
-  install-status, facts; `tests/dogfood.sh --installed` runs headless sessions against the
-  installed plugin and asserts the loaded version and the invoked skills.
+  install-status (both load modes), facts; `tests/installed-safety.sh` drives the installed hooks
+  against a disposable workspace (63 cases incl. tripwire STOP and latch; part of
+  `run-all --release`); `tests/dogfood.sh --installed` runs headless sessions against the installed
+  plugin and asserts the loaded source/version/path and the invoked skills.
+- Snapshot routing prints an explicit "Next: invoke the Skill tool with the lead" line (installed
+  dogfood showed sessions naming the lead without invoking it).
 
 ### Changed
 - Snapshot diet: compact output filtered to the touched repos, toolchain probed lazily
