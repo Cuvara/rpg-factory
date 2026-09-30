@@ -33,8 +33,18 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(HERE, "lib"))
+sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import fstate  # noqa: E402
+
+
+def pmap(fn, items):
+    """Stat-heavy work over independent repos: /mnt/c (9p) latency dominates, so run it in threads."""
+    items = list(items)
+    if len(items) < 2:
+        return [fn(i) for i in items]
+    from concurrent.futures import ThreadPoolExecutor  # lazy: read-only hook calls never need it
+    with ThreadPoolExecutor(max_workers=min(8, len(items))) as ex:
+        return list(ex.map(fn, items))
 READ_ONLY_PROGS = {"ls", "cat", "head", "tail", "grep", "egrep", "rg", "jq", "wc", "echo", "printf", "pwd", "stat", "file",
                    "which", "type", "diff", "cmp", "sort", "uniq", "cut", "tr", "less", "more", "tree", "du", "df", "date",
                    "basename", "dirname", "realpath", "readlink", "env", "printenv", "true", "false", "test", "[", "sha256sum",
@@ -48,12 +58,25 @@ READ_ONLY_GIT = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-r
                  "count-objects", "help", "version", "range-diff", "diff-tree", "whatchanged", "var"}
 
 
+_GUARD = None
+_REGISTRY = None
+
+
 def guard():
-    sys.path.insert(0, HERE)
+    """git-guard.py as a module - once per process (reused when git-guard.py itself is running)."""
+    global _GUARD
+    if _GUARD is not None:
+        return _GUARD
+    main = sys.modules.get("__main__")
+    if main is not None and hasattr(main, "classify_gh") and hasattr(main, "find_workspace"):
+        _GUARD = main
+        return main
+    sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
     import importlib.util
     spec = importlib.util.spec_from_file_location("git_guard", os.path.join(HERE, "git-guard.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    _GUARD = mod
     return mod
 
 
@@ -86,10 +109,13 @@ def payload_ws(payload):
 
 
 def load_registry():
-    try:
-        return json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    global _REGISTRY
+    if _REGISTRY is None:
+        try:
+            _REGISTRY = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    return _REGISTRY
 
 
 MODES = ("analyze", "plan", "implement", "validate", "review", "resume")
@@ -331,16 +357,14 @@ def baseline(sd, tops):
     if os.path.exists(bf):
         return json.load(open(bf, encoding="utf-8"))
     g = guard()
-    data = {}
-    for top in tops:
+    def one(top):
         if str(tops[top]).startswith("clone:"):
             # embedded clone (user state, often hundreds of dirty files): a spread sample only, compared
             # pre/post each command so the user's own concurrent edits in Unity are not flagged
             dirty = [p for _, p in porcelain(top)]
             step = max(1, len(dirty) // 24)
-            data[top] = {"": ["clone-dirty", resolve_head(gitdir_of(top)) if gitdir_of(top) else "", len(dirty),
+            return {"": ["clone-dirty", resolve_head(gitdir_of(top)) if gitdir_of(top) else "", len(dirty),
                               [r for r in dirty[::step][:24] if os.path.isfile(os.path.join(top, r))]]}
-            continue
         # --ignore-submodules=all: the client's submodule scan alone costs ~10 s on /mnt/c;
         # submodule pointers are compared separately (gitlink in the index vs the submodule HEAD).
         entries = {}
@@ -368,18 +392,35 @@ def baseline(sd, tops):
                                 st = os.stat(f)
                                 sample[rel] = [st.st_mtime_ns, st.st_size]
                         entries[path] = ["submodule-dirty", head, len(dirty), sample]
-        data[top] = entries
+        return entries
+
+    data = dict(zip(tops, pmap(one, list(tops))))  # independent repos: scan in parallel
     json.dump(data, open(bf, "w", encoding="utf-8"))
     return data
 
 
+def _stat_or_none(p):
+    try:
+        st = os.stat(p)
+        return [st.st_mtime_ns, st.st_size]
+    except OSError:
+        return None
+
+
 def clone_stats(base):
-    out = {}
+    jobs = []
     for top, entries in (base or {}).items():
         e = entries.get("")
         if isinstance(e, list) and e[:1] == ["clone-dirty"]:
-            out[top] = {r: ([os.stat(os.path.join(top, r)).st_mtime_ns, os.stat(os.path.join(top, r)).st_size]
-                            if os.path.isfile(os.path.join(top, r)) else None) for r in e[3]}
+            jobs += [(top, r) for r in e[3]]
+    vals = pmap(lambda j: _stat_or_none(os.path.join(*j)), jobs)
+    out = {}
+    for (top, r), v in zip(jobs, vals):
+        out.setdefault(top, {})[r] = v
+    for top, entries in (base or {}).items():  # clones with no dirty files still get an (empty) entry
+        e = entries.get("")
+        if isinstance(e, list) and e[:1] == ["clone-dirty"]:
+            out.setdefault(top, {})
     return out
 
 
@@ -433,7 +474,7 @@ def pre(payload):
     sd = state_dir(payload)
     t0 = time.perf_counter()
     baseline(sd, tops)
-    sigs = {t: signature(t) for t in tops}
+    sigs = dict(zip(tops, pmap(signature, tops)))
     snap = {"cmd": (payload.get("tool_input") or {}).get("command"), "tops": tops, "sig": sigs,
             "fp": {t: cached_fingerprint(sd, t, sigs[t]) for t in tops},
             "expected": expected_repos(payload, registry, ws),
@@ -480,9 +521,10 @@ def post(payload):
     base = json.load(open(os.path.join(sd, "baseline.json"), encoding="utf-8")) if os.path.exists(os.path.join(sd, "baseline.json")) else {}
     violations = []
     ws = g.find_workspace(payload.get("cwd") or os.getcwd(), registry) if registry else None
+    now_sigs = dict(zip(snap["tops"], pmap(signature, snap["tops"])))
     for top, key in snap["tops"].items():
         exp = snap["expected"].get(top, [])
-        sig = signature(top)
+        sig = now_sigs[top]
         if sig != snap.get("sig", {}).get(top):   # cheap-first: only re-read refs when something moved
             pats = g.protected_patterns(top, ws, registry) if ws and registry else g.DEFAULT_PROTECTED
             violations += diff(top, key, snap["fp"].get(top), cached_fingerprint(sd, top, sig), exp,

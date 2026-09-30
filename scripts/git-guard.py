@@ -648,22 +648,39 @@ def human_gate_hits(payload, registry):
     return hits
 
 
+def _session_state(payload, registry):
+    """(needs_tripwire, ws): cheap file checks first - the tripwire module is only imported when a latch or a
+    mode exists or the command declares a mode (read-only hook calls stay fast on /mnt/c)."""
+    sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+    import fstate  # noqa: E402
+    ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
+    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "default"))
+    sd = os.path.join(fstate.scratch(), sid)
+    wl = os.path.join(fstate.persistent(), "latch", fstate.workspace_key(ws) + ".json") if ws else ""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    need = os.path.exists(os.path.join(sd, "LATCH")) or (wl and os.path.exists(wl)) \
+        or os.path.exists(os.path.join(sd, "MODE")) or "--mode" in command
+    return need, ws
+
+
 def latch_hits(payload, registry):
     """After the tripwire detected an unauthorized mutation, only read-only commands may run."""
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # appended: stdlib lookups must not stat /mnt/c first
     import tripwire  # noqa: E402
+    tripwire._REGISTRY = tripwire._REGISTRY or registry
     latch = tripwire.latched(payload)
     if latch and not tripwire.is_read_only(payload):
         return [("deny", f"tripwire latched - {latch}. Stop and report it to the user; they clear it with "
-                         f"`python3 {os.path.join(PLUGIN_ROOT, 'scripts', 'tripwire.py')} --ack`")]
+                         f"`! python3 {os.path.join(PLUGIN_ROOT, 'scripts', 'tripwire.py')} --ack`")]
     return []
 
 
 def mode_hits(payload, registry):
     """Factory execution mode (declared with `factory-context.sh --mode <m>`): analyze/plan/review are
     read-only; validate may additionally run run-checks.py. implement/resume (or no mode) = normal rules."""
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # appended: stdlib lookups must not stat /mnt/c first
     import tripwire  # noqa: E402
+    tripwire._REGISTRY = tripwire._REGISTRY or registry
     ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
     if not ws:
         return []
@@ -693,7 +710,12 @@ def main():
     if not registry:
         return 0
     reasons = []
-    for part in (latch_hits, mode_hits, evaluate, human_gate_hits):  # isolated: a failure in one never drops the others
+    try:
+        need_state, _ws = _session_state(payload, registry)
+    except Exception:
+        need_state = True  # cannot tell cheaply: do the full checks
+    parts = (latch_hits, mode_hits, evaluate, human_gate_hits) if need_state else (evaluate, human_gate_hits)
+    for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)
         except Exception:  # a guard bug must never break the session

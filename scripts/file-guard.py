@@ -26,8 +26,8 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(HERE, "lib"))
+sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
+sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 SECRET = re.compile(r"(^|/)(\.env(\.[A-Za-z0-9_-]+)?|kubeconfig\.local)$")

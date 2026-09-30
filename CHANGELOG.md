@@ -74,8 +74,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   bench), installed-safety 83; dogfood gains analyze/plan/validate-only and command scenarios.
 
 ### Changed
-- factory-status takes ~5 s (was ~4.4 s) for four new sections; SessionStart baselines embedded clones
-  (see README performance notes).
+- Performance (same harness, /mnt/c): SessionStart baseline ~12 s (was ~14 s; repos and clones now scanned in
+  parallel), read-only command hooks ~0.19 s (was ~0.18 s), state-changing ~0.8 s (was ~0.9 s; signatures and
+  clone samples in parallel), factory-status ~4.3 s (was ~4.8 s; parallel scans, one git grep), file guard
+  ~0.09 s per file-tool call (new). Plugin scripts append (not prepend) their paths to sys.path so stdlib
+  imports never stat /mnt/c first.
 - `git pull` on a protected branch now asks unless `--ff-only`.
 
 ## [0.3.0] - 2026-09-30

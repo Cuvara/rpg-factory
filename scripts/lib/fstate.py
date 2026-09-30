@@ -14,7 +14,6 @@ Nothing here is a database: files are small, self-describing JSON, safe to delet
 """
 import hashlib
 import os
-import tempfile
 
 
 def _usable(d):
@@ -30,7 +29,7 @@ def persistent():
         base = xdg if xdg and os.path.isabs(xdg) else os.path.join(os.path.expanduser("~"), ".local", "state")
         root = os.path.join(base, "rpg-factory")
     if not os.path.isabs(root):  # HOME unset/relative: never fall back to the cwd
-        root = os.path.join(tempfile.gettempdir() if os.path.isabs(tempfile.gettempdir()) else "/tmp", "rpg-factory-state")
+        root = "/tmp/rpg-factory-state"
     return root
 
 
