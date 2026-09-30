@@ -279,6 +279,6 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
 - **No local cluster tooling.** kubectl, helm, promtool and kubeconform are not installed. Cluster checks are external and human-gated.
 - **Plugin evals with Bash are blocked on this machine** (`claude plugin eval` refuses Bash because of a symlink in `~/.docker`). Behaviour is verified with deterministic tests and headless dogfood sessions instead.
 - **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is caught by the tripwire after the fact (detection, not prevention). Another agent runtime (e.g. Codex) is outside both.
-- **Tripwire cost.** The session baseline takes ~10 s on the client (submodule scan, once per session); each mutating command adds ~0.5 s, read-only commands ~0.15 s.
+- **Tripwire cost.** The session baseline takes ~13 s (submodule scan, once per session); each mutating command adds ~0.9 s, read-only commands ~0.17 s (measured on /mnt/c, 2026-09-30).
 - **Pre-existing project issues** are recorded in `registry.json` `known_issues` and printed for the touched repos. They include stale docs, package CI SGL pins lagging the client, and the embedded package clones.
 

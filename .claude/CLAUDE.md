@@ -9,7 +9,7 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Keep `factory-context.sh`, `factory-status.py` and `scripts/checks/` read-only: no fetch (except
   opt-in `--remote` ls-remote), no writes, no persisted state. State is derived from git.
 - `run-checks.py` never runs a check in place when it would write into a product repo; pollution is FAIL.
-- Hooks must stay fast (guard + tripwire per command: ~0.15 s read-only, ~0.6 s mutating) and must
+- Hooks must stay fast (guard + tripwire per command, measured: ~0.17 s read-only, ~0.9 s mutating) and must
   never crash a session. The tripwire only detects; it never repairs.
 - The git guard never approves and never crashes a session (errors mean "no opinion"); it denies only tag
   creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`). Every new bypass found gets a
