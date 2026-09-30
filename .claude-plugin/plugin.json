@@ -1,7 +1,7 @@
 {
   "name": "rpg-factory",
-  "version": "0.2.0",
-  "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 8 specialised skills, module registry with cross-repo contracts, live context and skill routing, tiered validation, verify-a-result reporting, git safety guard.",
+  "version": "0.3.0",
+  "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 8 specialised skills, deterministic skill routing, module registry with cross-repo contracts and facts, a check runner with graded evidence, derived cross-repo status for resuming work, and a git guard (Bash + PowerShell) with a tripwire. Agents never tag.",
   "author": {
     "name": "Cuvara",
     "url": "https://github.com/Cuvara"

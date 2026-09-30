@@ -4,6 +4,68 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-30
+
+### Fixed
+- **Sessions ran a stale install.** Installed plugins are version-keyed cache copies and
+  `claude plugin update` is a no-op while `plugin.json`'s version is unchanged, so v0.2.0 sessions
+  loaded v0.1.0. `scripts/install-status.py` compares source, installed copy and the running session
+  (CURRENT / STALE / CONTENT_MISMATCH / RESTART_REQUIRED / NOT_INSTALLED); a SessionStart hook warns
+  when not CURRENT and the snapshot header shows the runtime version. The README's claim that local
+  edits apply without reinstalling was false and is corrected (Updating section).
+- **Guard bypasses.** The guard now covers the PowerShell tool (matcher `Bash|PowerShell`,
+  PowerShell tokenizer with backtick escapes and the `&` call operator) and expands commands before
+  classifying: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`, `xargs`,
+  `find -exec`), nested shells (`bash/sh -c`, `eval`, `cmd /c`, `powershell -c`), repo git aliases;
+  `$VAR` / `$(...)` as the program and interpreter one-liners running git ask.
+- Guard: `gh api .../git/refs|tags` and `gh release create` are denied; `merge`, `cherry-pick`,
+  `revert`, `am`, `pull --rebase`, `reset <commit>` on protected branches ask; `checkout -B`,
+  `switch -C`, `branch -f`, `update-ref`, `gc --prune`, `reflog expire`, `prune` ask. Worktrees use
+  their main checkout's protected branches.
+- Routing: `backend/content/` was mapped by two modules (winner depended on registry order).
+
+### Added
+- **Tripwire** (`scripts/tripwire.py`, SessionStart/PreToolUse/PostToolUse): detects git state
+  changes the guard could not see (tags, pushes, branch/HEAD/stash moves without a visible git
+  command in that repo, modified or deleted baseline files, moved user submodules, changed dirty
+  files inside submodules). Emits "STOP - rpg-factory tripwire" and latches the session (the guard
+  denies non-read-only commands) until `tripwire.py --ack`.
+- **Deterministic routing**: one primary lead (cross-repo driver > repo-kind driver on a touched
+  source > primary owner > secondary owner > `skills.<name>.order`), ordered co-leads, AMBIGUOUS,
+  `--lead` override (validated) and `--explain`. `.meta` paths route like their asset; unmapped
+  files route to per-repo fallback modules `<repo>.root`.
+- **Worktree-aware context**: the snapshot resolves the repo or worktree from the current directory.
+- **Check runner** `scripts/run-checks.py`: runs the registry checks for the touched modules and
+  grades them PASS / FAIL / BLOCKED / NOT_AVAILABLE / HUMAN_REQUIRED / SKIPPED with per-check
+  parsers (`go-test`, `dotnet-test`, `exit`, `regex:`), `needs` dependencies, extended-tier approval
+  (`--approve`), pollution detection (before/after `git status`) and an evidence JSON.
+- **Derived cross-repo status** `scripts/factory-status.py`: contract consistency, the wire rollout
+  chain (server bindings → Netcode copy → Netcode release → client pin), package release state
+  (released / unreleased changes / READY_TO_TAG), pins vs latest tags, CI SGL watchers,
+  unity-build-workflows refs and gitlink (`--remote`), in-flight `<type>/<area>/<topic>` branches
+  linked across repos, and pending items with their owning skill. No stored state.
+- Registry schema v3: `skills.order`, fallback modules, check `parser` / `needs`, `facts[]` with
+  read-only probe commands (re-verified by `tests/facts.test.sh`), 16 human gates (`sgl-release`).
+- `VERSION` file; run-all checks VERSION == plugin.json == marketplace == CHANGELOG section.
+- Tests: guard bypass matrix (145 cases incl. PowerShell and wrappers), tripwire simulations,
+  routing properties over real history, worktree, check runner, factory-status rollout fixtures,
+  install-status, facts; `tests/dogfood.sh --installed` runs headless sessions against the
+  installed plugin and asserts the loaded version and the invoked skills.
+
+### Changed
+- Snapshot diet: compact output filtered to the touched repos, toolchain probed lazily
+  (all repos 16.1 KB / 15.3 s → 3.3 KB / 4.9 s; one repo with `--paths` 13.9 KB → 2.4 KB).
+- `factory-core`: Resume step (factory-status), routing with lead/co-leads, validation through the
+  runner, tripwire STOP rule, same branch topic across repos, plugin boundary clause
+  (game-ai-workflows, web-game-factory).
+- `pin-bump`: also moves the unity-build-workflows toolkit (submodule gitlink and reusable-workflow
+  `@vN` refs); submodule bumps route to it.
+- `wire-contract`: resumes at the first incomplete rollout stage; compatibility, rollout order and
+  rollback table; `--min-protocol-version` on gateway and game server.
+- `client-integration`: package-version awareness (codes against the pinned tag) and hand-off table.
+- `server-realtime` trimmed; volatile values in skills replaced by registry facts;
+  `skills-lint` flags rule sentences copied from the registry and missing plugin boundaries.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added
