@@ -28,7 +28,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    would invent gameplay rules or numbers stops here (**H**, `phase-plumbing-only`).
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
-4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <files the task will touch>`.
+4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo <key> --paths <files the task will write>`
+   (repo-relative; for a benchmark or measurement that is the bench harness / `docs/BENCHMARK.md` /
+   results, not the code being measured).
    Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -
    also when the user only wants a plan or a review; naming the lead is not enough, its workflow,
    validation and gates are in that skill. The lead runs its **legs**.

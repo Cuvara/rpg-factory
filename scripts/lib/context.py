@@ -17,6 +17,7 @@ Usage (via factory-context.sh):
   --toolchain probe tool versions (slow on WSL: dotnet.exe ~5 s)
   --submodules scan uncommitted work inside submodules (the client's com.gdk.* cost ~9 s)
 """
+import glob
 import json
 import os
 import subprocess
@@ -52,7 +53,7 @@ def parse_args(argv):
             known = {"--repo", "--base", "--lead", "--json", "--explain", "--full", "--toolchain", "--submodules"}
             j = i + 1
             while j < len(argv) and argv[j] not in known:
-                a["paths"].append(argv[j][2:] if argv[j].startswith("./") else argv[j])
+                a["paths"] += [p for p in argv[j].split(",") if p.strip()]
                 j += 1
             i = j
             continue
@@ -141,6 +142,29 @@ def status_files(d, submodules):
     return files
 
 
+def norm_paths(paths, d, rep):
+    """Make --paths repo-relative: strip ./, a leading repo directory (`rpg-mmo-server/backend/..`),
+    absolute paths inside the repo; expand globs that match. Models pass all of these."""
+    out = []
+    prefix = rep["path"].strip("/") + "/"
+    for p in paths:
+        p = p.strip().strip('"').strip("'").replace("\\", "/")
+        if os.path.isabs(p):
+            rel = os.path.relpath(p, d)
+            p = rel if not rel.startswith("..") else p
+        while p.startswith("./"):
+            p = p[2:]
+        if p.startswith(prefix) and not os.path.exists(os.path.join(d, p)):
+            p = p[len(prefix):]
+        if any(c in p for c in "*?["):
+            hits = sorted(os.path.relpath(h, d) for h in glob.glob(os.path.join(d, p), recursive=True))
+            if hits:
+                out += hits[:50]
+                continue
+        out.append(p)
+    return list(dict.fromkeys(out))
+
+
 def repo_state(key, d, rep, args, reg):
     if git(d, "rev-parse", "--is-inside-work-tree") is None:
         return {"repo": key, "path": d, "error": "not a git work tree"}
@@ -158,7 +182,7 @@ def repo_state(key, d, rep, args, reg):
             behind, ahead = c
     base = args["base"] or (f"origin/{default}" if git(d, "rev-parse", "--verify", "-q", f"origin/{default}") else default)
     if args["paths"]:
-        files = [{"path": p, "status": "--", "source": "given"} for p in args["paths"]]
+        files = [{"path": p, "status": "--", "source": "given"} for p in norm_paths(args["paths"], d, rep)]
         base_ok = False
     else:
         files = status_files(d, args["submodules"])

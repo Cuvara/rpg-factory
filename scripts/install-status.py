@@ -102,7 +102,7 @@ def main():
     inst = r["installed"]
     if rt:
         same = inst and inst["loads_from"] and os.path.realpath(rt) == os.path.realpath(inst["loads_from"])
-        kind = ("installed (directory marketplace, in place)" if same and mode == "directory" else
+        kind = ("installed: directory marketplace, in place" if same and mode == "directory" else
                 "installed-cache" if same else
                 "stale cache copy" if "/.claude/plugins/cache/" in rt else "--plugin-dir / other checkout")
         r["runtime"] = {"path": rt, "version": plugin_version(rt), "kind": kind, "is_installed_load_path": bool(same)}

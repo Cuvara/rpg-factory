@@ -65,6 +65,9 @@ assert "Nakama session flow in client -> client-integration" client \
   "$(lead client-integration) and (.contracts | length == 0)" Assets/Scripts/Session/MainSessionFlow.cs Assets/Scripts/Nakama/NakamaSessionService.cs
 assert "move client to Netcode vX -> pin-bump leads; tag gate" client \
   "$(lead pin-bump) and $(contract package-pins) and $(gate tag)" Packages/manifest.json Packages/packages-lock.json
+assert "repo-prefixed path routes like repo-relative" server "(.routing.lead == \"server-ops\")" rpg-mmo-server/backend/deploy/k8s/app/40-gateway.yaml
+assert "comma-joined paths are split" server "(.routing.lead == \"server-services\") and ([.files[].path] | length == 2)" "backend/gateway/server/server.go,backend/nakama/main.go"
+assert "benchmark docs -> measure is the lead" server "(.routing.lead == \"measure\")" backend/docs/BENCHMARK.md
 assert "submodule gitlink bump -> pin-bump is the primary lead" client "(.routing.lead == \"pin-bump\") and (.routing.ambiguous | not)" unity-build-workflows
 assert "DOTS Sample recopy -> pin-bump" client "$(lead pin-bump)" "Assets/Samples/Netcode/DOTS Sample/DOTSNetworkBridge.cs"
 assert "k8s deployment -> server-ops; shared-infra gate" server \

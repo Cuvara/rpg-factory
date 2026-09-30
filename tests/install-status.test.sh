@@ -49,7 +49,7 @@ echo "-- directory marketplace (sessions load the source in place)"
 MKT=directory; install 0.3.1 "$(git -C "$SRC" rev-parse HEAD)"
 chk "[dir] record == source" CURRENT "$(state)"
 k=$(HOME="$H" CLAUDE_PLUGIN_ROOT="$SRC" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC" | jq -r '.runtime.kind')
-chk "[dir] session runs the marketplace dir in place" "installed (directory marketplace, in place)" "$k"
+chk "[dir] session runs the marketplace dir in place" "installed: directory marketplace, in place" "$k"
 echo "c" > "$SRC/file.txt"; git -C "$SRC" -c user.email=t@t -c user.name=t commit -qam v4
 chk "[dir] new commit, same version: still CURRENT (content loads in place)" CURRENT "$(state)"
 echo '{"name":"rpg-factory","version":"0.3.2"}' > "$SRC/.claude-plugin/plugin.json"; git -C "$SRC" -c user.email=t@t -c user.name=t commit -qam v5
