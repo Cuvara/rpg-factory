@@ -80,6 +80,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   ~0.09 s per file-tool call (new). Plugin scripts append (not prepend) their paths to sys.path so stdlib
   imports never stat /mnt/c first.
 - `git pull` on a protected branch now asks unless `--ff-only`.
+- Routing: a cross-repo dependent adds only its module's primary owner as a follow-up (a secondary owner
+  such as `measure` on `netcode.measurement` is not downstream work of a wire change). Replay of all 358
+  post-split commits against v0.3.0: 0 lead changes; co-leads/follow-ups differ only where intended
+  (measure on 26 Netcode measurement commits, transport-security on 5 TLS commits).
 
 ## [0.3.0] - 2026-09-30
 

@@ -73,6 +73,7 @@ assert "bench harness only -> measure leads, server-realtime co-leads" server "(
 assert "netcode measurement test -> unity-package leads, measure co-leads" netcode "(.routing.lead == \"unity-package\") and (.routing.co_leads | index(\"measure\"))" Tests/Runtime/PredictionLatencyMeasurement.cs
 assert "gateway TLS/sealed manifest -> server-ops drives transport-security; client + netcode follow up" server "(.routing.lead == \"server-ops\") and $(contract transport-security) and $(followup client-integration) and $(followup unity-package)" backend/deploy/k8s/app/40-gateway.yaml
 assert "client pin loader is an end of transport-security" client "$(contract transport-security) and (.routing.lead == \"client-integration\")" Assets/Scripts/DI/TransportSecurityReport.cs
+assert "wire change: cross-repo dependents add only their PRIMARY owner as follow-up (no measure noise)" server "$(followup unity-package) and ($(followup measure) | not)" backend/shared/proto/wire.proto
 assert "submodule gitlink bump -> pin-bump is the primary lead" client "(.routing.lead == \"pin-bump\") and (.routing.ambiguous | not)" unity-build-workflows
 assert "DOTS Sample recopy -> pin-bump" client "$(lead pin-bump)" "Assets/Samples/Netcode/DOTS Sample/DOTSNetworkBridge.cs"
 assert "k8s deployment -> server-ops; shared-infra gate" server \

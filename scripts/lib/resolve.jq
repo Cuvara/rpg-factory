@@ -124,7 +124,7 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
             | select(any(.depends_on[]; . as $d | $direct | index($d)))
             | .id as $mid | (.skills // [])[]
             | {skill: ., role: "leg", reason: "first-hop dependent module \($mid)"}),
-          ($cross[] | .id as $cid | .repo as $cr | .skills[] | {skill: ., role: "follow-up", reason: "cross-repo dependent \($cid) [\($cr)]"})
+          ($cross[] | .id as $cid | .repo as $cr | .skills[0:1][] | {skill: ., role: "follow-up", reason: "cross-repo dependent \($cid) [\($cr)]"})
         ]
       | map(select(.skill != "factory-core"))
       | group_by(.skill)
