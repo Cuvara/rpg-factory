@@ -6,7 +6,7 @@ Verified 2026-09-30 from each repo's working tree (`git`, `package.json`, `*.asm
 ## Common to all three
 
 - Repo root **is** the package root (`package.json`, `CHANGELOG.md`, `README.md`, each with `.meta`).
-- `unity: "6000.3"`; every Unity CI job uses Unity `6000.3.9f1` via `game-ci/unity-test-runner`.
+- `unity: "6000.3"`; every Unity CI job uses the Unity version of fact `unity-editor-version` via `game-ci/unity-test-runner`.
 - `release.yml` on `v*` tag: tag must equal `package.json` version, notes = the
   `## [X.Y.Z]` section, GitHub Release, then `npm publish` of `@cuvara/<name>` to GitHub Packages.
 - `release-reminder.yml` warns on push to the integration branch while the version is untagged.
@@ -41,7 +41,7 @@ Docs (`Documentation~/`): `NETCODE.md` (architecture, "Regenerating the schema t
 "Branching and releases".
 
 Generated / vendored: `Runtime/Protocol/Generated/Wire.cs` (server copy, byte-identical today);
-`Runtime/Plugins/Google.Protobuf.dll` (3.29.3, matches server `GameServer.csproj`),
+`Runtime/Plugins/Google.Protobuf.dll` (fact `netcode-vendored-protobuf`, matches server `GameServer.csproj`),
 `Runtime/Plugins/BouncyCastle.Cryptography.dll`; `Runtime/link.xml` preserves them.
 `Runtime/Protocol/WireProtocolVersion.cs`: `Current = 2` (line 54), mirrors Go
 `shared/messages.WireProtocolVersion` and server `GameServer/Net/WireProtocol.cs`; bump rules
@@ -53,12 +53,12 @@ CI (`.github/workflows/ci.yml`), 9 check runs expected on a PR:
 |---|---|---|
 | `Validate package` | package.json fields, CHANGELOG `[version]`, `check_metas.py`, prints asmdef names | dev-loop §1 |
 | `Headless tests (dotnet)` | `Tests~/Headless` via `dotnet test` + trx counter assert (`executed > 0`) | dev-loop §2 |
-| `Compile samples (6000.3.9f1)` | every sample imported into a bootstrapped project compiles | none (Unity) |
-| `Unity Tests (6000.3.9f1)` | EditMode tests, result XML asserted non-empty | client toggle, dev-loop §3 |
+| `Compile samples (<unity>)` | every sample imported into a bootstrapped project compiles | none (Unity) |
+| `Unity Tests (<unity>)` | EditMode tests, result XML asserted non-empty | client toggle, dev-loop §3 |
 | `Install probe (bare / openupm-registry-only / documented-prereqs / no-vcontainer)` | consumer installs; last two `required` | none |
 | `Generated Wire.cs matches the backend` | `cmp` with server `develop` Wire.cs | dev-loop §2 |
 
-CI manifests pin `com.rpgmmo.shared-gamelogic#sgl-v0.5.0`. Also `sync-main.yml` (on tag: PR
+CI manifests pin their own `com.rpgmmo.shared-gamelogic` tag (a `sgl-pin` watcher; `factory-status.py` shows it). Also `sync-main.yml` (on tag: PR
 moving `main` to the tag, auto-merge).
 
 ## UnityDots - `com.cuvara.dots`
@@ -66,7 +66,7 @@ moving `main` to the tag, auto-merge).
 | Item | Value |
 |---|---|
 | Remote / integration | `Cuvara/UnityDots`, **`main`** (only remote branch; local `develop` has no upstream). CI on push main/develop, PR into any branch |
-| Version | `package.json` `0.30.0`, latest tag `v0.29.0`; CHANGELOG has `## [Unreleased]` (with entries) **above** an undated `## [0.30.0]` |
+| Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py UnityDots` / `factory-status.py` (a bumped package.json with an undated section is not releasable) |
 | Branches / commits seen | `feat/samples-phase-b`, `release/v0.29.0`; `feat: ... (#31)`, `chore: release v0.29.0 — ...` |
 | Deps | entities 1.4.8, burst 1.8.30, collections 2.6.8, mathematics 1.3.2 |
 
@@ -99,7 +99,7 @@ CI: `Validate package` (+ `test_assert_test_floors.py` self-test) and 6 Unity ro
 | full stack | Editor>=100 Runtime>=29 GameLogic>=41 Netcode>=47 Prediction>=19 DI>=5 Physics==0 |
 | GameFoundation present | Editor>=100 Runtime>=29 GameLogic==0 Netcode==0 Prediction==0 Physics==0 |
 
-Rows pin `sgl-v0.5.0` and `com.cuvara.netcode#v0.41.0` (client: `sgl-v0.6.0`, `v0.45.0`).
+Rows pin their own SGL and Netcode tags (`factory-status.py` compares them with the client).
 Moving them is a deliberate task with a compatibility line (RELEASE.md §4).
 
 ## UIToolkit - `com.cuvara.uitoolkit`
@@ -131,7 +131,7 @@ Editor auto-regen there).
 
 CI, 5 check runs: `Validate package` (fields, no `com.gdk.core`/`com.gdk.3rd` dependency,
 `check_standalone.py`, `check_uss_prefix.py`, CHANGELOG, `check_metas.py`, `check_samples.py`,
-asmdef names), `Compile samples (6000.3.9f1)`, `Unity Tests (6000.3.9f1)` (total>0 assert,
+asmdef names), `Compile samples (<unity>)`, `Unity Tests (<unity>)` (total>0 assert,
 project also installs entities 1.4.8 + inputsystem 1.18.0), `Install probe (bare)`
 (informational), `Install probe (documented)` (required). `version-bump.yml`
 (workflow_dispatch: `npm version` + CHANGELOG heading, commits and pushes as a bot - a push,

@@ -46,7 +46,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 - Pin to tags only - never a branch or raw commit (#130).
 - `toggle-packages.sh` output is never committed: it writes WSL `file:` paths and does not touch the lock (`known_issues.toggle-packages-lock`).
 - Skipping versions is normal (the client pinned 21 of 77 Netcode tags) - read every skipped CHANGELOG section for breaking changes / `### Migration`.
-- Shared.GameLogic: package CIs (Netcode, UnityDots) bootstrap their own sgl pin (`contracts.sgl-pin` watchers, currently sgl-v0.5.0; UIToolkit CI has none). When moving the client's sgl pin, report whether those CI pins lag; changing them is `unity-package` work.
+- Shared.GameLogic: package CIs (Netcode, UnityDots) bootstrap their own sgl pin (`contracts.sgl-pin` watchers; `factory-status.py` shows the current values; UIToolkit CI has none). When moving the client's sgl pin, report whether those CI pins lag; changing them is `unity-package` work.
 
 ## Generated & protected paths
 

@@ -47,8 +47,8 @@ Architecture map and cross-process contracts: `references/service-map.md`. Migra
    table). `nakama-rpc`: this skill drives - list the gateway, game-server and client ends and hand the
    client end to `client-integration` as a follow-up. `shared/messages` wire types, `servers:id`,
    join-token claims: stop and route to `wire-contract`.
-3. **Implement** in the module. Go: wrap errors `fmt.Errorf("ctx: %w", err)`, table-driven tests
-   beside source, GoDoc on exports (`backend/TEAM.md` Development Standards).
+3. **Implement** in the module, following its registry `rules` (Go standards from `backend/TEAM.md`
+   are in `server.shared`'s rules; the snapshot lists them for touched modules).
 4. **Migrations:** follow `references/migrations.md` exactly - new numbered file in both places,
    never an edit to a shipped one.
 5. **Docs:** new RPC or message handling -> module `docs/API.md`; design change -> dated
@@ -95,7 +95,7 @@ Fast Go checks come from the registry via Core. This skill adds:
 
 - **Persistence / migrations** - fast, from `backend/gameserver-dotnet`:
   `{dotnet} test GameServer.Tests/GameServer.Tests.csproj -c Release --filter "FullyQualifiedName~GameServer.Tests.Persistence.MigratorTests" --logger "trx;LogFileName=test-results.trx"`.
-  Expected: Total 12. Without Docker: 4 pass, 8 skip (`docker unavailable`). Passed only if
+  Expected total: fact `migrator-tests-count`; without Docker the Docker-backed ones skip (`docker unavailable`). Passed only if
   `EmbeddedMigrations_AreDiscoveredAndWellFormed`, `EmbeddedMigrations_MatchDeployCopies`,
   `InitGamestateSql_MatchesFirstMigration`, `Normalize_IgnoresCommentsAndWhitespace_ButNotStatements`
   all passed - a skip of either sync test means the repo tree was not found, report `failed`.

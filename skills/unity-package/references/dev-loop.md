@@ -56,7 +56,7 @@ It copies `Runtime/`, `Tests/`, `Tests~/` to a temp dir and runs what CI's `head
 Counters: `discovered/executed/passed/failed`; `executed == 0` is a failure (CI asserts the same).
 The csproj compiles only `Runtime/Transport/{FrameBuffer,WireFraming,TransportException}.cs` and
 `Tests/Editor/{FrameBufferTests,TransportReadPumpTests}.cs`; a `using UnityEngine` in any of them
-breaks this build by design. Verified 2026-09-30: 30 discovered, 30 passed.
+breaks this build by design. `run-checks.py` reports the counts.
 
 ### UIToolkit UXML codegen drift (extended; temp copy)
 

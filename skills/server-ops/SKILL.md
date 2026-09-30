@@ -94,8 +94,8 @@ in `references/manifests-and-checks.md`):
 
 | Tier | Check | When | Evidence |
 |---|---|---|---|
-| fast | `k3s/validate-manifests.py` (no args) | any `agones/` or `k3s/` yaml | `6 document(s) validated, 0 failure(s)` at `5023a3d`, exit 0 |
-| extended | `k3s/validate-manifests.py k8s/app/*.yaml` | any `k8s/app/` yaml | `[FAIL]` set identical to base commit (2 known namespace FAILs at `5023a3d`); new FAIL = failed |
+| fast | `k3s/validate-manifests.py` (no args) | any `agones/` or `k3s/` yaml | `N document(s) validated, 0 failure(s)`, exit 0 |
+| extended | `k3s/validate-manifests.py k8s/app/*.yaml` | any `k8s/app/` yaml | `[FAIL]` set identical to base commit (pre-existing namespace FAILs: fact `k8s-app-baseline-validation-failures`); new FAIL = failed |
 | fast | `bash verify/tests/autoscaler_rule_test.sh` (cwd `k8s`) | fleet/autoscaler/verify lib edits | `RESULT=PASS`, 3 cases OK |
 | fast | `docker compose --env-file .env.example ... config -q` | compose edits | exit 0, no output, for base + override + agones |
 | extended | Deploy passthrough tests (`FullyQualifiedName~GameServer.Tests.Deploy`) | `env:` in fleet or compose | dotnet counts, Total > 0, 0 failed |

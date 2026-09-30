@@ -26,7 +26,7 @@ hook is a backstop. Following the rules means it never has to fire.
 
    | Generated | Generator |
    |---|---|
-   | `backend/shared/proto/gen/`, `backend/gameserver-dotnet/GameServer/Net/Generated/` | `backend/shared/proto/generate.sh` (protoc 29.3 + protoc-gen-go v1.36.6) |
+   | `backend/shared/proto/gen/`, `backend/gameserver-dotnet/GameServer/Net/Generated/` | `backend/shared/proto/generate.sh` (protoc + protoc-gen-go at the CI pins - registry facts) |
    | `Shared.GameLogic/GoldenVectors/*.json` | `GOLDEN_REGEN=1 dotnet test --filter Regenerate` |
    | `Assets/Samples/Netcode/DOTS Sample/` | recopy from com.cuvara.netcode `Samples~/DOTSSample` + `.sample-source` |
    | `Assets/Samples/Cuvara */<version>/` | Unity Package Manager sample import |

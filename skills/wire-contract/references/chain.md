@@ -85,5 +85,5 @@ Sealed hellos are Protobuf only (Netcode `c77d962`).
 ## Known drift
 
 - `Netcode/Documentation~/NETCODE.md` (around line 359) says CI does not diff `Wire.cs`. That is stale; the `wire` job does.
-- The Netcode and UnityDots CIs bootstrap `sgl-v0.5.0`, while the client pins `sgl-v0.6.0`.
-- `IndieRPGMMOAdventure/Tools/WireConformance` compiles `Packages/com.cuvara.netcode`, the gitignored embedded clone at v0.30.0-3, not the pinned v0.45.0.
+- The Netcode and UnityDots CIs bootstrap their own SGL tag, which can lag the client (`factory-status.py`).
+- `IndieRPGMMOAdventure/Tools/WireConformance` compiles `Packages/com.cuvara.netcode`, the gitignored embedded clone, which can be older than the pin (`pin-status.py` shows the pin).

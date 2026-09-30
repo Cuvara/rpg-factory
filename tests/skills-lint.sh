@@ -48,6 +48,22 @@ for dir in skills/*/; do
   if grep -nE '(features\.yaml|docs/registry/|\.ai/)' "$f" "$dir"/references/*.md 2>/dev/null | grep -viE 'never|not |game-ai-workflows' >/dev/null; then
     bad "$s: references a feature registry"; else ok; fi
 done
+# registry is the single source of module rules: no skill may copy one (>=50% of its 8-word shingles)
+dups=$(python3 -B - "$ROOT" <<'PY2'
+import glob, json, re, sys
+root = sys.argv[1]
+reg = json.load(open(f"{root}/registry.json"))
+sh = lambda t, n=8: (lambda w: {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)})(re.findall(r"[A-Za-z0-9_./#*-]+", t.lower()))
+rules = [(m["id"], x, sh(x)) for m in reg["modules"] for x in m["rules"]] + [(g["id"], g["rule"], sh(g["rule"])) for g in reg["global_rules"]]
+for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md") + glob.glob(f"{root}/skills/*/references/*.md")):
+    S = sh(open(f).read())
+    for mid, x, s in rules:
+        if s and len(s & S) / len(s) >= 0.5:
+            print(f"{f.replace(root + '/', '')}: copies registry rule of {mid}: {x[:80]}")
+PY2
+)
+if [ -z "$dups" ]; then ok; else bad "skill text duplicates registry rules:"; echo "$dups" | head -5; fi
+
 total=$((pass + fail))
 echo "skills lint: $total checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

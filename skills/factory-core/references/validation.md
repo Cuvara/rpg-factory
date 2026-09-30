@@ -86,7 +86,7 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
     If that fails in WSL, report `failed` with the error. Don't reclassify it as skipped.
 - **go**: `go.mod` requires 1.26.x. `GOTOOLCHAIN=auto` fetches it or uses the cached
   toolchain, so a lower local `go` is fine.
-- **protoc**: CI pins protoc 29.3 and protoc-gen-go v1.36.6. The snapshot shows local vs
+- **protoc**: CI pins protoc and protoc-gen-go (registry facts `protoc-ci-pin`, `protoc-gen-go-ci-pin`). The snapshot shows local vs
   expected. Regenerating with a different version rewrites version headers. Either install
   the pinned version, or leave regeneration to CI and report `not-run:tool-missing`.
 

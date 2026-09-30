@@ -81,7 +81,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo client --paths Tool
 
 ## Validation delta
 
-Fast (verified exit 0 at server `5023a3d`): `bash -n` on `backend/loadtest/scripts/*.sh`;
+Fast: `bash -n` on `backend/loadtest/scripts/*.sh`;
 `python3 -B scripts/encoding-report.py results/encoding` renders tables (cwd `backend/loadtest`).
 Bench micro-tests: `BENCH_TICK=1` / `BENCH_AOI=1` / `MEASURE_TIERING=1` gate them; under WSL pass
 `WSLENV=<VAR>` to `dotnet.exe` or every bench **skips** and the run exits 0 - a skip is not a result.

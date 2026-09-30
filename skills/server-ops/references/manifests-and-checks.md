@@ -29,16 +29,15 @@ or a missing file becomes an empty directory on the host (`docs/MONITORING.md` "
 
 ## `k3s/validate-manifests.py`
 
-Offline: pulls Agones `install.yaml` for `--agones-version` (default `1.59.0`), validates CRs against
+Offline: pulls Agones `install.yaml` for `--agones-version` (default: fact `agones-default-version`), validates CRs against
 the CRD `openAPIV3Schema`, then runs project contract checks (`check_fleet`, `check_autoscaler`,
 `check_allocation`, `check_gateway_constants`). Needs `pyyaml` + `jsonschema`; first run needs network
 (cache `$XDG_CACHE_HOME/rpg-mmo/agones-<ver>.yaml`, default `~/.cache/rpg-mmo/`). Use `python3 -B`
 so nothing is written into the repo.
 
-- **No arguments** = `agones/*.yaml` + `k3s/*.yaml` only. At `5023a3d`:
-  `6 document(s) validated, 0 failure(s)`, exit 0.
+- **No arguments** = `agones/*.yaml` + `k3s/*.yaml` only; expected `N document(s) validated, 0 failure(s)`, exit 0.
 - **`k8s/app/` must be passed explicitly**: `python3 -B k3s/validate-manifests.py k8s/app/*.yaml`.
-  At `5023a3d`: `7 document(s) validated, 2 failure(s)`, exit 1. Both FAILs are `check_fleet`'s
+  Pre-existing failures (count = fact `k8s-app-baseline-validation-failures`), exit 1. They are `check_fleet`'s
   namespace rule (`rpg-k8s-realtime` vs gateway `DefaultNamespace` `rpg-realtime`), which
   `40-gateway.yaml` overrides with `ALLOCATOR_NAMESPACE`. Plus one `[warn]` for `DefaultFleetMap`.
   Judge a change by the **delta** of `[FAIL]` lines against the base commit.
@@ -51,7 +50,7 @@ so nothing is written into the repo.
   "Stronger: server-side dry run").
 - `--check-image IMAGE --expect-revision SHA` asserts a local image's revision label (needs docker).
 
-## Other offline checks (all verified exit 0 at `5023a3d`)
+## Other offline checks (verified exit 0 on 2026-09-30)
 
 ```bash
 # cwd backend/deploy/k8s - canned kubectl JSON, no cluster; proves the ADR-2 autoscaler rule

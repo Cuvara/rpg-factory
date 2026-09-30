@@ -80,7 +80,7 @@ has a CLAUDE.md: read the package's `README.md` and the `Documentation~` pages n
 | Path | Generator / owner |
 |---|---|
 | `Netcode/Runtime/Protocol/Generated/Wire.cs` | copy of server `backend/gameserver-dotnet/GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs` (wire-contract) |
-| `Netcode/Runtime/Plugins/*.dll` | vendored binaries (Google.Protobuf 3.29.3, BouncyCastle) - replace only on request |
+| `Netcode/Runtime/Plugins/*.dll` | vendored binaries (Google.Protobuf - fact `netcode-vendored-protobuf` - and BouncyCastle) - replace only on request |
 | `UIToolkit/**/Generated/*.uxml.g.cs` | UXML codegen (Editor: `Assets/Cuvara/Generate UXML Bindings` to enrol, auto-regen on reimport) |
 | `UnityDots/.github/scripts/__pycache__/*.pyc` | tracked by mistake; run Python with `PYTHONDONTWRITEBYTECODE=1` |
 | `.meta` files | Unity Editor (or copied with their asset) |

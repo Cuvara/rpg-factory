@@ -73,6 +73,8 @@ run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
 if $use_ws; then run "routing properties over real history" python3 -B tests/routing-properties.test.py
 else skp "routing properties over real history" "--no-workspace"; fi
+if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
+else skp "registry facts re-probed in the repos" "--no-workspace"; fi
 if $use_ws; then run "routing + history replay" tests/routing.test.sh
 else run "routing (task scenarios only)" tests/routing.test.sh --no-history; fi
 

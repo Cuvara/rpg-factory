@@ -41,7 +41,7 @@ This skill **drives**; legs implement. It edits only `server.proto` (the `.proto
    - **Ordering**: server leg must land on `develop` before the Netcode leg can pass Netcode CI job `wire` (it diffs
      against server **develop**).
 2. **Leg 1 - server.** Invoke `server-services` and/or `server-realtime` with the per-end list. Evidence required:
-   `generate.sh` run with protoc 29.3 + protoc-gen-go v1.36.6 (snapshot toolchain row; a mismatch = `not-run:tool-missing`,
+   `generate.sh` run with protoc + protoc-gen-go at the CI pins (registry facts `protoc-ci-pin`, `protoc-gen-go-ci-pin`; snapshot toolchain row; a mismatch = `not-run:tool-missing`,
    propose letting CI regenerate only if the user agrees), both generated trees in the diff, Go + C# fast tier,
    `backend/gameserver-dotnet/docs/API.md` (the normative wire reference) updated, CHANGELOGs (`backend/shared`, `backend/gameserver-dotnet`, gateway if touched), and the
    extended integration suite (`TestDotnetInterop*`) - ask before running.
@@ -70,7 +70,7 @@ the contract as **not yet consistent** if `wire-parity.sh` fails.
 
 ## Generated & protected paths
 
-`backend/shared/proto/gen/`, `backend/gameserver-dotnet/GameServer/Net/Generated/` (generator `generate.sh`), `Netcode/Runtime/Protocol/Generated/Wire.cs` (byte copy), Netcode `Runtime/Plugins/` (vendored Google.Protobuf 3.29.3 - must match the protoc major the server uses).
+`backend/shared/proto/gen/`, `backend/gameserver-dotnet/GameServer/Net/Generated/` (generator `generate.sh`), `Netcode/Runtime/Protocol/Generated/Wire.cs` (byte copy), Netcode `Runtime/Plugins/` (vendored Google.Protobuf, fact `netcode-vendored-protobuf` - must match the protoc major the server uses).
 
 ## Validation delta
 

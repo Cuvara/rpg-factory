@@ -19,7 +19,7 @@ Flag reference: `backend/loadtest/README.md` "Key flags".
 | Current control shape | `results/2026-09-18-develop-3378bc9/README.md` | Release build run directly (not containerised), `-cooldown 40s` (> 30 s entity hold) instead of a restart per level, `SIM 60/15/5`, both `cluster` and `spread` |
 | One level + RAM/CPU sampling | `scripts/bench.sh <players> <duration> <movement> <outdir> [flags]` | needs `JWT_SECRET`; `LOADTEST_BIN` (default `./loadtest`), `DOCKER` (default `docker.exe`), `CONTAINERS` (default `rpg-gameserver rpg-gateway rpg-redis`). Writes `run-<players>-<movement>.{json,log}` and `stats-<players>-<movement>.txt` |
 | Encoding A/B | `JWT_SECRET=... scripts/encoding-sweep.sh [players...]` | arms `baseline-json` (`BASELINE_IMAGE`), `new-json` and `new-proto` (`NEW_IMAGE`), same generator. Refuses while a `cd.yml` run is in flight (`SKIP_CD_CHECK=1` overrides). Starts/restarts containers |
-| Render sweep tables | `python3 -B scripts/encoding-report.py [results/encoding]` | offline; exit 0 at `5023a3d` |
+| Render sweep tables | `python3 -B scripts/encoding-report.py [results/encoding]` | offline |
 
 Secrets: the server refuses to start without `JOIN_TOKEN_SECRET`; pass it to both sides. BENCHMARK.md
 greps them from `backend/deploy/.env` - that read is a gate; ask the user to export them.
