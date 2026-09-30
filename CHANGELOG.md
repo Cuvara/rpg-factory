@@ -38,14 +38,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   porcelain line and lost the first character of its path (and mangled quoted paths); it now parses
   NUL-separated porcelain.
 - `is_read_only` treated `2>/dev/null` / `2>&1` as writes.
+- Command `!` lines must match their own `allowed-tools` pattern or Claude Code refuses them (found by
+  installed dogfood; now linted). factory-core asks for Factory script paths exactly as printed
+  (absolute): relative paths hit permission prompts, and allow-listing relative paths would auto-approve
+  any repo's own `rpg-factory/scripts/`.
 - CHANGELOG 0.3.0 said 16 human gates; the registry has 15.
 
 ### Added
 - **Execution modes** `analyze`, `plan`, `implement`, `validate`, `review`, `resume`: declared with
   `factory-context.sh --mode <m>` (printed in the snapshot), recorded per session by the guard and
   enforced by both guards (analyze/plan/review read-only; validate only `run-checks.py`). factory-core
-  owns the mode table; every skill honours it. Evidence: in v0.3.0 dogfood every missed lead
-  invocation came from a plan-only prompt.
+  owns the mode table; every skill honours it. A PreToolUse(Skill) hook also records an explicit mode
+  from Factory skill arguments ("plan only", "mode: validate") - installed dogfood showed sessions that
+  never ran the Route command. Evidence: in v0.3.0 dogfood every missed lead invocation came from a
+  plan-only prompt.
 - **Commands** `/rpg-factory:status`, `/rpg-factory:route`, `/rpg-factory:check`, `/rpg-factory:doctor`
   (one validating dispatcher, `scripts/factory-cmd.py`). No `ack` command: clearing a latch stays a
   user action.
@@ -69,9 +75,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Skills: server-ops rollout order for security switches; unity-package package-CI pins;
   client-integration Unity-MCP hand-off (`references/unity-mcp.md`); measure ownership; factory-core
   game-ai-workflows hand-off.
-- Tests: guard 246 (GitHub, refs/remotes/config, modes), tripwire 40, file guard 26, commands 26,
-  run-checks 35 (evidence), factory-status 22, worktree 13 (clones), routing 51 (transport-security,
-  bench), installed-safety 83; dogfood gains analyze/plan/validate-only and command scenarios.
+- Tests: guard 252 (GitHub, refs/remotes/config, modes), tripwire 40, file guard 29, commands 30,
+  run-checks 35 (evidence), factory-status 22, worktree 13 (clones), routing 52 (transport-security,
+  bench, follow-up noise), installed-safety 83; dogfood gains analyze/plan/validate-only and command
+  scenarios (13 real sessions against the installed plugin).
 
 ### Changed
 - Performance (same harness, /mnt/c): SessionStart baseline ~12 s (was ~14 s; repos and clones now scanned in
