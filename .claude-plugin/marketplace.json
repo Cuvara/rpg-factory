@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "rpg-factory",
-      "description": "Factory Core: module registry, live workspace context, tiered validation, verify-a-result reporting, git safety guard.",
+      "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 8 specialised skills, module registry with cross-repo contracts, live context and skill routing, tiered validation, verify-a-result reporting, git safety guard.",
       "source": "./",
       "category": "development"
     }
