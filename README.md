@@ -27,7 +27,7 @@ automated state of any release is **READY_TO_TAG**.
 | `/rpg-factory:status [--remote]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness | no |
 | `/rpg-factory:route <repo> <path>... [--lead <skill>]` | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
 | `/rpg-factory:check <repo> [<path>...] [--status]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
-| `/rpg-factory:doctor` | install state (what this session loads), tripwire latches, registry validity, repos, state paths, tools, hooks | no |
+| `/rpg-factory:doctor` | install state (what this session loads), tripwire latches, registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
 
 Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
 works too).
@@ -72,14 +72,19 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
      measure        benchmarks / baselines        server-ops        (Docker, k8s/Agones, monitoring, CD)
                                                   unity-package     (Netcode, UnityDots, UIToolkit)
                                                   client-integration(VContainer, Nakama/session, HUD, build)
+                                                        │ load when the work needs the technology
+                                                  tech skills (never routed; routing line "tech")
+                                                  dotnet-gameserver · go-backend · unity-client-tech
               └────────────────┬─────────────────┘
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
                          → verify-a-result → /code-review → report
 
  hooks: SessionStart  install-status.py (stale install warning) · tripwire.py baseline
-        PreToolUse    git-guard.py (Bash + PowerShell) · tripwire.py fingerprint
+        PreToolUse    git-guard.py + tripwire.py fingerprint (Bash, PowerShell) · file-guard.py
+                      (Write/Edit/MultiEdit/NotebookEdit/Read) · tripwire.py --skill (records the mode)
         PostToolUse   tripwire.py (STOP + latch on unexpected git state change)
+ dev tools: registry dev_tools → lib/devtools.py → snapshot "Tools for this change" + doctor
 ```
 
 ## Skill map
@@ -94,6 +99,23 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
 | Dockerfile, compose, k8s/Agones manifest, monitoring, backups, CD | `server-ops` | server | `validate-manifests.py`, autoscaler test, `docker compose --env-file .env.example config` |
 | Netcode transport/prediction, UnityDots runtime, UIToolkit screens/codegen | `unity-package` | package repos | `check_metas.py`, Netcode headless tests, UXML drift, `package-ready.py` |
 | Client DI wiring, Nakama/session flow, HUD/UI, DotsViews, build scripts | `client-integration` | client | Unity Test Runner via Unity MCP, CI 01-ci |
+
+**Tech skills** (`kind: tech`) hold how a technology works in this workspace: architecture that spans
+several files, idioms the code uses, pitfalls with the file that proves them, single-test commands, and
+which dev tools help. They own no module and are never lead, leg or follow-up. The snapshot lists them
+as `tech` in the routing line when a skill in their `used_by` works on the change.
+
+| Tech skill | Used by | Covers |
+|---|---|---|
+| `dotnet-gameserver` | server-realtime, wire-contract, measure | tick order and rates, ECS world locking, zero-alloc idioms and guards, SGL C# limits, Net layer, xUnit idioms and filters, NativeAOT |
+| `go-backend` | server-services, wire-contract | module wiring without go.work, entry points, storage seams, test doubles, single Go tests, integration-test skips |
+| `unity-client-tech` | client-integration, unity-package, pin-bump | Entities system install and world lifecycle, UniTask and main thread, VContainer, asmdef/test assemblies, domain reload, WebGL, single Unity tests |
+
+**Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry
+`dev_tools` it uses (Unity MCP, Go LSP, C# LSP, pg-aiguide, context-mode, codex, dotnet, go, protoc,
+docker) and the step each one is for. The snapshot prints "Tools for this change" with each tool's state;
+when a tool is not OK the skill uses the registered fallback. There is no C# language server configured
+yet (known issue `no-csharp-lsp`); the Go one is the workspace `lsp` MCP server.
 
 ## How routing works
 
@@ -334,7 +356,7 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
 ## Known limitations
 
 - **Unity tests run outside the shell.** They need the Unity Editor (through the Unity MCP on :23621) or CI, so they are always HUMAN_REQUIRED. Testing unreleased package code in the client requires the human-gated `toggle-packages.sh` flow.
-- **No Linux dotnet in WSL.** Only the Windows `dotnet.exe` is available. Build and test work through it, but the Linux AOT native interop check stays external (CI `ci-dotnet.yml`).
+- **dotnet in WSL.** Factory resolves the Windows `dotnet.exe` on PATH; build and test work through it. A Linux SDK may exist off PATH at `~/.dotnet/dotnet` (the Go interop tests find it there), but Factory checks do not use it, so the Linux AOT native interop check stays external (CI `ci-dotnet.yml`).
 - **Local protoc is not the CI pin** (registry fact `protoc-ci-pin`). `generate.sh` output would drift locally; leave regeneration to CI, or install the pinned version.
 - **No local cluster tooling.** kubectl, helm, promtool and kubeconform are not installed. Cluster checks are external and human-gated.
 - **Plugin evals with Bash are blocked on this machine** (`claude plugin eval` refuses Bash because of a symlink in `~/.docker`). Behaviour is verified with deterministic tests and headless dogfood sessions instead.
