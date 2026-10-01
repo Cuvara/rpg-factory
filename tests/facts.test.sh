@@ -4,7 +4,7 @@
 # hard-code volatile values that belong in facts[] or in the live scripts.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-R="$ROOT/registry.json"
+R="${RPG_FACTORY_FACTS_REGISTRY:-$ROOT/registry.json}"   # override: the stale-detection self-test below
 WS="${RPG_FACTORY_WORKSPACE:-$(jq -r .workspace.root_default "$R")}"
 pass=0; fail=0; skip=0
 while read -r enc; do
@@ -27,5 +27,16 @@ done
 bad=$(grep -rnE "Total 12|[0-9]+ document\(s\) validated, [1-9]|30 discovered|CIs? (bootstrap|pin) \`?sgl-v[0-9]|currently sgl-v|at \`?5023a3d\`?:|protoc 29\.[0-9]|Google\.Protobuf 3\.[0-9]" "$ROOT/skills" || true)
 if [ -z "$bad" ]; then pass=$((pass + 1)); echo "PASS  skills carry no volatile point-in-time values"
 else fail=$((fail + 1)); echo "FAIL  volatile values in skills:"; echo "$bad" | head -5; fi
+# stale detection: a registry value that no longer matches the repo must FAIL (one fact per repo kind)
+if [ -z "${RPG_FACTORY_FACTS_REGISTRY:-}" ]; then
+  T="$(mktemp -d -p /tmp)"; trap 'rm -rf "$T"' EXIT
+  for f in sgl-langversion tick-rates-default enter-playmode-options; do
+    jq --arg f "$f" '(.facts[] | select(.id == $f) | .value) |= . + "-STALE"' "$R" > "$T/reg.json"
+    o=$(RPG_FACTORY_FACTS_REGISTRY="$T/reg.json" bash "$0" 2>&1); rc=$?
+    if [ $rc -ne 0 ] && grep -q "^FAIL  $f: registry says '.*-STALE', repo says" <<<"$o"; then pass=$((pass + 1)); echo "PASS  stale fact $f is detected"
+    elif grep -q "^SKIP  $f" <<<"$o"; then skip=$((skip + 1)); echo "SKIP  stale detection $f (repo not present)"
+    else fail=$((fail + 1)); echo "FAIL  stale fact $f NOT detected (rc=$rc)"; fi
+  done
+fi
 total=$((pass + fail + skip)); echo "facts tests: $total run, $pass passed, $fail failed, $skip skipped"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]

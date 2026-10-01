@@ -120,7 +120,8 @@
           "probes",
           "provides",
           "used_by",
-          "required"
+          "required",
+          "fallback"
         ],
         "properties": {
           "id": {
@@ -158,7 +159,8 @@
             "description": "true: the skill's fast validation needs it. false: fallback applies."
           },
           "fallback": {
-            "type": "string"
+            "type": "string",
+            "description": "What a skill does when the tool is not OK (always set; required tools fall back to CI)."
           }
         }
       }

@@ -8,6 +8,10 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 
 > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
+> **Supporting skill, never the owner:** invoke the lead (and co-leads) from the snapshot's routing line
+> first - here `client-integration`, `unity-package` or `pin-bump`. If you have not, stop and invoke it now: rules, gates, validation and the
+> report come only from it. This skill adds how the technology works; it decides nothing.
+
 Task: $ARGUMENTS
 
 Paths are relative to the client repo `IndieRPGMMOAdventure/` unless a package repo is named.
@@ -127,10 +131,11 @@ calling skill keeps validation and reporting.
   `testNamespace`, `testClass` or a fully-qualified `testMethod` (`Tests.Editor.Fixture.Test`). It
   resumes across a domain reload and stops on pre-existing compile errors; save dirty scenes first
   (`.claude/skills/tests-run/SKILL.md:3,13,26`).
-- **Editor closed:** batchmode `Unity -batchmode -projectPath . -runTests -testPlatform EditMode|PlayMode
-  -testResults <dir>/results.xml [-testFilter <regex>]`, as CI does
-  (`unity-build-workflows/.github/workflows/reusable-unity-tests.yml:401-403,463-465`). It cannot run
-  while an Editor holds the project open.
+- **Editor closed:** the test is HUMAN_REQUIRED. Hand the user the batchmode command CI uses,
+  `Unity -batchmode -projectPath . -runTests -testPlatform EditMode|PlayMode -testResults <dir>/results.xml
+  [-testFilter <regex>]` (`unity-build-workflows/.github/workflows/reusable-unity-tests.yml:401-403,463-465`);
+  never run it yourself - it opens the user's project (human gate `unity-batch`) and cannot run while an
+  Editor holds the project open.
 - `Packages/manifest.json:78-82` `testables` lists the three `com.cuvara.*` packages, so client CI
   also runs the package test suites in this project.
 
@@ -138,9 +143,9 @@ calling skill keeps validation and reporting.
 
 - `unity-mcp`: the client's `ai-game-developer` MCP server (HTTP :23621, reachable only while
   the Editor has the client open; the snapshot shows its state): `tests-run` for one test or one
-  assembly, console logs for compile errors. Fallback: batchmode above on a machine with Unity, or
-  report the test HUMAN_REQUIRED.
+  assembly, console logs for compile errors. DOWN: report the test HUMAN_REQUIRED with the
+  batchmode command above for the user (gate `unity-batch`); CI `01-ci` is the automated evidence.
 - `lsp-csharp`: missing on this machine. Fallback: `grep -rn` for the symbol across `Assets/` and
   the package repos, then an Editor compile (console) through `unity-mcp`.
-- `context-mode`: run batchmode or CI test logs and `results.xml` through `ctx_execute` and print
+- `context-mode`: read the user's batchmode or CI test logs and `results.xml` through `ctx_execute` and print
   only totals and failures. Fallback: `tail` / `grep` for the summary lines.

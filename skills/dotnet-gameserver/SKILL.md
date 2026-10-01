@@ -8,6 +8,10 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 
 > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
+> **Supporting skill, never the owner:** invoke the lead (and co-leads) from the snapshot's routing line
+> first - here `server-realtime`, `wire-contract` or `measure`. If you have not, stop and invoke it now: rules, gates, validation and the
+> report come only from it. This skill adds how the technology works; it decides nothing.
+
 Task: $ARGUMENTS
 
 ## Applies when / Not when

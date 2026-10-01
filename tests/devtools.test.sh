@@ -59,6 +59,46 @@ grep -q "^state c MISSING .*plugin codex not enabled" <<<"$out" && ok "tool stat
 grep -q "^state d OK" <<<"$out" && ok "plugin probe passes for an enabled plugin" || no "state d: $out"
 grep -qE "$SECRET1|$SECRET2" <<<"$out" && no "probe output leaks a planted secret" || ok "probe output carries no config values"
 
+# -- scenarios over the REAL registry in a controlled environment (fake PATH, config, Editor port)
+SC="$TMP/scen"; mkdir -p "$SC/bin" "$SC/cfg" "$SC/ws"
+for b in gopls csharp-ls dotnet go protoc protoc-gen-go docker codex; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
+echo '{"mcpServers": {"ai-game-developer": {}, "lsp": {}, "pg-aiguide": {}}}' > "$SC/ws/.mcp.json"
+echo '{"enabledPlugins": {"context-mode@context-mode": true, "codex@openai-codex": true}}' > "$SC/cfg/settings.json"
+scen=$(cd "$ROOT/scripts/lib" && CLAUDE_CONFIG_DIR="$SC/cfg" python3 -B - "$SC" "$ROOT/registry.json" <<'EOF'
+import json, os, socket, sys
+import devtools
+sc, reg = sys.argv[1], json.load(open(sys.argv[2]))
+os.environ["PATH"] = f"{sc}/bin"
+editor = socket.socket(); editor.bind(("127.0.0.1", 0)); editor.listen(1)
+reg["services"]["unity-mcp"]["probe"] = f"tcp://127.0.0.1:{editor.getsockname()[1]}"
+def states(tag):
+    for t in reg["dev_tools"]:
+        r = devtools.Prober(f"{sc}/ws", reg).tool(t)
+        print(tag, t["id"], r["state"], "fallback=" + str(bool(t.get("fallback"))))
+states("all")
+editor.close()                                   # Editor closed
+states("editor-closed")
+os.remove(f"{sc}/bin/csharp-ls")                 # no C# language server
+states("no-csharp")
+EOF
+)
+n=$(jq '.dev_tools | length' "$ROOT/registry.json")
+[ "$(grep -c '^all .* OK ' <<<"$scen")" -eq "$n" ] && ok "scenario all tools available: all $n OK" || no "scenario all: $(grep '^all' <<<"$scen" | grep -v ' OK ')"
+grep -q '^editor-closed unity-mcp DOWN fallback=True' <<<"$scen" && [ "$(grep -c '^editor-closed .* OK ' <<<"$scen")" -eq $((n - 1)) ] \
+  && ok "scenario Unity Editor closed: unity-mcp DOWN (not MISSING, not OK), fallback set, rest OK" || no "scenario editor-closed: $(grep '^editor-closed' <<<"$scen" | grep -v ' OK ')"
+grep -q '^no-csharp lsp-csharp MISSING fallback=True' <<<"$scen" && grep -q '^no-csharp unity-mcp DOWN' <<<"$scen" \
+  && ok "scenario no C# LSP: lsp-csharp MISSING with fallback, other states unchanged" || no "scenario no-csharp: $(grep '^no-csharp' <<<"$scen" | grep -v ' OK ')"
+jq -e '[.dev_tools[] | select(.id == "unity-mcp" or .id == "lsp-csharp") | .required] == [false, false]' "$ROOT/registry.json" >/dev/null \
+  && ok "unity-mcp and lsp-csharp are optional: their absence never fails doctor or a check" || no "unity-mcp/lsp-csharp marked required"
+# doctor's exit code also reflects install state, so compare: an optional tool's absence must not change it
+printf '#!/bin/sh\nexit 0\n' > "$SC/bin/csharp-ls"; chmod +x "$SC/bin/csharp-ls"
+rc_with=$(cd "$WS" && PATH="$SC/bin:$PATH" python3 -B "$ROOT/scripts/factory-cmd.py" doctor >/dev/null 2>&1; echo $?)
+rm -f "$SC/bin/csharp-ls"
+out_without=$(cd "$WS" && PATH="$SC/bin:$PATH" python3 -B "$ROOT/scripts/factory-cmd.py" doctor 2>&1); rc_without=$?
+grep -q '^- lsp-csharp (binary, optional): \*\*MISSING\*\*' <<<"$out_without" && [ "$rc_with" = "$rc_without" ] \
+  && ok "doctor exit code is the same with and without a C# LSP (optional tool; rc=$rc_without)" \
+  || no "doctor rc with C# LSP=$rc_with, without=$rc_without"
+
 # -- snapshot: Services line + Tools for this change (routed skills only)
 out=$(cd "$WS" && bash "$ROOT/scripts/factory-context.sh" --repo server --paths backend/gateway/server/server.go 2>&1)
 grep -q '^\*\*Services:\*\* `unity-mcp` \(reachable\|not reachable\)' <<<"$out" && ok "snapshot: Services line probes registry services" || no "snapshot services: $(head -c 400 <<<"$out")"
@@ -78,6 +118,16 @@ n=$(jq '.dev_tools | length' "$ROOT/registry.json")
 grep -q '^- codex (plugin, optional): \*\*MISSING\*\*.*plugin codex not enabled' <<<"$sec" && ok "doctor: disabled plugin reported MISSING" || no "doctor codex: $sec"
 grep -qE "$SECRET1|$SECRET2|example.invalid|Bearer" <<<"$out" && no "doctor leaks config values" || ok "doctor carries no config values"
 
+# -- a malformed config holding a secret: no parse error, traceback or partial content may surface
+printf '{"mcpServers": {"broken": {"env": {"K": "%s"}}' "$SECRET1" > "$C/.mcp.json"     # truncated JSON
+out=$(cd "$WS" && { bash "$ROOT/scripts/factory-context.sh" --repo client --paths Assets/Scripts/UI/A.cs; \
+                    python3 -B "$ROOT/scripts/factory-cmd.py" doctor; } 2>&1)
+grep -qE "$SECRET1|Traceback|JSONDecodeError" <<<"$out" && no "malformed config leaks content or a traceback" \
+  || ok "malformed config: no secret, no traceback in snapshot/doctor (stdout+stderr)"
+rm -f "$C/.mcp.json"
+grep -rqE "$SECRET1|$SECRET2" "$RPG_FACTORY_STATE_DIR" "$TMP/state" 2>/dev/null && no "Factory state files contain a planted secret" \
+  || ok "Factory state/evidence files carry no planted secret"
+
 # -- check-registry rejects malformed dev_tools and tech skills (mutated copies, --structure-only)
 PR="$TMP/pr"; mkdir -p "$PR/docs"; ln -s "$ROOT/skills" "$PR/skills"; cp "$ROOT/docs/registry.schema.json" "$PR/docs/"
 reject() { # name expected-message jq-mutation
@@ -89,7 +139,9 @@ reject "dev tool used by an unknown skill" "used_by unknown skill nosuch" '.dev_
 reject "dev tool probe of an unknown kind" "bad probe file:x" '.dev_tools[0].probes += ["file:x"]'
 reject "dev tool probe naming an unknown registry tool" "names an unknown tool" '.dev_tools[0].probes += ["tool:nosuch"]'
 reject "dev tool probe naming an unknown service" "names an unknown service" '.dev_tools[0].probes += ["service:nosuch"]'
-reject "optional dev tool without fallback" "optional tool needs a fallback" '(.dev_tools[] | select(.required == false)) |= del(.fallback)'
+reject "optional dev tool without fallback" "every tool needs a fallback" '(.dev_tools[] | select(.required == false)) |= del(.fallback)'
+reject "required dev tool without fallback" "dev_tools dotnet: every tool needs a fallback" '(.dev_tools[] | select(.id == "dotnet")) |= del(.fallback)'
+reject "dev tool without a purpose" "dev_tools go: missing field provides" '(.dev_tools[] | select(.id == "go")) |= del(.provides)'
 reject "duplicate dev tool id" "duplicate dev_tools id" '.dev_tools += [.dev_tools[0]]'
 reject "tech skill without used_by" "used_by (repo/cross-repo skills) missing" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999}'
 reject "tech skill used_by a core skill" "used_by factory-core is not a repo/cross-repo skill" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999, used_by: ["factory-core"]}'

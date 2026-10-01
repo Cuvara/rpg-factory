@@ -409,7 +409,11 @@ def classify(sub, args, branch, patterns, cfg):
     elif sub == "symbolic-ref" and len([x for x in args if not x.startswith("-")]) >= 2:
         ask("`git symbolic-ref` repoints a ref (HEAD) directly")
     elif sub == "tag":
-        listing = (not args) or a & {"-l", "--list", "-v", "--verify", "--contains", "--points-at"} or all(x.startswith("-n") for x in args)
+        # listing-only options; value options only in their `=` form, so no separate word can be a tag name
+        ro = {"-i", "--ignore-case", "--column", "--no-column", "--color", "--no-color", "--omit-empty"}
+        listing = ((not args) or a & {"-l", "--list", "-v", "--verify", "--contains", "--points-at"}
+                   or all(x.startswith("-n") or x in ro or x.startswith(("--sort=", "--format=", "--color=", "--column="))
+                          for x in args))
         if not listing:
             deny("creating/deleting tags is a release action reserved for the lead (agents never tag)")
     elif sub == "update-ref":

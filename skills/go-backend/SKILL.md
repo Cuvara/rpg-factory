@@ -8,6 +8,10 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 
 > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
 
+> **Supporting skill, never the owner:** invoke the lead (and co-leads) from the snapshot's routing line
+> first - here `server-services` or `wire-contract`. If you have not, stop and invoke it now: rules, gates, validation and the
+> report come only from it. This skill adds how the technology works; it decides nothing.
+
 Task: $ARGUMENTS
 
 This skill explains how the Go code works. Where a change belongs, its rules, checks and gates
@@ -87,7 +91,7 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
   they skip and `go test` still prints `ok`. Read `-v` output for `--- SKIP` (see
   `references/testing.md`). `GAMESERVER_NATIVE_BIN` runs them against a published AOT binary
   instead (`dotnet_interop_test.go:98-117`).
-- **No build tag, no tests.** Every integration_test file is `//go:build integration`; without
+- **No build tag, no tests.** Every `integration_test/*_test.go` file is `//go:build integration` (only the helper `mock_client.go` is untagged); without
   `-tags integration` the package reports `[no test files]` - CI says it once went green that way
   (`.github/workflows/ci.yml:185-192`).
 - **Plugin ABI lock.** The `.so` must be built by `heroiclabs/nakama-pluginbuilder` at the SAME tag

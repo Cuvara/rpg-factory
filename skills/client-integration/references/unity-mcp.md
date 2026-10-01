@@ -22,5 +22,6 @@ the `tests-run` tool with `testMode` EditMode then PlayMode, filtered by `testAs
 (dirty scenes abort the run); pre-existing compile errors stop it. `unity-mcp-cli` is not installed in WSL; the
 tool call is the MCP one. Evidence: total/passed/failed/skipped per mode; zero executed = FAIL.
 
-Editor closed: a batchmode `-runTests` run on a machine with Unity is the fallback (command:
-`rpg-factory:unity-client-tech` "Testing"); otherwise HUMAN_REQUIRED (external) (Editor closed).
+Editor closed: report HUMAN_REQUIRED (external) (Editor closed) and give the user the batchmode `-runTests`
+command from `rpg-factory:unity-client-tech` "Testing". Do not run it yourself: it opens the user's project
+(human gate `unity-batch`).

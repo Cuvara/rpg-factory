@@ -3634,8 +3634,8 @@
     },
     {
       "id": "unity-batch",
-      "rule": "Unity batch-mode builds/imports (PlayerBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) change project state; ask first.",
-      "match": "-executeMethod\\s+(PlayerBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\."
+      "rule": "Unity batch-mode runs open the user's project and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them.",
+      "match": "-executeMethod\\s+(PlayerBuilder|PlayClientBuilder|SampleBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\.|(^|\\s)-runTests\\b"
     },
     {
       "id": "db-schema-write",

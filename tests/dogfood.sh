@@ -57,10 +57,18 @@ PROMPT[plan-only]="Plan only, do not implement: add a GAMESERVER_ knob for the A
 EXPECT[plan-only]="server-realtime"; HANDOFF[plan-only]=""; MODE[plan-only]="plan"
 PROMPT[validate-only]="Validate only, change nothing: does the rpg-mmo-server gateway module (backend/gateway/server/server.go) pass its Factory checks right now?"
 EXPECT[validate-only]=""; HANDOFF[validate-only]=""; MODE[validate-only]="validate"; TOOLRUN[validate-only]="run-checks.py"
+# tech skills: the lead must be the repo skill AND the session must load the tech skill the routing line names,
+# and the answer must apply the tool fallback the snapshot reports (C# LSP MISSING, Unity MCP DOWN)
+PROMPT[tech-dotnet]="Analyze only: in the rpg-mmo-server C# game server, how do I run only the SnapshotAllocationTests class, what does it guard, and how do I find every caller of EcsWorld.UpdateComponents before changing it?"
+EXPECT[tech-dotnet]="server-realtime dotnet-gameserver"; HANDOFF[tech-dotnet]=""; SHOWS[tech-dotnet]="grep"
+PROMPT[tech-go]="Analyze only: in the rpg-mmo-server Go gateway, how do I run one gateway test with the race detector, and can a green integration_test run hide dotnet interop tests that never ran?"
+EXPECT[tech-go]="server-services go-backend"; HANDOFF[tech-go]=""; SHOWS[tech-go]="SKIP|skip"
+PROMPT[tech-unity]="Analyze only: how do I run just the HudEcsLifecycleTests EditMode tests of the IndieRPGMMOAdventure Unity client right now, and why can they not be PlayMode tests?"
+EXPECT[tech-unity]="client-integration unity-client-tech"; HANDOFF[tech-unity]=""; SHOWS[tech-unity]="HUMAN_REQUIRED|not reachable|Editor is closed|Editor closed"
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route)
+scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
@@ -108,6 +116,14 @@ for n in "${scenarios[@]}"; do
     for a in "${alts[@]}"; do grep -qw "$a" <<<"$used" && hit=true; done
     $hit || why+="expected $e not invoked; "
   done
+  # a tech skill is supporting context: some owning (repo/cross-repo) skill must be invoked before it
+  first_tech=""; owner_before=false
+  for u in $used; do
+    k=$(jq -r --arg s "$u" '.skills[$s].kind // ""' "$ROOT/registry.json")
+    if [ "$k" = "tech" ]; then first_tech=$u; break; fi
+    case "$k" in repo|cross-repo) owner_before=true;; esac
+  done
+  [ -z "$first_tech" ] || $owner_before || why+="tech skill $first_tech invoked before any owning skill; "
   for h in ${HANDOFF[$n]:-}; do grep -qw "$h" <<<"$used $answer" || why+="hand-off $h not named; "; done
   if [ -z "$why" ]; then pass=$((pass + 1)); r=PASS; else fail=$((fail + 1)); r="FAIL: $why"; fi
   printf '%-20s | %-26s | %-28s | %-40s | %s\n' "$n" "${lv:-?} ${src:-?}" "${EXPECT[$n]}${HANDOFF[$n]:+ > ${HANDOFF[$n]:-}}" "${used:-none}" "$r"

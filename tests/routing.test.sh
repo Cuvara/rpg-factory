@@ -119,6 +119,17 @@ assert "sample build scripts -> client.buildscripts with build gates" client \
 assert "deploy-only change -> no tech skill" server \
   "$(lead server-ops) and (.routing.legs == []) and (.routing.tech == [])" backend/deploy/monitoring/prometheus.yaml
 
+# a tech skill can never be forced into ownership, and --explain names it as supporting context
+for t in dotnet-gameserver go-backend unity-client-tech; do
+  if bash "$CTX" --repo server --paths backend/gameserver-dotnet/GameServer/Server/TickLoop.cs --lead "$t" >/dev/null 2>&1; then
+    fail=$((fail + 1)); echo "FAIL  --lead $t accepted (tech skills are never lead)"
+  else pass=$((pass + 1)); echo "PASS  --lead $t rejected (tech skills are never lead)"; fi
+done
+out=$(bash "$CTX" --repo server --explain --paths backend/gameserver-dotnet/GameServer/Server/TickLoop.cs 2>&1)
+if grep -q '^- dotnet-gameserver: tech (supporting) - .*(server-realtime)' <<<"$out" && grep -q '^- go-backend: not selected - tech skill: none of its users' <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  --explain marks tech skills as supporting / unused"
+else fail=$((fail + 1)); echo "FAIL  --explain tech rows: $(grep -E '^- (dotnet-gameserver|go-backend):' <<<"$out")"; fi
+
 echo "== history (real commits, replayed read-only)"
 history "action_seq wire change"              server rpg-mmo-server       2b1418c "$(lead wire-contract) and $(leg server-realtime)"
 history "Netcode Wire.cs resync (649f078)"    netcode Netcode              649f078 "$(lead wire-contract)"

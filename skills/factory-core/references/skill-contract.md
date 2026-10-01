@@ -60,7 +60,11 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
   A tech skill owns no module or contract (`check-registry.sh` rejects it), so it is never lead, leg
   or follow-up. The snapshot lists it as `tech` in the routing line when a skill in `used_by` works on
   the change (`routing.tech`).
-- Every skill in `used_by` names `rpg-factory:<tech skill>` in its body (lint), at the step that needs it.
+- Every skill in `used_by` names `rpg-factory:<tech skill>` in its body (lint), at the step that needs it,
+  as "invoke" (Skill tool) for implementing, debugging, reviewing and how-it-works/how-to-test questions.
+- Below the prerequisite line a tech skill carries the guard `> **Supporting skill, never the owner:**
+  invoke the lead ... first` (lint). Real sessions showed a model jumping straight to the tech skill,
+  which holds the "how" answers, and skipping the lead, which holds the rules, gates and validation.
 - It does not restate rules, checks or gates; those stay in the repo skill and the registry.
 - Layout: the same frontmatter and prerequisite line; sections `Applies when / Not when`, `Scope`,
   `Architecture`, `Idioms`, `Pitfalls`, `Testing`, `Tools`. Same size limits as below.
@@ -70,7 +74,8 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
 ## Dev tools
 
 Registry `dev_tools[]` lists the MCP servers, plugins and binaries a skill relies on, with probes,
-`used_by`, `required` and a `fallback`. Each repo and tech skill has a `## Tools` section that names
+`used_by`, `required` and a `fallback`. Every skill except `factory-core` (repo, cross-repo and tech) has
+a `## Tools` section that names
 the ids in whose `used_by` it appears and says for which step it uses each one; lint checks both
 directions. The snapshot prints "Tools for this change" with each tool's state; when a tool is not OK,
 use its fallback and say so in the report. `/rpg-factory:doctor` shows them all.

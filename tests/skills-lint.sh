@@ -42,6 +42,7 @@ for dir in skills/*/; do
     [ -n "$kind" ] && ok || bad "$s: not registered in registry.skills"
     owned=$(jq --arg s "$s" '[.modules[] | select((.skills // []) | index($s))] + [.contracts[] | select(.driver == $s)] | length' registry.json)
     if [ "$kind" = "tech" ]; then
+      grep -q '^> \*\*Supporting skill, never the owner:\*\* invoke the lead' "$f" && ok || bad "$s: tech skill lacks the 'invoke the lead first' guard"
       # reachable through routing.tech: every used_by skill must point the agent at it
       for u in $(jq -r --arg s "$s" '.skills[$s].used_by[]?' registry.json); do
         grep -q "rpg-factory:$s" "skills/$u/SKILL.md" && ok || bad "$s: used_by skill $u never names rpg-factory:$s"

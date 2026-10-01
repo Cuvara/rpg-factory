@@ -12,8 +12,10 @@ alternatives separated by `|` (any one passes). Probe kinds:
                    `~/.claude.json` (top level or the workspace/repo project entry)
   plugin:<name>    a Claude Code plugin `<name>@<marketplace>` is enabled in a settings file
 
-Only server and plugin NAMES are read from the config files. Commands, args, env, headers and URLs
-are never returned or printed: they can carry tokens.
+The config files are parsed in memory (JSON has to be parsed whole), but only server and plugin NAMES
+leave this module. Commands, args, env, headers and URLs are never returned, printed, logged or stored:
+they can carry tokens. A file that does not parse is treated as absent, with no error text (an error
+message could quote its content).
 """
 import json
 import os

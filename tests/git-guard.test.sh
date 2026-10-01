@@ -39,6 +39,10 @@ check allow "$SERVER" "git diff --stat"
 check allow "$SERVER" "git log --oneline -5"
 check allow "$SERVER" "git stash list"
 check allow "$SERVER" "git tag -l"
+check allow "$SERVER" "git tag --sort=-v:refname"           # listing with sort/format options is a read
+check allow "$SERVER" "git tag --format='%(refname)' --sort=-creatordate -n1"
+check deny "$SERVER" "git tag --sort=-v:refname v9.9.9"     # a name after listing options still creates
+check deny "$SERVER" "git tag --sort -v:refname"            # separated value form is ambiguous: not a listing
 check allow "$SERVER" "git add backend/gateway/main.go"
 check allow "$SERVER" "git restore --staged backend/gateway/main.go"
 check allow "$SERVER" 'echo "git reset --hard"'
@@ -93,6 +97,10 @@ check ask "$SERVER" "bash backend/deploy/k8s/verify/verify.sh --target k8s-dev"
 check ask "$SERVER" "bash backend/deploy/db/backup.sh"
 check ask "$SERVER" "JWT_SECRET=x ./scripts/bench.sh 50 60s cluster out"
 check ask "$CLIENT" "Unity.exe -batchmode -executeMethod PlayerBuilder.Build"
+check ask "$CLIENT" "Unity.exe -batchmode -executeMethod PlayClientBuilder.Build"      # _SampleBuild entries (client.buildscripts)
+check ask "$CLIENT" "Unity.exe -batchmode -executeMethod SampleBuilder.Build"
+check ask "$CLIENT" "Unity.exe -batchmode -projectPath . -runTests -testPlatform EditMode -testResults r.xml"
+check allow "$CLIENT" "grep -rn runTests unity-build-workflows/.github/workflows"       # mentioning the flag is not a run
 check ask "$SERVER" "psql -c 'DELETE FROM schema_migrations'"
 check allow "$SERVER" "cat backend/deploy/.env.example"
 # quoted / heredoc content is data, not commands

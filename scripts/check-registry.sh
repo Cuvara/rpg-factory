@@ -61,7 +61,7 @@ problems=$(jq -r '
                elif $pp[0] == "tool" and ($r.tools[$pp[1]] // null) == null then "dev_tools \($d.id): probe \($p) names an unknown tool"
                elif $pp[0] == "service" and (($r.services // {})[$pp[1]] // null) == null then "dev_tools \($d.id): probe \($p) names an unknown service"
                else empty end),
-          (select((($d.required // false) | not) and (($d.fallback // "") | length == 0)) | "dev_tools \($d.id): optional tool needs a fallback")),
+          (select(($d.fallback // "") | length == 0) | "dev_tools \($d.id): every tool needs a fallback (what a skill does when it is not OK)")),
       (($r.skills // {}) | to_entries[] | select((.value.order | type) != "number") | "skill \(.key): order (number) missing - lead precedence needs it"),
       (($r.skills // {}) | [to_entries[] | .value.order] | group_by(.) | map(select(length > 1))[] | "duplicate skill order \(.[0]) - routing would be ambiguous"),
       ($r.modules | map(select(.fallback != true)) | [ .[] | .repo as $rp | .id as $id | .paths[] | {k: "\($rp)|\(.)", id: $id} ]
