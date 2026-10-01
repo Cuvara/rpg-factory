@@ -17,7 +17,7 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 0.4.0 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
+Version 0.5.0 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
 automated state of any release is **READY_TO_TAG**.
 
 ## Commands

@@ -4,25 +4,45 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-01
+
+### Security
+- **Unity batch-mode test runs were ungated.** Factory treats Unity tests as external
+  (HUMAN_REQUIRED), but the new tech skill and the client's Unity MCP reference offered a batchmode
+  `-runTests` run as the agent's fallback when the Editor is closed. Nothing gated it, and the run opens
+  the user's project, which can rewrite `packages-lock.json` and settings and triggers a reimport. The
+  `unity-batch` human gate now also matches `-runTests` and the `_SampleBuild` build entries
+  (`PlayClientBuilder`, `SampleBuilder`), which the remap had brought under that gate without its
+  regex. The skills now hand the user the batchmode command instead of running it.
+
 ### Added
 - **Dev tools per skill.** New registry `dev_tools[]` records the MCP servers, plugins and binaries
   the skills use: `unity-mcp`, `lsp-go`, `lsp-csharp`, `pg-aiguide`, `context-mode`, `codex`,
   `dotnet`, `go`, `protoc` and `docker`. Each entry has `probes`, `used_by` skills, `required` and a
   `fallback`. `scripts/lib/devtools.py` probes them: PATH, registry tools, TCP services, MCP server
-  names (from workspace/repo `.mcp.json` and `~/.claude.json`) and enabled plugins. It reads names
-  only; config values such as env, headers and URLs are never read out or printed.
+  names (from workspace/repo `.mcp.json` and `~/.claude.json`) and enabled plugins. Config files are
+  parsed in memory, but only server and plugin names leave the module. Env, headers and URLs are
+  never returned, printed or stored.
 - The snapshot prints a **Services** line and, per repo, **Tools for this change** (OK / DOWN /
   MISSING, with the fallback) for the routed skills. `/rpg-factory:doctor` has a **Dev tools**
   section that also lists skills missing a required tool.
 - `check-registry.sh` and the schema validate `dev_tools`: fields, probe syntax, known tools,
-  services and skills, and a fallback for every optional tool. They also accept the new skill kind
+  services and skills, and a fallback for every tool. They also accept the new skill kind
   `tech`, which needs `used_by` (repo or cross-repo skills) and must not own a module or contract.
   Known issues `no-csharp-lsp`,
   `golangci-lint-missing` and `gameserver-claude-stale` were added, and `client-claude-stale` was
   extended.
+- Tests:
+  - `tests/devtools.test.sh` adds scenarios over the real registry in a controlled environment: all
+    tools OK; Unity Editor closed (`unity-mcp` DOWN, not MISSING or OK); no C# LSP (`lsp-csharp`
+    MISSING with its fallback, doctor still exits 0); a malformed config with a planted secret
+    surfaces no content or traceback.
+  - `tests/facts.test.sh` proves a stale registry value is caught by re-probing the repo.
+  - `tests/routing.test.sh` checks that `--lead <tech skill>` is rejected.
+  - `tests/dogfood.sh` adds `tech-dotnet`, `tech-go` and `tech-unity`: real sessions must invoke the
+    repo skill and its tech skill, and apply the reported tool fallback.
 - `tests/devtools.test.sh` covers the probes, the snapshot, doctor, planted secrets that must never
   be printed, and malformed registry entries.
-
 - **Tech skills** (new skill kind `tech`) explain how a technology works in this workspace. Repo
   skills keep where a change goes and which rules apply. Tech skills own no module, so they are never
   lead, leg or follow-up. `resolve.jq` emits `routing.tech`: the tech skills used by a working skill
@@ -36,7 +56,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - `unity-client-tech` (used by client-integration, unity-package and pin-bump): Entities system
     install and world lifecycle, Task vs UniTask boundaries, main-thread rules, VContainer, asmdef and
     test-assembly rules, domain reload, WebGL limits, single tests through Unity MCP `tests-run`
-    filters or batchmode.
+    filters (with the Editor closed, the batchmode command is handed to the user).
 - Every repo, cross-repo and tech skill has a `## Tools` section that names its `dev_tools` and the
   step each one is for. `tests/skills-lint.sh` enforces it in both directions: each `used_by` skill
   names the tool, and each tool a bullet leads with is registered for that skill. Tech skills need
@@ -68,6 +88,25 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   Go interop tests use it.
 
 ### Fixed
+- **Tech skills were not loaded for "how does it work / how do I test it" questions.** A real session
+  routed to `server-realtime` but never invoked `dotnet-gameserver`: the pointer sat only in the
+  "place the code" step and said "read", not "invoke". The repo skill, `factory-core` and the
+  snapshot's Next line now give one rule: the lead invokes the tech skill (Skill tool) before
+  implementing, debugging or reviewing code, or answering how it works or how to test it, in every
+  mode. A tech skill is supporting context, not a follow-up.
+- **A session could use a tech skill as the owner.** In one of three real Go sessions the model
+  invoked `go-backend` and `dotnet-gameserver` but never the routed lead or co-lead, so no rules, gates
+  or validation were loaded. Every tech skill now opens with a "Supporting skill, never the owner:
+  invoke the lead first" guard (lint-enforced). `tests/dogfood.sh` fails any session that invokes a
+  tech skill before an owning skill.
+- `--explain` said a tech skill was "not selected - no touched path maps to its modules ()". It now
+  reports `tech (supporting)` with the skill that uses it, or names its users when none works on the
+  change.
+- The git guard denied `git tag --sort=...` / `--format=...` (a read) as tag creation. Listing
+  options in their `=` form are now a listing. A tag name after them, or a separated `--sort <value>`,
+  is still denied.
+- `go-backend`: only the `*_test.go` files of `integration_test` carry the build tag; the
+  `mock_client.go` helper does not.
 - `server-ops` reference: the Nakama plugin is built by `deploy/nakama-plugin.Dockerfile`.
   `docker/Dockerfile.nakama-plugin` is not referenced by anything.
 - **The `services.unity-mcp` probe never ran.** Skills branch on "the snapshot shows `unity-mcp`
