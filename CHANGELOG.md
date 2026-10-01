@@ -99,6 +99,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   or validation were loaded. Every tech skill now opens with a "Supporting skill, never the owner:
   invoke the lead first" guard (lint-enforced). `tests/dogfood.sh` fails any session that invokes a
   tech skill before an owning skill.
+- `/rpg-factory:status` answers dropped each Pending item's owning skill (`[unity-package]`), which is
+  the point of the report. On this branch the installed and A/B sessions failed 3/3, against 2/2 on 0.4.0,
+  although the status output was byte-identical. The command now says to keep the brackets as printed
+  (3/3 after the fix).
+- The `factory-core` Skills table let a session name the lead by lookup and stop. It is now marked
+  orientation-only: run Route and invoke the lead before answering, with tech skills after the lead.
+  Known residual: `netcode-change` still sometimes names the lead without invoking it, at the 0.4.0
+  rate (0.4.0 passed 5 of 6 sessions, this release 6 of 7).
 - `--explain` said a tech skill was "not selected - no touched path maps to its modules ()". It now
   reports `tech (supporting)` with the skill that uses it, or names its users when none works on the
   change.

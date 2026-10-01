@@ -138,6 +138,10 @@ validated", "is Factory healthy".
 | client VContainer wiring, Nakama/session, HUD/UI, DotsViews, build scripts | `client-integration` |
 | benchmark harness (`GameServer.Tests/Bench/`), encoding sweep, re-baseline, multi-client verification | `measure` |
 
+Orientation only, not routing: naming a lead from this table is not doing the task. In every mode, run
+Route (step 4) and **invoke** the lead it prints before answering; tech skills (`dotnet-gameserver`,
+`go-backend`, `unity-client-tech`) come after the lead, never instead of it.
+
 ## References - read when
 
 - `references/repos.md` - first time in a repo, unmapped or repo-level paths.

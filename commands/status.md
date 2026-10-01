@@ -8,5 +8,6 @@ allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py:*)
 
 !`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py status $ARGUMENTS`
 
-Show the report above to the user. Lead with the **Pending** items (each names its owning skill) and any STALE
+Show the report above to the user. Lead with the **Pending** items and keep each one's owning skill in
+brackets exactly as printed (e.g. `[unity-package]`) - it says which skill resumes the work - then any STALE
 evidence or stale fetch. Do not run further commands, fetch, or change anything unless the user asks.
