@@ -75,6 +75,7 @@ run "skills lint (contract)" tests/skills-lint.sh
 run "tripwire (script-driven mutations, latch, submodule work)" env -u TMPDIR tests/tripwire.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.test.sh
+run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh

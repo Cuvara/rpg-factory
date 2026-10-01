@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- **Dev tools per skill.** New registry `dev_tools[]` records the MCP servers, plugins and binaries
+  the skills use: `unity-mcp`, `lsp-go`, `lsp-csharp`, `pg-aiguide`, `context-mode`, `codex`,
+  `dotnet`, `go`, `protoc` and `docker`. Each entry has `probes`, `used_by` skills, `required` and a
+  `fallback`. `scripts/lib/devtools.py` probes them: PATH, registry tools, TCP services, MCP server
+  names (from workspace/repo `.mcp.json` and `~/.claude.json`) and enabled plugins. It reads names
+  only; config values such as env, headers and URLs are never read out or printed.
+- The snapshot prints a **Services** line and, per repo, **Tools for this change** (OK / DOWN /
+  MISSING, with the fallback) for the routed skills. `/rpg-factory:doctor` has a **Dev tools**
+  section that also lists skills missing a required tool.
+- `check-registry.sh` and the schema validate `dev_tools`: fields, probe syntax, known tools,
+  services and skills, and a fallback for every optional tool. They also accept the new skill kind
+  `tech`, which needs `used_by` (repo or cross-repo skills) and must not own a module or contract.
+  Known issues `no-csharp-lsp`,
+  `golangci-lint-missing` and `gameserver-claude-stale` were added, and `client-claude-stale` was
+  extended.
+- `tests/devtools.test.sh` covers the probes, the snapshot, doctor, planted secrets that must never
+  be printed, and malformed registry entries.
+
+### Fixed
+- **The `services.unity-mcp` probe never ran.** Skills branch on "the snapshot shows `unity-mcp`
+  reachable", but no script read `services`. The snapshot now probes each service over TCP
+  (0.3 s timeout) and reports it in markdown and `--json`.
+
 ### Documentation
 - README: plugin hooks bind at session start. A session running before rpg-factory was installed or
   enabled has no Factory hooks at all (compaction does not load them); start or resume a session, and

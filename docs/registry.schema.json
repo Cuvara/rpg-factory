@@ -109,6 +109,60 @@
         }
       }
     },
+    "dev_tools": {
+      "type": "array",
+      "description": "Developer tools (MCP servers, plugins, binaries) the skills use. Probed read-only by lib/devtools.py for the snapshot ('Tools for this change') and /rpg-factory:doctor. Only names are read from MCP/plugin config files.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "probes",
+          "provides",
+          "used_by",
+          "required"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "mcp",
+              "plugin",
+              "binary",
+              "service"
+            ]
+          },
+          "probes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^(bin|tool|service|mcp|plugin):[^|:]+(\\|(bin|tool|service|mcp|plugin):[^|:]+)*$"
+            },
+            "description": "All probes must pass; '|' separates alternatives inside one probe."
+          },
+          "provides": {
+            "type": "string"
+          },
+          "used_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Skills that name this tool in their ## Tools section (skills-lint enforces both directions)."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "true: the skill's fast validation needs it. false: fallback applies."
+          },
+          "fallback": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "global_rules": {
       "type": "array",
       "items": {
@@ -250,9 +304,10 @@
             "enum": [
               "core",
               "repo",
-              "cross-repo"
+              "cross-repo",
+              "tech"
             ],
-            "description": "cross-repo skills drive contracts and orchestrate legs; repo skills implement inside one repo."
+            "description": "cross-repo skills drive contracts and orchestrate legs; repo skills implement inside one repo. tech skills hold how a technology works in this workspace; never routed as lead/leg, listed in routing.tech for the skills in used_by."
           },
           "repos": {
             "type": "array",
@@ -266,6 +321,13 @@
           "order": {
             "type": "number",
             "description": "Lead precedence tie-break inside a precedence class (lower wins). Unique across skills."
+          },
+          "used_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "tech skills only: the repo/cross-repo skills whose work needs this technology."
           }
         }
       }

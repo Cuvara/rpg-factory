@@ -25,6 +25,8 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
+import devtools  # noqa: E402
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(HERE))
 REGISTRY = os.path.join(PLUGIN_ROOT, "registry.json")
 RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
@@ -303,6 +305,9 @@ def render(snap, reg, args):
         + ("" if args["full"] else " (full text: `--full` or registry `global_rules`)"))
     add("**Human gates:** " + ", ".join(g["id"] + (" (deny)" if g.get("decision") == "deny" else "") for g in reg["human_gates"])
         + " - agents never tag; stop at READY_TO_TAG.")
+    if snap.get("services"):
+        add("**Services:** " + ", ".join(f"`{sid}` {'reachable' if s['reachable'] else 'not reachable'} ({s['probe']})"
+                                         for sid, s in snap["services"].items()))
     for r in snap["repos"]:
         add("")
         if r.get("error"):
@@ -349,6 +354,10 @@ def render(snap, reg, args):
                         "is its follow-up here.")
             if rt.get("lead_basis"):
                 add(f"  lead because: {'; '.join(rt['lead_basis']['reasons'][:3])} (class {rt['lead_basis']['class']}, order {rt['lead_basis']['order']})")
+        if r.get("dev_tools"):
+            add("Tools for this change: " + "; ".join(
+                f"{t['id']} {t['state']}" + (f" (fallback: {t['fallback']})" if not t["ok"] and t.get("fallback") else "")
+                for t in r["dev_tools"]))
         add(f"Modules: {', '.join(r['touched']) or 'none'}" + (f"; dependents {', '.join(r['dependents'])}" if r["dependents"] else "")
             + (f"; cross-repo (advisory) {', '.join(x['id'] for x in r['cross_repo_dependents'])}" if r["cross_repo_dependents"] else ""))
         if r.get("repo_level"):
@@ -419,6 +428,8 @@ def main():
     for name, t in reg["tools"].items():
         tools[name] = which(t["candidates"])
     subst = {"{dotnet}": os.path.basename(tools.get("dotnet") or "") or "<dotnet-not-found>", "{plugin_root}": PLUGIN_ROOT}
+    services = devtools.probe_services(reg)
+    prober = devtools.Prober(ws, reg, services)
     repos = []
     needed = set()
     for key in keys:
@@ -431,6 +442,9 @@ def main():
                 apply_override(st, args["lead"])
             if args["explain"]:
                 st["explain"] = explain(st, reg)
+            rt = st["routing"]
+            routed = ([rt["lead"]] if rt["lead"] else []) + rt["co_leads"] + rt["legs"] + rt.get("tech", [])
+            st["dev_tools"] = prober.for_skills(routed) if routed else []
             for c in st["checks"]:
                 if c["tier"] != "external":
                     for m in reg["modules"]:
@@ -444,7 +458,7 @@ def main():
         ver = tool_version(tools[name], t["version_args"]) if tools.get(name) and (args["toolchain"] or args["full"]) else None
         tc.append({"tool": name, "resolved": tools.get(name), "version": ver, "expected": t.get("expected")})
     snap = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "workspace": ws, "plugin_root": PLUGIN_ROOT,
-            "install": install_line(), "repos": repos, "toolchain": tc, "cwd_clone": clone, "mode": args["mode"],
+            "install": install_line(), "repos": repos, "toolchain": tc, "services": services, "cwd_clone": clone, "mode": args["mode"],
             "global_rules": reg["global_rules"], "human_gates": reg["human_gates"],
             "known_issues": reg.get("known_issues", [])}
     snap["elapsed_ms"] = round((time.perf_counter() - t0) * 1000)

@@ -6,7 +6,8 @@
                                           contracts, checks and gates for those files, and why
   check <repo> [<path>...] [--status]     run-checks.py (fast tier) - or --status: grade stored evidence
                                           against the current tree without running anything
-  doctor                                  install state, tripwire latches, registry, state paths, tools
+  doctor                                  install state, tripwire latches, registry, state paths, tools,
+                                          dev tools (MCP servers, plugins, binaries) per skill
 
 Read-only except `check` without --status, which runs the fast checks (builds/tests) exactly like
 run-checks.py. Exit code = the underlying script's; 2 = usage error.
@@ -117,6 +118,20 @@ def cmd_doctor(args):
     print(f"- tools: {'all present' if not missing else 'MISSING ' + ', '.join(missing)}")
     hooks = json.load(open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]
     print("- hooks: " + "; ".join(f"{e} [{', '.join(h.get('matcher') or '*' for h in v)}]" for e, v in hooks.items()))
+    print("\n## Dev tools (registry dev_tools; names only are read from MCP/plugin config)")
+    import devtools
+    prober = devtools.Prober(ws, reg)
+    gaps = {}
+    for t in reg.get("dev_tools", []):
+        res = prober.tool(t)
+        need = "required" if t.get("required") else "optional"
+        print(f"- {t['id']} ({t['kind']}, {need}): **{res['state']}** - {'; '.join(res['detail'])}"
+              + (f" - fallback: {t['fallback']}" if not res["ok"] and t.get("fallback") else ""))
+        if res["state"] == "MISSING" and t.get("required"):
+            for s in t.get("used_by", []):
+                gaps.setdefault(s, []).append(t["id"])
+    for s, ids in sorted(gaps.items()):
+        print(f"- skill {s} lacks required tool(s): {', '.join(ids)}")
     if missing or not ok_ws:
         rc |= 1
     return rc

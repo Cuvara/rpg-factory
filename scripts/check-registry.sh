@@ -43,7 +43,25 @@ problems=$(jq -r '
           (([$c.source] + ($c.copies // []) + ($c.upstream // []) + ($c.watchers // []))[] | select(($r.repos[.repo] // null) == null) | "contract \($c.id): unknown repo \(.repo)"),
           (select(($c.driver // null) != null and ($r.skills[$c.driver] // null) == null) | "contract \($c.id): unknown driver skill \($c.driver)")),
       (($r.contracts // []) | map(.id) | group_by(.) | map(select(length > 1))[] | "duplicate contract id: \(.[0])"),
-      (($r.skills // {}) | to_entries[] | select((.value.kind // "") | IN("repo","cross-repo","core") | not) | "skill \(.key): kind must be repo|cross-repo|core"),
+      (($r.skills // {}) | to_entries[] | select((.value.kind // "") | IN("repo","cross-repo","core","tech") | not) | "skill \(.key): kind must be repo|cross-repo|core|tech"),
+      (($r.skills // {}) | to_entries[] | select(.value.kind == "tech") as $t
+        | (select(($t.value.used_by // []) | length == 0) | "tech skill \($t.key): used_by (repo/cross-repo skills) missing"),
+          (($t.value.used_by // [])[] | select((($r.skills[.].kind) // "") | IN("repo","cross-repo") | not)
+             | "tech skill \($t.key): used_by \(.) is not a repo/cross-repo skill"),
+          (select([$r.modules[] | select((.skills // []) | index($t.key))] + [($r.contracts // [])[] | select(.driver == $t.key)] | length > 0)
+             | "tech skill \($t.key): must not own a module or contract (tech skills are never routed as lead/leg)")),
+      (($r.dev_tools // []) | map(.id) | group_by(.) | map(select(length > 1))[] | "duplicate dev_tools id: \(.[0])"),
+      (($r.dev_tools // [])[] as $d
+        | (["id","kind","probes","provides","used_by","required"][] | select(. as $k | $d | has($k) | not) | "dev_tools \($d.id // "?"): missing field \(.)"),
+          (select((($d.kind // "") | IN("mcp","plugin","binary","service")) | not) | "dev_tools \($d.id): kind must be mcp|plugin|binary|service"),
+          (($d.used_by // [])[] | select(($r.skills[.] // null) == null) | "dev_tools \($d.id): used_by unknown skill \(.)"),
+          (($d.probes // [])[] | split("|")[] | . as $p | ($p | split(":")) as $pp
+             | if ($pp | length) != 2 or ($pp[1] | length) == 0 or ($pp[0] | IN("bin","tool","service","mcp","plugin") | not)
+                 then "dev_tools \($d.id): bad probe \($p) (bin|tool|service|mcp|plugin:<name>)"
+               elif $pp[0] == "tool" and ($r.tools[$pp[1]] // null) == null then "dev_tools \($d.id): probe \($p) names an unknown tool"
+               elif $pp[0] == "service" and (($r.services // {})[$pp[1]] // null) == null then "dev_tools \($d.id): probe \($p) names an unknown service"
+               else empty end),
+          (select((($d.required // false) | not) and (($d.fallback // "") | length == 0)) | "dev_tools \($d.id): optional tool needs a fallback")),
       (($r.skills // {}) | to_entries[] | select((.value.order | type) != "number") | "skill \(.key): order (number) missing - lead precedence needs it"),
       (($r.skills // {}) | [to_entries[] | .value.order] | group_by(.) | map(select(length > 1))[] | "duplicate skill order \(.[0]) - routing would be ambiguous"),
       ($r.modules | map(select(.fallback != true)) | [ .[] | .repo as $rp | .id as $id | .paths[] | {k: "\($rp)|\(.)", id: $id} ]

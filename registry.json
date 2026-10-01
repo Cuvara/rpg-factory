@@ -95,6 +95,161 @@
       "purpose": "Unity Editor MCP (ai-game-developer). Reachable only while the Editor has the client project open. Used to run the Unity Test Runner from an agent."
     }
   },
+  "dev_tools": [
+    {
+      "id": "unity-mcp",
+      "kind": "mcp",
+      "probes": [
+        "mcp:ai-game-developer",
+        "service:unity-mcp"
+      ],
+      "provides": "Unity Editor from the agent (ai-game-developer, client .mcp.json): tests-run (EditMode/PlayMode, filter by assembly/class/method), console logs, asset and scene edits (human gate unity-asset-edit).",
+      "used_by": [
+        "client-integration",
+        "unity-package",
+        "pin-bump"
+      ],
+      "required": false,
+      "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
+    },
+    {
+      "id": "lsp-go",
+      "kind": "mcp",
+      "probes": [
+        "mcp:lsp|plugin:gopls-lsp",
+        "bin:gopls"
+      ],
+      "provides": "Go code intelligence over gopls (agent-lsp `lsp` server in the workspace/server .mcp.json): blast_radius, find_references, callers before changing an exported Go symbol or interface.",
+      "used_by": [
+        "server-services",
+        "wire-contract"
+      ],
+      "required": false,
+      "fallback": "grep for the symbol plus go vet / go build of every module that depends on shared"
+    },
+    {
+      "id": "lsp-csharp",
+      "kind": "binary",
+      "probes": [
+        "bin:csharp-ls|bin:OmniSharp|bin:roslyn-language-server|bin:Microsoft.CodeAnalysis.LanguageServer"
+      ],
+      "provides": "C# code intelligence for the game server, Shared.GameLogic and the com.cuvara.* packages (none configured yet, known issue no-csharp-lsp).",
+      "used_by": [
+        "server-realtime",
+        "unity-package",
+        "client-integration"
+      ],
+      "required": false,
+      "fallback": "grep for the symbol plus {dotnet} build of the solution (server) or an Editor compile through unity-mcp (packages, client)"
+    },
+    {
+      "id": "pg-aiguide",
+      "kind": "mcp",
+      "probes": [
+        "mcp:pg-aiguide"
+      ],
+      "provides": "PostgreSQL documentation search (search_docs) for SQL migrations, indexes and locking behaviour.",
+      "used_by": [
+        "server-services"
+      ],
+      "required": false,
+      "fallback": "the PostgreSQL manual for the server's Postgres version"
+    },
+    {
+      "id": "context-mode",
+      "kind": "plugin",
+      "probes": [
+        "plugin:context-mode"
+      ],
+      "provides": "Keeps long build, test and benchmark logs out of the conversation (ctx_execute / ctx_batch_execute return only the derived answer).",
+      "used_by": [
+        "server-realtime",
+        "server-services",
+        "server-ops",
+        "unity-package",
+        "client-integration",
+        "measure"
+      ],
+      "required": false,
+      "fallback": "pipe logs through tail / grep for the summary lines; run-checks.py already stores full logs as evidence"
+    },
+    {
+      "id": "codex",
+      "kind": "plugin",
+      "probes": [
+        "plugin:codex",
+        "bin:codex"
+      ],
+      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks.",
+      "used_by": [
+        "server-realtime",
+        "server-services",
+        "unity-package",
+        "client-integration"
+      ],
+      "required": false,
+      "fallback": "none needed"
+    },
+    {
+      "id": "dotnet",
+      "kind": "binary",
+      "probes": [
+        "tool:dotnet"
+      ],
+      "provides": "Build and test the C# game server, Shared.GameLogic and the Netcode headless tests (Windows dotnet.exe on WSL, known issue dotnet-wsl).",
+      "used_by": [
+        "server-realtime",
+        "wire-contract",
+        "measure",
+        "unity-package"
+      ],
+      "required": true,
+      "fallback": "CI ci-dotnet.yml"
+    },
+    {
+      "id": "go",
+      "kind": "binary",
+      "probes": [
+        "tool:go"
+      ],
+      "provides": "Build, vet and test the Go gateway, shared, nakama and integration_test modules.",
+      "used_by": [
+        "server-services",
+        "wire-contract"
+      ],
+      "required": true,
+      "fallback": "CI ci.yml"
+    },
+    {
+      "id": "protoc",
+      "kind": "binary",
+      "probes": [
+        "tool:protoc",
+        "tool:protoc-gen-go"
+      ],
+      "provides": "Regenerate wire bindings with generate.sh (CI pins libprotoc 29.3, fact protoc-ci-pin).",
+      "used_by": [
+        "wire-contract"
+      ],
+      "required": false,
+      "fallback": "let CI regenerate; a local protoc that differs from the pin drifts the generated code"
+    },
+    {
+      "id": "docker",
+      "kind": "binary",
+      "probes": [
+        "tool:docker"
+      ],
+      "provides": "Image builds, the compose stack (stack.sh) and Docker-backed integration tests.",
+      "used_by": [
+        "server-ops",
+        "server-services",
+        "measure"
+      ],
+      "required": false,
+      "fallback": "HUMAN_REQUIRED / CI"
+    }
+  ],
   "global_rules": [
     {
       "id": "english-only",
@@ -3228,7 +3383,7 @@
     {
       "id": "client-claude-stale",
       "scope": "client",
-      "summary": "Client CLAUDE.md: SampleImporter example uses -importPackage (code needs -samplePackage) and E:\\SecretProject paths; Unity MCP section describes Docker :8080 (real: .mcp.json HTTP :23621); Assembly Structure lists 3 of 13 asmdefs. Workspace CLAUDE.md 'gh workflow run unity-build.yml' names a removed workflow."
+      "summary": "Client CLAUDE.md: SampleImporter example uses -importPackage (code needs -samplePackage) and E:\\SecretProject paths; Unity MCP section describes Docker :8080 (real: .mcp.json HTTP :23621); Assembly Structure lists 3 of 13 asmdefs. Workspace CLAUDE.md 'gh workflow run unity-build.yml' names a removed workflow. Also: bootScene is still the version-named Assets/Samples/Cuvara Netcode/0.19.0/... path (real: Assets/Samples/Netcode/DOTS Sample), R3 is listed but not in Packages/manifest.json, and the Package pins section appears twice."
     },
     {
       "id": "dots-wiring-doc-stale",
@@ -3264,6 +3419,21 @@
       "id": "client-claude-package-clones",
       "scope": "client",
       "summary": "Client CLAUDE.md names package clones at /mnt/e/CuvaraPackages (absent here), says the lock must point at them, and duplicates the file: pinning section (~lines 281 and 332)."
+    },
+    {
+      "id": "no-csharp-lsp",
+      "scope": "server,netcode,unitydots,uitoolkit,client",
+      "summary": "No C# language server is configured (the workspace lsp MCP server runs gopls only). C# navigation falls back to grep plus a build; dev tool lsp-csharp reports MISSING until one is added to .mcp.json."
+    },
+    {
+      "id": "golangci-lint-missing",
+      "scope": "server",
+      "summary": "backend/TEAM.md requires golangci-lint with a shared config, but the server repo has no .golangci* file and no CI lint step. go vet is the only lint that runs."
+    },
+    {
+      "id": "gameserver-claude-stale",
+      "scope": "server",
+      "summary": "backend/gameserver-dotnet/CLAUDE.md still describes the wire as '4-byte BE length + JSON' (protobuf is current, ADR-9) and says there are no external dependencies (the csproj references Arch, Npgsql, StackExchange.Redis, OpenTelemetry, Google.Protobuf, BouncyCastle)."
     }
   ],
   "skills": {
