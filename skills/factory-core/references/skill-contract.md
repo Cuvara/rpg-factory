@@ -12,6 +12,10 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
      │        own: ordering, contract evidence, hand-offs, human gates between legs, per-repo report
      └── repo skills         - server-realtime, server-services, server-ops, unity-package, client-integration
               own: implementation + validation inside one repo (one leg)
+                   │
+                   └── tech skills - dotnet-gameserver, go-backend, unity-client-tech
+                            own: how a technology works in this workspace (never routed, loaded by
+                            the skills in their used_by when the work needs it)
 ```
 
 | Belongs in Core | Belongs in a specialised skill |
@@ -45,6 +49,31 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
 9. **Never bypass Core.** This covers the baseline, the guard, and the report template.
 10. **Never create another registry.** No feature lists, GDD state or task trackers. Feature and
     GDD lifecycle belongs to `game-ai-workflows`. Module knowledge belongs to `registry.json`.
+
+## Tech skills
+
+A repo skill says **where** a change goes and **which rules** apply. A tech skill says **how the
+technology works here**: architecture that takes several files to understand, idioms the code
+already uses, pitfalls with the file that proves them, how to run one test, and which dev tools help.
+
+- Registry: `skills.<name>` = `{kind: "tech", repos, summary, order, used_by: [repo/cross-repo skills]}`.
+  A tech skill owns no module or contract (`check-registry.sh` rejects it), so it is never lead, leg
+  or follow-up. The snapshot lists it as `tech` in the routing line when a skill in `used_by` works on
+  the change (`routing.tech`).
+- Every skill in `used_by` names `rpg-factory:<tech skill>` in its body (lint), at the step that needs it.
+- It does not restate rules, checks or gates; those stay in the repo skill and the registry.
+- Layout: the same frontmatter and prerequisite line; sections `Applies when / Not when`, `Scope`,
+  `Architecture`, `Idioms`, `Pitfalls`, `Testing`, `Tools`. Same size limits as below.
+- Facts: every architectural claim cites the repo file that shows it. Version-like values (language
+  version, default rates, settings) are registry `facts[]` with a probe.
+
+## Dev tools
+
+Registry `dev_tools[]` lists the MCP servers, plugins and binaries a skill relies on, with probes,
+`used_by`, `required` and a `fallback`. Each repo and tech skill has a `## Tools` section that names
+the ids in whose `used_by` it appears and says for which step it uses each one; lint checks both
+directions. The snapshot prints "Tools for this change" with each tool's state; when a tool is not OK,
+use its fallback and say so in the report. `/rpg-factory:doctor` shows them all.
 
 ## SKILL.md layout (at most about 150 lines)
 

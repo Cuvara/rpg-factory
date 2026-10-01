@@ -23,7 +23,53 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `tests/devtools.test.sh` covers the probes, the snapshot, doctor, planted secrets that must never
   be printed, and malformed registry entries.
 
+- **Tech skills** (new skill kind `tech`) explain how a technology works in this workspace. Repo
+  skills keep where a change goes and which rules apply. Tech skills own no module, so they are never
+  lead, leg or follow-up. `resolve.jq` emits `routing.tech`: the tech skills used by a working skill
+  (lead, co-lead or leg). The snapshot prints it in the routing line and the Next hint.
+  - `dotnet-gameserver` (used by server-realtime, wire-contract and measure): tick order (the tick
+    gathers and connection write tasks encode/send), rates, ECS world locking, zero-alloc idioms and
+    what each guard covers, SGL compiler limits, the Net layer, xUnit idioms and filters, NativeAOT.
+  - `go-backend` (used by server-services and wire-contract): six modules that `replace` shared
+    without go.work, gateway entry points, storage seams, test doubles (`miniredis.RunT`, httptest,
+    embedded `runtime.NakamaModule`), single-test commands, and when the dotnet interop tests skip.
+  - `unity-client-tech` (used by client-integration, unity-package and pin-bump): Entities system
+    install and world lifecycle, Task vs UniTask boundaries, main-thread rules, VContainer, asmdef and
+    test-assembly rules, domain reload, WebGL limits, single tests through Unity MCP `tests-run`
+    filters or batchmode.
+- Every repo, cross-repo and tech skill has a `## Tools` section that names its `dev_tools` and the
+  step each one is for. `tests/skills-lint.sh` enforces it in both directions: each `used_by` skill
+  names the tool, and each tool a bullet leads with is registered for that skill. Tech skills need
+  the sections Architecture / Idioms / Pitfalls / Testing / Tools, and every `used_by` skill names
+  `rpg-factory:<tech>`.
+- Routing properties P7 (a tech skill is never routed) and P8 (`routing.tech` only lists skills
+  whose `used_by` is a working skill), plus 7 task scenarios in `tests/routing.test.sh`.
+- Registry facts with probes: `sgl-langversion`, `sgl-target-frameworks`, `tick-rates-default`,
+  `aoi-parallel-gather-min-viewers`, `nakama-version`, `enter-playmode-options`.
+
+### Changed
+- `server-realtime`, `server-services` and `client-integration` were deepened and point to their tech
+  skill.
+  - server-realtime names `SnapshotAllocationTests` (snapshot path only) and the single-test filter,
+    and cites ADR-7/8/13/22/25.
+  - server-services cites ADR-1/4/6 and adds an evidence rule: skipped interop tests are NOT_RUN,
+    never PASS.
+  - client-integration is trimmed to 149 lines, covers `_SampleBuild`, adds CI `01-ci-docs.yml`
+    (its green result is not evidence) and `02-package-pins.yml`, and its Unity MCP reference gains
+    the `tests-run` filters.
+- `server-ops` is trimmed to about 150 lines and gains ADR-17 (one replica; `Recreate` on the
+  `hostPort` workloads).
+- Registry modules:
+  - `Assets/_SampleBuild/` maps to `client.buildscripts`, which brings its build gates (it used to
+    fall through to `client.unity-assets`).
+  - `client.ui` now describes what it actually holds (the theme). The HUD UXML/USS live in
+    `client.scripts`, which gains `docs/UI-ARCHITECTURE.md` and the `ci-uxml-drift` external check.
+- Known issue `dotnet-wsl` is corrected: a Linux SDK may exist off PATH at `~/.dotnet/dotnet`, and the
+  Go interop tests use it.
+
 ### Fixed
+- `server-ops` reference: the Nakama plugin is built by `deploy/nakama-plugin.Dockerfile`.
+  `docker/Dockerfile.nakama-plugin` is not referenced by anything.
 - **The `services.unity-mcp` probe never ran.** Skills branch on "the snapshot shows `unity-mcp`
   reachable", but no script read `services`. The snapshot now probes each service over TCP
   (0.3 s timeout) and reports it in markdown and `--json`.

@@ -33,12 +33,22 @@ for dir in skills/*/; do
   if grep -qE 'TODO|TBD|FIXME' "$f" "$dir"/references/*.md 2>/dev/null; then bad "$s: TODO/TBD left"; else ok; fi
   if [ "$s" != "factory-core" ]; then
     grep -q 'Prerequisite:\*\* follow `rpg-factory:factory-core`' "$f" && ok || bad "$s: missing Core prerequisite line"
-    for sec in "Applies when" "Scope" "Validation" "Human gates" "Review checklist" "Report additions"; do
+    kind=$(jq -r --arg s "$s" '.skills[$s].kind // ""' registry.json)
+    if [ "$kind" = "tech" ]; then secs=("Applies when" "Scope" "Architecture" "Idioms" "Pitfalls" "Testing" "Tools")
+    else secs=("Applies when" "Scope" "Validation" "Human gates" "Review checklist" "Report additions"); fi
+    for sec in "${secs[@]}"; do
       grep -qE "^## .*${sec}" "$f" && ok || bad "$s: missing section '## ${sec}'"
     done
-    jq -e --arg s "$s" '.skills[$s].kind != null' registry.json >/dev/null && ok || bad "$s: not registered in registry.skills"
+    [ -n "$kind" ] && ok || bad "$s: not registered in registry.skills"
     owned=$(jq --arg s "$s" '[.modules[] | select((.skills // []) | index($s))] + [.contracts[] | select(.driver == $s)] | length' registry.json)
-    [ "$owned" -gt 0 ] && ok || bad "$s: owns no registry module or contract (unreachable by routing)"
+    if [ "$kind" = "tech" ]; then
+      # reachable through routing.tech: every used_by skill must point the agent at it
+      for u in $(jq -r --arg s "$s" '.skills[$s].used_by[]?' registry.json); do
+        grep -q "rpg-factory:$s" "skills/$u/SKILL.md" && ok || bad "$s: used_by skill $u never names rpg-factory:$s"
+      done
+    else
+      [ "$owned" -gt 0 ] && ok || bad "$s: owns no registry module or contract (unreachable by routing)"
+    fi
   fi
   # agents never tag: a skill may mention tags only as the lead's action
   if grep -nE '(^|[`$ ])git (-C [^ ]+ )?tag [^-]|git push [^`]*--tags' "$f" "$dir"/references/*.md 2>/dev/null | grep -viE 'lead|human|deny|denies|denied|never|guard|not |no agent|agents never|by the lead' >/dev/null; then
@@ -63,6 +73,35 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md") + glob.glob(f"{root}/skil
 PY2
 )
 if [ -z "$dups" ]; then ok; else bad "skill text duplicates registry rules:"; echo "$dups" | head -5; fi
+
+# dev tools: every non-core skill has a ## Tools section; it names (backticked) every dev_tools id whose
+# used_by lists the skill; every tool a bullet leads with is a registered dev_tools id
+tools_out=$(python3 -B - "$ROOT" <<'PY3'
+import glob, json, os, re, sys
+root = sys.argv[1]
+reg = json.load(open(f"{root}/registry.json"))
+ids = {t["id"] for t in reg.get("dev_tools", [])}
+for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
+    s = os.path.basename(os.path.dirname(f))
+    if reg["skills"].get(s, {}).get("kind") == "core":
+        continue
+    m = re.search(r"^## Tools\n(.*?)(?=^## |\Z)", open(f).read(), re.M | re.S)
+    if not m:
+        print(f"{s}: missing section '## Tools'"); continue
+    sec = m.group(1)
+    for t in reg.get("dev_tools", []):
+        if s in t.get("used_by", []) and f"`{t['id']}`" not in sec:
+            print(f"{s}: ## Tools does not name dev tool `{t['id']}` (registry used_by lists {s})")
+    for line in re.findall(r"^- (.*)$", sec, re.M):
+        lead = line.split(":", 1)[0] if ":" in line else ""
+        for name in re.findall(r"`([^`]+)`", lead):
+            if name not in ids:
+                print(f"{s}: ## Tools bullet names `{name}`, not a registry dev_tools id")
+            elif s not in next(t for t in reg["dev_tools"] if t["id"] == name)["used_by"]:
+                print(f"{s}: ## Tools names `{name}` but registry dev_tools.{name}.used_by lacks {s}")
+PY3
+)
+if [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
 
 # plugin boundaries: factory-core must hand design work to game-ai-workflows and web projects to
 # web-game-factory, and no Factory skill may claim their triggers

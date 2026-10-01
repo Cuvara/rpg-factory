@@ -1,6 +1,6 @@
 # Client composition map
 
-Verified 2026-09-30 against IndieRPGMMOAdventure `develop`. Paths are repo-relative.
+Verified 2026-09-30 against IndieRPGMMOAdventure `develop` (`_SampleBuild` and workflows 2026-10-01). Paths are repo-relative.
 
 ## Scopes
 
@@ -42,6 +42,7 @@ Why order matters (all from the file comments / `docs/DOTS-WIRING.md`):
 | `NDC.Tests.Editor` | `Assets/Tests/Editor/` | Editor-only, namespace `Tests.Editor` |
 | `NDC.Tests.Runtime` | `Assets/Tests/Runtime/` | PlayMode, namespace `Tests.Runtime` |
 | `BuildScript.Editor` / `BuildScript.Runtime` | `Assets/BuildScripts/{Editor,Runtime}/` | build automation, `GameVersion` |
+| (none) | `Assets/_SampleBuild/Editor/` | no asmdef: compiles into `Assembly-CSharp-Editor` |
 
 Defines are per-asmdef `versionDefines`; they do not flow from packages. Table:
 `docs/DOTS-WIRING.md` "Defines".
@@ -92,9 +93,14 @@ Defines are per-asmdef `versionDefines`; they do not flow from packages. Table:
 - `PlayerBuilder.Build` (`-bootScene`, `-buildOutput`, `-development`), `AddressableBuilder.Build`,
   `SampleImporter.Import` (`-samplePackage <pkg> -importSample "<name>" [-addToBuild 1]`),
   `StrippingProbeBuilder.Build` (`-probeScene`, `-strippingLevel`, `-buildOutput`).
+- `Assets/_SampleBuild/Editor/`: `PlayClientBuilder.Build` (the netcode DOTS Sample scene as a standalone
+  multi-window player) and `SampleBuilder.Build` (the UI Toolkit ScreenFlow sample); both pass the scene
+  straight to `BuildPipeline` and leave `EditorBuildSettings` alone. Read `BUILD_RESULT`, not the exit code.
 - `BuildConfig/base.json` + `development.json` / `staging.json` / `production.json` overlays,
   consumed by the `unity-build-workflows` pipeline (`unity-pipeline.yml@v6`); stage 01 fails when
   `BuildConfig` and `ProjectSettings.asset` disagree (`unity-build-workflows/CHANGELOG.md`).
-- Entry workflows: `01-ci.yml` (push/PR, tests, no player), `10-build-development.yml`,
+- Entry workflows: `01-ci.yml` (push/PR, tests, no player), `01-ci-docs.yml` (docs-only PRs, no-op
+  stand-ins for the six required contexts), `02-package-pins.yml` / `sgl-pin-check.yml` (manifest/lock
+  pins), `uxml-codegen-drift.yml`, `10-build-development.yml`,
   `11-build-release.yml` (dispatch), `20/22/23/24-release-*.yml` (promote a `source-run-id`, need
   `artifact-name`). Details: `CLAUDE.md` "CI/CD".

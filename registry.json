@@ -107,7 +107,8 @@
       "used_by": [
         "client-integration",
         "unity-package",
-        "pin-bump"
+        "pin-bump",
+        "unity-client-tech"
       ],
       "required": false,
       "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
@@ -122,7 +123,8 @@
       "provides": "Go code intelligence over gopls (agent-lsp `lsp` server in the workspace/server .mcp.json): blast_radius, find_references, callers before changing an exported Go symbol or interface.",
       "used_by": [
         "server-services",
-        "wire-contract"
+        "wire-contract",
+        "go-backend"
       ],
       "required": false,
       "fallback": "grep for the symbol plus go vet / go build of every module that depends on shared"
@@ -137,7 +139,9 @@
       "used_by": [
         "server-realtime",
         "unity-package",
-        "client-integration"
+        "client-integration",
+        "dotnet-gameserver",
+        "unity-client-tech"
       ],
       "required": false,
       "fallback": "grep for the symbol plus {dotnet} build of the solution (server) or an Editor compile through unity-mcp (packages, client)"
@@ -168,7 +172,10 @@
         "server-ops",
         "unity-package",
         "client-integration",
-        "measure"
+        "measure",
+        "dotnet-gameserver",
+        "go-backend",
+        "unity-client-tech"
       ],
       "required": false,
       "fallback": "pipe logs through tail / grep for the summary lines; run-checks.py already stores full logs as evidence"
@@ -201,7 +208,8 @@
         "server-realtime",
         "wire-contract",
         "measure",
-        "unity-package"
+        "unity-package",
+        "dotnet-gameserver"
       ],
       "required": true,
       "fallback": "CI ci-dotnet.yml"
@@ -215,7 +223,8 @@
       "provides": "Build, vet and test the Go gateway, shared, nakama and integration_test modules.",
       "used_by": [
         "server-services",
-        "wire-contract"
+        "wire-contract",
+        "go-backend"
       ],
       "required": true,
       "fallback": "CI ci.yml"
@@ -244,7 +253,8 @@
       "used_by": [
         "server-ops",
         "server-services",
-        "measure"
+        "measure",
+        "go-backend"
       ],
       "required": false,
       "fallback": "HUMAN_REQUIRED / CI"
@@ -1325,7 +1335,8 @@
         "docs/DOTS-WIRING.md",
         "docs/HUD-BRIDGE.md",
         "docs/ACCOUNT-RECOVERY.md",
-        "docs/DEVICE-BENCHMARK.md"
+        "docs/DEVICE-BENCHMARK.md",
+        "docs/UI-ARCHITECTURE.md"
       ],
       "changelog": "CHANGELOG.md",
       "rules": [
@@ -1352,6 +1363,11 @@
             "id": "ci-unity",
             "run": "CI 01-ci.yml (unity-build-workflows pipeline, run-tests: true)",
             "evidence": "Job pass and test count in the report artifact."
+          },
+          {
+            "id": "ci-uxml-drift",
+            "run": "CI uxml-codegen-drift.yml (PRs touching *.uxml / *.uxml.g.cs / packages-lock.json)",
+            "evidence": "Job pass."
           }
         ]
       },
@@ -1405,7 +1421,7 @@
       "paths": [
         "Assets/UI Toolkit/"
       ],
-      "responsibility": "UI Toolkit UXML/USS and generated *.uxml.g.cs bindings.",
+      "responsibility": "UI Toolkit theme assets under Assets/UI Toolkit/ (the runtime .tss). The only UXML/USS today, the HUD (Assets/Scripts/UI/Hud/: HudView.uxml, Hud.uss, Generated/*.uxml.g.cs), lives in client.scripts by design (docs/HUD-BRIDGE.md); new screens go here once Assets/UI/Screens/ exists.",
       "depends_on": [
         "client.packages"
       ],
@@ -1444,9 +1460,10 @@
       "repo": "client",
       "paths": [
         "Assets/BuildScripts/",
-        "BuildConfig/"
+        "BuildConfig/",
+        "Assets/_SampleBuild/"
       ],
-      "responsibility": "Batch-mode build entry (PlayerBuilder.Build) and layered build configs (base + environment overlays).",
+      "responsibility": "Batch-mode build entries (Assets/BuildScripts/ PlayerBuilder.Build; Assets/_SampleBuild/Editor/ PlayClientBuilder.Build and SampleBuilder.Build, no asmdef: Assembly-CSharp-Editor) and layered build configs (base + environment overlays).",
       "depends_on": [],
       "claude_md": "CLAUDE.md",
       "docs": [
@@ -3313,7 +3330,7 @@
     {
       "id": "dotnet-wsl",
       "scope": "workspace",
-      "summary": "WSL has no Linux dotnet; only Windows dotnet.exe. Build/test work through it; Linux AOT publish and env-var passing (GOLDEN_REGEN) need care (WSLENV)."
+      "summary": "On PATH, WSL resolves only the Windows dotnet.exe, so Factory checks build and test through it (env vars such as GOLDEN_REGEN need WSLENV). A Linux SDK may exist off PATH at ~/.dotnet/dotnet: backend/integration_test interop tests look there after PATH (dotnet_interop_test.go), so they run rather than skip on such a machine."
     },
     {
       "id": "netcode-doc-wire-ci",
@@ -3517,6 +3534,47 @@
       ],
       "summary": "Unity client glue: VContainer scopes, Nakama/session, HUD/UI, DotsViews, build scripts.",
       "order": 60
+    },
+    "dotnet-gameserver": {
+      "kind": "tech",
+      "repos": [
+        "server"
+      ],
+      "order": 90,
+      "used_by": [
+        "server-realtime",
+        "wire-contract",
+        "measure"
+      ],
+      "summary": "How the C# .NET 10 game server and Shared.GameLogic work: tick order, rates, ECS world and locking, zero-alloc idioms, SGL C# limits, Net layer, xUnit idioms and single-test filters, AOT."
+    },
+    "go-backend": {
+      "kind": "tech",
+      "repos": [
+        "server"
+      ],
+      "order": 91,
+      "used_by": [
+        "server-services",
+        "wire-contract"
+      ],
+      "summary": "How the Go gateway, shared and Nakama plugin modules work: module wiring without go.work, entry points, storage seams, test doubles (miniredis, httptest, Nakama mocks), single-test commands, integration-test pitfalls."
+    },
+    "unity-client-tech": {
+      "kind": "tech",
+      "repos": [
+        "client",
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "order": 92,
+      "used_by": [
+        "client-integration",
+        "unity-package",
+        "pin-bump"
+      ],
+      "summary": "How the Unity 6 client code works: Entities system install and world lifecycle, UniTask and main-thread rules, VContainer, asmdef and test-assembly rules, domain reload, WebGL limits, single-test runs through Unity MCP or batchmode."
     }
   },
   "human_gates": [
@@ -4036,6 +4094,48 @@
       "repo": "server",
       "probe": "python3 -c \"import re;t=open('.github/workflows/ci.yml').read();print(str(bool(re.search(r'^  pull_request:',t,re.M)) and 'test-integration:' in t).lower())\"",
       "why": "the cross-language E2E suite runs on PRs, not only on push (stale docs claim otherwise)"
+    },
+    {
+      "id": "sgl-langversion",
+      "value": "9.0",
+      "repo": "server",
+      "probe": "sed -n 's/.*<LangVersion>\\(.*\\)<\\/LangVersion>.*/\\1/p' backend/gameserver-dotnet/Shared.GameLogic/Shared.GameLogic.csproj",
+      "why": "Shared.GameLogic is compiled by Unity as source: no C# feature newer than this (dotnet-gameserver)"
+    },
+    {
+      "id": "sgl-target-frameworks",
+      "value": "netstandard2.1;net10.0",
+      "repo": "server",
+      "probe": "sed -n 's/.*<TargetFrameworks>\\(.*\\)<\\/TargetFrameworks>.*/\\1/p' backend/gameserver-dotnet/Shared.GameLogic/Shared.GameLogic.csproj",
+      "why": "SGL must build for both the Unity (netstandard2.1) and server targets"
+    },
+    {
+      "id": "tick-rates-default",
+      "value": "Critical=60 World=15 Background=5",
+      "repo": "server",
+      "probe": "sed -n 's/.*const int Default\\(Critical\\|World\\|Background\\)Hz = \\([0-9]*\\);.*/\\1=\\2/p' backend/gameserver-dotnet/GameServer/Server/SimulationRates.cs | paste -sd' '",
+      "why": "default simulation rates; snapshots go out at the World rate (ADR-7)"
+    },
+    {
+      "id": "aoi-parallel-gather-min-viewers",
+      "value": "500",
+      "repo": "server",
+      "probe": "sed -n 's/.*const int GatherParallelMinViewers = \\([0-9]*\\);.*/\\1/p' backend/gameserver-dotnet/GameServer/Server/TickLoop.cs",
+      "why": "viewer count at which the snapshot gather goes parallel"
+    },
+    {
+      "id": "nakama-version",
+      "value": "3.40.0",
+      "repo": "server",
+      "probe": "sed -n 's/^ARG NAKAMA_VERSION=//p' backend/deploy/nakama-plugin.Dockerfile",
+      "why": "the Go plugin must be built against exactly this Nakama (ABI)"
+    },
+    {
+      "id": "enter-playmode-options",
+      "value": "enabled=1 options=0",
+      "repo": "client",
+      "probe": "printf 'enabled=%s options=%s\\n' $(sed -n 's/^ *m_EnterPlayModeOptionsEnabled: //p' ProjectSettings/EditorSettings.asset) $(sed -n 's/^ *m_EnterPlayModeOptions: //p' ProjectSettings/EditorSettings.asset)",
+      "why": "options 0 = domain and scene reload both happen on Enter Play Mode; static caches are reset (unity-client-tech)"
     }
   ]
 }

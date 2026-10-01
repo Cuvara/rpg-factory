@@ -9,6 +9,8 @@ is replayed through scripts/lib/resolve.jq and must satisfy:
   P5 nothing unmapped: every path maps to a module (repo-level files go to <repo>.root)
   P6 coverage floor: >= 95% of commits get a lead unless all their touched modules are
      deliberately skill-less (docs / repo-level / user-owned submodules)
+  P7 tech skills (kind tech) are never lead, co-lead, leg or follow-up
+  P8 every routing.tech entry is used_by a working (lead/co-lead/leg) skill of that commit
 
 Usage: tests/routing-properties.test.py [--commits N]   (default 120 per repo; client since 2026-09-07)
 Skips a repo that is not present. Exit 1 on any violation.
@@ -42,6 +44,7 @@ def key(rt):
 
 
 skillless = {m["id"] for m in REG["modules"] if not m.get("skills")}
+tech = {k for k, v in REG["skills"].items() if v.get("kind") == "tech"}
 viol, stats = [], {}
 rng = random.Random(7)
 for rk, rep in REG["repos"].items():
@@ -71,6 +74,12 @@ for rk, rep in REG["repos"].items():
         both = ({rt["lead"]} | set(rt["co_leads"])) & set(rt["follow_ups"])
         if both - {None}:
             viol.append(f"P4 {rk}@{s}: {sorted(both)} both lead and follow-up")
+        routed = ({rt["lead"]} | set(rt["co_leads"]) | set(rt["legs"]) | set(rt["follow_ups"])) - {None}
+        if routed & tech:
+            viol.append(f"P7 {rk}@{s}: tech skill(s) {sorted(routed & tech)} routed as lead/leg/follow-up")
+        bad_tech = [t for t in rt.get("tech", []) if not set(REG["skills"][t].get("used_by", [])) & (routed - set(rt["follow_ups"]))]
+        if bad_tech:
+            viol.append(f"P8 {rk}@{s}: routing.tech {bad_tech} not used by any working skill")
         if r["unmapped"]:
             viol.append(f"P5 {rk}@{s}: unmapped {r['unmapped'][:3]}")
         if rt["lead"]:

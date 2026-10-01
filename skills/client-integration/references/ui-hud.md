@@ -1,6 +1,6 @@
 # UI and HUD procedure
 
-Verified 2026-09-30. Sources: `docs/UI-ARCHITECTURE.md` (authoritative, set 2026-08-21),
+Verified 2026-09-30 (HUD data path, workflows and _SampleBuild re-checked 2026-10-01). Sources: `docs/UI-ARCHITECTURE.md` (authoritative, set 2026-08-21),
 `docs/HUD-BRIDGE.md`, `.github/workflows/uxml-codegen-drift.yml`, `Assets/Scripts/UI/Hud/`.
 
 ## Which technology
@@ -50,12 +50,9 @@ Verified 2026-09-30. Sources: `docs/UI-ARCHITECTURE.md` (authoritative, set 2026
 
 ## HUD data path (do not bypass)
 
-`NetworkEntity`/`NetworkEntityState`/`LocalTransform` -> `HudStateSystem` (Simulation group,
-compares before writing, quantizes to 0.1) -> `HudState` singleton -> `HudBridgeSystem`
-(Presentation group, pure `Convert`) -> `HudSnapshot` -> `HudPresenter` -> `HudViewModel`
-(`BindableViewModel`) -> `HudView` / `HudView.uxml`. Host: `HudWorldBridge`
-(`[RequireComponent(UIDocument)]`, not DI-injected). Teardown: sink first, then
-`HudEcsBootstrap.Uninstall`, then the view.
+ECS -> `HudStateSystem` -> `HudState` -> `HudBridgeSystem` -> `HudSnapshot` -> `HudPresenter` ->
+`HudViewModel` -> `HudView`. How each hop, the install and the teardown work:
+`rpg-factory:unity-client-tech` (`references/ecs-and-async.md` there).
 
 Adding a HUD field: extend `HudState` (+ `IEquatable`), the aggregator, `HudSnapshot`, the
 ViewModel property, the UXML element + regenerated binding, and the tests

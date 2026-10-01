@@ -13,12 +13,11 @@ Task: $ARGUMENTS
 
 ## Applies when / Not when
 
-- **Applies:** edits under `backend/deploy/` (docker, compose, `stack.sh`, `Makefile`, `k8s/`,
-  `k3s/`, `agones/`, `monitoring/`, `db/`, `environments.tsv`, `preflight-isolation.sh`),
-  `.github/workflows/cd.yml` / `publish-images.yml`, deploy docs, the verify probe, post-deploy smoke.
-- **Not when:** the change is in `backend/gateway`, `backend/gameserver-dotnet` code, `backend/shared`,
-  Nakama plugin code, or a benchmark. Hand those off (see Scope). This skill **authors and validates
-  offline**; it never deploys.
+- **Applies:** `backend/deploy/` (docker, compose, `stack.sh`, `Makefile`, `k8s/`, `k3s/`, `agones/`,
+  `monitoring/`, `db/`, `environments.tsv`, `preflight-isolation.sh`), `cd.yml` / `publish-images.yml`,
+  deploy docs, the verify probe, post-deploy smoke.
+- **Not when:** gateway, game server, `shared` or Nakama plugin code, or a benchmark (hand off, see
+  Scope). This skill **authors and validates offline**; it never deploys.
 
 ## Scope
 
@@ -33,26 +32,24 @@ jq '.modules[] | select(.id|startswith("server.deploy") or .=="server.monitoring
 
 Hand-offs: new gameserver knob or env var -> `server-realtime`, which also adds the `env:` passthrough
 lines of the five `server-knobs` copies plus the deploy CHANGELOG entry in the knob commit (contract
-`co_edit`); this skill owns the values (`.env.example`, `20-configmaps.yaml` keys) and everything else; migration SQL, both canonical (`GameServer/Persistence/Migrations/`) and the
-`db/migrations/gamestate/*.sql` + `db/init-gamestate.sql` copies -> `server-services`. In `server.db`
-this skill owns only `db/{backup,restore,redis-backup,redis-restore}.sh` and the `cd.yml` backup/migrate steps; `scripts/` at repo root (`build-all.sh`, `deploy-local.sh`,
-`bootstrap-vps.sh`) -> `server.scripts`; load/bench numbers -> `measure`.
+`co_edit`); this skill owns the values (`.env.example`, `20-configmaps.yaml` keys) and everything else.
+Migration SQL (canonical and the `db/` copies) -> `server-services`; in `server.db` this skill owns only
+`db/{backup,restore,redis-backup,redis-restore}.sh` and the `cd.yml` backup/migrate steps. Repo-root
+`scripts/` -> `server.scripts`; load/bench numbers -> `measure`.
 Order when combined with a code change: code skill first, then this skill for its deployment.
 
 ## Workflow delta
 
-1. **Classify the target** of every edit: local compose (dev box), k3d dev cluster `k3d-rpg-dev`
-   (shared: CD `DEPLOY_MODE=k8s` applies to it), staging/production (compose/host on the runner host).
-   Anything past "edit a file and validate offline" is a human gate.
-2. **Read the doc that governs the file** before editing (map in `references/manifests-and-checks.md`).
-   The docs carry the incident history behind each invariant; `backend/deploy/CLAUDE.md` "File Structure
-   Target" is aspirational, the tree is the truth.
+1. **Classify the target** of every edit: local compose, k3d dev cluster `k3d-rpg-dev` (shared: CD
+   `DEPLOY_MODE=k8s` applies to it), staging/production (runner host). Past offline = human gate.
+2. **Read the governing doc** first (map in `references/manifests-and-checks.md`); it carries the
+   incident history. `backend/deploy/CLAUDE.md` "File Structure Target" is aspirational; the tree is truth.
 3. **Env edits are two-sided.** Adding/removing an `env:` entry in a fleet or a compose gameserver service
    is checked against the gameserver's declared knobs by `GameServer.Tests/Deploy/*PassthroughTests`.
    Changing a port/deploy dir/compose project for an environment = GitHub Environment variable **and**
    its `environments.tsv` row in the same change (`docs/CICD.md` "reserved-identity registry").
-4. **Validate offline** (Validation delta), comparing against the base commit where a check is
-   already red at HEAD. Never "fix" a pre-existing failure silently; report it.
+4. **Validate offline** (Validation delta) against the base commit where a check is already red;
+   never "fix" a pre-existing failure silently; report it.
 5. **Stop before any live action** and hand the user the exact command (Human gates).
 6. Obligations: `backend/deploy/CHANGELOG.md` `[Unreleased]`; the matching `backend/deploy/docs/*.md`.
 
@@ -68,8 +65,8 @@ A switch only goes **on** after every capability it needs exists; it goes **off*
 4. Smoketest / verify pin the **target** cluster's certificate (`smoke/`, `k8s/verify/`).
 5. Then flip the manifest, and validate end to end (killprobe / dungeonprobe / verify) - external, human-gated.
 
-History: `ed090ab` (every dungeon entry failed once meta-hop TLS went on), `437a3db` (verify pinned dev's
-certificate against another cluster). Report which of 1-4 are done, with evidence, before flipping.
+History: `ed090ab` (meta-hop TLS broke dungeon entry), `437a3db` (verify pinned another cluster's
+certificate). Report which of 1-4 are done, with evidence, before flipping.
 
 ## Rules
 
@@ -78,15 +75,16 @@ certificate against another cluster). Report which of 1-4 are done, with evidenc
   only (ADR-14 decision 5). Source: `docs/K3S.md` "Why there is no autoscaler on a MAP fleet".
 - Apply order in `k8s/app/`: autoscaler last, after the dungeon fleet image is pinned
   (`k8s/app/README.md` "Apply"). `dev-up.sh` encodes the order; do not reorder by hand.
+- ADR-17: on k8s every component is one replica and every gateway rollout is a join outage (accepted
+  for dev only). The `hostPort` workloads (gateway 7000, Nakama 7001) keep `strategy: Recreate`; a
+  second replica or RollingUpdate there is a new ADR decision, not a manifest tweak.
 - Fleets: port named `game`, `portPolicy: Dynamic`, `POD_NAME` from `metadata.name`, no `GAMESERVER_ID`,
   no `GAMESERVER_PUBLIC_ADDR`, no literal secret values (`docs/K3S.md` "Offline validation").
-- Secrets never in git: `k8s/app/30-secret-template.yaml` and `agones/secret-example.yaml` stay templates;
-  `.env`, `.env.scratch`, `kubeconfig.local*` are gitignored (`backend/deploy/.gitignore`).
-- WSL: `docker` is Docker Desktop's shim. Bind-mount sources must be literal relative paths
-  (`./monitoring`), never `$PWD`/absolute (`docs/CICD.md` "path-translation rule").
-- `monitoring/prometheus.yaml` replaces the otel-lgtm default: keep the copied `otlp:`/`storage:` blocks
-  when bumping `OTEL_LGTM_VERSION`; keep `metric_name_escaping_scheme: underscores` on gameserver jobs
-  (`docs/MONITORING.md`).
+- Secrets never in git: `k8s/app/30-secret-template.yaml`, `agones/secret-example.yaml` stay templates.
+- WSL `docker` is Docker Desktop's shim: bind-mount sources literal relative (`./monitoring`), never
+  `$PWD`/absolute (`docs/CICD.md` "path-translation rule").
+- `monitoring/prometheus.yaml`: keep the copied `otlp:`/`storage:` blocks on `OTEL_LGTM_VERSION` bumps and
+  `metric_name_escaping_scheme: underscores` on gameserver jobs (`docs/MONITORING.md`).
 - DB: never edit a shipped migration; `db/migrations/gamestate/*.sql` are verbatim ops copies of
   `GameServer/Persistence/Migrations/`; `db/init-gamestate.sql` mirrors `001_init.sql` only
   (`docs/DATABASE.md` section 1).
@@ -96,16 +94,14 @@ certificate against another cluster). Report which of 1-4 are done, with evidenc
 
 ## Generated & protected paths
 
-- Protected (never read, never commit): `backend/deploy/.env`, `.env.scratch`, `kubeconfig.local*`,
-  `agones/secret-*.local.yaml`. Use `.env.example` when a command needs an env file.
-- `modules/*.so`: built by `make plugin` (gitignored).
-- `k8s/app/proof/`, `k8s/verify/tests/` fixtures: captured evidence; change only with a new capture.
-- No generator-owned files in these modules.
+- Protected (gitignored; never read, never commit): `backend/deploy/.env`, `.env.scratch`,
+  `kubeconfig.local*`, `agones/secret-*.local.yaml`. Use `.env.example` when a command needs an env file.
+- `modules/*.so` built by `make plugin` (gitignored). `k8s/app/proof/`, `k8s/verify/tests/` fixtures are
+  captured evidence: change only with a new capture. No generator-owned files.
 
 ## Validation delta
 
-Core's fast tier runs the registry checks. Domain reading of them (details and baseline results
-in `references/manifests-and-checks.md`):
+Core runs the registry checks; how to read them (baselines in `references/manifests-and-checks.md`):
 
 | Tier | Check | When | Evidence |
 |---|---|---|---|
@@ -117,23 +113,25 @@ in `references/manifests-and-checks.md`):
 | fast (server-services leg) | `MigratorTests` (`EmbeddedMigrations_MatchDeployCopies`, `InitGamestateSql_MatchesFirstMigration`) | `db/*.sql` (server-services leg) | passed counts |
 | fast | monitoring yaml/json parse | `monitoring/` | exit 0; **no promtool locally** - rule semantics NOT_AVAILABLE |
 
-External (never self-run): `kubectl apply --dry-run=server`, `k8s/verify/verify.sh --target ...`,
-`make flow-up && make flow-check`, `cd.yml` `post-deploy-smoke`. Report HUMAN_REQUIRED (external) with the
-command the user should run.
+External (never self-run, report HUMAN_REQUIRED with the command): `kubectl apply --dry-run=server`,
+`k8s/verify/verify.sh --target ...`, `make flow-up && make flow-check`, `cd.yml` `post-deploy-smoke`.
 
 ## Human gates
 
 Ask before, and never run unasked:
-- `kubectl`, `helm`, `k3d`, `k3s`, `ssh`, `scp`, and scripts that wrap them: `k8s/dev-up.sh`,
-  `k8s/rollback-to-compose.sh`, `k3s/setup-dev.sh`, `k3s/teardown-dev.sh`, `k8s/data/apply.sh`,
-  `k8s/registry/push.sh`, `k8s/verify/verify.sh` (read-only, but hits a live cluster;
-  `--allow-allocation` costs a GameServer).
-- Starting/stopping stacks: `stack.sh up|down|check`, `make flow-*|up|down|reset|monitoring-*`,
-  `docker compose up|down|restart`.
+- `kubectl`, `helm`, `k3d`, `k3s`, `ssh`, `scp` and their wrappers: `k8s/{dev-up,rollback-to-compose}.sh`,
+  `k3s/{setup,teardown}-dev.sh`, `k8s/data/apply.sh`, `k8s/registry/push.sh`, `k8s/verify/verify.sh`
+  (live cluster; `--allow-allocation` costs a GameServer).
+- Stacks: `stack.sh up|down|check`, `make flow-*|up|down|reset|monitoring-*`, `docker compose up|down|restart`.
 - `db/backup.sh`, `db/restore.sh` (destructive with `--yes`), `db/redis-*.sh`.
 - `gh workflow run cd.yml|publish-images.yml`, re-running CD runs, merging to develop/staging/release-*.
 - Reading or committing `.env`, `kubeconfig.local*`, secrets; editing GitHub Environment variables.
 - Any action against staging or production.
+
+## Tools
+
+- `docker`: compose `config -q` and image builds, offline only (missing: compose check NOT_AVAILABLE).
+- `context-mode`: validator / CD logs through it, only `[FAIL]`/`[warn]` lines enter context (else grep).
 
 ## Review checklist
 
@@ -141,13 +139,13 @@ Ask before, and never run unasked:
 - [ ] Map fleet still `replicas: 1`, no autoscaler targets it; dungeon autoscaler `Buffer`.
 - [ ] Env added to fleet/compose is a declared gameserver knob (passthrough tests) and documented.
 - [ ] Port/identity changes mirrored in `environments.tsv` and called out for the GitHub Environment.
-- [ ] Bind mounts relative; new mount source is bundled by `cd.yml` `bundle` if compose needs it on hosts.
-- [ ] Validator `[FAIL]` set not larger than base; `[warn]` lines reviewed.
+- [ ] Bind mounts relative and bundled by `cd.yml` `bundle` if hosts need them; validator `[FAIL]` set
+  not larger than base, `[warn]` lines reviewed.
 - [ ] CHANGELOG + governing doc updated; stale doc claims touched by the change corrected.
 
 ## Report additions
 
-- Target environments affected and which gates are pending, each with the exact command for the user.
-- Validator output delta vs base commit (FAIL/warn lines), autoscaler test `RESULT=` line.
-- For compose/fleet env edits: passthrough test counts or the runner state.
+- Target environments affected and pending gates, each with the exact command for the user.
+- Validator output delta vs base commit (FAIL/warn lines), autoscaler `RESULT=` line, passthrough test
+  counts for compose/fleet env edits.
 - "Deploys on merge to develop: yes/no" for the change.

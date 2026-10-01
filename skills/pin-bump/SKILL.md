@@ -93,6 +93,15 @@ The client pins the toolkit in **two independent places**; `factory-status.py` l
 
 `tag` (the lead creates upstream tags - this skill only reports "needs tag"), `client-package-toggle`, `publish` (push/PR only on request).
 
+## Tools
+
+- Tech: `rpg-factory:unity-client-tech` when the bump's fallout reaches client code (asmdef references,
+  version defines, ECS system install, test assemblies).
+- `unity-mcp`: after the pin edit, let the Editor resolve packages and run `tests-run` for the affected
+  assemblies (filters: the client-integration skill's Unity MCP reference). Not reachable: Unity tests stay
+  HUMAN_REQUIRED and CI `01-ci` / `02-package-pins` are the evidence; never hand-edit the lock hash beyond
+  what `pin-plan.py` prints.
+
 ## Review checklist
 
 - [ ] Manifest string == lock `version`; lock `hash` == tag commit; no `file:`.

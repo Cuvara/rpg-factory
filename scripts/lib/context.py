@@ -337,12 +337,15 @@ def render(snap, reg, args):
                 + (f" · co-leads {', '.join(rt['co_leads'])}" if rt["co_leads"] else "")
                 + (f" · legs {', '.join(rt['legs'])}" if rt["legs"] else "")
                 + (f" · follow-ups {', '.join(rt['follow_ups'])}" if rt["follow_ups"] else "")
+                + (f" · tech {', '.join(rt['tech'])}" if rt.get("tech") else "")
                 + (" · **AMBIGUOUS** (same precedence class and order) - ask the user or pass --lead" if rt["ambiguous"] else "")
                 + (" · (override)" if rt.get("override") else ""))
             if rt["lead"] and not rt["ambiguous"]:
                 add(f"  **Next:** invoke the Skill tool with {code('rpg-factory:' + rt['lead'])} now - also for plan-only or "
                     "read-only requests; it owns this change's workflow, validation and gates"
-                    + (f", then {', '.join(code('rpg-factory:' + c) for c in rt['co_leads'])}" if rt["co_leads"] else "") + ".")
+                    + (f", then {', '.join(code('rpg-factory:' + c) for c in rt['co_leads'])}" if rt["co_leads"] else "") + "."
+                    + (f" Load the tech skill(s) {', '.join(code('rpg-factory:' + t) for t in rt['tech'])} when the work needs how "
+                       "the technology works here (architecture, idioms, pitfalls, single-test commands)." if rt.get("tech") else ""))
             regc = {c["id"]: c for c in reg.get("contracts", [])}
             for c in r["contracts"]:
                 src_repo = (regc.get(c["id"], {}).get("source") or {}).get("repo")

@@ -7,7 +7,7 @@ Verified against `rpg-mmo-server` `develop` @ `5023a3d` on 2026-09-30. Paths are
 
 | Area | Files | Governing doc |
 |---|---|---|
-| Images | `docker/Dockerfile.{gameserver-dotnet,gateway,nakama,nakama-plugin}` (build context `backend/`) | `docs/CICD.md` "Container images (GHCR)" |
+| Images | `docker/Dockerfile.{gameserver-dotnet,gateway,nakama}` (build context `backend/`). The Nakama plugin `.so` is built by `nakama-plugin.Dockerfile` (`Makefile:26`, `stack.sh:231`, `cd.yml:225`); `docker/Dockerfile.nakama-plugin` is referenced by nothing - do not edit it as the plugin build | `docs/CICD.md` "Container images (GHCR)", `docs/README.md` |
 | Local stack | `docker-compose.yml`, `docker-compose.override.yml` (second map server `gameserver-dotnet-map02`), `docker-compose.agones.yml` (kubeconfig mount + k3d network), `stack.sh up\|check\|health\|logs\|ps\|down [--scratch] [--no-build]`, `Makefile` (`flow-*` wrap `stack.sh`) | `docs/RUNBOOK-local-dev.md` |
 | Dev cluster, k8s-native | `k8s/data/` (kustomize: postgres x2, redis, nakama in `rpg-k8s-data`), `k8s/app/00..70-*.yaml` (gateway, map fleet, dungeon fleet, dungeon FleetAutoscaler in `rpg-k8s-realtime`), `k8s/dev-up.sh` (same script CD runs in `DEPLOY_MODE=k8s`), `k8s/rollback-to-compose.sh` | `k8s/README.md`, `k8s/app/README.md` |
 | Legacy Agones dev | `agones/fleet-map-dotnet-dev.yaml`, `agones/allocation-dev.yaml`, `agones/secret-example.yaml`, `k3s/{setup-dev,teardown-dev,lib}.sh`, `k3s/namespaces.yaml` (`rpg-realtime`, `rpg-meta`, `rpg-data`) | `docs/K3S.md` |

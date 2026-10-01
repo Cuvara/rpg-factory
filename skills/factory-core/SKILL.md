@@ -60,6 +60,8 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    `server-services`; a wire field → `wire-contract`), shown as **Cross-repo** in the downstream
    repo's routing; the other repos' skills are its follow-ups.
    **Co-leads** run after the lead in the order shown (code before deploy before measurement).
+   **Tech** skills are never leads: load one when the work needs how that technology works here. For
+   "Tools for this change", a tool that is not OK means its fallback applies; say which in the report.
    **Follow-ups** are later work in other repos - name them in the report. **AMBIGUOUS** means the
    registry cannot decide: ask the user, or pass `--lead <skill>` (validated). `--explain` shows
    why every skill was or was not selected.

@@ -33,6 +33,8 @@ followup() { echo "any(.suggested_skills[]; .role == \"follow-up\" and .skill ==
 contract() { echo "any(.contracts[]; .id == \"$1\")"; }
 gate()     { echo "any(.gates[]; .gate == \"$1\")"; }
 nolead()   { echo "(any(.suggested_skills[]; .role == \"lead\" and .skill == \"$1\") | not)"; }
+tech()     { echo "(.routing.tech | index(\"$1\"))"; }
+notech()   { echo "(.routing.tech | index(\"$1\") | not)"; }
 
 # history <name> <repo-key> <repo-dir> <sha> <predicate>
 history() {
@@ -100,6 +102,22 @@ assert "client build config -> client-integration" client "$(lead client-integra
 assert "content items.json -> server-realtime; gameplay gate" server \
   "$(lead server-realtime) and $(gate gameplay-rules)" backend/content/items.json
 assert "docs-only ADR edit -> no specialised lead" server "(.suggested_skills | length == 0)" backend/docs/ARCHITECTURE-DECISIONS.md
+
+assert "SGL change -> server-realtime leads, tech dotnet-gameserver listed, never routed" server \
+  "$(lead server-realtime) and $(tech dotnet-gameserver) and $(notech go-backend) and (any(.suggested_skills[]; .skill == \"dotnet-gameserver\") | not)" \
+  backend/gameserver-dotnet/Shared.GameLogic/Shared.GameLogic.csproj
+assert "gateway change -> tech go-backend, not dotnet-gameserver" server \
+  "$(lead server-services) and $(tech go-backend) and $(notech dotnet-gameserver)" backend/gateway/server/server.go
+assert "wire field -> both server tech skills (wire-contract uses both)" server \
+  "$(lead wire-contract) and $(tech dotnet-gameserver) and $(tech go-backend)" backend/shared/proto/wire.proto
+assert "client HUD ECS code -> tech unity-client-tech" client \
+  "$(lead client-integration) and $(tech unity-client-tech) and $(notech dotnet-gameserver)" Assets/Scripts/UI/Hud/Ecs/HudEcsBootstrap.cs
+assert "Netcode package code -> tech unity-client-tech via unity-package" netcode \
+  "$(lead unity-package) and $(tech unity-client-tech)" Runtime/Transport/ITransport.cs
+assert "sample build scripts -> client.buildscripts with build gates" client \
+  "$(lead client-integration) and (.touched == [\"client.buildscripts\"]) and $(gate unity-batch)" Assets/_SampleBuild/Editor/SampleBuilder.cs
+assert "deploy-only change -> no tech skill" server \
+  "$(lead server-ops) and (.routing.legs == []) and (.routing.tech == [])" backend/deploy/monitoring/prometheus.yaml
 
 echo "== history (real commits, replayed read-only)"
 history "action_seq wire change"              server rpg-mmo-server       2b1418c "$(lead wire-contract) and $(leg server-realtime)"

@@ -105,6 +105,15 @@ reported HUMAN_REQUIRED (external) with the exact command when not run.
 - Reading `.env` or cluster secrets (`kubectl get secret ...` for the Nakama key).
 - Committing results/doc changes; `core-baseline-*` tags (lead only).
 
+## Tools
+
+- Tech: `rpg-factory:dotnet-gameserver` for the tick phases, allocation guards and bench switches a server
+  number depends on (what `BENCH_TICK=1` measures, where a phase spends its time).
+- `dotnet`: micro-benchmarks and the server under test; `docker`: the compose stack and load generators
+  (stack start/stop stays a human gate). Missing either: that leg is NOT_AVAILABLE, not estimated.
+- `context-mode`: run long bench/load logs through it so only the summary lines and the record's numbers
+  enter the conversation (fallback: `tail` / `grep` the summary lines; the raw log stays in the results dir).
+
 ## Review checklist
 
 - [ ] Record written before the run; expected value had units and a reason.

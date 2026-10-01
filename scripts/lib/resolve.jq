@@ -148,6 +148,10 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
     co_leads: [ $leads[1:][] | .skill ],
     legs: [ $o.suggested_skills[] | select(.role == "leg") | .skill ],
     follow_ups: [ $o.suggested_skills[] | select(.role == "follow-up") | .skill ],
+    tech: ([ $o.suggested_skills[] | select(.role != "follow-up") | .skill ] as $working
+      | [ ($reg.skills // {}) | to_entries[] | select(.value.kind == "tech")
+          | select(any((.value.used_by // [])[]; . as $u | $working | index($u))) | {k: .key, o: (.value.order // 999)} ]
+      | sort_by(.o, .k) | map(.k)),
     ambiguous: (($leads | length) > 1 and $leads[0].class == $leads[1].class and $leads[0].order == $leads[1].order),
     precedence: "class (0 cross-repo contract driver, 1 contract owner via source, 2 primary module owner, 3 secondary owner), then skills.<name>.order",
     lead_basis: (if ($leads | length) == 0 then null else

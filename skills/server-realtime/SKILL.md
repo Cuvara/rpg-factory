@@ -37,7 +37,7 @@ modules); architecture map and wiring recipes: `references/gameserver.md`.
 ## Workflow delta
 
 1. **Classify before planning.** Each new number (HP, damage, cooldown, spawn rate, AI radius, knob default) is a gameplay rule. Stop and ask (`phase-plumbing-only`). Routing a value the user already gave is plumbing.
-2. **Place the code.** See `references/gameserver.md`. The core (Server, World, Net, Snapshot, Input) stays content-agnostic, and content goes behind `ISimulationPhase` in `Scaffolding/`, wired only in `Program.cs`. A new system implements `IEcsSystem` with `Group`, a unique `Order` and honest `ComponentAccess`. It keeps state on components, not in fields.
+2. **Place the code.** See `references/gameserver.md`. Before writing it, read `rpg-factory:dotnet-gameserver` for how the tech works here: tick order, which work is inline versus a system, EcsWorld locks, rates, the zero-alloc idioms, test fixtures and the one-test filter. The core (Server, World, Net, Snapshot, Input) stays content-agnostic, and content goes behind `ISimulationPhase` in `Scaffolding/`, wired only in `Program.cs`. A new system implements `IEcsSystem` with `Group`, a unique `Order` and honest `ComponentAccess`. It keeps state on components, not in fields.
 3. **Knob change = server-knobs obligation.** Follow `references/gameserver.md#knobs`. Declare the name as a `const string` and parse it strictly (exit 2). Then the passthrough lines must land in the **same commit**. The manifests belong to `server.deploy`, so for a single-repo server task this skill co-edits them (only the `environment:`/`env:` entries) and puts a `backend/deploy/CHANGELOG.md` entry in the same commit. Values (`.env.example`, ConfigMap keys) and anything else in those files are hand-offs to server-ops.
 4. **Metric or /status change.** Update `docs/METRICS.md` in the same change. No test enforces parity. Then check the consumers: `deploy/monitoring/{prometheus,alerts}.yaml` and `dashboards/rpg-gameplay.json` (server-ops), and `/status` field names read by the client DOTS sample (client-integration).
 5. **SGL change.** Registry rules apply (`.meta`, golden vectors, release). A signature or behaviour change is a two-repo contract (ADR-10): name the client impact and the `pin-bump` follow-up in the report.
@@ -47,6 +47,8 @@ modules); architecture map and wiring recipes: `references/gameserver.md`.
 Module rules are in the registry. These are the additions, each with its source:
 
 - Systems declare frequency only through `IEcsSystem.Group`. Never count ticks, test `tick % n` or read Hz. Group order Critical, World, Background is fixed (ADR-13; `Server/SimulationSchedule.cs`).
+- Rates that do not divide the critical rate are rejected at startup, not rounded (ADR-13 d2; `Server/SimulationRates.cs` `TryCreate`). Replication stays gated to the World rate (ADR-13 d7): the base rate would break the `< 50 KB/s` per-client mobile budget (ADR-7). A change to snapshot cadence or size needs a measure leg.
+- `Net/Transport/` (KCP PSK, ADR-8) and `Net/Sealed/` (X25519 + ChaCha20-Poly1305, nonce as replay counter, ADR-22; per-pod Ed25519 identity, ADR-25) have Go twins in `backend/shared/transport` and `backend/shared/sealed`. Changing framing, handshake or crypto bytes is wire-contract work; turning `GAMESERVER_SEALED` on in manifests is the `transport-security` contract (server-ops).
 - An under-declared `ComponentAccess` is a latent race: `IsDisjointFrom` is the future parallel predicate (`Server/SystemSchedule.cs`). Structural changes go through the world's deferred phase (ADR-11 d3, ADR-12 d2).
 - Never add `NoWarn` for the audited Collections.Pooled AOT warnings (`GameServer.csproj`); reflection JSON is caught by `Aot/JsonReflectionGuardTests.cs`.
 - ECS staging must not change the wire, and snapshot output stays byte-identical (ADR-12 d6; `Snapshot/SnapshotByteIdentityTests.cs`). Importance orders what is sent. It does not budget or gate interest. It is off by default (ADR-27).
@@ -64,7 +66,8 @@ Module rules are in the registry. These are the additions, each with its source:
 
 ## Validation delta
 
-- **fast:** `run-checks.py` runs the registry's `dotnet-build`, `dotnet-test`, `verify-test-counters`, `check-metas`. The dotnet-test skip count is **non-zero by design**. `Regenerate` skips without `GOLDEN_REGEN`, benches skip without `BENCH_TICK`/`BENCH_AOI`/`MEASURE_TIERING`, and the Docker fixtures skip without Docker. Name each skip family. Anything else that skipped is a finding. While iterating on knobs, `--filter "FullyQualifiedName~GameServer.Tests.Deploy"` is a quick targeted run, but it does not replace the full run.
+- **fast:** `run-checks.py` runs the registry's `dotnet-build`, `dotnet-test`, `verify-test-counters`, `check-metas`. The dotnet-test skip count is **non-zero by design**. `Regenerate` skips without `GOLDEN_REGEN`, benches skip without `BENCH_TICK`/`BENCH_AOI`/`MEASURE_TIERING`, and the Docker fixtures skip without Docker. Name each skip family. Anything else that skipped is a finding. While iterating, `{dotnet} test GameServer.Tests --filter "FullyQualifiedName~<Namespace.Class[.Method]>"` is the only selector (no `[Trait]`s); e.g. `~GameServer.Tests.Deploy` for knobs. It never replaces the full run.
+- **zero-alloc guard:** `GameServer.Tests/Snapshot/SnapshotAllocationTests.cs` runs in every `dotnet-test` and guards the snapshot path. It does not cover input/combat: for a change there, also run `Bench/TickAllocationBench.cs` (`BENCH_TICK=1`) as a local check; a number written into a doc is measure's.
 - **extended `golden-regen`:** run only for an intended behaviour change. Evidence: the `git diff --stat` of `GoldenVectors/`, with every changed case explained, and the non-regen suite passing afterwards.
 - **extended `aot-publish`:** triggered by a new component, serialization, a new package or a csproj change. Evidence: the publish succeeds and the only AOT/trim warnings are the audited `Collections.Pooled.PooledEnumerableJsonConverter` set (IL2026/IL3050 warnings, count = fact `aot-audited-warnings`, plus the IL3053/IL2104 summary lines, `docs/DESIGN.md`) - any new warning is a finding. The native interop run is Linux-only, so from WSL report it HUMAN_REQUIRED (external) (covered by `ci-dotnet.yml`).
 - **extended `integration-e2e`:** for a handshake, join or snapshot framing change (registry trigger).
@@ -93,3 +96,10 @@ Module rules are in the registry. These are the additions, each with its source:
 - Golden diff summary, or "GoldenVectors unchanged".
 - SGL: the API or behaviour change and its client impact, or "no SGL change". Whether it is ready to tag.
 - AOT: the warning set compared with the audited baseline, or HUMAN_REQUIRED with the trigger.
+
+## Tools
+
+- `dotnet`: build, `dotnet-test` and single-test runs, `aot-publish`. Not OK: CI `ci-dotnet.yml` is the evidence, reported as external.
+- `lsp-csharp`: find callers before changing an ECS component, an `EcsWorld` API, an `IEcsSystem`/`ISimulationPhase` member or a phase order. Not OK (today MISSING): `grep -rn` the symbol over `GameServer/`, `GameServer.Tests/`, `Shared.GameLogic/`, then `{dotnet} build`.
+- `context-mode`: keep `dotnet test` / `dotnet publish` logs out of context; return only the summary, failures and IL warning codes. Not OK: `tail`/`grep` the summary lines.
+- `codex`: a second diagnosis through `codex:rescue` when a tick, lock or race bug is stuck after one honest attempt; its output is reviewed like any diff and runs outside the Factory hooks. Not OK: no fallback needed.

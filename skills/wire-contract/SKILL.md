@@ -102,6 +102,16 @@ the next session, not a failure to hide.
 
 `tag` (Netcode vX.Y.Z, sgl-vX.Y.Z), `publish` (pushes/PRs per leg), production `--min-protocol-version` changes.
 
+## Tools
+
+- Tech: server legs load `rpg-factory:go-backend` (gateway/shared Go side) and `rpg-factory:dotnet-gameserver`
+  (C# bindings, Net layer) for how each side encodes, tests and runs one test.
+- `protoc`: `generate.sh` regeneration; a local version off the CI pin drifts generated code, so let CI
+  regenerate when it is not the pinned one (`--toolchain` shows the version).
+- `go`, `dotnet`: the server-leg builds and tests; missing = that leg's checks NOT_AVAILABLE, never skipped silently.
+- `lsp-go`: `find_references` / `blast_radius` on a generated message type or `shared` codec symbol before
+  renaming or removing it (fallback: grep every Go module that depends on `shared`).
+
 ## Review checklist
 
 - [ ] Field numbers never reused; removals reserved in `wire.proto`.

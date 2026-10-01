@@ -40,15 +40,17 @@ Architecture map and cross-process contracts: `references/service-map.md`. Migra
 
 ## Workflow delta
 
-1. **Read the ADR first** for any boundary: ADR-3 (redirect only), ADR-2 (one live server per
-   `map_id`), ADR-5 (Streams only), ADR-20 (kick by jti), ADR-24 (Nakama TLS / http_key),
-   ADR-26 (dungeon keyed by party) in `backend/docs/ARCHITECTURE-DECISIONS.md`.
+1. **Read the ADR first** for any boundary (`backend/docs/ARCHITECTURE-DECISIONS.md`): ADR-1 (one
+   writer per datum), ADR-2 (one server per `map_id`), ADR-3 (redirect only), ADR-4 (Redis roles),
+   ADR-5 (Streams), ADR-6 (<=30 s loss), ADR-20 (kick by jti), ADR-24 (Nakama TLS), ADR-26 (dungeons).
 2. **List the other side** of every contract the change touches (`references/service-map.md`
    table). `nakama-rpc`: this skill drives - list the gateway, game-server and client ends and hand the
    client end to `client-integration` as a follow-up. `shared/messages` wire types, `servers:id`,
    join-token claims: stop and route to `wire-contract`.
 3. **Implement** in the module, following its registry `rules` (Go standards from `backend/TEAM.md`
-   are in `server.shared`'s rules; the snapshot lists them for touched modules).
+   are in `server.shared`'s rules). How the Go code is wired (no `go.work`, storage seams, Nakama
+   idioms, test doubles): invoke `rpg-factory:go-backend`. Before changing an exported `shared`
+   symbol or storage interface, take its callers with `lsp-go`; build every dependent module.
 4. **Migrations:** follow `references/migrations.md` exactly - new numbered file in both places,
    never an edit to a shipped one.
 5. **Docs:** new RPC or message handling -> module `docs/API.md`; design change -> dated
@@ -70,9 +72,13 @@ Architecture map and cross-process contracts: `references/service-map.md`. Migra
 - The Nakama plugin makes no outbound network calls; callers come in over `runtime.http_key`
   (`backend/TEAM.md` Communication Channels).
 - Economy writes are atomic DB transactions with an idempotency guard; client-facing RPCs are
-  rate limited (`backend/nakama/CLAUDE.md` Key Design Constraints).
-- Nakama ABI: plugin Go toolchain and `github.com/heroiclabs/nakama-common` must match the
-  Nakama release in `nakama-plugin.Dockerfile` (`backend/deploy/docs/RUNBOOK-local-dev.md`).
+  rate limited (`backend/nakama/CLAUDE.md` Key Design Constraints). Anything of value is granted
+  through Nakama at grant time, never left to the 30 s save sweep (ADR-6).
+- One writer per datum (ADR-1): sessions = gateway, `player_states` = game server, meta = Nakama
+  API only; a second writer needs an ADR. New Redis keys take a role prefix from
+  `shared/constants/keys.go` and a TTL or trim bound: under `noeviction` a full Redis fails writes (ADR-4).
+- Nakama ABI: plugin toolchain and `nakama-common` match the pinned Nakama release
+  (`backend/deploy/docs/RUNBOOK-local-dev.md`; mechanics in `rpg-factory:go-backend`).
 - Never edit an applied migration; never add anything to `init-gamestate.sql` beyond what
   `001_init.sql` describes (`backend/deploy/docs/DATABASE.md`).
 - Migrations are expand/contract: CD migrates before the new binary starts.
@@ -91,7 +97,8 @@ Architecture map and cross-process contracts: `references/service-map.md`. Migra
 
 ## Validation delta
 
-Fast Go checks come from the registry via Core. This skill adds:
+Fast Go checks come from the registry via Core; to iterate on one test use the commands in
+`rpg-factory:go-backend` (its testing reference). This skill adds:
 
 - **Persistence / migrations** - fast, from `backend/gameserver-dotnet`:
   `{dotnet} test GameServer.Tests/GameServer.Tests.csproj -c Release --filter "FullyQualifiedName~GameServer.Tests.Persistence.MigratorTests" --logger "trx;LogFileName=test-results.trx"`.
@@ -101,7 +108,10 @@ Fast Go checks come from the registry via Core. This skill adds:
   all passed - a skip of either sync test means the repo tree was not found, report FAIL.
   Then Core's full `dotnet-test` for `server.gameserver-dotnet` still applies.
 - **integration-e2e** (extended, ask): trigger = join token, redirect, registry, party check,
-  kick, session or Streams behaviour changed. Always `-tags integration`; count `--- PASS`.
+  kick, session or Streams behaviour changed. Always `-tags integration -v`; count `--- PASS`
+  and list every `--- SKIP`. A skipped `TestDotnetInterop_*`, `selfreg` or `sealed_session` test
+  (`dotnet not found`, e.g. WSL with only `dotnet.exe`) is NOT evidence for a change on a
+  Go<->C# contract: report it NOT_RUN, never PASS, even though `go test` printed `ok`.
 - **nakama-plugin-image** (external): `make plugin` in `backend/deploy` or `./stack.sh up`; evidence
   is the Nakama log line `rpg-mmo nakama module loaded in <n>ms` (`main.go`), not a build exit.
 - **ci**: `ci.yml` (Go modules + integration on every PR) and `ci-dotnet.yml` for persistence.
@@ -128,3 +138,13 @@ Fast Go checks come from the registry via Core. This skill adds:
 - Contracts touched and the file of each side (or "none").
 - Migration table: version, name, both paths, MigratorTests counts.
 - Whether the Nakama plugin was rebuilt/loaded, or HUMAN_REQUIRED (external).
+- Interop evidence: `--- PASS` / `--- SKIP` counts of the integration run, or NOT_RUN with reason.
+
+## Tools
+
+- `go`: build, vet and test inside each touched module and every `shared` dependent. Fallback: CI `ci.yml`.
+- `lsp-go`: `blast_radius` / `find_references` / `find_callers` (MCP server `lsp`) at step 3 before an exported symbol or storage interface changes. Fallback: `grep -rn` across `backend/` + `go vet`/`go build` of every dependent module.
+- `pg-aiguide`: `search_docs` at step 4 for migration SQL: lock levels, `CREATE INDEX CONCURRENTLY`, adding columns with defaults. Fallback: the PostgreSQL docs for the server's version; state the lock taken in the report.
+- `context-mode`: run Go/.NET test suites and integration logs through `ctx_execute`, keep only pass/fail/skip lines. Fallback: `grep` for the summary lines.
+- `codex`: optional second review of a migration or contract change before reporting. Fallback: the Review checklist alone.
+- `docker`: plugin build (`make plugin`), Docker-backed MigratorTests and the e2e stack. Fallback: HUMAN_REQUIRED / CI, reported as not run locally.

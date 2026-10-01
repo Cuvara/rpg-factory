@@ -17,6 +17,10 @@ control, so ask before every asset edit.
 
 If the snapshot shows `unity-mcp` reachable and the session has the client's `ai-game-developer` MCP server, run
 the `tests-run` tool with `testMode` EditMode then PlayMode, filtered by `testAssembly` `NDC.Tests.Editor` /
-`NDC.Tests.Runtime`. Save open scenes first (dirty scenes abort the run). `unity-mcp-cli` is not installed in WSL;
-the tool call is the MCP one. Evidence: total/passed/failed/skipped per mode; zero executed = FAIL. Otherwise
-HUMAN_REQUIRED (external) (Editor closed).
+`NDC.Tests.Runtime`. To iterate on one test, add `testNamespace`, `testClass` or a fully-qualified `testMethod`
+(`Tests.Editor.<Fixture>.<Test>`) - the graded run is still the whole assembly per mode. Save open scenes first
+(dirty scenes abort the run); pre-existing compile errors stop it. `unity-mcp-cli` is not installed in WSL; the
+tool call is the MCP one. Evidence: total/passed/failed/skipped per mode; zero executed = FAIL.
+
+Editor closed: a batchmode `-runTests` run on a machine with Unity is the fallback (command:
+`rpg-factory:unity-client-tech` "Testing"); otherwise HUMAN_REQUIRED (external) (Editor closed).

@@ -111,6 +111,18 @@ topic name) - never by hand-editing the client.
 - `tag` / `npm publish` - lead only. Stop at "ready to tag".
 - Replacing a vendored DLL or bumping `unity` / dependency versions in `package.json`.
 
+## Tools
+
+- Tech: `rpg-factory:unity-client-tech` for Entities system lifecycle, asmdef/test-assembly rules, async and
+  main-thread rules and single-test runs; they apply to package code as well as the client.
+- `dotnet`: Netcode headless tests (`scripts/checks/netcode-headless.sh`); missing = NOT_AVAILABLE.
+- `unity-mcp`: package tests inside the client project (`testables`) and Editor compiles; not reachable =
+  HUMAN_REQUIRED / CI.
+- `lsp-csharp`: find callers of a public package API before changing it (MISSING here: grep the package,
+  the client and the DOTS Sample copy, then compile in the Editor or run the headless build).
+- `context-mode`: keep headless test and Editor logs out of context (fallback: the `.trx` counters only).
+- `codex`: second diagnosis for a stuck transport/prediction bug (`codex:rescue`); review its diff like any other.
+
 ## Review checklist
 
 - [ ] `.meta` for every new file **and folder** outside `~` dirs; staged before `check_metas.py`

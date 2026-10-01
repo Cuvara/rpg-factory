@@ -10,15 +10,14 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 
 Task: $ARGUMENTS
 
-The client is thin: networking, ECS views and UI navigation live in the `com.cuvara.*`
-packages. This repo composes them. Most client work is wiring, so the order of
-registrations and the scope a thing lives in matter more than the code volume.
+The client is thin: networking, ECS views and UI navigation live in the `com.cuvara.*` packages; this
+repo composes them, so registration order and scope matter more than code volume.
 
 ## Applies when / Not when
 
-Applies: `Assets/Scripts/**` (DI, Nakama, Session, UI/Hud, Benchmark), `Assets/DotsViews/`,
-`Assets/Resources/DotsViews/`, `Assets/VContainer/`, `Assets/BuildScripts/`, `BuildConfig/`,
-`Assets/Tests/`, client docs, client CI workflow files that call `unity-pipeline.yml`.
+Applies: `Assets/Scripts/**` (DI, Nakama, Session, UI incl. the HUD, Benchmark), `Assets/DotsViews/`,
+`Assets/Resources/DotsViews/`, `Assets/VContainer/`, `Assets/BuildScripts/`, `Assets/_SampleBuild/Editor/`
+(`PlayClientBuilder`, `SampleBuilder`), `BuildConfig/`, `Assets/Tests/`, client docs, client CI workflows.
 
 Not when: the fix belongs inside a package (a `NetworkClient`, codec, `RegisterNetworking`,
 `RegisterDotsViews`, `IScreenNavigator`, the UXML codegen) -> `unity-package`. Bumping a
@@ -29,40 +28,32 @@ multi-client measurements (`Tools/run-clients.sh`, `verify-multiclient.sh`) -> `
 
 ## Scope
 
-Repo `client`. Modules: `client.scripts`, `client.tests`, `client.ui`, `client.buildscripts`,
-`client.unity-assets`, `client.ci`. Read-only here: `client.packages`, `client.dots-sample`,
-`client.samples-imported`, `client.gdk-submodules`, `client.build-workflows`, `client.tools`
-(`measure`), `client.wire-conformance` (`wire-contract`); `client.docs` is updated as an obligation.
-
-Module rules come from the registry (the snapshot prints them for touched modules). Repo-level
-files (`.gitignore`, `.claude/`, root configs) map to the fallback `client.root`.
+Repo `client`. Modules: `client.scripts` (all C#, incl. UI code in `Assets/Scripts/UI/`), `client.tests`,
+`client.ui` (only the `Assets/UI Toolkit/` theme), `client.buildscripts`, `client.unity-assets`, `client.ci`.
+Read-only here: `client.packages`, `client.dots-sample`, `client.samples-imported`, `client.gdk-submodules`,
+`client.build-workflows`, `client.tools` (`measure`), `client.wire-conformance` (`wire-contract`);
+`client.docs` is updated as an obligation. Module rules: the snapshot; repo-level files -> `client.root`.
 
 ## Workflow delta
 
 1. **Find the layer.** Place the change with `references/composition.md` (scopes, what each
    registers, which asmdef and define guards it). New code goes in the asmdef that already owns
-   the folder; a new folder gets its own `.asmdef` (repo convention) plus `.meta`.
-2. **Check the package boundary.** Know which package version the client compiles against:
-   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py` (the pinned tag, not the gitignored
-   embedded clone and not package `develop`). Code against that tag's API only. If the change needs
-   a new or changed package API, stop the client leg and hand off (below). Never edit gitignored
-   `Packages/com.cuvara.*` clones.
+   the folder; a new `Assets/Scripts/` area gets its own `.asmdef` plus `.meta`. Before writing an ECS
+   system, async code, an asmdef or a test, follow `rpg-factory:unity-client-tech`.
+2. **Check the package boundary.** Code against the pinned tag's API only
+   (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py`; not the gitignored embedded clone, not package
+   `develop`, never edit those clones). A new or changed package API stops the client leg (hand-off below).
 3. **UI work:** run the 10 questions in `docs/UI-ARCHITECTURE.md` "Before implementing
    anything" and follow `references/ui-hud.md`. Edit `.uxml` in a way that regenerates the
    `Generated/*.uxml.g.cs` (Editor save through the codegen) and commit both.
-4. **Assets.** Scenes, prefabs, `.asset` and `.meta` are Unity-serialized: create and modify them
-   in the Editor (Unity MCP tools in the client's `.claude/skills/`), never by hand-editing YAML.
-   See *Human gates*.
-5. **Tests.** Add EditMode tests to `Assets/Tests/Editor` (asmdef `NDC.Tests.Editor`, namespace
-   `Tests.Editor`); PlayMode tests only where a live `UIDocument`/frame loop is required
-   (`Assets/Tests/Runtime`, `NDC.Tests.Runtime`). Presenters and flows are tested as plain C#
-   against fakes (`MainSessionFlowTests`, `HudPresenterTests` are the pattern).
+4. **Assets.** Scenes, prefabs, `.asset` and `.meta` change in the Editor (Unity MCP), never by
+   hand-editing YAML. See *Human gates*.
+5. **Tests.** EditMode in `Assets/Tests/Editor` (`NDC.Tests.Editor`); PlayMode in `Assets/Tests/Runtime`
+   only for a live `UIDocument`/frame loop (it cannot see ECS). Templates: `rpg-factory:unity-client-tech`.
 6. **Docs.** Wiring changes update `docs/DOTS-WIRING.md` / `docs/HUD-BRIDGE.md` /
    `docs/UI-ARCHITECTURE.md` as applicable, plus the root `CHANGELOG.md` `[Unreleased]`.
 
 ## Cross-repo hand-offs
-
-This skill is often the **last leg** of someone else's chain, or starts one:
 
 | Situation | Hand to | Client resumes when |
 |---|---|---|
@@ -71,17 +62,13 @@ This skill is often the **last leg** of someone else's chain, or starts one:
 | Nakama RPC changed | `server-services` drives `nakama-rpc` | server side merged; update `PartyService.cs` / `NakamaAuthProvider.cs` callers |
 | compile/test fallout after a pin move | this skill, as `pin-bump`'s follow-up | now |
 
-- Before starting, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`: a pending pin-bump or an
-  incomplete wire rollout means the client code you need may not be pinned yet - say so instead of
-  coding against unreleased package code.
-- Use the same `<type>/<area>/<topic>` branch topic as the upstream legs; name open hand-offs and
-  their owning skill in the report.
+- First `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`: a pending pin-bump or wire rollout means the
+  code you need is not pinned yet - say so. Reuse the upstream legs' `<type>/<area>/<topic>` branch topic.
 
 ## Unity-MCP hand-off
 
-Editor-owned files (scenes, prefabs, ScriptableObjects, `.meta`) change only through the client's Unity-MCP
-skills, behind the `unity-asset-edit` gate; tests run through `tests-run`. Factory's hooks do not inspect MCP
-calls - ask before every asset edit. Table and rules: `references/unity-mcp.md`.
+Editor-owned files change only through the client's Unity-MCP skills behind the `unity-asset-edit` gate (hooks
+do not inspect MCP calls - ask before every edit); tests run through `tests-run`. `references/unity-mcp.md`.
 
 ## Rules
 
@@ -96,17 +83,12 @@ calls - ask before every asset edit. Table and rules: `references/unity-mcp.md`.
 - **Never wire GameFoundation's screen flow** (`RegisterScreenManager`, `IScreenManager`,
   `RegisterGameFoundation`). The only navigation is `com.cuvara.uitoolkit`'s `IScreenNavigator`.
   The check is a human grep of `Assets/` returning nothing (`docs/UI-ARCHITECTURE.md`).
-- **ECS never touches UI Toolkit.** ECS -> adapter/presenter -> View; the HUD bridge is the model
-  (`docs/HUD-BRIDGE.md`). World-space/combat UI stays prefab/uGUI - it is not legacy.
+- **ECS never touches UI Toolkit** (ECS -> bridge -> presenter -> View, `docs/HUD-BRIDGE.md`).
 - **The `[DOTSNet]` session log lines are a contract** with `Tools/verify-multiclient.sh`
   (`MainSessionFlow` remarks): change both in one commit or not at all.
-- **Nakama RPC names** (`gateway_token`, `party_create|join|leave|get`) and their JSON
-  (`party_id`, `token`) are contract `nakama-rpc` - a rename is driven by `server-services`; this skill
-  updates the client caller as its follow-up, never alone.
-- **TLS pinning has no accept-any mode** (`PinnedCertificateHandler`); a missing pin means Unity's
-  own validation (ADR-24 via `GameLifetimeScope` comments). Do not add a bypass.
-- **Scripting backend differs per target** (IL2CPP on Android/WebGL, Mono on Standalone): a
-  Windows build proves nothing about AOT or stripping (`CLAUDE.md` "Scripting backend").
+- **Nakama RPC names/JSON** (`gateway_token`, `party_*`, `party_id`, `token`) are contract `nakama-rpc`.
+- **TLS pinning has no accept-any mode** (`PinnedCertificateHandler`, ADR-24); do not add a bypass.
+- **A Windows (Mono) build proves nothing about IL2CPP/stripping** (`CLAUDE.md` "Scripting backend").
 - `EditorBuildSettings` changes from `SampleImporter -addToBuild 1` are never committed; the
   release player boots `MainScene` (`CLAUDE.md` "Importing a package sample").
 
@@ -118,7 +100,6 @@ calls - ask before every asset edit. Table and rules: `references/unity-mcp.md`.
 | `*.meta`, scenes, prefabs, `.asset`, root `*.csproj`/`*.sln` | Unity Editor |
 | `Assets/Resources/DotsViews/DotsViewLibrary.asset` | Editor (`Cuvara/DOTS/Create Placeholder View Library` or the asset menu) |
 | `Assets/AddressableAssetsData/**` (`dots/view/*` addresses) | Addressables window |
-| `Assets/Samples/**`, `Packages/com.gdk.*`, `unity-build-workflows/` | not ours - see Scope |
 
 ## Validation delta
 
@@ -126,11 +107,12 @@ Fast (Core) only covers `BuildConfig` JSON. The domain checks are external:
 
 - **Unity Test Runner** (`unity-test-runner`): `tests-run` (EditMode then PlayMode, `NDC.Tests.Editor` /
   `NDC.Tests.Runtime`) when `unity-mcp` is reachable - details in `references/unity-mcp.md`; zero executed = FAIL.
-- **CI** `01-ci.yml` (tests, no player; ignores `**.md` and `docs/**`) and
-  `uxml-codegen-drift.yml` (any `*.uxml`/`*.uxml.g.cs`/lock change) on the PR. Count jobs.
-- **Player build** only if the change is build-affecting: `10-build-development.yml` is a
-  gated dispatch; verify the artifact with `strings -el` plus a control (`CLAUDE.md`
-  "Verifying a player build").
+- **CI** `01-ci.yml` (tests, no player; ignores `**.md`, `docs/**`) and `uxml-codegen-drift.yml` (any
+  `*.uxml`/`*.uxml.g.cs`/lock change) on the PR. Count jobs. A docs-only PR runs `01-ci-docs.yml`,
+  which reports the six required contexts as no-op echoes - its green "Unity Tests" is not evidence.
+  `02-package-pins.yml` and `sgl-pin-check.yml` run when `Packages/manifest.json`/lock change.
+- **Player build** only if build-affecting: `10-build-development.yml` (gated dispatch) or a local
+  `PlayerBuilder` / `_SampleBuild` build; verify with `strings -el` plus a control (`CLAUDE.md`).
 - A `DotsViewArchetypes` / view-library change: `DotsViewLibraryValidationTests` (EditMode) and
   `DotsViewLibraryBuildCheck` (runs inside every build) are the evidence.
 
@@ -140,7 +122,7 @@ Fast (Core) only covers `BuildConfig` JSON. The domain checks are external:
   get a yes, save the scene, then show `git status` of the asset and its `.meta`.
 - Dispatching `10-build-development`, `11-build-release`, `20/22/23/24-release-*`.
 - `toggle-packages.sh dev|release` (workspace root): rewrites `manifest.json` only.
-- Unity batch mode `-executeMethod PlayerBuilder.Build|SampleImporter.Import|StrippingProbeBuilder.Build|AddressableBuilder.Build`.
+- Unity batch mode `-executeMethod PlayerBuilder.Build|SampleImporter.Import|StrippingProbeBuilder.Build|AddressableBuilder.Build|PlayClientBuilder.Build|SampleBuilder.Build`.
 - Touching the user's baseline (dirty `Packages/com.gdk.*`, untracked `Assets/Samples/**`, scratch scenes).
 
 ## Review checklist
@@ -158,3 +140,10 @@ Fast (Core) only covers `BuildConfig` JSON. The domain checks are external:
 - Unity Test Runner table per mode (or HUMAN_REQUIRED (external) + why), and the CI job count.
 - For asset edits: asset path, how it was edited (MCP tool / Editor), `.meta` included.
 - Any hand-off opened (`unity-package`, `pin-bump`, `wire-contract`) and its state.
+
+## Tools
+
+- `unity-mcp`: asset edits (gated) and `tests-run`; fallback: report tests HUMAN_REQUIRED, never hand-edit YAML.
+- `lsp-csharp`: symbol lookup across client and pinned packages; fallback: grep plus an Editor compile via `unity-mcp`.
+- `context-mode`: keep CI, batchmode and Editor logs out of the conversation; fallback: `tail`/`grep` the summary.
+- `codex`: second diagnosis of a stuck client bug (`codex:rescue`), reviewed like any diff; fallback: none needed.
