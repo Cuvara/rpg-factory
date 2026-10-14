@@ -117,8 +117,11 @@ Read-only `gh` (view/list/checks/diff/status/search, `gh api` GET, GraphQL queri
 - **Pre/PostToolUse** (Bash, PowerShell) compare ref fingerprints (branches, tags,
   remote-tracking refs, stash, HEAD) around every command. Each tool call has its own snapshot
   (`pre-<tool_use_id>.json`); a denied call's snapshot is never compared by a later command and is
-  pruned after 2 h. Changes are expected only in a repo the command visibly ran git in - or in which
-  another session's (or a parallel call's) *completed* command visibly ran git during this window.
+  pruned after 2 h. Changes are expected only in a repo the command visibly ran git in, or when another
+  session's (or a parallel call's) *completed* command saw the same ref reach the same value through git
+  subcommands that make that kind of change (its own checked-out branch for `commit`/`reset`/..., new
+  branches for `branch`/`switch -c`, remote-tracking refs for `fetch`/`push`, `refs/stash` for `stash`).
+  Failing commands are checked too (PostToolUseFailure).
 - **Violations:** any tag change (never explained by anyone's git); ref/HEAD/stash/push changes
   without a visible git command in that repo; a baseline file modified or deleted; a user submodule
   moved or its dirty files changed. A visible `git stash` is not a violation; it is appended to the
@@ -147,6 +150,8 @@ your command. Recovery:
 
 Limits: git run by a background process, or by another runtime without these hooks, is attributed to
 whichever command's window it lands in (a STOP, never a silent pass); so is another session's command
-that has not finished when this one's PostToolUse runs. Remote-only GitHub changes are invisible to it
+that has not finished when this one's PostToolUse runs. A hidden change to exactly the ref a concurrent
+visible git command could make (for example a script moving the branch another session is committing on)
+is attributed to that command, as it always was within one command. Remote-only GitHub changes are invisible to it
 (the guard is the only control). State lives outside the repos (`lib/fstate.py`: scratch under
 `$TMPDIR` or `/tmp`; events, audit and evidence under `~/.local/state/rpg-factory`).

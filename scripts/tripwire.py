@@ -113,7 +113,11 @@ def call_key(payload):
 
 
 def snap_file(sd, payload):
-    return os.path.join(sd, "pre-" + (call_key(payload) or "nokey") + ".json")
+    key = call_key(payload)
+    if not key:  # no tool_use_id: one snapshot per distinct command, so parallel calls do not share a file
+        cmd = str(((payload or {}).get("tool_input") or {}).get("command") or "")
+        key = "nokey-" + hashlib.sha1(cmd.encode("utf-8", "replace")).hexdigest()[:12]
+    return os.path.join(sd, "pre-" + key + ".json")
 
 
 def prune(d, prefix, ttl, suffix=".json"):
@@ -302,8 +306,8 @@ def is_read_only(payload):
                 continue  # `git branch --list 'backup/*'`: a pattern after --list only filters
             if sub == "stash" and args[:1] in (["list"], ["show"]):
                 continue
-            if sub == "reflog" and args[:1] not in (["expire"], ["delete"]):
-                continue  # inspecting reflogs is how a latch is investigated; expire/delete are not read-only
+            if sub == "reflog" and not {"expire", "delete", "drop", "write"} & set(args):
+                continue  # show / list / exists / <ref>; expire, delete, drop and write rewrite reflogs  # inspecting reflogs is how a latch is investigated; expire/delete are not read-only
             if sub == "tag" and (not args or set(args) & {"-l", "--list"}):
                 continue
             if sub in {"remote", "config", "worktree"} and args[:1] in (["-v"], ["--get"], ["list"], ["get-url"], ["--list"], ["show"]):
@@ -427,7 +431,10 @@ def cached_fingerprint(sd, top, sig):
         return hit["fp"]
     fp = fingerprint(top)
     cache[top] = {"sig": sig, "fp": fp}
-    fstate.write_json(cf, cache)  # atomic: parallel calls of one session share this cache
+    try:
+        fstate.write_json(cf, cache)  # atomic: parallel calls of one session share this cache
+    except OSError:
+        pass  # only a cache: a lost write costs speed, never the comparison
     return fp
 
 
@@ -638,9 +645,17 @@ def take_snapshot(sd, payload):
     return snap
 
 
+def repo_key(top):
+    """Refs live in the common git dir: a worktree and its main checkout share them."""
+    gd = gitdir_of(top)
+    return os.path.normcase(os.path.abspath(common_dir(gd))) if gd else os.path.normcase(os.path.abspath(top))
+
+
 def other_git(ws, payload, since):
-    """{top: subcommands} that OTHER completed calls (other sessions, or parallel calls of this one) visibly ran
-    since `since` - their own guard judged that git, so it explains ref changes in those repos here."""
+    """{repo_key: {ref: {new values}}} that OTHER completed calls (other sessions, or parallel calls of this one)
+    saw change while their own visible git ran in that repo, since `since`. A ref change here is explained only
+    when the same ref reached the same value there - never by a read-only git command, never a tag, never a
+    different ref (a script resetting `develop` is not explained by someone's `git commit` on a feature branch)."""
     out = {}
     if not ws:
         return out
@@ -657,8 +672,9 @@ def other_git(ws, payload, since):
         rec = load_json(os.path.join(d, n))
         if not isinstance(rec, dict) or rec.get("end", 0) < since or rec.get("start", now + 1) > now:
             continue
-        for top, subs in (rec.get("expected") or {}).items():
-            out.setdefault(top, set()).update(subs)
+        for rk, refs in (rec.get("explained") or {}).items():
+            for ref, new in (refs or {}).items():
+                out.setdefault(rk, {}).setdefault(ref, set()).add(new)
     return out
 
 
@@ -667,15 +683,63 @@ def state_key(payload):
     return sid + "--" + (call_key(payload) or "nokey")
 
 
-def record_activity(ws, payload, snap):
-    """A completed call that visibly ran git: lets concurrent calls attribute its ref changes correctly."""
-    if not ws or not snap.get("expected"):
+def record_activity(ws, payload, snap, explained):
+    """A completed call whose visible git changed refs: lets concurrent calls attribute exactly those changes."""
+    if not ws or not explained:
         return
     d = fstate.activity_dir(ws)
     prune(d, "", ACTIVITY_TTL)
     fstate.write_json(os.path.join(d, state_key(payload) + ".json"),
                       {"session": payload.get("session_id"), "call": call_key(payload), "start": snap.get("at", 0),
-                       "end": time.time(), "expected": snap["expected"]})
+                       "end": time.time(), "command": (payload.get("tool_input") or {}).get("command"),
+                       "explained": explained})
+
+
+BRANCH_MOVERS = {"commit", "merge", "reset", "rebase", "cherry-pick", "revert", "pull", "am", "stash"}
+BRANCH_MAKERS = {"branch", "switch", "checkout", "worktree"}
+REMOTE_WRITERS = {"fetch", "pull", "push", "remote"}
+HEAD_WRITERS = {"switch", "checkout", "rebase", "bisect", "worktree", "merge", "pull"}
+
+
+def can_explain(subs, ref, old, new, current):
+    """Could git subcommands `subs` (run visibly by a call) have made this ref change? `current` = the branch
+    refs that call's checkout pointed at. Only these changes are offered to concurrent calls as explained -
+    a `git log`, or a `git switch -c feature`, never explains a hidden reset of `develop`."""
+    subs = set(subs)
+    if ref.startswith("refs/tags/"):
+        return False
+    if ref == "refs/stash":
+        return "stash" in subs
+    if ref.startswith("refs/remotes/"):
+        return bool(subs & REMOTE_WRITERS)
+    if ref == "HEAD":
+        return bool(subs & HEAD_WRITERS)
+    if ref.startswith("refs/heads/"):
+        if old is None:                       # created
+            return bool(subs & BRANCH_MAKERS)
+        if new is None:                       # deleted
+            return "branch" in subs
+        return bool(subs & BRANCH_MOVERS) and ref in current   # moved: only the branch that call had checked out
+    return False
+
+
+def excuse(before, after, theirs, top):
+    """`before` with every ref change another call explained (same ref, same new value) taken out."""
+    if not before or not after or not theirs:
+        return before
+    ra, rb = dict(before["refs"]), after["refs"]
+    for n in set(ra) | set(rb):
+        if n.startswith("refs/tags/") or ra.get(n) == rb.get(n):
+            continue
+        if rb.get(n) in theirs.get(n, ()):
+            if n in rb:
+                ra[n] = rb[n]
+            else:
+                ra.pop(n, None)
+    head = before.get("HEAD")
+    if head != after.get("HEAD") and after.get("HEAD") in theirs.get("HEAD@" + top, ()):
+        head = after.get("HEAD")
+    return {"HEAD": head, "refs": ra}
 
 
 def changed_refs(a, b):
@@ -715,12 +779,12 @@ def recovery_hints(top, refs):
     return hints
 
 
-def diff(top, key, a, b, expected_subs, protected):
+def diff(top, key, a, b, expected_subs, protected, refs_too=True):
     v = []
     if not a or not b:
         return v
     ra, rb = a["refs"], b["refs"]
-    names = set(ra) | set(rb)
+    names = (set(ra) | set(rb)) if refs_too else set()
     changed = sorted(n for n in names if ra.get(n) != rb.get(n))
     git_seen = bool(expected_subs)
     for n in changed:
@@ -764,22 +828,34 @@ def post(payload):
     base = load_json(os.path.join(sd, "baseline.json")) or {}
     violations = []
     ws = g.find_workspace(payload.get("cwd") or os.getcwd(), registry) if registry else None
-    others = other_git(ws, payload, snap.get("at", 0))
-    record_activity(ws, payload, snap)
+    try:
+        others = other_git(ws, payload, snap.get("at", 0))
+    except Exception:
+        others = {}  # cannot read the activity log: explain nothing (fail closed)
     now_sigs = dict(zip(snap["tops"], pmap(signature, snap["tops"])))
-    repos_hit, refs_hit, audited = {}, {}, set()
-    for top, key in snap["tops"].items():
+    repos_hit, refs_hit, audited, explained, ref_diffed = {}, {}, set(), {}, set()
+    # a worktree the command runs in first: its refs are shared with the main checkout, report them once there
+    order = sorted(snap["tops"].items(), key=lambda kv: not str(kv[1]).startswith("worktree:"))
+    for top, key in order:
         exp = snap["expected"].get(top, [])
         sig = now_sigs[top]
         if sig != snap.get("sig", {}).get(top):   # cheap-first: only re-read refs when something moved
             pats = g.protected_patterns(top, ws, registry) if ws and registry else g.DEFAULT_PROTECTED
             before, after = snap["fp"].get(top), cached_fingerprint(sd, top, sig)
             refs = changed_refs(before, after)
+            rk = repo_key(top)
+            if exp and refs:  # this call's own visible git: what it could have changed, for concurrent calls
+                current = {h.split(":", 1)[1].strip() for h in ((before or {}).get("HEAD"), (after or {}).get("HEAD"))
+                           if isinstance(h, str) and h.startswith("ref:")}
+                for n, (old, new) in refs.items():
+                    if can_explain(exp, n, old, new, current):
+                        explained.setdefault(rk, {})["HEAD@" + top if n == "HEAD" else n] = new
             if "stash" in exp and "refs/stash" in refs and tuple(refs["refs/stash"]) not in audited:
                 audited.add(tuple(refs["refs/stash"]))  # a worktree and its main checkout share refs/stash
                 audit_stash(ws, payload, top, key, refs)
-            v = diff(top, key, before, after, exp or sorted(others.get(top, ())),
-                     lambda br, p=pats: g.is_protected(br, p))
+            v = diff(top, key, excuse(before, after, others.get(rk), top), after, exp,
+                     lambda br, p=pats: g.is_protected(br, p), refs_too=rk not in ref_diffed)
+            ref_diffed.add(rk)
             if v:
                 violations += v
                 repos_hit[top], refs_hit[top] = key, refs
@@ -816,6 +892,10 @@ def post(payload):
             now = os.stat(full) if os.path.isfile(full) else None
             if (now is None or [now.st_mtime_ns, now.st_size] != st) and not git_restore:
                 violations.append(f"[{key}] pre-existing user file {path} was " + ("deleted" if now is None else "modified"))
+    try:
+        record_activity(ws, payload, snap, explained)
+    except Exception:
+        pass  # attribution help for other calls only; never costs this call its check
     if not violations:
         return 0
     msg = "; ".join(violations)
@@ -840,7 +920,8 @@ def post(payload):
             "the user (`tripwire.py --status` shows the event, ref values and recovery hints). Further mutating commands "
             "are denied until the user reviews the repos and runs: ! " + ack_command())
     print(json.dumps({"decision": "block", "reason": stop,
-                      "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": stop}}))
+                      "hookSpecificOutput": {"hookEventName": payload.get("hook_event_name") or "PostToolUse",
+                                             "additionalContext": stop}}))
     return 0
 
 
@@ -876,6 +957,8 @@ def archive_event(e):
     dst = os.path.join(dst_dir, e["id"] + ".json")
     now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     if e["legacy"]:
+        if os.path.exists(dst):  # an older legacy latch was archived under the same id: keep both
+            dst = os.path.join(dst_dir, f"{e['id']}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{os.urandom(2).hex()}.json")
         data = load_json(e["path"])
         if not isinstance(data, dict):
             data = {"raw": read(e["path"])}

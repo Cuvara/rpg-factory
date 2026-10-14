@@ -25,6 +25,7 @@ import json
 import os
 import re
 import threading
+import time
 
 
 def _usable(d):
@@ -95,14 +96,29 @@ def write_json(path, obj):
     """Atomic: readers (and concurrent hooks) never see a half-written file."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(obj, fh)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:  # Windows: another hook process has `path` open for a moment
+                if attempt == 4:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def ack_command(plugin_root):
     """The one acknowledgement command every message prints: forward slashes and double quotes, so it
-    survives Git Bash, WSL bash and PowerShell (a mixed `C:/x\\scripts\\tripwire.py` loses its
-    backslashes in bash and the user's ack silently fails)."""
+    pastes into the shell the session runs in (Git Bash or PowerShell for a Windows plugin root, bash for a
+    WSL one). A mixed `C:/x\\scripts\\tripwire.py` loses its backslashes in bash and the ack silently fails.
+    Run it where the session runs: WSL and Windows have different state roots."""
     p = plugin_root.replace("\\", "/").rstrip("/") + "/scripts/tripwire.py"
     return 'python3 "' + re.sub(r'(["$`])', r"\\\1", p) + '" --ack'

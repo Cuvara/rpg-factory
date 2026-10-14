@@ -12,9 +12,18 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   session overwrote each other's snapshot. Snapshots are now per tool call (`pre-<tool_use_id>.json`),
   read only by the same call, written atomically, and pruned after 2 h when a call never completes.
   Without a `tool_use_id`, a snapshot of a different command is discarded.
-- **Concurrent sessions.** Git that another session's (or a parallel call's) completed command visibly ran
-  in a repo now explains ref changes in that repo, as the command's own git already did. Tags are never
-  explained; unfinished calls explain nothing.
+- **Concurrent sessions.** A ref change is explained when another session's (or a parallel call's)
+  completed command saw that same ref reach that same value while its own visible git ran in that repo,
+  and its subcommands could make that change: `commit`/`merge`/`reset`/... move only the branch it had
+  checked out, `branch`/`switch`/`checkout -b` create branches, `fetch`/`push` move remote-tracking refs,
+  `stash` moves `refs/stash`. A read-only `git log`, a different ref, a tag or an unfinished call never
+  explains anything, so a hidden reset of `develop` still trips while another session commits elsewhere.
+- **Failing commands were never checked.** A Bash call that exits non-zero fires `PostToolUseFailure`,
+  not `PostToolUse`; the tripwire now runs `--post` on both (`hooks.json`).
+- **A worktree ref change was reported twice** (once per checkout sharing the refs); it is now reported
+  once, under the worktree the command ran in.
+- Cache writes that fail (Windows: `os.replace` onto a file another hook has open) are retried, never
+  leave temp files, and never cost the comparison.
 - **The printed ack command did not work.** `os.path.join` produced `C:/.../rpg-factory\scripts\tripwire.py`;
   bash dropped the backslashes and the user's ack silently failed. Every message (STOP, guard denials,
   file guard, SessionStart, doctor) now prints `fstate.ack_command()`: quoted, forward slashes.
@@ -31,8 +40,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `latch/<workspace>.json` still blocks and is migrated into `acked/` on ack.
 - `--status` lists open events with ref values, recovery hints, recent audited stash operations and the
   exact ack command.
-- While latched, read-only investigation is allowed: `git reflog` (not `expire`/`delete`), `git stash
-  show` and `git branch --list <pattern>`.
+- While latched, read-only investigation is allowed: `git reflog` (not `expire`/`delete`/`drop`/`write`,
+  which rewrite the history the recovery hints point at), `git stash show` and `git branch --list <pattern>`.
+- Snapshots of calls without a `tool_use_id` are keyed by the command, so parallel calls do not share one.
+  A second legacy latch is archived next to the first instead of overwriting it.
 - git-safety: never stash/reset/clean to get a clean tree (export HEAD instead), never assume a stash is
   yours, one mutating command per worktree, and the recovery procedure after a STOP.
 
@@ -46,7 +57,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Security
 - The guard now denies `tripwire.py --ack` to the agent at all times, not only while latched, so an agent
-  cannot dismiss an incident another session raised a moment earlier.
+  cannot dismiss an incident another session raised a moment earlier. It matches any Python invocation of
+  the script (options before it, `py -3`, `python -c ... run_path`, the path behind a variable) and no
+  longer denies `grep -- --ack tripwire.py`.
 
 ## [0.5.0] - 2026-10-01
 

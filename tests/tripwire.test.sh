@@ -365,6 +365,68 @@ w=$(python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fs
 gc "$SERVER" tag -d v9.9.9 >/dev/null
 [ "$(gdec s-cmd "$SERVER" "python3 \"$TW\" --ack")" = deny ] && ok "agent --ack denied even when nothing is latched" || no "agent ack allowed"
 
+# ==== review findings (PR #1) =======================================================================
+python3 -B "$TW" --ack >/dev/null; gc "$SERVER" switch -q develop
+# F1: another session's git explains only the refs it changed itself, never a read-only git and never another ref
+gc "$SERVER" commit -q --allow-empty -m "keep me"; keep=$(git -C "$SERVER" rev-parse develop)
+printf '#!/usr/bin/env bash\ngit reset -q --hard HEAD~1\n' > "$TMP/build.sh"; chmod +x "$TMP/build.sh"
+hook --pre s-f1a tu-f1a "$SERVER" "$TMP/build.sh"
+hook --pre s-f1b tu-f1b "$SERVER" "git log -1 >/dev/null && touch $TMP/f1b"
+(cd "$SERVER" && "$TMP/build.sh")                                                   # hidden reset of protected develop
+outB=$(hook --post s-f1b tu-f1b "$SERVER" "git log -1 >/dev/null && touch $TMP/f1b")
+outA=$(hook --post s-f1a tu-f1a "$SERVER" "$TMP/build.sh")
+case "$outA" in *"branch develop moved"*"PROTECTED"*) ok "F1: a read-only git of another session does not excuse a hidden reset of develop";;
+  *) no "F1 read-only excuse: A=${outA:0:200}";; esac
+python3 -B "$TW" --ack >/dev/null; gc "$SERVER" reset -q --hard "$keep"
+hook --pre s-f1a tu-f1c "$SERVER" "$TMP/build.sh"
+hook --pre s-f1b tu-f1d "$SERVER" "git switch -q -c feat/server/f1 && git switch -q develop"
+(cd "$SERVER" && git switch -q -c feat/server/f1 && git switch -q develop && "$TMP/build.sh")
+outB=$(hook --post s-f1b tu-f1d "$SERVER" "git switch -q -c feat/server/f1 && git switch -q develop")
+outA=$(hook --post s-f1a tu-f1c "$SERVER" "$TMP/build.sh")
+case "$outA" in *"branch develop moved"*) case "$outA" in *"feat/server/f1"*) no "F1: B's own branch blamed on A: ${outA:0:200}";; *) ok "F1: B's visible branch explained, the hidden develop reset still trips";; esac;;
+  *) no "F1 other-ref excuse: A=${outA:0:200}";; esac
+python3 -B "$TW" --ack >/dev/null; gc "$SERVER" reset -q --hard "$keep"
+# F2: a failing command (PostToolUseFailure) is still checked, and the STOP names that hook event
+pl=$(jq -cn --arg d "$SERVER" --arg c "$TMP/sneaky.sh commit; exit 1" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"s-f2",tool_use_id:"tu-f2"}')
+python3 -B "$TW" --pre <<<"$pl"; (cd "$SERVER" && bash -c "$TMP/sneaky.sh commit; exit 1"); \
+out=$(jq -c '. + {hook_event_name:"PostToolUseFailure"}' <<<"$pl" | python3 -B "$TW" --post)
+[ "$(jq -r '.hookSpecificOutput.hookEventName' <<<"$out" 2>/dev/null)" = PostToolUseFailure ] && case "$out" in *"branch develop moved"*) true;; *) false;; esac \
+  && ok "F2: failing command checked through PostToolUseFailure" || no "F2: ${out:0:200}"
+jq -e '.hooks.PostToolUseFailure[0].matcher == "Bash|PowerShell" and (.hooks.PostToolUseFailure[0].hooks[0].command | test("tripwire.py\" --post"))' \
+  "$ROOT/hooks/hooks.json" >/dev/null && ok "F2: hooks.json wires PostToolUseFailure to tripwire --post" || no "F2: hooks.json"
+# F4 + F6 while latched: reflog rewrites denied; every ack form denied to the agent; grep of the script allowed
+for c in "git reflog drop --all" "git reflog write refs/heads/develop HEAD x" "git reflog expire --expire=now --all" "git reflog delete develop@{0}"; do
+  [ "$(gdec s-f2 "$SERVER" "$c")" = deny ] && ok "F4: denied while latched: $c" || no "F4: allowed while latched: $c"; done
+python3 -B "$TW" --ack >/dev/null; gc "$SERVER" reset -q --hard "$keep"
+for c in "python3 -B -X utf8 $TW --ack" "T=$TW; python3 \$T --ack" "python3 -c \"import runpy,sys; sys.argv=['tripwire.py','--ack']; runpy.run_path('$TW')\"" \
+         "py -3 $TW --ack 20261014T000000Z-abc123" "cd /tmp && python3 $TW --ack"; do
+  [ "$(gdec s-f6 "$SERVER" "$c")" = deny ] && ok "F6: agent ack denied: ${c:0:60}" || no "F6: agent ack allowed: $c"; done
+for c in "grep -- --ack $TW" "grep -n -- --ack $TW" "python3 $TW --status"; do
+  [ "$(gdec s-f6 "$SERVER" "$c")" = allow ] && ok "F6: allowed: ${c:0:60}" || no "F6: denied: $c"; done
+# F5: a failed cache write (here: fpcache.json is a directory) never costs the comparison
+mkdir -p "$TMP/rpg-factory/s-f5/fpcache.json"
+out=$(call s-f5 tu-f5 "$SERVER" "$TMP/sneaky.sh tag")
+case "$out" in *"tag v9.9.9 created"*) ok "F5: STOP still raised when the fingerprint cache cannot be written";; *) no "F5: ${out:0:200}";; esac
+ls "$TMP/rpg-factory/s-f5"/*.tmp >/dev/null 2>&1 && no "F5: temp files leaked" || ok "F5: no temp files left behind"
+python3 -B "$TW" --ack >/dev/null; gc "$SERVER" tag -d v9.9.9 >/dev/null
+# F7: a commit in a worktree is reported once (the worktree and its main checkout share refs)
+out=$(call s-f7 tu-f7 "$WS/srv-wt" "$TMP/sneaky.sh commit")
+n7=$(jq -r '.violations[]' "$TMP"/state/latch/*/*.json | grep -c "branch feat/server/wt moved")
+[ "$n7" -eq 1 ] && jq -e '.violations[0] | startswith("[worktree:srv-wt]")' "$TMP"/state/latch/*/*.json >/dev/null \
+  && ok "F7: worktree ref change reported once, under the worktree" || no "F7: $n7 lines: $(jq -c .violations "$TMP"/state/latch/*/*.json)"
+python3 -B "$TW" --ack >/dev/null
+# F8: parallel calls without tool_use_id keep separate snapshots; both are checked
+hook --pre s-f8 "" "$SERVER" "touch $TMP/f8a"; hook --pre s-f8 "" "$SERVER" "touch $TMP/f8b"
+(cd "$SERVER" && "$TMP/sneaky.sh" tag)
+oa=$(hook --post s-f8 "" "$SERVER" "touch $TMP/f8a"); ob=$(hook --post s-f8 "" "$SERVER" "touch $TMP/f8b")
+[ -n "$oa" ] && [ -n "$ob" ] && ok "F8: two parallel calls without tool_use_id are both checked" || no "F8 nokey: a=${oa:0:80} b=${ob:0:80}"
+python3 -B "$TW" --ack >/dev/null; gc "$SERVER" tag -d v9.9.9 >/dev/null
+# F8: a second legacy latch never overwrites the first archived one
+for i in 1 2; do jq -cn --arg w "$WS" --arg m "legacy $i" '{workspace:$w,session:"old",at:"t",message:$m}' > "$TMP/state/latch/$key.json"; python3 -B "$TW" --ack >/dev/null; done
+msgs=$(cat "$TMP/state/latch/$key/acked/"legacy-*.json | jq -r .message)
+grep -qx "legacy 1" <<<"$msgs" && grep -qx "legacy 2" <<<"$msgs" && grep -qx "\[server\] branch x moved" <<<"$msgs" \
+  && ok "F8: two legacy latches archived side by side" || no "F8 legacy: $(ls "$TMP/state/latch/$key/acked/")"
+
 # performance: pre+post overhead for a mutating command vs a read-only command, 2 repos
 t0=$(date +%s%N); for i in 1 2 3 4 5; do p=$(jq -cn --arg d "$SERVER" --arg s perf '{tool_name:"Bash",tool_input:{command:"touch /tmp/rpgf-perf"},cwd:$d,session_id:$s}'); python3 -B "$TW" --pre <<<"$p"; python3 -B "$TW" --post <<<"$p" >/dev/null; done; t1=$(date +%s%N)
 t2=$(date +%s%N); for i in 1 2 3 4 5; do p=$(jq -cn --arg d "$SERVER" --arg s perf '{tool_name:"Bash",tool_input:{command:"git status"},cwd:$d,session_id:$s}'); python3 -B "$TW" --pre <<<"$p"; python3 -B "$TW" --post <<<"$p" >/dev/null; done; t3=$(date +%s%N)
