@@ -18,7 +18,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
   in `scripts/file-guard.py`; execution modes are enforced by both guards. Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a `CHANGELOG.md` entry under [Unreleased].
-- Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count.
+- Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count. CI
+  (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`.

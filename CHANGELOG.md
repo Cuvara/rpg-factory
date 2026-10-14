@@ -37,6 +37,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   yours, one mutating command per worktree, and the recovery procedure after a STOP.
 
 ### Added
+- **CI.** `.github/workflows/tests.yml` runs `tests/run-all.sh --no-workspace --no-claude` on every pull
+  request and push to `main` (read-only token, pinned actions, log artifact, FAIL/SKIP summary). The
+  runner has no RPG MMO workspace, so workspace checks show as SKIP there; `tests/run-all.sh` with the
+  workspace is still required locally before a release.
 - **Stash audit.** A visible `git stash` (the approved path) is appended to `audit/<workspace>.jsonl`
   with session, tool call id, command and the stash SHA before and after. It does not latch.
 
