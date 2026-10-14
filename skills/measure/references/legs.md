@@ -73,3 +73,34 @@ Needs a Windows player built by `Assets/BuildScripts/Editor/PlayerBuilder.cs` (c
 asset. Development-build numbers are relative (run-to-run), not absolute; discard the first run after
 install; 2-minute cooldown between runs; >10% p95 disagreement between repeats = throttling.
 GPU time reads 0 unless Frame Timing Stats is enabled.
+
+## Server: profiling (attribution, not a number by itself)
+
+Use when a load or bench leg shows a regression and the record must say *where* the time or bytes go.
+
+- Metrics first, always available: `gameserver.tick.duration`, `gameserver.sim.group.duration`
+  (per group), `gameserver.gc.{allocated.bytes,pause.seconds,heap.bytes}`, `gameserver.achieved_tick_hz`
+  (`GameServer/Observability/GameMetrics.cs:36-67`, `/metrics`). Scrape before and after the leg.
+- `dotnet-counters monitor -p <pid> System.Runtime` / `dotnet-trace collect -p <pid>` (dev tool
+  `dotnet-diagnostics`, optional): run against a **JIT** Release build started directly, not the AOT image -
+  NativeAOT exposes only part of EventPipe. A trace is attribution evidence; the number still comes from
+  the leg's own record.
+- Allocation per tick: `TickAllocationBench` (`BENCH_TICK=1`) and the always-on
+  `CoreV3/GameplayAllocationTests` (0 B over 600 ticks) - a change that makes the latter fail is a FAIL, not
+  a measurement.
+
+## Server: network adversity (correctness under loss, jitter, reorder)
+
+`GameServer.Tests/Infrastructure/AdversityProxy.cs` is a seeded, deterministic UDP impairment proxy between
+a real KCP client and server (`:9-40`; profile = per-direction link + seed, `:60-68`). Suites:
+`Server/NetworkAdversityTests.cs`, `Server/KcpNetworkConditionsTests.cs`,
+`Snapshot/EntityIntervalUnderAdversityTests.cs`. They run inside `dotnet-test` (no gate) - a failing seed is
+named in the output; rerun with that seed. A *number* from them (snapshot interval under loss) is a measure
+record like any other.
+
+## Soak / long-run (not available yet)
+
+No soak harness exists (no long-duration test or loadtest mode; only heartbeat tests). A memory-growth or
+"stable for N hours" claim is NOT_AVAILABLE: say so, never extrapolate from a 60 s level. Building one is a
+`backend/loadtest` change (measure owns the harness) with `-duration` hours, RSS and
+`gameserver.gc.heap.bytes` sampled per minute, and a slope with its own control run.

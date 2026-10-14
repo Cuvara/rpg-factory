@@ -21,7 +21,9 @@ Repo `server`. Modules: `server.gameserver-dotnet`, `server.shared-gamelogic`, `
 `server.content` belongs here. The game server is its only reader: it loads and validates at boot and serves `/content` (ADR-19). Its schema and validator are in `Shared.GameLogic/Content/`, its loader is `GameServer/Content/`, and `ContentLoaderTests` validates the shipped `items.json`. Its changes go in `backend/gameserver-dotnet/CHANGELOG.md` (the ADR-19 commit cc217b9 did this).
 
 Module rules, checks and obligations come from the registry (the snapshot prints them for touched
-modules); architecture map and wiring recipes: `references/gameserver.md`.
+modules); architecture map and wiring recipes: `references/gameserver.md`; where combat, abilities, statuses,
+inventory, loot and content live, and the authority checklist for a new input or command:
+`references/gameplay-systems.md`.
 
 | Touches | Owner | This skill |
 |---|---|---|

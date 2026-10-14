@@ -44,6 +44,20 @@ for dir in skills/*/; do
     if [ "$kind" = "tech" ]; then
       grep -q '^> \*\*Supporting skill, never the owner:\*\* invoke the lead' "$f" && ok || bad "$s: tech skill lacks the 'invoke the lead first' guard"
       # reachable through routing.tech: every used_by skill must point the agent at it
+      # every Pitfalls bullet cites the file (path or path:line) or issue (#n) that proves it
+      uncited=$(python3 -B - "$f" <<'PYC'
+import re, sys
+m = re.search(r"^## Pitfalls
+(.*?)(?=^## |\Z)", open(sys.argv[1]).read(), re.M | re.S)
+cite = re.compile(r"`[^`]*(/|\.(cs|md|go|json|ya?ml|asmdef|asset|csproj|sh|py|proto|sql|uxml|uss))[^`]*`|#\d+|:\d+")
+for b in re.split(r"
+(?=- )", "
+" + (m.group(1).strip() if m else "")):
+    if b.strip().startswith("- ") and not cite.search(b):
+        print(b.strip()[:90])
+PYC
+)
+      [ -z "$uncited" ] && ok || bad "$s: Pitfalls bullet without a cited file or issue: $(head -1 <<<"$uncited")"
       for u in $(jq -r --arg s "$s" '.skills[$s].used_by[]?' registry.json); do
         grep -q "rpg-factory:$s" "skills/$u/SKILL.md" && ok || bad "$s: used_by skill $u never names rpg-factory:$s"
       done

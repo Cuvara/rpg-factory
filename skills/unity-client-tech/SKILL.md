@@ -1,6 +1,6 @@
 ---
 name: unity-client-tech
-description: How the Unity 6 code in IndieRPGMMOAdventure and the com.cuvara.* packages actually works - Entities system install and world lifecycle, UniTask/Task and main-thread rules, VContainer, asmdef and test-assembly rules, domain reload, input handling, WebGL limits, and running one EditMode/PlayMode test through Unity MCP or batchmode. Use when writing or reviewing an ECS system, async code, an asmdef or a Unity test in the client or a package. Not for deciding where a change goes or which rules, checks and gates apply (client-integration, unity-package, pin-bump own that), and not for server C#.
+description: How the Unity 6 application code in IndieRPGMMOAdventure and the com.cuvara.* packages actually works - world lifecycle and the ECS-to-UI bridge, UniTask/Task and main-thread rules, VContainer scopes and lifetimes, UI Toolkit views, binding, collections and screen flow, asmdef and test-assembly rules, domain reload, input handling, WebGL limits, and running one EditMode/PlayMode test through Unity MCP or batchmode. Use when writing or reviewing async code, a VContainer registration, a UI Toolkit screen, an asmdef or a Unity test in the client or a package (ECS systems and jobs: unity-dots). Not for deciding where a change goes or which rules, checks and gates apply (client-integration, unity-package, pin-bump own that), and not for server C#.
 argument-hint: "[task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 ---
@@ -16,7 +16,8 @@ Task: $ARGUMENTS
 
 Paths are relative to the client repo `IndieRPGMMOAdventure/` unless a package repo is named.
 Worked examples (HUD data path, DOTS bridge lifecycle, async seams, test templates):
-`references/ecs-and-async.md`.
+`references/ecs-and-async.md`. UI Toolkit and VContainer patterns: `references/ui-toolkit.md`.
+ECS systems, jobs, Burst and ECB: `rpg-factory:unity-dots`. Netcode internals: `rpg-factory:netcode-client`.
 
 ## Applies when / Not when
 
@@ -61,14 +62,15 @@ calling skill keeps validation and reporting.
 
 ## Idioms
 
-- New system: prefer unmanaged `ISystem` with `SystemAPI.Query` / `IJobEntity`; no
-  `Entities.ForEach`; `com.unity.jobs` is merged into collections (`CLAUDE.md:523-526`). Package
-  hot-path systems add `[BurstCompile]` (`UnityDots/Runtime/Simulation/MoveTowardSystem.cs:38-55`);
-  the HUD aggregator is not Burst-compiled (`HudStateSystem.cs:33-35`).
-- `OnCreate`: create the singleton you own, then `state.RequireForUpdate<T>()`; `OnDestroy`
-  removes it so a reinstall starts fresh (`HudStateSystem.cs:47-70`).
-- Compare before write: `if (!SystemAPI.GetSingleton<T>().Equals(next)) SystemAPI.SetSingleton(next)`
-  - the change filter fires on any write, equal or not (`HudStateSystem.cs:28-31,107-109`).
+- ECS code (system shape, Burst, jobs, ECB, scheduling, allocators): invoke `rpg-factory:unity-dots`.
+  A world-lifetime singleton is created in `OnCreate` and removed in `OnDestroy` so a reinstall starts
+  fresh (`HudStateSystem.cs:47-70`).
+- UI: View (UXML + bindings) / ViewModel (`BindableViewModel`, raises only on change) / Presenter (no
+  `VisualElement`); lists through the package adapters; every subscription disposed
+  (`references/ui-toolkit.md`).
+- VContainer lifetimes: Singleton in a root or scene scope for services; `Scoped` only for per-screen
+  presenters (one screen = one scope, `UIToolkit/Runtime/VContainer/ScreenFlowRegistration.cs:68,78`);
+  no Transient for stateful services.
 - Fire-and-forget at an entry point: `IStartable` + an owned `CancellationTokenSource` +
   `async UniTaskVoid RunAsync(...)` + `.Forget()`, cancelled in `Dispose`; not `IAsyncStartable`,
   whose return type depends on VContainer's UniTask define (`MainSessionDriver.cs:38-40,57,92-95`).

@@ -39,7 +39,9 @@ Read-only here: `client.packages`, `client.dots-sample`, `client.samples-importe
 1. **Find the layer.** Place the change with `references/composition.md` (scopes, what each
    registers, which asmdef and define guards it). New code goes in the asmdef that already owns
    the folder; a new `Assets/Scripts/` area gets its own `.asmdef` plus `.meta`. Before writing an ECS
-   system, async code, an asmdef or a test, follow `rpg-factory:unity-client-tech`.
+   system or job invoke `rpg-factory:unity-dots` (and decide ECS vs a VContainer service there first); before
+   async code, a UI Toolkit screen, a VContainer registration, an asmdef or a test, invoke
+   `rpg-factory:unity-client-tech`; input send, session or prediction wiring: `rpg-factory:netcode-client`.
 2. **Check the package boundary.** Code against the pinned tag's API only
    (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py`; not the gitignored embedded clone, not package
    `develop`, never edit those clones). A new or changed package API stops the client leg (hand-off below).

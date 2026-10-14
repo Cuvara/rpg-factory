@@ -108,7 +108,9 @@
         "client-integration",
         "unity-package",
         "pin-bump",
-        "unity-client-tech"
+        "unity-client-tech",
+        "unity-dots",
+        "netcode-client"
       ],
       "required": false,
       "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
@@ -141,7 +143,9 @@
         "unity-package",
         "client-integration",
         "dotnet-gameserver",
-        "unity-client-tech"
+        "unity-client-tech",
+        "unity-dots",
+        "netcode-client"
       ],
       "required": false,
       "fallback": "grep for the symbol plus {dotnet} build of the solution (server) or an Editor compile through unity-mcp (packages, client)"
@@ -175,7 +179,9 @@
         "measure",
         "dotnet-gameserver",
         "go-backend",
-        "unity-client-tech"
+        "unity-client-tech",
+        "unity-dots",
+        "netcode-client"
       ],
       "required": false,
       "fallback": "pipe logs through tail / grep for the summary lines; run-checks.py already stores full logs as evidence"
@@ -209,7 +215,8 @@
         "wire-contract",
         "measure",
         "unity-package",
-        "dotnet-gameserver"
+        "dotnet-gameserver",
+        "netcode-client"
       ],
       "required": true,
       "fallback": "CI ci-dotnet.yml"
@@ -258,6 +265,20 @@
       ],
       "required": false,
       "fallback": "HUMAN_REQUIRED / CI"
+    },
+    {
+      "id": "dotnet-diagnostics",
+      "kind": "binary",
+      "probes": [
+        "bin:dotnet-counters|bin:dotnet-counters.exe|bin:dotnet-trace|bin:dotnet-trace.exe"
+      ],
+      "provides": "dotnet-counters / dotnet-trace: live GC, allocation-rate and thread-pool counters and CPU sampling traces of a running game server process (JIT build; NativeAOT supports EventPipe counters only partially).",
+      "used_by": [
+        "measure",
+        "dotnet-gameserver"
+      ],
+      "required": false,
+      "fallback": "the server's own OTel metrics on /metrics (gameserver.gc.*, gameserver.tick.duration, gameserver.sim.group.duration) and the BENCH_TICK micro-benches; say which was used"
     }
   ],
   "global_rules": [
@@ -848,6 +869,13 @@
             "run": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/check_metas.py backend/gameserver-dotnet/Shared.GameLogic",
             "evidence": "exit 0 with its one-line summary (it does not list files)",
             "parser": "exit"
+          },
+          {
+            "id": "sgl-determinism",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/sgl-determinism.py backend/gameserver-dotnet/Shared.GameLogic",
+            "parser": "regex:^OK: sgl-determinism files=[1-9]\\d* banned=0$",
+            "evidence": "OK line with files>0 and banned=0; a FAIL lists each banned Math/MathF call as path:line (ADR-10: an amendment, not a review comment)"
           }
         ],
         "extended": [
@@ -3575,6 +3603,36 @@
         "pin-bump"
       ],
       "summary": "How the Unity 6 client code works: Entities system install and world lifecycle, UniTask and main-thread rules, VContainer, asmdef and test-assembly rules, domain reload, WebGL limits, single-test runs through Unity MCP or batchmode."
+    },
+    "unity-dots": {
+      "kind": "tech",
+      "repos": [
+        "unitydots",
+        "client"
+      ],
+      "order": 93,
+      "used_by": [
+        "unity-package",
+        "client-integration",
+        "measure"
+      ],
+      "summary": "How Entities/Burst/Jobs code works in UnityDots and the client: ECS-vs-classic decision, group tree and bootstrap install, SystemOrderVerifier, the package ECB singleton, measured Schedule vs ScheduleParallel thresholds, archetype-stable spawn, sync points, allocators, change filters, ECS tests."
+    },
+    "netcode-client": {
+      "kind": "tech",
+      "repos": [
+        "netcode",
+        "unitydots",
+        "client"
+      ],
+      "order": 94,
+      "used_by": [
+        "unity-package",
+        "wire-contract",
+        "client-integration",
+        "measure"
+      ],
+      "summary": "How com.cuvara.netcode works on the client: TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning/merge, interpolation clock, movement prediction and reconciliation, reconnect policy, per-packet allocations, headless tests."
     }
   },
   "human_gates": [
@@ -4136,6 +4194,55 @@
       "repo": "client",
       "probe": "printf 'enabled=%s options=%s\\n' $(sed -n 's/^ *m_EnterPlayModeOptionsEnabled: //p' ProjectSettings/EditorSettings.asset) $(sed -n 's/^ *m_EnterPlayModeOptions: //p' ProjectSettings/EditorSettings.asset)",
       "why": "options 0 = domain and scene reload both happen on Enter Play Mode; static caches are reset (unity-client-tech)"
+    },
+    {
+      "id": "entities-version",
+      "value": "1.4.8",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"com.unity.entities\"]' Packages/manifest.json",
+      "why": "Entities API differs between 1.0, 1.2 and 1.4 (SystemAPI, IJobEntity, enableable components, Baker APIs); ECS advice must match the pinned version"
+    },
+    {
+      "id": "burst-version",
+      "value": "1.8.30",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"com.unity.burst\"]' Packages/manifest.json",
+      "why": "Burst feature set and compile-time restrictions follow this version"
+    },
+    {
+      "id": "collections-version",
+      "value": "2.6.8",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"com.unity.collections\"]' Packages/manifest.json",
+      "why": "Collections 2.x merged com.unity.jobs; allocator API (WorldUpdateAllocator, AllocatorHandle) follows this version"
+    },
+    {
+      "id": "unity-physics-version",
+      "value": "1.4.7",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"com.unity.physics\"]' Packages/manifest.json",
+      "why": "Runtime.Physics (CollisionWorld queries, events) compiles against this version"
+    },
+    {
+      "id": "vcontainer-version",
+      "value": "1.16.9",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"jp.hadashikick.vcontainer\"]' Packages/manifest.json | sed 's/.*#//'",
+      "why": "VContainer API (RegisterBuildCallback, entry points, IAsyncStartable return type) follows this tag"
+    },
+    {
+      "id": "unitask-version",
+      "value": "2.5.10",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"com.cysharp.unitask\"]' Packages/manifest.json",
+      "why": "UniTask API used by the client and packages"
+    },
+    {
+      "id": "perf-testing-version",
+      "value": "3.2.0",
+      "repo": "client",
+      "probe": "jq -r '.dependencies[\"com.unity.test-framework.performance\"].version' Packages/packages-lock.json",
+      "why": "Unity Performance Testing is resolved transitively (lock depth 1), not a direct manifest dependency; a perf-test asmdef references Unity.PerformanceTesting"
     }
   ]
 }

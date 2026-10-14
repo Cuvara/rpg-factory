@@ -105,7 +105,8 @@ the next session, not a failure to hide.
 ## Tools
 
 - Tech: server legs load `rpg-factory:go-backend` (gateway/shared Go side) and `rpg-factory:dotnet-gameserver`
-  (C# bindings, Net layer) for how each side encodes, tests and runs one test.
+  (C# bindings, Net layer) for how each side encodes, tests and runs one test; the Netcode leg loads
+  `rpg-factory:netcode-client` (codec sniffing, snapshot resolver, headless suite).
 - `protoc`: `generate.sh` regeneration; a local version off the CI pin drifts generated code, so let CI
   regenerate when it is not the pinned one (`--toolchain` shows the version).
 - `go`, `dotnet`: the server-leg builds and tests; missing = that leg's checks NOT_AVAILABLE, never skipped silently.

@@ -113,7 +113,10 @@ topic name) - never by hand-editing the client.
 
 ## Tools
 
-- Tech: `rpg-factory:unity-client-tech` for Entities system lifecycle, asmdef/test-assembly rules, async and
+- Tech: invoke `rpg-factory:unity-dots` before writing or reviewing a UnityDots system, job or component
+  (ECB, Burst, scheduling, sync points, `references/ecs-review.md`), `rpg-factory:netcode-client` for Netcode
+  transport, snapshot, interpolation or prediction code, and
+  `rpg-factory:unity-client-tech` for Entities system lifecycle, asmdef/test-assembly rules, async and
   main-thread rules and single-test runs; they apply to package code as well as the client.
 - `dotnet`: Netcode headless tests (`scripts/checks/netcode-headless.sh`); missing = NOT_AVAILABLE.
 - `unity-mcp`: package tests inside the client project (`testables`) and Editor compiles; not reachable =
