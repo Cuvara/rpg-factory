@@ -245,11 +245,16 @@ Four layers, all inside the workspace (plus `gh` commands naming a workspace rep
    included); a change the command did not visibly ask for (a tag from a script, a push from Python,
    a reset of a user file) returns **"STOP - rpg-factory tripwire"** and latches the **workspace**:
    writes and state-changing commands are denied - also in later sessions after a crash - until the
-   user runs `! python3 scripts/tripwire.py --ack` (denied to the agent). `/rpg-factory:doctor` shows it.
+   user runs `! python3 "<plugin root>/scripts/tripwire.py" --ack` (denied to the agent). Each incident is
+   an event (command, session, ref values before/after, recovery hints); `--status` lists them, `--ack
+   [<event-id>]` archives them and reports CLEAR or still LATCHED. Snapshots are per tool call, so a
+   denied command or another session's visible git does not get blamed on the next command.
+   `/rpg-factory:doctor` shows it.
 
 Where Factory keeps state (`scripts/lib/fstate.py`, always absolute, never inside a repo): per-session
-scratch under `$TMPDIR` if it is a usable absolute directory, else `/tmp`; the workspace latch and
-check evidence under `$XDG_STATE_HOME/rpg-factory` (default `~/.local/state/rpg-factory`).
+scratch under `$TMPDIR` if it is a usable absolute directory, else `/tmp`; tripwire events, the stash
+audit, cross-session git activity and check evidence under `$XDG_STATE_HOME/rpg-factory` (default
+`~/.local/state/rpg-factory`).
 
 Workspace model: the five **workspace repos** (registry), **git submodules** inside them (`com.gdk.*`,
 `unity-build-workflows`: pointers are user state), **embedded clones** (gitignored

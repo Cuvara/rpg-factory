@@ -100,8 +100,8 @@ def cmd_doctor(args):
     rc = 0
     print("## Install")
     rc |= run([sys.executable, "-B", os.path.join(ROOT, "scripts", "install-status.py")])
-    print("\n## Tripwire latches (clear only after reviewing the repos: `! python3 "
-          + os.path.join(ROOT, "scripts", "tripwire.py") + " --ack`)")
+    print("\n## Tripwire latches (the user clears them only after reviewing the repos: `! "
+          + fstate.ack_command(ROOT) + "`)")
     run([sys.executable, "-B", os.path.join(ROOT, "scripts", "tripwire.py"), "--status"])
     print("\n## Registry")
     rc |= run(["bash", os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only"])

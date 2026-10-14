@@ -115,8 +115,9 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
 - File tools (Write/Edit/MultiEdit/NotebookEdit) ask before touching embedded clones
   (`Packages/com.cuvara.*`), submodule content, generated paths, the user's baseline files or secrets.
 - If a tool result contains **"STOP - rpg-factory tripwire"**, stop immediately: do not repair,
-  reset or retry anything. Report what it says to the user. Writes stay denied - also in later
-  sessions - until the user acknowledges (`! python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py --ack`).
+  reset, stash or retry anything. Report what it says to the user with `tripwire.py --status` (the event,
+  ref values, recovery hints). Writes stay denied - also in later sessions - until the user acknowledges
+  with the quoted command the STOP prints; never run `--ack` yourself.
 - Stage explicit paths only. Policy: `references/git-safety.md`.
 
 ## Commands (the user types these; they are read-only except `check`)

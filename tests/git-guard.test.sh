@@ -225,6 +225,27 @@ check allow "$SERVER" "git status"
 check allow "$SERVER" "ls -la"
 rm -f "$TMP/rpg-factory/guardtest/LATCH"
 check allow "$FEATURE" "git commit -m 'feat(gateway): after ack'"
+# an open workspace event (another session's incident) latches every session; investigation stays allowed
+python3 -B - "$ROOT" "$TMP/ws" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import fstate, os
+fstate.write_json(os.path.join(fstate.latch_dir(sys.argv[2]), "20261014T000000Z-abc123.json"),
+                  {"id": "20261014T000000Z-abc123", "workspace": sys.argv[2], "session": "other", "message": "[server] tag v9 created"})
+PY
+check deny  "$SERVER" "touch newfile"
+check deny  "$SERVER" "git stash drop"
+check deny  "$SERVER" "git reflog expire --expire=now --all"
+check allow "$SERVER" "git reflog show develop"
+check allow "$SERVER" "git stash show -p"
+check allow "$SERVER" "git branch --list 'backup/*'"
+check deny  "$SERVER" "git branch -D --list x"
+rm -f "$TMP/state/latch/"*/20261014T000000Z-abc123.json
+check allow "$SERVER" "touch newfile"
+# acknowledging is the user's: denied to the agent whether or not anything is latched
+check deny  "$SERVER" "python3 $ROOT/scripts/tripwire.py --ack"
+check deny  "$SERVER" "python3 -B \"$ROOT/scripts/tripwire.py\" --ack 20261014T000000Z-abc123"
+check deny  "$SERVER" "cd /tmp && python3 C:/x/rpg-factory/scripts/tripwire.py --ack"
+check allow "$SERVER" "python3 $ROOT/scripts/tripwire.py --status"
+check allow "$SERVER" "grep -n -- --ack $ROOT/scripts/tripwire.py"
 # non-Bash payloads are ignored
 out=$(jq -cn '{tool_name:"Read", tool_input:{file_path:"x"}, cwd:"/"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
 if [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL non-Bash payload produced output: $out"; fi

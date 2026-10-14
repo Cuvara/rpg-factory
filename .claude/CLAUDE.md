@@ -18,7 +18,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
   in `scripts/file-guard.py`; execution modes are enforced by both guards. Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a `CHANGELOG.md` entry under [Unreleased].
-- Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count.
+- Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count. CI
+  (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`.
@@ -78,6 +79,10 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
   - PreToolUse Skill: `tripwire.py --skill`, which records the execution mode.
   - PostToolUse Bash|PowerShell: `tripwire.py --post` (STOP plus latch on an unexpected git state change).
+  - Tripwire lifecycle: snapshots are per tool call (`pre-<tool_use_id>.json`, never shared or reused); every
+    incident is an event file under `fstate.latch_dir()` (never overwritten, archived on ack); the latch is
+    global per workspace on purpose. `--ack` is the user's only (the guard always denies it to the agent),
+    reports CLEAR / still LATCHED with exit 0 / 1, and every message prints `fstate.ack_command()`.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
   covered by `tests/commands.test.sh`.
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract) routes to
