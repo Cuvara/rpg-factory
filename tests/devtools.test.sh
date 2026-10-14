@@ -61,7 +61,7 @@ grep -qE "$SECRET1|$SECRET2" <<<"$out" && no "probe output leaks a planted secre
 
 # -- scenarios over the REAL registry in a controlled environment (fake PATH, config, Editor port)
 SC="$TMP/scen"; mkdir -p "$SC/bin" "$SC/cfg" "$SC/ws"
-for b in gopls csharp-ls dotnet go protoc protoc-gen-go docker codex; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
+for b in gopls csharp-ls dotnet dotnet-counters go protoc protoc-gen-go docker codex; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
 echo '{"mcpServers": {"ai-game-developer": {}, "lsp": {}, "pg-aiguide": {}}}' > "$SC/ws/.mcp.json"
 echo '{"enabledPlugins": {"context-mode@context-mode": true, "codex@openai-codex": true}}' > "$SC/cfg/settings.json"
 scen=$(cd "$ROOT/scripts/lib" && CLAUDE_CONFIG_DIR="$SC/cfg" python3 -B - "$SC" "$ROOT/registry.json" <<'EOF'

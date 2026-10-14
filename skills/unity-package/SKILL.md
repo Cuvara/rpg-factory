@@ -114,7 +114,7 @@ topic name) - never by hand-editing the client.
 ## Tools
 
 - Tech: invoke `rpg-factory:unity-dots` before writing or reviewing a UnityDots system, job or component
-  (ECB, Burst, scheduling, sync points, `references/ecs-review.md`), `rpg-factory:netcode-client` for Netcode
+  (ECB, Burst, scheduling, sync points, and its ECS review checklist), `rpg-factory:netcode-client` for Netcode
   transport, snapshot, interpolation or prediction code, and
   `rpg-factory:unity-client-tech` for Entities system lifecycle, asmdef/test-assembly rules, async and
   main-thread rules and single-test runs; they apply to package code as well as the client.

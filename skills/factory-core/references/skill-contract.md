@@ -59,7 +59,8 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
 - Registry: `skills.<name>` = `{kind: "tech", repos, summary, order, used_by: [repo/cross-repo skills]}`.
   A tech skill owns no module or contract (`check-registry.sh` rejects it), so it is never lead, leg
   or follow-up. The snapshot lists it as `tech` in the routing line when a skill in `used_by` works on
-  the change (`routing.tech`).
+  the change **and** the snapshot's repo is in the tech skill's `repos` (`routing.tech`): a measure run on
+  the server lists `dotnet-gameserver`, not `unity-dots`.
 - Every skill in `used_by` names `rpg-factory:<tech skill>` in its body (lint), at the step that needs it,
   as "invoke" (Skill tool) for implementing, debugging, reviewing and how-it-works/how-to-test questions.
 - Below the prerequisite line a tech skill carries the guard `> **Supporting skill, never the owner:**

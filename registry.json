@@ -3373,7 +3373,7 @@
     {
       "id": "unity-netcode-agent-stale",
       "scope": "client",
-      "summary": ".claude/agents/unity-netcode.md predates the package split (code now in com.cuvara.netcode), references a non-existent unity-prediction agent and /mnt/e paths."
+      "summary": ".claude/agents/unity-netcode.md predates the package split (code now in com.cuvara.netcode), references a non-existent unity-prediction agent and /mnt/e paths. Fix pending: client branch docs/claude/retire-netcode-agent (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text. Its knowledge now lives in the netcode-client tech skill; never follow the agent."
     },
     {
       "id": "embedded-package-clones-stale",
@@ -3423,12 +3423,12 @@
     {
       "id": "gateway-claude-nakama",
       "scope": "server",
-      "summary": "backend/gateway/CLAUDE.md says the gateway calls Nakama at runtime NONE; transfer/party.go calls party_get (ADR-26)."
+      "summary": "backend/gateway/CLAUDE.md says the gateway calls Nakama at runtime NONE; transfer/party.go calls party_get (ADR-26). Fix pending: server branch docs/claude/stale-wire-and-rates (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
     },
     {
       "id": "client-claude-stale",
       "scope": "client",
-      "summary": "Client CLAUDE.md: SampleImporter example uses -importPackage (code needs -samplePackage) and E:\\SecretProject paths; Unity MCP section describes Docker :8080 (real: .mcp.json HTTP :23621); Assembly Structure lists 3 of 13 asmdefs. Workspace CLAUDE.md 'gh workflow run unity-build.yml' names a removed workflow. Also: bootScene is still the version-named Assets/Samples/Cuvara Netcode/0.19.0/... path (real: Assets/Samples/Netcode/DOTS Sample), R3 is listed but not in Packages/manifest.json, and the Package pins section appears twice."
+      "summary": "Client CLAUDE.md: SampleImporter example uses -importPackage (code needs -samplePackage) and E:\\SecretProject paths; Unity MCP section describes Docker :8080 (real: .mcp.json HTTP :23621); Assembly Structure lists 3 of 13 asmdefs. Workspace CLAUDE.md 'gh workflow run unity-build.yml' names a removed workflow. Also: bootScene is still the version-named Assets/Samples/Cuvara Netcode/0.19.0/... path (real: Assets/Samples/Netcode/DOTS Sample), R3 is listed but not in Packages/manifest.json, and the Package pins section appears twice. Fix pending: client branch docs/claude/retire-netcode-agent (workspace-root CLAUDE.md fixed in place) (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
     },
     {
       "id": "dots-wiring-doc-stale",
@@ -3443,12 +3443,12 @@
     {
       "id": "gameserver-addr-flag-docs",
       "scope": "server",
-      "summary": "Root and gameserver-dotnet CLAUDE.md show `--addr=:9000`; GetArg only matches the space-separated form, so the `=` form is silently ignored."
+      "summary": "Root and gameserver-dotnet CLAUDE.md show `--addr=:9000`; GetArg only matches the space-separated form, so the `=` form is silently ignored. Fix pending: server branch docs/claude/stale-wire-and-rates (workspace-root CLAUDE.md fixed in place) (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
     },
     {
       "id": "gameserver-claude-wire-json",
       "scope": "server",
-      "summary": "gameserver-dotnet/CLAUDE.md describes the wire as 4-byte BE + JSON; ADR-9 moved it to Protobuf (JSON still accepted)."
+      "summary": "gameserver-dotnet/CLAUDE.md describes the wire as 4-byte BE + JSON; ADR-9 moved it to Protobuf (JSON still accepted). Fix pending: server branch docs/claude/stale-wire-and-rates (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
     },
     {
       "id": "uitoolkit-no-gitignore",
@@ -3463,7 +3463,7 @@
     {
       "id": "client-claude-package-clones",
       "scope": "client",
-      "summary": "Client CLAUDE.md names package clones at /mnt/e/CuvaraPackages (absent here), says the lock must point at them, and duplicates the file: pinning section (~lines 281 and 332)."
+      "summary": "Client CLAUDE.md names package clones at /mnt/e/CuvaraPackages (absent here), says the lock must point at them, and duplicates the file: pinning section (~lines 281 and 332). Fix pending: client branch docs/claude/retire-netcode-agent (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
     },
     {
       "id": "no-csharp-lsp",
@@ -3478,7 +3478,7 @@
     {
       "id": "gameserver-claude-stale",
       "scope": "server",
-      "summary": "backend/gameserver-dotnet/CLAUDE.md still describes the wire as '4-byte BE length + JSON' (protobuf is current, ADR-9) and says there are no external dependencies (the csproj references Arch, Npgsql, StackExchange.Redis, OpenTelemetry, Google.Protobuf, BouncyCastle)."
+      "summary": "backend/gameserver-dotnet/CLAUDE.md still describes the wire as '4-byte BE length + JSON' (protobuf is current, ADR-9) and says there are no external dependencies (the csproj references Arch, Npgsql, StackExchange.Redis, OpenTelemetry, Google.Protobuf, BouncyCastle). Fix pending: server branch docs/claude/stale-wire-and-rates (local commit, not merged) - remove this entry once it reaches the default branch; until then the default branch still carries the stale text."
     }
   ],
   "skills": {

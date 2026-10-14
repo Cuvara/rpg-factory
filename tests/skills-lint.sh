@@ -47,12 +47,9 @@ for dir in skills/*/; do
       # every Pitfalls bullet cites the file (path or path:line) or issue (#n) that proves it
       uncited=$(python3 -B - "$f" <<'PYC'
 import re, sys
-m = re.search(r"^## Pitfalls
-(.*?)(?=^## |\Z)", open(sys.argv[1]).read(), re.M | re.S)
+m = re.search(r"^## Pitfalls\n(.*?)(?=^## |\Z)", open(sys.argv[1]).read(), re.M | re.S)
 cite = re.compile(r"`[^`]*(/|\.(cs|md|go|json|ya?ml|asmdef|asset|csproj|sh|py|proto|sql|uxml|uss))[^`]*`|#\d+|:\d+")
-for b in re.split(r"
-(?=- )", "
-" + (m.group(1).strip() if m else "")):
+for b in re.split(r"\n(?=- )", "\n" + (m.group(1).strip() if m else "")):
     if b.strip().startswith("- ") and not cite.search(b):
         print(b.strip()[:90])
 PYC
