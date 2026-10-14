@@ -48,6 +48,13 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: a
 - Zero readings proven able to be non-zero, or flagged.
 - Anything that passed only because it selected nothing: none | <details>.
 
+## Review
+- `/code-review` and checklists applied: <lead checklist, tech review files | not run - trivial diff>
+- Findings: <file:line - item - fixed | open> | none
+
+## Lessons (only verified ones)
+- <symptom -> root cause -> captured as: test <path> | Pitfall in <skill> | known_issue <id> | fact <id>> | none
+
 ## Not done / risks
 - <open items, extended/external checks still required, assumptions, questions>
 
@@ -65,3 +72,7 @@ Rules:
   which is which by running the same check on the base commit in a separate worktree
   (server). Never stash the user's baseline to do it.
 - Link CI runs by id or URL when you cite them.
+- A Lesson is a failure you reproduced and fixed, not a guess. Capture it in exactly one durable place:
+  a regression test (preferred), a Pitfall line with its file in the owning tech skill, a registry
+  `known_issues` entry (tooling or doc drift), or a `facts[]` entry with a probe (a value that moves).
+  Propose skill or registry edits in the report; the plugin change is its own task.

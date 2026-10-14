@@ -4,6 +4,48 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- **Tech skill `unity-dots`** (Entities/Burst/Jobs in UnityDots and the client): the ECS-vs-classic
+  decision (ECS for many homogeneous per-frame entities; services, UI and request/response state stay
+  VContainer + UI Toolkit), the group tree and bootstrap install, `SystemOrderVerifier`, the package ECB
+  singleton, the measured `ParallelScheduling` thresholds, archetype-stable spawning, sync points,
+  allocators, change filters and ECS tests, every claim cited. References `dots-patterns.md` and
+  `ecs-review.md` (the review checklist). Used by unity-package, client-integration and measure.
+- **Tech skill `netcode-client`** (com.cuvara.netcode on the client): TCP gateway hop vs KCP-only
+  gameplay and its PlayerLoop pump, KcpCrypto (CRC, no integrity) vs the sealed session, codecs,
+  snapshot interning and merge, the interpolation clock, movement prediction and reconciliation with
+  clock steering, reconnect policy, per-packet allocations, the headless suite. Replaces the client's
+  stale `unity-netcode` agent. Used by unity-package, wire-contract, client-integration and measure.
+- `unity-client-tech` reference `ui-toolkit.md`: View/ViewModel/Presenter, one-way binding, the
+  package list adapters and virtualization, screen flow and subscription lifecycle, the two ways game
+  state reaches UI, VContainer scopes and lifetimes. ECS idioms moved to `unity-dots`.
+- `measure` reference `client-profiling.md` (markers, Performance Testing, MCP `profiler-*` as point
+  samples, no budget without a baseline) and `legs.md` sections for server profiling, the seeded
+  network-adversity suites and soak (NOT_AVAILABLE until a harness exists).
+- `server-realtime` reference `gameplay-systems.md`: where combat, abilities, statuses, inventory,
+  loot and content live, the authority checklist for a new input or command, SGL determinism, and the
+  known structural debt.
+- **Fast check `sgl-determinism`** (`scripts/checks/sgl-determinism.py`, module
+  `server.shared-gamelogic`): fails on any `Math`/`MathF` transcendental in Shared.GameLogic (ADR-10),
+  ignoring comments and strings. Fixture tests in `run-all.sh`.
+- Registry facts `entities-version`, `burst-version`, `collections-version`, `unity-physics-version`,
+  `vcontainer-version`, `unitask-version`, `perf-testing-version`; dev tool `dotnet-diagnostics`
+  (`dotnet-counters` / `dotnet-trace`, optional, fallback the server's OTel metrics).
+- Evals `dots-spawn-system`, `prediction-reconcile-bug`, `claim-faster-frame`, `inventory-list-screen`,
+  `new-command-authority`, `ecs-or-service`; routing scenarios for the new tech skills.
+
+### Changed
+- **`routing.tech` lists a tech skill only when the snapshot's repo is in its `repos`.** A measure run
+  on the server no longer suggests `unity-dots`/`netcode-client`, and a client `Tools/` change no longer
+  suggests `dotnet-gameserver` (`scripts/lib/resolve.jq`, skill-contract "Tech skills").
+- factory-core step 11 (Review) applies the lead's checklist and the review file of every
+  `routing.tech` skill after `/code-review`; the report template gains **Review** and **Lessons**.
+- Skill contract: a **learning loop** (a verified failure lands in exactly one of: regression test,
+  cited Pitfall, `known_issues`, `facts[]`), version-specific API advice names its fact, and every tech
+  skill Pitfall cites a file or issue (`skills-lint.sh` enforces it).
+- `known_issues` for the stale client/server CLAUDE.md text and the `unity-netcode` agent name the
+  product-repo branches that fix them; remove each entry when its branch reaches the default branch.
+
 ### Fixed
 - **Tripwire false STOPs across sessions.** The pre-command snapshot was one `pre.json` per session,
   consumed by whichever PostToolUse came next. A call denied by the guard (PreToolUse ran, PostToolUse

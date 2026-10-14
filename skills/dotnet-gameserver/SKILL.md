@@ -102,7 +102,7 @@ knobs, metrics, golden vectors and the AOT warning baseline:
   (`GameServer.Tests/Aot/JsonReflectionGuardTests.cs`); the rest shows only in the CI
   "Publish AOT" job's native join (`.github/workflows/ci-dotnet.yml`, `TestDotnetInterop`).
 - **Shared.GameLogic multi-targets** `netstandard2.1`: a .NET-only API compiles for `net10.0` and
-  fails on the other target - read both target errors.
+  fails on the other target - read both target errors (`Shared.GameLogic/Shared.GameLogic.csproj`).
 - `gameserver-dotnet/CLAUDE.md` still says "4-byte BE length + JSON"; the wire is Protobuf with JSON
   legacy (ADR-9, `WireProtocol.cs`).
 
@@ -134,5 +134,8 @@ knobs, metrics, golden vectors and the AOT warning baseline:
   or an `IEcsSystem`/`ISimulationPhase` member. Currently MISSING (known issue `no-csharp-lsp`):
   fall back to `grep -rn` for the symbol over `GameServer/`, `GameServer.Tests/` and
   `Shared.GameLogic/`, then `{dotnet} build` of `GameServer.sln` to catch what grep missed.
+- `dotnet-diagnostics`: `dotnet-counters monitor -p <pid>` (GC heap, allocation rate, thread pool) or
+  `dotnet-trace collect` on a JIT build to find where a phase spends time; MISSING here: use the
+  `gameserver.gc.*` and `gameserver.sim.group.duration` metrics plus `TickBreakdownBench`.
 - `context-mode`: run `{dotnet} test` / `{dotnet} publish` through `ctx_execute` and return only
   the summary line, failures and IL warning codes. Not OK: pipe through `tail` / `grep -E 'Passed!|Failed|error|IL[0-9]{4}'`.

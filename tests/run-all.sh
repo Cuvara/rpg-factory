@@ -151,8 +151,26 @@ else
   skp "factory-context live checks" "--no-workspace"
 fi
 
+# ---- sgl-determinism (ADR-10) against fixtures: banned calls fail, comments/strings/allowed MathF pass
+dt=$(mktemp -d -p /tmp)
+printf '%s\n' 'class A {' '  float F(float x) => MathF.Sqrt(x) + MathF.Abs(x); // MathF.Sin(x) in a comment' \
+  '  string S = "Math.Pow(1, 2)";' '}' > "$dt/Ok.cs"
+out=$(python3 -B scripts/checks/sgl-determinism.py "$dt" 2>&1); rc=$?
+[ $rc -eq 0 ] && grep -q "^OK: sgl-determinism files=1 banned=0" <<<"$out" \
+  && ok "sgl-determinism: allowed MathF, comments and strings pass" || bad "sgl-determinism allowed fixture" "$out"
+printf '%s\n' 'class B {' '  float G(float x) => MathF.Atan2(x, 1f);' '  double H(double y) => System.Math.Pow(y, 2);' '}' > "$dt/Bad.cs"
+out=$(python3 -B scripts/checks/sgl-determinism.py "$dt" 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "Bad.cs:2: MathF.Atan2" <<<"$out" && grep -q "Bad.cs:3: Math.Pow" <<<"$out" \
+  && ok "sgl-determinism: banned calls fail with path:line" || bad "sgl-determinism banned fixture" "$out"
+rm -f "$dt"/*.cs
+python3 -B scripts/checks/sgl-determinism.py "$dt" >/dev/null 2>&1; [ $? -eq 2 ] \
+  && ok "sgl-determinism: empty directory is an error, not a pass" || bad "sgl-determinism empty dir"
+rm -rf "$dt"
+
 # ---- Factory check scripts against the live workspace (read-only)
 if $use_ws; then
+  run "sgl-determinism on Shared.GameLogic" python3 -B scripts/checks/sgl-determinism.py \
+    "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
   run "pin-status (client pins vs upstream tags)" python3 -B scripts/checks/pin-status.py
   run "wire-parity (Wire.cs bytes + protocol version)" bash scripts/checks/wire-parity.sh
   out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.netcode v0.45.0 --client-ref 17b7737^ 2>&1)

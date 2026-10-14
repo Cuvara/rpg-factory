@@ -116,11 +116,18 @@ assert "Netcode package code -> tech unity-client-tech via unity-package" netcod
   "$(lead unity-package) and $(tech unity-client-tech)" Runtime/Transport/ITransport.cs
 assert "sample build scripts -> client.buildscripts with build gates" client \
   "$(lead client-integration) and (.touched == [\"client.buildscripts\"]) and $(gate unity-batch)" Assets/_SampleBuild/Editor/SampleBuilder.cs
+assert "UnityDots simulation system -> tech unity-dots (and unity-client-tech), unity-package leads" unitydots   "$(lead unity-package) and $(tech unity-dots) and $(tech unity-client-tech) and $(notech dotnet-gameserver)" Runtime/Simulation/TimeToLiveSystem.cs
+assert "Netcode prediction code -> tech netcode-client, unity-package leads" netcode   "$(lead unity-package) and $(tech netcode-client)" Runtime/Prediction/LocalMovePredictor.cs
+assert "client ECS bridge code -> tech unity-dots and netcode-client via client-integration" client   "$(lead client-integration) and $(tech unity-dots) and $(tech netcode-client)" Assets/Scripts/DI/Dots/DotsWorldBridge.cs
+assert "wire field in server repo -> no client tech skill (the Netcode leg gets it in its repo)" server   "$(lead wire-contract) and $(notech netcode-client) and $(notech unity-dots)" backend/shared/proto/wire.proto
+assert "server loadtest (measure) -> server tech only, no Unity tech skill" server   "$(lead measure) and $(tech dotnet-gameserver) and $(notech unity-dots) and $(notech netcode-client)" backend/loadtest/cmd/loadtest/main.go
+assert "client measurement tools (measure) -> Unity tech, not dotnet-gameserver" client   "$(lead measure) and $(tech unity-dots) and $(notech dotnet-gameserver)" Tools/run-clients.sh
+assert "server tick change -> no Unity tech skill" server   "$(lead server-realtime) and $(notech unity-dots) and $(notech netcode-client)" backend/gameserver-dotnet/GameServer/Server/TickLoop.cs
 assert "deploy-only change -> no tech skill" server \
   "$(lead server-ops) and (.routing.legs == []) and (.routing.tech == [])" backend/deploy/monitoring/prometheus.yaml
 
 # a tech skill can never be forced into ownership, and --explain names it as supporting context
-for t in dotnet-gameserver go-backend unity-client-tech; do
+for t in dotnet-gameserver go-backend unity-client-tech unity-dots netcode-client; do
   if bash "$CTX" --repo server --paths backend/gameserver-dotnet/GameServer/Server/TickLoop.cs --lead "$t" >/dev/null 2>&1; then
     fail=$((fail + 1)); echo "FAIL  --lead $t accepted (tech skills are never lead)"
   else pass=$((pass + 1)); echo "PASS  --lead $t rejected (tech skills are never lead)"; fi

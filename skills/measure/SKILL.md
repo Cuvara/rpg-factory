@@ -37,7 +37,8 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --repo client --paths Tool
 1. **Write the measurement record first** (`references/measurement-record.md`): claim, object
    measured, expected value **with units** and why, control arm, absolute bound, run id, results path.
    No record, no run.
-2. **Pick the leg and its instrument** (`references/legs.md`). Prefer one binary with a runtime flag
+2. **Pick the leg and its instrument** (`references/legs.md`; client frame/GC/ECS work:
+   `references/client-profiling.md`). Prefer one binary with a runtime flag
    over two builds (MEASUREMENT.md section 4). Micro-benches (`GameServer.Tests/Bench`) are local and
    cheap; load/sweep/multi-client legs are heavy and gated.
 3. **Establish the control** on the same host, same session, same generator binary. A control from
@@ -108,9 +109,13 @@ reported HUMAN_REQUIRED (external) with the exact command when not run.
 ## Tools
 
 - Tech: `rpg-factory:dotnet-gameserver` for the tick phases, allocation guards and bench switches a server
-  number depends on (what `BENCH_TICK=1` measures, where a phase spends its time).
+  number depends on (what `BENCH_TICK=1` measures, where a phase spends its time);
+  `rpg-factory:unity-dots` and `rpg-factory:netcode-client` for what a client number depends on (sync
+  points, scheduling thresholds, frame-bound KCP pump, per-packet allocations).
 - `dotnet`: micro-benchmarks and the server under test; `docker`: the compose stack and load generators
   (stack start/stop stays a human gate). Missing either: that leg is NOT_AVAILABLE, not estimated.
+- `dotnet-diagnostics`: `dotnet-counters`/`dotnet-trace` against the server under a load leg (attribution of
+  GC and CPU); MISSING: quote the server's `/metrics` GC and tick instruments instead and say so.
 - `context-mode`: run long bench/load logs through it so only the summary lines and the record's numbers
   enter the conversation (fallback: `tail` / `grep` the summary lines; the raw log stays in the results dir).
 

@@ -13,7 +13,7 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
      └── repo skills         - server-realtime, server-services, server-ops, unity-package, client-integration
               own: implementation + validation inside one repo (one leg)
                    │
-                   └── tech skills - dotnet-gameserver, go-backend, unity-client-tech
+                   └── tech skills - dotnet-gameserver, go-backend, unity-client-tech, unity-dots, netcode-client
                             own: how a technology works in this workspace (never routed, loaded by
                             the skills in their used_by when the work needs it)
 ```
@@ -59,7 +59,8 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
 - Registry: `skills.<name>` = `{kind: "tech", repos, summary, order, used_by: [repo/cross-repo skills]}`.
   A tech skill owns no module or contract (`check-registry.sh` rejects it), so it is never lead, leg
   or follow-up. The snapshot lists it as `tech` in the routing line when a skill in `used_by` works on
-  the change (`routing.tech`).
+  the change **and** the snapshot's repo is in the tech skill's `repos` (`routing.tech`): a measure run on
+  the server lists `dotnet-gameserver`, not `unity-dots`.
 - Every skill in `used_by` names `rpg-factory:<tech skill>` in its body (lint), at the step that needs it,
   as "invoke" (Skill tool) for implementing, debugging, reviewing and how-it-works/how-to-test questions.
 - Below the prerequisite line a tech skill carries the guard `> **Supporting skill, never the owner:**
@@ -69,7 +70,20 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
 - Layout: the same frontmatter and prerequisite line; sections `Applies when / Not when`, `Scope`,
   `Architecture`, `Idioms`, `Pitfalls`, `Testing`, `Tools`. Same size limits as below.
 - Facts: every architectural claim cites the repo file that shows it. Version-like values (language
-  version, default rates, settings) are registry `facts[]` with a probe.
+  version, default rates, settings, package versions) are registry `facts[]` with a probe; API advice that
+  depends on a package version names the fact (e.g. `entities-version`), never a remembered version.
+- Every `## Pitfalls` bullet cites a file (`path:line` or a backticked path) or an issue (`#123`) that
+  proves it (lint). A pitfall nobody can point at is an opinion.
+- Optional review file: `references/<area>-review.md`, a checklist factory-core step 11 applies when the
+  skill is in `routing.tech` (e.g. `unity-dots` `references/ecs-review.md`).
+
+## Learning loop
+
+Knowledge enters the plugin only from a verified failure: reproduced, root-caused, fixed. The report's
+**Lessons** section names where it went (`references/report.md`): a regression test in the product repo
+(preferred - it cannot rot), a cited Pitfall in the owning tech skill, a registry `known_issues` entry, or
+a `facts[]` entry with a probe. One place, never several. A later plugin task promotes proposed skill or
+registry lines; `tests/facts.test.sh` and the citation lint keep them honest afterwards.
 
 ## Dev tools
 
@@ -176,8 +190,9 @@ After any change run `tests/run-all.sh`. It must report 0 failed.
 ## Coexistence
 
 - **Product repos:** their own `.claude` assets stay where they are: the client's Unity-MCP
-  tool skills, `verify-a-result`, and the `unity-netcode` agent, which is stale (see
-  `known_issues`). Skills call them. They do not copy them.
+  tool skills (including the `profiler-*` point samples measure uses) and `verify-a-result`. Skills call
+  them. They do not copy them. Netcode client knowledge lives in `netcode-client`; the client's old
+  `unity-netcode` agent is retired.
 - **`game-ai-workflows`:** independent. Factory never reads or writes `.ai/`, `docs/registry/`
   or `docs/features/`.
 - **Review:** the built-in `/code-review` is the review step.

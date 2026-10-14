@@ -150,6 +150,7 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
     follow_ups: [ $o.suggested_skills[] | select(.role == "follow-up") | .skill ],
     tech: ([ $o.suggested_skills[] | select(.role != "follow-up") | .skill ] as $working
       | [ ($reg.skills // {}) | to_entries[] | select(.value.kind == "tech")
+          | select((.value.repos // [$repo]) | index($repo))
           | select(any((.value.used_by // [])[]; . as $u | $working | index($u))) | {k: .key, o: (.value.order // 999)} ]
       | sort_by(.o, .k) | map(.k)),
     ambiguous: (($leads | length) > 1 and $leads[0].class == $leads[1].class and $leads[0].order == $leads[1].order),

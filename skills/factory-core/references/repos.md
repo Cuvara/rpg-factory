@@ -37,7 +37,7 @@ the client as a UPM git dependency `com.rpgmmo.shared-gamelogic#sgl-vX.Y.Z`.
 - Packages: no CLAUDE.md - `README.md`, `Documentation~/*.md`, `.github/workflows/ci.yml`, `release.yml`
   (UnityDots `Documentation~/RELEASE.md`, UIToolkit `version-bump.yml`).
 - Client: `IndieRPGMMOAdventure/CLAUDE.md` (build, package pins, DOTS Sample, CI, conventions),
-  `.claude/agents/unity-netcode.md` (networking-layer agent - stale since the package split, see `known_issues.unity-netcode-agent-stale`), `.claude/skills/` (Unity MCP
+  `.claude/agents/unity-netcode.md` (stale networking agent being retired - never follow it; netcode knowledge is `netcode-client`, see `known_issues.unity-netcode-agent-stale`), `.claude/skills/` (Unity MCP
   tool skills + `verify-a-result`).
 
 ## How path -> module mapping works

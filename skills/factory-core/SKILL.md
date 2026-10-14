@@ -78,7 +78,8 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    evidence. Evidence is bound to the tree it ran on: after any further edit, `--status` shows it
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
-11. **Review (O).** `/code-review` on non-trivial diffs.
+11. **Review (O).** Non-trivial diffs: `/code-review`, then the lead's review checklist and the review
+    file of every `routing.tech` skill that has one (e.g. the `unity-dots` ECS review checklist).
 12. **Report (M).** `references/report.md`, including the runner table and routing. A release
     ends at **READY_TO_TAG** - the lead creates the tag.
 
