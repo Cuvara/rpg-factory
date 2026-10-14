@@ -60,6 +60,21 @@ t deny  Write "$C/Assets/Scripts/Net/NewFile.cs" other-session
 t allow Read  "$C/Assets/Scripts/Net/Client.cs" other-session
 python3 -B "$TW" --ack >/dev/null
 t allow Write "$C/Assets/Scripts/Net/NewFile.cs" other-session
+# an open event (any session's incident) denies writes, and the reason carries the working ack command
+python3 -B - "$ROOT" "$WS" <<'PY'
+import sys, os; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import fstate
+fstate.write_json(os.path.join(fstate.latch_dir(sys.argv[2]), "20261014T000000Z-fg0001.json"),
+                  {"id": "20261014T000000Z-fg0001", "workspace": sys.argv[2], "session": "s-other", "message": "[server] stash created outside git"})
+PY
+t deny  Write "$C/Assets/Scripts/Net/NewFile.cs" fresh-session
+t deny  Edit  "$S/backend/deploy/compose.yml" fresh-session
+t allow Read  "$C/Assets/Scripts/Net/Client.cs" fresh-session
+why=$(jq -cn --arg p "$C/Assets/Scripts/Net/NewFile.cs" --arg d "$C" '{tool_name:"Write",tool_input:{file_path:$p},cwd:$d,session_id:"fresh-session"}' \
+  | python3 -B "$FG" | jq -r '.hookSpecificOutput.permissionDecisionReason')
+case "$why" in *"event 20261014T000000Z-fg0001"*"! python3 \"$ROOT/scripts/tripwire.py\" --ack"*) pass=$((pass + 1)); echo "PASS  deny names the event and the quoted ack command";;
+  *) fail=$((fail + 1)); echo "FAIL  deny reason: $why";; esac
+python3 -B "$TW" --ack >/dev/null
+t allow Write "$C/Assets/Scripts/Net/NewFile.cs" fresh-session
 out=$(echo 'garbage' | python3 -B "$FG"; echo "rc=$?"); [ "$out" = "rc=0" ] && { pass=$((pass + 1)); echo "PASS  malformed input -> no opinion"; } || { fail=$((fail + 1)); echo "FAIL  malformed: $out"; }
 out=$(jq -cn --arg p "$C/Packages/com.cuvara.dots/a.cs" '{tool_name:"Edit",tool_input:{file_path:$p},cwd:"/"}' | RPG_FACTORY_GUARD=off python3 -B "$FG")
 [ -z "$out" ] && { pass=$((pass + 1)); echo "PASS  RPG_FACTORY_GUARD=off disables it"; } || { fail=$((fail + 1)); echo "FAIL  guard off: $out"; }

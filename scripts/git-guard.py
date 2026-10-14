@@ -660,9 +660,8 @@ def _session_state(payload, registry):
     ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
     sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "default"))
     sd = os.path.join(fstate.scratch(), sid)
-    wl = os.path.join(fstate.persistent(), "latch", fstate.workspace_key(ws) + ".json") if ws else ""
     command = (payload.get("tool_input") or {}).get("command") or ""
-    need = os.path.exists(os.path.join(sd, "LATCH")) or (wl and os.path.exists(wl)) \
+    need = os.path.exists(os.path.join(sd, "LATCH")) or (ws and fstate.has_open_events(ws)) \
         or os.path.exists(os.path.join(sd, "MODE")) or "--mode" in command
     return need, ws
 
@@ -675,7 +674,21 @@ def latch_hits(payload, registry):
     latch = tripwire.latched(payload)
     if latch and not tripwire.is_read_only(payload):
         return [("deny", f"tripwire latched - {latch}. Stop and report it to the user; they clear it with "
-                         f"`! python3 {os.path.join(PLUGIN_ROOT, 'scripts', 'tripwire.py')} --ack`")]
+                         f"`! {tripwire.ack_command()}` (agents never run it)")]
+    return []
+
+
+def ack_hits(payload, registry):
+    """Acknowledging tripwire events is the user's decision, latched or not: an agent ack could dismiss an
+    incident another session raised a moment earlier. Cheap text check first (runs on every command)."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    if "--ack" not in command or "tripwire" not in command:
+        return []
+    shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    for argv in expand(command, shell=shell):
+        if any(os.path.basename(a.replace("\\", "/")) == "tripwire.py" for a in argv[:4]) and "--ack" in argv:
+            return [("deny", "tripwire events are acknowledged only by the user, after reviewing the repos: report the "
+                             "STOP and `tripwire.py --status`, then the user runs `! ... tripwire.py --ack` themselves")]
     return []
 
 
@@ -718,7 +731,7 @@ def main():
         need_state, _ws = _session_state(payload, registry)
     except Exception:
         need_state = True  # cannot tell cheaply: do the full checks
-    parts = (latch_hits, mode_hits, evaluate, human_gate_hits) if need_state else (evaluate, human_gate_hits)
+    parts = (latch_hits, mode_hits, ack_hits, evaluate, human_gate_hits) if need_state else (ack_hits, evaluate, human_gate_hits)
     for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)

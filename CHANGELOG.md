@@ -4,6 +4,46 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- **Tripwire false STOPs across sessions.** The pre-command snapshot was one `pre.json` per session,
+  consumed by whichever PostToolUse came next. A call denied by the guard (PreToolUse ran, PostToolUse
+  never does) left its snapshot behind, and the next read-only command (`tripwire.py --status`) compared
+  against it and was blamed for every ref another session had changed in between. Parallel calls of one
+  session overwrote each other's snapshot. Snapshots are now per tool call (`pre-<tool_use_id>.json`),
+  read only by the same call, written atomically, and pruned after 2 h when a call never completes.
+  Without a `tool_use_id`, a snapshot of a different command is discarded.
+- **Concurrent sessions.** Git that another session's (or a parallel call's) completed command visibly ran
+  in a repo now explains ref changes in that repo, as the command's own git already did. Tags are never
+  explained; unfinished calls explain nothing.
+- **The printed ack command did not work.** `os.path.join` produced `C:/.../rpg-factory\scripts\tripwire.py`;
+  bash dropped the backslashes and the user's ack silently failed. Every message (STOP, guard denials,
+  file guard, SessionStart, doctor) now prints `fstate.ack_command()`: quoted, forward slashes.
+- **`--ack` reported success it had not checked** and always exited 0. It now re-reads the state and
+  prints `latch is now CLEAR` (exit 0) or `still LATCHED: <ids>` / `NOT cleared: <reason>` (exit 1;
+  2 = invalid id). Repeating it is safe; unknown ids are reported.
+
+### Changed
+- **Tripwire events instead of one latch file.** Each incident is `latch/<workspace>/<event-id>.json` with
+  the command, session, tool call id, ref values before and after, and recovery hints (for a dropped
+  stash: its SHA and `git stash apply <sha>`). A second incident no longer overwrites the first. `--ack`
+  archives events to `acked/` (kept 30 days) instead of deleting them; `--ack <event-id>` acknowledges one,
+  and an event created while an ack runs stays open. The latch stays global per workspace. A legacy
+  `latch/<workspace>.json` still blocks and is migrated into `acked/` on ack.
+- `--status` lists open events with ref values, recovery hints, recent audited stash operations and the
+  exact ack command.
+- While latched, read-only investigation is allowed: `git reflog` (not `expire`/`delete`), `git stash
+  show` and `git branch --list <pattern>`.
+- git-safety: never stash/reset/clean to get a clean tree (export HEAD instead), never assume a stash is
+  yours, one mutating command per worktree, and the recovery procedure after a STOP.
+
+### Added
+- **Stash audit.** A visible `git stash` (the approved path) is appended to `audit/<workspace>.jsonl`
+  with session, tool call id, command and the stash SHA before and after. It does not latch.
+
+### Security
+- The guard now denies `tripwire.py --ack` to the agent at all times, not only while latched, so an agent
+  cannot dismiss an incident another session raised a moment earlier.
+
 ## [0.5.0] - 2026-10-01
 
 ### Security

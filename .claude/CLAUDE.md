@@ -78,6 +78,10 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
   - PreToolUse Skill: `tripwire.py --skill`, which records the execution mode.
   - PostToolUse Bash|PowerShell: `tripwire.py --post` (STOP plus latch on an unexpected git state change).
+  - Tripwire lifecycle: snapshots are per tool call (`pre-<tool_use_id>.json`, never shared or reused); every
+    incident is an event file under `fstate.latch_dir()` (never overwritten, archived on ack); the latch is
+    global per workspace on purpose. `--ack` is the user's only (the guard always denies it to the agent),
+    reports CLEAR / still LATCHED with exit 0 / 1, and every message prints `fstate.ack_command()`.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
   covered by `tests/commands.test.sh`.
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract) routes to
