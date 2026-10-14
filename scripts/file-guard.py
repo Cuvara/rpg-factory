@@ -74,7 +74,8 @@ def evaluate(payload, registry):
         return R
     latch = tripwire.latched(payload)
     if latch:
-        R.append(("deny", f"tripwire latched - {latch}. Stop and report it to the user"))
+        R.append(("deny", f"tripwire latched - {latch}. Stop and report it to the user; they clear it with "
+                          f"`! {tripwire.ack_command()}` (agents never run it)"))
     mode = tripwire.current_mode(payload)
     if mode in tripwire.READ_ONLY_MODES or mode == "validate":
         R.append(("deny", f"Factory mode is `{mode}`: no file changes. Switch only when the user asked to implement: "

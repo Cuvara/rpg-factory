@@ -660,9 +660,8 @@ def _session_state(payload, registry):
     ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
     sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "default"))
     sd = os.path.join(fstate.scratch(), sid)
-    wl = os.path.join(fstate.persistent(), "latch", fstate.workspace_key(ws) + ".json") if ws else ""
     command = (payload.get("tool_input") or {}).get("command") or ""
-    need = os.path.exists(os.path.join(sd, "LATCH")) or (wl and os.path.exists(wl)) \
+    need = os.path.exists(os.path.join(sd, "LATCH")) or (ws and fstate.has_open_events(ws)) \
         or os.path.exists(os.path.join(sd, "MODE")) or "--mode" in command
     return need, ws
 
@@ -675,7 +674,38 @@ def latch_hits(payload, registry):
     latch = tripwire.latched(payload)
     if latch and not tripwire.is_read_only(payload):
         return [("deny", f"tripwire latched - {latch}. Stop and report it to the user; they clear it with "
-                         f"`! python3 {os.path.join(PLUGIN_ROOT, 'scripts', 'tripwire.py')} --ack`")]
+                         f"`! {tripwire.ack_command()}` (agents never run it)")]
+    return []
+
+
+def ack_hits(payload, registry):
+    """Acknowledging tripwire events is the user's decision, latched or not: an agent ack could dismiss an
+    incident another session raised a moment earlier. Cheap text check first (runs on every command)."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    if "ack" not in command:
+        return []
+    deny = [("deny", "tripwire events are acknowledged only by the user, after reviewing the repos: report the "
+                     "STOP and `tripwire.py --status`, then the user runs `! ... tripwire.py --ack` themselves")]
+    shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    try:
+        argvs = list(expand(command, shell=shell))
+    except Exception:
+        argvs = []
+    for argv in argvs:
+        base = [os.path.basename(a.replace("\\", "/")).lower() for a in argv]
+        runs_python = bool(base) and (re.match(r"(python[0-9.]*|py)(\.exe)?$", base[0]) is not None)
+        runs_script = bool(base) and base[0] == "tripwire.py"
+        if not (runs_python or runs_script):
+            continue  # grep/cat/less mentioning tripwire.py and --ack read the file, they do not run it
+        if (runs_script or "tripwire.py" in base) and "--ack" in argv:
+            return deny
+        if runs_python and "-c" in argv and any("tripwire" in a and "ack" in a for a in argv):
+            return deny  # python -c "...runpy.run_path('.../tripwire.py')... --ack"
+        if runs_python and "--ack" in argv and any("$" in a or "%" in a for a in argv):
+            return deny  # python3 $T --ack: the script path is behind a variable
+    if re.search(r"tripwire", command) and re.search(r"(^|\s)--ack\b", command) and re.search(r"\bpy(thon[0-9.]*)?(\.exe)?\b", command) \
+            and re.search(r"\$|%|`", command):
+        return deny  # a variable or substitution hides which script runs: the user acks, never the agent
     return []
 
 
@@ -718,7 +748,7 @@ def main():
         need_state, _ws = _session_state(payload, registry)
     except Exception:
         need_state = True  # cannot tell cheaply: do the full checks
-    parts = (latch_hits, mode_hits, evaluate, human_gate_hits) if need_state else (evaluate, human_gate_hits)
+    parts = (latch_hits, mode_hits, ack_hits, evaluate, human_gate_hits) if need_state else (ack_hits, evaluate, human_gate_hits)
     for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)

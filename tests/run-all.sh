@@ -61,8 +61,9 @@ done
 jq -e '(.hooks.PreToolUse[0].matcher == "Bash|PowerShell")
         and ([.hooks.PreToolUse[0].hooks[].command] | any(test("git-guard.py")) and any(test("tripwire.py\" --pre")))
         and (.hooks.PostToolUse[0].matcher == "Bash|PowerShell") and (.hooks.PostToolUse[0].hooks[0].command | test("tripwire.py\" --post"))
+        and (.hooks.PostToolUseFailure[0].matcher == "Bash|PowerShell") and (.hooks.PostToolUseFailure[0].hooks[0].command | test("tripwire.py\" --post"))
         and ([.hooks.SessionStart[0].hooks[].command] | any(test("install-status.py\" --session")) and any(test("tripwire.py\" --session-start")))' hooks/hooks.json >/dev/null \
-  && ok "hooks: guard+tripwire on Bash|PowerShell, tripwire post, session install check + baseline" || bad "hooks wiring"
+  && ok "hooks: guard+tripwire on Bash|PowerShell, tripwire post (success and failure), session install check + baseline" || bad "hooks wiring"
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
@@ -85,7 +86,17 @@ else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
 else skp "registry facts re-probed in the repos" "--no-workspace"; fi
 if $use_ws; then run "routing + history replay" tests/routing.test.sh
-else run "routing (task scenarios only)" tests/routing.test.sh --no-history; fi
+else
+  # task scenarios resolve --paths only, but factory-context still needs the workspace markers and a git
+  # work tree per registry repo: a throwaway stand-in (empty repos), never the real workspace
+  SW=$(mktemp -d)
+  while IFS= read -r p; do
+    git init -q "$SW/$p" && git -C "$SW/$p" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  done < <(jq -r '.repos[].path' registry.json)
+  while IFS= read -r m; do mkdir -p "$SW/$(dirname "$m")"; touch "$SW/$m"; done < <(jq -r '.workspace.root_markers[]' registry.json)
+  run "routing (task scenarios only, stand-in workspace)" env RPG_FACTORY_WORKSPACE="$SW" tests/routing.test.sh --no-history
+  rm -rf "$SW"
+fi
 
 # ---- resolver behaviour (pure jq, no workspace needed)
 resolve() { # repo files-json

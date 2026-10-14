@@ -4,6 +4,63 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- **Tripwire false STOPs across sessions.** The pre-command snapshot was one `pre.json` per session,
+  consumed by whichever PostToolUse came next. A call denied by the guard (PreToolUse ran, PostToolUse
+  never does) left its snapshot behind, and the next read-only command (`tripwire.py --status`) compared
+  against it and was blamed for every ref another session had changed in between. Parallel calls of one
+  session overwrote each other's snapshot. Snapshots are now per tool call (`pre-<tool_use_id>.json`),
+  read only by the same call, written atomically, and pruned after 2 h when a call never completes.
+  Without a `tool_use_id`, a snapshot of a different command is discarded.
+- **Concurrent sessions.** A ref change is explained when another session's (or a parallel call's)
+  completed command saw that same ref reach that same value while its own visible git ran in that repo,
+  and its subcommands could make that change: `commit`/`merge`/`reset`/... move only the branch it had
+  checked out, `branch`/`switch`/`checkout -b` create branches, `fetch`/`push` move remote-tracking refs,
+  `stash` moves `refs/stash`. A read-only `git log`, a different ref, a tag or an unfinished call never
+  explains anything, so a hidden reset of `develop` still trips while another session commits elsewhere.
+- **Failing commands were never checked.** A Bash call that exits non-zero fires `PostToolUseFailure`,
+  not `PostToolUse`; the tripwire now runs `--post` on both (`hooks.json`).
+- **A worktree ref change was reported twice** (once per checkout sharing the refs); it is now reported
+  once, under the worktree the command ran in.
+- Cache writes that fail (Windows: `os.replace` onto a file another hook has open) are retried, never
+  leave temp files, and never cost the comparison.
+- **The printed ack command did not work.** `os.path.join` produced `C:/.../rpg-factory\scripts\tripwire.py`;
+  bash dropped the backslashes and the user's ack silently failed. Every message (STOP, guard denials,
+  file guard, SessionStart, doctor) now prints `fstate.ack_command()`: quoted, forward slashes.
+- **`--ack` reported success it had not checked** and always exited 0. It now re-reads the state and
+  prints `latch is now CLEAR` (exit 0) or `still LATCHED: <ids>` / `NOT cleared: <reason>` (exit 1;
+  2 = invalid id). Repeating it is safe; unknown ids are reported.
+
+### Changed
+- **Tripwire events instead of one latch file.** Each incident is `latch/<workspace>/<event-id>.json` with
+  the command, session, tool call id, ref values before and after, and recovery hints (for a dropped
+  stash: its SHA and `git stash apply <sha>`). A second incident no longer overwrites the first. `--ack`
+  archives events to `acked/` (kept 30 days) instead of deleting them; `--ack <event-id>` acknowledges one,
+  and an event created while an ack runs stays open. The latch stays global per workspace. A legacy
+  `latch/<workspace>.json` still blocks and is migrated into `acked/` on ack.
+- `--status` lists open events with ref values, recovery hints, recent audited stash operations and the
+  exact ack command.
+- While latched, read-only investigation is allowed: `git reflog` (not `expire`/`delete`/`drop`/`write`,
+  which rewrite the history the recovery hints point at), `git stash show` and `git branch --list <pattern>`.
+- Snapshots of calls without a `tool_use_id` are keyed by the command, so parallel calls do not share one.
+  A second legacy latch is archived next to the first instead of overwriting it.
+- git-safety: never stash/reset/clean to get a clean tree (export HEAD instead), never assume a stash is
+  yours, one mutating command per worktree, and the recovery procedure after a STOP.
+
+### Added
+- **CI.** `.github/workflows/tests.yml` runs `tests/run-all.sh --no-workspace --no-claude` on every pull
+  request and push to `main` (read-only token, pinned actions, log artifact, FAIL/SKIP summary). The
+  runner has no RPG MMO workspace, so workspace checks show as SKIP there; `tests/run-all.sh` with the
+  workspace is still required locally before a release.
+- **Stash audit.** A visible `git stash` (the approved path) is appended to `audit/<workspace>.jsonl`
+  with session, tool call id, command and the stash SHA before and after. It does not latch.
+
+### Security
+- The guard now denies `tripwire.py --ack` to the agent at all times, not only while latched, so an agent
+  cannot dismiss an incident another session raised a moment earlier. It matches any Python invocation of
+  the script (options before it, `py -3`, `python -c ... run_path`, the path behind a variable) and no
+  longer denies `grep -- --ack tripwire.py`.
+
 ## [0.5.0] - 2026-10-01
 
 ### Security

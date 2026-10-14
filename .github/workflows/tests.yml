@@ -1,0 +1,65 @@
+# Plugin test suite on a clean runner. The RPG MMO workspace (server, client, Netcode, UnityDots,
+# UIToolkit) is not available here, so this runs `tests/run-all.sh --no-workspace --no-claude`: every
+# check that needs those repos on disk (registry paths, facts, pin-status, wire-parity, package-ready,
+# netcode headless, live context/status) is reported as SKIP, never as PASS. Those still have to be run
+# locally with the workspace (`tests/run-all.sh`) before a release.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-all:
+    name: run-all (no workspace)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tool versions
+        run: |
+          python3 --version
+          jq --version
+          git --version
+
+      - name: Git identity and defaults for test fixtures
+        run: |
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+
+      - name: tests/run-all.sh --no-workspace --no-claude
+        run: |
+          set -o pipefail
+          tests/run-all.sh --no-workspace --no-claude 2>&1 | tee run-all.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '### tests/run-all.sh --no-workspace --no-claude'
+            echo '```'
+            grep -E '^(FAIL|SKIP) |^run-all:' run-all.log || echo 'no run-all.log'
+            echo '```'
+            echo 'Workspace checks are skipped here; run `tests/run-all.sh` locally with the workspace.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: run-all-log
+          path: run-all.log
+          retention-days: 14
+          if-no-files-found: warn
