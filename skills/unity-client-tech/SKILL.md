@@ -105,13 +105,13 @@ calling skill keeps validation and reporting.
   `Assets/Scripts/Session/BackendCommandLine.cs:256-268`); no TLS pinning, the browser does the
   handshake (`Assets/Scripts/Nakama/Tls/PinnedCertificateHandler.cs:34-38`); no browser realtime
   transport (`docs/CUVARA-DOTS-IMPROVEMENT-PLAN.md:212`).
-- **IL2CPP + Minimal stripping on Android/WebGL, Mono on Standalone** (`CLAUDE.md:9-20`), and the
+- **IL2CPP + Minimal stripping on Android/WebGL, Mono on Standalone** (`CLAUDE.md` "Scripting backend is per-target"), and the
   client has no `link.xml` under `Assets/`: reflection-only types can be stripped and a Windows
   build never shows it.
 - **Builds through MCP:** `BuildPipeline.BuildPlayer` blocks the Editor main thread, the MCP
   channel drops and its retries start the build again; read `Editor.log`, guard with a sentinel
-  (`CLAUDE.md:438-441`).
-- **Stale MCP doc:** `CLAUDE.md:528-532` describes a Docker stdio server on port 8080; the live
+  (`CLAUDE.md` "Verifying a player build actually contains your change").
+- **Stale MCP doc:** `CLAUDE.md` "Unity MCP (IvanMurzak/Unity-MCP)" describes a Docker stdio server on port 8080; the live
   config is `.mcp.json` (`ai-game-developer`, HTTP `localhost:23621`).
 
 ## Testing

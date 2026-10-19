@@ -5,6 +5,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- **Game rules live only in Shared.GameLogic (ADR-10).** Until now the rule existed only in the
+  client's stale `unity-netcode` agent. Factory said nothing when a client or package change
+  reimplemented movement, combat or validation logic that the server must agree with. New module rules
+  cover `client.scripts`, `netcode.runtime` and `unitydots.runtime`: never copy a game rule. Stop the leg
+  and hand the rule to `server-realtime`, then to `pin-bump`. A new rule on `server.gameserver-dotnet`
+  says that logic the client must reproduce goes into `Shared.GameLogic`, not only into `GameServer/`.
+  `client-integration` has a new workflow step and a new hand-off row, and `server-realtime` step 2 names
+  the placement. `tests/routing.test.sh` asserts that each of the four snapshots carries the rule.
 - **Tech skill `unity-dots`** (Entities/Burst/Jobs in UnityDots and the client): the ECS-vs-classic
   decision (ECS for many homogeneous per-frame entities; services, UI and request/response state stay
   VContainer + UI Toolkit), the group tree and bootstrap install, `SystemOrderVerifier`, the package ECB
@@ -47,6 +55,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   product-repo branches that fix them; remove each entry when its branch reaches the default branch.
 
 ### Fixed
+- `unity-client-tech` cited the client `CLAUDE.md` by line numbers, which had drifted by about 15 lines.
+  The citations now use section names.
 - **Tripwire false STOPs across sessions.** The pre-command snapshot was one `pre.json` per session,
   consumed by whichever PostToolUse came next. A call denied by the guard (PreToolUse ran, PostToolUse
   never does) left its snapshot behind, and the next read-only command (`tripwire.py --status`) compared

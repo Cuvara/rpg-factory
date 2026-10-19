@@ -75,6 +75,12 @@ assert "bench harness only -> measure leads, server-realtime co-leads" server "(
 assert "netcode measurement test -> unity-package leads, measure co-leads" netcode "(.routing.lead == \"unity-package\") and (.routing.co_leads | index(\"measure\"))" Tests/Runtime/PredictionLatencyMeasurement.cs
 assert "gateway TLS/sealed manifest -> server-ops drives transport-security; client + netcode follow up" server "(.routing.lead == \"server-ops\") and $(contract transport-security) and $(followup client-integration) and $(followup unity-package)" backend/deploy/k8s/app/40-gateway.yaml
 assert "client pin loader is an end of transport-security" client "$(contract transport-security) and (.routing.lead == \"client-integration\")" Assets/Scripts/DI/TransportSecurityReport.cs
+# ADR-10: game rules live only in Shared.GameLogic. Every consumer of a game rule carries the rule in its snapshot.
+sgl_rule() { echo "any(.obligations[]; .module == \"$1\" and any(.rules[]; test(\"Shared.GameLogic\") and test(\"ADR-10\")))"; }
+assert "client game code carries the SGL-only game-rule rule" client "$(sgl_rule client.scripts)" Assets/Scripts/Session/MainSessionFlow.cs
+assert "game server carries the SGL placement rule" server "$(sgl_rule server.gameserver-dotnet)" backend/gameserver-dotnet/GameServer/Program.cs
+assert "Netcode runtime carries the SGL-only game-rule rule" netcode "$(sgl_rule netcode.runtime)" Runtime/Client/NetworkClient.cs
+assert "UnityDots runtime carries the SGL-only game-rule rule" unitydots "$(sgl_rule unitydots.runtime)" Runtime/Simulation/SimConstants.cs
 assert "wire change: cross-repo dependents add only their PRIMARY owner as follow-up (no measure noise)" server "$(followup unity-package) and ($(followup measure) | not)" backend/shared/proto/wire.proto
 assert "submodule gitlink bump -> pin-bump is the primary lead" client "(.routing.lead == \"pin-bump\") and (.routing.ambiguous | not)" unity-build-workflows
 assert "DOTS Sample recopy -> pin-bump" client "$(lead pin-bump)" "Assets/Samples/Netcode/DOTS Sample/DOTSNetworkBridge.cs"

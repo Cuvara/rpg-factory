@@ -928,6 +928,7 @@
         "XML doc comments on public APIs; no allocations in hot paths; NativeAOT-safe (System.Text.Json source generators, no reflection).",
         "Tests needing docker/Postgres/Redis use [SkippableFact] / SkipUnlessAvailable(), never an early return. Deadlines use Stopwatch, not DateTime.UtcNow.",
         "Movement-related changes need a test through the live socket path (pattern: GameServer.Tests/Server/SlowClientMovementTests.cs).",
+        "Deterministic logic the client must reproduce or predict (movement, combat, validation, content rules) goes into Shared.GameLogic and the game server calls it; never put it only in GameServer/ (ADR-10).",
         "Redis hash servers:id:{id} is a cross-language contract with Go redisstore/registry.go.",
         "Knobs: a new GAMESERVER_* const (ServerEnv.cs / *Settings) is reflected by GameServer.Tests/Deploy/DeclaredKnobs.cs and must be passed through in docker-compose.yml + docker-compose.override.yml and agones/fleet-map-dotnet-dev.yaml + k8s/app/50-fleet-map.yaml + k8s/app/60-fleet-dungeon.yaml (or excluded by name with a reason) - Compose/FleetEnvPassthroughTests fail otherwise. k8s/app/20-configmaps.yaml is not what those tests read.",
         "Metrics: new instruments in Observability/GameMetrics.cs are documented in docs/METRICS.md (no test enforces this - review item).",
@@ -1371,6 +1372,7 @@
         "Namespace mirrors folder path under Assets; one class per file; VContainer DI over singletons; UniTask over coroutines; prefer separate .asmdef assemblies.",
         "Every new asset/folder needs its Unity-generated .meta committed with it.",
         "Networking, ECS views and navigation live in com.cuvara.* packages (unity-package); .claude/agents/unity-netcode.md is stale (known issue).",
+        "Game rules (movement, combat, damage, validation, cooldowns, any formula the server must agree with) live only in Shared.GameLogic (server repo, server-realtime) and reach this repo through the com.rpgmmo.shared-gamelogic pin (pin-bump). Never reimplement or copy one here (ADR-10); a missing rule stops this leg.",
         "One RegisterMessagePipe (inside RegisterDots); one IWireCodec (RegisterNetworking encoding:); scene components injected via RegisterBuildCallback, not RegisterComponentInHierarchy (except BenchmarkLifetimeScope).",
         "[DOTSNet] log prefixes in Assets/Scripts/Session/MainSessionFlow.cs are a contract with Tools/verify-multiclient.sh."
       ],
@@ -2354,7 +2356,8 @@
       "rules": [
         "Every new file/folder needs its .meta (CI validate: check_metas.py).",
         "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
-        "Consumes Shared.GameLogic (com.rpgmmo.shared-gamelogic); Netcode CI bootstraps its own SGL pin (contract sgl-pin watcher; factory-status shows lag)."
+        "Consumes Shared.GameLogic (com.rpgmmo.shared-gamelogic); Netcode CI bootstraps its own SGL pin (contract sgl-pin watcher; factory-status shows lag).",
+        "Game rules (movement, combat, damage, validation, cooldowns, any formula the server must agree with) live only in Shared.GameLogic (server repo, server-realtime) and reach this repo through the com.rpgmmo.shared-gamelogic pin (pin-bump). Never reimplement or copy one here (ADR-10); a missing rule stops this leg."
       ],
       "generated": [],
       "tools": [
@@ -2624,7 +2627,8 @@
         "Every new file/folder needs its .meta.",
         "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
         "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI.",
-        "Define-constrained assemblies: behaviour must hold in all six CI matrix configurations (without/with netcode, core-only, physics, full-stack, gamefoundation)."
+        "Define-constrained assemblies: behaviour must hold in all six CI matrix configurations (without/with netcode, core-only, physics, full-stack, gamefoundation).",
+        "Game rules (movement, combat, damage, validation, cooldowns, any formula the server must agree with) live only in Shared.GameLogic (server repo, server-realtime) and reach this repo through the com.rpgmmo.shared-gamelogic pin (pin-bump). Never reimplement or copy one here (ADR-10); a missing rule stops this leg."
       ],
       "generated": [],
       "tools": [

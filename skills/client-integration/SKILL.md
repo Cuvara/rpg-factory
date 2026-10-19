@@ -42,23 +42,27 @@ Read-only here: `client.packages`, `client.dots-sample`, `client.samples-importe
    system or job invoke `rpg-factory:unity-dots` (and decide ECS vs a VContainer service there first); before
    async code, a UI Toolkit screen, a VContainer registration, an asmdef or a test, invoke
    `rpg-factory:unity-client-tech`; input send, session or prediction wiring: `rpg-factory:netcode-client`.
-2. **Check the package boundary.** Code against the pinned tag's API only
+2. **Game rule or wiring?** Logic the server must agree with (movement, combat, damage, validation,
+   cooldowns, any formula) belongs in `Shared.GameLogic`, never under `Assets/` (ADR-10): stop this leg and
+   hand it to `server-realtime` (table below). A new number is a gameplay rule as well (`phase-plumbing-only`).
+3. **Check the package boundary.** Code against the pinned tag's API only
    (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py`; not the gitignored embedded clone, not package
    `develop`, never edit those clones). A new or changed package API stops the client leg (hand-off below).
-3. **UI work:** run the 10 questions in `docs/UI-ARCHITECTURE.md` "Before implementing
+4. **UI work:** run the 10 questions in `docs/UI-ARCHITECTURE.md` "Before implementing
    anything" and follow `references/ui-hud.md`. Edit `.uxml` in a way that regenerates the
    `Generated/*.uxml.g.cs` (Editor save through the codegen) and commit both.
-4. **Assets.** Scenes, prefabs, `.asset` and `.meta` change in the Editor (Unity MCP), never by
+5. **Assets.** Scenes, prefabs, `.asset` and `.meta` change in the Editor (Unity MCP), never by
    hand-editing YAML. See *Human gates*.
-5. **Tests.** EditMode in `Assets/Tests/Editor` (`NDC.Tests.Editor`); PlayMode in `Assets/Tests/Runtime`
+6. **Tests.** EditMode in `Assets/Tests/Editor` (`NDC.Tests.Editor`); PlayMode in `Assets/Tests/Runtime`
    only for a live `UIDocument`/frame loop (it cannot see ECS). Templates: `rpg-factory:unity-client-tech`.
-6. **Docs.** Wiring changes update `docs/DOTS-WIRING.md` / `docs/HUD-BRIDGE.md` /
+7. **Docs.** Wiring changes update `docs/DOTS-WIRING.md` / `docs/HUD-BRIDGE.md` /
    `docs/UI-ARCHITECTURE.md` as applicable, plus the root `CHANGELOG.md` `[Unreleased]`.
 
 ## Cross-repo hand-offs
 
 | Situation | Hand to | Client resumes when |
 |---|---|---|
+| needs a game rule (movement, combat, validation, a formula the server must agree with) | `server-realtime` (into `Shared.GameLogic`, golden vectors) → lead tags `sgl-v*` → `pin-bump` | the sgl pin moved; call the rule from the pinned package, never a client copy (ADR-10) |
 | needs a package API or fix | `unity-package` (package repo, stops at READY_TO_TAG) → lead tags → `pin-bump` | the pin moved to that tag (`factory-status.py` shows no pin-bump pending) |
 | server message / field needed | `wire-contract` (server → Netcode → client) | the rollout reaches `client pin`; then wire the new field here |
 | Nakama RPC changed | `server-services` drives `nakama-rpc` | server side merged; update `PartyService.cs` / `NakamaAuthProvider.cs` callers |
