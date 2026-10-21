@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-21
+
+Hotfix: the tripwire and its workspace latch are removed. Update the plugin (`claude plugin marketplace
+update rpg-factory && claude plugin update rpg-factory@rpg-factory`) and start a new session: hooks bind at
+session start, so a running session keeps the old hooks until it is restarted. No registry schema or
+command-line changes.
+
 ### Changed
 - The execution-mode and tech-skill-order logic moved from `scripts/tripwire.py` to
   `scripts/factory_session.py` (Skill hook: `factory_session.py --skill`). Behaviour is unchanged.
