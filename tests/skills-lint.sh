@@ -2,7 +2,8 @@
 # Lint every skill against references/skill-contract.md. Mechanical checks only; the
 # semantic review is the human/LLM review step.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); }

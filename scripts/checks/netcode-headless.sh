@@ -26,9 +26,27 @@ work=$(mktemp -d "$base/.tmp-netcode-headless-XXXXXX")
 $keep || trap 'rm -rf "$work"' EXIT
 for d in Runtime Tests "Tests~"; do cp -r "$src/$d" "$work/" || { echo "ERROR: copy $d failed"; exit 2; }; done
 
+# The prediction tests compile against Shared.GameLogic at the tag package.json pins
+# (x-manualDependencies). CI checks that tag out and passes -p:SglDir; do the same from the workspace
+# server repo with `git archive` (read-only; nothing is built inside rpg-mmo-server).
+sgl_args=()
+sgl_tag=$(python3 -B -c "import json,sys; u=json.load(open(sys.argv[1], encoding='utf-8')).get('x-manualDependencies', {}).get('com.rpgmmo.shared-gamelogic', ''); print(u.rsplit('#', 1)[1] if '#' in u else '')" "$src/package.json")
+if [ -n "$sgl_tag" ]; then
+  srv="$(dirname "$src")/rpg-mmo-server"; sgl_path=backend/gameserver-dotnet/Shared.GameLogic
+  mkdir -p "$work/sgl"
+  git -C "$srv" archive "$sgl_tag" "$sgl_path" | tar -x -C "$work/sgl" \
+    || { echo "NOT-RUN(blocked): Shared.GameLogic tag $sgl_tag not readable in $srv (fetch its tags)"; exit 2; }
+  sgl_dir="$work/sgl/$sgl_path"
+  # Windows dotnet needs C:/... - git-bash: cygpath; WSL running dotnet.exe: wslpath (/mnt/c/... is not a path to it)
+  if command -v cygpath >/dev/null 2>&1; then sgl_dir=$(cygpath -m "$sgl_dir")
+  elif [ "$dotnet" = dotnet.exe ] && command -v wslpath >/dev/null 2>&1; then sgl_dir=$(wslpath -m "$sgl_dir"); fi
+  sgl_args=(-p:SglDir="$sgl_dir")
+  echo "sgl:    $sgl_tag from $srv (git archive, as CI checks out the pinned tag)"
+fi
+
 echo "source: $src @ $(git -C "$src" rev-parse --short HEAD 2>/dev/null) ($(git -C "$src" status --porcelain 2>/dev/null | wc -l) uncommitted paths included as-is)"
-echo "run:    (cd <copy>/Tests~/Headless && $dotnet test --logger 'trx;LogFileName=results.trx' --results-directory results)"
-(cd "$work/Tests~/Headless" && timeout 900 "$dotnet" test --logger 'trx;LogFileName=results.trx' --results-directory results 2>&1 | tail -15)
+echo "run:    (cd <copy>/Tests~/Headless && $dotnet test ${sgl_args[*]:-} --logger 'trx;LogFileName=results.trx' --results-directory results)"
+(cd "$work/Tests~/Headless" && timeout 900 "$dotnet" test "${sgl_args[@]}" --logger 'trx;LogFileName=results.trx' --results-directory results 2>&1 | tail -15)
 
 python3 - "$work/Tests~/Headless/results" <<'PY'
 import glob, sys, xml.etree.ElementTree as ET

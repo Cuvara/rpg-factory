@@ -8,8 +8,9 @@
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
 set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
 use_ws=true; use_claude=true; release=false
 for a in "$@"; do
@@ -28,7 +29,7 @@ while IFS= read -r f; do json_count=$((json_count + 1)); run "json: $f" jq empty
   < <(find . -name '*.json' -not -path './.git/*' | sort)
 [ "$json_count" -ge 4 ] && ok "json files found: $json_count" || bad "json files found: $json_count (expected >= 4)"
 for f in scripts/*.sh scripts/checks/*.sh tests/*.sh; do run "bash -n: $f" bash -n "$f"; done
-for f in scripts/*.py scripts/checks/*.py; do run "py_compile: $f" python3 -B -c "import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])" "$f"; done
+for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
 run "jq compile: scripts/lib/resolve.jq" \
   jq -e --arg repo server --argjson files '[]' --argjson subst '{}' --argjson tools '{}' -f scripts/lib/resolve.jq registry.json
 find scripts tests -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
@@ -71,6 +72,7 @@ if $use_ws; then run "registry paths exist in workspace" scripts/check-registry.
 else skp "registry paths exist in workspace" "--no-workspace"; fi
 
 # ---- git guard, skill contract lint, routing (task + historical replay)
+run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -u TMPDIR tests/compat.test.sh
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
 run "tripwire (script-driven mutations, latch, submodule work)" env -u TMPDIR tests/tripwire.test.sh
@@ -89,7 +91,7 @@ if $use_ws; then run "routing + history replay" tests/routing.test.sh
 else
   # task scenarios resolve --paths only, but factory-context still needs the workspace markers and a git
   # work tree per registry repo: a throwaway stand-in (empty repos), never the real workspace
-  SW=$(mktemp -d)
+  SW=$(mktemp_win)
   while IFS= read -r p; do
     git init -q "$SW/$p" && git -C "$SW/$p" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   done < <(jq -r '.repos[].path' registry.json)
@@ -152,7 +154,7 @@ else
 fi
 
 # ---- sgl-determinism (ADR-10) against fixtures: banned calls fail, comments/strings/allowed MathF pass
-dt=$(mktemp -d -p /tmp)
+dt=$(mktemp_win)
 printf '%s\n' 'class A {' '  float F(float x) => MathF.Sqrt(x) + MathF.Abs(x); // MathF.Sin(x) in a comment' \
   '  string S = "Math.Pow(1, 2)";' '}' > "$dt/Ok.cs"
 out=$(python3 -B scripts/checks/sgl-determinism.py "$dt" 2>&1); rc=$?
@@ -171,7 +173,22 @@ rm -rf "$dt"
 if $use_ws; then
   run "sgl-determinism on Shared.GameLogic" python3 -B scripts/checks/sgl-determinism.py \
     "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
-  run "pin-status (client pins vs upstream tags)" python3 -B scripts/checks/pin-status.py
+  # pin-status reads the client's working tree. When the user has uncommitted pin files (the local file:
+  # toggle is a human gate and their state), a live FAIL says nothing about this plugin: then verify the
+  # committed HEAD through a read-only export and report SKIP with the reason - never PASS.
+  wsr="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"; cl="$wsr/IndieRPGMMOAdventure"
+  pin_files=(Packages/manifest.json Packages/packages-lock.json "Assets/Samples/Netcode/DOTS Sample/.sample-source")
+  if out=$(python3 -B scripts/checks/pin-status.py 2>&1); then ok "pin-status (client pins vs upstream tags)"
+  elif [ -n "$(git -C "$cl" status --porcelain -- "${pin_files[@]}" 2>/dev/null)" ]; then
+    ph=$(mktemp_win); mkdir -p "$ph/ws/IndieRPGMMOAdventure"
+    git -C "$cl" archive HEAD -- "${pin_files[@]}" | tar -x -C "$ph/ws/IndieRPGMMOAdventure"
+    for r in Netcode UnityDots UIToolkit rpg-mmo-server; do
+      [ -d "$wsr/$r/.git" ] && git clone -q --shared --no-checkout "$wsr/$r" "$ph/ws/$r"; done
+    if hout=$(python3 -B scripts/checks/pin-status.py --workspace "$ph/ws" 2>&1); then
+      skp "pin-status on the live tree" "client pin files have uncommitted user changes; committed HEAD: $(tail -1 <<<"$hout")"
+    else bad "pin-status (committed HEAD, live tree also has user changes)" "$hout"; fi
+    rm -rf "$ph"
+  else bad "pin-status (client pins vs upstream tags)" "$out"; fi
   run "wire-parity (Wire.cs bytes + protocol version)" bash scripts/checks/wire-parity.sh
   out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.netcode v0.45.0 --client-ref 17b7737^ 2>&1)
   grep -q "hash=2eb6ddbc4e0c62544fa860b3a4f7e64071918f0b" <<<"$out" && grep -q "DOTSNetworkBridge.cs" <<<"$out" \
@@ -203,7 +220,7 @@ else
 fi
 
 # ---- package pins checker behaviour
-T=$(mktemp -d); mkdir -p "$T/Packages"
+T=$(mktemp_win); mkdir -p "$T/Packages"
 echo '{"dependencies":{"a":"https://x/a.git#v1","b":"1.0.0"}}' > "$T/Packages/manifest.json"
 echo '{"dependencies":{"a":{"version":"https://x/a.git#v1"}}}' > "$T/Packages/packages-lock.json"
 python3 scripts/checks/unity-package-pins.py "$T" >/dev/null && ok "package-pins: agreeing pins pass" || bad "package-pins: agreeing pins pass"
@@ -213,6 +230,14 @@ echo '{"dependencies":{"a":"file:/mnt/c/x"}}' > "$T/Packages/manifest.json"
 python3 scripts/checks/unity-package-pins.py "$T" >/dev/null && bad "package-pins: file: must fail" || ok "package-pins: file: path fails"
 echo '{"dependencies":{"b":"1.0.0"}}' > "$T/Packages/manifest.json"
 python3 scripts/checks/unity-package-pins.py "$T" >/dev/null && bad "package-pins: empty selection must fail" || ok "package-pins: zero git deps fails"
+rm -rf "$T"
+
+# ---- package-ready: when git cannot read the tree, readiness is unknown (exit 2), never READY
+T=$(mktemp_win)
+printf '{"name":"com.cuvara.netcode","version":"9.9.9"}\n' > "$T/package.json"; printf '## [9.9.9] - 2026-01-01\n' > "$T/CHANGELOG.md"
+out=$(GIT_CEILING_DIRECTORIES="$T" python3 -B scripts/checks/package-ready.py "$T" 2>&1); rc=$?
+[ $rc -eq 2 ] && grep -q "readiness unknown" <<<"$out" && ! grep -q "READY to tag" <<<"$out" \
+  && ok "package-ready: unreadable git tree is an error, not READY" || bad "package-ready on a non-repo (rc=$rc)" "$out"
 rm -rf "$T"
 
 # ---- Claude Code's own validator

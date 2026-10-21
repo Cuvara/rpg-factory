@@ -3,8 +3,9 @@
 # Walks: consistent -> server changes wire -> Netcode copies -> Netcode bumps -> (lead tags) ->
 # client pins -> consistent; plus in-flight topic branches, migration drift and resume/idempotency.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; N="$WS/Netcode"; C="$WS/IndieRPGMMOAdventure"
 gc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }

@@ -11,13 +11,14 @@
 #
 # Usage: tests/installed-safety.sh [--plugin-root DIR]   (default: install-status.py loads_from)
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 PR=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r '.installed.loads_from // empty')
 [ "${1:-}" = "--plugin-root" ] && PR="$2"
 REC=$(jq -r '.plugins["rpg-factory@rpg-factory"][0] | "\(.version) \(.gitCommitSha[0:7])"' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null)
 [ -n "$PR" ] && [ -f "$PR/hooks/hooks.json" ] || { echo "NOT_AVAILABLE  no installed rpg-factory (installPath '$PR')"; exit 2; }
 VER=$(jq -r .version "$PR/.claude-plugin/plugin.json")
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP/tmpdir"; mkdir -p "$TMPDIR"
 export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$PR" PYTHONDONTWRITEBYTECODE=1 RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$RPG_FACTORY_WORKSPACE"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; OTHER="$TMP/elsewhere"
@@ -87,6 +88,8 @@ t Bash deny "$S" "gh release create v9.9.9"
 echo "== wrapped / nested (deny)"
 t Bash deny "$S" "bash -c 'git tag v9'"
 t Bash deny "$S" "sh -c \"git push origin --tags\""
+# git -C into the workspace from outside it, with no RPG_FACTORY_WORKSPACE to fall back on (allowed before 1.0.0)
+RPG_FACTORY_WORKSPACE= t Bash deny "$OTHER" "git -C $S tag v9.9.9"
 t Bash deny "$S" "env GIT_TRACE=0 git tag v9"
 t Bash deny "$S" "sudo git tag v9"
 t Bash deny "$S" "timeout 5 git tag v9"

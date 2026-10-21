@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-20
+
+First stable release. Supported environments: Linux, WSL and Windows (Git for Windows bash with native
+Windows Python). No registry schema, hook or command-line changes are required of users:
+update the plugin (`claude plugin marketplace update rpg-factory && claude plugin update
+rpg-factory@rpg-factory`) and restart the session. Legacy single-file latches from 0.5.0 and earlier are
+still read and migrated on `--ack`.
+
 ### Added
 - **Game rules live only in Shared.GameLogic (ADR-10).** Until now the rule existed only in the
   client's stale `unity-netcode` agent. Factory said nothing when a client or package change
@@ -41,6 +49,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   (`dotnet-counters` / `dotnet-trace`, optional, fallback the server's OTel metrics).
 - Evals `dots-spawn-system`, `prediction-reconcile-bug`, `claim-faster-frame`, `inventory-list-screen`,
   `new-command-authority`, `ecs-or-service`; routing scenarios for the new tech skills.
+- **CI.** `.github/workflows/tests.yml` runs `tests/run-all.sh --no-workspace --no-claude` on every pull
+  request and push to `main` (read-only token, pinned actions, log artifact, FAIL/SKIP summary). The
+  runner has no RPG MMO workspace, so workspace checks show as SKIP there; `tests/run-all.sh` with the
+  workspace is still required locally before a release.
+- **Stash audit.** A visible `git stash` (the approved path) is appended to `audit/<workspace>.jsonl`
+  with session, tool call id, command and the stash SHA before and after. It does not latch.
 
 ### Changed
 - **`routing.tech` lists a tech skill only when the snapshot's repo is in its `repos`.** A measure run
@@ -53,8 +67,64 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   skill Pitfall cites a file or issue (`skills-lint.sh` enforces it).
 - `known_issues` for the stale client/server CLAUDE.md text and the `unity-netcode` agent name the
   product-repo branches that fix them; remove each entry when its branch reaches the default branch.
+- **Tripwire events instead of one latch file.** Each incident is `latch/<workspace>/<event-id>.json` with
+  the command, session, tool call id, ref values before and after, and recovery hints (for a dropped
+  stash: its SHA and `git stash apply <sha>`). A second incident no longer overwrites the first. `--ack`
+  archives events to `acked/` (kept 30 days) instead of deleting them; `--ack <event-id>` acknowledges one,
+  and an event created while an ack runs stays open. The latch stays global per workspace. A legacy
+  `latch/<workspace>.json` still blocks and is migrated into `acked/` on ack.
+- `--status` lists open events with ref values, recovery hints, recent audited stash operations and the
+  exact ack command.
+- While latched, read-only investigation is allowed: `git reflog` (not `expire`/`delete`/`drop`/`write`,
+  which rewrite the history the recovery hints point at), `git stash show` and `git branch --list <pattern>`.
+- Snapshots of calls without a `tool_use_id` are keyed by the command, so parallel calls do not share one.
+  A second legacy latch is archived next to the first instead of overwriting it.
+- git-safety: never stash/reset/clean to get a clean tree (export HEAD instead), never assume a stash is
+  yours, one mutating command per worktree, and the recovery procedure after a STOP.
 
 ### Fixed
+- **Windows (git-bash + native Windows Python) is a supported environment.** On Windows `tests/run-all.sh`
+  failed 12 checks before any Factory change. Causes and fixes:
+  - `jq -r` writes CRLF there, so `$(jq -r ...)` loops kept a carriage return (`skills/foo<CR>/SKILL.md` does
+    not exist): 10 skills-lint failures. New `scripts/lib/compat.sh` (sourced by every test suite and
+    `check-registry.sh`) strips it on MSYS/MINGW/CYGWIN only, and adds `mktemp_win`, `is_abs`, `fwd`,
+    `path_entry` and `dir_readonly`/`dir_writable` (an ACL, since `chmod 555` does nothing on NTFS).
+  - Test scripts passed MSYS paths (`/c/...`, `/tmp/...`) to native Python, which cannot resolve them
+    (`No module named 'fstate'`, fixture workspaces never found). `ROOT` now comes from `pwd -W` and temp dirs
+    from `mktemp_win` (`C:/...`). `install-status.test.sh` also sets `USERPROFILE`: Windows Python ignores `HOME`.
+  - Tests compared native Python paths (`C:\x`) as strings with bash paths (`C:/x`); they now normalise.
+  - **Output encoding.** Python entry points wrote cp1252 into pipes (the snapshot showed `?` for `·`,
+    `pin-plan.py` crashed on `→`), and 16 `subprocess` calls decoded git and jq output as cp1252. Every
+    entry point now writes UTF-8 and every `text=True` call decodes UTF-8 (`errors="replace"`).
+  - **Tool lookup ignored `PATHEXT`.** `context.which` and `devtools.which` looked for `python3`, not
+    `python3.exe`, so the snapshot said `python3 MISSING` and listed every Python-based fast check as MISSING
+    (not run) on Windows. Both now try the `PATHEXT` extensions.
+  - **Every check that calls a Factory script failed on Windows.** `{plugin_root}` was substituted as
+    `C:\...\rpg-factory`, and `run-checks.py` runs each check through `bash -c`, which drops the backslashes
+    (`can't open file '...WorkspacesUnityIndierpg-factory\scripts\checks\sgl-determinism.py'`). It is
+    substituted with forward slashes; `run-checks.test.sh` runs a `{plugin_root}` check with a backslash root.
+    The guard's mode denial printed the same broken form (`bash C:/x\scripts\factory-context.sh`); it now
+    prints a quoted forward-slash path (`git-guard.test.sh` checks it with a backslash root).
+  - Registry fact `netcode-vendored-protobuf` probed with `strings`, which git-bash lacks; the probe is
+    Python now (same value, 3.29.3). `ci-integration-on-pull-request` opens `ci.yml` as UTF-8.
+- **`netcode-headless.sh` compiled nothing since Netcode's prediction tests need Shared.GameLogic.** The temp
+  copy had no sibling `rpg-mmo-server`, so `Vec2`/`MapBounds` were missing and no `.trx` was produced. The check
+  now does what Netcode CI does: Shared.GameLogic at the tag `package.json` pins (`x-manualDependencies`), taken
+  with `git archive` from the workspace server repo into the temp dir, passed as `-p:SglDir` (352/352 run).
+  The path is converted for Windows `dotnet.exe`: `cygpath -m` in git-bash, `wslpath -m` in WSL.
+- **`package-ready.py` crashed in WSL and read a failed `git status` as a clean tree.** Over `/mnt/c` a cold
+  index made `git status` exceed the 30 s timeout (traceback, no verdict). git calls now allow 120 s; a git
+  timeout or a failing `git status` exits 2 with "readiness unknown" instead of continuing as if the tree were
+  clean (`run-all.sh` covers the non-repo case).
+- **Per-project MCP servers were never found on Windows.** `~/.claude.json` keys projects as `C:/x/y`; the
+  probe looked up `C:\x\y`, so a project-scoped server such as `ai-game-developer` showed as not configured.
+  Keys are compared normalised.
+- `run-all.sh`: when live `pin-status` fails and the client's pin files hold uncommitted user changes (the
+  local `file:` toggle), the committed HEAD is verified through a read-only export and the live check is
+  reported as SKIP with that result, never as PASS. New `tests/compat.test.sh` covers the helpers, UTF-8
+  output under a cp1252 stdout, the `PATHEXT` lookup and (by AST) that every `text=True` call decodes UTF-8.
+  README has a Windows section with requirements and troubleshooting. A clean tree that fails still fails. `py_compile` now
+  covers `scripts/lib/*.py`, reads UTF-8 and treats `SyntaxWarning` as an error.
 - `unity-client-tech` cited the client `CLAUDE.md` by line numbers, which had drifted by about 15 lines.
   The citations now use section names.
 - **Tripwire false STOPs across sessions.** The pre-command snapshot was one `pre.json` per session,
@@ -83,35 +153,23 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   prints `latch is now CLEAR` (exit 0) or `still LATCHED: <ids>` / `NOT cleared: <reason>` (exit 1;
   2 = invalid id). Repeating it is safe; unknown ids are reported.
 
-### Changed
-- **Tripwire events instead of one latch file.** Each incident is `latch/<workspace>/<event-id>.json` with
-  the command, session, tool call id, ref values before and after, and recovery hints (for a dropped
-  stash: its SHA and `git stash apply <sha>`). A second incident no longer overwrites the first. `--ack`
-  archives events to `acked/` (kept 30 days) instead of deleting them; `--ack <event-id>` acknowledges one,
-  and an event created while an ack runs stays open. The latch stays global per workspace. A legacy
-  `latch/<workspace>.json` still blocks and is migrated into `acked/` on ack.
-- `--status` lists open events with ref values, recovery hints, recent audited stash operations and the
-  exact ack command.
-- While latched, read-only investigation is allowed: `git reflog` (not `expire`/`delete`/`drop`/`write`,
-  which rewrite the history the recovery hints point at), `git stash show` and `git branch --list <pattern>`.
-- Snapshots of calls without a `tool_use_id` are keyed by the command, so parallel calls do not share one.
-  A second legacy latch is archived next to the first instead of overwriting it.
-- git-safety: never stash/reset/clean to get a clean tree (export HEAD instead), never assume a stash is
-  yours, one mutating command per worktree, and the recovery procedure after a STOP.
-
-### Added
-- **CI.** `.github/workflows/tests.yml` runs `tests/run-all.sh --no-workspace --no-claude` on every pull
-  request and push to `main` (read-only token, pinned actions, log artifact, FAIL/SKIP summary). The
-  runner has no RPG MMO workspace, so workspace checks show as SKIP there; `tests/run-all.sh` with the
-  workspace is still required locally before a release.
-- **Stash audit.** A visible `git stash` (the approved path) is appended to `audit/<workspace>.jsonl`
-  with session, tool call id, command and the stash SHA before and after. It does not latch.
-
 ### Security
 - The guard now denies `tripwire.py --ack` to the agent at all times, not only while latched, so an agent
   cannot dismiss an incident another session raised a moment earlier. It matches any Python invocation of
   the script (options before it, `py -3`, `python -c ... run_path`, the path behind a variable) and no
   longer denies `grep -- --ack tripwire.py`.
+- **The git guard ignored a workspace when `RPG_FACTORY_WORKSPACE` named another one.** The env root was tried
+  before the cwd, so a second checkout of the workspace (or a `cd` into it) counted as "outside the workspace"
+  and `git tag`, `push --tags` and `reset --hard` there passed without a decision. The nearest workspace above
+  the cwd now wins and the env root is the fallback; after a `cd` the new directory's workspace applies.
+- **`git -C <workspace repo> ...` from outside the workspace was not checked** when `RPG_FACTORY_WORKSPACE`
+  was unset (`git -C .../rpg-mmo-server tag v1` from another directory was allowed). The workspace is now
+  resolved from the directory git works in. Cases in `git-guard.test.sh` and `installed-safety.sh`.
+- **The guard went silent on Windows path and encoding differences.** It compared paths as strings, so a
+  payload cwd `C:/ws/x` did not match the workspace found as `C:\ws` and every command there was skipped; and a
+  non-ASCII branch name (a UTF-8 byte cp1252 cannot decode) raised inside the guard, which counts as "no
+  opinion". Paths are compared normalised and git output is decoded as UTF-8. New `git-guard.test.sh` cases
+  cover both, the env-root case and `cd` between workspaces.
 
 ## [0.5.0] - 2026-10-01
 

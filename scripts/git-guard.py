@@ -65,11 +65,11 @@ def load_registry():
 
 
 def find_workspace(start, registry):
+    """The workspace containing `start` (nearest ancestor with every root marker), else the env root.
+    The cwd wins: an env root exported for one workspace must never hide another workspace the command
+    actually runs in (the guard would see "outside the workspace" and let a tag through)."""
     markers = registry["workspace"]["root_markers"]
     candidates = []
-    env_root = os.environ.get(registry["workspace"].get("root_env", ""), "")
-    if env_root:
-        candidates.append(env_root)
     d = os.path.abspath(start)
     while True:
         candidates.append(d)
@@ -77,15 +77,25 @@ def find_workspace(start, registry):
         if parent == d:
             break
         d = parent
+    env_root = os.environ.get(registry["workspace"].get("root_env", ""), "")
+    if env_root:
+        candidates.append(env_root)
     for c in candidates:
         if all(os.path.exists(os.path.join(c, m)) for m in markers):
             return os.path.abspath(c)
     return None
 
 
+def within(path, root):
+    """True when `path` is `root` or below it. Compares normalised paths (Windows: forward vs back slashes,
+    case), not strings: a payload cwd of `C:/ws/x` must match a workspace found with backslashes."""
+    a, b = os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(root))
+    return a == b or a.startswith(b.rstrip("/\\") + os.sep)
+
+
 def git_out(cwd, *args):
     try:
-        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
         return r.stdout.strip() if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -562,7 +572,7 @@ def evaluate(payload, registry):
     if not re.search(r"git|\bgh\b|\$|`|eval|python|node|perl|ruby|php|powershell|pwsh|cmd", command, re.I):
         return []
     shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
-    cwd = payload.get("cwd") or os.getcwd()
+    cwd = os.path.abspath(payload.get("cwd") or os.getcwd())
     workspace = find_workspace(cwd, registry)
     reasons = []
     predicted_branch = {}
@@ -577,14 +587,18 @@ def evaluate(payload, registry):
             if target:
                 cwd = os.path.normpath(os.path.join(cwd, os.path.expanduser(target.replace("\\", "/"))))
             continue
-        ws = workspace or find_workspace(cwd, registry)
+        ws = find_workspace(cwd, registry) or workspace  # after a `cd` into another workspace, that one applies
         if p in {"gh", "gh.exe"} and (ws or names_registry_repo(argv, registry)):
             for d, t in classify_gh(argv):
                 reasons.append((d, t))
             continue
         if not ws:
-            continue  # outside the workspace: not our business
-        here = os.path.relpath(cwd, ws) if cwd.startswith(ws) else cwd
+            # outside the workspace: not our business - unless `git -C <dir>` points git into one
+            pre = parse_git(argv)
+            ws = find_workspace(os.path.normpath(os.path.join(cwd, pre[0])), registry) if pre and pre[0] else None
+            if not ws:
+                continue
+        here = os.path.relpath(cwd, ws) if within(cwd, ws) else cwd
         if argv[0] == "__opaque__":
             reasons.append(("ask", f"[{here}] {argv[1]} - its contents cannot be checked"))
             continue
@@ -603,7 +617,8 @@ def evaluate(payload, registry):
             continue
         cdir, sub, args, cfg = parsed
         eff = os.path.normpath(os.path.join(cwd, cdir)) if cdir else cwd
-        if not os.path.abspath(eff).startswith(ws):
+        ws = find_workspace(eff, registry) or ws  # the directory git works in decides (`git -C` into another workspace)
+        if not within(eff, ws):
             continue
         top = git_out(eff, "rev-parse", "--show-toplevel")
         top = os.path.abspath(top) if top else None
@@ -722,7 +737,8 @@ def mode_hits(payload, registry):
     mode = declared or tripwire.current_mode(payload)
     if not mode or declared or tripwire.is_read_only(payload):
         return []
-    how = ("switch only when the user asked for it: `bash " + os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh")
+    how = ("switch only when the user asked for it: `bash \"" + PLUGIN_ROOT.replace("\\", "/").rstrip("/")
+           + "/scripts/factory-context.sh\""  # forward slashes: the command is pasted into bash
            + " --mode implement` (or validate)")
     if mode in tripwire.READ_ONLY_MODES:
         return [("deny", f"Factory mode is `{mode}` (read-only): this command changes state - {how}")]
@@ -768,4 +784,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

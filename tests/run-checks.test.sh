@@ -2,8 +2,9 @@
 # run-checks.py state model, deterministically: a temp plugin copy whose registry gives the
 # server.gateway module synthetic checks, run against a throwaway workspace.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"; cp -r "$ROOT/scripts" "$ROOT/.claude-plugin" "$P/"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
 mkdir -p "$S/backend/gateway" "$S/backend/shared" "$S/backend/deploy" "$C/ProjectSettings"; touch "$S/backend/TEAM.md" "$S/backend/gateway/x.go" "$S/backend/shared/s.go" "$S/backend/deploy/d.yaml" "$C/ProjectSettings/ProjectVersion.txt"
@@ -18,7 +19,8 @@ jq --arg ws "$WS" '
         {id: "t-fail",     cwd: ".", run: "echo \"--- FAIL: TestC\"; exit 1", parser: "go-test", evidence: "e"},
         {id: "t-skipall",  cwd: ".", run: "echo \"Passed!  - Failed:     0, Passed:     0, Skipped:     3, Total:     3\"", parser: "dotnet-test", evidence: "e"},
         {id: "t-dotnet",   cwd: ".", run: "echo \"Passed!  - Failed:     0, Passed:    12, Skipped:     1, Total:    13\"", parser: "dotnet-test", evidence: "e"},
-        {id: "t-needs",    cwd: ".", run: "echo should-not-run", evidence: "e", needs: ["t-fail"]},
+        {id: "t-root",     cwd: ".", run: "test -f {plugin_root}/registry.json && echo \"OK: 1\"", parser: "regex:^OK: \\d+", evidence: "e"},
+        {id: "t-needs",   cwd: ".", run: "echo should-not-run", evidence: "e", needs: ["t-fail"]},
         {id: "t-regex",    cwd: ".", run: "echo nothing-useful", parser: "regex:^OK: \\d+", evidence: "e"},
         {id: "t-pollute",  cwd: ".", run: "touch leftover.txt", evidence: "e"},
         {id: "t-scoped",   cwd: "backend/gateway", run: "printf \"=== RUN TestS\\n--- PASS: TestS\\nok  s 0.1s\\n\"", parser: "go-test", evidence: "e"}
@@ -37,6 +39,13 @@ expect t-zero FAIL
 expect t-fail FAIL
 expect t-skipall FAIL
 expect t-dotnet PASS
+expect t-root PASS
+if [ -n "$RPGF_WINDOWS" ]; then   # the plugin root as Windows reports it (C:\...): {plugin_root} must survive bash -c
+  full="$out"
+  out=$(CLAUDE_PLUGIN_ROOT="$(cygpath -w "$P")" python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-root --json)
+  expect t-root PASS
+  out="$full"
+fi
 expect t-needs BLOCKED
 expect t-regex FAIL
 expect t-pollute FAIL

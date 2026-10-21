@@ -34,7 +34,7 @@ SAMPLE_SOURCE = "Assets/Samples/Netcode/DOTS Sample/.sample-source"
 
 def git(repo, *args):
     try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         return r.returncode, r.stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         return 99, str(exc)
@@ -105,7 +105,7 @@ def main():
                 url = spec.split("?")[0].split("#")[0]
                 try:
                     r = subprocess.run(["git", "ls-remote", "--tags", url, f"refs/tags/{ref}"],
-                                       capture_output=True, text=True, timeout=60)
+                                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
                     row["tag_remote"] = bool(r.stdout.strip()) if r.returncode == 0 else None
                 except (OSError, subprocess.SubprocessError):
                     row["tag_remote"] = None
@@ -160,4 +160,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

@@ -17,7 +17,7 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 0.5.0 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
+Version 1.0.0 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
 automated state of any release is **READY_TO_TAG**.
 
 ## Commands
@@ -320,6 +320,29 @@ Requirements:
 
 The workspace root is `/mnt/c/Workspaces/UnityIndie`. Override it with `RPG_FACTORY_WORKSPACE`.
 
+### Windows (Git for Windows bash + native Windows Python)
+
+Supported and tested with `tests/run-all.sh` (the hooks run there in every Claude Code session on Windows).
+
+- Git for Windows (its bash runs the hooks and the tests), `jq` on PATH (e.g. `winget install jqlang.jq`), and
+  a real Python 3 that `python3` resolves to (the Python install manager provides `python3.exe`; the Microsoft
+  Store stub alone is not enough: `python3 --version` must print a version).
+- Set the workspace in Windows form: `RPG_FACTORY_WORKSPACE=C:/Workspaces/UnityIndie` (user environment).
+  The guard finds the workspace from the command's directory first, so this variable never hides a second
+  checkout of the workspace.
+- The tests convert paths for native Windows programs themselves (`scripts/lib/compat.sh`); run them from
+  git-bash, not from PowerShell or cmd.
+
+Troubleshooting:
+
+| Symptom | Cause and fix |
+|---|---|
+| `python3: can't open file 'C:\...rpg-factoryscriptstripwire.py'` when acknowledging a STOP | bash dropped the backslashes of a hand-typed path. Copy the ack command exactly as the STOP prints it (quoted, forward slashes). |
+| The snapshot shows `python3 MISSING` or a tool as MISSING although it runs in bash | a plugin older than this release looked for `python3` without `.exe`; update the plugin. |
+| `UnicodeEncodeError: 'charmap' codec` or `?` in Factory output | an old copy of the plugin (before UTF-8 output); update. To work around it: `PYTHONUTF8=1`. |
+| `git-guard.test.sh` passes everything as `allow` | a test from before this release with `RPG_FACTORY_WORKSPACE` set in the shell; the suite now unsets it. |
+| `pin-status` FAIL with `!= lock 'file:...'` | the client is in the local `file:` package toggle (human gate). Factory reports it; it never changes it. Restore the git pins with `toggle-packages.sh` before committing. |
+
 ## Usage examples
 
 ```text
@@ -368,6 +391,8 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
 - **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is caught by the tripwire after the fact (detection, not prevention). Remote-only GitHub changes are only controlled by the guard (the tripwire cannot see them). Another agent runtime (e.g. Codex) is outside all layers.
 - **MCP tools are not inspected.** Unity-MCP asset/scene edits are controlled by the `unity-asset-edit` human gate (policy), not by a hook.
 - **Evidence identity** covers the check's directory plus the paths of its module's same-repo dependencies (registry `depends_on`); untracked files count by name, size and mtime (not contents). Changes in *another* repo are not part of it (a package's new tag reaches a consumer through its pin file, which is in the consumer repo).
-- **Hook cost** (measured 2026-09-30 on /mnt/c, same harness as v0.3.0): SessionStart baseline ~12 s once per session (all repos and embedded clones, scanned in parallel; v0.3.0 ~14 s); guard + tripwire per read-only command ~0.19 s (v0.3.0 ~0.18 s), per state-changing command ~0.8 s (v0.3.0 ~0.9 s); file guard per Write/Edit ~0.09 s.
+- **Hook cost** (measured 2026-09-30 on /mnt/c, same harness as v0.3.0): SessionStart baseline ~12 s once per session (all repos and embedded clones, scanned in parallel; v0.3.0 ~14 s); guard + tripwire per read-only command ~0.19 s (v0.3.0 ~0.18 s), per state-changing command ~0.8 s (v0.3.0 ~0.9 s); file guard per Write/Edit ~0.09 s. On native Windows
+  (2026-10-20, git-bash, Python 3.14, mean of 5): guard + tripwire `--pre` ~0.37 s per read-only command and
+  ~0.44 s per state-changing one, the same as 0.5.0 (~0.35 s / ~0.77 s in that run); Python start-up alone is ~0.1 s.
 - **Pre-existing project issues** are recorded in `registry.json` `known_issues` and printed for the touched repos. They include stale docs, package CI SGL pins lagging the client, and the embedded package clones.
 
