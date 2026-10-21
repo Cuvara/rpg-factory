@@ -61,7 +61,13 @@ for t in python3 git jq; do
 done
 
 # Python entry points write UTF-8 even when the inherited stdout encoding is cp1252
-out=$(cd "$ROOT" && PYTHONIOENCODING=cp1252 python3 -B scripts/factory-cmd.py route client Assets/Scripts/X.cs 2>&1 | od -An -tx1 | tr -d ' \n')
+# (a stand-in workspace: empty repos + root markers, so this also runs where no RPG MMO workspace exists, e.g. CI)
+SW="$TMP/sw"
+while IFS= read -r p; do
+  git init -q "$SW/$p" && git -C "$SW/$p" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+done < <(jq -r '.repos[].path' "$ROOT/registry.json")
+while IFS= read -r m; do mkdir -p "$SW/$(dirname "$m")"; touch "$SW/$m"; done < <(jq -r '.workspace.root_markers[]' "$ROOT/registry.json")
+out=$(cd "$ROOT" && RPG_FACTORY_WORKSPACE="$SW" PYTHONIOENCODING=cp1252 python3 -B scripts/factory-cmd.py route client Assets/Scripts/X.cs 2>&1 | od -An -tx1 | tr -d ' \n')
 case "$out" in *c2b7*) ok "factory-cmd route prints U+00B7 as UTF-8 under cp1252";;
   *) no "route output not UTF-8 (no c2b7 bytes)";; esac
 for f in "$ROOT"/scripts/*.py "$ROOT"/scripts/checks/*.py "$ROOT"/scripts/lib/context.py; do
