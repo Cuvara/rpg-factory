@@ -5,6 +5,7 @@
 # Usage: check-registry.sh [--structure-only]
 #   --structure-only  skip on-disk path checks (for machines without the workspace)
 set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/lib/compat.sh"
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REGISTRY="$PLUGIN_ROOT/registry.json"

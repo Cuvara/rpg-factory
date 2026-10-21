@@ -2,9 +2,10 @@
 # Tripwire tests: real commands between the real --pre and --post hooks, in a throwaway
 # workspace (never the real repos). Each case: expected "trip" or "clean".
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TW="$ROOT/scripts/tripwire.py"; GUARD="$ROOT/scripts/git-guard.py"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$TMP/ws"; SERVER="$WS/rpg-mmo-server"; CLIENT="$WS/IndieRPGMMOAdventure"
 mkdir -p "$SERVER/backend" "$CLIENT/ProjectSettings"
@@ -97,7 +98,7 @@ chk allow "git status"
 ss=$(jq -cn --arg d "$SERVER" '{cwd:$d,session_id:"fresh-B"}' | python3 -B "$TW" --session-start | jq -r '.hookSpecificOutput.additionalContext // ""')
 case "$ss" in *"never cleared"*"session crashed-A"*"--ack"*) pass=$((pass + 1)); echo "PASS  SessionStart reports the unresolved STOP from crashed-A";;
   *) fail=$((fail + 1)); echo "FAIL  SessionStart message: $ss";; esac
-st=$(python3 -B "$TW" --status); case "$st" in *"OPEN event "*"[workspace $WS, session crashed-A"*) pass=$((pass + 1)); echo "PASS  --status lists the workspace latch";; *) fail=$((fail + 1)); echo "FAIL  status: $st";; esac
+st=$(fwd "$(python3 -B "$TW" --status)"); case "$st" in *"OPEN event "*"[workspace $WS, session crashed-A"*) pass=$((pass + 1)); echo "PASS  --status lists the workspace latch";; *) fail=$((fail + 1)); echo "FAIL  status: $st";; esac
 python3 -B "$TW" --ack >/dev/null
 chk allow "touch y"
 [ -z "$(ls "$TMP"/state/latch/*/*.json 2>/dev/null)" ] && [ -n "$(ls "$TMP"/state/latch/*/acked/*.json 2>/dev/null)" ]   && { pass=$((pass + 1)); echo "PASS  --ack closed the workspace event and archived it (evidence kept)"; } || { fail=$((fail + 1)); echo "FAIL  open event left or nothing archived"; }
@@ -111,11 +112,11 @@ for td in "" "relative/dir" "/nonexistent/x" "$TMP/tmpok"; do
   (cd "$PROBE" && TMPDIR="$td" python3 -B "$TW" --pre <<<"$pl" && TMPDIR="$td" python3 -B "$TW" --post <<<"$pl" >/dev/null
    TMPDIR="$td" python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate, os; r=fstate.scratch(); assert os.path.isabs(r), r; print(r)" > "$TMP/root.txt")
   root=$(cat "$TMP/root.txt")
-  if [ -z "$(ls -A "$PROBE")" ] && [ "${root:0:1}" = "/" ]; then pass=$((pass + 1)); echo "PASS  TMPDIR='$td' -> $root (nothing written in the cwd)"
+  if [ -z "$(ls -A "$PROBE")" ] && is_abs "$root"; then pass=$((pass + 1)); echo "PASS  TMPDIR='$td' -> $root (nothing written in the cwd)"
   else fail=$((fail + 1)); echo "FAIL  TMPDIR='$td' root=$root cwd has: $(ls -A "$PROBE")"; fi
 done
 rm -rf /tmp/rpg-factory/tmpdir-case                                   # fallback cases used the real /tmp: clean up
-(cd "$PROBE" && env -u TMPDIR python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate; print(fstate.scratch())") | grep -q '^/' && { pass=$((pass + 1)); echo "PASS  TMPDIR unset -> absolute"; } || { fail=$((fail + 1)); echo "FAIL  TMPDIR unset"; }
+is_abs "$(cd "$PROBE" && env -u TMPDIR python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate; print(fstate.scratch())")" && { pass=$((pass + 1)); echo "PASS  TMPDIR unset -> absolute"; } || { fail=$((fail + 1)); echo "FAIL  TMPDIR unset"; }
 
 # ---- v0.4: embedded package clones (gitignored nested repos inside the client) are user state
 CLONE="$CLIENT/Packages/com.cuvara.dots"
@@ -152,7 +153,8 @@ echo "readme" > "$SERVER/README"; mkdir -p "$SERVER/My Folder"; echo a > "$SERVE
 gc "$SERVER" add README "My Folder"; gc "$SERVER" commit -qm files
 echo "user edit" >> "$SERVER/README"; echo "user edit" >> "$SERVER/My Folder/a b.txt"
 jq -cn --arg d "$SERVER" '{cwd:$d,session_id:"firstfile"}' | python3 -B "$TW" --session-start >/dev/null
-bl=$(cat "$TMP/rpg-factory/firstfile/baseline.json")
+FWDKEYS='with_entries(.key |= gsub("\\\\"; "/"))'   # baseline keys are native paths (backslashes on Windows)
+bl=$(jq "$FWDKEYS" "$TMP/rpg-factory/firstfile/baseline.json")
 jq -e --arg t "$SERVER" '.[$t] | has("README") and has("My Folder/a b.txt") and (.["README"] | type == "array")' <<<"$bl" >/dev/null \
   && { pass=$((pass + 1)); echo "PASS  baseline keeps the first modified file and a path with spaces exactly"; } \
   || { fail=$((fail + 1)); echo "FAIL  baseline keys: $(jq -c --arg t "$SERVER" '.[$t] | keys' <<<"$bl")"; }
@@ -160,7 +162,7 @@ pl=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash",tool_input:{command:"sh -c \"ec
 python3 -B "$TW" --pre <<<"$pl"; (cd "$SERVER" && sh -c "echo x > README"); out=$(python3 -B "$TW" --post <<<"$pl")
 case "$out" in *"pre-existing user file README was modified"*) pass=$((pass + 1)); echo "PASS  overwriting the first baseline file trips";; *) fail=$((fail + 1)); echo "FAIL  first-file overwrite: ${out:0:200}";; esac
 python3 -B "$TW" --ack >/dev/null
-[ -f "$TMP/rpg-factory/firstfile/baseline.json" ] && jq -e --arg t "$SERVER" '.[$t] | has("README")' "$TMP/rpg-factory/firstfile/baseline.json" >/dev/null \
+[ -f "$TMP/rpg-factory/firstfile/baseline.json" ] && jq "$FWDKEYS" "$TMP/rpg-factory/firstfile/baseline.json" | jq -e --arg t "$SERVER" '.[$t] | has("README")' >/dev/null \
   && { pass=$((pass + 1)); echo "PASS  --ack rebuilds the baseline immediately (reviewed state protected before the next command)"; } \
   || { fail=$((fail + 1)); echo "FAIL  no baseline after --ack"; }
 gc "$SERVER" checkout -q -- README "My Folder"
@@ -296,7 +298,7 @@ out=$(call s-pe tu-pe1 "$SERVER" "ls")$(call s-pe tu-pe2 "$SERVER" "touch $TMP/p
 call s-af tu-af "$SERVER" "$TMP/sneaky.sh tag" >/dev/null
 kd=$(dirname "$(ls "$TMP"/state/latch/*/*.json | head -1)")
 if [ "$(id -u)" != 0 ]; then
-  chmod 555 "$kd"; out=$(python3 -B "$TW" --ack); rc=$?; chmod 755 "$kd"
+  dir_readonly "$kd"; out=$(python3 -B "$TW" --ack); rc=$?; dir_writable "$kd"
   [ $rc -eq 1 ] && case "$out" in *"NOT cleared"*"still LATCHED"*) true;; *) false;; esac && [ "$(nopen)" -eq 1 ] \
     && [ "$(gdec s-af "$SERVER" "touch f")" = deny ] && ok "unwritable latch dir: ack exits 1, NOT cleared, still latched" || no "ack failure: rc=$rc ${out:0:300}"
 fi

@@ -4119,7 +4119,7 @@
       "id": "netcode-vendored-protobuf",
       "value": "3.29.3",
       "repo": "netcode",
-      "probe": "strings -e l Runtime/Plugins/Google.Protobuf.dll | grep -m1 -oE '^3\\.[0-9]+\\.[0-9]+'",
+      "probe": "python3 -c \"import re;b=open('Runtime/Plugins/Google.Protobuf.dll','rb').read();s=[x.decode('utf-16-le') for x in re.findall(rb'(?:[\\x20-\\x7e]\\x00){4,}',b)];print(next((m.group(0) for m in (re.match(r'3\\.[0-9]+\\.[0-9]+',x) for x in s) if m),''))\"",
       "why": "must be compatible with the protoc major that generated Wire.cs"
     },
     {
@@ -4154,7 +4154,7 @@
       "id": "ci-integration-on-pull-request",
       "value": "true",
       "repo": "server",
-      "probe": "python3 -c \"import re;t=open('.github/workflows/ci.yml').read();print(str(bool(re.search(r'^  pull_request:',t,re.M)) and 'test-integration:' in t).lower())\"",
+      "probe": "python3 -c \"import re;t=open('.github/workflows/ci.yml',encoding='utf-8').read();print(str(bool(re.search(r'^  pull_request:',t,re.M)) and 'test-integration:' in t).lower())\"",
       "why": "the cross-language E2E suite runs on PRs, not only on push (stale docs claim otherwise)"
     },
     {

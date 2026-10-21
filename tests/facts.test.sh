@@ -3,7 +3,8 @@
 # the recorded value; toolchain "expected" pins must agree with the facts; skills must not
 # hard-code volatile values that belong in facts[] or in the live scripts.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 R="${RPG_FACTORY_FACTS_REGISTRY:-$ROOT/registry.json}"   # override: the stale-detection self-test below
 WS="${RPG_FACTORY_WORKSPACE:-$(jq -r .workspace.root_default "$R")}"
 pass=0; fail=0; skip=0
@@ -29,7 +30,7 @@ if [ -z "$bad" ]; then pass=$((pass + 1)); echo "PASS  skills carry no volatile 
 else fail=$((fail + 1)); echo "FAIL  volatile values in skills:"; echo "$bad" | head -5; fi
 # stale detection: a registry value that no longer matches the repo must FAIL (one fact per repo kind)
 if [ -z "${RPG_FACTORY_FACTS_REGISTRY:-}" ]; then
-  T="$(mktemp -d -p /tmp)"; trap 'rm -rf "$T"' EXIT
+  T="$(mktemp_win)"; trap 'rm -rf "$T"' EXIT
   for f in sgl-langversion tick-rates-default enter-playmode-options; do
     jq --arg f "$f" '(.facts[] | select(.id == $f) | .value) |= . + "-STALE"' "$R" > "$T/reg.json"
     o=$(RPG_FACTORY_FACTS_REGISTRY="$T/reg.json" bash "$0" 2>&1); rc=$?

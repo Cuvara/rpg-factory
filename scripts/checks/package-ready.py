@@ -11,7 +11,8 @@ Usage: package-ready.py <package-repo-dir> [--json]
   - a clean working tree and the release branch checked out (Netcode: develop; UnityDots,
     UIToolkit: main - per their release docs/workflows)
 Never creates a tag: prints the command the lead would run.
-Exit 0 = ready; 1 = not ready (reasons printed); 2 = not a package repo.
+Exit 0 = ready; 1 = not ready (reasons printed); 2 = not a package repo, or git failed or timed out
+(readiness unknown - never reported as ready).
 """
 import json
 import os
@@ -22,12 +23,33 @@ import sys
 RELEASE_BRANCH = {"com.cuvara.netcode": "develop", "com.cuvara.dots": "main", "com.cuvara.uitoolkit": "main"}
 
 
+GIT_TIMEOUT = 120  # a cold index over WSL /mnt/c can take well over 30 s for `git status`
+
+
+class GitFailed(Exception):
+    pass
+
+
 def git(repo, *args):
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, timeout=30)
+    try:
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise GitFailed(f"`git {' '.join(args)}` timed out after {GIT_TIMEOUT} s")
+    except OSError as exc:
+        raise GitFailed(f"`git {' '.join(args)}` could not run: {exc}")
     return r.returncode, r.stdout.strip()
 
 
 def main():
+    try:
+        return check()
+    except GitFailed as exc:
+        print(f"ERROR: {exc} - readiness unknown, not ready")
+        return 2
+
+
+def check():
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
@@ -62,7 +84,9 @@ def main():
     want = RELEASE_BRANCH.get(name)
     if want and branch != want:
         reasons.append(f"on branch '{branch}', releases of {name} are tagged from '{want}'")
-    dirty = git(repo, "status", "--porcelain")[1]
+    rc, dirty = git(repo, "status", "--porcelain")
+    if rc != 0:  # an unreadable tree is not a clean one
+        raise GitFailed(f"`git status` failed in {repo} (exit {rc})")
     facts["dirty_paths"] = len(dirty.splitlines()) if dirty else 0
     if dirty:
         reasons.append(f"{facts['dirty_paths']} uncommitted path(s) - a tag must point at committed, pushed work")
@@ -72,7 +96,7 @@ def main():
 
     metas = os.path.join(repo, ".github/scripts/check_metas.py")
     if os.path.isfile(metas):
-        r = subprocess.run([sys.executable, "-B", metas], cwd=repo, capture_output=True, text=True, timeout=120,
+        r = subprocess.run([sys.executable, "-B", metas], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         facts["check_metas"] = "pass" if r.returncode == 0 else "fail"
         if r.returncode != 0:
@@ -95,4 +119,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

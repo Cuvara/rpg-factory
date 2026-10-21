@@ -2,9 +2,10 @@
 # file-guard.py: the workspace rules applied to Claude's file tools (Write/Edit/MultiEdit/NotebookEdit/Read),
 # in a throwaway workspace. Expected decision per payload.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 FG="$ROOT/scripts/file-guard.py"; TW="$ROOT/scripts/tripwire.py"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
 gc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }

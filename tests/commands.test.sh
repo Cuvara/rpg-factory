@@ -2,9 +2,10 @@
 # Slash commands: every commands/*.md is well-formed and calls factory-cmd.py with its own verb; the
 # dispatcher validates arguments (exit 2 + usage) and really invokes the scripts (fixture workspace).
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 CMD="$ROOT/scripts/factory-cmd.py"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state" CLAUDE_PLUGIN_ROOT="$ROOT"
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }

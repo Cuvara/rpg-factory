@@ -180,7 +180,7 @@ def main():
     ctx_cmd = ["bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
     if a["paths"]:
         ctx_cmd += ["--paths", *a["paths"]]
-    r = subprocess.run(ctx_cmd, capture_output=True, text=True, env={**os.environ, "CLAUDE_PLUGIN_ROOT": PLUGIN_ROOT})
+    r = subprocess.run(ctx_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, "CLAUDE_PLUGIN_ROOT": PLUGIN_ROOT})
     if r.returncode != 0:
         print(r.stderr, file=sys.stderr)
         sys.exit(2)
@@ -240,7 +240,7 @@ def main():
             ident = evidence.identity(rdir, scopes, {**m, **c})
             t0 = time.perf_counter()
             try:
-                p = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True, timeout=a["timeout"], errors="replace",
+                p = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=a["timeout"], errors="replace",
                                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
                 code, out = p.returncode, (p.stdout or "") + (p.stderr or "")
             except OSError as e:
@@ -291,4 +291,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

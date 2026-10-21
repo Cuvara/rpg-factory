@@ -2,8 +2,9 @@
 # Worktree awareness: factory-context run inside a git worktree must report THAT worktree
 # (branch, HEAD, changed files, routing), not the main checkout. Throwaway fixture only.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
 mkdir -p "$S/backend/gateway" "$C/ProjectSettings"; touch "$S/backend/TEAM.md" "$C/ProjectSettings/ProjectVersion.txt"
@@ -21,7 +22,7 @@ expect() { if jq -e "$2" <<<"$3" >/dev/null 2>&1; then pass=$((pass + 1)); echo 
 
 a=$(ctx "$WS/wt-a")
 expect "worktree A: single repo auto-detected from cwd" '.repos | length == 1 and .[0].repo == "server"' "$a"
-expect "worktree A: path is the worktree" ".repos[0].path == \"$WS/wt-a\" and .repos[0].worktree == true" "$a"
+expect "worktree A: path is the worktree" "(.repos[0].path | gsub(\"\\\\\\\\\"; \"/\")) == \"$WS/wt-a\" and .repos[0].worktree == true" "$a"
 expect "worktree A: branch feat/gateway/a, not develop" '.repos[0].branch == "feat/gateway/a" and .repos[0].protected == false' "$a"
 expect "worktree A: sees its own uncommitted file only" '[.repos[0].files[].path] | length == 1 and (.[0] | startswith("backend/gateway"))' "$a"
 expect "worktree A: routes to server-services" '.repos[0].routing.lead == "server-services"' "$a"

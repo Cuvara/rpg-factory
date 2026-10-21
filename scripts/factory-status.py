@@ -245,7 +245,7 @@ def main():
         line = [l for l in (git("client", "ls-tree", integ("client"), "unity-build-workflows") or "").splitlines()]
         sha = line[0].split()[2] if line else None
         out = subprocess.run(["git", "ls-remote", "--tags", "https://github.com/Cuvara/unity-build-workflows"],
-                             capture_output=True, text=True, timeout=60).stdout if sha else ""
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60).stdout if sha else ""
         tagmap = {l.split()[1].replace("refs/tags/", "").replace("^{}", ""): l.split()[0] for l in out.splitlines() if l.strip()}
         at = [t for t, s in tagmap.items() if s == sha]
         st["pins"].append({"package": "unity-build-workflows (submodule)", "pinned": sha[:10] if sha else None,
@@ -268,7 +268,7 @@ def main():
                 pend.append({"skill": "pin-bump", "repo": "client", "what": f"client workflows call unity-build-workflows at mixed majors {majors}"})
             if remote and majors:
                 out = subprocess.run(["git", "ls-remote", "--tags", "https://github.com/Cuvara/unity-build-workflows"],
-                                     capture_output=True, text=True, timeout=60).stdout
+                                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60).stdout
                 newest = max([int(t) for t in re.findall(r"refs/tags/v(\d+)$", out, re.M)] or [0])
                 used = max(int(m[1:]) for m in majors)
                 if newest > used:
@@ -433,4 +433,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

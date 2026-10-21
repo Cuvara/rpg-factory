@@ -3,8 +3,9 @@
 # snapshot's "Services" / "Tools for this change" lines and the doctor "Dev tools" section. Secrets
 # planted in the fixture MCP configs must never appear in any output.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state" CLAUDE_PLUGIN_ROOT="$ROOT" CLAUDE_CONFIG_DIR="$TMP/cfg"
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
@@ -25,7 +26,7 @@ cat > "$TMP/cfg/.claude.json" <<EOF
 EOF
 echo '{"enabledPlugins": {"context-mode@context-mode": true, "codex@openai-codex": false}}' > "$TMP/cfg/settings.json"
 printf '#!/bin/sh\nexit 0\n' > "$TMP/bin/gopls"; chmod +x "$TMP/bin/gopls"
-export RPG_FACTORY_WORKSPACE="$WS" PATH="$TMP/bin:$PATH"
+export RPG_FACTORY_WORKSPACE="$WS" PATH="$(path_entry "$TMP/bin"):$PATH"
 
 # -- unit: probes
 out=$(cd "$ROOT/scripts/lib" && python3 -B - "$WS" "$ROOT/registry.json" <<'EOF'
@@ -92,9 +93,9 @@ jq -e '[.dev_tools[] | select(.id == "unity-mcp" or .id == "lsp-csharp") | .requ
   && ok "unity-mcp and lsp-csharp are optional: their absence never fails doctor or a check" || no "unity-mcp/lsp-csharp marked required"
 # doctor's exit code also reflects install state, so compare: an optional tool's absence must not change it
 printf '#!/bin/sh\nexit 0\n' > "$SC/bin/csharp-ls"; chmod +x "$SC/bin/csharp-ls"
-rc_with=$(cd "$WS" && PATH="$SC/bin:$PATH" python3 -B "$ROOT/scripts/factory-cmd.py" doctor >/dev/null 2>&1; echo $?)
+rc_with=$(cd "$WS" && PATH="$(path_entry "$SC/bin"):$PATH" python3 -B "$ROOT/scripts/factory-cmd.py" doctor >/dev/null 2>&1; echo $?)
 rm -f "$SC/bin/csharp-ls"
-out_without=$(cd "$WS" && PATH="$SC/bin:$PATH" python3 -B "$ROOT/scripts/factory-cmd.py" doctor 2>&1); rc_without=$?
+out_without=$(cd "$WS" && PATH="$(path_entry "$SC/bin"):$PATH" python3 -B "$ROOT/scripts/factory-cmd.py" doctor 2>&1); rc_without=$?
 grep -q '^- lsp-csharp (binary, optional): \*\*MISSING\*\*' <<<"$out_without" && [ "$rc_with" = "$rc_without" ] \
   && ok "doctor exit code is the same with and without a C# LSP (optional tool; rc=$rc_without)" \
   || no "doctor rc with C# LSP=$rc_with, without=$rc_without"

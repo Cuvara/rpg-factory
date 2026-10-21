@@ -9,7 +9,7 @@
 #
 # Usage: tests/routing.test.sh [--no-history]
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
 CTX="$ROOT/scripts/factory-context.sh"
 history=true; [ "${1:-}" = "--no-history" ] && history=false

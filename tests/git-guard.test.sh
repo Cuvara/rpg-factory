@@ -2,11 +2,13 @@
 # Unit tests for scripts/git-guard.py. Builds a throwaway fake workspace in a temp
 # dir (never touches the real repos), feeds hook payloads, and checks the decision.
 set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 GUARD="$ROOT/scripts/git-guard.py"
-TMP="$(mktemp -d -p /tmp)" || exit 1; [ -d "$TMP" ] || exit 1
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1
 trap 'rm -rf "$TMP"' EXIT
+unset RPG_FACTORY_WORKSPACE   # the developer shell may point it at the real workspace; this test builds its own
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"   # tripwire latch/mode state stays inside this test
 
 WS="$TMP/ws"
@@ -275,6 +277,14 @@ mcheck allow "python3 $RC --repo server --status | head -20"
 mcheck deny  "touch validate.txt"
 mcheck allow "bash $CTX --mode analyze"
 mcheck deny  "git commit -m x"
+# the switch command in the denial pastes into bash: no backslashes, also when Windows reports C:\... as the root
+winroot=$(cygpath -w "$ROOT" 2>/dev/null || echo "$ROOT")
+reason=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash",tool_input:{command:"git commit -m y"},cwd:$d,session_id:"modes"}' \
+  | CLAUDE_PLUGIN_ROOT="$winroot" python3 "$GUARD" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+bs='\'
+case "$reason" in *"$bs"*|"") fail=$((fail + 1)); echo "FAIL mode denial command is not bash-safe: $reason";;
+  *'/scripts/factory-context.sh" --mode implement'*) pass=$((pass + 1));;
+  *) fail=$((fail + 1)); echo "FAIL mode denial names no switch command: $reason";; esac
 mcheck allow "bash $CTX --mode implement --repo server"
 mcheck allow "touch implement.txt"
 mcheck allow "git switch -c feat/x/impl"
@@ -372,6 +382,37 @@ check ask "$SERVER" "git submodule set-url sub https://evil/x.git"
 check ask "$SERVER" "git pull origin develop" "" PowerShell
 check ask "$SERVER" "git remote set-url origin x" "" PowerShell
 check deny "$SERVER" "gh api graphql -f query='mutation{createRef(input:{name:\"refs/tags/v9\"}){ref{name}}}'" "" PowerShell
+
+# Windows: a non-ASCII branch name (U+0410 is d0 90 in UTF-8; cp1252 cannot decode 0x90) once made the
+# guard's git calls raise, and an exception means "no opinion" - the tag went through
+git -C "$SERVER" checkout -q -b "feat/gateway/$(printf '\xd0\x90')"
+check deny "$SERVER" "git tag v1.2.3"
+check ask "$SERVER" "git push --force origin HEAD"
+git -C "$SERVER" checkout -q develop
+# the payload cwd uses the other separator style than the workspace path the guard finds
+if [ -n "$RPGF_WINDOWS" ]; then
+  check deny "$(cygpath -w "$SERVER")" "git tag v1.2.3"
+  check ask "$(cygpath -w "$SERVER")" "git reset --hard HEAD~1"
+  check deny "$(fwd "$(cygpath -w "$SERVER")")" "git push origin --tags"
+fi
+# a developer shell exporting RPG_FACTORY_WORKSPACE for a different (real, complete) workspace must not
+# open this one, and a `cd` from one workspace into the other is checked against the second
+WS2="$TMP/ws2"; mkdir -p "$WS2/rpg-mmo-server/backend" "$WS2/IndieRPGMMOAdventure/ProjectSettings"
+touch "$WS2/rpg-mmo-server/backend/TEAM.md" "$WS2/IndieRPGMMOAdventure/ProjectSettings/ProjectVersion.txt"
+git -C "$WS2/rpg-mmo-server" init -q -b develop
+check deny "$SERVER" "git tag v1.2.3" "RPG_FACTORY_WORKSPACE=$OUT"
+check deny "$SERVER" "git tag v1.2.3" "RPG_FACTORY_WORKSPACE=$WS2"
+check ask "$SERVER" "git reset --hard HEAD~1" "RPG_FACTORY_WORKSPACE=$WS2"
+check deny "$SERVER" "cd $WS2/rpg-mmo-server && git tag v1.2.3"
+check allow "$OUT" "git reset --hard" "RPG_FACTORY_WORKSPACE=$WS2"   # a repo outside every workspace stays not ours
+check deny "$OUT" "git -C $WS2/rpg-mmo-server tag v1.2.3" "RPG_FACTORY_WORKSPACE=$WS2"   # the env root still covers git -C into it
+# `git -C` decides by the directory git works in: from another workspace, and from outside every workspace
+check deny "$WS2/rpg-mmo-server" "git -C $SERVER tag v1.2.3" "RPG_FACTORY_WORKSPACE=$WS"
+check deny "$WS2/rpg-mmo-server" "git -C $SERVER tag v1.2.3"
+check deny "$OUT" "git -C $SERVER tag v1.2.3"
+check ask "$OUT" "git -C $SERVER reset --hard HEAD~1"
+check allow "$OUT" "git -C $OUT reset --hard"
+
 
 total=$((pass + fail))
 echo "git-guard tests: $total run, $pass passed, $fail failed"

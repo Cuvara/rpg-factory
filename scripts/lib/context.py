@@ -136,18 +136,27 @@ def cwd_clone(reg, ws):
     return None
 
 
+def _exe_names(name):
+    """The file names `name` may have on PATH: on Windows also name + each PATHEXT extension (python3.exe)."""
+    if os.name != "nt" or os.path.splitext(name)[1]:
+        return [name]
+    exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
+    return [name] + [name + e.lower() for e in exts]
+
+
 def which(cands):
     for c in cands:
         for d in os.environ.get("PATH", "").split(os.pathsep):
-            p = os.path.join(d, c)
-            if os.path.isfile(p) and os.access(p, os.X_OK):
-                return p
+            for n in _exe_names(c):
+                p = os.path.join(d, n)
+                if os.path.isfile(p) and os.access(p, os.X_OK):
+                    return p
     return None
 
 
 def tool_version(path, args, timeout=15):
     try:
-        r = subprocess.run([path, *args.split()], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        r = subprocess.run([path, *args.split()], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
         return ((r.stdout or r.stderr).splitlines() or [""])[0].strip()
     except (OSError, subprocess.SubprocessError):
         return "?"
@@ -230,7 +239,7 @@ def repo_state(key, d, rep, args, reg):
 def resolve(reg, key, files, subst, tools):
     r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files),
                         "--argjson", "subst", json.dumps(subst), "--argjson", "tools", json.dumps(tools),
-                        "-f", RESOLVE, REGISTRY], capture_output=True, text=True)
+                        "-f", RESOLVE, REGISTRY], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         die(f"routing engine failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
@@ -276,7 +285,7 @@ def explain(state, reg):
 def install_line():
     try:
         r = subprocess.run([sys.executable, "-B", os.path.join(PLUGIN_ROOT, "scripts", "install-status.py"), "--json"],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         d = json.loads(r.stdout)
         rt = d.get("runtime") or {}
         return {"state": d.get("state"), "runtime_version": rt.get("version"), "runtime_kind": rt.get("kind"),
@@ -436,7 +445,7 @@ def main():
     tools = {}
     for name, t in reg["tools"].items():
         tools[name] = which(t["candidates"])
-    subst = {"{dotnet}": os.path.basename(tools.get("dotnet") or "") or "<dotnet-not-found>", "{plugin_root}": PLUGIN_ROOT}
+    subst = {"{dotnet}": os.path.basename(tools.get("dotnet") or "") or "<dotnet-not-found>", "{plugin_root}": PLUGIN_ROOT.replace("\\", "/")}  # check commands run through bash, which eats backslashes
     services = devtools.probe_services(reg)
     prober = devtools.Prober(ws, reg, services)
     repos = []
@@ -478,4 +487,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     main()

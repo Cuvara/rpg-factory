@@ -463,7 +463,7 @@ def repos(payload, registry):
 def slow_git(cwd, *args, timeout=50):
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         return r.stdout if r.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -1126,4 +1126,7 @@ def main():
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

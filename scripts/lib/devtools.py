@@ -41,6 +41,11 @@ def _user_json():
     return os.path.join(d, ".claude.json") if d else os.path.join(os.path.expanduser("~"), ".claude.json")
 
 
+def _path_key(p):
+    """Comparable form of a directory path: separators and (on Windows) case normalised."""
+    return os.path.normcase(os.path.normpath(p)) if isinstance(p, str) else p
+
+
 def mcp_servers(ws, reg):
     """{server name: [where configured]} - names only."""
     found = {}
@@ -58,8 +63,10 @@ def mcp_servers(ws, reg):
     if isinstance(user.get("mcpServers"), dict):
         note(list(user["mcpServers"]), "~/.claude.json")
     projects = user.get("projects") if isinstance(user.get("projects"), dict) else {}
+    # Claude Code keys projects by path as it saw it (on Windows `C:/x/y`, while `d` here is `C:\x\y`)
+    projects = {_path_key(k): v for k, v in projects.items()}
     for d in dirs:
-        p = projects.get(d) or {}
+        p = projects.get(_path_key(d)) or {}
         if isinstance(p.get("mcpServers"), dict):
             note(list(p["mcpServers"]), f"~/.claude.json project {os.path.relpath(d, ws)}")
     return found
@@ -79,10 +86,15 @@ def enabled_plugins(ws):
 
 
 def which(name):
+    """Like shutil.which without its extra stats; on Windows also name + each PATHEXT extension."""
+    names = [name]
+    if os.name == "nt" and not os.path.splitext(name)[1]:
+        names += [name + e.lower() for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
     for d in os.environ.get("PATH", "").split(os.pathsep):
-        p = os.path.join(d, name)
-        if os.path.isfile(p) and os.access(p, os.X_OK):
-            return p
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
     return None
 
 
