@@ -1,6 +1,6 @@
 ---
 name: go-backend
-description: Use when writing, debugging or reviewing Go code in rpg-mmo-server's gateway, shared, Nakama plugin or Go integration_test modules and you need to know how that code actually works - module wiring without go.work, gateway entry points and options, the storage interfaces, Nakama runtime idioms, test doubles and how to run a single test. Not for deciding where a change goes or which rules, checks and gates apply (server-services, wire-contract), and not for the C# game server.
+description: How the Go code in rpg-mmo-server's gateway, shared, Nakama plugin and Go integration_test modules actually works - module wiring without go.work, gateway entry points and options, the storage interfaces, Nakama runtime idioms, test doubles and how to run a single test. Use when you implement, debug or review Go code there and need to know how the technology behaves, not where the change belongs. Not for deciding scope, rules, checks or gates (server-services, wire-contract own those), and not for the C# game server.
 argument-hint: "[task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 ---

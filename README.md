@@ -82,7 +82,7 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
 
  hooks: SessionStart  install-status.py (stale install warning) · tripwire.py baseline
         PreToolUse    git-guard.py + tripwire.py fingerprint (Bash, PowerShell) · file-guard.py
-                      (Write/Edit/MultiEdit/NotebookEdit/Read) · tripwire.py --skill (records the mode)
+                      (Write/Edit/MultiEdit/NotebookEdit/Read) · tripwire.py --skill (records the mode; a tech skill waits for its lead)
         PostToolUse   tripwire.py (STOP + latch on unexpected git state change)
  dev tools: registry dev_tools → lib/devtools.py → snapshot "Tools for this change" + doctor
 ```

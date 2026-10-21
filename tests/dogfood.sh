@@ -95,7 +95,10 @@ for n in "${scenarios[@]}"; do
     [ "$lv" = "$VERSION" ] || why+="version=$lv; "
     [ -n "${RAW[$n]:-}" ] || grep -qE "rpg-factory runtime $VERSION \\(installed[^)]*\\), installed $VERSION, source $VERSION - install state \\*\\*CURRENT" "$f" || why+="snapshot runtime line missing/not CURRENT; "
   fi
-  used=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | .input.skill' | sed 's/^rpg-factory://' | tr '\n' ' ')
+  # Skill calls that ran: a call the Skill hook denied (tool_result is_error, e.g. a tech skill before its lead)
+  # never loaded the skill, so it is not an invocation
+  used=$(grep '^{' "$f" | jq -rs '[.[] | select(.type=="user") | .message.content[]? | objects | select(.type=="tool_result" and .is_error==true) | .tool_use_id] as $denied
+    | .[] | select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | select(.id as $i | $denied | index($i) | not) | .input.skill' | sed 's/^rpg-factory://' | tr '\n' ' ')
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
