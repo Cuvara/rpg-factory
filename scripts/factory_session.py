@@ -165,6 +165,34 @@ def runs_checks(payload):
                                g.prog(argv[0]) in READ_ONLY_PROGS for argv in argvs)
 
 
+SED_PRINT = re.compile(r"(\d+|\$)(,(\d+|\$))?p|/[^/]*/p|\d+q")
+SED_FLAGS = {"-n", "--quiet", "--silent", "-E", "-r", "--regexp-extended", "-s", "--separate", "-u", "-z", "--"}
+
+
+def sed_prints_only(args):
+    """`sed -n 300,340p file`: a script that only prints lines (N,Mp, /re/p, Nq). Anything else - -i, -f, a
+    script file, s///w, the e and w commands, several commands - is not read-only."""
+    script, i = False, 0
+    while i < len(args):
+        a = args[i]
+        if a in SED_FLAGS:
+            i += 1
+            continue
+        if a in ("-e", "--expression"):
+            if i + 1 >= len(args) or not SED_PRINT.fullmatch(args[i + 1]):
+                return False
+            script, i = True, i + 2
+            continue
+        if a.startswith("-"):
+            return False
+        if not script:
+            if not SED_PRINT.fullmatch(a):
+                return False
+            script = True
+        i += 1  # after the script: input files
+    return script
+
+
 def is_read_only(payload):
     command = (payload.get("tool_input") or {}).get("command") or ""
     if not command.strip():
@@ -202,6 +230,8 @@ def is_read_only(payload):
                 continue
             return False
         if p == "find" and not any(a in {"-exec", "-execdir", "-delete", "-ok", "-okdir"} for a in argv):
+            continue
+        if p == "sed" and sed_prints_only(argv[1:]):
             continue
         script = next((a for a in argv[:3] if "/" in a or a.endswith((".py", ".sh"))), "")
         if os.path.basename(script) in READ_ONLY_FACTORY:

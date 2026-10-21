@@ -3647,16 +3647,19 @@
     },
     {
       "id": "publish",
+      "read_only_exempt": true,
       "rule": "git push, opening/merging PRs, GitHub releases - only when the user explicitly asks in this task.",
       "match": "^gh\\s+(pr\\s+(create|merge)|release\\s+create)\\b"
     },
     {
       "id": "workflow-dispatch",
+      "read_only_exempt": true,
       "rule": "Dispatching CI/CD or release workflows (cd.yml, publish-images, client 10/11/20-24 builds, package version-bump) - explicit user authorization.",
       "match": "\\bgh\\s+(workflow\\s+run|run\\s+rerun)\\b"
     },
     {
       "id": "shared-infra",
+      "read_only_exempt": true,
       "rule": "kubectl/helm against any cluster, ssh/scp to a VPS, applying manifests, anything touching staging or production - explicit user authorization; never automatic.",
       "match": "^(sudo\\s+)?([A-Za-z_]+=\\S*\\s+)*(kubectl|helm|k3d|k3s|ssh|scp|rsync)\\b|(dev-up|rollback-to-compose|setup-dev|teardown-dev)\\.sh\\b|k8s/(data/apply|registry/push)\\.sh\\b|verify/verify\\.sh\\b"
     },
@@ -3667,11 +3670,13 @@
     },
     {
       "id": "client-package-toggle",
+      "read_only_exempt": true,
       "rule": "Pointing the client at local package clones (toggle-packages.sh dev) edits the user's client tree: only with explicit consent; back up Packages/manifest.json and packages-lock.json first and restore them byte-identical (cmp) afterwards - never 'restore' with toggle-packages.sh release (it pins each package to its newest local tag, not the previous pin); never commit its output.",
       "match": "toggle-packages\\.sh"
     },
     {
       "id": "local-stack",
+      "read_only_exempt": true,
       "rule": "Starting/stopping/resetting the local Docker stack (make up/flow-up/reset/down, stack.sh up/down, docker compose up/down) - heavy and stateful; ask first. Health checks (make flow-check) are fine.",
       "match": "\\bstack\\.sh\\s+(up|down)\\b|\\bmake\\s+(flow-up\\S*|flow-down|flow-reset|up|down|reset|monitoring-(up|down))\\b|\\bdocker(\\.exe)?\\s+compose\\b[^;&|]*\\s(up|down|restart|stop|rm|kill)\\b"
     },
@@ -3681,26 +3686,31 @@
     },
     {
       "id": "db-backup-restore",
+      "read_only_exempt": true,
       "rule": "Running database/Redis backup or restore scripts - explicit user authorization.",
       "match": "\\b(backup|restore|redis-backup|redis-restore)\\.sh\\b"
     },
     {
       "id": "load-run",
+      "read_only_exempt": true,
       "rule": "Load generation (bench.sh, encoding-sweep.sh, the loadtest binary) against any stack - ask first; never against staging/production without authorization.",
       "match": "\\b(bench|encoding-sweep)\\.sh\\b|(^|\\s)\\./loadtest(\\s|$)"
     },
     {
       "id": "multi-client",
+      "read_only_exempt": true,
       "rule": "Launching or verifying multiple Unity players on the user's machine.",
       "match": "\\b(run-clients|verify-multiclient)\\.sh\\b"
     },
     {
       "id": "unity-batch",
+      "read_only_exempt": true,
       "rule": "Unity batch-mode runs open the user's project and change its state (Library reimport, possibly packages-lock.json / ProjectSettings): builds and imports (PlayerBuilder, PlayClientBuilder, SampleBuilder, SampleImporter, StrippingProbeBuilder, AddressableBuilder) and -runTests test runs. Ask first; an agent reports Unity tests HUMAN_REQUIRED with the command instead of running them.",
       "match": "-executeMethod\\s+(PlayerBuilder|PlayClientBuilder|SampleBuilder|SampleImporter|StrippingProbeBuilder|AddressableBuilder)\\.|(^|\\s)-runTests\\b"
     },
     {
       "id": "db-schema-write",
+      "read_only_exempt": true,
       "rule": "Running the migrator standalone or writing schema_migrations by hand.",
       "match": "--migrate-only|(?i:(update|delete\\s+from|truncate|insert\\s+into)\\s+schema_migrations)"
     },
@@ -3710,6 +3720,7 @@
     },
     {
       "id": "sgl-release",
+      "read_only_exempt": true,
       "rule": "Only the lead releases Shared.GameLogic: package.json version bump for release, sgl-v* tags, dispatching publish-shared-gamelogic.yml. Skills stop at 'ready to tag server sgl-vX.Y.Z'.",
       "match": "\\bgh\\s+workflow\\s+run\\s+\\S*publish-shared-gamelogic"
     }

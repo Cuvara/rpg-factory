@@ -105,6 +105,35 @@ check ask "$CLIENT" "Unity.exe -batchmode -projectPath . -runTests -testPlatform
 check allow "$CLIENT" "grep -rn runTests unity-build-workflows/.github/workflows"       # mentioning the flag is not a run
 check ask "$SERVER" "psql -c 'DELETE FROM schema_migrations'"
 check allow "$SERVER" "cat backend/deploy/.env.example"
+# 1.0.2: a read_only_exempt gate never asks for read-only inspection of the gated script; running it still asks
+check allow "$CLIENT" "sed -n 300,340p $CLIENT/Tools/verify-multiclient.sh"
+check allow "$CLIENT" "sed -n '1,\$p' Tools/run-clients.sh"
+check allow "$CLIENT" "sed -n -e 10q Tools/run-clients.sh"
+check allow "$CLIENT" "cat Tools/run-clients.sh | grep -n Unity"
+check allow "$CLIENT" "grep -n 'players' Tools/verify-multiclient.sh"
+check allow "$CLIENT" "head -40 Tools/verify-multiclient.sh && wc -l Tools/run-clients.sh"
+check allow "$SERVER" "cat backend/deploy/db/backup.sh"
+check allow "$SERVER" "sed -n 1,30p scripts/bench.sh"
+check allow "$WS" "cat toggle-packages.sh"
+check allow "$SERVER" "git log --oneline -5 -- backend/deploy/k8s/verify/verify.sh"
+check ask   "$CLIENT" "bash Tools/verify-multiclient.sh"
+check ask   "$CLIENT" "./Tools/run-clients.sh 2"
+check ask   "$CLIENT" "sed -n 1,5p Tools/run-clients.sh; bash Tools/run-clients.sh 2"   # inspect, then run
+check ask   "$CLIENT" "cat Tools/run-clients.sh | bash"                                  # piped into a shell
+check ask   "$CLIENT" "sed -n 1,5p Tools/run-clients.sh | sh"
+check ask   "$CLIENT" "sed -i s/4/8/ Tools/run-clients.sh"                               # edits the script
+check ask   "$CLIENT" "sed -n '1e bash Tools/run-clients.sh' x.txt"                      # sed e runs a command
+check ask   "$CLIENT" "sed -n 1w/tmp/x Tools/run-clients.sh"                             # sed w writes a file
+check ask   "$CLIENT" "sed -f prog.sed Tools/run-clients.sh"                             # script file: unknown
+check ask   "$CLIENT" "sed -n 1,5p Tools/run-clients.sh > copy.sh"                       # redirect: a write
+check ask   "$CLIENT" "find Tools -name run-clients.sh -exec {} \\;"
+check ask   "$CLIENT" "xargs -a list.txt Tools/run-clients.sh"
+check ask   "$SERVER" "sed -n 1,5p backend/deploy/kubeconfig.local"                      # secrets is not exempt
+check ask   "$SERVER" "head -3 backend/deploy/.env"
+# every gate with a match: exempt from read-only inspection except secrets (reading is what it guards)
+jq -e '[.human_gates[] | select(.match != null and .id != "secrets") | .read_only_exempt == true] | all' "$ROOT/registry.json" >/dev/null \
+  && jq -e '.human_gates[] | select(.id == "secrets") | (.read_only_exempt // false) == false' "$ROOT/registry.json" >/dev/null \
+  && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL read_only_exempt: every matching gate except secrets"; }
 # quoted / heredoc content is data, not commands
 check allow "$FEATURE" "git commit -m \"\$(cat <<'EOF'
 docs: explain why git reset --hard is guarded
@@ -260,6 +289,9 @@ mcheck deny  "git switch -c feat/x/plan"
 mcheck deny  "python3 $RC --repo server"
 mcheck allow "git status 2>/dev/null"
 mcheck allow "git log --oneline -3 2>&1 | head -3"
+mcheck allow "sed -n 10,40p backend/x.go"                                 # print-only sed is read-only
+mcheck deny  "sed -i s/a/b/ backend/x.go"
+mcheck deny  "sed -n 's/a/b/w out.txt' backend/x.go"
 mcheck allow "python3 $ROOT/scripts/factory-status.py"
 mcheck deny  "touch x" PowerShell
 mcheck allow "bash $CTX --mode=validate --repo server"

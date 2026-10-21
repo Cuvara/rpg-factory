@@ -84,7 +84,7 @@ quoting (`` ` `` escape, `&` call operator, `git.exe`).
 | `submodule update/deinit/sync/foreach/add/set-url` | ask | changes submodule checkouts or sources |
 | `worktree remove/prune --force` | ask | deletes a worktree with its changes |
 | git run through an interpreter one-liner, or a program that is `$VAR` / `$(...)` / backticks | ask | the guard cannot see what runs |
-| any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | ask (or the gate's `decision`) | human gate |
+| any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | ask (or the gate's `decision`); a read-only command (`cat`, `grep`, `sed -n 10,40p`, `git log`) that only names a gated script passes when the gate is `read_only_exempt` (every matching gate except `secrets`) | human gate |
 
 The guard ignores quoted text and heredoc bodies (a commit message mentioning `git tag` is fine),
 follows `cd <dir> &&` and `git -C <dir>`, knows that `git checkout -b feat/x && git commit`
