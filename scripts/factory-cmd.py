@@ -6,7 +6,7 @@
                                           contracts, checks and gates for those files, and why
   check <repo> [<path>...] [--status]     run-checks.py (fast tier) - or --status: grade stored evidence
                                           against the current tree without running anything
-  doctor                                  install state, tripwire latches, registry, state paths, tools,
+  doctor                                  install state, registry, state paths, tools,
                                           dev tools (MCP servers, plugins, binaries) per skill
 
 Read-only except `check` without --status, which runs the fast checks (builds/tests) exactly like
@@ -100,9 +100,6 @@ def cmd_doctor(args):
     rc = 0
     print("## Install")
     rc |= run([sys.executable, "-B", os.path.join(ROOT, "scripts", "install-status.py")])
-    print("\n## Tripwire latches (the user clears them only after reviewing the repos: `! "
-          + fstate.ack_command(ROOT) + "`)")
-    run([sys.executable, "-B", os.path.join(ROOT, "scripts", "tripwire.py"), "--status"])
     print("\n## Registry")
     rc |= run(["bash", os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only"])
     print("\n## Workspace and state")

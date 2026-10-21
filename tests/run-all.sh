@@ -60,11 +60,11 @@ for ref in $(grep -o 'references/[a-z-]*\.md' skills/factory-core/SKILL.md | sor
   [ -f "skills/factory-core/$ref" ] && ok "skill reference exists: $ref" || bad "skill reference missing: $ref"
 done
 jq -e '(.hooks.PreToolUse[0].matcher == "Bash|PowerShell")
-        and ([.hooks.PreToolUse[0].hooks[].command] | any(test("git-guard.py")) and any(test("tripwire.py\" --pre")))
-        and (.hooks.PostToolUse[0].matcher == "Bash|PowerShell") and (.hooks.PostToolUse[0].hooks[0].command | test("tripwire.py\" --post"))
-        and (.hooks.PostToolUseFailure[0].matcher == "Bash|PowerShell") and (.hooks.PostToolUseFailure[0].hooks[0].command | test("tripwire.py\" --post"))
-        and ([.hooks.SessionStart[0].hooks[].command] | any(test("install-status.py\" --session")) and any(test("tripwire.py\" --session-start")))' hooks/hooks.json >/dev/null \
-  && ok "hooks: guard+tripwire on Bash|PowerShell, tripwire post (success and failure), session install check + baseline" || bad "hooks wiring"
+        and ([.hooks.PreToolUse[0].hooks[].command] | any(test("git-guard.py")))
+        and ([.hooks.PreToolUse[] | select(.matcher == "Skill") | .hooks[].command] | any(test("factory_session.py\" --skill")))
+        and ([.hooks.SessionStart[0].hooks[].command] | any(test("install-status.py\" --session")))
+        and ([.. | .command? // empty] | all(test("tripwire") | not))' hooks/hooks.json >/dev/null \
+  && ok "hooks: guard on Bash|PowerShell, skill order on Skill, session install check, no tripwire" || bad "hooks wiring"
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
@@ -75,7 +75,7 @@ else skp "registry paths exist in workspace" "--no-workspace"; fi
 run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -u TMPDIR tests/compat.test.sh
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
-run "tripwire (script-driven mutations, latch, submodule work)" env -u TMPDIR tests/tripwire.test.sh
+run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.test.sh
 run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh

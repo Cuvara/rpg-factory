@@ -2,28 +2,22 @@
 
 Two roots, both always absolute:
 
-  scratch()     per-session, disposable: tripwire snapshots and session baselines.
+  scratch()     per-session, disposable: the declared execution mode and the skills run (MODE, SKILLS).
                 $TMPDIR when it is an absolute, existing, writable directory; otherwise /tmp; otherwise
-                the persistent root's `tmp/`. An empty or relative $TMPDIR used to make the tripwire
+                the persistent root's `tmp/`. An empty or relative $TMPDIR must never make a hook
                 write `rpg-factory/<session>/` into the current directory (a product repo).
-  persistent()  survives the session and a crash: the workspace tripwire events, the stash audit, the
-                cross-session git activity log and check evidence.
+  persistent()  survives the session and a crash: check evidence.
                 $XDG_STATE_HOME/rpg-factory, else ~/.local/state/rpg-factory. Override (tests):
                 $RPG_FACTORY_STATE_DIR (must be absolute).
 
 Under persistent(), per workspace key (workspace_key):
-  latch/<key>/<event-id>.json        open tripwire events (one file per incident, never overwritten)
-  latch/<key>/acked/<event-id>.json  acknowledged events (archived, pruned after 30 days)
-  latch/<key>.json                   legacy (<= 0.5.0) single-file latch; still read, migrated on --ack
-  audit/<key>.jsonl                  visible `git stash` operations (the approved path)
-  activity/<key>/<call>.json         completed commands that visibly ran git (cross-session attribution)
+  evidence/<key>/...                 check evidence (lib/evidence.py)
 
 Nothing here is a database: files are small, self-describing JSON. Writes are atomic (write_json).
 """
 import hashlib
 import json
 import os
-import re
 import threading
 import time
 
@@ -61,37 +55,6 @@ def workspace_key(ws):
     return hashlib.sha1(os.path.abspath(ws or "-").encode()).hexdigest()[:12]
 
 
-def latch_root():
-    return os.path.join(persistent(), "latch")
-
-
-def latch_dir(ws=None, key=None):
-    return os.path.join(latch_root(), key or workspace_key(ws))
-
-
-def legacy_latch_file(ws=None, key=None):
-    return os.path.join(latch_root(), (key or workspace_key(ws)) + ".json")
-
-
-def audit_file(ws):
-    return os.path.join(persistent(), "audit", workspace_key(ws) + ".jsonl")
-
-
-def activity_dir(ws):
-    return os.path.join(persistent(), "activity", workspace_key(ws))
-
-
-def has_open_events(ws):
-    """Cheap check for the guards: any open event file (or a legacy latch) for this workspace."""
-    if os.path.exists(legacy_latch_file(ws)):
-        return True
-    try:
-        with os.scandir(latch_dir(ws)) as it:
-            return any(e.name.endswith(".json") and e.is_file() for e in it)
-    except OSError:
-        return False
-
-
 def write_json(path, obj):
     """Atomic: readers (and concurrent hooks) never see a half-written file."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -113,12 +76,3 @@ def write_json(path, obj):
                 os.remove(tmp)
             except OSError:
                 pass
-
-
-def ack_command(plugin_root):
-    """The one acknowledgement command every message prints: forward slashes and double quotes, so it
-    pastes into the shell the session runs in (Git Bash or PowerShell for a Windows plugin root, bash for a
-    WSL one). A mixed `C:/x\\scripts\\tripwire.py` loses its backslashes in bash and the ack silently fails.
-    Run it where the session runs: WSL and Windows have different state roots."""
-    p = plugin_root.replace("\\", "/").rstrip("/") + "/scripts/tripwire.py"
-    return 'python3 "' + re.sub(r'(["$`])', r"\\\1", p) + '" --ack'

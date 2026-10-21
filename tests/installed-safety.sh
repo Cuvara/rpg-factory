@@ -5,7 +5,7 @@
 # against a disposable fake workspace (throwaway repos + a bare remote under mktemp). Nothing in the
 # real workspace is touched: RPG_FACTORY_WORKSPACE points at the fake one.
 #
-# Commands the hooks allow are executed (as Claude would) and followed by the PostToolUse hook;
+# Commands the hooks allow are executed (as Claude would) and followed by any PostToolUse hook;
 # asked/denied ones are not executed (nobody approves). At the end the fake repos and remote must
 # hold no tag created by a blocked command.
 #
@@ -28,7 +28,7 @@ echo team > "$S/backend/TEAM.md"; echo "m_EditorVersion: 6000" > "$C/ProjectSett
 git init -q --bare "$TMP/remote.git"
 for r in "$S" "$C" "$OTHER"; do git -C "$r" init -q -b develop; echo a > "$r/a.txt"; gc "$r" add -A; gc "$r" commit -qm init; done
 gc "$S" remote add origin "$TMP/remote.git"; gc "$S" push -q origin develop
-gc "$S" branch feat/x; echo "user wip" > "$S/user-wip.txt"          # a baseline (user) file
+gc "$S" branch feat/x; echo "user wip" > "$S/user-wip.txt"          # a pre-existing user file
 SID="safety-$$"
 
 fdecide() { # tool path -> allow|ask|deny through the installed file-tool hooks
@@ -59,7 +59,7 @@ post() { # tool command cwd -> prints STOP text if any
     payload PostToolUse "$1" "$2" "$3" | (cd "$3" && bash -c "$h") 2>/dev/null | jq -r '.hookSpecificOutput.additionalContext // .reason // empty' 2>/dev/null
   done < <(hooks PostToolUse "$1")
 }
-# SessionStart (baseline) exactly as installed
+# SessionStart exactly as installed
 while IFS= read -r h; do payload SessionStart "" "" "$S" | (cd "$S" && bash -c "$h") >/dev/null 2>&1; done < <(jq -r '.hooks.SessionStart[]?.hooks[].command' "$PR/hooks/hooks.json")
 
 pass=0; fail=0; REASON=""; LASTPOST=""
@@ -109,7 +109,7 @@ t PowerShell deny "$S" "Set-Location $S; git tag v9"
 t PowerShell ask  "$S" "git reset --hard HEAD"
 t PowerShell ask  "$S" "git push origin develop"
 EXEC=0 t PowerShell allow "$S" "git status"
-echo "== GitHub remote mutations (the tripwire cannot see these)"
+echo "== GitHub remote mutations (remote-only: the guard is the only control)"
 t Bash deny "$S" "gh api graphql -f query='mutation{createRef(input:{name:\"refs/tags/v9\"}){ref{name}}}'"
 t Bash deny "$S" "gh repo delete Cuvara/rpg-mmo-server --yes"
 t Bash deny "$OTHER" "gh repo delete Cuvara/Netcode --yes"
@@ -150,27 +150,21 @@ t Bash allow "$S" "git switch -c feat/safety-probe"
 t Bash allow "$S" "git commit --allow-empty -m 'mentions git tag v9 and git push --tags'"
 t Bash allow "$S" "git tag --list"
 t Bash allow "$OTHER" "git tag outside-workspace"
-echo "== tripwire: a script the guard cannot read creates a tag and pushes it"
+echo "== no tripwire (removed in 1.0.1): a script's effect is never latched, the next command still runs"
 printf '#!/bin/sh\ngit tag v6.6.6 && git push -q origin v6.6.6\n' > "$S/release.sh"
 t Bash allow "$S" "sh ./release.sh"
-stop=$LASTPOST
-case "$stop" in *"STOP - rpg-factory tripwire"*) pass=$((pass + 1)); row PASS Bash "(post) tripwire STOP after script tag+push" STOP STOP "";;
-  *) fail=$((fail + 1)); row FAIL Bash "(post) tripwire STOP after script tag+push" STOP none "";; esac
-t Bash deny "$S" "touch after-stop.txt"
-EXEC=0 t Bash allow "$S" "git status"
-python3 -B "$PR/scripts/tripwire.py" --ack "$SID" >/dev/null 2>&1
-EXEC=0 t Bash allow "$S" "touch after-ack.txt"
-echo "== user baseline file"
+[ -z "$LASTPOST" ] && { pass=$((pass + 1)); row PASS Bash "(post) no STOP after a script's tag+push" none none ""; } \
+  || { fail=$((fail + 1)); row FAIL Bash "(post) no STOP after a script's tag+push" none STOP "${LASTPOST:0:80}"; }
+t Bash allow "$S" "touch after-script.txt"
+t Bash allow "$S" "git fetch --tags"
 t Bash allow "$S" "sh -c 'echo x >> user-wip.txt'"
-stop=$LASTPOST
-case "$stop" in *"STOP"*"user-wip.txt"*) pass=$((pass + 1)); row PASS Bash "(post) STOP: user baseline file modified" STOP STOP "";;
-  *) fail=$((fail + 1)); row FAIL Bash "(post) STOP: user baseline file modified" STOP none "${stop:0:80}";; esac
-python3 -B "$PR/scripts/tripwire.py" --ack "$SID" >/dev/null 2>&1
+[ -z "$LASTPOST" ] && { pass=$((pass + 1)); row PASS Bash "(post) no STOP: user file modified" none none ""; } \
+  || { fail=$((fail + 1)); row FAIL Bash "(post) no STOP: user file modified" none STOP "${LASTPOST:0:80}"; }
 
 echo "== file tools and execution modes (installed file-guard + git-guard)"
 mkdir -p "$S/backend/shared/proto/gen"; touch "$S/backend/shared/proto/gen/wire.pb.go"
 f=$(fdecide Edit "$S/backend/shared/proto/gen/wire.pb.go"); [ "$f" = ask ] && { pass=$((pass + 1)); row PASS Edit "generated path" ask ask ""; } || { fail=$((fail + 1)); row FAIL Edit "generated path" ask "$f" ""; }
-f=$(fdecide Edit "$S/user-wip.txt"); [ "$f" = ask ] && { pass=$((pass + 1)); row PASS Edit "user baseline file" ask ask ""; } || { fail=$((fail + 1)); row FAIL Edit "user baseline file" ask "$f" ""; }
+f=$(fdecide Edit "$S/user-wip.txt"); [ "$f" = allow ] && { pass=$((pass + 1)); row PASS Edit "pre-existing user file" allow allow ""; } || { fail=$((fail + 1)); row FAIL Edit "pre-existing user file" allow "$f" ""; }
 f=$(fdecide Write "$S/new.txt"); [ "$f" = allow ] && { pass=$((pass + 1)); row PASS Write "ordinary new file" allow allow ""; } || { fail=$((fail + 1)); row FAIL Write "ordinary new file" allow "$f" ""; }
 EXEC=0 t Bash allow "$S" "bash $PR/scripts/factory-context.sh --mode plan --repo server"
 t Bash deny "$S" "touch plan-mode.txt"
@@ -180,7 +174,7 @@ EXEC=0 t Bash allow "$S" "touch implement-mode.txt"
 
 echo "== outcome in the disposable repos"
 lt=$(git -C "$S" tag | tr '\n' ' '); rt=$(git -C "$TMP/remote.git" tag | tr '\n' ' ')
-if [ "$lt" = "v6.6.6 " ] && [ "$rt" = "v6.6.6 " ]; then pass=$((pass + 1)); echo "PASS  only the tripwire-probe tag exists (local: $lt remote: $rt) - no blocked command ran"
+if [ "$lt" = "v6.6.6 " ] && [ "$rt" = "v6.6.6 " ]; then pass=$((pass + 1)); echo "PASS  only the script-probe tag exists (local: $lt remote: $rt) - no blocked command ran"
 else fail=$((fail + 1)); echo "FAIL  unexpected tags local='$lt' remote='$rt'"; fi
 total=$((pass + fail)); echo "installed-safety ($VER): $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

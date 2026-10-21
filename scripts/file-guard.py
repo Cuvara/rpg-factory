@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """rpg-factory file guard - PreToolUse hook for Claude's file tools (Write, Edit, MultiEdit, NotebookEdit, Read).
 
-The shell guard (git-guard.py) and the tripwire only see Bash/PowerShell. File tools write directly, so
+The shell guard (git-guard.py) only sees Bash/PowerShell. File tools write directly, so
 this hook applies the same workspace rules to the target path. Inside the workspace only; it never
 approves anything and never crashes a session (any error = no opinion).
 
-  deny  any write while the tripwire is latched (an unresolved STOP, this or an earlier session), or while the
-        declared Factory mode is analyze/plan/review/validate
+  deny  any write while the declared Factory mode is analyze/plan/review/validate
   ask   a write to:
           - an embedded package clone (client Packages/com.cuvara.*): the user's work, not the canonical repo
           - a git submodule's content (client com.gdk.*, unity-build-workflows): changes belong in its own repo
           - a generated path from the registry (proto bindings, Wire.cs copy, golden vectors, *.uxml.g.cs,
             imported samples): change it through its generator
-          - a file that was already modified/untracked when the session started (the user's baseline)
           - secrets (.env, kubeconfig.local)
   ask   a Read of secrets (.env, kubeconfig.local)
 
@@ -62,8 +60,8 @@ def evaluate(payload, registry):
     path = target(payload)
     if not path:
         return []
-    import tripwire  # noqa: E402  (shares the workspace/latch model)
-    g = tripwire.guard()
+    import factory_session as session  # noqa: E402  (shares the workspace and mode model)
+    g = session.guard()
     ws = g.find_workspace(os.path.dirname(path), registry)
     if not ws:
         return []
@@ -72,14 +70,10 @@ def evaluate(payload, registry):
         R.append(("ask", f"{os.path.relpath(path, ws)} holds secrets - human gate 'secrets'"))
     if tool not in WRITE_TOOLS:
         return R
-    latch = tripwire.latched(payload)
-    if latch:
-        R.append(("deny", f"tripwire latched - {latch}. Stop and report it to the user; they clear it with "
-                          f"`! {tripwire.ack_command()}` (agents never run it)"))
-    mode = tripwire.current_mode(payload)
-    if mode in tripwire.READ_ONLY_MODES or mode == "validate":
+    mode = session.current_mode(payload)
+    if mode in session.READ_ONLY_MODES or mode == "validate":
         R.append(("deny", f"Factory mode is `{mode}`: no file changes. Switch only when the user asked to implement: "
-                          f"`bash {os.path.join(tripwire.PLUGIN_ROOT, 'scripts', 'factory-context.sh')} --mode implement`"))
+                          f"`bash {os.path.join(session.PLUGIN_ROOT, 'scripts', 'factory-context.sh')} --mode implement`"))
     for key, r in registry["repos"].items():
         rdir = os.path.abspath(os.path.join(ws, r["path"]))
         if not (path == rdir or path.startswith(rdir + os.sep)):
@@ -99,18 +93,6 @@ def evaluate(payload, registry):
                 if generated_match(rel, gp):
                     R.append(("ask", f"{r['path']}/{rel} is generated ({gp}, module {m['id']}): change it through its generator"))
                     break
-        base = {}
-        try:
-            base = json.load(open(os.path.join(tripwire.state_dir(payload), "baseline.json"), encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass
-        for top, entries in base.items():
-            if path.startswith(os.path.abspath(top) + os.sep):
-                trel = os.path.relpath(path, top).replace("\\", "/")
-                e = entries.get(trel, "absent")
-                in_new_dir = any(v == "dir" and trel.startswith(k.rstrip("/") + "/") for k, v in entries.items())
-                if e is None or in_new_dir or (isinstance(e, list) and len(e) == 2 and all(isinstance(x, int) for x in e)):
-                    R.append(("ask", f"{r['path']}/{rel} already had changes when the session started (the user's baseline)"))
         break
     return R
 
@@ -123,8 +105,8 @@ def main():
     except (json.JSONDecodeError, ValueError):
         return 0
     try:
-        import tripwire
-        registry = tripwire.load_registry()
+        import factory_session
+        registry = factory_session.load_registry()
         if not registry:
             return 0
         reasons = evaluate(payload, registry)

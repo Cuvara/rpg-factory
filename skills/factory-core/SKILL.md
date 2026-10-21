@@ -114,11 +114,7 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
 - GitHub: `gh` reads pass; tag/release creation (REST or GraphQL) and repository deletion are
   **denied**; every other remote mutation (branch protection, PRs, settings, refs) asks.
 - File tools (Write/Edit/MultiEdit/NotebookEdit) ask before touching embedded clones
-  (`Packages/com.cuvara.*`), submodule content, generated paths, the user's baseline files or secrets.
-- If a tool result contains **"STOP - rpg-factory tripwire"**, stop immediately: do not repair,
-  reset, stash or retry anything. Report what it says to the user with `tripwire.py --status` (the event,
-  ref values, recovery hints). Writes stay denied - also in later sessions - until the user acknowledges
-  with the quoted command the STOP prints; never run `--ack` yourself.
+  (`Packages/com.cuvara.*`), submodule content, generated paths or secrets.
 - Stage explicit paths only. Policy: `references/git-safety.md`.
 
 ## Commands (the user types these; they are read-only except `check`)
@@ -148,7 +144,7 @@ Route (step 4) and **invoke** the lead it prints before answering; tech skills (
 
 - `references/repos.md` - first time in a repo, unmapped or repo-level paths.
 - `references/validation.md` - before running or reporting any check.
-- `references/git-safety.md` - before any branch, stage, commit, cleanup, or after a tripwire STOP.
+- `references/git-safety.md` - before any branch, stage, commit or cleanup.
 - `references/report.md` - before the final report (always).
 - `references/skill-contract.md` - routing precedence and how skills compose.
 

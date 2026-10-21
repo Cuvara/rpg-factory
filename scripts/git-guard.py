@@ -18,12 +18,11 @@ Wrappers peeled: VAR=x, env, command, builtin, exec, sudo, doas, timeout, nohup,
 stdbuf, ionice, setsid, xargs, find -exec/-execdir. Nested: bash|sh|zsh|dash -c, eval,
 cmd(.exe) /c|/k, powershell|pwsh -c|-Command, PowerShell `&` call operator.
 
-Git run by a script file or a program is invisible to text analysis; scripts/tripwire.py
-(PostToolUse) catches its effect and latches: afterwards this guard denies every
-non-read-only command until the user acknowledges.
+Git run by a script file or a program is invisible to text analysis (documented limitation).
+A declared Factory execution mode (scripts/factory_session.py) keeps analyze/plan/review read-only.
 
 Never approves: no output + exit 0 = "no opinion". Any internal error = no opinion; each
-part (git analysis, human gates, latch) fails independently. RPG_FACTORY_GUARD=off disables it.
+part (git analysis, human gates, mode) fails independently. RPG_FACTORY_GUARD=off disables it.
 """
 import json
 import os
@@ -493,8 +492,8 @@ def gh_api_request(argv):
 
 def classify_gh(argv):
     """GitHub CLI: reads pass; tag/release creation and repository deletion are denied (agents never tag,
-    never delete repos); every other remote mutation asks. Remote-only effects are invisible to the tripwire,
-    so this is the only line of defence for them."""
+    never delete repos); every other remote mutation asks. Remote-only effects never show in a local
+    checkout, so this is the only line of defence for them."""
     R = []
     if len(argv) < 2:
         return R
@@ -667,82 +666,35 @@ def human_gate_hits(payload, registry):
     return hits
 
 
-def _session_state(payload, registry):
-    """(needs_tripwire, ws): cheap file checks first - the tripwire module is only imported when a latch or a
-    mode exists or the command declares a mode (read-only hook calls stay fast on /mnt/c)."""
+def _needs_mode(payload):
+    """Cheap file check first - factory_session.py is only imported when a mode exists or the command declares one
+    (read-only hook calls stay fast on /mnt/c)."""
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
     import fstate  # noqa: E402
-    ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
     sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "default"))
-    sd = os.path.join(fstate.scratch(), sid)
     command = (payload.get("tool_input") or {}).get("command") or ""
-    need = os.path.exists(os.path.join(sd, "LATCH")) or (ws and fstate.has_open_events(ws)) \
-        or os.path.exists(os.path.join(sd, "MODE")) or "--mode" in command
-    return need, ws
-
-
-def latch_hits(payload, registry):
-    """After the tripwire detected an unauthorized mutation, only read-only commands may run."""
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # appended: stdlib lookups must not stat /mnt/c first
-    import tripwire  # noqa: E402
-    tripwire._REGISTRY = tripwire._REGISTRY or registry
-    latch = tripwire.latched(payload)
-    if latch and not tripwire.is_read_only(payload):
-        return [("deny", f"tripwire latched - {latch}. Stop and report it to the user; they clear it with "
-                         f"`! {tripwire.ack_command()}` (agents never run it)")]
-    return []
-
-
-def ack_hits(payload, registry):
-    """Acknowledging tripwire events is the user's decision, latched or not: an agent ack could dismiss an
-    incident another session raised a moment earlier. Cheap text check first (runs on every command)."""
-    command = (payload.get("tool_input") or {}).get("command") or ""
-    if "ack" not in command:
-        return []
-    deny = [("deny", "tripwire events are acknowledged only by the user, after reviewing the repos: report the "
-                     "STOP and `tripwire.py --status`, then the user runs `! ... tripwire.py --ack` themselves")]
-    shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
-    try:
-        argvs = list(expand(command, shell=shell))
-    except Exception:
-        argvs = []
-    for argv in argvs:
-        base = [os.path.basename(a.replace("\\", "/")).lower() for a in argv]
-        runs_python = bool(base) and (re.match(r"(python[0-9.]*|py)(\.exe)?$", base[0]) is not None)
-        runs_script = bool(base) and base[0] == "tripwire.py"
-        if not (runs_python or runs_script):
-            continue  # grep/cat/less mentioning tripwire.py and --ack read the file, they do not run it
-        if (runs_script or "tripwire.py" in base) and "--ack" in argv:
-            return deny
-        if runs_python and "-c" in argv and any("tripwire" in a and "ack" in a for a in argv):
-            return deny  # python -c "...runpy.run_path('.../tripwire.py')... --ack"
-        if runs_python and "--ack" in argv and any("$" in a or "%" in a for a in argv):
-            return deny  # python3 $T --ack: the script path is behind a variable
-    if re.search(r"tripwire", command) and re.search(r"(^|\s)--ack\b", command) and re.search(r"\bpy(thon[0-9.]*)?(\.exe)?\b", command) \
-            and re.search(r"\$|%|`", command):
-        return deny  # a variable or substitution hides which script runs: the user acks, never the agent
-    return []
+    return os.path.exists(os.path.join(fstate.scratch(), sid, "MODE")) or "--mode" in command
 
 
 def mode_hits(payload, registry):
     """Factory execution mode (declared with `factory-context.sh --mode <m>`): analyze/plan/review are
     read-only; validate may additionally run run-checks.py. implement/resume (or no mode) = normal rules."""
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # appended: stdlib lookups must not stat /mnt/c first
-    import tripwire  # noqa: E402
-    tripwire._REGISTRY = tripwire._REGISTRY or registry
+    import factory_session as session  # noqa: E402
+    session._REGISTRY = session._REGISTRY or registry
     ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
     if not ws:
         return []
-    declared = tripwire.record_mode(payload)
-    mode = declared or tripwire.current_mode(payload)
-    if not mode or declared or tripwire.is_read_only(payload):
+    declared = session.record_mode(payload)
+    mode = declared or session.current_mode(payload)
+    if not mode or declared or session.is_read_only(payload):
         return []
     how = ("switch only when the user asked for it: `bash \"" + PLUGIN_ROOT.replace("\\", "/").rstrip("/")
            + "/scripts/factory-context.sh\""  # forward slashes: the command is pasted into bash
            + " --mode implement` (or validate)")
-    if mode in tripwire.READ_ONLY_MODES:
+    if mode in session.READ_ONLY_MODES:
         return [("deny", f"Factory mode is `{mode}` (read-only): this command changes state - {how}")]
-    if mode == "validate" and not tripwire.runs_checks(payload):
+    if mode == "validate" and not session.runs_checks(payload):
         return [("deny", "Factory mode is `validate`: only read-only commands and run-checks.py - " + how)]
     return []
 
@@ -761,10 +713,10 @@ def main():
         return 0
     reasons = []
     try:
-        need_state, _ws = _session_state(payload, registry)
+        need_mode = _needs_mode(payload)
     except Exception:
-        need_state = True  # cannot tell cheaply: do the full checks
-    parts = (latch_hits, mode_hits, ack_hits, evaluate, human_gate_hits) if need_state else (ack_hits, evaluate, human_gate_hits)
+        need_mode = True  # cannot tell cheaply: do the full checks
+    parts = (mode_hits, evaluate, human_gate_hits) if need_mode else (evaluate, human_gate_hits)
     for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)
