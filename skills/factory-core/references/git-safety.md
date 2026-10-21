@@ -1,10 +1,8 @@
 # Git safety
 
-The policy has three layers: the rules below, which you follow; the PreToolUse guard
+The policy has two layers: the rules below, which you follow, and the PreToolUse guard
 (`scripts/git-guard.py`, Bash **and** PowerShell), which asks the user (or denies, for tags) when a
-command would break them; and the tripwire (`scripts/tripwire.py`), which detects git state changes
-the guard could not see (scripts, interpreters) and stops the session. Following the rules means
-neither ever fires.
+command would break them. Following the rules means the guard never fires.
 
 ## Rules
 
@@ -50,13 +48,11 @@ neither ever fires.
 12. **Never stash, reset or clean to get a clean tree.** Run `git status` before anything that can
     move or overwrite changes. To compare with HEAD, export it instead:
     `git -C <repo> archive HEAD | tar -x -C "$tmp"` or `git -C <repo> worktree add --detach "$tmp" HEAD`.
-    Never run git hidden inside `wsl -e`, `bash -c '...'` or a script: the guard cannot see it and the
-    tripwire stops the workspace.
+    Never run git hidden inside `wsl -e`, `bash -c '...'` or a script: the guard cannot see it.
 13. **A stash is never assumed to be yours.** Other sessions and the user stash too. Inspect it first
     (`git stash list`, `git stash show -p stash@{n}`) and note its SHA (`git rev-parse stash@{n}`)
-    before any `apply`/`pop`; never `drop` or `clear`. When a stash is unavoidable, use the visible,
-    auditable path: `git stash push -m "rpg-factory: <reason>" -- <paths>` (the guard asks; the
-    tripwire appends it to `audit/<workspace>.jsonl` with the stash SHA before and after).
+    before any `apply`/`pop`; never `drop` or `clear`. When a stash is unavoidable, use the visible
+    path: `git stash push -m "rpg-factory: <reason>" -- <paths>` (the guard asks) and note the SHA.
 14. **One mutating command per worktree at a time.** Do not run two state-changing commands against
     the same worktree in parallel (or alongside another session working there). Read-only
     investigation (`git status`, `log`, `diff`, `reflog`, `stash list/show`) may run in parallel.
@@ -74,7 +70,7 @@ quoting (`` ` `` escape, `&` call operator, `git.exe`).
 | `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing or fetching into tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`) | **deny** | agents never tag |
 | `gh release create/upload/edit`, `gh api` REST writes to `/git/tags`, tag refs or `/releases`, `gh api graphql` mutations creating a tag ref or release | **deny** | agents never tag |
 | `gh repo delete/archive`, `gh api -X DELETE repos/<o>/<r>` (or the GraphQL equivalents) | **deny** | irreversible |
-| any other `gh api` write (method from `-X`, else POST when fields/`--input` are given), GraphQL mutations, GraphQL from a file; mutating `gh` verbs (repo edit/rename/sync, secret/variable set, workflow enable/disable, run cancel, pr close/comment/edit, label create...) | ask | remote-only change the tripwire cannot see |
+| any other `gh api` write (method from `-X`, else POST when fields/`--input` are given), GraphQL mutations, GraphQL from a file; mutating `gh` verbs (repo edit/rename/sync, secret/variable set, workflow enable/disable, run cancel, pr close/comment/edit, label create...) | ask | remote-only change |
 | `reset --hard/--merge/--keep`, `reset <commit>` on a protected branch, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | ask | discards work or moves a protected branch |
 | `clean -f...` | ask | deletes untracked files |
 | `stash` (push/save/pop/drop/clear) | ask | moves or drops uncommitted changes |
@@ -101,57 +97,15 @@ Read-only `gh` (view/list/checks/diff/status/search, `gh api` GET, GraphQL queri
 ## File tools and modes
 
 - `scripts/file-guard.py` (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Read`, workspace only): writes into an
-  embedded clone, submodule content, a registry generated path, a file that was already dirty/untracked when
-  the session started, or secrets **ask**; secret reads ask; writes while latched are **denied**.
+  embedded clone, submodule content, a registry generated path, or secrets **ask**; secret reads ask.
 - The Factory mode declared with `factory-context.sh --mode <m>` is enforced by both guards: `analyze`, `plan`,
   `review` deny writes and mutating commands; `validate` allows only `run-checks.py` (and read-only commands).
 - Not inspected: MCP tools that write files (Unity-MCP asset/scene tools) - the `unity-asset-edit` gate is the
   control there.
 
-## Tripwire
+## Limits
 
-- **SessionStart** records a baseline: the user's dirty/untracked files, submodule pointers, a
-  sample of dirty files inside submodules (the client's `com.gdk.*`) and inside embedded clones
-  (`Packages/com.cuvara.*`, compared before/after each command so the user's own edits in Unity are
-  not flagged).
-- **Pre/PostToolUse** (Bash, PowerShell) compare ref fingerprints (branches, tags,
-  remote-tracking refs, stash, HEAD) around every command. Each tool call has its own snapshot
-  (`pre-<tool_use_id>.json`); a denied call's snapshot is never compared by a later command and is
-  pruned after 2 h. Changes are expected only in a repo the command visibly ran git in, or when another
-  session's (or a parallel call's) *completed* command saw the same ref reach the same value through git
-  subcommands that make that kind of change (its own checked-out branch for `commit`/`reset`/..., new
-  branches for `branch`/`switch -c`, remote-tracking refs for `fetch`/`push`, `refs/stash` for `stash`).
-  Failing commands are checked too (PostToolUseFailure).
-- **Violations:** any tag change (never explained by anyone's git); ref/HEAD/stash/push changes
-  without a visible git command in that repo; a baseline file modified or deleted; a user submodule
-  moved or its dirty files changed. A visible `git stash` is not a violation; it is appended to the
-  stash audit.
-- On a violation the tool result carries **"STOP - rpg-factory tripwire ... (event <id>)"**, an event
-  file is written (command, session, tool call id, ref values before/after, recovery hints) and the
-  **workspace** is latched: every non-read-only command and file write is denied - in every session
-  and worktree of the workspace (a crash does not clear it; SessionStart reports it) - until the user
-  acknowledges. A second incident is a second event; nothing overwrites another session's evidence.
-
-After a STOP: do nothing else. Do not repair, reset, stash, drop, delete the tag, re-push or
-"normalise" anything. The change may come from another session, a background job or the user, not
-your command. Recovery:
-
-1. Report the STOP verbatim and run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py --status`
-   (read-only): open events with the command, the old and new SHA of every changed ref and recovery
-   hints (`stash show -p <sha>`, `reflog show <ref>`).
-2. Investigate read-only (`git status`, `log`, `reflog`, `stash list`, `stash show -p`, `branch --list`
-   stay allowed while latched). Restoring anything (`git stash apply <sha>`, a rescue branch) is the
-   user's decision - an event's old SHA stays reachable until `git gc`.
-3. The user acknowledges with the command the STOP prints (quoted, forward slashes):
-   `! python3 "<plugin root>/scripts/tripwire.py" --ack` (all events open at that moment) or
-   `--ack <event-id>` (one). It reports `latch is now CLEAR` (exit 0) or `still LATCHED: <ids>` /
-   `NOT cleared: ...` (exit 1); repeating it is safe. Events are archived to `acked/`, never deleted.
-   The guard denies `--ack` to the agent at all times.
-
-Limits: git run by a background process, or by another runtime without these hooks, is attributed to
-whichever command's window it lands in (a STOP, never a silent pass); so is another session's command
-that has not finished when this one's PostToolUse runs. A hidden change to exactly the ref a concurrent
-visible git command could make (for example a script moving the branch another session is committing on)
-is attributed to that command, as it always was within one command. Remote-only GitHub changes are invisible to it
-(the guard is the only control). State lives outside the repos (`lib/fstate.py`: scratch under
-`$TMPDIR` or `/tmp`; events, audit and evidence under `~/.local/state/rpg-factory`).
+Git run by a script file, a background process or another runtime without these hooks is invisible to
+the guard; rules 12 and 14 are the control there. Remote-only GitHub changes are controlled only by the
+guard. State lives outside the repos (`lib/fstate.py`: scratch under `$TMPDIR` or `/tmp`; evidence under
+`~/.local/state/rpg-factory`).

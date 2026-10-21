@@ -42,7 +42,7 @@ grep -q "against the CURRENT tree (nothing was run)" <<<"$out" && grep -q "NOT_R
 out=$(cd "$WS" && python3 -B "$CMD" status); rc=$?
 grep -q "# Factory status" <<<"$out" && grep -q "## Freshness" <<<"$out" && [ $rc -eq 0 ] && ok "status runs factory-status (exit 0)" || no "status rc=$rc"
 out=$(cd "$WS" && python3 -B "$CMD" doctor 2>&1)
-grep -q "## Install" <<<"$out" && grep -q "## Tripwire latches" <<<"$out" && grep -q "persistent state: $TMP/state" <<<"$out" && ok "doctor: install, latches, state paths" || no "doctor: $(tail -c 300 <<<"$out")"
+grep -q "## Install" <<<"$out" && ! grep -qE "## Tripwire|--ack" <<<"$out" && grep -q "persistent state: $TMP/state" <<<"$out" && ok "doctor: install, state paths, no tripwire section" || no "doctor: $(tail -c 300 <<<"$out")"
 [ -z "$(git -C "$S" status --porcelain)" ] && ok "read-only commands left the fixture repo untouched" || no "fixture repo changed"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

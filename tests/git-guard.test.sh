@@ -9,7 +9,7 @@ GUARD="$ROOT/scripts/git-guard.py"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1
 trap 'rm -rf "$TMP"' EXIT
 unset RPG_FACTORY_WORKSPACE   # the developer shell may point it at the real workspace; this test builds its own
-export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"   # tripwire latch/mode state stays inside this test
+export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"   # mode state stays inside this test
 
 WS="$TMP/ws"
 OUT="$TMP/outside"
@@ -219,35 +219,26 @@ git -C "$SERVER" worktree add -q "$TMP/ws/srv-wt" -b feat/server/wt 2>/dev/null
 check allow "$TMP/ws/srv-wt" "git commit -m 'feat(server): x'"
 git -C "$TMP/ws/srv-wt" switch -q -c release-9 2>/dev/null
 check ask "$TMP/ws/srv-wt" "git commit -m x"
-# ---- tripwire latch: guard denies mutating commands, allows read-only
+# ---- 1.0.1: the tripwire latch is gone - state files left by older versions (a session LATCH, open workspace
+# events, a legacy single-file latch) never block anything
 mkdir -p "$TMP/rpg-factory/guardtest" && echo "test violation" > "$TMP/rpg-factory/guardtest/LATCH"
-check deny "$FEATURE" "git commit -m x"
-check deny "$SERVER" "touch newfile"
-check allow "$SERVER" "git status"
-check allow "$SERVER" "ls -la"
-rm -f "$TMP/rpg-factory/guardtest/LATCH"
-check allow "$FEATURE" "git commit -m 'feat(gateway): after ack'"
-# an open workspace event (another session's incident) latches every session; investigation stays allowed
-python3 -B - "$ROOT" "$TMP/ws" <<'PY'
-import sys; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import fstate, os
-fstate.write_json(os.path.join(fstate.latch_dir(sys.argv[2]), "20261014T000000Z-abc123.json"),
-                  {"id": "20261014T000000Z-abc123", "workspace": sys.argv[2], "session": "other", "message": "[server] tag v9 created"})
+python3 -B - "$TMP/state" "$TMP/ws" <<'PY'
+import hashlib, json, os, sys
+key = hashlib.sha1(os.path.abspath(sys.argv[2]).encode()).hexdigest()[:12]
+os.makedirs(os.path.join(sys.argv[1], "latch", key), exist_ok=True)
+for p in (os.path.join(sys.argv[1], "latch", key, "20261014T000000Z-abc123.json"), os.path.join(sys.argv[1], "latch", key + ".json")):
+    json.dump({"workspace": sys.argv[2], "session": "other", "message": "[client] pre-existing user file changed"}, open(p, "w"))
 PY
-check deny  "$SERVER" "touch newfile"
-check deny  "$SERVER" "git stash drop"
-check deny  "$SERVER" "git reflog expire --expire=now --all"
-check allow "$SERVER" "git reflog show develop"
-check allow "$SERVER" "git stash show -p"
-check allow "$SERVER" "git branch --list 'backup/*'"
-check deny  "$SERVER" "git branch -D --list x"
-rm -f "$TMP/state/latch/"*/20261014T000000Z-abc123.json
+check allow "$SERVER" "git fetch --tags"
+check allow "$SERVER" "git fetch origin --tags --prune"
 check allow "$SERVER" "touch newfile"
-# acknowledging is the user's: denied to the agent whether or not anything is latched
-check deny  "$SERVER" "python3 $ROOT/scripts/tripwire.py --ack"
-check deny  "$SERVER" "python3 -B \"$ROOT/scripts/tripwire.py\" --ack 20261014T000000Z-abc123"
-check deny  "$SERVER" "cd /tmp && python3 C:/x/rpg-factory/scripts/tripwire.py --ack"
-check allow "$SERVER" "python3 $ROOT/scripts/tripwire.py --status"
-check allow "$SERVER" "grep -n -- --ack $ROOT/scripts/tripwire.py"
+check allow "$FEATURE" "git commit -m 'feat(gateway): x'"
+check allow "$SERVER" "git switch -c feat/server/after-latch"
+check allow "$SERVER" "python3 build.py"
+check allow "$SERVER" "git status"
+check ask   "$SERVER" "git stash drop"                       # the unrelated git safety rules still apply
+check deny  "$SERVER" "git push origin --tags"
+rm -rf "$TMP/rpg-factory/guardtest/LATCH" "$TMP/state/latch"
 # non-Bash payloads are ignored
 out=$(jq -cn '{tool_name:"Read", tool_input:{file_path:"x"}, cwd:"/"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
 if [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL non-Bash payload produced output: $out"; fi
@@ -291,7 +282,7 @@ mcheck allow "git switch -c feat/x/impl"
 mcheck allow "bash $CTX --mode nonsense"                                   # unknown modes are not recorded
 mcheck allow "touch still-implement.txt"
 # the mode can also be declared through the Skill tool's arguments (hook on Skill)
-skill() { jq -cn --arg a "$1" --arg sk "${2:-rpg-factory:factory-core}" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:$a},cwd:$d,session_id:"modes"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/tripwire.py" --skill; }
+skill() { jq -cn --arg a "$1" --arg sk "${2:-rpg-factory:factory-core}" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:$a},cwd:$d,session_id:"modes"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill; }
 skill "Plan-only task: add an AOI radius knob. No edits."
 mcheck deny  "touch via-skill-plan.txt"
 skill "Validate only, change nothing"
@@ -306,7 +297,7 @@ mcheck allow "touch other-plugin.txt"
 
 # ---- 1.0.0: a tech skill (registry kind "tech") is denied until one of its used_by leads ran in the session
 sk() { local o; o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"how do I run one test"},cwd:$d,session_id:$s}' \
-  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/tripwire.py" --skill); jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${o:-{\}}"; }
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill); jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${o:-{\}}"; }
 skchk() { local got; got=$(sk "$2" "$3"); if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL skill order expected=$1 got=$got skill=$2 session=$3"; fi; }
 skchk allow rpg-factory:factory-core tech-a                 # core skill: never gated
 skchk deny  rpg-factory:go-backend tech-a                   # tech before its lead
@@ -319,14 +310,14 @@ skchk allow rpg-factory:go-backend tech-a                   # after a used_by le
 skchk deny  rpg-factory:go-backend tech-b                   # per session
 skchk allow other-plugin:go-backend tech-b                  # other plugins are not Factory skills
 reason=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:unity-dots"},cwd:$d,session_id:"tech-c"}' \
-  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/tripwire.py" --skill | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
 case "$reason" in *'/scripts/factory-context.sh"'*"rpg-factory:unity-package"*) pass=$((pass + 1));;
   *) fail=$((fail + 1)); echo "FAIL tech-skill denial names no lead / route command: $reason";; esac
 out=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:go-backend"},cwd:$d,session_id:"tech-d"}' \
-  | CLAUDE_PLUGIN_ROOT="$TMP/no-such-plugin" python3 "$ROOT/scripts/tripwire.py" --skill; echo "rc=$?")
+  | CLAUDE_PLUGIN_ROOT="$TMP/no-such-plugin" python3 "$ROOT/scripts/factory_session.py" --skill; echo "rc=$?")
 [ "$out" = "rc=0" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL skill hook without a registry must fail open: $out"; }
 
-# ---- v0.4: GitHub remote mutations (invisible to the tripwire - the guard is the only defence)
+# ---- v0.4: GitHub remote mutations (remote-only: the guard is the only defence)
 check deny "$SERVER" "gh api graphql -f query='mutation{createRef(input:{repositoryId:\"R\",name:\"refs/tags/v9\",oid:\"abc\"}){ref{name}}}'"
 check deny "$SERVER" "gh api graphql -f query='mutation(\$n:String!){createRef(input:{name:\$n}){ref{name}}}' -f n=refs/tags/v9"
 check deny "$SERVER" "gh api graphql -f query='mutation{createRelease(input:{tagName:\"v9\"}){release{id}}}'"

@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+- The execution-mode and tech-skill-order logic moved from `scripts/tripwire.py` to
+  `scripts/factory_session.py` (Skill hook: `factory_session.py --skill`). Behaviour is unchanged.
+
+### Removed
+- **The tripwire and its latch, on purpose.** `tripwire.py` snapshotted every workspace repo around each
+  non-read-only Bash/PowerShell call. Any ref or baseline-file change in that window, whoever made it,
+  raised a STOP and latched the whole workspace for every session until the user ran `tripwire.py --ack`.
+  In practice the Unity Editor saving `ProjectSettings/ProjectSettings.asset` latched it within minutes,
+  during read-only commands, and blocked autonomous work in every session. Removed with it:
+  - the SessionStart baseline scan, the `--pre` PreToolUse hook and the PostToolUse /
+    PostToolUseFailure `--post` hooks;
+  - the latch deny in `git-guard.py` (`latch_hits`) and `file-guard.py`, and the guard rule that denied
+    `tripwire.py --ack` to the agent (`ack_hits`);
+  - the file guard's "already dirty when the session started" ask, which read the tripwire baseline;
+  - `fstate` latch, audit and activity paths and `ack_command()`; the doctor "Tripwire latches" section;
+  - the STOP, ack and recovery instructions in `factory-core`, `git-safety.md`, `report.md` and the
+    doctor command;
+  - `tests/tripwire.test.sh`.
+
+  State files left by older versions (`latch/`, `audit/`, `activity/` under the persistent state root, a
+  session `LATCH`) are no longer read and can be deleted. `tests/session-state.test.sh` (new) checks that
+  stale latch files block nothing (`git fetch --tags`, commits, writes), that no hook or script reads them,
+  and keeps the state-path checks from the old suite. The git guard (tag deny, destructive-git asks, human
+  gates), the file guard's other rules and the execution modes are unchanged.
+
 ## [1.0.0] - 2026-10-20
 
 First stable release. Supported environments: Linux, WSL and Windows (Git for Windows bash with native

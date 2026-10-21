@@ -4,7 +4,7 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-FG="$ROOT/scripts/file-guard.py"; TW="$ROOT/scripts/tripwire.py"
+FG="$ROOT/scripts/file-guard.py"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws" CLAUDE_PLUGIN_ROOT="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
@@ -16,9 +16,8 @@ echo "Packages/com.cuvara.*/" > "$C/.gitignore"; gc "$C" add .gitignore; gc "$C"
 git init -q -b main "$C/Packages/com.cuvara.dots"; echo x > "$C/Packages/com.cuvara.dots/a.cs"; gc "$C/Packages/com.cuvara.dots" add -A; gc "$C/Packages/com.cuvara.dots" commit -qm c
 SUB="$TMP/gdk"; git init -q -b main "$SUB"; echo s > "$SUB/s.cs"; gc "$SUB" add -A; gc "$SUB" commit -qm s
 gc "$C" -c protocol.file.allow=always submodule add -q "$SUB" Packages/com.gdk.core >/dev/null 2>&1; gc "$C" commit -qm sub
-echo "user wip" >> "$C/Assets/Scripts/Net/Client.cs"                 # the user's pre-existing change (baseline)
+echo "user wip" >> "$C/Assets/Scripts/Net/Client.cs"                 # a pre-existing user change
 mkdir -p "$C/Assets/Samples/Mine"; echo u > "$C/Assets/Samples/Mine/u.cs"  # untracked user dir
-jq -cn --arg d "$C" '{cwd:$d,session_id:"fg"}' | python3 -B "$TW" --session-start >/dev/null
 pass=0; fail=0
 dec() { # tool path [session]
   local o; o=$(jq -cn --arg t "$1" --arg p "$2" --arg s "${3:-fg}" --arg d "$C" '{tool_name:$t,tool_input:{file_path:$p,content:"x"},cwd:$d,session_id:$s}' | python3 -B "$FG")
@@ -26,8 +25,8 @@ dec() { # tool path [session]
 t() { local g; g=$(dec "$2" "$3" "${4:-fg}"); if [ "$g" = "$1" ]; then pass=$((pass + 1)); echo "PASS  $1  $2 ${3#$TMP/}"; else fail=$((fail + 1)); echo "FAIL  expected $1 got $g  $2 ${3#$TMP/}"; fi; }
 t allow Write "$C/Assets/Scripts/Net/NewFile.cs"
 t allow Edit  "$S/backend/deploy/compose.yml"
-t ask   Edit  "$C/Assets/Scripts/Net/Client.cs"                         # baseline (user's modified file)
-t ask   Write "$C/Assets/Samples/Mine/u.cs"                             # inside an untracked user dir + generated Assets/Samples/
+t allow Edit  "$C/Assets/Scripts/Net/Client.cs"                         # pre-existing change: no session baseline any more
+t ask   Write "$C/Assets/Samples/Mine/u.cs"                             # generated Assets/Samples/
 t ask   Edit  "$C/Packages/com.cuvara.dots/a.cs"                        # embedded clone
 t ask   Write "$C/Packages/com.gdk.core/s.cs"                           # submodule content
 t ask   Edit  "$S/backend/shared/proto/gen/wire.pb.go"                  # generated (proto bindings)
@@ -42,7 +41,7 @@ t allow Read  "$S/backend/TEAM.md"
 t allow Read  "$C/Packages/com.cuvara.dots/a.cs"                         # reading user state is fine
 t allow Write "$TMP/outside/file.txt"                                     # outside the workspace
 t allow Edit  "Assets/Scripts/Net/Other.cs"                               # relative path resolved against cwd
-t ask   Edit  "Assets/Scripts/Net/Client.cs"
+t ask   Edit  "Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"      # relative generated path
 # modes: analyze/plan/review/validate forbid file changes (declared through the shell guard, same session)
 declare_mode() { jq -cn --arg c "bash $ROOT/scripts/factory-context.sh --mode $1" --arg d "$C" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"fg"}' | python3 -B "$ROOT/scripts/git-guard.py" >/dev/null; }
 declare_mode plan;      t deny  Write "$C/Assets/Scripts/Net/NewFile.cs"; t allow Read "$C/Assets/Scripts/Net/Client.cs"
@@ -50,32 +49,17 @@ declare_mode validate;  t deny  Edit  "$S/backend/deploy/compose.yml"
 declare_mode review;    t deny  MultiEdit "$C/Assets/Scripts/Net/NewFile.cs"
 declare_mode implement; t allow Write "$C/Assets/Scripts/Net/NewFile.cs"
 
-# latch: an unresolved STOP (even from an earlier session) denies every write
-mkdir -p "$TMP/state/latch"
-python3 -B - "$ROOT" "$WS" <<'PY'
-import json, os, sys; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import fstate
-json.dump({"workspace": sys.argv[2], "session": "old", "at": "t", "message": "[server] tag v9 created"},
-          open(os.path.join(fstate.persistent(), "latch", fstate.workspace_key(sys.argv[2]) + ".json"), "w"))
-PY
-t deny  Write "$C/Assets/Scripts/Net/NewFile.cs" other-session
-t allow Read  "$C/Assets/Scripts/Net/Client.cs" other-session
-python3 -B "$TW" --ack >/dev/null
-t allow Write "$C/Assets/Scripts/Net/NewFile.cs" other-session
-# an open event (any session's incident) denies writes, and the reason carries the working ack command
-python3 -B - "$ROOT" "$WS" <<'PY'
-import sys, os; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import fstate
-fstate.write_json(os.path.join(fstate.latch_dir(sys.argv[2]), "20261014T000000Z-fg0001.json"),
-                  {"id": "20261014T000000Z-fg0001", "workspace": sys.argv[2], "session": "s-other", "message": "[server] stash created outside git"})
-PY
-t deny  Write "$C/Assets/Scripts/Net/NewFile.cs" fresh-session
-t deny  Edit  "$S/backend/deploy/compose.yml" fresh-session
-t allow Read  "$C/Assets/Scripts/Net/Client.cs" fresh-session
-why=$(jq -cn --arg p "$C/Assets/Scripts/Net/NewFile.cs" --arg d "$C" '{tool_name:"Write",tool_input:{file_path:$p},cwd:$d,session_id:"fresh-session"}' \
-  | python3 -B "$FG" | jq -r '.hookSpecificOutput.permissionDecisionReason')
-case "$why" in *"event 20261014T000000Z-fg0001"*"! python3 \"$ROOT/scripts/tripwire.py\" --ack"*) pass=$((pass + 1)); echo "PASS  deny names the event and the quoted ack command";;
-  *) fail=$((fail + 1)); echo "FAIL  deny reason: $why";; esac
-python3 -B "$TW" --ack >/dev/null
-t allow Write "$C/Assets/Scripts/Net/NewFile.cs" fresh-session
+# 1.0.1: the tripwire latch is gone - stale latch files from older versions never deny a write
+python3 -B - "$TMP/state" "$WS" <<'PY2'
+import hashlib, json, os, sys
+key = hashlib.sha1(os.path.abspath(sys.argv[2]).encode()).hexdigest()[:12]
+os.makedirs(os.path.join(sys.argv[1], "latch", key), exist_ok=True)
+for p in (os.path.join(sys.argv[1], "latch", key, "20261014T000000Z-fg0001.json"), os.path.join(sys.argv[1], "latch", key + ".json")):
+    json.dump({"workspace": sys.argv[2], "session": "old", "message": "[client] pre-existing user file changed"}, open(p, "w"))
+PY2
+mkdir -p "$TMP/rpg-factory/stale-session" && echo "old STOP" > "$TMP/rpg-factory/stale-session/LATCH"
+t allow Write "$C/Assets/Scripts/Net/NewFile.cs" stale-session
+t allow Edit  "$S/backend/deploy/compose.yml" fresh-session
 out=$(echo 'garbage' | python3 -B "$FG"; echo "rc=$?"); [ "$out" = "rc=0" ] && { pass=$((pass + 1)); echo "PASS  malformed input -> no opinion"; } || { fail=$((fail + 1)); echo "FAIL  malformed: $out"; }
 out=$(jq -cn --arg p "$C/Packages/com.cuvara.dots/a.cs" '{tool_name:"Edit",tool_input:{file_path:$p},cwd:"/"}' | RPG_FACTORY_GUARD=off python3 -B "$FG")
 [ -z "$out" ] && { pass=$((pass + 1)); echo "PASS  RPG_FACTORY_GUARD=off disables it"; } || { fail=$((fail + 1)); echo "FAIL  guard off: $out"; }

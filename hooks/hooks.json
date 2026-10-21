@@ -1,5 +1,5 @@
 {
-  "description": "rpg-factory safety: git guard + tripwire (Bash and PowerShell tools) and a stale-install check at session start.",
+  "description": "rpg-factory safety: git guard (Bash and PowerShell tools), file guard, skill order and a stale-install check at session start.",
   "hooks": {
     "SessionStart": [
       {
@@ -8,11 +8,6 @@
             "type": "command",
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/install-status.py\" --session",
             "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --session-start",
-            "timeout": 60
           }
         ]
       }
@@ -24,11 +19,6 @@
           {
             "type": "command",
             "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/git-guard.py\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --pre",
             "timeout": 10
           }
         ]
@@ -48,31 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --skill",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --post",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/tripwire.py\" --post",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/factory_session.py\" --skill",
             "timeout": 10
           }
         ]

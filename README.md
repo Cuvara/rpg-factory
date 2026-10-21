@@ -27,7 +27,7 @@ automated state of any release is **READY_TO_TAG**.
 | `/rpg-factory:status [--remote]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness | no |
 | `/rpg-factory:route <repo> <path>... [--lead <skill>]` | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
 | `/rpg-factory:check <repo> [<path>...] [--status]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
-| `/rpg-factory:doctor` | install state (what this session loads), tripwire latches, registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
+| `/rpg-factory:doctor` | install state (what this session loads), registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
 
 Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
 works too).
@@ -80,10 +80,9 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
          run-checks.py (fast / extended / external, graded states + evidence JSON)
                          → verify-a-result → /code-review → report
 
- hooks: SessionStart  install-status.py (stale install warning) · tripwire.py baseline
-        PreToolUse    git-guard.py + tripwire.py fingerprint (Bash, PowerShell) · file-guard.py
-                      (Write/Edit/MultiEdit/NotebookEdit/Read) · tripwire.py --skill (records the mode; a tech skill waits for its lead)
-        PostToolUse   tripwire.py (STOP + latch on unexpected git state change)
+ hooks: SessionStart  install-status.py (stale install warning)
+        PreToolUse    git-guard.py (Bash, PowerShell) · file-guard.py (Write/Edit/MultiEdit/NotebookEdit/Read)
+                      · factory_session.py --skill (records the mode; a tech skill waits for its lead)
  dev tools: registry dev_tools → lib/devtools.py → snapshot "Tools for this change" + doctor
 ```
 
@@ -203,15 +202,15 @@ Read-only check scripts against the product repos:
 
 ## Resuming interrupted work
 
-There is no workflow database: state is derived from git each time (plus two small files outside the
-repos: the tripwire latch and the check evidence). `factory-status.py` answers "what is left" after a
+There is no workflow database: state is derived from git each time (plus the check evidence, kept
+outside the repos). `factory-status.py` answers "what is left" after a
 crash, a failed leg or a new session - including uncommitted work and which validation is STALE - e.g. `server bindings ✓ · Netcode copy ✓ ·
 Netcode release ✗ (READY_TO_TAG netcode v0.46.0) · client pin ✗`. Cross-repo tasks use one branch topic
 in every repo (`feat/wire/party` in server, Netcode and client) so the legs are linked.
 
 ## Git safety and human gates
 
-Four layers, all inside the workspace (plus `gh` commands naming a workspace repo, wherever they run):
+Three layers, all inside the workspace (plus `gh` commands naming a workspace repo, wherever they run):
 
 1. **Rules** in `skills/factory-core/references/git-safety.md` (baseline preservation, explicit
    staging, `<type>/<area>/<topic>` branches, never tag).
@@ -237,24 +236,13 @@ Four layers, all inside the workspace (plus `gh` commands naming a workspace rep
      `.env`/`kubeconfig.local`, `toggle-packages.sh`, Docker stack lifecycle, backups, load runs,
      Unity batch builds, `schema_migrations` writes).
 3. **File guard** - `scripts/file-guard.py`, PreToolUse on `Write|Edit|MultiEdit|NotebookEdit|Read`:
-   writes into embedded clones, submodule content, registry generated paths, the user's baseline files
-   or secrets ask; secret reads ask; writes while latched or in a read-only mode are denied.
-4. **Tripwire** - `scripts/tripwire.py`. SessionStart records the user's baseline (dirty files,
-   submodule pointers, samples of dirty files inside submodules and embedded clones). Around every
-   Bash/PowerShell call it compares branch/tag/remote/stash/HEAD fingerprints (embedded clones
-   included); a change the command did not visibly ask for (a tag from a script, a push from Python,
-   a reset of a user file) returns **"STOP - rpg-factory tripwire"** and latches the **workspace**:
-   writes and state-changing commands are denied - also in later sessions after a crash - until the
-   user runs `! python3 "<plugin root>/scripts/tripwire.py" --ack` (denied to the agent). Each incident is
-   an event (command, session, ref values before/after, recovery hints); `--status` lists them, `--ack
-   [<event-id>]` archives them and reports CLEAR or still LATCHED. Snapshots are per tool call, so a
-   denied command or another session's visible git does not get blamed on the next command.
-   `/rpg-factory:doctor` shows it.
-
+   writes into embedded clones, submodule content, registry generated paths or secrets ask; secret
+   reads ask; writes in a read-only mode are denied.
 Where Factory keeps state (`scripts/lib/fstate.py`, always absolute, never inside a repo): per-session
-scratch under `$TMPDIR` if it is a usable absolute directory, else `/tmp`; tripwire events, the stash
-audit, cross-session git activity and check evidence under `$XDG_STATE_HOME/rpg-factory` (default
-`~/.local/state/rpg-factory`).
+scratch (the declared mode, the skills run) under `$TMPDIR` if it is a usable absolute directory, else
+`/tmp`; check evidence under `$XDG_STATE_HOME/rpg-factory` (default `~/.local/state/rpg-factory`).
+Releases up to 1.0.0 also kept a tripwire latch there (`latch/`, `audit/`, `activity/`); nothing reads
+those directories any more, and they can be deleted.
 
 Workspace model: the five **workspace repos** (registry), **git submodules** inside them (`com.gdk.*`,
 `unity-build-workflows`: pointers are user state), **embedded clones** (gitignored
@@ -298,7 +286,7 @@ claude plugin uninstall rpg-factory@rpg-factory && claude plugin install rpg-fac
 ```
 
 **Hooks bind when a Claude Code session starts.** A session that was already running when rpg-factory was
-installed or enabled has *no* Factory hooks - no guard, no file guard, no tripwire, no modes - and a
+installed or enabled has *no* Factory hooks - no guard, no file guard, no modes - and a
 compaction (`/compact`, auto-compact) does not load them either. Start a new session (resuming with
 `claude --resume` starts a new process and does load them). Check: in a protected session
 `/rpg-factory:doctor` exists and reports the runtime; if the command is unknown, the plugin is not loaded in
@@ -337,7 +325,6 @@ Troubleshooting:
 
 | Symptom | Cause and fix |
 |---|---|
-| `python3: can't open file 'C:\...rpg-factoryscriptstripwire.py'` when acknowledging a STOP | bash dropped the backslashes of a hand-typed path. Copy the ack command exactly as the STOP prints it (quoted, forward slashes). |
 | The snapshot shows `python3 MISSING` or a tool as MISSING although it runs in bash | a plugin older than this release looked for `python3` without `.exe`; update the plugin. |
 | `UnicodeEncodeError: 'charmap' codec` or `?` in Factory output | an old copy of the plugin (before UTF-8 output); update. To work around it: `PYTHONUTF8=1`. |
 | `git-guard.test.sh` passes everything as `allow` | a test from before this release with `RPG_FACTORY_WORKSPACE` set in the shell; the suite now unsets it. |
@@ -374,7 +361,7 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
   order, no duplicate module paths, one fallback per repo).
 - Skills follow `skills/factory-core/references/skill-contract.md` and are linted by
   `tests/skills-lint.sh` (contract, plugin boundaries, no rules copied from the registry).
-- `tests/run-all.sh` runs every local suite: guard bypass matrix, tripwire, worktree, check runner,
+- `tests/run-all.sh` runs every local suite: guard bypass matrix, session state, worktree, check runner,
   factory-status fixtures, install-status, facts, routing properties and history replay, the live
   check scripts, Netcode headless tests, and `claude plugin validate --strict`. `--release` also
   requires the installed plugin to be CURRENT. It must report 0 failed.
@@ -388,11 +375,9 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
 - **Local protoc is not the CI pin** (registry fact `protoc-ci-pin`). `generate.sh` output would drift locally; leave regeneration to CI, or install the pinned version.
 - **No local cluster tooling.** kubectl, helm, promtool and kubeconform are not installed. Cluster checks are external and human-gated.
 - **Plugin evals with Bash are blocked on this machine** (`claude plugin eval` refuses Bash because of a symlink in `~/.docker`). Behaviour is verified with deterministic tests and headless dogfood sessions instead.
-- **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is caught by the tripwire after the fact (detection, not prevention). Remote-only GitHub changes are only controlled by the guard (the tripwire cannot see them). Another agent runtime (e.g. Codex) is outside all layers.
+- **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is not seen (the git-safety rules are the control there). Remote-only GitHub changes are only controlled by the guard. Another agent runtime (e.g. Codex) is outside all layers.
 - **MCP tools are not inspected.** Unity-MCP asset/scene edits are controlled by the `unity-asset-edit` human gate (policy), not by a hook.
 - **Evidence identity** covers the check's directory plus the paths of its module's same-repo dependencies (registry `depends_on`); untracked files count by name, size and mtime (not contents). Changes in *another* repo are not part of it (a package's new tag reaches a consumer through its pin file, which is in the consumer repo).
-- **Hook cost** (measured 2026-09-30 on /mnt/c, same harness as v0.3.0): SessionStart baseline ~12 s once per session (all repos and embedded clones, scanned in parallel; v0.3.0 ~14 s); guard + tripwire per read-only command ~0.19 s (v0.3.0 ~0.18 s), per state-changing command ~0.8 s (v0.3.0 ~0.9 s); file guard per Write/Edit ~0.09 s. On native Windows
-  (2026-10-20, git-bash, Python 3.14, mean of 5): guard + tripwire `--pre` ~0.37 s per read-only command and
-  ~0.44 s per state-changing one, the same as 0.5.0 (~0.35 s / ~0.77 s in that run); Python start-up alone is ~0.1 s.
+- **Hook cost:** one guard process per Bash/PowerShell call and one file-guard process per file tool call; no SessionStart repository scan and no post-command comparison (both left with the tripwire in 1.0.1). Python start-up alone is ~0.1 s on native Windows.
 - **Pre-existing project issues** are recorded in `registry.json` `known_issues` and printed for the touched repos. They include stale docs, package CI SGL pins lagging the client, and the embedded package clones.
 

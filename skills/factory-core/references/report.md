@@ -67,7 +67,6 @@ Rules:
 
 - **Never** write "tests pass", "looks good", or "all green" without the counts in the table.
 - If a fast check is not PASS, the task is not done. Say so in the Summary.
-- Include any tripwire STOP verbatim, and never claim a task done after one.
 - Report pre-existing failures separately from failures your change introduced. Prove
   which is which by running the same check on the base commit in a separate worktree
   (server). Never stash the user's baseline to do it.

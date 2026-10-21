@@ -8,11 +8,12 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   commands, or rules in `SKILL.md` or the references - put them in the registry and read them.
 - Keep `factory-context.sh`, `factory-status.py` and `scripts/checks/` read-only: no fetch (except
   opt-in `--remote` ls-remote), no writes into repos. State is derived from git; the only Factory
-  files are the latch and check evidence, resolved through `scripts/lib/fstate.py` (never `$TMPDIR`
+  files are per-session mode state and check evidence, resolved through `scripts/lib/fstate.py` (never `$TMPDIR`
   directly, never relative). Tests set `RPG_FACTORY_STATE_DIR` and `TMPDIR` to a temp dir.
 - `run-checks.py` never runs a check in place when it would write into a product repo; pollution is FAIL.
-- Hooks must stay fast (guard + tripwire per command, measured: ~0.17 s read-only, ~0.9 s mutating) and must
-  never crash a session. The tripwire only detects; it never repairs.
+- Hooks must stay fast (one guard process per command, no repository scan) and must never crash a session.
+  No hook snapshots repository state, latches a session or needs an acknowledgement (the tripwire was
+  removed on purpose; do not bring back a post-command lock under another name).
 - The git guard never approves and never crashes a session (errors mean "no opinion"); it denies only tag
   creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`). Every new bypass found gets a
   case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
@@ -43,7 +44,7 @@ tests/run-all.sh --release          # + installed plugin CURRENT, source committ
 
 # single suites (each standalone; sets its own temp TMPDIR / RPG_FACTORY_STATE_DIR)
 tests/git-guard.test.sh
-env -u TMPDIR tests/tripwire.test.sh       # run-all runs tripwire/file-guard/commands with TMPDIR unset
+env -u TMPDIR tests/session-state.test.sh  # run-all runs session-state/file-guard/commands with TMPDIR unset
 tests/routing.test.sh [--no-history]       # task scenarios (+ real commits replayed read-only)
 python3 -B tests/routing-properties.test.py
 tests/skills-lint.sh                       # skill contract, tech sections, ## Tools vs dev_tools
@@ -74,16 +75,12 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 - **Derived state:** `factory-status.py` covers rollout stage, READY_TO_TAG, pin drift, uncommitted work and
   STALE evidence. Nothing is stored; it re-derives everything from git each time.
 - **Hooks** (`hooks/hooks.json`):
-  - SessionStart: `install-status.py --session` and `tripwire.py --session-start` (baseline).
-  - PreToolUse Bash|PowerShell: `git-guard.py` and `tripwire.py --pre`.
+  - SessionStart: `install-status.py --session`.
+  - PreToolUse Bash|PowerShell: `git-guard.py`.
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
-  - PreToolUse Skill: `tripwire.py --skill`, which records the execution mode and denies a `kind: tech` skill until one of its
-    `used_by` leads ran in the session.
-  - PostToolUse Bash|PowerShell: `tripwire.py --post` (STOP plus latch on an unexpected git state change).
-  - Tripwire lifecycle: snapshots are per tool call (`pre-<tool_use_id>.json`, never shared or reused); every
-    incident is an event file under `fstate.latch_dir()` (never overwritten, archived on ack); the latch is
-    global per workspace on purpose. `--ack` is the user's only (the guard always denies it to the agent),
-    reports CLEAR / still LATCHED with exit 0 / 1, and every message prints `fstate.ack_command()`.
+  - PreToolUse Skill: `factory_session.py --skill`, which records the execution mode and denies a `kind: tech` skill
+    until one of its `used_by` leads ran in the session. Both guards import `factory_session` for the mode.
+  - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
   covered by `tests/commands.test.sh`.
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract) routes to
