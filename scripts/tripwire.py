@@ -255,13 +255,33 @@ def mode_from_text(text):
 
 def skill_hook(payload):
     """PreToolUse(Skill): when a Factory skill is invoked with an explicit mode in its arguments ("plan only",
-    "mode: validate"), record it - so the mode holds even if the model never runs the Route command."""
+    "mode: validate"), record it - so the mode holds even if the model never runs the Route command.
+    Also keeps tech skills (registry kind "tech") behind their leads: a tech skill is denied until one of its
+    `used_by` skills ran in this session, so its "how it works" never replaces routing, rules and gates."""
     ti = payload.get("tool_input") or {}
-    if not str(ti.get("skill", "")).startswith("rpg-factory:"):
+    name = str(ti.get("skill", ""))
+    if not name.startswith("rpg-factory:"):
         return 0
     m = mode_from_text(ti.get("args"))
     if m in MODES:
         open(os.path.join(state_dir(payload), "MODE"), "w", encoding="utf-8").write(m)
+    short = name.split(":", 1)[1]
+    seen_file = os.path.join(state_dir(payload), "SKILLS")
+    seen = set((read(seen_file) or "").split())
+    spec = ((load_registry() or {}).get("skills") or {}).get(short) or {}
+    leads = [s for s in spec.get("used_by") or [] if isinstance(s, str)]
+    if spec.get("kind") == "tech" and leads and not seen.intersection(leads):
+        root = PLUGIN_ROOT.replace("\\", "/").rstrip("/")
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"rpg-factory: `{short}` is a supporting tech skill and never runs first. Route the task "
+                f"(`bash \"{root}/scripts/factory-context.sh\" --mode <mode> --repo <key> --paths <files>`), invoke the "
+                f"lead it prints - for {short} one of: " + ", ".join(f"rpg-factory:{s}" for s in leads)
+                + f" - and then rpg-factory:{short}.")}}))
+        return 0
+    with open(seen_file, "a", encoding="utf-8") as fh:
+        fh.write(short + "\n")
     return 0
 
 

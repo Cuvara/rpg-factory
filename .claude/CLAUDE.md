@@ -77,7 +77,8 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   - SessionStart: `install-status.py --session` and `tripwire.py --session-start` (baseline).
   - PreToolUse Bash|PowerShell: `git-guard.py` and `tripwire.py --pre`.
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
-  - PreToolUse Skill: `tripwire.py --skill`, which records the execution mode.
+  - PreToolUse Skill: `tripwire.py --skill`, which records the execution mode and denies a `kind: tech` skill until one of its
+    `used_by` leads ran in the session.
   - PostToolUse Bash|PowerShell: `tripwire.py --post` (STOP plus latch on an unexpected git state change).
   - Tripwire lifecycle: snapshots are per tool call (`pre-<tool_use_id>.json`, never shared or reused); every
     incident is an event file under `fstate.latch_dir()` (never overwritten, archived on ack); the latch is

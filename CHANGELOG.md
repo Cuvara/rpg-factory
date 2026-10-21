@@ -57,6 +57,14 @@ still read and migrated on `--ack`.
   with session, tool call id, command and the stash SHA before and after. It does not latch.
 
 ### Changed
+- **A tech skill waits for its lead (Skill hook).** The release-gate dogfood `tech-go` failed 4/4 runs: asked
+  how to run one gateway test, the model invoked `go-backend` right after `factory-core`, before routing and
+  before `server-services`, so the answer skipped the lead's rules and gates. `tripwire.py --skill` now records
+  each Factory skill a session runs and denies a `kind: tech` skill until one of its registry `used_by` skills
+  ran, with a message naming the route command and those leads; it fails open without a registry. The
+  `go-backend` description now has the same "how it works / not for scope" form as the other tech skills.
+  `tests/dogfood.sh` counts only Skill calls that ran (a denied call is not an invocation); 12 cases in
+  `git-guard.test.sh`.
 - **`routing.tech` lists a tech skill only when the snapshot's repo is in its `repos`.** A measure run
   on the server no longer suggests `unity-dots`/`netcode-client`, and a client `Tools/` change no longer
   suggests `dotnet-gameserver` (`scripts/lib/resolve.jq`, skill-contract "Tech skills").

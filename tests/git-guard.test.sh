@@ -304,6 +304,28 @@ mcheck allow "touch via-skill-implement.txt"
 skill "plan only" "other-plugin:skill"                                    # other plugins' skills never set a Factory mode
 mcheck allow "touch other-plugin.txt"
 
+# ---- 1.0.0: a tech skill (registry kind "tech") is denied until one of its used_by leads ran in the session
+sk() { local o; o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"how do I run one test"},cwd:$d,session_id:$s}' \
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/tripwire.py" --skill); jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${o:-{\}}"; }
+skchk() { local got; got=$(sk "$2" "$3"); if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL skill order expected=$1 got=$got skill=$2 session=$3"; fi; }
+skchk allow rpg-factory:factory-core tech-a                 # core skill: never gated
+skchk deny  rpg-factory:go-backend tech-a                   # tech before its lead
+skchk deny  rpg-factory:go-backend tech-a                   # still denied: a denied call does not count as run
+skchk allow rpg-factory:server-realtime tech-a              # a lead of another tech skill does not unlock go-backend
+skchk deny  rpg-factory:go-backend tech-a
+skchk allow rpg-factory:dotnet-gameserver tech-a            # ...but it unlocks its own tech skill
+skchk allow rpg-factory:server-services tech-a
+skchk allow rpg-factory:go-backend tech-a                   # after a used_by lead: allowed
+skchk deny  rpg-factory:go-backend tech-b                   # per session
+skchk allow other-plugin:go-backend tech-b                  # other plugins are not Factory skills
+reason=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:unity-dots"},cwd:$d,session_id:"tech-c"}' \
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/tripwire.py" --skill | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+case "$reason" in *'/scripts/factory-context.sh"'*"rpg-factory:unity-package"*) pass=$((pass + 1));;
+  *) fail=$((fail + 1)); echo "FAIL tech-skill denial names no lead / route command: $reason";; esac
+out=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:go-backend"},cwd:$d,session_id:"tech-d"}' \
+  | CLAUDE_PLUGIN_ROOT="$TMP/no-such-plugin" python3 "$ROOT/scripts/tripwire.py" --skill; echo "rc=$?")
+[ "$out" = "rc=0" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL skill hook without a registry must fail open: $out"; }
+
 # ---- v0.4: GitHub remote mutations (invisible to the tripwire - the guard is the only defence)
 check deny "$SERVER" "gh api graphql -f query='mutation{createRef(input:{repositoryId:\"R\",name:\"refs/tags/v9\",oid:\"abc\"}){ref{name}}}'"
 check deny "$SERVER" "gh api graphql -f query='mutation(\$n:String!){createRef(input:{name:\$n}){ref{name}}}' -f n=refs/tags/v9"
