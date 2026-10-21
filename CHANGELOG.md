@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-21
+
+Fix: read-only inspection of a gated script (`sed -n`, `cat`, `grep`, `head`) no longer asks for a human
+gate. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin update
+rpg-factory@rpg-factory`) and start a new session. No command-line changes; the registry gains the optional
+`human_gates[].read_only_exempt` field.
+
 ### Fixed
 - **Human gates no longer ask for read-only inspection of a gated script.** The gate regexes match script
   names anywhere in a command, so `sed -n 300,340p Tools/verify-multiclient.sh` asked under `multi-client`
