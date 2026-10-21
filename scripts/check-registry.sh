@@ -13,6 +13,18 @@ structure_only=false
 [ "${1:-}" = "--structure-only" ] && structure_only=true
 
 if ! jq empty "$REGISTRY" 2>/dev/null; then echo "FAIL: $REGISTRY is not valid JSON"; exit 1; fi
+# a duplicate key is valid JSON, and jq and Python both keep the last one silently
+dups=$(python3 -B -c '
+import json, sys
+def hook(pairs):
+    seen = set()
+    for k, _ in pairs:
+        if k in seen:
+            print(k)
+        seen.add(k)
+    return dict(pairs)
+json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=hook)' "$REGISTRY" 2>&1)
+if [ -n "$dups" ]; then echo "FAIL: $REGISTRY has duplicate keys (the last one wins silently): $(sort -u <<<"$dups" | tr '\n' ' ')"; exit 1; fi
 
 # ---- structure (jq emits one line per problem)
 problems=$(jq -r '

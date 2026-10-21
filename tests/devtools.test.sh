@@ -144,6 +144,10 @@ reject "optional dev tool without fallback" "every tool needs a fallback" '(.dev
 reject "required dev tool without fallback" "dev_tools dotnet: every tool needs a fallback" '(.dev_tools[] | select(.id == "dotnet")) |= del(.fallback)'
 reject "dev tool without a purpose" "dev_tools go: missing field provides" '(.dev_tools[] | select(.id == "go")) |= del(.provides)'
 reject "duplicate dev tool id" "duplicate dev_tools id" '.dev_tools += [.dev_tools[0]]'
+sed '0,/"order": 30/s//"order": 30, "order": 31/' "$ROOT/registry.json" > "$PR/registry.json"
+o=$(CLAUDE_PLUGIN_ROOT="$PR" bash "$ROOT/scripts/check-registry.sh" --structure-only 2>&1)
+[ $? -ne 0 ] && grep -q "duplicate keys (the last one wins silently): order" <<<"$o" && ok "check-registry rejects: a duplicate JSON key" \
+  || no "check-registry accepted a duplicate key: $(head -c 200 <<<"$o")"
 reject "cite_roots naming an unknown repo" 'skill unity-dots: cite_roots "x:" -> unknown repo in nope:abc' '.skills["unity-dots"].cite_roots["x:"] = "nope:abc"'
 reject "tech skill without used_by" "used_by (repo/cross-repo skills) missing" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999}'
 reject "tech skill used_by a core skill" "used_by factory-core is not a repo/cross-repo skill" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999, used_by: ["factory-core"]}'

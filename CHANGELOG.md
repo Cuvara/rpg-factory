@@ -19,6 +19,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `run-all.sh` the fixture suite `tests/skill-citations.test.sh` and the live check against the workspace.
   The rule is in `skill-contract.md` ("Line citations are checked against the code").
 
+- `check-registry.sh` rejects duplicate keys in `registry.json`: they are valid JSON and jq and Python
+  silently keep the last one (a duplicated `cite_roots` hid that another skill had none).
+
 ### Changed
 - `skill-contract.md` "New skill" names every required registry field (`order`, `used_by`, `cite_roots`).
 
