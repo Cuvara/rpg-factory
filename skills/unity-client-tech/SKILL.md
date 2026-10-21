@@ -35,30 +35,32 @@ calling skill keeps validation and reporting.
 
 - **Systems are installed, not discovered.** Client and package systems carry
   `[DisableAutoCreation]` + `[UpdateInGroup]` and a static `*Bootstrap` adds them to an existing
-  group: `Assets/Scripts/UI/Hud/Ecs/HudEcsBootstrap.cs:30-47` (client),
+  group: `HudEcsBootstrap.Install` in `Assets/Scripts/UI/Hud/Ecs/HudEcsBootstrap.cs:30-47` (client),
+  `DotsSimulationBootstrap.InstallSimulationSystems` in
   `UnityDots/Runtime/Simulation/DotsSimulationBootstrap.cs:42` (package; same pattern in
   `DotsViewBootstrap`, `DotsNetcodeBootstrap`, `DotsPredictionBootstrap`). Install is idempotent
   (`GetOrCreateSystem` + `AddSystemToUpdateList` refuse duplicates); `Uninstall` destroys
   (`HudEcsBootstrap.cs:16-25,50-68`). Root-scoped systems (dots views) are never uninstalled by a
-  scene (`Assets/Scripts/DI/Dots/DotsWorldBridge.cs:40`).
+  scene: its teardown runs only `DotsModules.UninstallScope(Session)`
+  (`Assets/Scripts/DI/Dots/DotsWorldBridge.cs:42-46`).
 - **One world:** `World.DefaultGameObjectInjectionWorld`. Scene components reach it in `Update`
   and install once; teardown is `OnDestroy` in reverse install order
-  (`HudWorldBridge.cs:51-105`, `DotsWorldBridge.cs:134-232,381-400`).
+  (`HudWorldBridge.cs:51-105`; `DotsWorldBridge.Update` / `OnDestroy`: `DotsWorldBridge.cs:194-209,521-565`).
 - **ECS -> UI goes through a bridge system.** `HudStateSystem` (unmanaged `ISystem`, Simulation
   group) writes a singleton only when it changed; `HudBridgeSystem` (managed, Presentation group)
-  derives `UIToolkit/Runtime/Ecs/EcsViewModelBridge.cs:62` (a `SystemBase`) and pushes a struct
-  snapshot to a presenter. `VisualElement` is never touched from `ISystem`, jobs, Burst or a worker
-  thread (`docs/UI-ARCHITECTURE.md:61-72`).
+  derives the package's `EcsViewModelBridge` (a `SystemBase`, `UIToolkit/Runtime/Ecs/EcsViewModelBridge.cs:62`)
+  and pushes a struct snapshot to a presenter. `VisualElement` is never touched from `ISystem`, jobs,
+  Burst or a worker thread (`docs/UI-ARCHITECTURE.md` "Layers, and what each may know").
 - **Async is two types.** Nakama, session driver and UI asset loading use UniTask
   (`MainSessionDriver.cs`, `Nakama/NakamaSessionService.cs`, `Nakama/Social/PartyService.cs`,
   `UI/AddressableAssetLoader.cs`); the DOTS view seam is `System.Threading.Tasks.Task` because
   the package interface is (`UnityDots/Runtime/Provisioning/IViewAssetProvider.cs:44`,
-  `Assets/Scripts/DI/Dots/LeasedViewAssetProvider.cs:115,146`). `NDC.Scripts.Session` has zero
+  `LeasedViewAssetProvider.PrewarmAsync` / `AcquireAsync`: `Assets/Scripts/DI/Dots/LeasedViewAssetProvider.cs:115,146`). `NDC.Scripts.Session` has zero
   references (`Assets/Scripts/Session/NDC.Scripts.Session.asmdef`), so `MainSessionFlow.IEndpoint`
-  returns `Task` (`MainSessionFlow.cs:39-54`).
+  returns `Task` (`MainSessionFlow.cs:42-65`).
 - **Composition is VContainer** (scopes and order: `rpg-factory:client-integration`'s
   composition map). Scene components get `[Inject] Construct(...)` from a scope build callback and
-  stay inert without a container (`DotsWorldBridge.cs:120-132`).
+  stay inert without a container (`DotsWorldBridge.cs:178-192`).
 
 ## Idioms
 
@@ -73,38 +75,43 @@ calling skill keeps validation and reporting.
   no Transient for stateful services.
 - Fire-and-forget at an entry point: `IStartable` + an owned `CancellationTokenSource` +
   `async UniTaskVoid RunAsync(...)` + `.Forget()`, cancelled in `Dispose`; not `IAsyncStartable`,
-  whose return type depends on VContainer's UniTask define (`MainSessionDriver.cs:38-40,57,92-95`).
+  whose return type depends on VContainer's UniTask define (`MainSessionDriver.cs:40-42,103-106,143-144`).
 - Unity objects (prefabs, Addressables handles, `GameObject`) are main-thread only
-  (`DI/Dots/IViewPrefabLoader.cs:20`, `LeasedViewAssetProvider.cs:45`).
+  (`IViewPrefabLoader.LoadAsync`: `DI/Dots/IViewPrefabLoader.cs:20`; `LeasedViewAssetProvider` remarks:
+  `LeasedViewAssetProvider.cs:45`).
 - Prefer constructor / `[Inject]` method injection. `Assets/Scripts/Extensions/DIExtensions.cs`
   (`GetCurrentContainer()`) is a static service locator caching whichever `LifetimeScope`
   `FindFirstObjectByType` hits first; it has no callers - do not add any.
 - Input: branch on `#if ENABLE_INPUT_SYSTEM` / `#elif ENABLE_LEGACY_INPUT_MANAGER` / `#else` zero
-  (`DotsWorldBridge.cs:449-476`); the project is new-Input-System-only (`activeInputHandler: 1` in
+  (`DotsWorldBridge.ReadKeyboard`, `DotsWorldBridge.cs:730-756`); the project is new-Input-System-only (`activeInputHandler: 1` in
   `ProjectSettings/ProjectSettings.asset`). One component owns input per scene: sampled, sent and
-  recorded on the predictor as one stream (`DotsWorldBridge.cs:58-61`).
+  recorded on the predictor as one stream (`DotsWorldBridge.driveInput`, `DotsWorldBridge.cs:63-67,216-251`).
 - Optional dependency = a gated assembly: `defineConstraints` naming defines that the same asmdef
   sets through `versionDefines` (`Assets/Scripts/UI/Hud/Ecs/NDC.Scripts.UI.Hud.Ecs.asmdef`).
-  Defines do not flow between asmdefs; whole-file `#if` guards match them (`DotsWorldBridge.cs:1`).
+  Defines do not flow between asmdefs; whole-file `#if` guards on the same defines (`CUVARA_DOTS`, ...)
+  match them (`DotsWorldBridge.cs:1`).
 
 ## Pitfalls
 
 - **Not every folder has an asmdef.** `Assets/_SampleBuild/Editor/` has none and compiles into
   `Assembly-CSharp-Editor`; a test cannot reference it by asmdef name.
-- **Domain reload is on today but opt-out is one click away.** `ProjectSettings/EditorSettings.asset:27-28`
-  holds registry fact `enter-playmode-options` (options `0` = no `Disable*Reload` flag: both domain and
+- **Domain reload is on today but opt-out is one click away.** `m_EnterPlayModeOptions` in
+  `ProjectSettings/EditorSettings.asset:27-28` holds registry fact `enter-playmode-options` (options `0` = no `Disable*Reload` flag: both domain and
   scene reload). Code with statics must still reset them
   (`[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`) - a disabled reload keeps them across
   plays.
 - **World may not exist yet, or be gone.** `HudWorldBridge` keeps polling while the world is null;
-  `DotsWorldBridge.TryInstall` instead warns and disables itself (`DotsWorldBridge.cs:169-177`). Any
-  teardown guards `world is { IsCreated: true }` (`DotsWorldBridge.cs:391`, `HudEcsBootstrap.cs:52`).
+  `DotsWorldBridge.TryInstall` instead warns and disables itself (`DotsWorldBridge.cs:288-296`). Any
+  teardown checks `World.IsCreated` first (`DotsWorldBridge.cs:534`; `HudEcsBootstrap.Uninstall`:
+  `HudEcsBootstrap.cs:52`).
 - **Sink before systems.** A sink left registered keeps Presenter -> ViewModel -> visual tree
-  alive (`HudWorldBridge.cs:31-36,95-105`).
-- **WebGL:** no command line (`BackendCommandLine` falls back to `CUVARA_*` env,
-  `Assets/Scripts/Session/BackendCommandLine.cs:256-268`); no TLS pinning, the browser does the
-  handshake (`Assets/Scripts/Nakama/Tls/PinnedCertificateHandler.cs:34-38`); no browser realtime
-  transport (`docs/CUVARA-DOTS-IMPROVEMENT-PLAN.md:212`).
+  alive (`HudWorldBridge` remarks and `OnDestroy`: `HudWorldBridge.cs:31-36,95-105`).
+- **WebGL:** no command line (`BackendCommandLine.SafeArgs` returns none and the `CUVARA_*` env
+  fallback still works, `Assets/Scripts/Session/BackendCommandLine.cs:288-300`); no TLS pinning, the
+  browser does the handshake and never calls `ValidateCertificate`
+  (`Assets/Scripts/Nakama/Tls/PinnedCertificateHandler.cs:34-38`); no game-server join at all -
+  gameplay is KCP/UDP only and browsers have no UDP (`docs/CUVARA-DOTS-IMPROVEMENT-PLAN.md`
+  "D13 - P2: build a focused verification matrix").
 - **IL2CPP + Minimal stripping on Android/WebGL, Mono on Standalone** (`CLAUDE.md` "Scripting backend is per-target"), and the
   client has no `link.xml` under `Assets/`: reflection-only types can be stripped and a Windows
   build never shows it.
@@ -132,13 +139,13 @@ calling skill keeps validation and reporting.
 - **One test, Editor open:** Unity MCP `tests-run` with `testMode` plus `testAssembly`,
   `testNamespace`, `testClass` or a fully-qualified `testMethod` (`Tests.Editor.Fixture.Test`). It
   resumes across a domain reload and stops on pre-existing compile errors; save dirty scenes first
-  (`.claude/skills/tests-run/SKILL.md:3,13,26`).
+  (`.claude/skills/tests-run/SKILL.md` description, "Filters", "Domain reloads").
 - **Editor closed:** the test is HUMAN_REQUIRED. Hand the user the batchmode command CI uses,
   `Unity -batchmode -projectPath . -runTests -testPlatform EditMode|PlayMode -testResults <dir>/results.xml
-  [-testFilter <regex>]` (`unity-build-workflows/.github/workflows/reusable-unity-tests.yml:401-403,463-465`);
+  [-testFilter <regex>]` (`unity-build-workflows/.github/workflows/reusable-unity-tests.yml`);
   never run it yourself - it opens the user's project (human gate `unity-batch`) and cannot run while an
   Editor holds the project open.
-- `Packages/manifest.json:78-82` `testables` lists the three `com.cuvara.*` packages, so client CI
+- The `testables` array of `Packages/manifest.json` lists the three `com.cuvara.*` packages, so client CI
   also runs the package test suites in this project.
 
 ## Tools

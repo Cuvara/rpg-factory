@@ -32,19 +32,20 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
 ## Architecture
 
 - **No `go.work`.** Each module is its own build root, linked by `replace` directives:
-  gateway `backend/gateway/go.mod:56`, nakama `backend/nakama/go.mod:12`, integration_test
-  `backend/integration_test/go.mod:56-61` (shared, gateway and nakama). `loadtest`, `smoketest` and
+  gateway (`backend/gateway/go.mod`) and nakama (`backend/nakama/go.mod`) replace
+  `rpg-mmo/shared` with `../shared`; integration_test (`backend/integration_test/go.mod`, end of
+  file) replaces `rpg-mmo/shared`, `rpg-mmo/gateway` and `rpg-mmo/nakama`. `loadtest`, `smoketest` and
   `backend/deploy/k8s/verify/probe` also replace `shared`. So: `cd` into the module before any
   `go` command, and a change to an exported `shared` symbol is only proven by building every
   dependent: `grep -l 'rpg-mmo/shared =>' backend/*/go.mod backend/deploy/k8s/verify/probe/go.mod`.
 - **The `go` directive differs per module** (`grep -H '^go ' backend/*/go.mod`). With the default
   `GOTOOLCHAIN=auto` an older local `go` silently downloads the module's toolchain; `go version`
   run inside the module shows which one actually builds it.
-- **Gateway:** `Gateway` struct (`backend/gateway/server/server.go:31`), built by
-  `New(sessions, reg, jwtSecret, logger, opts...)` (`server.go:277`) with functional `Option`s
-  (`server.go:113`, e.g. `WithDungeons` at `:131`), served by `Run` (`server.go:431`). Wiring of
+- **Gateway:** `Gateway` struct (`backend/gateway/server/server.go:33`), built by
+  `New(sessions, reg, jwtSecret, logger, opts...)` (`server.go:259`) with functional `Option`s
+  (`server.go:108`, e.g. `WithDungeons` at `:119`), served by `Run` (`server.go:412`). Wiring of
   stores, allocator and options is all in `backend/gateway/cmd/gateway/main.go` (redis vs memory
-  backend `:207-233`, `server.New` `:398`). Collaborators: `ClientConn`
+  backend from `backendRedis` `:179-216`, `server.New` `:369`). Collaborators: `ClientConn`
   (`server/connection.go:30`), `registry.RegistryService` (`registry/registry.go:77`),
   `session.SessionManager` (`session/manager.go:38`), and the seams
   `transfer.PartyMembership` (`transfer/party.go:37`), `transfer.DungeonAllocator`
@@ -52,11 +53,12 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
 - **Storage seams:** `PlayerStore`, `SessionStore`, `ServerRegistry`, `DungeonIndex`,
   `EventStream` in `backend/shared/storage/interfaces.go:76-152`. Two implementations each:
   in-memory (`storage/memory.go`, also the gateway's `--backend=memory`) and Redis
-  (`storage/redisstore/`). Compile-time assertions sit at `interfaces.go:14-19`.
+  (`storage/redisstore/`). Compile-time assertions for the in-memory types (`MemoryPlayerStore` etc.) sit at
+  `interfaces.go:14-19`.
 - **Nakama plugin:** a `-buildmode=plugin` `.so`; entry `InitModule` (`backend/nakama/main.go:25`)
   registers RPCs and hooks. Handlers are plain functions
   `(ctx, runtime.Logger, *sql.DB, runtime.NakamaModule, payload)` (e.g.
-  `economy/reward_batch.go:140`), so per-plugin state lives in package-level singletons.
+  `RewardKillsRPC`, `economy/reward_batch.go:140`), so per-plugin state lives in package-level singletons.
 - **Data ownership** (`backend/docs/ARCHITECTURE-DECISIONS.md`): ADR-1 - one writer per datum,
   `player_states` in Postgres is the only recoverable gameplay datum; sessions and registry are
   rebuilt, not restored. ADR-4 - one Redis, roles separated by key prefix
@@ -67,8 +69,9 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
 ## Idioms
 
 - **Errors:** wrap with `%w`; absence is `storage.ErrNotFound` tested with `errors.Is`
-  (`interfaces.go:11`, `gateway/registry/registry.go:238`, `registry/watcher.go:145`).
-- **Logging:** gateway and shared use `log/slog` (`server.go:39`, `shared/logger/logger.go`);
+  (`interfaces.go:11`, `isRetriable()` `gateway/registry/registry.go:234-238`, the watcher's
+  `storage.ErrNotFound` check `registry/watcher.go:145`).
+- **Logging:** gateway and shared use `log/slog` (`slog.Logger` `server.go:41`, `shared/logger/logger.go`);
   the Nakama plugin uses the printf-style `runtime.Logger` it is handed - no slog there.
 - **Nakama errors:** `runtime.NewError(msg, grpcCode)` (`economy/reward_batch.go:158`).
 - **Idempotent economy write:** the caller-supplied `BatchID` is the key
@@ -79,21 +82,22 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
   with `StartCleanup` (`backend/nakama/social/ratelimit.go:48-53`); per-IP/per-connection in the
   gateway (`server.go` `connLimiter`, `msgRate`).
 - **Nil means off:** optional collaborators are nil-able and documented as such
-  (`server.go:33-36`, `WithDungeons` treating one-without-the-other as off).
+  (`Gateway.dungeonIndex` / `partyMembers` `server.go:36-39`, `WithDungeons` treating one-without-the-other as off).
 - **Narrow interfaces over Nakama:** declare the slice of `runtime.NakamaModule` you call
-  (`nakama/auth/profile.go:35`) and assert it (`auth/profile_test.go:269`).
+  (`nakama/auth/profile.go:35`) and assert it (`profileStore` check `auth/profile_test.go:270`).
 
 ## Pitfalls
 
-- **Skipped is not passed.** `backend/integration_test/dotnet_interop_test.go:123-130,376-379`
-  (and `selfreg_flow_test.go:55`, `sealed_session_e2e_test.go:146`) `t.Skip` when neither
+- **Skipped is not passed.** The interop tests probe `exec.LookPath`
+  (`backend/integration_test/dotnet_interop_test.go:123-130,377-380`; also `t.Skip` in
+  `selfreg_flow_test.go:55` and `t.Skip` in `sealed_session_e2e_test.go:149`) and skip when neither
   `dotnet` on `PATH` nor `~/.dotnet/dotnet` exists. On WSL with only the Windows `dotnet.exe`
   they skip and `go test` still prints `ok`. Read `-v` output for `--- SKIP` (see
   `references/testing.md`). `GAMESERVER_NATIVE_BIN` runs them against a published AOT binary
   instead (`dotnet_interop_test.go:98-117`).
 - **No build tag, no tests.** Every `integration_test/*_test.go` file is `//go:build integration` (only the helper `mock_client.go` is untagged); without
   `-tags integration` the package reports `[no test files]` - CI says it once went green that way
-  (`.github/workflows/ci.yml:185-192`).
+  (comment above `test_flags`, `.github/workflows/ci.yml:185-192`).
 - **Plugin ABI lock.** The `.so` must be built by `heroiclabs/nakama-pluginbuilder` at the SAME tag
   as the running `heroiclabs/nakama`, with the Go toolchain and `nakama-common` that release ships;
   mismatch fails at load with "plugin was built with a different version of package"
@@ -102,8 +106,9 @@ Repo `server`, used by `server-services` and `wire-contract`. Owns no module, co
   `GOTOOLCHAIN=auto` in the builder would reintroduce the mismatch.
 - **Build context is `backend/`**, not `backend/nakama/`, because of the `replace => ../shared`
   (`nakama-plugin.Dockerfile:3-5,28-30`).
-- **Lint:** `backend/TEAM.md:234` asks for golangci-lint, but there is no config and no CI step
-  (registry known issue `golangci-lint-missing`); CI runs `go vet` (`.github/workflows/_go-module.yml:116-118`).
+- **Lint:** `backend/TEAM.md` (Go conventions, "Linting") asks for golangci-lint, but there is no config and no CI step
+  (registry known issue `golangci-lint-missing`); CI runs `go vet` with
+  `inputs.vet_flags` (`.github/workflows/_go-module.yml:116-118`).
 - **Panicking mocks are intentional:** the Nakama mock embeds a nil `runtime.NakamaModule`
   (`nakama/auth/mock_test.go:70-74`); a panic in a new test means your code called a method the
   mock does not implement - add it to the mock, do not recover.

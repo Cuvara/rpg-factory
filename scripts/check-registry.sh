@@ -45,6 +45,9 @@ problems=$(jq -r '
           (select(($c.driver // null) != null and ($r.skills[$c.driver] // null) == null) | "contract \($c.id): unknown driver skill \($c.driver)")),
       (($r.contracts // []) | map(.id) | group_by(.) | map(select(length > 1))[] | "duplicate contract id: \(.[0])"),
       (($r.skills // {}) | to_entries[] | select((.value.kind // "") | IN("repo","cross-repo","core","tech") | not) | "skill \(.key): kind must be repo|cross-repo|core|tech"),
+      (($r.skills // {}) | to_entries[] | .key as $s | (.value.cite_roots // {}) | to_entries[]
+        | select((.value | split(":")[0]) as $k | ($r.repos[$k] // null) == null)
+        | "skill \($s): cite_roots \(.key | tojson) -> unknown repo in \(.value)"),
       (($r.skills // {}) | to_entries[] | select(.value.kind == "tech") as $t
         | (select(($t.value.used_by // []) | length == 0) | "tech skill \($t.key): used_by (repo/cross-repo skills) missing"),
           (($t.value.used_by // [])[] | select((($r.skills[.].kind) // "") | IN("repo","cross-repo") | not)

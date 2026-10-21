@@ -116,6 +116,11 @@ PY3
 )
 if [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
 
+# line citations: backticked and anchored (needs no repos; tests/skill-citations.test.sh and the live
+# run in run-all.sh check them against the code)
+cite_out=$(cd "$ROOT" && CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B scripts/checks/skill-citations.py --offline 2>&1); cite_rc=$?
+if [ $cite_rc -eq 0 ]; then ok; else bad "line citations (skill-citations.py --offline):"; grep '^FAIL' <<<"$cite_out" | sed 's/^FAIL  /      /' | head -20; tail -1 <<<"$cite_out" | sed 's/^/      /'; fi
+
 # plugin boundaries: factory-core must hand design work to game-ai-workflows and web projects to
 # web-game-factory, and no Factory skill may claim their triggers
 desc=$(sed -n 's/^description: //p' "$ROOT/skills/factory-core/SKILL.md")

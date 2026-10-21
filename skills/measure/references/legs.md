@@ -1,6 +1,6 @@
 # Measurement legs
 
-Verified 2026-09-30 against `rpg-mmo-server` @ `5023a3d` and `IndieRPGMMOAdventure` `develop`.
+Verified 2026-10-21 against `rpg-mmo-server` `origin/develop` @ `e982a6d` and `IndieRPGMMOAdventure` `origin/develop` @ `c2cf32c`.
 Every leg below except the micro-benches and the report renderer is a human gate.
 
 ## Server: load generator (`backend/loadtest`)
@@ -80,7 +80,7 @@ Use when a load or bench leg shows a regression and the record must say *where* 
 
 - Metrics first, always available: `gameserver.tick.duration`, `gameserver.sim.group.duration`
   (per group), `gameserver.gc.{allocated.bytes,pause.seconds,heap.bytes}`, `gameserver.achieved_tick_hz`
-  (`GameServer/Observability/GameMetrics.cs:36-67`, `/metrics`). Scrape before and after the leg.
+  (`GameServer/Observability/GameMetrics.cs:67,75,570,587-597`, `/metrics`). Scrape before and after the leg.
 - `dotnet-counters monitor -p <pid> System.Runtime` / `dotnet-trace collect -p <pid>` (dev tool
   `dotnet-diagnostics`, optional): run against a **JIT** Release build started directly, not the AOT image -
   NativeAOT exposes only part of EventPipe. A trace is attribution evidence; the number still comes from
@@ -92,7 +92,7 @@ Use when a load or bench leg shows a regression and the record must say *where* 
 ## Server: network adversity (correctness under loss, jitter, reorder)
 
 `GameServer.Tests/Infrastructure/AdversityProxy.cs` is a seeded, deterministic UDP impairment proxy between
-a real KCP client and server (`:9-40`; profile = per-direction link + seed, `:60-68`). Suites:
+a real KCP client and server (`AdversityProxy`, `:9-40`; `Profile` = per-direction link + seed, `:60-68`). Suites:
 `Server/NetworkAdversityTests.cs`, `Server/KcpNetworkConditionsTests.cs`,
 `Snapshot/EntityIntervalUnderAdversityTests.cs`. They run inside `dotnet-test` (no gate) - a failing seed is
 named in the output; rerun with that seed. A *number* from them (snapshot interval under loss) is a measure

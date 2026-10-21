@@ -144,6 +144,7 @@ reject "optional dev tool without fallback" "every tool needs a fallback" '(.dev
 reject "required dev tool without fallback" "dev_tools dotnet: every tool needs a fallback" '(.dev_tools[] | select(.id == "dotnet")) |= del(.fallback)'
 reject "dev tool without a purpose" "dev_tools go: missing field provides" '(.dev_tools[] | select(.id == "go")) |= del(.provides)'
 reject "duplicate dev tool id" "duplicate dev_tools id" '.dev_tools += [.dev_tools[0]]'
+reject "cite_roots naming an unknown repo" 'skill unity-dots: cite_roots "x:" -> unknown repo in nope:abc' '.skills["unity-dots"].cite_roots["x:"] = "nope:abc"'
 reject "tech skill without used_by" "used_by (repo/cross-repo skills) missing" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999}'
 reject "tech skill used_by a core skill" "used_by factory-core is not a repo/cross-repo skill" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999, used_by: ["factory-core"]}'
 reject "tech skill owning a module" "must not own a module" '.skills["x-tech"] = {kind: "tech", repos: ["server"], summary: "s", order: 999, used_by: ["server-realtime"]} | .modules[0].skills += ["x-tech"]'

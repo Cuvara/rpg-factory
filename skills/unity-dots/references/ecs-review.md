@@ -8,7 +8,7 @@ the file that shows the expected shape. A finding cites the diff line and the it
       request/response or one-off flow (inventory, login, menus) stays a VContainer service
       (SKILL.md "ECS or not").
 - [ ] Authority unchanged: the client predicts only movement and projectiles
-      (`Netcode/Documentation~/PREDICTION.md:29-31`); everything else is applied from snapshots.
+      (`Netcode/Documentation~/PREDICTION.md`, sections "LocalMovePredictor" and "Projectile prediction"); everything else is applied from snapshots.
 - [ ] Hybrid traffic uses an existing seam (enqueue-only `DotsEntityView`, bridge system + presenter,
       view groups), not a new static or a `FindObjectOfType` from a system.
 
