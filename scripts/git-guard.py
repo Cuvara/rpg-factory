@@ -652,6 +652,7 @@ def human_gate_hits(payload, registry):
     texts = {" ".join(seg) for seg in segments(tokenize(command))}
     texts |= {" ".join(argv) for argv in expand(command, shell=shell)}
     hits = []
+    read_only = []  # computed once, only when a read_only_exempt gate matched
     for text in texts:
         for g in registry.get("human_gates", []):
             m = g.get("match")
@@ -661,6 +662,17 @@ def human_gate_hits(payload, registry):
                 matched = re.search(m, text)
             except re.error:  # one bad registry regex must not disable the rest of the guard
                 continue
+            if matched and g.get("read_only_exempt"):
+                if not read_only:
+                    try:
+                        sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # appended: stdlib first
+                        import factory_session as session  # noqa: E402
+                        session._REGISTRY = session._REGISTRY or registry
+                        read_only.append(session.is_read_only(payload))
+                    except Exception:
+                        read_only.append(False)  # cannot tell: the gate applies
+                if read_only[0]:
+                    continue  # `sed -n 1,40p run-clients.sh`: inspecting the script does not run it
             if matched:
                 hits.append((g.get("decision", "ask"), f"human gate '{g['id']}': {g['rule']}"))
     return hits

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-21
+
+Fix: read-only inspection of a gated script (`sed -n`, `cat`, `grep`, `head`) no longer asks for a human
+gate. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin update
+rpg-factory@rpg-factory`) and start a new session. No command-line changes; the registry gains the optional
+`human_gates[].read_only_exempt` field.
+
+### Fixed
+- **Human gates no longer ask for read-only inspection of a gated script.** The gate regexes match script
+  names anywhere in a command, so `sed -n 300,340p Tools/verify-multiclient.sh` asked under `multi-client`
+  exactly like running the script (same for `cat bench.sh`, `grep x backup.sh`, `head toggle-packages.sh`).
+  New registry field `human_gates[].read_only_exempt` (schema): the git guard skips such a gate when the
+  whole command is read-only (`factory_session.is_read_only`, the classifier the execution modes use). Set
+  on every gate with a `match` except `secrets`, whose point is reading. Running, editing (`sed -i`),
+  redirecting, or piping a gated script into a shell still asks.
+- `is_read_only` accepts print-only `sed` (`N,Mp`, `/re/p`, `Nq`, with `-n`/`-e`/`-E`); `-i`, `-f`, the
+  `e` and `w` commands, `s///` and multi-command scripts stay non-read-only. A read-only mode therefore
+  allows `sed -n 10,40p file`.
+
 ## [1.0.1] - 2026-10-21
 
 Hotfix: the tripwire and its workspace latch are removed. Update the plugin (`claude plugin marketplace
