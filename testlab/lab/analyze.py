@@ -869,7 +869,10 @@ def check_enemy_pursuit(ev, a):
     Pursuit: an enemy farther than `far_distance` from its nearest live player, that moved
     between two consecutive server samples, must have moved toward where that player stood
     (within `max_heading_deg` of the bearing). Heading, not distance: a player walking away at
-    5 u/s outruns a 2.5 u/s chaser, so the distance grows while the pursuit is correct. Near the target,
+    5 u/s outruns a 2.5 u/s chaser, so the distance grows while the pursuit is correct. Judged on
+    ISOLATED enemies only (no other enemy within `crowd_radius`): inside a crowd, separation and
+    queueing legitimately move an enemy sideways or back, which is not a targeting decision.
+    Crowd steps are reported, not judged. Near the target,
     queueing, sliding and separation legitimately move an enemy sideways or back, so the rule is
     asserted only where none of them applies. Settled: enemies within `settle_distance` of their
     target in both samples; their speed relative to the target is the jitter a client sees.
@@ -883,6 +886,8 @@ def check_enemy_pursuit(ev, a):
     settle = float(a.get("settle_distance", 2.6))
     moving_eps = float(a.get("moving_epsilon", 0.02))
     cos_max = math.cos(math.radians(float(a.get("max_heading_deg", 45))))
+    crowd_r = float(a.get("crowd_radius", 1.2))
+    crowd_steps = crowd_heading = 0
     far_steps = approaching = 0
     away = []
     settled_rel = []
@@ -895,7 +900,8 @@ def check_enemy_pursuit(ev, a):
         if not players0:
             continue
         e1 = {e[0]: e for e in _alive_enemies(r1)}
-        for e in _alive_enemies(r0):
+        alive0 = _alive_enemies(r0)
+        for e in alive0:
             n = e1.get(e[0])
             if n is None:
                 continue
@@ -906,8 +912,12 @@ def check_enemy_pursuit(ev, a):
             d1 = math.hypot(n[2] - t1[2], n[3] - t1[3])
             moved = math.hypot(n[2] - e[2], n[3] - e[3])
             if d0 > far and moved > moving_eps:
-                far_steps += 1
                 cos = ((n[2] - e[2]) * (target[2] - e[2]) + (n[3] - e[3]) * (target[3] - e[3])) / (moved * d0)
+                if any(o is not e and math.hypot(o[2] - e[2], o[3] - e[3]) < crowd_r for o in alive0):
+                    crowd_steps += 1
+                    crowd_heading += 1 if cos >= cos_max else 0
+                    continue
+                far_steps += 1
                 if cos >= cos_max:
                     approaching += 1
                 elif len(away) < 20:
@@ -918,7 +928,7 @@ def check_enemy_pursuit(ev, a):
                 settled_rel.append(rel / dt)
     min_far = int(a.get("min_far_steps", 50))
     if far_steps < min_far:
-        return _inconclusive(f"{far_steps} enemy steps farther than {far} from a target (need {min_far})",
+        return _inconclusive(f"{far_steps} isolated enemy steps farther than {far} from a target (need {min_far})",
                              source="/debug/entities")
     min_settled = int(a.get("min_settled_samples", 50))
     if a.get("max_settled_speed") is not None and len(settled_rel) < min_settled:
@@ -928,7 +938,7 @@ def check_enemy_pursuit(ev, a):
     findings = []
     status = PASS
     if ratio < float(a.get("min_pursuit_ratio", 0.95)):
-        findings.append(f"only {ratio:.1%} of {far_steps} far enemy steps headed for the nearest live player")
+        findings.append(f"only {ratio:.1%} of {far_steps} isolated far enemy steps headed for the nearest live player")
         status = FAIL
     settled_p95 = round(util.percentile(settled_rel, 95), 3) if settled_rel else None
     if a.get("max_settled_speed") is not None and settled_p95 is not None \
@@ -936,10 +946,12 @@ def check_enemy_pursuit(ev, a):
         findings.append(f"settled enemies move at p95 {settled_p95} u/s relative to their target")
         status = FAIL
     return _result(status, {"far_steps": far_steps, "pursuit_ratio": round(ratio, 4),
+                             "crowd_steps": crowd_steps,
+                             "crowd_heading_ratio": round(crowd_heading / crowd_steps, 4) if crowd_steps else None,
                              "settled_samples": len(settled_rel), "settled_rel_speed_p95": settled_p95,
                              "settled_rel_speed_median": round(util.percentile(settled_rel, 50), 3) if settled_rel else None},
                    {"min_pursuit_ratio": a.get("min_pursuit_ratio", 0.95), "far_distance": far,
-                    "max_heading_deg": a.get("max_heading_deg", 45),
+                    "max_heading_deg": a.get("max_heading_deg", 45), "crowd_radius": crowd_r,
                     "max_settled_speed": a.get("max_settled_speed")},
                    source="server /debug/entities, consecutive samples; target = nearest live player "
                           "(the server's rule, PlayerTargetBuffer.TryNearest)",

@@ -330,6 +330,15 @@ class AnalysisTests(unittest.TestCase):
                                              "min_far_steps": 10, "min_settled_samples": 10})
         self.assertEqual(shaky["status"], analyze.FAIL)
 
+    def test_pursuit_does_not_judge_enemies_moved_inside_a_crowd(self):
+        # Two enemies 0.5 apart, far from the player, sliding sideways: separation and queueing,
+        # not targeting. Reported as crowd steps; with no isolated step the rule is unjudged.
+        rows = [_row(i * 0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5],
+                               ["m0", "mob", -10.0, 0.2 * i, 16, 16, 0, 2.5],
+                               ["m1", "mob", -10.0, 0.5 + 0.2 * i, 16, 16, 0, 2.5]]) for i in range(80)]
+        res = analyze.check_enemy_pursuit(_ev(entities=rows, duration=8), {"skip_first_s": 0, "min_far_steps": 10})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+
     def test_pursuit_with_too_few_far_steps_is_inconclusive(self):
         rows = [_row(i * 0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5],
                                ["m", "mob", -10.0 + 0.25 * i, 0.0, 16, 16, 0, 2.5]]) for i in range(5)]

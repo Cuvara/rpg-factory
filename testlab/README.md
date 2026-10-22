@@ -146,7 +146,7 @@ Copy a file in `scenarios/` and change these fields:
 | `render_jumps` server_teleport | nothing; informational | a respawn or teleport the server made |
 | `spawn_overlap` FAIL | `detail.overlapping` (player, time, position, nearest other player) | a fresh or respawned player placed on another (rpg-mmo-server#469); `GAMESERVER_SPAWN_SCATTER=0` reproduces it |
 | `enemy_crowding` overlap FAIL | `timeline` (`nn_p10`, `overlap_ratio`) | enemy separation off or not converging (`GAMESERVER_ENEMY_SEPARATION`, #469). Concentration on one player is INFO: it follows the nearest-player rule, which `enemy_pursuit` checks |
-| `enemy_pursuit` FAIL | `detail.away` (enemy, target, heading) | an enemy far from every player not heading for the nearest one; `settled_rel_speed_p95` above its bound is a crowd that still jitters at its target |
+| `enemy_pursuit` FAIL | `detail.away` (enemy, target, heading) | an isolated enemy (no other within `crowd_radius`) far from every player not heading for the nearest one - crowd members moved by separation are reported as `crowd_steps`, not judged; `settled_rel_speed_p95` above its bound is a crowd that still jitters at its target |
 | `position_divergence` with layer "interpolation" | the worst rows, `samples.ndjson` | the client received the right position and drew it elsewhere |
 | `position_divergence` with layer "snapshot or transport" | `snapshots.ndjson` gaps, `/status` replication gap | the client never received the server's path |
 | `kcp_health` dropped `no_session` | `metrics-after.txt` vs `metrics-end.txt` | a client quit inside the window |
