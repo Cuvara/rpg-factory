@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import sys
 import tempfile
 import unittest
@@ -97,6 +98,27 @@ class UtilTests(unittest.TestCase):
 
 def _row(st, ents):
     return {"st": st, "tick": int(st * 60), "ents": ents}
+
+
+class WriteJsonTests(unittest.TestCase):
+    def test_write_json_retries_a_replace_the_target_is_locked_for(self):
+        import tempfile
+        from unittest import mock
+        from lab import util
+        real = os.replace
+        calls = {"n": 0}
+
+        def flaky(src, dst):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError(5, "Access is denied")
+            return real(src, dst)
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(util.os, "replace", flaky):
+            target = Path(d) / "control.json"
+            util.write_json(target, {"ok": 1})
+            self.assertEqual(json.loads(target.read_text()), {"ok": 1})
+            self.assertEqual(calls["n"], 3)
 
 
 class ConfigTests(unittest.TestCase):

@@ -58,7 +58,17 @@ def write_json(path: Path, data) -> None:
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, indent=2, sort_keys=False)
         fh.write("\n")
-    os.replace(tmp, path)
+    # On Windows a replace fails with "Access is denied" while another process (a player
+    # polling control.json) has the target open; that is momentary, so retry briefly
+    # instead of failing the run (seen in S03 run 20261022T095452Z-S03-1rw4).
+    for attempt in range(50):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 49:
+                raise
+            time.sleep(0.02)
 
 
 def read_ndjson(path: Path) -> list:
