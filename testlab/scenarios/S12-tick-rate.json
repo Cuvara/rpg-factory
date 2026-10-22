@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S12",
-  "version": 1,
+  "version": 2,
   "title": "Non-default tick rate: S03 movement with the server at 30 Hz critical / 15 Hz world",
   "description": "S03's scripted movement on dev_arena (enemies off) with SIM_CRITICAL_HZ=30 and SIM_WORLD_HZ=15. 30/15 is a pair SimulationRates.TryCreate accepts (15 and the default background 5 both divide 30, none exceeds it, all under MaxHz 240). Only the movement rate changes: the world rate, and so the snapshot cadence and bandwidth, stays at the default 15 Hz, so a difference from S03 is the client adopting the advertised tick rate (JoinTokenResponse.tick_rate = MovementHz = critical), not the snapshot stream. server_config proves the rates were in force.",
   "clients": 3,
@@ -206,6 +206,16 @@
       "id": "render_freshness",
       "check": "render_freshness",
       "title": "age of the newest snapshot at each frame (C2)"
+    },
+    {
+      "id": "tick_adoption",
+      "check": "tick_adoption",
+      "title": "the predictor steps at the server's advertised tick rate (C1)"
+    },
+    {
+      "id": "cross_client_convergence",
+      "check": "cross_client_convergence",
+      "title": "clients draw a remote entity in the same place at the same render tick (C4)"
     }
   ]
 }

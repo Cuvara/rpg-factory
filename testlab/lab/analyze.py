@@ -329,8 +329,10 @@ def check_redis(ev, a):
 def check_clients_completed(ev, a):
     if not ev["clients"]:
         return _inconclusive("no clients in this run", source="client summary.json")
+    # A scenario may expect another outcome for a client, e.g. "left" for one that quits (S08G).
+    want = {str(k): v for k, v in (a.get("expected_outcomes") or {}).items()}
     bad = {c["index"]: (c["summary"] or {}).get("outcome") for c in ev["clients"]
-           if (c["summary"] or {}).get("outcome") != "completed"}
+           if (c["summary"] or {}).get("outcome") != want.get(str(c["index"]), "completed")}
     return _result(PASS if not bad else FAIL, len(ev["clients"]) - len(bad), len(ev["clients"]),
                    source="client summary.json outcome", sampling="per client",
                    rationale="a client that crashed, aborted or errored did not run the scenario",
@@ -1671,98 +1673,201 @@ INTERP_TARGET_DELAY_MS = 100.0
 INTERP_MAX_EXTRAPOLATION_MS = 50.0
 
 
+def _tick_hz(ev, a) -> float | None:
+    """Server base tick rate (world ticks advance at it): the assertion's, else /status."""
+    if a.get("tick_hz"):
+        return float(a["tick_hz"])
+    rows = [r for r in ev["server"]["status"] if r.get("tick_rate") or r.get("sim_critical_hz")]
+    return float(rows[-1].get("tick_rate") or rows[-1]["sim_critical_hz"]) if rows else None
+
+
 def check_render_freshness(ev, a):
-    """Age of the newest received snapshot at each rendered frame (C2 render.csv snapshot_age_ms).
-    Bound = TargetDelay + MaxExtrapolation (Netcode InterpolationConfig.Default, 100 + 50 ms): a frame
-    whose newest snapshot is older than that has run the render clock past every sample and past the
-    extrapolation allowance, so remote entities are drawn frozen. p99 decides; frames in host-wide
-    stalls are set aside the same way as elsewhere (INCONCLUSIVE when only they would fail it)."""
+    """How far the render clock runs past the newest snapshot it has consumed, per rendered frame
+    (C2 render.csv, schema rpg.testlab.delivery.v2: render_tick, clock_newest_tick, clock_source).
+
+    overrun_ms = (render_tick - clock_newest_tick) / tick_hz * 1000, 0 when the clock is behind the
+    newest tick (the normal case: TargetDelay behind). A positive overrun means the interpolator has
+    no sample ahead and extrapolates; past MaxExtrapolation (50 ms, Netcode InterpolationConfig.Default,
+    which the client uses) remote entities are held still: a visible freeze. p99 overrun <= 50 ms.
+    snapshot_age_ms (receive age of the newest snapshot) is reported alongside. A v1 render.csv has
+    an empty render_tick in this client (the ECS clock is never fed on the untimed SetState path), so
+    v1 evidence is INCONCLUSIVE. Frames in host-wide stalls are set aside (INCONCLUSIVE when only they
+    would fail it)."""
     import csv
     if not ev["clients"]:
         return _inconclusive("no clients in this run", source="client render.csv")
-    bound = float(a.get("target_delay_ms", INTERP_TARGET_DELAY_MS)) + float(a.get("max_extrapolation_ms",
-                                                                                   INTERP_MAX_EXTRAPOLATION_MS))
+    hz = _tick_hz(ev, a)
+    if not hz:
+        return _inconclusive("server tick rate unknown (/status tick_rate, sim_critical_hz)", source="/status")
+    bound = float(a.get("max_extrapolation_ms", INTERP_MAX_EXTRAPOLATION_MS))
     dur = float(ev["scenario"].get("duration_s", 0))
     excl = [(float(w[0]), float(w[1])) for w in a.get("exclude_s", [])]
     stalls = host_stalls(ev)
-    per, missing, worst_all, worst_quiet = {}, [], [], []
+    per, missing, worst_all, worst_quiet = {}, {}, [], []
     for c in ev["clients"]:
         start = (c["summary"] or {}).get("start_realtime")
-        ages, quiet = [], []
+        over, quiet, ages, sources, frames = [], [], [], {}, 0
         try:
             with open(c.get("render_csv") or "", encoding="utf-8", newline="") as fh:
                 for r in csv.DictReader(fh):
-                    t_us, age = _num_or_none(r.get("t_us")), _num_or_none(r.get("snapshot_age_ms"))
-                    if t_us is None or age is None or start is None:
+                    t_us = _num_or_none(r.get("t_us"))
+                    if t_us is None or start is None:
                         continue
                     st = t_us / 1e6 - start
                     if not 0 <= st <= dur or any(e0 <= st <= e1 for e0, e1 in excl):
                         continue
-                    ages.append(age)
+                    frames += 1
+                    age = _num_or_none(r.get("snapshot_age_ms"))
+                    if age is not None:
+                        ages.append(age)
+                    rt, newest = _num_or_none(r.get("render_tick")), _num_or_none(r.get("clock_newest_tick"))
+                    if rt is None or newest is None:
+                        continue
+                    src = r.get("clock_source") or "unnamed (v1)"
+                    sources[src] = sources.get(src, 0) + 1
+                    o = max(0.0, (rt - newest) / hz * 1000.0)
+                    over.append(o)
                     if not _in_stall(stalls, st, st, slack=0.3, after=1.0):
-                        quiet.append(age)
+                        quiet.append(o)
         except OSError:
             pass
-        if not ages:
-            missing.append(c["index"])
+        if not over:
+            missing[c["index"]] = ("no render.csv" if frames == 0 else
+                                   f"{frames} frames, none with a render_tick (v1 schema or no readable clock)")
             continue
-        p99, p99q = util.percentile(ages, 99), util.percentile(quiet, 99) if quiet else None
-        per[c["index"]] = {"frames": len(ages), "p50_ms": round(util.percentile(ages, 50), 1), "p99_ms": round(p99, 1),
-                           "max_ms": round(max(ages), 1), "p99_outside_host_stalls_ms": None if p99q is None else round(p99q, 1)}
+        p99, p99q = util.percentile(over, 99), util.percentile(quiet, 99) if quiet else None
+        per[c["index"]] = {"frames": len(over), "clock_source": sources, "overrun_p99_ms": round(p99, 1),
+                           "overrun_max_ms": round(max(over), 1),
+                           "overrun_p99_outside_host_stalls_ms": None if p99q is None else round(p99q, 1),
+                           "frames_frozen": sum(1 for o in over if o > bound),
+                           "snapshot_age_p50_ms": round(util.percentile(ages, 50), 1) if ages else None,
+                           "snapshot_age_p99_ms": round(util.percentile(ages, 99), 1) if ages else None}
         worst_all.append(p99)
         worst_quiet.append(p99q if p99q is not None else p99)
     if missing:
-        return _inconclusive(f"no C2 render.csv snapshot ages for client(s) {missing} (player without the delivery "
-                             "recorder, or no frame inside the window)", source="client render.csv")
+        return _inconclusive(f"no render clock in C2 render.csv for client(s) {missing}", source="client render.csv")
     fails, fails_quiet = max(worst_all) > bound, max(worst_quiet) > bound
     status = FAIL if fails_quiet else (INCONCLUSIVE if fails else PASS)
-    return _result(status, per, {"p99_ms": bound, "formula": "TargetDelay + MaxExtrapolation",
-                                 "target_delay_ms": a.get("target_delay_ms", INTERP_TARGET_DELAY_MS),
-                                 "max_extrapolation_ms": a.get("max_extrapolation_ms", INTERP_MAX_EXTRAPOLATION_MS)},
-                   source="C2 render.csv snapshot_age_ms (now - receive time of the newest snapshot, player clock)",
+    return _result(status, per, {"overrun_p99_ms": bound, "formula": "max(0, render_tick - clock_newest_tick) / tick_hz",
+                                 "tick_hz": hz, "max_extrapolation_ms": bound},
+                   source="C2 render.csv v2 render_tick and clock_newest_tick (WorldViewBinder clock)",
                    sampling="every rendered frame in the scenario window",
-                   rationale="snapshot_age_ms is a receive age on the player's own clock, so RTT and clock offset do not "
-                             "enter it. Beyond TargetDelay + MaxExtrapolation the interpolator has no sample left to "
-                             "draw toward and holds remote entities still: the player sees a freeze",
+                   rationale="the render clock runs TargetDelay behind the newest snapshot; when snapshots stop it "
+                             "catches up and extrapolates, and past MaxExtrapolation it holds remote entities still. "
+                             "The overrun is read from the clock that drew the frame, so it is a freeze the player saw",
                    artifacts=[str(c["dir"] / "render.csv") for c in ev["clients"]])
 
 
-def check_prediction_bound(ev, a):
-    """Local-prediction hard snaps per client-minute stay under a bound taken from measured runs.
+# Derived from every stored run of 2026-10-21/22 (.testlab-runs/reanalysis/T16-FAC-V2/
+# prediction-bound-derivation.log): with respawn snaps explained, the fixed builds
+# (verify-netcode-77cbc97, 7e6c9d8, 5fa8f37) leave at most 2 unexplained snaps per client-minute
+# (S07 20261022T091437Z-S07-c5hc client 2: 2 in 60 s, under bot load; both 1 h soaks: 0-3 per hour),
+# while in every run of the pre-fix builds (testlab, testlab-before-fix) the worst client has at
+# least 7.5 (S10 20261022T054359Z-S10-g0tz client 0: 5 in 40 s; typical 15-30).
+PREDICTION_UNEXPLAINED_BOUND = 4.0
+BOUND_JUSTIFICATION = ("Bound 4 unexplained snaps per client-minute: twice the worst fixed-build rate (2.0, S07 c5hc) "
+                       "and about half the lowest pre-fix rate (7.5, S10 g0tz), from every stored run of 2026-10-21/22.")
 
-    Bound (default 6 snaps per client-minute): the fixed candidate builds (verify-netcode-5fa8f37 and
-    7e6c9d8) snapped at most 3.05 per client-minute in every scenario run on 2026-10-22 (e.g. S09
-    20261022T112220Z-S09-eeoa: 177-183 snaps in 3600 s; S02/S05/S08/S10: 1-3 snaps in 40-70 s), while
-    the pre-fix testlab build snapped 12-67 per client-minute (S10 20261022T054359Z-S10-g0tz: 4-8 in
-    40 s; S09 20261022T054502Z-S09-q61b: 209-335 in 300 s). 6 is twice the worst fixed rate and half
-    the best broken one. max_correction is reported, not judged: respawns move the local player
-    14-40 units and are counted in it."""
+
+def _server_teleports(ev, uid, max_speed):
+    """[(tick_lo, tick_hi)] server-tick ranges in which the server moved player `uid` other than by
+    walking: a respawn (dead -> alive, or HP from below half to full) or a step longer than it can
+    walk between two probe samples (1.5 x max_speed + 0.2). Read from /debug/entities rows."""
+    out, prev = [], None
+    for r in ev["server"]["entities"]:
+        tick, st = r.get("tick"), r.get("st")
+        if tick is None or st is None:
+            continue
+        e = next((x for x in r["ents"] if x[0] == uid), None)
+        if e is None:
+            prev = None
+            continue
+        if prev is not None and tick > prev[0]:
+            ptick, pst, px, py, php, pdead = prev
+            mx = e[5] or 0
+            respawn = (pdead and not e[6]) or (mx > 0 and php is not None and e[4] is not None
+                                                and php < 0.5 * mx and e[4] >= mx)
+            jump = math.hypot(e[2] - px, e[3] - py) > 1.5 * max_speed * max(st - pst, 1e-3) + 0.2
+            if respawn or jump:
+                out.append((ptick, tick))
+        prev = (tick, st, e[2], e[3], e[4], e[6])
+    return out
+
+
+def _snap_steps(c):
+    """[(world_tick_before, world_tick_at, n)] for each rise of the cumulative pred.snaps counter
+    between two consecutive samples (world_tick = newest snapshot the client had then)."""
+    out, prev = [], None
+    for s in c["samples"]:
+        p = s.get("pred") or {}
+        if p.get("snaps") is None or s.get("world_tick") is None:
+            continue
+        cur = (s["world_tick"], int(p["snaps"]))
+        if prev is not None and cur[1] > prev[1]:
+            out.append((prev[0], cur[0], cur[1] - prev[1]))
+        prev = cur
+    return out
+
+
+def check_prediction_bound(ev, a):
+    """Local-prediction hard snaps that NO server teleport explains stay under a bound taken from
+    measured runs.
+
+    A teleport must snap: the server respawns a dead player 1-2.4 units away (PlayerRespawnSystem;
+    rpg-mmo-server, T17-NET-IDLESNAP: every client snap in S02, S04 and both 1 h soaks of 2026-10-22
+    matched one server respawn of that player). So each rise of the client's pred.snaps (20 Hz
+    samples) is matched by world tick to a server-side respawn or non-walkable step of the same
+    player (/debug/entities, 5 Hz) whose tick range, widened by match_window_ticks (default 60 =
+    1 s at 60 Hz: probe spacing 12 ticks + snapshot latency), overlaps the snap's tick range. Matched
+    snaps are 'explained'; the rest are prediction errors and are graded. Snaps after the last sample
+    (summary count above the last sample) count as unexplained.
+
+    Bound: see BOUND_JUSTIFICATION below (max_unexplained_per_client_min). max_correction is reported,
+    not judged: it includes the teleports."""
     if not ev["clients"]:
         return _inconclusive("no clients in this run", source="client summary.json prediction")
-    bound = float(a.get("max_snaps_per_client_min", 6.0))
+    bound = float(a.get("max_unexplained_per_client_min", PREDICTION_UNEXPLAINED_BOUND))
     min_s = float(a.get("min_seconds", 20.0))  # S03, the shortest moving scenario, is 22 s
+    win = int(a.get("match_window_ticks", 60))
+    max_speed = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0))
+    ids = _user_ids(ev)
     per, missing, over = {}, [], []
     for c in ev["clients"]:
         s = c["summary"] or {}
         p, secs = s.get("prediction") or {}, s.get("scenario_seconds")
         if not p.get("present") or p.get("snaps") is None or not secs or secs < min_s:
-            missing.append(c["index"])
+            missing.append(f"{c['index']}: no prediction counters over >= {min_s:.0f} s")
             continue
-        rate = p["snaps"] / (secs / 60.0)
-        per[c["index"]] = {"snaps": p["snaps"], "seconds": round(secs, 1), "snaps_per_min": round(rate, 2),
-                           "smoothed": p.get("smoothed"), "max_correction": p.get("max_correction")}
+        steps = _snap_steps(c)
+        located = any((x.get("pred") or {}).get("snaps") is not None and x.get("world_tick") is not None
+                      for x in c["samples"])
+        if p["snaps"] > 0 and not located:
+            missing.append(f"{c['index']}: snaps not locatable (no per-sample pred.snaps / world_tick)")
+            continue
+        uid = ids[c["index"]]
+        tps = _server_teleports(ev, uid, max_speed) if uid else []
+        explained = 0
+        for t0, t1, n in steps:
+            if any(lo - win <= t1 and t0 <= hi + win for lo, hi in tps):
+                explained += n
+        unexplained = max(0, p["snaps"] - explained)
+        rate = unexplained / (secs / 60.0)
+        per[c["index"]] = {"snaps": p["snaps"], "explained_by_server_teleport": explained,
+                           "unexplained": unexplained, "server_teleports": len(tps), "seconds": round(secs, 1),
+                           "unexplained_per_min": round(rate, 2), "max_correction": p.get("max_correction")}
         if rate > bound:
             over.append(c["index"])
     if missing:
-        return _inconclusive(f"no prediction counters over >= {min_s:.0f} s for client(s) {missing}",
-                             source="client summary.json prediction")
-    return _result(FAIL if over else PASS, per, {"max_snaps_per_client_min": bound},
-                   source="client summary.json prediction.snaps (LocalMovePredictor hard corrections)",
-                   sampling="whole scenario, per client",
-                   rationale="a hard snap is a correction too large to smooth: the local player jumps. The bound "
-                             "separates the measured fixed builds (<= 3.05/min) from the broken one (>= 12/min); see "
-                             "the check docstring for the runs",
+        return _inconclusive("; ".join(missing), source="client summary.json / samples.ndjson prediction")
+    return _result(FAIL if over else PASS, per, {"max_unexplained_per_client_min": bound,
+                                                 "match_window_ticks": win},
+                   source="client samples.ndjson pred.snaps rises vs server /debug/entities respawns and teleports "
+                          "of the same player, matched by world tick",
+                   sampling="20 Hz client samples, 5 Hz server samples",
+                   rationale="a hard snap the server did not cause is a prediction error the player sees as a jump; "
+                             "snaps from respawns are correct and are reported, not judged. " + BOUND_JUSTIFICATION,
                    detail={"over": over})
+
 
 
 _RATE_FIELDS = {"SIM_CRITICAL_HZ": "sim_critical_hz", "SIM_WORLD_HZ": "sim_world_hz",
@@ -1795,4 +1900,321 @@ CHECKS.update({
     "render_freshness": check_render_freshness,
     "prediction_bound": check_prediction_bound,
     "server_config": check_server_config,
+})
+
+
+# --------------------------------------------------------------------------- client hooks C1-C6 (T16)
+
+def _expected_tick_hz(ev):
+    rows = _status_in_window(ev) or ev["server"]["status"]
+    vals = sorted({float(r.get("tick_rate") or r.get("sim_critical_hz")) for r in rows
+                   if r.get("tick_rate") or r.get("sim_critical_hz")})
+    return vals
+
+
+def check_tick_adoption(ev, a):
+    """The client's predictor steps at the rate the server advertises (C1 hook: samples.ndjson
+    pred.tick_hz, summary.json prediction.tick_hz) - JoinTokenResponse.tick_rate, which /status
+    publishes as tick_rate (= SimulationRates.MovementHz). Every sample after the scenario start
+    must match, so a reconnect that kept the old rate fails too (client fix 4544aab, Netcode#183)."""
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="samples.ndjson pred.tick_hz")
+    want = _expected_tick_hz(ev)
+    if not want:
+        return _inconclusive("/status reports no tick_rate", source="/status tick_rate")
+    if len(want) > 1:
+        return _inconclusive(f"/status tick_rate changed during the run: {want}", source="/status tick_rate")
+    hz = want[0]
+    excl = [(float(w[0]), float(w[1])) for w in a.get("exclude_s", [])]
+    per, missing, wrong = {}, [], 0
+    for c in ev["clients"]:
+        seen = {}
+        for s in c["samples"]:
+            st, p = s.get("st"), s.get("pred") or {}
+            if st is None or st < 0 or p.get("tick_hz") is None or any(e0 <= st <= e1 for e0, e1 in excl):
+                continue
+            v = float(p["tick_hz"])
+            seen[v] = seen.get(v, 0) + 1
+        end = ((c["summary"] or {}).get("prediction") or {}).get("tick_hz")
+        if not seen and end is None:
+            missing.append(c["index"])
+            continue
+        bad = sum(n for v, n in seen.items() if abs(v - hz) > 1e-3) + (1 if end is not None and abs(float(end) - hz) > 1e-3 else 0)
+        wrong += bad
+        per[c["index"]] = {"samples": seen, "summary_tick_hz": end, "mismatches": bad}
+    if missing:
+        return _inconclusive(f"no predictor tick_hz from client(s) {missing} (player without hook C1, or no predictor)",
+                         source="samples.ndjson pred.tick_hz")
+    return _result(PASS if wrong == 0 else FAIL, per, {"tick_hz": hz},
+                   source="client samples.ndjson pred.tick_hz and summary.json prediction.tick_hz vs /status tick_rate",
+                   sampling="every client sample", detail={},
+                   rationale="a predictor stepping at another rate than the server integrates at drifts from the "
+                             "server path and is corrected again and again (rubber-banding)")
+
+
+# Removed entities may still be drawn while the render clock (TargetDelay behind) has not passed
+# their removal; TargetDelay + MaxExtrapolation is the longest that can legitimately take.
+def check_entity_lifecycle(ev, a):
+    """C3 hooks (events.ndjson entity_added / entity_removed / entities_reset) against the 20 Hz
+    rendered samples:
+    - despawn: an entity removed at time t is not in any rendered sample after
+      t + TargetDelay + MaxExtrapolation (150 ms) + one sample period, unless its id was added again;
+    - id reuse: an id added again after a removal is first drawn at its own spawn position (the
+      entity_added rx/ry within max_speed x 150 ms + 0.2 of its first snapshot's x/y), not where the
+      previous entity was."""
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="events.ndjson entity_*")
+    grace = (float(a.get("target_delay_ms", INTERP_TARGET_DELAY_MS)) +
+             float(a.get("max_extrapolation_ms", INTERP_MAX_EXTRAPOLATION_MS))) / 1000.0
+    sample_dt = 1.0 / max(1.0, float(ev["scenario"].get("sample_hz", 20)))
+    max_speed = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0))
+    tol = max_speed * grace + 0.2
+    lingering, reuse_bad, reuse_ok = [], [], 0
+    removed_total, missing = 0, []
+    for c in ev["clients"]:
+        evs = sorted((e for e in c["events"] if e.get("event") in ("entity_added", "entity_removed", "entities_reset")
+                      and e.get("t") is not None), key=lambda e: e["t"])
+        if not any(e["event"] in ("entity_added", "entity_removed") for e in evs) or not c["samples"]:
+            missing.append(c["index"])
+            continue
+        samples = [(s["t"], {r[0]: r for r in s.get("ents", [])}) for s in c["samples"] if s.get("t") is not None]
+        stimes = [t for t, _ in samples]
+        drawn = {}  # id -> sorted sample times it was drawn at (one index, so a soak stays linear)
+        for t, ents in samples:
+            for eid in ents:
+                drawn.setdefault(eid, []).append(t)
+        removed_at = {}
+        for i, e in enumerate(evs):
+            if e["event"] == "entities_reset":
+                removed_at.clear()
+                continue
+            eid = e.get("id")
+            if e["event"] == "entity_removed":
+                removed_total += 1
+                removed_at[eid] = e["t"]
+                nxt = next((f["t"] for f in evs[i + 1:] if f.get("id") == eid and f["event"] == "entity_added"
+                            or f["event"] == "entities_reset"), None)
+                lo, hi = e["t"] + grace + sample_dt, (nxt if nxt is not None else float("inf"))
+                times = drawn.get(eid, [])
+                j = bisect_right(times, lo)
+                if j < len(times) and times[j] < hi:
+                    lingering.append({"client": c["index"], "id": eid, "removed_t": round(e["t"], 3),
+                                      "still_drawn_t": round(times[j], 3)})
+            elif e["event"] == "entity_added" and eid in removed_at and e.get("rx") is not None:
+                prev = next((ents[eid] for t, ents in reversed(samples[:bisect_left(stimes, removed_at[eid])])
+                             if eid in ents), None)
+                d = math.hypot(e["rx"] - e["x"], e["ry"] - e["y"])
+                row = {"client": c["index"], "id": eid, "t": round(e["t"], 3), "first_drawn_from_spawn": round(d, 3),
+                       "from_previous_entity": None if prev is None else round(math.hypot(e["rx"] - prev[3], e["ry"] - prev[4]), 3)}
+                if d > tol:
+                    reuse_bad.append(row)
+                else:
+                    reuse_ok += 1
+                removed_at.pop(eid, None)
+    if missing:
+        return _inconclusive(f"no entity_added/entity_removed events or samples for client(s) {missing} "
+                             "(player without hook C3)", source="events.ndjson entity_*")
+    if removed_total == 0:
+        return _inconclusive("no entity was removed during the run: despawn not exercised", source="events.ndjson")
+    return _result(FAIL if lingering or reuse_bad else PASS,
+                   {"removed": removed_total, "lingering": len(lingering), "reused_ids_checked": reuse_ok + len(reuse_bad),
+                    "reused_drawn_elsewhere": len(reuse_bad)},
+                   {"despawn_grace_s": round(grace + sample_dt, 3), "reuse_tolerance": round(tol, 3)},
+                   source="client events.ndjson entity_added/entity_removed (C3) vs samples.ndjson rendered entities",
+                   sampling=f"rendered samples at {ev['scenario'].get('sample_hz')} Hz",
+                   rationale="a removed entity left on screen is a ghost; a reused id drawn where the previous entity "
+                             "was is a stale view entry interpolating between two different entities",
+                   detail={"lingering": lingering[:20], "reuse_drawn_elsewhere": reuse_bad[:20]})
+
+
+def _render_tracks(c, skip, stalls):
+    """{entity id: ([render_tick], [x], [y])} of remote (not locally predicted) entities."""
+    out = {}
+    for s in c["samples"]:
+        rt, st = s.get("render_tick"), s.get("st")
+        if rt is None or st is None or st < skip or _in_stall(stalls, st, st, slack=0.5):
+            continue
+        for row in s.get("ents", []):
+            if row[2] == 1 or row[1] == "projectile":
+                continue
+            tr = out.setdefault(row[0], ([], [], []))
+            tr[0].append(float(rt))
+            tr[1].append(row[3])
+            tr[2].append(row[4])
+    return out
+
+
+def check_cross_client_convergence(ev, a):
+    """Two clients drawing the same remote entity at the same server tick draw it in the same place
+    (C4 hook: samples.ndjson render_tick, the tick the row's positions were drawn at). For every pair
+    of clients, A's rendered position at render tick T is compared with B's interpolated between B's
+    two samples around T. Thresholds are those of the remote position_divergence assertions (p95 0.35,
+    max 1.0): two views of one interpolated stream must agree at least as well as each agrees with
+    the server. Pairs across a server teleport (B's two samples further apart than an entity can walk)
+    are skipped."""
+    if len(ev["clients"]) < 2:
+        return _inconclusive("needs at least two clients", source="samples.ndjson render_tick")
+    hz = _tick_hz(ev, a)
+    if not hz:
+        return _inconclusive("server tick rate unknown", source="/status")
+    stalls = host_stalls(ev)
+    skip = float(a.get("skip_first_s", 2.0))
+    tracks = [_render_tracks(c, skip, stalls) for c in ev["clients"]]
+    missing = [c["index"] for c, t in zip(ev["clients"], tracks) if not t]
+    if missing:
+        return _inconclusive(f"no samples with render_tick for client(s) {missing} (player without hook C4)",
+                             source="samples.ndjson render_tick")
+    max_gap = float(a.get("max_bracket_s", 0.2)) * hz
+    max_speed = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0))
+    dists, worst = [], []
+    for i, ta in enumerate(tracks):
+        for j, tb in enumerate(tracks):
+            if i == j:
+                continue
+            for eid, (ticks, xs, ys) in ta.items():
+                other = tb.get(eid)
+                if other is None:
+                    continue
+                bt, bx, by = other
+                for k, tick in enumerate(ticks):
+                    m = bisect_left(bt, tick)
+                    if m == 0 or m >= len(bt) or bt[m] - bt[m - 1] > max_gap or bt[m] == bt[m - 1]:
+                        continue
+                    step = math.hypot(bx[m] - bx[m - 1], by[m] - by[m - 1])
+                    if step > max_speed * 1.5 * (bt[m] - bt[m - 1]) / hz + 0.2:
+                        continue
+                    f = (tick - bt[m - 1]) / (bt[m] - bt[m - 1])
+                    d = math.hypot(xs[k] - (bx[m - 1] + f * (bx[m] - bx[m - 1])), ys[k] - (by[m - 1] + f * (by[m] - by[m - 1])))
+                    dists.append(d)
+                    if d > float(a.get("max", 1.0)) and len(worst) < 15:
+                        worst.append({"a": i, "b": j, "id": eid, "render_tick": tick, "dist": round(d, 3)})
+    if len(dists) < int(a.get("min_pairs", 50)):
+        return _inconclusive(f"{len(dists)} comparable pairs (need {a.get('min_pairs', 50)})", source="samples.ndjson")
+    p95, mx = util.percentile(dists, 95), max(dists)
+    ok = p95 <= float(a.get("p95", 0.35)) and mx <= float(a.get("max", 1.0))
+    return _result(PASS if ok else FAIL, {"pairs": len(dists), "p50": round(util.percentile(dists, 50), 4),
+                                          "p95": round(p95, 4), "max": round(mx, 4)},
+                   {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0)},
+                   source="samples.ndjson rendered remote positions keyed by render_tick (C4), client pairs",
+                   sampling=f"client {ev['scenario'].get('sample_hz')} Hz",
+                   rationale="clients interpolate the same server stream; at the same render tick they must draw an "
+                             "entity in the same place, or players see each other's world differently",
+                   detail={"worst": worst})
+
+
+def check_stall_recovery(ev, a):
+    """After a scripted client stall (C2 hook: plan action stall, events.ndjson stall with start/end
+    and actual_ms), the stalled client's predicted player is back on the server path: local
+    divergence p95 <= 0.5 (the local_divergence bound of S03/S10/S12) over [end + recover_s,
+    end + recover_s + judge_s]. recover_s (default 1.0 s, 15 world snapshots) is the time allowed to
+    reconcile; it is a test parameter, reported with the result. Hard snaps during each stall window
+    are reported (pred.snaps delta)."""
+    stalls = [(c, e) for c in ev["clients"] for e in c["events"] if e.get("event") == "stall"]
+    if not stalls:
+        return _inconclusive("no stall event in any client (plan without a stall action, or player without hook C2)",
+                             source="events.ndjson stall")
+    recover, judge = float(a.get("recover_s", 1.0)), float(a.get("judge_s", 3.0))
+    bound = float(a.get("p95", 0.5))
+    rows, failed, unjudged = [], 0, 0
+    for c, e in stalls:
+        if e.get("end") is None or e.get("actual_ms") is None or float(e["actual_ms"]) < 0.9 * float(e.get("ms", 0)):
+            rows.append({"client": c["index"], "ms": e.get("ms"), "actual_ms": e.get("actual_ms"), "result": "did not stall as asked"})
+            unjudged += 1
+            continue
+        lo, hi = float(e["end"]) + recover, float(e["end"]) + recover + judge
+        errs, snaps_before, snaps_after = [], None, None
+        for s in c["samples"]:
+            t, p = s.get("t"), s.get("pred") or {}
+            if t is None:
+                continue
+            if t <= float(e["start"]) and p.get("snaps") is not None:
+                snaps_before = p["snaps"]
+            if t <= hi and p.get("snaps") is not None:
+                snaps_after = p["snaps"]
+            if not lo <= t <= hi or s.get("st") is None:
+                continue
+            for row in s.get("ents", []):
+                if row[2] != 1:
+                    continue
+                tr = ev["traj"].get(row[0])
+                d = _dist_to_path(tr, s["st"] - 0.3, s["st"] + 0.6, row[3], row[4]) if tr else None
+                if d is not None:
+                    errs.append(d)
+        if len(errs) < 10:
+            rows.append({"client": c["index"], "ms": e.get("ms"), "result": f"{len(errs)} local samples after recovery"})
+            unjudged += 1
+            continue
+        p95 = util.percentile(errs, 95)
+        ok = p95 <= bound
+        failed += 0 if ok else 1
+        rows.append({"client": c["index"], "ms": e.get("ms"), "actual_ms": e.get("actual_ms"),
+                     "local_p95_after": round(p95, 3), "samples": len(errs),
+                     "snaps_during": None if snaps_before is None or snaps_after is None else snaps_after - snaps_before,
+                     "ok": ok})
+    status = FAIL if failed else (INCONCLUSIVE if unjudged else PASS)
+    return _result(status, rows, {"local_p95": bound, "recover_s": recover, "judge_s": judge},
+                   source="events.ndjson stall (C2) and samples.ndjson local rendered position vs server /debug/entities",
+                   sampling=f"client {ev['scenario'].get('sample_hz')} Hz, server {ev['scenario'].get('server_sample_hz')} Hz",
+                   rationale="a client that stops for a frame of half a second or two seconds must reconcile with the "
+                             "server and stay there, not keep drifting or rubber-banding")
+
+
+def check_graceful_leave(ev, a):
+    """A client that leaves with the quit action (C6 hook: Disconnect(), not a process kill) ends
+    with outcome `left` and a `disconnected` event, and its player entity leaves the server within
+    leave_timeout_s (default 5 s, a test bound far under the 60 s KCP idle timeout,
+    KcpTuning.IdleTimeoutMs, that cleans up a silent client): a polite leave must not wait for
+    the timeout. Other clients with hook C3 must report its entity removed in the same bound."""
+    leavers = [(c, e) for c in ev["clients"] for e in c["events"] if e.get("event") == "quit_requested"]
+    if not leavers:
+        return _inconclusive("no quit_requested event (plan without quit, or player without hook C6)",
+                             source="events.ndjson quit_requested")
+    ids = _user_ids(ev)
+    timeout = float(a.get("leave_timeout_s", 5.0))
+    rows, bad, unjudged = [], 0, 0
+    for c, e in leavers:
+        uid, st = ids[c["index"]], e.get("st")
+        row = {"client": c["index"], "user_id": uid, "quit_st": st,
+               "outcome": (c["summary"] or {}).get("outcome"),
+               "disconnected": any(x.get("event") == "disconnected" for x in c["events"])}
+        t = ev["traj"].get(uid) if uid else None
+        after = [r for r in ev["server"]["entities"] if r.get("st") is not None and st is not None and r["st"] > st + timeout]
+        if t is None or st is None or not after:
+            row["result"] = "no server samples to judge the removal"
+            unjudged += 1
+            rows.append(row)
+            continue
+        still = [r["st"] for r in after if any(x[0] == uid for x in r["ents"])]
+        last_seen = max((s for s in t["st"] if s >= st), default=None)
+        row.update({"server_removed_after_s": None if last_seen is None else round(last_seen - st, 2),
+                    "present_after_timeout": len(still)})
+        seen_removed = {}
+        for o in ev["clients"]:
+            if o is c:
+                continue
+            rm = [x["st"] for x in o["events"] if x.get("event") == "entity_removed" and x.get("id") == uid
+                  and x.get("st") is not None and x["st"] >= st]
+            seen_removed[o["index"]] = round(min(rm) - st, 2) if rm else None
+        row["others_removed_after_s"] = seen_removed
+        late_others = [k for k, v in seen_removed.items() if v is None or v > timeout]
+        has_c3 = any(x.get("event") == "entity_removed" for o in ev["clients"] if o is not c for x in o["events"])
+        ok = row["outcome"] == "left" and row["disconnected"] and not still and (not has_c3 or not late_others)
+        row["ok"] = ok
+        bad += 0 if ok else 1
+        rows.append(row)
+    status = FAIL if bad else (INCONCLUSIVE if unjudged else PASS)
+    return _result(status, rows, {"leave_timeout_s": timeout, "outcome": "left"},
+                   source="client events.ndjson quit_requested/disconnected, summary.json outcome, server /debug/entities, "
+                          "other clients' entity_removed (C3)",
+                   sampling=f"server {ev['scenario'].get('server_sample_hz')} Hz",
+                   rationale="a player who leaves must disappear for everyone at once; one that lingers until the idle "
+                             "timeout is a ghost the others can still see and hit")
+
+
+CHECKS.update({
+    "tick_adoption": check_tick_adoption,
+    "entity_lifecycle": check_entity_lifecycle,
+    "cross_client_convergence": check_cross_client_convergence,
+    "stall_recovery": check_stall_recovery,
+    "graceful_leave": check_graceful_leave,
 })

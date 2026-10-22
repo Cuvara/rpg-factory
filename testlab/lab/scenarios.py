@@ -15,7 +15,10 @@ from . import SCHEMA_PLAN, SCHEMA_SCENARIO, util
 SCENARIO_DIR = Path(__file__).resolve().parent.parent / "scenarios"
 
 _STEP_MODES = {"idle", "move", "circle", "toward_point", "toward_nearest_enemy", "away_from_nearest_enemy", "toward_client"}
-_ACTION_KINDS = {"cast_nearest_enemy", "cast_forward", "jump"}
+_ACTION_KINDS = {"cast_nearest_enemy", "cast_forward", "jump",
+                 # Coverage hooks C2/C5/C6 (client docs/TESTLAB.md "Coverage hooks"): one-shot at t0.
+                 "cast_at_point", "cast_spam", "stall", "quit", "reconnect"}
+_ONE_SHOT = {"stall", "quit", "reconnect"}
 _DISRUPTIONS = {"kill_client", "restart_gameserver"}
 
 DEFAULTS = {
@@ -94,6 +97,8 @@ def validate(sc: dict) -> None:
         for action in block.get("actions", []):
             if action.get("kind") not in _ACTION_KINDS:
                 raise ScenarioError(f"{sc['id']}: unknown action kind {action.get('kind')}")
+            if action["kind"] == "stall" and int(action.get("ms", 0)) <= 0:
+                raise ScenarioError(f"{sc['id']}: a stall needs ms > 0: {action}")
     for d in sc["disruptions"]:
         if d.get("kind") not in _DISRUPTIONS:
             raise ScenarioError(f"{sc['id']}: unknown disruption {d.get('kind')}")
@@ -142,5 +147,9 @@ def _step(s: dict) -> dict:
 
 
 def _action(a: dict) -> dict:
-    return {"t0": float(a["t0"]), "t1": float(a["t1"]), "kind": a["kind"],
-            "interval_s": float(a.get("interval_s", 1)), "range": float(a.get("range", 12))}
+    # One-shot actions (stall, quit, reconnect) fire at t0; the client ignores t1.
+    t1 = a.get("t1", a["t0"] if a["kind"] in _ONE_SHOT else None)
+    return {"t0": float(a["t0"]), "t1": float(t1), "kind": a["kind"],
+            "interval_s": float(a.get("interval_s", 1)), "range": float(a.get("range", 12)),
+            "x": float(a.get("x", 0)), "y": float(a.get("y", 0)),
+            "interval_ms": float(a.get("interval_ms", 100)), "ms": int(a.get("ms", 250))}

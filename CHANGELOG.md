@@ -72,6 +72,25 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     (versions bumped).
   - `build-client` writes a `netcode` block (embedded git HEAD or packages-lock hash) into
     `testlab-build.json`, so a build-client player's provenance names its Netcode commit.
+  - **Client trace schema v2 and the client coverage hooks C1-C6** (client 299b6c8,
+    `docs/TESTLAB.md`). `render_freshness` now grades the render clock that drew each frame
+    (v2 `render_tick` / `clock_newest_tick`): p99 overrun past the newest consumed tick <=
+    MaxExtrapolation (50 ms); v1 render.csv (empty `render_tick`) is INCONCLUSIVE. New checks
+    `tick_adoption` (C1), `entity_lifecycle` (C3: no ghost after removal, reused ids drawn at
+    their own spawn), `cross_client_convergence` (C4: same entity, same render tick, same place),
+    `stall_recovery` (C2) and `graceful_leave` (C6); each INCONCLUSIVE without its hook's
+    evidence. New scenarios S13 (client stall 500 ms and 2000 ms) and S08G (graceful leave);
+    suite `readiness` (S11 S12 S13 S08G). Plan actions `stall`, `quit`, `reconnect`,
+    `cast_at_point`, `cast_spam` are accepted; `clients_completed` takes `expected_outcomes`.
+  - **`prediction_bound` grades only unexplained snaps.** Every snap is matched by world tick to
+    a server respawn or teleport of the same player (/debug/entities); explained snaps are
+    reported, the rest are graded at 4 per client-minute (fixed builds at most 2.0, pre-fix runs
+    7.5 or more, derived from every stored run). It was 6 total snaps per client-minute, which
+    counted correct respawn snaps as errors.
+- `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
+  tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
+  `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
+  (`tests/netcode-headless.test.sh`, in run-all).
   - Paths given to the CLI in Git Bash form (`/c/...`) work with Windows Python. The README states
     which commands run in Git Bash and which also run in WSL, and that `build-client` regenerates
     the scene only with `--rebuild-scene`.

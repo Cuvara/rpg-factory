@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S11",
-  "version": 1,
+  "version": 2,
   "title": "Resync after a game-server restart: clients come back, ticks restart, rendering converges",
   "description": "Three clients on dev_arena (enemies on). At 20 s the scratch game server container is restarted (disruption restart_gameserver). 20-40 s is the grace window for the restart, the server's re-registration and the clients' reconnect; nothing is judged inside it. After it every client must be back InWorld, the server must hold all three players, snapshots must flow at the world rate, ticks may restart only in a new session, and what clients render must be back on the server's path. A FAIL here is a valid result (e.g. a client that never rebinds after the reconnect); the scenario is not tuned to pass.",
   "clients": 3,
@@ -138,6 +138,23 @@
         ]
       ],
       "title": "age of the newest snapshot at each frame outside the grace window (C2)"
+    },
+    {
+      "id": "tick_adoption",
+      "check": "tick_adoption",
+      "title": "the predictor steps at the server's advertised tick rate (C1)",
+      "exclude_s": [
+        [
+          20,
+          40
+        ]
+      ]
+    },
+    {
+      "id": "cross_client_convergence",
+      "check": "cross_client_convergence",
+      "title": "clients draw a remote entity in the same place at the same render tick (C4)",
+      "skip_first_s": 40
     }
   ]
 }

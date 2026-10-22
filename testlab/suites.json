@@ -3,7 +3,8 @@
   "crowding": ["S02", "S05", "S10"],
   "movement": ["S03", "S06"],
   "combat": ["S04"],
-  "lifecycle": ["S08"],
+  "lifecycle": ["S08", "S08G"],
+  "readiness": ["S11", "S12", "S13", "S08G"],
   "soak": ["S09"],
   "full": ["S01", "S02", "S03", "S04", "S05", "S06", "S08", "S10"]
 }

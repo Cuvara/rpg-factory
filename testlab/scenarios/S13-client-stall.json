@@ -1,0 +1,127 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S13",
+  "version": 1,
+  "title": "Client stall recovery: one client's main thread stops for 500 ms and for 2000 ms",
+  "description": "dev_arena, enemies off, every client moving. Client 0 blocks its main thread (plan action stall, client hook C2: Thread.Sleep) for 500 ms at 10 s and 2000 ms at 25 s, as a GC pause, an alt-tab or a slow disk would. It must reconcile with the server and stay there (stall_recovery), without hard prediction snaps beyond the measured bound (prediction_bound) and without a local rendered jump (render_jumps). The other clients must keep drawing it where the server has it. The stall is one process only, so host_stalls does not set it aside.",
+  "clients": 3,
+  "map": "dev_arena",
+  "seed": 13,
+  "duration_s": 40,
+  "server_env": {
+    "GAMESERVER_ENEMIES": "false"
+  },
+  "screenshots_s": [
+    9,
+    11,
+    24,
+    28,
+    38
+  ],
+  "client_defaults": {
+    "steps": [
+      {
+        "t0": 2,
+        "t1": 38,
+        "mode": "circle",
+        "rate": 1.0
+      }
+    ],
+    "actions": []
+  },
+  "per_client": [
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 20,
+          "mode": "circle",
+          "rate": 1.0
+        },
+        {
+          "t0": 20,
+          "t1": 38,
+          "mode": "move",
+          "x": 0,
+          "y": 1
+        }
+      ],
+      "actions": [
+        {
+          "t0": 10,
+          "kind": "stall",
+          "ms": 500
+        },
+        {
+          "t0": 25,
+          "kind": "stall",
+          "ms": 2000
+        }
+      ]
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "stall_recovery",
+      "check": "stall_recovery",
+      "title": "the stalled client is back on the server path after each stall"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "title": "local prediction hard snaps per client-minute"
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "max_local": 0,
+      "max_remote_per_client_min": 2.0,
+      "title": "no local rendered jump, stalls included"
+    },
+    {
+      "id": "remote_player_divergence",
+      "check": "position_divergence",
+      "types": [
+        "player"
+      ],
+      "p95": 0.35,
+      "max": 1.0,
+      "title": "the other clients draw every player on the server path"
+    },
+    {
+      "id": "snapshots",
+      "check": "snapshot_cadence",
+      "exclude_s": [
+        [
+          10,
+          11.5
+        ],
+        [
+          25,
+          28
+        ]
+      ],
+      "title": "snapshot cadence outside the stalls"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order"
+    },
+    {
+      "id": "tick_adoption",
+      "check": "tick_adoption"
+    }
+  ]
+}

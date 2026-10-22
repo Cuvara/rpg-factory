@@ -1180,61 +1180,344 @@ class EnemyBudgetTests(unittest.TestCase):
 
 
 class RenderFreshnessTests(unittest.TestCase):
-    def _ev(self, d, ages_per_client, start=10.0):
-        ev = _ev(clients=len(ages_per_client), duration=10)
-        for c, ages in zip(ev["clients"], ages_per_client):
+    """v2 render.csv: overrun = render_tick past clock_newest_tick, in ms at the server tick rate."""
+    V2 = "frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms,clock_source"
+
+    def _ev(self, d, overruns_per_client, start=10.0, header=V2, hz=60):
+        ev = _ev(clients=len(overruns_per_client), duration=10, status=[{"_st": 1, "tick_rate": hz}])
+        for c, overruns in zip(ev["clients"], overruns_per_client):
             p = Path(d) / f"render-{c['index']}.csv"
-            rows = ["frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms"]
-            for k, age in enumerate(ages):
+            rows = [header]
+            for k, o in enumerate(overruns):
                 t_us = int((start + 0.5 + k * 0.016) * 1e6)
-                rows.append(f"{k},{t_us},100,104,104,{t_us - int(age * 1000)},{age}")
+                newest = 1000 + k
+                rt = "" if o is None else f"{newest + o / 1000.0 * hz:.3f}"
+                cn = "" if o is None else str(newest)
+                src = "" if o is None else "binder"
+                cols = [str(k), str(t_us), rt, cn, str(newest), str(t_us - 30000), "30.0"]
+                if "clock_source" in header:
+                    cols.append(src)
+                rows.append(",".join(cols))
             _write(p, "\n".join(rows) + "\n")
             c["render_csv"] = p
             c["summary"] = {"start_realtime": start}
         return ev
 
-    def test_bound_is_target_delay_plus_max_extrapolation(self):
+    def test_clock_behind_newest_passes_and_frozen_frames_fail(self):
         with tempfile.TemporaryDirectory() as d:
-            ok = self._ev(d, [[20 + (k % 50) for k in range(300)]] * 2)
-            res = analyze.check_render_freshness(ok, {})
-            self.assertEqual(res["status"], analyze.PASS)
-            self.assertEqual(res["threshold"]["p99_ms"], 150.0)
-            stale = self._ev(d, [[20] * 280 + [400] * 20, [20] * 300])
-            self.assertEqual(analyze.check_render_freshness(stale, {})["status"], analyze.FAIL)
+            # Normal: render clock TargetDelay (100 ms) behind the newest tick -> overrun 0.
+            res = analyze.check_render_freshness(self._ev(d, [[-100] * 300] * 2), {})
+            self.assertEqual(res["status"], analyze.PASS, res)
+            self.assertEqual(res["threshold"]["overrun_p99_ms"], 50.0)
+            self.assertEqual(res["measured"][0]["clock_source"], {"binder": 300})
+            frozen = self._ev(d, [[-100] * 280 + [200] * 20, [-100] * 300])
+            res = analyze.check_render_freshness(frozen, {})
+            self.assertEqual(res["status"], analyze.FAIL)
+            self.assertEqual(res["measured"][0]["frames_frozen"], 20)
 
-    def test_stale_frames_only_inside_a_host_stall_are_inconclusive(self):
+    def test_overrun_is_converted_at_the_server_tick_rate(self):
         with tempfile.TemporaryDirectory() as d:
-            ev = self._ev(d, [[20] * 280 + [400] * 20] * 2)
-            stall_st = 0.5 + 285 * 0.016
+            ev = self._ev(d, [[40] * 300], hz=30)  # 40 ms at 30 Hz = 1.2 ticks
+            self.assertAlmostEqual(analyze.check_render_freshness(ev, {})["measured"][0]["overrun_p99_ms"], 40.0, delta=0.1)
+
+    def test_v1_render_csv_with_empty_render_tick_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            v1 = "frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms"
+            res = analyze.check_render_freshness(self._ev(d, [[None] * 300] * 2, header=v1), {})
+            self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+            self.assertIn("v1 schema", res["detail"]["why"])
+
+    def test_frozen_frames_only_inside_a_host_stall_are_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            ev = self._ev(d, [[-100] * 280 + [200] * 20] * 2)
             for c in ev["clients"]:
-                c["frames"] = [(stall_st, 800.0)]
+                c["frames"] = [(0.5 + 285 * 0.016, 800.0)]
             self.assertEqual(analyze.check_render_freshness(ev, {})["status"], analyze.INCONCLUSIVE)
 
-    def test_missing_c2_is_inconclusive(self):
-        ev = _ev(clients=2)
+    def test_missing_c2_or_tick_rate_is_inconclusive(self):
+        ev = _ev(clients=2, status=[{"_st": 1, "tick_rate": 60}])
         for c in ev["clients"]:
             c["summary"] = {"start_realtime": 1.0}
             c["render_csv"] = Path("does-not-exist.csv")
         self.assertEqual(analyze.check_render_freshness(ev, {})["status"], analyze.INCONCLUSIVE)
+        with tempfile.TemporaryDirectory() as d:
+            ev = self._ev(d, [[-100] * 300])
+            ev["server"]["status"] = []
+            self.assertEqual(analyze.check_render_freshness(ev, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_delivery_parser_reads_v1_and_v2_render_csv(self):
+        from lab import delivery
+        with tempfile.TemporaryDirectory() as d:
+            for header, extra in ((self.V2, ",binder"), (self.V2.rsplit(",", 1)[0], "")):
+                _write(Path(d) / "render.csv", header + "\n" + f"1,1000000,99.5,104,104,980000,20.0{extra}\n"
+                       + f"2,1016000,100.5,104,104,980000,36.0{extra}\n")
+                frames, render = delivery.read_frames(Path(d))
+                self.assertEqual(len(render), 2)
+                self.assertEqual(render[0][2], 99.5)
+
+
+class TickAdoptionTests(unittest.TestCase):
+    def _ev(self, *rates, summary=None, status_hz=30):
+        ev = _ev(clients=len(rates), status=[{"_st": 1, "tick_rate": status_hz}])
+        for c, hz in zip(ev["clients"], rates):
+            c["samples"] = [{"st": k * 0.5, "pred": {"tick_hz": hz}} for k in range(10)]
+            c["summary"] = {"prediction": {"tick_hz": summary if summary is not None else hz}}
+        return ev
+
+    def test_predictor_at_the_advertised_rate_passes_any_other_fails(self):
+        self.assertEqual(analyze.check_tick_adoption(self._ev(30, 30), {})["status"], analyze.PASS)
+        self.assertEqual(analyze.check_tick_adoption(self._ev(30, 60), {})["status"], analyze.FAIL)
+        ev = self._ev(30)
+        ev["clients"][0]["samples"][7]["pred"]["tick_hz"] = 60  # a reconnect that kept the old rate
+        self.assertEqual(analyze.check_tick_adoption(ev, {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_tick_adoption(ev, {"exclude_s": [[3, 4]]})["status"], analyze.PASS)
+
+    def test_without_the_hook_or_the_server_rate_it_is_inconclusive(self):
+        ev = _ev(clients=1, status=[{"_st": 1, "tick_rate": 60}])
+        ev["clients"][0]["samples"] = [{"st": 1, "pred": {"snaps": 0}}]
+        self.assertEqual(analyze.check_tick_adoption(ev, {})["status"], analyze.INCONCLUSIVE)
+        ev = self._ev(30)
+        ev["server"]["status"] = []
+        self.assertEqual(analyze.check_tick_adoption(ev, {})["status"], analyze.INCONCLUSIVE)
+
+
+def _sample(t, ents, render_tick=None, pred=None):
+    s = {"t": t, "st": t - 100.0, "ents": ents}
+    if render_tick is not None:
+        s["render_tick"] = render_tick
+    if pred is not None:
+        s["pred"] = pred
+    return s
+
+
+class EntityLifecycleTests(unittest.TestCase):
+    def _ev(self, events, drawn_until, reuse_at=None):
+        """Entity 'm' drawn every 50 ms from t=100 until drawn_until (player clock)."""
+        ev = _ev(clients=1, duration=20)
+        c = ev["clients"][0]
+        samples = []
+        for k in range(200):
+            t = 100.0 + k * 0.05
+            ents = []
+            if t < drawn_until or (reuse_at is not None and t >= reuse_at):
+                ents.append(["m", "mob", 0, 1.0, 1.0, 1.0, 1.0])
+            samples.append(_sample(t, ents))
+        c["samples"], c["events"] = samples, events
+        return ev
+
+    ADD = {"event": "entity_added", "t": 100.0, "id": "m", "type": "mob", "tick": 10, "x": 1.0, "y": 1.0, "rx": 1.0, "ry": 1.0}
+
+    def test_removed_entity_off_screen_within_the_grace_passes(self):
+        ev = self._ev([self.ADD, {"event": "entity_removed", "t": 104.0, "id": "m", "rendered": True}], drawn_until=104.1)
+        res = analyze.check_entity_lifecycle(ev, {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual(res["measured"]["removed"], 1)
+
+    def test_a_removed_entity_still_drawn_is_a_ghost(self):
+        ev = self._ev([self.ADD, {"event": "entity_removed", "t": 104.0, "id": "m"}], drawn_until=105.0)
+        res = analyze.check_entity_lifecycle(ev, {})
+        self.assertEqual((res["status"], res["measured"]["lingering"]), (analyze.FAIL, 1))
+
+    def test_a_reused_id_must_start_at_its_own_spawn(self):
+        removed = {"event": "entity_removed", "t": 104.0, "id": "m"}
+        good = dict(self.ADD, t=106.0, tick=500, x=8.0, y=8.0, rx=8.1, ry=8.0)
+        res = analyze.check_entity_lifecycle(self._ev([self.ADD, removed, good], drawn_until=104.1, reuse_at=106.0), {})
+        self.assertEqual((res["status"], res["measured"]["reused_ids_checked"]), (analyze.PASS, 1))
+        stale = dict(good, rx=1.0, ry=1.0)  # drawn where the previous entity was
+        res = analyze.check_entity_lifecycle(self._ev([self.ADD, removed, stale], drawn_until=104.1, reuse_at=106.0), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["detail"]["reuse_drawn_elsewhere"][0]["from_previous_entity"], 0.0)
+
+    def test_without_the_hook_or_a_removal_it_is_inconclusive(self):
+        self.assertEqual(analyze.check_entity_lifecycle(self._ev([], drawn_until=200), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_entity_lifecycle(self._ev([self.ADD], drawn_until=200), {})["status"],
+                         analyze.INCONCLUSIVE)
+
+
+class CrossClientConvergenceTests(unittest.TestCase):
+    def _ev(self, offset=0.0, render_tick=True):
+        ev = _ev(clients=2, status=[{"_st": 1, "tick_rate": 60}])
+        for c in ev["clients"]:
+            samples = []
+            phase = 0.013 * c["index"]  # the two clients sample at different instants
+            for k in range(100):
+                t = 103.0 + phase + k * 0.05
+                tick = 1000 + (t - 103.0) * 60
+                x = (tick - 1000) / 60 * 2.0  # 2 u/s along x, a function of the render tick
+                if c["index"] == 1:
+                    x += offset
+                samples.append(_sample(t, [["e", "mob", 0, x, 0.0, x, 0.0]], tick if render_tick else None))
+            c["samples"] = samples
+        return ev
+
+    def test_same_tick_same_place_passes(self):
+        res = analyze.check_cross_client_convergence(self._ev(), {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertLess(res["measured"]["max"], 0.01)
+
+    def test_a_client_drawing_elsewhere_fails(self):
+        self.assertEqual(analyze.check_cross_client_convergence(self._ev(offset=0.6), {})["status"], analyze.FAIL)
+
+    def test_without_render_tick_or_a_second_client_it_is_inconclusive(self):
+        self.assertEqual(analyze.check_cross_client_convergence(self._ev(render_tick=False), {})["status"],
+                         analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_cross_client_convergence(_ev(clients=1), {})["status"], analyze.INCONCLUSIVE)
+
+
+class StallRecoveryTests(unittest.TestCase):
+    def _ev(self, err_after, actual_ms=2000):
+        # Server: player 'u' walks +x at 2 u/s; client 0 stalls 2 s at st 10-12 (t 110-112).
+        ents = [_row(k * 0.2, [["u", "player", k * 0.2 * 2.0, 0.0, 100, 100, 0, 5]]) for k in range(150)]
+        ev = _ev(clients=1, entities=ents, duration=30)
+        c = ev["clients"][0]
+        c["events"] = [{"event": "stall", "t": 110.0, "ms": 2000, "actual_ms": actual_ms, "start": 110.0, "end": 112.0}]
+        samples = []
+        for k in range(400):
+            t = 100.0 + k * 0.05
+            if 110.0 < t < 112.0:
+                continue
+            st = t - 100.0
+            x, y = st * 2.0, (err_after if t > 112.0 else 0.0)  # off the path sideways
+            samples.append(_sample(t, [["u", "player", 1, x, y, x, y]], pred={"snaps": 0 if t < 112 else 1}))
+        c["samples"] = samples
+        return ev
+
+    def test_back_on_the_server_path_after_the_stall_passes(self):
+        res = analyze.check_stall_recovery(self._ev(0.0), {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual(res["measured"][0]["snaps_during"], 1)
+
+    def test_still_off_the_path_after_recovery_fails(self):
+        self.assertEqual(analyze.check_stall_recovery(self._ev(1.0), {})["status"], analyze.FAIL)
+
+    def test_no_stall_or_a_short_stall_is_inconclusive(self):
+        self.assertEqual(analyze.check_stall_recovery(_ev(clients=1), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_stall_recovery(self._ev(0.0, actual_ms=300), {})["status"], analyze.INCONCLUSIVE)
+
+
+class GracefulLeaveTests(unittest.TestCase):
+    def _ev(self, gone_at, outcome="left", others_removed=True):
+        ents = [_row(k * 0.2, [["u0", "player", 0, 0, 100, 100, 0, 5], ["u1", "player", 1, 0, 100, 100, 0, 5]] +
+                     ([["u2", "player", 2, 0, 100, 100, 0, 5]] if k * 0.2 < gone_at else [])) for k in range(150)]
+        ev = _ev(clients=3, entities=ents, duration=30)
+        for c in ev["clients"]:
+            c["summary"] = {"user_id": f"u{c['index']}", "outcome": "completed"}
+        leaver = ev["clients"][2]
+        leaver["summary"]["outcome"] = outcome
+        leaver["events"] = [{"event": "quit_requested", "st": 15.0}, {"event": "disconnected", "st": 15.05}]
+        if others_removed:
+            for c in ev["clients"][:2]:
+                c["events"] = [{"event": "entity_removed", "id": "u2", "st": gone_at + 0.1}]
+        return ev
+
+    def test_a_polite_leave_removes_the_player_quickly(self):
+        res = analyze.check_graceful_leave(self._ev(gone_at=15.4), {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+
+    def test_lingering_until_the_idle_timeout_or_a_wrong_outcome_fails(self):
+        self.assertEqual(analyze.check_graceful_leave(self._ev(gone_at=25.0), {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_graceful_leave(self._ev(gone_at=15.4, outcome="completed"), {})["status"],
+                         analyze.FAIL)
+
+    def test_without_a_quit_it_is_inconclusive(self):
+        self.assertEqual(analyze.check_graceful_leave(_ev(clients=2), {})["status"], analyze.INCONCLUSIVE)
+
+    def test_expected_outcomes_let_a_leaver_complete(self):
+        ev = self._ev(gone_at=15.4)
+        self.assertEqual(analyze.check_clients_completed(ev, {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_clients_completed(ev, {"expected_outcomes": {"2": "left"}})["status"], analyze.PASS)
+
+
+class HookScenarioTests(unittest.TestCase):
+    def test_one_shot_actions_expand_with_their_fields(self):
+        plan = scenarios.client_plan(scenarios.load("S13"), 0, "r")
+        stalls = [a for a in plan["actions"] if a["kind"] == "stall"]
+        self.assertEqual([(a["t0"], a["t1"], a["ms"]) for a in stalls], [(10.0, 10.0, 500), (25.0, 25.0, 2000)])
+        quit_ = [a for a in scenarios.client_plan(scenarios.load("S08G"), 2, "r")["actions"] if a["kind"] == "quit"]
+        self.assertEqual(quit_[0]["t0"], 15.0)
+        with self.assertRaises(scenarios.ScenarioError):
+            scenarios.validate(_scenario(client_defaults={"steps": [], "actions": [{"t0": 1, "kind": "stall", "ms": 0}]}))
+
+    def test_s13_judges_after_each_stall_and_excludes_them_from_cadence(self):
+        sc = scenarios.load("S13")
+        stalls = [a for a in sc["per_client"][0]["actions"] if a["kind"] == "stall"]
+        windows = next(a for a in sc["assertions"] if a["check"] == "snapshot_cadence")["exclude_s"]
+        for s, w in zip(stalls, windows):
+            self.assertEqual(w[0], s["t0"])
+            self.assertGreaterEqual(w[1], s["t0"] + s["ms"] / 1000.0)
+        checks = {a["check"] for a in sc["assertions"]}
+        self.assertTrue({"stall_recovery", "prediction_bound", "render_jumps"} <= checks)
+
+    def test_s08g_expects_the_leaver_to_leave(self):
+        sc = scenarios.load("S08G")
+        by = {a["check"]: a for a in sc["assertions"]}
+        self.assertEqual(by["clients_completed"]["expected_outcomes"], {"2": "left"})
+        self.assertEqual(by["players_online"]["expected"], sc["clients"] - 1)
+        self.assertNotIn("disruptions", {k for k, v in sc.items() if v})
 
 
 class PredictionBoundTests(unittest.TestCase):
-    def _ev(self, *snaps, seconds=60.0, present=True):
-        ev = _ev(clients=len(snaps))
-        for c, n in zip(ev["clients"], snaps):
-            c["summary"] = {"scenario_seconds": seconds,
-                            "prediction": {"present": present, "snaps": n, "max_correction": 14.0}}
+    """Snaps matched by world tick to server respawns/teleports of the same player are explained."""
+
+    def _ev(self, snap_ticks, respawn_ticks=(), seconds=60.0, present=True, extra_summary_snaps=0):
+        # Server: player 'u' sampled every 12 ticks (5 Hz at 60 Hz); dead one sample before each respawn tick.
+        rows = []
+        for k in range(int(seconds * 5) + 1):
+            tick = 300 + k * 12
+            dead = any(rt - 12 <= tick < rt for rt in respawn_ticks)
+            moved = sum(1 for rt in respawn_ticks if tick >= rt) * 2.0  # respawn 2 units away
+            rows.append({"st": k * 0.2, "tick": tick, "ents": [["u", "player", moved, 0.0, 0 if dead else 100, 100,
+                                                                 1 if dead else 0, 5]]})
+        ev = _ev(clients=1, entities=rows, duration=seconds)
+        c = ev["clients"][0]
+        samples, snaps = [], 0
+        for k in range(int(seconds * 20)):
+            tick = 300 + k * 3
+            snaps += sum(1 for st in snap_ticks if tick - 3 < st <= tick)
+            samples.append({"t": 100 + k * 0.05, "st": k * 0.05, "world_tick": tick, "pred": {"snaps": snaps}})
+        c["samples"] = samples
+        c["summary"] = {"user_id": "u", "scenario_seconds": seconds,
+                        "prediction": {"present": present, "snaps": snaps + extra_summary_snaps, "max_correction": 2.0}}
         return ev
 
-    def test_measured_fixed_rates_pass_and_broken_rates_fail(self):
-        self.assertEqual(analyze.check_prediction_bound(self._ev(3, 3, 3), {})["status"], analyze.PASS)  # S02 58sn
-        self.assertEqual(analyze.check_prediction_bound(self._ev(183, seconds=3600), {})["status"], analyze.PASS)  # eeoa
-        self.assertEqual(analyze.check_prediction_bound(self._ev(8, seconds=40), {})["status"], analyze.FAIL)  # g0tz
-        self.assertEqual(analyze.check_prediction_bound(self._ev(335, seconds=300), {})["status"], analyze.FAIL)  # q61b
+    def test_snaps_at_server_respawns_are_explained(self):
+        respawns = [1500, 2600, 3700]
+        res = analyze.check_prediction_bound(self._ev([r + 4 for r in respawns], respawns), {})  # S02 58sn pattern
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual((res["measured"][0]["explained_by_server_teleport"], res["measured"][0]["unexplained"]), (3, 0))
 
-    def test_without_counters_or_long_enough_window_it_is_inconclusive(self):
-        self.assertEqual(analyze.check_prediction_bound(self._ev(0, seconds=15), {})["status"], analyze.INCONCLUSIVE)
-        self.assertEqual(analyze.check_prediction_bound(self._ev(0, present=False), {})["status"], analyze.INCONCLUSIVE)
+    def test_snaps_without_a_server_teleport_are_graded(self):
+        snaps = [400 + 150 * k for k in range(20)]  # 20 unexplained in 60 s
+        res = analyze.check_prediction_bound(self._ev(snaps), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["measured"][0]["unexplained"], 20)
+        # A snap far from the respawn (outside the match window) is not explained by it.
+        res = analyze.check_prediction_bound(self._ev([1500 + 200], [1500]), {})
+        self.assertEqual(res["measured"][0]["explained_by_server_teleport"], 0)
+
+    def test_bound_separates_the_measured_fixed_and_broken_rates(self):
+        fixed = self._ev([400, 2000])  # 2 unexplained in 60 s: S07 c5hc client 2, the worst fixed build
+        self.assertEqual(analyze.check_prediction_bound(fixed, {})["status"], analyze.PASS)
+        broken = self._ev([400 + 300 * k for k in range(5)], seconds=40)  # 5 in 40 s = 7.5/min: S10 g0tz
+        self.assertEqual(analyze.check_prediction_bound(broken, {})["status"], analyze.FAIL)
+
+    def test_snaps_after_the_last_sample_count_as_unexplained(self):
+        res = analyze.check_prediction_bound(self._ev([], extra_summary_snaps=2), {})
+        self.assertEqual(res["measured"][0]["unexplained"], 2)
+
+    def test_without_counters_samples_or_long_enough_window_it_is_inconclusive(self):
+        self.assertEqual(analyze.check_prediction_bound(self._ev([], seconds=15), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_prediction_bound(self._ev([], present=False), {})["status"], analyze.INCONCLUSIVE)
+        ev = self._ev([1000])
+        ev["clients"][0]["samples"] = []
+        self.assertEqual(analyze.check_prediction_bound(ev, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_server_teleport_detection(self):
+        ev = self._ev([], [1500])
+        self.assertEqual(len(analyze._server_teleports(ev, "u", 6.0)), 1)
+        rows = [{"st": k * 0.2, "tick": k * 12, "ents": [["u", "player", 0.0 if k < 5 else 9.0, 0, 100, 100, 0, 5]]}
+                for k in range(10)]  # a 9-unit step in 0.2 s: not walkable
+        self.assertEqual(analyze._server_teleports({"server": {"entities": rows}}, "u", 6.0), [(48, 60)])
 
 
 class ServerConfigTests(unittest.TestCase):

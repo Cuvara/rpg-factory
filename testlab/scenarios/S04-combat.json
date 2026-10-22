@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S04",
-  "version": 2,
+  "version": 3,
   "title": "Combat: scripted projectile casts through the real cast path damage enemies",
   "description": "MainScene's only attack is the projectile skillshot (Q / right mouse). The testlab presses it through IGameplayInputSource and aims at the nearest enemy, so AbilityId, aim, projectile prediction and the server's hit resolution all run on the production path.",
   "clients": 3,
@@ -28,6 +28,7 @@
     { "id": "tick", "check": "server_tick" },
     { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" },
     { "id": "prediction_snaps", "check": "prediction_bound", "title": "local prediction hard snaps per client-minute" },
-    { "id": "enemy_budget", "check": "enemy_budget", "title": "live enemies never exceed the server's hard budget" }
+    { "id": "enemy_budget", "check": "enemy_budget", "title": "live enemies never exceed the server's hard budget" },
+    { "id": "entity_lifecycle", "check": "entity_lifecycle", "title": "removed entities leave the screen; reused ids start at their spawn (C3)" }
   ]
 }

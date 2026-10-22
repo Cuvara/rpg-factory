@@ -10,8 +10,9 @@ Inputs (both optional; whatever is absent makes the answers that need it UNKNOWN
   `delivery.csv` `world_tick,recv_us,applied_us,bytes,full,entities,frame`, one row per received
   snapshot (`recv_us`: when its frame left the transport; `applied_us`: when it was merged; both
   LabClock microseconds since player start, on the same axis as the `t` columns), and `render.csv`
-  `frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms`, one row
-  per rendered frame. Recorders that predate C2 write only snapshots.ndjson `t` (main-thread
+  `frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms` (schema
+  rpg.testlab.delivery.v1) plus `clock_source` (v2), one row per rendered frame; columns are read by
+  header name, so both schemas parse. v1 players left render_tick empty (no clock was readable). Recorders that predate C2 write only snapshots.ndjson `t` (main-thread
   receive time, seconds since player start) and frames.csv `frame,t,dt_ms,scenario_t`. The receive
   time then falls back to `applied_us` or `t`, and the answers that need a true receive time
   (PATH) are UNKNOWN.
