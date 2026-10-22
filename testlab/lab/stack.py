@@ -222,6 +222,22 @@ def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_rest
     return record
 
 
+NAKAMA_MODULE = "modules/nakama.so"
+
+
+def check_nakama_module(cfg: LabConfig, build: bool) -> None:
+    """The Nakama Go plugin (backend/deploy/modules/nakama.so) is built only by `stack.sh up` with
+    builds on. A worktree without it, run without --build-server, starts a Nakama with no
+    gateway_token RPC and every join times out after join_timeout_s (T06 lost run
+    20261022T174703Z-S09-ierj to this). Fail fast instead."""
+    if build:
+        return
+    if not (cfg.deploy_dir / NAKAMA_MODULE).is_file():
+        raise StackError(f"{cfg.deploy_dir / NAKAMA_MODULE} is missing: this server worktree has never been built "
+                         "with the stack, so Nakama would start without the gateway_token RPC and every join would "
+                         "time out. Run once with --build-server (it builds the plugin and the images).")
+
+
 REVISION_LABEL = "org.opencontainers.image.revision"
 
 

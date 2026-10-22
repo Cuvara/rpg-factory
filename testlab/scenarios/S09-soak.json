@@ -1,13 +1,14 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S09",
-  "version": 3,
+  "version": 4,
   "title": "Soak: repeated movement and combat cycles, leak and drift checks",
-  "description": "Default 300 s; pass --duration for a longer soak. Memory slope of the server container, entity-count drift, accumulated errors and render jumps over the whole run.",
+  "description": "Default 300 s; pass --duration for a longer soak. Memory slope of the server container, entity-count drift, accumulated errors and render jumps over the whole run. The 300 s movement and combat cycle repeats for the whole duration (repeat_cycle_s), so a run with --duration 3600 stays active for the hour. Soaks recorded before version 4 (20261022T112220Z-S09-eeoa, 20261022T163744Z-S09-sfj5, 20261022T175111Z-S09-y6vg) ran the cycle once: 5 minutes active, then 55 minutes of idle players.",
   "clients": 3,
   "map": "map_01",
   "seed": 9,
   "duration_s": 300,
+  "repeat_cycle_s": 300,
   "screenshots_s": [60, 180, 295],
   "per_client": [
     { "steps": [ { "t0": 2, "t1": 298, "mode": "circle", "rate": 0.6 } ] },

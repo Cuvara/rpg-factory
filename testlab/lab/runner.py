@@ -118,6 +118,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         if pre["conflicts"]:
             raise RuntimeError("port conflict: " + "; ".join(pre["conflicts"]))
 
+        stack.check_nakama_module(cfg, build_server)
         env = stack.env_for(sc, cfg)
         if sc.get("snapshot_trace") and not stack.compose_forwards(cfg, "GAMESERVER_SNAPSHOT_TRACE"):
             raise stack.StackError(f"{cfg.deploy_dir / 'docker-compose.yml'} does not forward GAMESERVER_SNAPSHOT_TRACE "

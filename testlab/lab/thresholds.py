@@ -104,6 +104,9 @@ CHECK_DEFAULTS = [
     ("cast_damage_bound", "reach_margin", 1.0, POLICY),
     ("delivery (analyze --delivery)", "gap_ms / explain_fraction / bucket_s", "250 / 0.5 / 300", POLICY),
     ("delivery clock fit", "bins / tolerance", ">= 5 bins / residual p90 <= 50 ms", POLICY),
+    ("delivery scope", "time-overlap slack", "50 ms", POLICY),
+    ("delivery KCP class", "after_rows", 4, f"{POLICY}: rows after tick b where a retransmission burst lands "
+                                            "(T06 sfj5 s 738: 3 -> 40 in the next rows)"),
 ]
 
 

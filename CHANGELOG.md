@@ -106,6 +106,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     PASS_WITH_WARNINGS (exit 4), never PASS; the report shows that and host load under
     "Qualified by". `testlab/docs/THRESHOLDS.md` (generated, kept current by a test) lists every
     limit with its source or "policy, unvalidated".
+  - **Soak plan and classifier fixes (T06 findings).** S09 v4 repeats its 300 s movement and combat
+    cycle for the whole `--duration` (`repeat_cycle_s`; earlier 1 h soaks were 5 min active, 55 min
+    idle). `analyze --delivery`: a gap is ALL-CLIENTS when the other clients' gaps overlap in time
+    on the server clock or in touching tick ranges; the KCP class also reads the 4 server rows after
+    the late snapshot. On the 1 h soaks the clock fit stays poor (the WSL clock rate wanders
+    1.073-1.090), so one-way delay is reported unavailable. Preflight fails fast when a server
+    worktree has no `modules/nakama.so` and `--build-server` is not set.
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice

@@ -47,6 +47,7 @@ there is no other client to compare with.
 from __future__ import annotations
 
 import csv
+from bisect import bisect_right
 from pathlib import Path
 
 from . import util
@@ -222,7 +223,8 @@ def fit_clock(pairs: list, *, min_points: int = 5, bin_us: int = 1_000_000, tole
 
 
 def classify_gap(gap: dict, srv: dict | None, stalls: list, recv_source: str, *, explain_fraction: float,
-                 slack_us: int, rate: float = 1.0) -> tuple[str, str, dict]:
+                 slack_us: int, rate: float = 1.0, srv_ticks: list | None = None,
+                 after_rows: int = 4) -> tuple[str, str, dict]:
     """(class, reason, evidence) for one client receive gap between ticks a and b. `rate` converts
     server durations to client time (fit_clock); 1.0 when no fit is available."""
     a, b, gap_us = gap["tick_a"], gap["tick_b"], gap["gap_us"]
@@ -239,6 +241,12 @@ def classify_gap(gap: dict, srv: dict | None, stalls: list, recv_source: str, *,
     if server and all(server):
         ra, rb = server
         between = [r for t, r in srv.items() if a < t <= b]
+        # KCP signs can land just after the late snapshot: a retransmission burst or a full send
+        # window is written in the rows that follow tick b. Look `after_rows` server rows further.
+        ticks = srv_ticks if srv_ticks is not None else sorted(srv)
+        j = bisect_right(ticks, b)
+        after = [srv[t] for t in ticks[j:j + after_rows]]
+        kcp_rows = between + after
         delays = [(r["write_start_us"] - r["enqueue_us"]) * rate for r in between
                   if r.get("write_start_us") is not None and r.get("enqueue_us") is not None]
         queue_delay = max(delays) if delays else None
@@ -249,10 +257,13 @@ def classify_gap(gap: dict, srv: dict | None, stalls: list, recv_source: str, *,
                    "server_rows_between": len(between),
                    "queue_depth_b": rb.get("queue_depth"),
                    "dropped_delta": _sub(rb.get("dropped_oldest_total"), ra.get("dropped_oldest_total")),
-                   "retrans_delta": _sub(rb.get("kcp_retrans_total"), ra.get("kcp_retrans_total")),
+                   "retrans_delta": _sub(max((r["kcp_retrans_total"] for r in kcp_rows
+                                              if r.get("kcp_retrans_total") is not None), default=None),
+                                         ra.get("kcp_retrans_total")),
                    "wait_snd_a": ra.get("kcp_wait_snd"),
-                   "wait_snd_max": max((r["kcp_wait_snd"] for r in between if r.get("kcp_wait_snd") is not None),
-                                       default=None)})
+                   "wait_snd_max": max((r["kcp_wait_snd"] for r in kcp_rows if r.get("kcp_wait_snd") is not None),
+                                       default=None),
+                   "kcp_rows_after_b": len(after)})
         if queue_delay is not None and queue_delay >= large:
             return "QUEUE", "the snapshot waited in the server send queue for most of the gap", ev
         if write_gap is not None and write_gap >= large:
@@ -317,18 +328,25 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
         c["gaps"] = gaps
         c["long"] = [g for g in gaps if g["gap_us"] > gap_ms * 1000]
 
+    # Clock fits first: the scope of a gap compares clients on the server clock.
+    for c in clients:
+        srv = (trace or {}).get(c["user_id"]) if (trace is not None and c["user_id"]) else None
+        c["clock"] = fit_clock(_matched(c, srv)) if srv else {"ok": False, "reason": "no server trace"}
+
     out_clients = {}
     totals = {k: 0 for k in CLASSES}
     scopes = {k: 0 for k in SCOPES}
     for c in clients:
         srv = (trace or {}).get(c["user_id"]) if (trace is not None and c["user_id"]) else None
-        clock = fit_clock(_matched(c, srv)) if srv else {"ok": False, "reason": "no server trace"}
+        clock = c["clock"]
         rate = clock["rate"] if clock["ok"] else 1.0
+        srv_ticks = sorted(srv) if srv else None
         classified = []
         for g in c["long"]:
             cls, why, evd = classify_gap(g, srv, c["stalls"], c["recv_source"],
-                                         explain_fraction=explain_fraction, slack_us=slack_us, rate=rate)
-            scope = _scope(g, c, clients, gap_ms)
+                                         explain_fraction=explain_fraction, slack_us=slack_us, rate=rate,
+                                         srv_ticks=srv_ticks)
+            scope = _scope(g, c, clients, gap_ms, slack_us)
             totals[cls] += 1
             scopes[scope] += 1
             classified.append({"tick_a": g["tick_a"], "tick_b": g["tick_b"], "gap_ms": round(g["gap_us"] / 1000, 1),
@@ -371,15 +389,35 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
             "classes": totals, "scopes": scopes, "clients": out_clients}
 
 
-def _scope(g, c, clients, gap_ms):
-    """ALL-CLIENTS when every other client that received snapshots across these ticks had a long
-    gap overlapping them; SINGLE-CLIENT when one of them did not."""
+def _to_server_us(clock, recv_us):
+    return (recv_us - clock["offset_us"]) / clock["rate"]
+
+
+def _scope(g, c, clients, gap_ms, slack_us=50_000):
+    """ALL-CLIENTS when every other client that received snapshots across these ticks had a long gap
+    at the same time; SINGLE-CLIENT when one of them did not. "Same time": the two receive windows
+    overlap on the server clock (both clients' clock fits mapped, widened by slack_us), or their tick
+    ranges overlap or touch - one host freeze can leave one client's gap at 182061-182065 and
+    another's at 182065-182069 (T06, run 20261022T163744Z-S09-sfj5 s 3269)."""
     others = [o for o in clients if o is not c and o["snaps"]
               and o["snaps"][0][0] <= g["tick_a"] and o["snaps"][-1][0] >= g["tick_b"]]
     if not others:
         return "UNKNOWN"
+    mine = c.get("clock") or {}
+    window = ((_to_server_us(mine, g["recv_a_us"]), _to_server_us(mine, g["recv_b_us"]))
+              if mine.get("ok") else None)
     for o in others:
-        if not any(og["tick_a"] < g["tick_b"] and g["tick_a"] < og["tick_b"] for og in o["long"]):
+        theirs = o.get("clock") or {}
+
+        def same(og):
+            if og["tick_a"] <= g["tick_b"] and g["tick_a"] <= og["tick_b"]:
+                return True
+            if window is None or not theirs.get("ok"):
+                return False
+            o0, o1 = _to_server_us(theirs, og["recv_a_us"]), _to_server_us(theirs, og["recv_b_us"])
+            return o0 - slack_us <= window[1] and window[0] <= o1 + slack_us
+
+        if not any(same(og) for og in o["long"]):
             return "SINGLE-CLIENT"
     return "ALL-CLIENTS"
 

@@ -818,6 +818,7 @@ class CleanupTests(unittest.TestCase):
             mock.patch.object(stack, "ensure", return_value={"actions": []}),
             mock.patch.object(provenance, "docker_image_id", return_value="sha256:" + "0" * 64),
             mock.patch.object(stack, "image_revision", return_value=None),
+            mock.patch.object(stack, "check_nakama_module"),
             mock.patch.object(runner, "ServerProbe", FakeProbe),
             mock.patch.object(clients, "launch", side_effect=fake_launch),
             mock.patch.object(clients, "wait_phase", side_effect=wait_phase_effect),
@@ -2053,6 +2054,83 @@ class ThresholdsDocTests(unittest.TestCase):
                 if limits:
                     self.assertIn((sid, a["id"]), listed)
         self.assertTrue(all(r[5] for r in rows))
+
+
+# =========================================================================== T28: soak cycle, classifier, preflight
+
+class SoakCycleTests(unittest.TestCase):
+    def _active(self, plan, t0, t1):
+        return any(x["t0"] < t1 and x["t1"] > t0 for x in plan["steps"] + plan["actions"])
+
+    def test_an_hour_of_s09_is_active_in_every_five_minute_bucket(self):
+        sc = scenarios.load("S09", {"duration_s": 3600})
+        for i in range(sc["clients"]):
+            plan = scenarios.client_plan(sc, i, "r")
+            for k in range(12):
+                self.assertTrue(self._active(plan, k * 300, (k + 1) * 300), (i, k))
+            self.assertTrue(all(x["t1"] <= 3600 for x in plan["steps"] + plan["actions"]))
+
+    def test_the_first_cycle_is_unchanged(self):
+        short = scenarios.load("S09")
+        long_ = scenarios.load("S09", {"duration_s": 3600})
+        for i in range(short["clients"]):
+            a, b = scenarios.client_plan(short, i, "r"), scenarios.client_plan(long_, i, "r")
+            for key in ("steps", "actions"):
+                self.assertEqual(a[key], [x for x in b[key] if x["t0"] < 300], (i, key))
+
+    def test_without_repeat_a_long_run_idles_after_the_script(self):
+        sc = scenarios.load("S09", {"duration_s": 3600, "repeat_cycle_s": 0})
+        plan = scenarios.client_plan(sc, 0, "r")
+        self.assertFalse(self._active(plan, 300, 600))
+
+
+class ScopeAndKcpWindowTests(unittest.TestCase):
+    def test_a_gap_on_the_next_tick_pair_in_the_same_freeze_is_all_clients(self):
+        # T06, sfj5 s 3269: c0 182061-182065, c1 182065-182069, both ~600 ms in one host freeze.
+        from lab import delivery
+        g0 = {"tick_a": 182061, "tick_b": 182065, "recv_a_us": 10_000_000, "recv_b_us": 10_600_000, "gap_us": 600_000}
+        g1 = {"tick_a": 182065, "tick_b": 182069, "recv_a_us": 20_050_000, "recv_b_us": 20_640_000, "gap_us": 590_000}
+        snaps = [(182000, 0, None, None), (182200, 0, None, None)]
+        c0 = {"snaps": snaps, "long": [g0], "clock": {"ok": False}}
+        c1 = {"snaps": snaps, "long": [g1], "clock": {"ok": False}}
+        self.assertEqual(delivery._scope(g0, c0, [c0, c1], 250), "ALL-CLIENTS")  # ticks touch
+        g1b = dict(g1, tick_a=182069, tick_b=182073)
+        c1["long"] = [g1b]
+        self.assertEqual(delivery._scope(g0, c0, [c0, c1], 250), "SINGLE-CLIENT")  # no clock: cannot tell
+        # Same receive time on the server clock (each client's own offset), different tick pairs.
+        c0["clock"] = {"ok": True, "offset_us": 5_000_000, "rate": 1.08}
+        c1["clock"] = {"ok": True, "offset_us": 15_050_000, "rate": 1.08}
+        self.assertEqual(delivery._scope(g0, c0, [c0, c1], 250), "ALL-CLIENTS")
+        c1["clock"] = {"ok": True, "offset_us": 13_000_000, "rate": 1.08}  # 2 s apart on the server clock
+        self.assertEqual(delivery._scope(g0, c0, [c0, c1], 250), "SINGLE-CLIENT")
+
+    def test_kcp_signs_just_after_the_late_snapshot_are_seen(self):
+        # T06 candidate s 738: written on time, retransmissions 3 -> 40 in the rows after tick b.
+        from lab import delivery
+        def row(tick, write, retrans):
+            return {"gather_us": write - 1500, "enqueue_us": write - 1000, "write_start_us": write,
+                    "write_end_us": write + 200, "queue_depth": 0, "dropped_oldest_total": 0, "kcp_wait_snd": 0,
+                    "kcp_retrans_total": retrans}
+        srv = {t: row(t, t * 16_667, 3 if t <= 108 else 40) for t in range(100, 130, 4)}
+        gap = {"tick_a": 104, "tick_b": 108, "recv_a_us": 0, "recv_b_us": 400_000, "gap_us": 400_000}
+        cls, _, ev = delivery.classify_gap(gap, srv, [], "recv_us", explain_fraction=0.5, slack_us=50_000)
+        self.assertEqual(cls, "KCP")
+        self.assertEqual(ev["retrans_delta"], 37)
+        cls, _, _ = delivery.classify_gap(gap, srv, [], "recv_us", explain_fraction=0.5, slack_us=50_000, after_rows=0)
+        self.assertEqual(cls, "PATH")  # the old window: up to tick b only
+
+
+class NakamaPreflightTests(unittest.TestCase):
+    def test_a_worktree_without_the_nakama_plugin_fails_fast_unless_building(self):
+        from lab import config, stack
+        with tempfile.TemporaryDirectory() as d:
+            cfg = config.LabConfig(workspace=Path(d), runs_root=Path(d), server_repo=Path(d))
+            with self.assertRaises(stack.StackError) as e:
+                stack.check_nakama_module(cfg, build=False)
+            self.assertIn("--build-server", str(e.exception))
+            stack.check_nakama_module(cfg, build=True)  # building makes it
+            _write(Path(d) / "backend" / "deploy" / "modules" / "nakama.so", "elf")
+            stack.check_nakama_module(cfg, build=False)
 
 
 if __name__ == "__main__":

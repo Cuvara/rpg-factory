@@ -43,6 +43,9 @@ DEFAULTS = {
     # Ask the game server for its per-snapshot delivery trace (GAMESERVER_SNAPSHOT_TRACE, contract
     # C1); the harness copies it to server/snapshot-trace.csv for `analyze --delivery`.
     "snapshot_trace": False,
+    # Repeat each client's steps and actions every N seconds until duration_s (soaks run longer than
+    # the scripted cycle). None: the plan runs once and the client idles after its last step.
+    "repeat_cycle_s": None,
 }
 
 
@@ -135,9 +138,35 @@ def client_plan(sc: dict, index: int, run_id: str) -> dict:
         "anomaly_screenshots": int(sc["anomaly_screenshots"]),
         "overlay": bool(sc["overlay"]),
         "quit_on_done": True,
-        "steps": [_step(s) for s in block.get("steps", [])],
-        "actions": [_action(a) for a in block.get("actions", [])],
+        "steps": [_step(s) for s in _repeat(block.get("steps", []), sc)],
+        "actions": [_action(a) for a in _repeat(block.get("actions", []), sc)],
     }
+
+
+def _repeat(items: list, sc: dict) -> list:
+    """The scripted cycle, then copies of it shifted by k x repeat_cycle_s while they start inside
+    duration_s, each clipped to the duration. The first cycle is unchanged; nothing is random, so
+    a soak of any length is reproducible."""
+    cycle = sc.get("repeat_cycle_s")
+    duration = float(sc["duration_s"])
+    if not cycle or float(cycle) <= 0:
+        return list(items)
+    cycle = float(cycle)
+    out, k = [], 0
+    while k * cycle < duration:
+        for it in items:
+            t0 = float(it["t0"]) + k * cycle
+            if t0 >= duration:
+                continue
+            c = dict(it)
+            c["t0"] = t0
+            if "t1" in it:
+                c["t1"] = min(float(it["t1"]) + k * cycle, duration)
+            out.append(c)
+        k += 1
+        if not items:
+            break
+    return out
 
 
 def _step(s: dict) -> dict:
