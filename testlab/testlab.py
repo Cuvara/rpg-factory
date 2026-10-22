@@ -137,10 +137,14 @@ def cmd_build_client(args) -> int:
     log = cfg.runs_root / "logs" / f"build-client-{util.utc_stamp()}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     project = cfg.client_project
-    steps = [
-        ("scene", ["-quit", "-executeMethod", "TestLab.Editor.TestLabSceneBuilder.Build"] +
-         (["-testlabMap", str(cfg.server_repo / "backend" / "content" / "maps" / "dev_arena.json")]
-          if (cfg.server_repo / "backend" / "content" / "maps" / "dev_arena.json").exists() else [])),
+    steps = []
+    if args.rebuild_scene:
+        # Regeneration is not byte-deterministic (Unity assigns new fileIDs), so it is opt-in:
+        # by default the COMMITTED scene is validated and built, and the build stays clean.
+        steps.append(("scene", ["-quit", "-executeMethod", "TestLab.Editor.TestLabSceneBuilder.Build"] +
+                      (["-testlabMap", str(cfg.server_repo / "backend" / "content" / "maps" / "dev_arena.json")]
+                       if (cfg.server_repo / "backend" / "content" / "maps" / "dev_arena.json").exists() else [])))
+    steps += [
         ("validate", ["-executeMethod", "TestLab.Editor.TestLabSceneBuilder.Validate"]),
         ("player", ["-quit", "-buildTarget", "Win64", "-executeMethod", "PlayerBuilder.Build", "-buildOutput", str(out_root),
                     "-bootScene", "Assets/Scenes/Tests/MultiplayerCombatTest.unity", "-extraDefines", "CUVARA_TESTLAB"]),
@@ -249,6 +253,8 @@ def main(argv=None) -> int:
     a.set_defaults(fn=cmd_analyze)
     b = sub.add_parser("build-client")
     b.add_argument("--out")
+    b.add_argument("--rebuild-scene", action="store_true",
+                   help="regenerate MultiplayerCombatTest.unity from MainScene first (dirties the tree)")
     b.set_defaults(fn=cmd_build_client)
     sub.add_parser("build-loadtest").set_defaults(fn=cmd_build_loadtest)
     st = sub.add_parser("stack")

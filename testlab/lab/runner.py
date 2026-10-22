@@ -26,6 +26,20 @@ def _git(repo: Path, *args) -> str | None:
         return None
 
 
+def _host_load() -> dict | None:
+    """Host CPU load and free memory when the run starts (Windows), so environment noise is on record."""
+    if not util.IS_WINDOWS:
+        return None
+    cmd = ["powershell", "-NoProfile", "-Command",
+           "$c=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average;"
+           "$m=(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory; Write-Output \"$c $m\""]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.split()
+        return {"cpu_load_pct": float(out[0]), "free_mem_mb": round(float(out[1]) / 1024)}
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+
+
 def _player_fingerprint(cfg: LabConfig) -> dict:
     exe = cfg.player_exe
     managed = exe.parent / (exe.stem + "_Data") / "Managed"
@@ -71,6 +85,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                        "dirty": bool(_git(cfg.client_project, "status", "--porcelain"))},
         },
         "player": _player_fingerprint(cfg),
+        "host_load_at_start": _host_load(),
         # What the player under test was BUILT from (testlab-build.json written by build-client);
         # repos.client above is only the configured project checkout, which may have moved on.
         "config": cfg.as_dict(),

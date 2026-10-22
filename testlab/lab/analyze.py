@@ -388,11 +388,14 @@ def _divergence(ev, a, *, local: bool):
     types = set(a.get("types", ["mob", "player"]))
     rendered, received = [], []
     worst = []
+    stalls = host_stalls(ev)
+    stalled = []
     for c in ev["clients"]:
         for s in c["samples"]:
             st = s.get("st")
             if st is None or st < float(a.get("skip_first_s", 2.0)):
                 continue
+            in_stall = _in_stall(stalls, st, st, slack=0.5)
             for row in s.get("ents", []):
                 eid, etype, is_local = row[0], row[1], row[2] == 1
                 if is_local != local or etype not in types:
@@ -403,6 +406,9 @@ def _divergence(ev, a, *, local: bool):
                 d = _dist_to_path(t, st - lag, st + lead, row[3], row[4])
                 if d is None:
                     continue
+                if in_stall:
+                    stalled.append(d)
+                    continue
                 rendered.append(d)
                 if len(row) >= 7:
                     dr = _dist_to_path(t, st - lag, st + lead, row[5], row[6])
@@ -411,18 +417,20 @@ def _divergence(ev, a, *, local: bool):
                 if d > float(a.get("max", 1.0)):
                     worst.append({"client": c["index"], "st": round(st, 3), "id": eid, "type": etype,
                                   "rendered_err": round(d, 3)})
-    return rendered, received, worst
+    return rendered, received, worst, stalled
 
 
 def check_position_divergence(ev, a):
     local = bool(a.get("local", False))
-    rendered, received, worst = _divergence(ev, a, local=local)
+    rendered, received, worst, stalled = _divergence(ev, a, local=local)
     if len(rendered) < int(a.get("min_samples", 50)):
         return _inconclusive(f"{len(rendered)} comparable samples (< {a.get('min_samples', 50)})",
                              source="client samples.ndjson vs server /debug/entities")
     p95, mx = util.percentile(rendered, 95), max(rendered)
     rp95 = util.percentile(received, 95) if received else None
     ok = p95 <= float(a.get("p95", 0.35)) and mx <= float(a.get("max", 1.0))
+    stall_would_fail = bool(stalled) and max(stalled) > float(a.get("max", 1.0))
+    worst = [w for w in worst if not _in_stall(host_stalls(ev), w["st"], w["st"], slack=0.5)]
     # Attribution: a client that RECEIVED positions on the server's path but RENDERED them off it
     # has an interpolation/presentation problem; one that received them off-path has a
     # snapshot/transport problem (or the server path itself is what moved).
@@ -433,9 +441,11 @@ def check_position_divergence(ev, a):
     else:
         layer = "snapshot or transport (received positions already off the server path)"
     worst.sort(key=lambda w: -w["rendered_err"])
-    return _result(PASS if ok else FAIL,
+    return _result(FAIL if not ok else (INCONCLUSIVE if stall_would_fail else PASS),
                    {"p50": round(util.percentile(rendered, 50), 4), "p95": round(p95, 4), "max": round(mx, 4),
-                    "received_p95": None if rp95 is None else round(rp95, 4), "samples": len(rendered)},
+                    "received_p95": None if rp95 is None else round(rp95, 4), "samples": len(rendered),
+                    "in_host_stall": len(stalled),
+                    "max_in_host_stall": round(max(stalled), 4) if stalled else None},
                    {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0)},
                    source=("rendered LocalTransform of the " + ("local predicted player" if local else "remote entities") +
                            " vs the server's authoritative polyline in a time window around the sample"),
@@ -464,6 +474,9 @@ def check_render_jumps(ev, a):
         stalls = host_stalls(ev)
         stall_events = all_stall_events
         for e in js:
+            if e.get("type") in set(a.get("ignore_types", ["projectile"])):
+                counts["ignored_type"] = counts.get("ignored_type", 0) + 1
+                continue
             if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.3):
                 counts["host_stall"] = counts.get("host_stall", 0) + 1
                 stall_events.append(e)
@@ -490,7 +503,8 @@ def check_render_jumps(ev, a):
         return _inconclusive("no client summary", source="client events.ndjson render_jump")
     minutes = max(1e-6, float(ev["scenario"].get("duration_s", 60)) / 60.0)
     n = max(1, len(ev["clients"]))
-    rate = {k: round(v / minutes / n, 3) for k, v in counts.items() if k not in ("server_teleport", "host_stall")}
+    rate = {k: round(v / minutes / n, 3) for k, v in counts.items()
+            if k not in ("server_teleport", "host_stall", "ignored_type")}
     def passes(c):
         r = {k: c[k] / minutes / n for k in ("remote_major", "local_minor", "remote_minor")}
         return (c["local_major"] <= int(a.get("max_local", 0)) and

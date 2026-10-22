@@ -226,6 +226,15 @@ class AnalysisTests(unittest.TestCase):
         ev["clients"][1]["frames"] = []  # not host-wide any more: a real local snap
         self.assertEqual(analyze.check_render_jumps(ev, {"max_local": 0})["status"], analyze.FAIL)
 
+    def test_projectiles_are_not_judged_as_walking_entities(self):
+        ev = _ev(duration=10)
+        ev["clients"][0]["summary"] = {"outcome": "completed"}
+        ev["clients"][0]["events"] = [
+            {"event": "render_jump", "st": 5.0, "id": "pr", "type": "projectile", "local": True, "step": 3.0}]
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual(res["status"], analyze.PASS)
+        self.assertEqual(res["measured"]["ignored_type"], 1)
+
     def test_replication_gap_with_missing_samples_is_inconclusive(self):
         rows = [{"_st": float(i), "snapshot_max_update_gap_ms": 100} for i in range(10)]
         rows[3].pop("snapshot_max_update_gap_ms")
