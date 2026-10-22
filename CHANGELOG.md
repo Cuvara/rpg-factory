@@ -26,7 +26,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     unless a scenario sets `share_is_failure`, because it follows the nearest-player rule.
   - `render_jumps` classifies a jump as a server teleport when the client's own received stream
     shows the same step, and gives host stalls a 1 s tail window, so a respawn the server probe
-    aliased is not counted against interpolation or prediction.
+    aliased is not counted against interpolation or prediction. A received step counts only when
+    no entity could walk it in the server ticks between the two samples.
+  - `enemy_pursuit` is judged on isolated enemies; crowd steps (separation, queueing) are reported.
+    `inputs_consumed` leaves server respawns out of a move segment. Evidence minimums make sparse
+    pursuit or spawn evidence INCONCLUSIVE.
+  - `--player` accepts a build directory; sweep files are named by scenario id; the atomic JSON
+    write retries while a player holds the file (Windows).
 - `skills/measure/references/legs.md`: the testlab as the multi-client verification leg.
 
 ## [1.0.5] - 2026-10-22
