@@ -83,7 +83,7 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
 
  hooks: SessionStart  install-status.py (stale install warning)
         PreToolUse    git-guard.py (Bash, PowerShell) · file-guard.py (Write/Edit/MultiEdit/NotebookEdit/Read)
-                      · factory_session.py --skill (records the mode; a tech skill waits for its lead)
+                      · factory_session.py --skill (records the mode; tech skill first: advisory or auto-corrected to factory-core)
  dev tools: registry dev_tools → lib/devtools.py → snapshot "Tools for this change" + doctor
 ```
 

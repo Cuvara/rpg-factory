@@ -64,8 +64,13 @@ done
 o=$(jq -cn --arg p "$CLIENT/Packages/com.gdk.core/x.cs" --arg d "$CLIENT" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"},cwd:$d,session_id:"adv"}' | python3 -B "$FG")
 jq -e '.hookSpecificOutput | has("permissionDecision") | not' <<<"${o:-{\}}" >/dev/null && ok "file guard never decides" || no "file guard decided: $o"
 sk=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:go-backend"},cwd:$d,session_id:"adv-tech"}' | python3 -B "$SESS" --skill)
-jq -e '(.hookSpecificOutput | has("permissionDecision") | not) and (.hookSpecificOutput.additionalContext | startswith("rpg-factory advisory (high)"))' <<<"$sk" >/dev/null \
-  && grep -qx go-backend "$TMP/rpg-factory/adv-tech/SKILLS" && ok "tech skill before its lead: advisory, still runs (recorded)" || no "tech skill: ${sk:0:200}"
+jq -e '(.hookSpecificOutput | has("permissionDecision") | not) and (.hookSpecificOutput.updatedInput.skill == "rpg-factory:factory-core")
+        and (.hookSpecificOutput.additionalContext | startswith("rpg-factory advisory (high)"))' <<<"$sk" >/dev/null \
+  && grep -qx factory-core "$TMP/rpg-factory/adv-tech/SKILLS" && ok "tech skill before factory-core: auto-corrected to factory-core, no decision (recorded)" || no "tech skill: ${sk:0:200}"
+sk=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:go-backend"},cwd:$d,session_id:"adv-tech"}' | python3 -B "$SESS" --skill)
+jq -e '(.hookSpecificOutput | has("permissionDecision") | not) and (.hookSpecificOutput | has("updatedInput") | not)
+        and (.hookSpecificOutput.additionalContext | test("This call continues"))' <<<"$sk" >/dev/null \
+  && grep -qx go-backend "$TMP/rpg-factory/adv-tech/SKILLS" && ok "tech skill before its lead: advisory, the call runs as requested (recorded)" || no "tech skill 2nd: ${sk:0:200}"
 
 # ---- state paths never resolve relative to the cwd, whatever TMPDIR is
 PROBE="$TMP/cwdprobe"; mkdir -p "$PROBE" "$TMP/tmpok"

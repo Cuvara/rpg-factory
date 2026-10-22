@@ -140,7 +140,8 @@ validated", "is Factory healthy".
 Orientation only, not routing: naming a lead from this table is not doing the task. In every mode, run
 Route (step 4) and **invoke** the lead it prints before answering; tech skills (`dotnet-gameserver`,
 `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`) come after the lead, never instead of
-it (the Skill hook denies a tech skill until one of its `used_by` leads ran).
+it. The Skill hook never blocks: a tech skill requested before factory-core loads factory-core instead; one
+requested before its lead runs with an advisory - then route and invoke the lead.
 
 ## References - read when
 

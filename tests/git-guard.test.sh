@@ -329,22 +329,43 @@ mcheck allow "touch other-plugin.txt"
 
 # ---- 1.0.0: a tech skill (registry kind "tech") is denied until one of its used_by leads ran in the session
 sk() { local o; o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"how do I run one test"},cwd:$d,session_id:$s}' \
-  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill); jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${o:-{\}}"; }
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill); jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" elif .hookSpecificOutput.updatedInput then "swap:" + .hookSpecificOutput.updatedInput.skill else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${o:-{\}}"; }
 skchk() { local got; got=$(sk "$2" "$3"); if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL skill order expected=$1 got=$got skill=$2 session=$3"; fi; }
+advs() { python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; p = os.path.join(fstate.scratch(), sys.argv[2], 'ADVISORIES'); print(open(p).read().strip() if os.path.exists(p) else '')" "$ROOT/scripts/lib" "$1"; }
 skchk allow rpg-factory:factory-core tech-a                 # core skill: never gated
-skchk high  rpg-factory:go-backend tech-a                   # tech before its lead
-skchk high  rpg-factory:go-backend tech-a                   # still denied: a denied call does not count as run
-skchk allow rpg-factory:server-realtime tech-a              # a lead of another tech skill does not unlock go-backend
+skchk high  rpg-factory:go-backend tech-a                   # tech before its lead: warned, the call still runs
+skchk high  rpg-factory:go-backend tech-a                   # warned again: a warning does not count as a lead
+skchk allow rpg-factory:server-realtime tech-a              # a lead of another tech skill does not satisfy go-backend
 skchk high  rpg-factory:go-backend tech-a
-skchk allow rpg-factory:dotnet-gameserver tech-a            # ...but it unlocks its own tech skill
+skchk allow rpg-factory:dotnet-gameserver tech-a            # ...but it satisfies its own tech skill
 skchk allow rpg-factory:server-services tech-a
-skchk allow rpg-factory:go-backend tech-a                   # after a used_by lead: allowed
-skchk high  rpg-factory:go-backend tech-b                   # per session
+skchk allow rpg-factory:go-backend tech-a                   # after a used_by lead: no advisory
+skchk swap:rpg-factory:factory-core rpg-factory:go-backend tech-b   # before factory-core: auto-corrected to factory-core
 skchk allow other-plugin:go-backend tech-b                  # other plugins are not Factory skills
-# every registry tech skill (new ones included, nothing to edit here): denied first, allowed after its first lead
+# every registry tech skill (new ones included, nothing to edit here): auto-corrected first, warned before a
+# lead (no second swap: no loop), quiet after its first lead
 while IFS=$'\t' read -r t lead; do
-  skchk high  "rpg-factory:$t" "every-$t"; skchk allow "rpg-factory:$lead" "every-$t"; skchk allow "rpg-factory:$t" "every-$t"
+  skchk "swap:rpg-factory:factory-core" "rpg-factory:$t" "every-$t"; skchk high "rpg-factory:$t" "every-$t"
+  skchk allow "rpg-factory:$lead" "every-$t"; skchk allow "rpg-factory:$t" "every-$t"
 done < <(jq -r '.skills | to_entries[] | select(.value.kind == "tech") | "\(.key)\t\(.value.used_by[0])"' "$ROOT/registry.json")
+# regression (1.0.3 dogfood tech-go / tech-dots): early tech skills are advisory or auto-corrected, never a
+# decision, the hook always exits 0, and the session state says what happened
+o_all=""
+for step in "rpg-factory:factory-core ord-go" "rpg-factory:go-backend ord-go" "rpg-factory:server-services ord-go" "rpg-factory:go-backend ord-go" \
+            "rpg-factory:unity-dots ord-dots" "rpg-factory:unity-package ord-dots" "rpg-factory:unity-dots ord-dots" \
+            "rpg-factory:factory-core ord-normal" "rpg-factory:unity-package ord-normal" "rpg-factory:unity-dots ord-normal"; do
+  set -- $step
+  o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"x"},cwd:$d,session_id:$s}' \
+      | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill); rc=$?
+  [ $rc -eq 0 ] || { fail=$((fail + 1)); echo "FAIL skill hook exited $rc for $step"; }
+  o_all="$o_all$o"
+done
+grep -q permissionDecision <<<"$o_all" && { fail=$((fail + 1)); echo "FAIL skill hook returned a permission decision"; } || pass=$((pass + 1))
+[ "$(advs ord-go)" = "go-backend warn lead-missing" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL early go-backend after factory-core: advisories '$(advs ord-go)'"; }
+[ "$(advs ord-dots)" = "unity-dots autocorrect factory-core" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL early unity-dots before factory-core: advisories '$(advs ord-dots)'"; }
+[ -z "$(advs ord-normal)" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL normal order produced advisories '$(advs ord-normal)'"; }
+seen=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; print(' '.join(open(os.path.join(fstate.scratch(), 'ord-dots', 'SKILLS')).read().split()))" "$ROOT/scripts/lib")
+[ "$seen" = "factory-core unity-package unity-dots" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL session records what loaded (factory-core for the corrected call): '$seen'"; }
 reason=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:unity-dots"},cwd:$d,session_id:"tech-c"}' \
   | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill | jq -r '.hookSpecificOutput.additionalContext // ""')
 case "$reason" in *'/scripts/factory-context.sh"'*"rpg-factory:unity-package"*) pass=$((pass + 1));;
