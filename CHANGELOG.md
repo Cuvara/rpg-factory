@@ -8,8 +8,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 Hotfix: the hooks never ask for confirmation and never block; every former ask/deny rule reaches the agent
 as an advisory. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin update
-rpg-factory@rpg-factory`) and start a new session. Also ships the citation drift guard (PR #6), which adds
-the optional registry field `skills.<s>.cite_roots`. No command-line changes.
+rpg-factory@rpg-factory`) and start a new session. Also ships the citation drift guard (PR #6, new optional
+registry field `skills.<s>.cite_roots`) and the skill authoring workflow (PR #9). No command-line changes.
 
 ### Added
 - **Skill authoring workflow.** Adding a skill meant about 25 hand edits across the registry, skills,
