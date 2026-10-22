@@ -326,6 +326,11 @@ skill "mode: implement - the user approved the plan"
 mcheck allow "touch via-skill-implement.txt"
 skill "plan only" "other-plugin:skill"                                    # other plugins' skills never set a Factory mode
 mcheck allow "touch other-plugin.txt"
+# a session id that is not a plain UUID: git-guard must find the MODE factory_session wrote (same fstate.session_key)
+jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:factory-core",args:"plan only"},cwd:$d,session_id:"odd/id:1"}' \
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill >/dev/null
+o=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash",tool_input:{command:"touch odd-id.txt"},cwd:$d,session_id:"odd/id:1"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
+case "$o" in *"Factory mode is \`plan\`"*) pass=$((pass + 1));; *) fail=$((fail + 1)); echo "FAIL mode for a non-UUID session id not seen by git-guard: ${o:-none}";; esac
 
 # ---- 1.0.0: a tech skill (registry kind "tech") is denied until one of its used_by leads ran in the session
 sk() { local o; o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"how do I run one test"},cwd:$d,session_id:$s}' \

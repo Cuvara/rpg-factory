@@ -847,7 +847,7 @@ def _needs_mode(payload):
     (read-only hook calls stay fast on /mnt/c)."""
     sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
     import fstate  # noqa: E402
-    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or "default"))
+    sid = fstate.session_key(payload.get("session_id"))  # the same directory factory_session writes MODE to
     command = (payload.get("tool_input") or {}).get("command") or ""
     return os.path.exists(os.path.join(fstate.scratch(), sid, "MODE")) or "--mode" in command
 
