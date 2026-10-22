@@ -5,21 +5,25 @@ Reads the hook payload on stdin. For commands that run inside the RPG MMO worksp
 expands the command into the programs that will actually run, peeling wrappers and
 recursing into nested shells, then classifies every git / gh invocation. Advisory only (1.0.3): the
 hook never asks the user and never blocks; a match is returned as additionalContext
-"rpg-factory advisory (<level>): ..." for the agent to weigh. Internally the classes are still
-"deny" (reported as level high) and "ask" (level warn):
+"rpg-factory advisory (<level>): ..." for the agent to weigh. Internally a finding is a
+("deny", reason) or ("ask", reason) tuple; "deny" is reported as advisory level high and "ask" as
+level warn - neither is a permission decision:
 
-  - "deny"  creating, deleting or pushing tags (git tag, push --tags / tag refs, update-ref
+  - high    creating, deleting or pushing tags (git tag, push --tags / tag refs, update-ref
             on tags, gh api .../git/refs|tags, gh release create) - release actions, only with explicit release authorization in the current task
-  - "ask"   destructive or high-impact git (reset --hard, clean -f, checkout -- / -B,
+  - warn    destructive or high-impact git (reset --hard, clean -f, checkout -- / -B,
             restore, stash, branch -D/-f, update-ref, gc --prune, reflog expire, rebase,
             filter-branch, any push, add -A, commit -a/--amend, commit/merge/cherry-pick/
             revert/am/pull --rebase/reset <commit> on a protected branch, submodule update,
             git -c alias.*), commands whose git use cannot be seen (interpreters with inline
-            code, $VAR / $(...) as the program, encoded PowerShell), and registry
+            code or a heredoc, $VAR / $(...) as the program, encoded PowerShell), and registry
             human_gates[].match
 Wrappers peeled: VAR=x, env, command, builtin, exec, sudo, doas, timeout, nohup, nice, time,
-stdbuf, ionice, setsid, xargs, find -exec/-execdir. Nested: bash|sh|zsh|dash -c, eval,
-cmd(.exe) /c|/k, powershell|pwsh -c|-Command, PowerShell `&` call operator.
+stdbuf, ionice, setsid, xargs, find -exec/-execdir, and leading shell reserved words ({ ! if then
+else elif do while until, `name()` / `function name` headers; PowerShell script-block braces).
+Nested: bash|sh|zsh|dash -c, a heredoc fed to a shell (`bash <<EOF`, `cat <<EOF | sh`), eval,
+cmd(.exe) /c|/k, powershell|pwsh -c|-Command, PowerShell `&` call operator. On Windows, git-bash
+paths (/c/..., /mnt/c/...) are mapped to drive paths before they are resolved.
 
 Git run by a script file or a program is invisible to text analysis (documented limitation).
 A declared Factory execution mode (scripts/factory_session.py) flags state changes in analyze/plan/review.
@@ -28,6 +32,7 @@ Never approves or denies: no output + exit 0 = "no opinion", advisory output = s
 internal error = no opinion; each
 part (git analysis, human gates, mode) fails independently. RPG_FACTORY_GUARD=off disables it.
 """
+import io
 import json
 import os
 import re
@@ -55,6 +60,22 @@ GIT_BUILTINS = MUTATING_GIT_WORDS | {"status", "log", "diff", "show", "fetch", "
                                      "sparse-checkout", "maintenance", "repack", "replace", "format-patch",
                                      "request-pull", "bundle", "filter-repo"}
 MAX_DEPTH = 4
+MAX_COMMAND = 200_000  # characters; longer commands are not analysed (shlex on them takes minutes)
+# git subcommands whose classification never depends on the branch or the repo: no git calls needed for them
+STATELESS_READ_GIT = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-remote", "ls-tree", "cat-file",
+                      "describe", "blame", "grep", "shortlog", "for-each-ref", "check-ignore", "merge-base", "rev-list",
+                      "name-rev", "count-objects", "help", "version", "range-diff", "diff-tree", "whatchanged", "var"}
+# shell reserved words that can start a segment in front of the command that really runs
+RESERVED_LEAD = {"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until", "elseif", "try", "finally"}
+
+
+def native_path(p, nt=None):
+    """A git-bash path as the OS resolves it. Python on Windows reads `/c/ws` as `C:\\c\\ws` (rooted on the
+    current drive) and `/mnt/c/ws` as `C:\\mnt\\c\\ws`; git-bash and WSL mean `C:/ws`. Elsewhere unchanged."""
+    if not p or not (os.name == "nt" if nt is None else nt):
+        return p
+    m = re.match(r"^/mnt/([A-Za-z])(/|$)", p) or re.match(r"^/([A-Za-z])(/|$)", p)
+    return f"{m.group(1).upper()}:/{p[m.end():]}" if m else p
 
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -155,17 +176,86 @@ def logical_lines(command):
             continue
         buf.append(ch)
     lines.append("".join(buf))
-    out, delimiter = [], None
+    out, stack = [], []  # stack of [delimiter, reader, body lines]
     for line in lines:
-        if delimiter is not None:
-            if line.strip() == delimiter:
-                delimiter = None
+        if stack and line.strip() == stack[-1][0]:
+            _, reader, body = stack.pop()
+            if reader and reader != "shell" and re.search(r"\b(git|gh)\b", "\n".join(body)):
+                out.append(f"__opaque__ '`{reader}` code from a heredoc invokes git/gh'")
             continue
-        out.append(line)
+        if stack and stack[-1][1] != "shell":
+            stack[-1][2].append(line)  # data (or interpreter code): not shell commands
+            continue
+        out.append(line)  # a command line - also the body of a heredoc that a shell executes
         m = HEREDOC.search(line)
         if m:
-            delimiter = m.group(2)
+            stack.append([m.group(2), heredoc_reader(line), []])
     return out
+
+
+def _stdin_reader(argv):
+    """'shell' when argv is a shell that executes its stdin, the interpreter's name when it is an interpreter
+    reading its program from stdin, else None."""
+    argv = peel(argv)
+    if not argv:
+        return None
+    p = prog(argv[0])
+    opts = [a for a in argv[1:] if a.startswith("-") and a != "-"]
+    rest = [a for a in argv[1:] if not a.startswith("-") or a == "-"]
+    if p in SHELLS:
+        if any("c" in o.lstrip("-") for o in opts if not o.startswith("--")):
+            return None  # `bash -c '...' <<EOF`: the script is the argument, the heredoc is its data
+        return "shell" if "-s" in opts or not rest or rest[0] == "-" else None
+    if p in INTERPRETERS:
+        if any(o in {"-c", "-e", "--eval", "-p", "-m", "-r"} for o in opts):
+            return None
+        return p if not rest or rest[0] == "-" else None
+    return None
+
+
+def heredoc_reader(line):
+    """Who reads the heredoc started on `line`: the command carrying `<<`, or - when that is a passthrough like
+    cat - the next command of its pipeline (`cat <<EOF | sh`). Returns 'shell', an interpreter name or None."""
+    try:
+        lex = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        return None
+    pipeline, cur, found = [], [], None
+    for t in toks + [";"]:
+        if t == "|":
+            pipeline.append(cur)
+            cur = []
+        elif t in SEPARATORS or (t and set(t) <= set(";&|()")):
+            pipeline.append(cur)
+            if found is not None:
+                break
+            pipeline, cur = [], []
+        else:
+            if t.startswith("<<") and found is None:
+                found = len(pipeline)
+            cur.append(t)
+    if found is None:
+        return None
+    first, skip, to_file = [], False, False
+    for t in pipeline[found]:  # the command without its heredoc / redirection words
+        if skip:
+            skip = False
+            continue
+        if t in {"<<", "<<-", ">", ">>", "<"}:
+            skip = True
+            to_file = to_file or t.startswith(">")
+            continue
+        if t.startswith(("<<", ">", "<")) or re.match(r"^\d*>", t):
+            to_file = to_file or (t.startswith(">") or re.match(r"^1?>", t) is not None)
+            continue
+        first.append(t)
+    reader = _stdin_reader(first)
+    if reader is None and not to_file and first and prog(first[0]) in {"cat", "tee"} and len(first) == 1 \
+            and found + 1 < len(pipeline):
+        reader = _stdin_reader(pipeline[found + 1])
+    return reader
 
 
 def tokenize(command, shell="bash"):
@@ -183,10 +273,12 @@ def tokenize(command, shell="bash"):
     return tokens
 
 
-def segments(tokens):
+def segments(tokens, shell="bash"):
+    """Simple commands of a token stream. PowerShell script-block braces end a command too
+    (`if ($x) { git tag v1 }` has no `;` before the `}`)."""
     seg = []
     for t in tokens:
-        if t in SEPARATORS or (t and set(t) <= set(";&|()")):
+        if t in SEPARATORS or (t and set(t) <= set(";&|()")) or (shell == "powershell" and t in {"{", "}"}):
             if seg:
                 yield seg
             seg = []
@@ -204,13 +296,19 @@ def peel(seg):
     """Strip env assignments and wrapper programs; return the argv that really runs.
 
     xargs appends its stdin items to the command, so `echo v9 | xargs git tag` runs `git tag v9`:
-    a placeholder argument is appended to keep `git tag` from looking like a tag listing."""
+    a placeholder argument is appended to keep `git tag` from looking like a tag listing.
+    Leading reserved words (`{ git tag v1; }`, `! git tag`, `then git tag`, `do git tag`) and function
+    headers (`function f { ...`) are not programs: the command after them is what runs."""
     i = 0
     via_xargs = False
     while i < len(seg):
         t = seg[i]
         p = prog(t)
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
+        if t in RESERVED_LEAD:
+            i += 1
+        elif t == "function" and i + 1 < len(seg):
+            i += 2  # `function name` (its `()` is a separator token)
+        elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
             i += 1
         elif p == "env":
             i += 1
@@ -248,7 +346,7 @@ def expand(command, depth=0, shell="bash"):
     if depth > MAX_DEPTH:
         yield ["__too_deep__"]
         return
-    for seg in segments(tokenize(command, shell)):
+    for seg in segments(tokenize(command, shell), shell):
         if seg and seg[0] == "&":  # PowerShell call operator: & 'git.exe' tag x
             seg = seg[1:]
         argv = peel(seg)
@@ -310,7 +408,8 @@ def parse_git(argv):
     while i < len(argv) and argv[i].startswith("-"):
         if argv[i] in GLOBAL_OPTS_WITH_VALUE and i + 1 < len(argv):
             if argv[i] == "-C":
-                cdir = argv[i + 1] if cdir is None else os.path.join(cdir, argv[i + 1])
+                d = native_path(argv[i + 1])
+                cdir = d if cdir is None else os.path.join(cdir, d)
             if argv[i] == "-c":
                 cfg.append(argv[i + 1])
             i += 2
@@ -332,6 +431,35 @@ def refspec_dsts(args):
             continue
         out.append(x.split(":", 1)[1] if ":" in x else x)
     return [d.lstrip("+") for d in out]
+
+
+TAG_LIST_MODES = ("-l", "--list", "-v", "--verify", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at")
+TAG_RO = {"-i", "--ignore-case", "--column", "--no-column", "--color", "--no-color", "--omit-empty"}
+# `--sort <key>` as a separate word only for a full, unabbreviated key: `-v:refname` (abbreviated, starts
+# like the -v option) stays ambiguous, so a separate word after --sort is never mistaken for a listing
+SORT_KEY = re.compile(r"-?(version:)?(refname|creatordate|taggerdate|committerdate|authordate|objectname|"
+                      r"objecttype|objectsize|taggername|taggeremail|subject|body|contents|tag|type|object|"
+                      r"creator|tagger|committer|author)(:[a-z]+)?")
+
+
+def tag_listing(args):
+    """True when `git tag <args>` only lists. --contains/--no-contains/--merged/--no-merged/--points-at imply
+    --list (git: any further word is a pattern or the commit they take); otherwise only listing options and
+    their values may follow, so no separate word can be a tag name."""
+    if not args or any(x in TAG_LIST_MODES or x.startswith(tuple(m + "=" for m in TAG_LIST_MODES[4:])) for x in args):
+        return True
+    i = 0
+    while i < len(args):
+        x = args[i]
+        if x.startswith("-n") or x in TAG_RO or x.startswith(("--sort=", "--format=", "--color=", "--column=")):
+            i += 1
+        elif x == "--sort" and i + 1 < len(args) and SORT_KEY.fullmatch(args[i + 1]):
+            i += 2
+        elif x == "--format" and i + 1 < len(args) and "%(" in args[i + 1]:
+            i += 2
+        else:
+            return False
+    return True
 
 
 def classify(sub, args, branch, patterns, cfg):
@@ -422,12 +550,7 @@ def classify(sub, args, branch, patterns, cfg):
     elif sub == "symbolic-ref" and len([x for x in args if not x.startswith("-")]) >= 2:
         ask("`git symbolic-ref` repoints a ref (HEAD) directly")
     elif sub == "tag":
-        # listing-only options; value options only in their `=` form, so no separate word can be a tag name
-        ro = {"-i", "--ignore-case", "--column", "--no-column", "--color", "--no-color", "--omit-empty"}
-        listing = ((not args) or a & {"-l", "--list", "-v", "--verify", "--contains", "--points-at"}
-                   or all(x.startswith("-n") or x in ro or x.startswith(("--sort=", "--format=", "--color=", "--column="))
-                          for x in args))
-        if not listing:
+        if not tag_listing(args):
             deny("creating/deleting tags is a release action (only with explicit release authorization in the current task)")
     elif sub == "update-ref":
         if any(re.match(TAG_REF, x) for x in args if not x.startswith("-")):
@@ -494,11 +617,38 @@ def gh_api_request(argv):
     return method, endpoint or "", " ".join(fields)
 
 
+GH_GLOBAL_VALUE = {"-R", "--repo", "--hostname"}
+
+
+def gh_normalise(argv):
+    """`gh --repo o/r release create v1` -> `gh release create v1`: the repository / host selectors in front of the
+    group or the verb are dropped, so they never hide what runs. Later words (arguments) stay."""
+    out, i, words = [argv[0]], 1, 0
+    while i < len(argv):
+        x = argv[i]
+        if words < 2 and x in GH_GLOBAL_VALUE:
+            i += 2
+            continue
+        if words < 2 and x.startswith(tuple(f + "=" for f in GH_GLOBAL_VALUE)):
+            i += 1
+            continue
+        if words < 2 and re.match(r"^-R\S", x):
+            i += 1
+            continue
+        if not x.startswith("-"):
+            words += 1
+        out.append(x)
+        i += 1
+    return out
+
+
 def classify_gh(argv):
-    """GitHub CLI: reads pass; tag/release creation and repository deletion are flagged (release actions only with explicit release authorization in the current task,
-    never delete repos); every other remote mutation asks. Remote-only effects never show in a local
-    checkout, so this is the only line of defence for them."""
+    """GitHub CLI: reads pass; tag/release creation and repository deletion get advisory level high (release
+    actions only with explicit release authorization in the current task, never delete repos); every other remote
+    mutation gets advisory level warn. Remote-only effects never show in a local checkout, so this is the only
+    line of defence for them."""
     R = []
+    argv = gh_normalise(argv)
     if len(argv) < 2:
         return R
     group = argv[1]
@@ -578,7 +728,7 @@ def evaluate(payload, registry):
     cwd = os.path.abspath(payload.get("cwd") or os.getcwd())
     workspace = find_workspace(cwd, registry)
     reasons = []
-    predicted_branch = {}
+    predicted_branch, repo_state, pattern_cache = {}, {}, {}
     # a command substitution used as the program: $(which git) reset / `which git` push
     verbs = "|".join(sorted(MUTATING_GIT_WORDS, key=len, reverse=True))
     if workspace and re.search(r"(^|[;&|(]\s*)(\$\([^)]*\)|`[^`]*`)\s+(" + verbs + r")\b", command):
@@ -588,7 +738,7 @@ def evaluate(payload, registry):
         if p in CD_WORDS:
             target = next((x for x in argv[1:] if not x.startswith("-")), None)
             if target:
-                cwd = os.path.normpath(os.path.join(cwd, os.path.expanduser(target.replace("\\", "/"))))
+                cwd = os.path.normpath(os.path.join(cwd, native_path(os.path.expanduser(target.replace("\\", "/")))))
             continue
         ws = find_workspace(cwd, registry) or workspace  # after a `cd` into another workspace, that one applies
         if p in {"gh", "gh.exe"} and (ws or names_registry_repo(argv, registry)):
@@ -608,8 +758,8 @@ def evaluate(payload, registry):
         if argv[0] == "__too_deep__":
             reasons.append(("ask", f"[{here}] shells nested deeper than {MAX_DEPTH} levels - cannot be checked"))
             continue
-        if p in INTERPRETERS and any(x in {"-c", "-e", "--eval", "-p"} for x in argv[1:]) and re.search(r"\bgit\b", " ".join(argv[1:])):
-            reasons.append(("ask", f"[{here}] `{p}` inline code invokes git - cannot be checked; run git directly"))
+        if p in INTERPRETERS and any(x in {"-c", "-e", "--eval", "-p"} for x in argv[1:]) and re.search(r"\b(git|gh)\b", " ".join(argv[1:])):
+            reasons.append(("ask", f"[{here}] `{p}` inline code invokes git/gh - cannot be checked; run git/gh directly"))
             continue
         if argv[0].startswith("$") or argv[0].startswith("`"):
             if any(x.lower() in MUTATING_GIT_WORDS for x in argv[1:3]):
@@ -619,14 +769,21 @@ def evaluate(payload, registry):
         if not parsed:
             continue
         cdir, sub, args, cfg = parsed
+        if sub in STATELESS_READ_GIT and not any(c.lower().startswith("alias.") for c in cfg):
+            continue  # nothing to classify: skip the per-repo git calls (30 x `git status` stay fast)
         eff = os.path.normpath(os.path.join(cwd, cdir)) if cdir else cwd
         ws = find_workspace(eff, registry) or ws  # the directory git works in decides (`git -C` into another workspace)
         if not within(eff, ws):
             continue
-        top = git_out(eff, "rev-parse", "--show-toplevel")
-        top = os.path.abspath(top) if top else None
-        branch = predicted_branch.get(top) or (git_out(eff, "branch", "--show-current") if top else "")
-        patterns = protected_patterns(top, ws, registry) if top else DEFAULT_PROTECTED
+        if eff not in repo_state:  # memoised per directory within this one hook call
+            t = git_out(eff, "rev-parse", "--show-toplevel")
+            t = os.path.abspath(t) if t else None
+            repo_state[eff] = (t, git_out(eff, "branch", "--show-current") if t else "")
+        top, current = repo_state[eff]
+        branch = predicted_branch.get(top) or current
+        if (top, ws) not in pattern_cache:
+            pattern_cache[(top, ws)] = protected_patterns(top, ws, registry) if top else DEFAULT_PROTECTED
+        patterns = pattern_cache[(top, ws)]
         where = os.path.relpath(top, ws) if top else os.path.relpath(eff, ws)
         if sub not in GIT_BUILTINS and top:
             alias = git_out(eff, "config", "--get", f"alias.{sub}")
@@ -649,12 +806,15 @@ def human_gate_hits(payload, registry):
     command = (payload.get("tool_input") or {}).get("command") or ""
     tool = payload.get("tool_name") or "Bash"
     cwd = payload.get("cwd") or os.getcwd()
-    if not find_workspace(cwd, registry) and not any(find_workspace(os.path.expanduser(t), registry)
-                                                     for t in re.findall(r"(/[^\s'\"]+)", command)):
+    if not find_workspace(cwd, registry) and not any(find_workspace(native_path(os.path.expanduser(t)), registry)
+                                                     for t in re.findall(r"((?:\b[A-Za-z]:[/\\]|/)[^\s'\"]+)", command)):
         return []
     shell = "powershell" if tool == "PowerShell" else "bash"
     texts = {" ".join(seg) for seg in segments(tokenize(command))}
-    texts |= {" ".join(argv) for argv in expand(command, shell=shell)}
+    for argv in expand(command, shell=shell):
+        texts.add(" ".join(argv))
+        if prog(argv[0]) in {"gh", "gh.exe"}:  # `gh --repo o/r pr merge 1` is seen as `gh pr merge 1`
+            texts.add(" ".join(["gh"] + gh_normalise(argv)[1:]))
     hits = []
     read_only = []  # computed once, only when a read_only_exempt gate matched
     for text in texts:
@@ -692,16 +852,45 @@ def _needs_mode(payload):
     return os.path.exists(os.path.join(fstate.scratch(), sid, "MODE")) or "--mode" in command
 
 
+MODE_SCRIPTS = {"factory-context.sh", "context.py"}
+
+
+def mode_runner(payload):
+    """The first expanded argv that executes factory-context.sh (or lib/context.py) with --mode: the script
+    itself as the program, or a shell / interpreter whose first non-option argument is the script."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    if "--mode" not in command:
+        return None
+    shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    for argv in expand(command, shell=shell):
+        p = prog(argv[0])
+        if p in MODE_SCRIPTS:
+            script = 0
+        elif p in SHELLS or p in INTERPRETERS:
+            script = next((k for k, a in enumerate(argv[1:], 1) if not a.startswith("-")), None)
+            if script is None or prog(argv[script]) not in MODE_SCRIPTS:
+                continue
+        else:
+            continue
+        if any(a == "--mode" or a.startswith("--mode=") for a in argv[script + 1:]):
+            return [prog(argv[script])] + argv[script + 1:]
+    return None
+
+
 def mode_hits(payload, registry):
     """Factory execution mode (declared with `factory-context.sh --mode <m>`): analyze/plan/review are
     read-only; validate may additionally run run-checks.py. implement/resume (or no mode) = normal rules."""
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # appended: stdlib lookups must not stat /mnt/c first
     import factory_session as session  # noqa: E402
     session._REGISTRY = session._REGISTRY or registry
+    # a mode switch counts wherever it runs (a stale read-only mode must not outlive `--mode implement` run from
+    # outside the workspace), but only when the command really runs the script - `grep factory-context.sh --mode
+    # review README.md` or `echo ... --mode plan` only mention it
+    runner = mode_runner(payload)
+    declared = session.record_mode(dict(payload, tool_name="Bash", tool_input={"command": shlex.join(runner)})) if runner else None
     ws = find_workspace(payload.get("cwd") or os.getcwd(), registry)
     if not ws:
         return []
-    declared = session.record_mode(payload)
     mode = declared or session.current_mode(payload)
     if not mode or declared or session.is_read_only(payload):
         return []
@@ -718,14 +907,21 @@ def mode_hits(payload, registry):
 def main():
     if os.environ.get("RPG_FACTORY_GUARD", "").lower() in {"off", "0", "false"}:
         return 0
-    try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
+    try:  # UTF-8 whatever the console code page (Windows pipes default to cp1252: a non-ASCII cwd broke the match)
+        stream = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace") if hasattr(sys.stdin, "buffer") else sys.stdin
+        payload = json.load(stream)
+    except (json.JSONDecodeError, ValueError, OSError):
         return 0
-    if payload.get("tool_name") not in (None, "Bash", "PowerShell"):
+    if not isinstance(payload, dict) or payload.get("tool_name") not in (None, "Bash", "PowerShell"):
+        return 0  # `[]`, `null`, `42`: not a hook payload
+    if not isinstance(payload.get("tool_input") or {}, dict) or not isinstance((payload.get("tool_input") or {}).get("command") or "", str):
         return 0
     registry = load_registry()
     if not registry:
+        return 0
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    if len(command) > MAX_COMMAND:  # analysing it would take minutes: say so instead of guessing
+        json.dump(advisory("rpg-factory guard", [("ask", f"command too large to check ({len(command) // 1024} KB); review it")]), sys.stdout)
         return 0
     reasons = []
     try:
@@ -758,4 +954,8 @@ if __name__ == "__main__":
     for _stream in (sys.stdout, sys.stderr):  # Windows pipes default to cp1252: output is UTF-8 everywhere
         if hasattr(_stream, "reconfigure"):
             _stream.reconfigure(encoding="utf-8", errors="replace")
-    sys.exit(main())
+    try:
+        rc = main()
+    except Exception:  # a guard bug must never break the session: no opinion
+        rc = 0
+    sys.exit(rc)

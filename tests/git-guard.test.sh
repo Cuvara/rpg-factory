@@ -483,6 +483,167 @@ check high "$OUT" "git -C $SERVER tag v1.2.3"
 check warn "$OUT" "git -C $SERVER reset --hard HEAD~1"
 check allow "$OUT" "git -C $OUT reset --hard"
 
+# ---- 1.0.5: guard classification gaps
+# (1) git-bash paths: on Windows `/c/ws` and `/mnt/c/ws` once resolved to C:\c\ws (no workspace: no advisory)
+nt=$(python3 -B - "$GUARD" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gg", sys.argv[1]); g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+cases = [("/c/Workspaces/UnityIndie/Netcode", True, "C:/Workspaces/UnityIndie/Netcode"), ("/mnt/c/ws/x", True, "C:/ws/x"),
+         ("/d", True, "D:/"), ("/tmp/x", True, "/tmp/x"), ("C:\\ws\\x", True, "C:\\ws\\x"), ("backend", True, "backend"),
+         ("/c/ws", False, "/c/ws"), ("/mnt/c/ws", False, "/mnt/c/ws")]
+bad = [c for c in cases if g.native_path(c[0], nt=c[1]) != c[2]]
+print("ok" if not bad else f"bad {bad}")
+PY
+)
+[ "$nt" = ok ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL native_path mapping: $nt"; }
+check high "$OUT" "cd $SERVER && git tag v1.0.0"          # every platform: the native form
+check high "$OUT" "git -C $SERVER/backend tag v1.0.0"
+if [ -n "$RPGF_WINDOWS" ]; then
+  d="${SERVER:0:1}"; u="/${d,,}${SERVER:2}"   # C:/Users/... -> /c/Users/... (cygpath -u would print /tmp/...)
+  check high "$OUT" "cd $u && git tag v1.0.0"
+  check high "$OUT" "git -C $u tag v1.0.0"
+  check high "$OUT" "git -C /mnt$u tag v1.0.0"
+  check warn "$OUT" "cd /mnt$u/backend && git reset --hard"
+  check high "$CLIENT" "cd $u && git push origin --tags"
+  check warn "$OUT" "kubectl apply -f $u/backend/x.yaml"      # human gate path scan maps the path too
+fi
+check warn "$OUT" "kubectl apply -f $SERVER/backend/x.yaml"   # native form (C:/... on Windows) on every platform
+# (2) shell reserved words in front of git
+check high "$SERVER" '{ git tag v1; }'
+check high "$SERVER" '! git tag v1'
+check high "$SERVER" 'if true; then git tag v1; fi'
+check high "$SERVER" 'if false; then :; else git tag v1; fi'
+check high "$SERVER" 'if false; then :; elif true; then git tag v1; fi'
+check high "$SERVER" 'if git tag v1; then :; fi'
+check high "$SERVER" 'for i in 1; do git tag v$i; done'
+check high "$SERVER" 'while false; do git push --tags; done'
+check high "$SERVER" 'until false; do git tag v1; done'
+check high "$SERVER" 'f() { git tag v1; }; f'
+check high "$SERVER" 'function f { git tag v1; }; f'
+check warn "$SERVER" '{ git reset --hard; } 2>/dev/null'
+check allow "$SERVER" 'if true; then git status; fi'
+check allow "$SERVER" '{ git log -1; }'
+check allow "$SERVER" 'for f in a b; do echo $f; done'
+check high "$SERVER" 'if ($true) { git tag v1 }' "" PowerShell
+check high "$SERVER" 'foreach ($t in $tags) { git tag $t }' "" PowerShell
+check warn "$SERVER" 'try { git reset --hard } finally { Write-Host x }' "" PowerShell
+check allow "$SERVER" 'if ($x) { git status } else { git log -1 }' "" PowerShell
+check allow "$SERVER" 'if ($x) { git tag -l }' "" PowerShell
+# (3) a heredoc read by a shell is commands; by an interpreter, opaque code; otherwise data
+check high "$SERVER" "bash <<'EOF2'
+git tag v1
+EOF2"
+check high "$SERVER" "bash -s <<EOF
+git tag v1
+EOF"
+check high "$SERVER" "cat <<EOF | sh
+git push --tags
+EOF"
+check high "$SERVER" "sh - <<'X'
+cd backend && git tag v2
+X"
+check warn "$SERVER" "python3 - <<'PY'
+import os; os.system('git reset --hard')
+PY"
+check warn "$SERVER" "node <<'JS'
+require('child_process').execSync('gh release create v1')
+JS"
+check allow "$SERVER" "python3 - <<'PY'
+print(1)
+PY"
+check allow "$SERVER" "cat > notes.txt <<'EOF'
+git tag v1
+EOF"
+check allow "$SERVER" "cat <<'EOF' > notes.txt
+git push --tags
+EOF"
+check allow "$SERVER" "bash -c 'cat' <<'EOF'
+git tag v1
+EOF"
+check allow "$SERVER" "bash <<'O'
+cat > f <<'I'
+git tag v1
+I
+git status
+O"
+check high "$SERVER" "bash <<'O'
+cat > f <<'I'
+x
+I
+git tag v1
+O"
+check allow "$FEATURE" "git commit -F - <<'EOF'
+chore: git tag v1 and git push --tags are release actions
+EOF"
+# (4) gh repository / host selectors never hide the group and verb (also for the human gates)
+check high "$SERVER" "gh --repo Cuvara/x release create v1"
+check high "$SERVER" "gh -R Cuvara/x release create v1"
+check high "$SERVER" "gh --repo=Cuvara/x release create v1"
+check high "$SERVER" "gh -RCuvara/x release create v1"
+check high "$SERVER" "gh --hostname github.com release create v1"
+check high "$SERVER" "gh release --repo Cuvara/x create v1"
+check warn "$SERVER" "gh -R Cuvara/x pr merge 1"
+check allow "$SERVER" "gh -R Cuvara/x pr view 1"
+check allow "$SERVER" "gh --repo Cuvara/x release list"
+reason_has() { # cwd command needle
+  local r; r=$(jq -cn --arg c "$2" --arg d "$1" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"guardtest"}' \
+    | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" | jq -r '.hookSpecificOutput.additionalContext // ""')
+  case "$r" in *"$3"*) pass=$((pass + 1));; *) fail=$((fail + 1)); echo "FAIL reason for '$2' lacks '$3': $r";; esac
+}
+reason_has "$SERVER" "gh -R Cuvara/x pr merge 1" "human gate 'publish'"
+reason_has "$SERVER" "gh --repo Cuvara/x pr create --fill" "human gate 'publish'"
+# (5) interpreter one-liners that invoke gh
+check warn "$SERVER" 'python3 -c "import os; os.system(\"gh release create v1\")"'
+check warn "$SERVER" 'node -e "require(\"child_process\").execSync(\"gh release create v1\")"'
+check allow "$SERVER" 'python3 -c "print(\"github\")"'
+# (6) payloads that are not objects, and non-ASCII paths decoded as UTF-8
+for p in '[]' 'null' '"s"' '42' '{"tool_name":"Bash","tool_input":"x"}' '{"tool_name":"Bash","tool_input":{"command":42}}'; do
+  out=$(printf '%s' "$p" | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" 2>&1; echo "exit=$?")
+  [ "$out" = "exit=0" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL payload $p: $out"; }
+done
+NA="$SERVER/backend/d$(printf '\xc3\x84\xd0\x90')"; mkdir -p "$NA"
+check high "$NA" "git tag v1.2.3"
+check warn "$OUT" "git -C $NA reset --hard"
+# (7) tag listings with --merged / --no-merged / --no-contains / separate --sort and --format values
+check allow "$SERVER" "git tag --merged"
+check allow "$SERVER" "git tag --no-merged HEAD"
+check allow "$SERVER" "git tag --merged=HEAD 'v*'"
+check allow "$SERVER" "git tag --no-contains HEAD"
+check allow "$SERVER" "git tag --sort -version:refname"
+check allow "$SERVER" "git tag --sort creatordate --format '%(refname:short)'"
+check high "$SERVER" "git tag --sort -version:refname v9.9.9"
+check high "$SERVER" "git tag --sort version:refname v9"
+check high "$SERVER" "git tag --format x v9"
+# (8) many read-only git calls stay quiet; an oversized command is one warn
+cmd30=$(for i in $(seq 30); do printf 'git -C backend status; '; done)
+check allow "$SERVER" "$cmd30"
+check warn "$SERVER" "$(for i in $(seq 30); do printf 'git -C backend status; '; done)git commit -m x"
+{ printf 'echo '; printf '%0200000d' 0; } > "$TMP/big.txt"   # too large for a jq --arg: read from a file
+out=$(jq -cn --rawfile c "$TMP/big.txt" --arg d "$SERVER" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"guardtest"}' \
+  | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; echo "rc=$?")
+case "$out" in *'rpg-factory advisory (warn)'*'command too large to check'*rc=0) pass=$((pass + 1));;
+  *) fail=$((fail + 1)); echo "FAIL oversized command: ${out:0:300}";; esac
+# (10) a mode switch counts wherever it runs, and only when the script really runs
+mx() { # expected cwd command
+  local out got; out=$(jq -cn --arg c "$3" --arg d "$2" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"modes-x"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
+  got=$(jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${out:-{\}}")
+  if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL mode-x expected=%s got=%s cwd=%s cmd=%s\n  out=%s\n' "$1" "$got" "${2#$TMP/}" "$3" "$out"; fi
+}
+mx allow "$SERVER" "bash $CTX --mode plan"
+mx high  "$SERVER" "touch a.txt"
+mx allow "$OUT"    "bash $CTX --mode implement --repo server"     # switched from outside the workspace
+mx allow "$SERVER" "touch b.txt"
+mx allow "$OUT"    "bash $CTX --mode review"
+mx high  "$SERVER" "touch c.txt"
+mx allow "$OUT"    "$CTX --mode=implement"
+mx allow "$SERVER" "touch d.txt"
+mx allow "$SERVER" "grep -n factory-context.sh --mode review README.md"   # mentions the script, does not run it
+mx allow "$SERVER" "echo factory-context.sh --mode plan"
+mx allow "$SERVER" "touch e.txt"
+mx allow "$SERVER" "bash -x $CTX --mode analyze"
+mx high  "$SERVER" "touch f.txt"
+mx allow "$SERVER" "bash $CTX --mode implement"
+
 
 total=$((pass + fail))
 echo "git-guard tests: $total run, $pass passed, $fail failed"

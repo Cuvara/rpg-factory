@@ -13,6 +13,31 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   flags the same commands at the same advisory level, nothing blocks or asks. `run-all.sh` fails if the absolute
   "agents never tag" wording returns or a policy file drops the authorization rule.
 
+### Fixed
+- **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
+  commands were missed or misread and now get the advisory they should:
+  - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan
+    resolved to `C:\c\...` (no workspace, no advisory); they are mapped to drive paths first (`native_path`).
+  - Shell reserved words hid git: `{ git tag v1; }`, `! git tag`, `if/then/else/elif`, `for/while/until ... do`,
+    `f() { ...; }`, `function f { ... }`, PowerShell `if (...) { git tag v1 }` / `foreach (...) { ... }` (braces end
+    a PowerShell command).
+  - A heredoc read by a shell (`bash <<EOF`, `bash -s <<EOF`, `cat <<EOF | sh`) is analysed as commands; read by an
+    interpreter (`python3 - <<PY`) and mentioning git/gh it is warn (opaque). Other heredocs (commit messages,
+    `cat > file <<EOF`) stay data.
+  - `gh --repo/-R/--hostname <x>` before the group or verb hid `release create`, `pr merge` and the `publish` gate.
+  - Interpreter one-liners invoking `gh` (`python3 -c "...gh release create..."`, `node -e`) are warn like git.
+  - Non-object JSON payloads (`[]`, `null`, `42`) crashed with a traceback (exit 1); stdin is read as UTF-8, so a
+    non-ASCII cwd no longer breaks the workspace match on Windows.
+  - `git tag --merged`, `--no-merged <c>`, `--no-contains <c>` and `--sort <full key>` / `--format '%(...)'` as
+    separate words are listings (allow); a name after them, and the abbreviated `--sort -v:refname`, stay high.
+  - Speed: read-only git subcommands (status, log, diff, ...) skip the per-repo git calls and the others are
+    memoised per directory (30 x `git -C backend status`: ~1.36 s -> ~0.18 s on Windows); commands over 200 KB
+    get one warn ("command too large to check") instead of minutes of parsing.
+  - `factory-context.sh --mode <m>` run outside the workspace now records the mode (a stale read-only mode stayed),
+    and the mode is only recorded when the script is actually run - `grep factory-context.sh --mode review` or
+    `echo ... --mode plan` no longer switch it.
+  - Wording: the module and `classify_gh` docstrings describe advisory levels high/warn, not deny/ask decisions.
+
 ## [1.0.4] - 2026-10-22
 
 Fix: tech skills stay behind their lead skills under the advisory-only hooks of 1.0.3, still without blocking or
