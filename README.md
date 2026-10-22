@@ -17,8 +17,10 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 1.0.4 (see `VERSION`). Releases are tagged by the maintainer; agents never tag - the last
-automated state of any release is **READY_TO_TAG**.
+Version 1.0.4 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
+current task, an agent stops at **READY_TO_TAG** and the maintainer tags; when the user explicitly authorizes the
+release in that task, the agent performs the authorized merge, version, tag and release steps itself, within that
+scope and after the release checks pass. The guard's tag/release advisories apply either way.
 
 ## Commands
 
@@ -216,7 +218,7 @@ in every repo (`feat/wire/party` in server, Netcode and client) so the legs are 
 Three layers, all inside the workspace (plus `gh` commands naming a workspace repo, wherever they run). Since 1.0.3 the hooks are **advisory only**: they never ask you to confirm and never block the agent. A match is passed to the agent as context (`rpg-factory advisory (high|warn): ...`); `high` marks the former deny class, `warn` the former ask class.
 
 1. **Rules** in `skills/factory-core/references/git-safety.md` (baseline preservation, explicit
-   staging, `<type>/<area>/<topic>` branches, never tag).
+   staging, `<type>/<area>/<topic>` branches, no tag without explicit release authorization).
 2. **Guard** - `scripts/git-guard.py`, PreToolUse on **Bash and PowerShell**. It expands a command
    into what actually runs: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`,
    `xargs`, `find -exec`), nested shells (`bash -c`, `sh -c`, `eval`, `cmd /c`, `powershell -c`),

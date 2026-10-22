@@ -64,8 +64,9 @@ topic name) - never by hand-editing the client.
 
 ## Rules
 
-- **Never tag, never publish.** A `v*` tag triggers `release.yml`, which runs `npm publish` to
-  GitHub Packages; that cannot be undone (Netcode `README.md` "Cutting a release").
+- **No tag, no publish without release authorization.** A `v*` tag triggers `release.yml`, which runs
+  `npm publish` to GitHub Packages; that cannot be undone (Netcode `README.md` "Cutting a release"). Stop at
+  "ready to tag" unless the user explicitly authorized this package release in the current task.
 - `package.json` version must equal the tag, and the tagged commit must carry `## [X.Y.Z]`;
   `release.yml` extracts the notes by that heading and refuses a mismatched version.
 - UnityDots release sections also carry one compatibility line per moved pin and a

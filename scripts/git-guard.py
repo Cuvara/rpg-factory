@@ -9,7 +9,7 @@ hook never asks the user and never blocks; a match is returned as additionalCont
 "deny" (reported as level high) and "ask" (level warn):
 
   - "deny"  creating, deleting or pushing tags (git tag, push --tags / tag refs, update-ref
-            on tags, gh api .../git/refs|tags, gh release create) - agents never tag
+            on tags, gh api .../git/refs|tags, gh release create) - release actions, only with explicit release authorization in the current task
   - "ask"   destructive or high-impact git (reset --hard, clean -f, checkout -- / -B,
             restore, stash, branch -D/-f, update-ref, gc --prune, reflog expire, rebase,
             filter-branch, any push, add -A, commit -a/--amend, commit/merge/cherry-pick/
@@ -377,7 +377,7 @@ def classify(sub, args, branch, patterns, cfg):
             ask("`git branch -f/-M` moves or overwrites an existing branch")
     elif sub == "push":
         if "--tags" in a or "--follow-tags" in a or "--mirror" in a or any(re.match(TAG_REF, d) for d in refspec_dsts(args)):
-            deny("pushing tags is a release action reserved for the lead (agents never tag)")
+            deny("pushing tags is a release action (only with explicit release authorization in the current task)")
         if any(x == "--force" or x.startswith("--force-with-lease") or x.startswith("--force-if-includes") for x in args) \
                 or has_short_flag(args, "f") or any(x.startswith("+") for x in args):
             ask("force push rewrites remote history")
@@ -407,7 +407,7 @@ def classify(sub, args, branch, patterns, cfg):
         if "--update-head-ok" in a or any(d and not d.lstrip("+").startswith("refs/remotes/") for d in dsts) \
                 or any(x.startswith("+") and ":" in x and not x.split(":", 1)[1].startswith("refs/remotes/") for x in args):
             if any(re.match(TAG_REF, d.lstrip("+")) for d in dsts):
-                deny("`git fetch` into a tag ref - agents never tag")
+                deny("`git fetch` into a tag ref - a release action (only with explicit release authorization in the current task)")
             else:
                 ask("`git fetch <src>:<dst>` writes a local branch directly (can force-move it)")
     elif sub == "remote" and args and args[0] in {"add", "set-url", "remove", "rm", "rename", "set-branches", "set-head"}:
@@ -428,10 +428,10 @@ def classify(sub, args, branch, patterns, cfg):
                    or all(x.startswith("-n") or x in ro or x.startswith(("--sort=", "--format=", "--color=", "--column="))
                           for x in args))
         if not listing:
-            deny("creating/deleting tags is a release action reserved for the lead (agents never tag)")
+            deny("creating/deleting tags is a release action (only with explicit release authorization in the current task)")
     elif sub == "update-ref":
         if any(re.match(TAG_REF, x) for x in args if not x.startswith("-")):
-            deny("`git update-ref` on a tag ref - agents never tag")
+            deny("`git update-ref` on a tag ref - a release action (only with explicit release authorization in the current task)")
         else:
             ask("`git update-ref` rewrites a ref directly")
     elif sub == "gc" and any(x.startswith("--prune") for x in args):
@@ -495,7 +495,7 @@ def gh_api_request(argv):
 
 
 def classify_gh(argv):
-    """GitHub CLI: reads pass; tag/release creation and repository deletion are denied (agents never tag,
+    """GitHub CLI: reads pass; tag/release creation and repository deletion are flagged (release actions only with explicit release authorization in the current task,
     never delete repos); every other remote mutation asks. Remote-only effects never show in a local
     checkout, so this is the only line of defence for them."""
     R = []
@@ -513,7 +513,7 @@ def classify_gh(argv):
             if not re.search(r"\bmutation\b", fields):
                 return R  # a graphql query reads
             if re.search(TAGGISH, text) or re.search(r"\b(createRef|updateRef|updateRefs)\b", fields) and "refs/tags" in text:
-                R.append(("deny", "`gh api graphql` mutation creates/changes a tag or release - agents never tag"))
+                R.append(("deny", "`gh api graphql` mutation creates/changes a tag or release - a release action (only with explicit release authorization in the current task)"))
             elif re.search(r"\b(deleteRepository|archiveRepository)\b", fields):
                 R.append(("deny", "`gh api graphql` deletes/archives a repository"))
             else:
@@ -523,7 +523,7 @@ def classify_gh(argv):
             return R
         path = re.sub(r"^/+", "", endpoint)
         if re.search(TAGGISH, text):
-            R.append(("deny", f"`gh api -X {method} {path}` creates/changes a tag or release - agents never tag"))
+            R.append(("deny", f"`gh api -X {method} {path}` creates/changes a tag or release - a release action (only with explicit release authorization in the current task)"))
         elif method == "DELETE" and re.match(r"^repos/[^/]+/[^/]+/?$", path):
             R.append(("deny", f"`gh api -X DELETE {path}` deletes a repository"))
         elif "/protection" in path or "/rulesets" in path:
@@ -534,7 +534,7 @@ def classify_gh(argv):
             R.append(("ask", f"`gh api -X {method} {path}` changes GitHub state"))
         return R
     if group == "release" and verb in {"create", "upload", "edit"}:
-        R.append(("deny", f"`gh release {verb}` creates or changes a tag/release - agents never tag"))
+        R.append(("deny", f"`gh release {verb}` creates or changes a tag/release - a release action (only with explicit release authorization in the current task)"))
     elif group == "release" and verb == "delete-asset":
         R.append(("ask", "`gh release delete-asset` changes a published release"))
     elif group == "release" and verb == "delete":

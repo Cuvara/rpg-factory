@@ -44,8 +44,10 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
    gate and ask the user.
 7. **Produce domain evidence.** Examples: test counts, byte-identical diffs, pin agreement, a
    measurement with a control.
-8. **Never tag.** Tags (`v*`, `sgl-v*`, `core-baseline-*`) are created by the lead. The guard
-   flags `git tag <name>` and pushing tags (advisory `high`); agents never tag. Skills stop at **"ready to tag <repo> <version>"**.
+8. **No tag without release authorization.** Tags (`v*`, `sgl-v*`, `core-baseline-*`) are created by the
+   lead; skills stop at **"ready to tag <repo> <version>"**. Only when the user explicitly authorizes the
+   release in the current task does the agent tag and publish itself (`git-safety.md` rule 5).
+   The guard flags `git tag <name>` and pushing tags (advisory `high`) either way.
 9. **Never bypass Core.** This covers the baseline, the guard, and the report template.
 10. **Never create another registry.** No feature lists, GDD state or task trackers. Feature and
     GDD lifecycle belongs to `game-ai-workflows`. Module knowledge belongs to `registry.json`.

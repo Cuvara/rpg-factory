@@ -20,9 +20,14 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    `factory-status.py` links the legs and can resume them.
 4. **Stage explicit paths.** `git add <path>...` only. Never `add -A`, `add .`, `add :/`,
    `commit -a`.
-5. **Commit, push, PR, merge only on request; never tag.** Commit messages follow Conventional
-   Commits with a lowercase scope (`fix(gateway): ...`). PRs target `develop`, and the repos
-   squash-merge. Tags are never created by agents in any repo (`v*`, `sgl-v*`, `core-baseline-*` belong to the lead); skills stop at "ready to tag".
+5. **Commit, push, PR, merge only on request; tags and releases only when authorized.** Commit
+   messages follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target
+   `develop`, and the repos squash-merge. Without explicit release authorization from the user in the
+   current task, an agent creates no tag (`v*`, `sgl-v*`, `core-baseline-*`) and publishes no release in
+   any repo: skills stop at "ready to tag" with evidence and the lead tags. When the user explicitly
+   authorizes a release in the current task, the agent performs exactly the authorized merge, version,
+   tag and release steps, after the release checks pass on the commit being tagged. Never move, delete
+   or reuse a tag, never publish past a failing check.
 6. **No history rewrites** on shared branches: no force push, rebase of pushed commits,
    amend of pushed commits, or filter-branch.
 7. **Generated files only via their generator:**
@@ -68,8 +73,8 @@ quoting (`` ` `` escape, `&` call operator, `git.exe`).
 
 | Command | Advisory | Why |
 |---|---|---|
-| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing or fetching into tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`) | **high** | agents never tag |
-| `gh release create/upload/edit`, `gh api` REST writes to `/git/tags`, tag refs or `/releases`, `gh api graphql` mutations creating a tag ref or release | **high** | agents never tag |
+| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing or fetching into tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`) | **high** | release action: only with explicit release authorization (rule 5) |
+| `gh release create/upload/edit`, `gh api` REST writes to `/git/tags`, tag refs or `/releases`, `gh api graphql` mutations creating a tag ref or release | **high** | release action: only with explicit release authorization (rule 5) |
 | `gh repo delete/archive`, `gh api -X DELETE repos/<o>/<r>` (or the GraphQL equivalents) | **high** | irreversible |
 | any other `gh api` write (method from `-X`, else POST when fields/`--input` are given), GraphQL mutations, GraphQL from a file; mutating `gh` verbs (repo edit/rename/sync, secret/variable set, workflow enable/disable, run cancel, pr close/comment/edit, label create...) | warn | remote-only change |
 | `reset --hard/--merge/--keep`, `reset <commit>` on a protected branch, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | warn | discards work or moves a protected branch |
