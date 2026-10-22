@@ -40,10 +40,11 @@ def load_evidence(run_dir: Path) -> dict:
             "status": util.read_json(d / "status.json", default={}) or {},
             "summary": util.read_json(d / "summary.json", default=None),
             "summaries": [util.read_json(p, default=None) for p in sorted(d.glob("summary*.json"))],
-            "events": util.read_ndjson(d / "events.ndjson"),
-            "samples": util.read_ndjson(d / "samples.ndjson"),
+            # Streamed, never held: a 1 h soak's samples and events are gigabytes as Python objects.
+            "events": util.LazyNdjson(d / "events.ndjson"),
+            "samples": util.LazyNdjson(d / "samples.ndjson"),
             "snapshots": util.read_ndjson(d / "snapshots.ndjson"),
-            "inputs": util.read_ndjson(d / "inputs.ndjson"),
+            "inputs": util.LazyNdjson(d / "inputs.ndjson"),
             "plan": util.read_json(d / "plan.json", default={}) or {},
             "logs": {p.name: p.read_text(encoding="utf-8", errors="replace") for p in logs},
             "frames": _read_frames(d / "frames.csv"),
@@ -53,7 +54,7 @@ def load_evidence(run_dir: Path) -> dict:
             "history": (meta.get("clients") or {}).get(str(i), {}),
         })
     server_dir = run_dir / "server"
-    entities = util.read_ndjson(server_dir / "entities.ndjson")
+    entities = util.LazyNdjson(server_dir / "entities.ndjson")
     ev = {
         "run_dir": run_dir,
         "meta": meta,
@@ -75,9 +76,30 @@ def load_evidence(run_dir: Path) -> dict:
     return ev
 
 
-def _read_frames(path: Path) -> list:
-    """[(scenario_t, dt_ms)] for frames inside the scenario window (scenario_t >= 0)."""
-    out = []
+class FrameSeries:
+    """(scenario_t, dt_ms) per frame in two float arrays (16 bytes a frame, not a tuple each)."""
+
+    def __init__(self):
+        from array import array
+        self.st, self.dt = array("d"), array("d")
+
+    def append(self, item) -> None:
+        self.st.append(item[0])
+        self.dt.append(item[1])
+
+    def __iter__(self):
+        return zip(self.st, self.dt)
+
+    def __len__(self) -> int:
+        return len(self.st)
+
+    def __bool__(self) -> bool:
+        return len(self.st) > 0
+
+
+def _read_frames(path: Path) -> "FrameSeries":
+    """(scenario_t, dt_ms) for frames inside the scenario window (scenario_t >= 0)."""
+    out = FrameSeries()
     try:
         with open(path, encoding="utf-8") as fh:
             next(fh, None)
@@ -140,8 +162,10 @@ def parse_prometheus(path: Path) -> dict:
     return out
 
 
-def trajectories(entities: list) -> dict:
-    """{id: {"type": t, "st": [...], "x": [...], "y": [...], "hp": [...], "max_hp": .., "speed": ..}}"""
+def trajectories(entities) -> dict:
+    """{id: {"type": t, "st": [...], "x": [...], "y": [...], "hp": [...], "max_hp": .., "speed": ..}}
+    st, x and y are float arrays (8 bytes a value); one pass over the rows."""
+    from array import array
     traj = {}
     for row in entities:
         st = row.get("st")
@@ -149,8 +173,10 @@ def trajectories(entities: list) -> dict:
             continue
         for e in row["ents"]:
             eid, etype, x, y, hp, max_hp, dead, speed = (e + [None] * 8)[:8]
-            t = traj.setdefault(eid, {"type": etype, "st": [], "x": [], "y": [], "hp": [], "dead": [],
-                                       "max_hp": max_hp, "speed": speed})
+            t = traj.get(eid)
+            if t is None:
+                t = traj[eid] = {"type": etype, "st": array("d"), "x": array("d"), "y": array("d"), "hp": [],
+                                 "dead": [], "max_hp": max_hp, "speed": speed}
             t["st"].append(st)
             t["x"].append(x)
             t["y"].append(y)
@@ -233,14 +259,27 @@ def _dist_to_path(t: dict, st_lo: float, st_hi: float, px: float, py: float):
     i1 = min(len(times), bisect_right(times, st_hi) + 1)
     if i1 - i0 < 1:
         return None
+    # Same arithmetic as _seg_dist, inlined over one slice of the trajectory (hot path: once per
+    # rendered entity per sample, millions of times on a soak).
+    xs, ys = t["x"][i0:i1], t["y"][i0:i1]
     best = None
-    for i in range(i0, i1):
-        if i + 1 < i1:
-            d = _seg_dist(px, py, t["x"][i], t["y"][i], t["x"][i + 1], t["y"][i + 1])
+    hypot = math.hypot
+    ax, ay = xs[0], ys[0]
+    for k in range(1, len(xs)):
+        bx, by = xs[k], ys[k]
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        if L <= 1e-12:
+            d = hypot(px - ax, py - ay)
         else:
-            d = math.hypot(px - t["x"][i], py - t["y"][i])
-        best = d if best is None or d < best else best
-    return best
+            f = ((px - ax) * dx + (py - ay) * dy) / L
+            f = 0.0 if f < 0.0 else 1.0 if f > 1.0 else f
+            d = hypot(px - (ax + f * dx), py - (ay + f * dy))
+        if best is None or d < best:
+            best = d
+        ax, ay = bx, by
+    d = hypot(px - ax, py - ay)
+    return d if best is None or d < best else best
 
 
 def _seg_dist(px, py, ax, ay, bx, by):
@@ -467,10 +506,10 @@ def _divergence(ev, a, *, local: bool):
     lag = float(a.get("window_before_s", 0.6 if not local else 0.3))
     lead = float(a.get("window_after_s", 0.15 if not local else 0.6))
     types = set(a.get("types", ["mob", "player"]))
-    rendered, received = [], []
-    worst = []
+    rendered, received, stalled = util.Distribution(), util.Distribution(), util.Distribution()
+    import heapq
+    worst, seq = [], 0  # the 15 largest (stable for ties), not every row over the limit
     stalls = host_stalls(ev)
-    stalled = []
     for c in ev["clients"]:
         for s in c["samples"]:
             st = s.get("st")
@@ -488,16 +527,22 @@ def _divergence(ev, a, *, local: bool):
                 if d is None:
                     continue
                 if in_stall:
-                    stalled.append(d)
+                    stalled.add(d)
                     continue
-                rendered.append(d)
+                rendered.add(d)
                 if len(row) >= 7:
                     dr = _dist_to_path(t, st - lag, st + lead, row[5], row[6])
                     if dr is not None:
-                        received.append(dr)
+                        received.add(dr)
                 if d > float(a.get("max", 1.0)):
-                    worst.append({"client": c["index"], "st": round(st, 3), "id": eid, "type": etype,
-                                  "rendered_err": round(d, 3)})
+                    item = (round(d, 3), -seq, {"client": c["index"], "st": round(st, 3), "id": eid, "type": etype,
+                                                "rendered_err": round(d, 3)})
+                    seq += 1
+                    if len(worst) < 15:
+                        heapq.heappush(worst, item)
+                    elif item[:2] > worst[0][:2]:
+                        heapq.heapreplace(worst, item)
+    worst = [w[2] for w in sorted(worst, key=lambda w: (-w[0], -w[1]))]
     return rendered, received, worst, stalled
 
 
@@ -507,10 +552,10 @@ def check_position_divergence(ev, a):
     if len(rendered) < int(a.get("min_samples", 50)):
         return _inconclusive(f"{len(rendered)} comparable samples (< {a.get('min_samples', 50)})",
                              source="client samples.ndjson vs server /debug/entities")
-    p95, mx = util.percentile(rendered, 95), max(rendered)
-    rp95 = util.percentile(received, 95) if received else None
+    p95, mx = rendered.percentile(95), rendered.max()
+    rp95 = received.percentile(95) if received else None
     ok = p95 <= float(a.get("p95", 0.35)) and mx <= float(a.get("max", 1.0))
-    stall_would_fail = bool(stalled) and max(stalled) > float(a.get("max", 1.0))
+    stall_would_fail = bool(stalled) and stalled.max() > float(a.get("max", 1.0))
     worst = [w for w in worst if not _in_stall(host_stalls(ev), w["st"], w["st"], slack=0.5)]
     # Attribution: a client that RECEIVED positions on the server's path but RENDERED them off it
     # has an interpolation/presentation problem; one that received them off-path has a
@@ -523,10 +568,10 @@ def check_position_divergence(ev, a):
         layer = "snapshot or transport (received positions already off the server path)"
     worst.sort(key=lambda w: -w["rendered_err"])
     return _result(FAIL if not ok else (INCONCLUSIVE if stall_would_fail else PASS),
-                   {"p50": round(util.percentile(rendered, 50), 4), "p95": round(p95, 4), "max": round(mx, 4),
+                   {"p50": round(rendered.percentile(50), 4), "p95": round(p95, 4), "max": round(mx, 4),
                     "received_p95": None if rp95 is None else round(rp95, 4), "samples": len(rendered),
                     "in_host_stall": len(stalled),
-                    "max_in_host_stall": round(max(stalled), 4) if stalled else None},
+                    "max_in_host_stall": round(stalled.max(), 4) if stalled else None},
                    {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0)},
                    source=("rendered LocalTransform of the " + ("local predicted player" if local else "remote entities") +
                            " vs the server's authoritative polyline in a time window around the sample"),
@@ -552,6 +597,7 @@ def check_render_jumps(ev, a):
     for c in ev["clients"]:
         js = [e for e in c["events"] if e.get("event") == "render_jump" and (e.get("st") or -1) >= skip]
         per_client[c["index"]] = len(js)
+        near = {"samples": _samples_near(c, [e.get("st") for e in js], before=0.25, after=0.15)}
         stalls = host_stalls(ev)
         stall_events = all_stall_events
         for e in js:
@@ -569,7 +615,7 @@ def check_render_jumps(ev, a):
             # (0.8 s at max_speed, +20%): only then is it a teleport rather than ordinary motion.
             walkable = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)) * 0.8 * 1.2
             respawned = _server_respawned(ev, e.get("id"), e.get("st"))
-            received_step = _received_step(c, e.get("id"), e.get("st"),
+            received_step = _received_step(near, e.get("id"), e.get("st"),
                                            max_speed=float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)))
             explained = server_step is not None and server_step >= 0.8 * (e.get("step") or 0)
             # The client's own received stream (20 Hz) resolves a teleport the 5 Hz server
@@ -628,6 +674,29 @@ def check_render_jumps(ev, a):
                    detail={"per_client": per_client, "largest": attributed},
                    artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]] +
                              [str(c["dir"] / "shots") for c in ev["clients"]])
+
+
+def _samples_near(c: dict, times, before: float, after: float) -> list:
+    """The client's samples (in file order) whose scenario time lies within [t - before, t + after] of
+    any of `times`: one streaming pass instead of re-reading the file for every jump."""
+    merged = []
+    for lo, hi in sorted((t - before, t + after) for t in times if t is not None):
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    if not merged:
+        return []
+    starts = [m[0] for m in merged]
+    out = []
+    for smp in c["samples"]:
+        st = smp.get("st")
+        if st is None:
+            continue
+        j = bisect_right(starts, st) - 1
+        if j >= 0 and st <= merged[j][1]:
+            out.append(smp)
+    return out
 
 
 def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15, max_speed=6.0, tick_hz=60.0):
@@ -865,12 +934,16 @@ def _players(row):
 def check_enemy_crowding(ev, a):
     """Target distribution and separation of the enemy crowd, measured on the server."""
     lo, hi = _window(ev)
-    rows = [r for r in ev["server"]["entities"] if r.get("st") is not None and lo + float(a.get("skip_first_s", 5)) <= r["st"] <= hi]
-    if not rows:
+    lo += float(a.get("skip_first_s", 5))
+    n_rows = sum(1 for r in ev["server"]["entities"] if r.get("st") is not None and lo <= r["st"] <= hi)
+    if not n_rows:
         return _inconclusive("no server entity samples in window", source="/debug/entities")
     overlap_r = float(a.get("overlap_radius", 0.3))
     per_sample = []
-    for r in rows[:: max(1, len(rows) // 60)]:
+    stride = max(1, n_rows // 60)
+    picked = (r for i, r in enumerate(r for r in ev["server"]["entities"]
+                                      if r.get("st") is not None and lo <= r["st"] <= hi) if i % stride == 0)
+    for r in picked:
         enemies, players = _alive_enemies(r), _players(r)
         if not enemies or not players:
             continue
@@ -967,10 +1040,20 @@ def check_enemy_pursuit(ev, a):
     target in both samples; their speed relative to the target is the jitter a client sees.
     """
     lo, hi = _window(ev)
-    rows = [r for r in ev["server"]["entities"]
-            if r.get("st") is not None and lo + float(a.get("skip_first_s", 5)) <= r["st"] <= hi]
-    if len(rows) < 2:
+    lo += float(a.get("skip_first_s", 5))
+    n_rows = sum(1 for r in ev["server"]["entities"] if r.get("st") is not None and lo <= r["st"] <= hi)
+    if n_rows < 2:
         return _inconclusive("fewer than two server entity samples in window", source="/debug/entities")
+
+    def _rows_in_window():
+        return (r for r in ev["server"]["entities"] if r.get("st") is not None and lo <= r["st"] <= hi)
+
+    def _consecutive(it):
+        prev = None
+        for r in it:
+            if prev is not None:
+                yield prev, r
+            prev = r
     far = float(a.get("far_distance", 3.0))
     settle = float(a.get("settle_distance", 2.6))
     moving_eps = float(a.get("moving_epsilon", 0.02))
@@ -980,7 +1063,7 @@ def check_enemy_pursuit(ev, a):
     far_steps = approaching = 0
     away = []
     settled_rel = []
-    for r0, r1 in zip(rows, rows[1:]):
+    for r0, r1 in _consecutive(_rows_in_window()):
         dt = r1["st"] - r0["st"]
         if not 0.03 <= dt <= 0.6:
             continue
@@ -1044,7 +1127,7 @@ def check_enemy_pursuit(ev, a):
                     "max_settled_speed": a.get("max_settled_speed")},
                    source="server /debug/entities, consecutive samples; target = nearest live player "
                           "(the server's rule, PlayerTargetBuffer.TryNearest)",
-                   sampling=f"{len(rows)} server samples",
+                   sampling=f"{n_rows} server samples",
                    rationale="an enemy far from every player has no crowd to queue in, so every step it takes must "
                              "close on its target; the settled speed is how much a crowd at its target still moves "
                              "(jitter), measured relative to the target so a walking player is not counted",
@@ -1055,12 +1138,11 @@ def check_enemy_pursuit(ev, a):
 def check_spawn_overlap(ev, a):
     """Fresh player placements (first appearance, respawn) do not land on another live player."""
     min_d = float(a.get("min_distance", 0.5))
-    rows = [r for r in ev["server"]["entities"] if r.get("st") is not None]
-    if not rows:
-        return _inconclusive("no server entity samples", source="/debug/entities")
+    n_rows = 0
     seen = {}
     spawns = []
-    for r in rows:
+    for r in (r for r in ev["server"]["entities"] if r.get("st") is not None):
+        n_rows += 1
         players = _players(r) + [e for e in r["ents"] if e[1] == "player" and e[6]]
         alive = [p for p in players if not p[6] and (p[4] or 0) > 0]
         for p in players:
@@ -1078,6 +1160,8 @@ def check_spawn_overlap(ev, a):
             nearest = min((math.hypot(p[2] - q[2], p[3] - q[3]) for q in others), default=None)
             spawns.append({"st": round(r["st"], 2), "id": p[0], "x": round(p[2], 3), "y": round(p[3], 3),
                            "nearest_player": None if nearest is None else round(nearest, 3)})
+    if not n_rows:
+        return _inconclusive("no server entity samples", source="/debug/entities")
     judged = [s for s in spawns if s["nearest_player"] is not None]
     min_judged = int(a.get("min_judged", 2))
     if len(judged) < min_judged:
@@ -1092,7 +1176,7 @@ def check_spawn_overlap(ev, a):
                    {"min_distance": min_d, "max_overlapping": a.get("max_overlapping", 0)},
                    source="server /debug/entities: first appearance or respawn (dead -> alive, or HP from below half "
                           "to full) of each player, distance to every other live player in the same sample",
-                   sampling=f"{len(rows)} server samples",
+                   sampling=f"{n_rows} server samples",
                    rationale="every new or respawned player used to start on the same point (rpg-mmo-server#469); "
                              "GAMESERVER_SPAWN_SCATTER spreads them. A placement with no other live player in the "
                              "world cannot land on one: it is counted as unjudged, and PASS speaks for the judged "
@@ -1134,7 +1218,7 @@ def _nearest_neighbour(points):
 def check_enemy_server_speed(ev, a):
     configured = float(a.get("speed", 2.5))
     tol = float(a.get("tolerance", 1.15))
-    speeds = []
+    speeds = util.Distribution()
     worst = []
     for eid, t in ev["traj"].items():
         if t["type"] != "mob":
@@ -1144,15 +1228,17 @@ def check_enemy_server_speed(ev, a):
             if dt <= 0.05:
                 continue
             v = math.hypot(t["x"][i] - t["x"][i - 1], t["y"][i] - t["y"][i - 1]) / dt
-            speeds.append(v)
+            speeds.add(v)
             if v > configured * tol:
                 worst.append({"id": eid, "st": round(t["st"][i], 2), "speed": round(v, 3)})
+                if len(worst) > 1000:
+                    worst = sorted(worst, key=lambda w: -w["speed"])[:10]
     if not speeds:
         return _inconclusive("no enemy trajectories", source="/debug/entities")
-    mx = max(speeds)
+    mx = speeds.max()
     # Probe sampling jitter (HTTP latency) inflates speeds measured over short intervals.
-    ok = util.percentile(speeds, 99) <= configured * tol
-    return _result(PASS if ok else FAIL, {"p99": round(util.percentile(speeds, 99), 3), "max": round(mx, 3), "n": len(speeds)},
+    ok = speeds.percentile(99) <= configured * tol
+    return _result(PASS if ok else FAIL, {"p99": round(speeds.percentile(99), 3), "max": round(mx, 3), "n": len(speeds)},
                    {"p99_max": round(configured * tol, 3)}, source="server /debug/entities positions, consecutive samples",
                    sampling=f"{ev['scenario'].get('server_sample_hz')} Hz", rationale="server-side enemy speed must not "
                    "exceed GAMESERVER_ENEMY_SPEED; probe timing jitter is why p99, not max, decides",
@@ -1163,7 +1249,7 @@ def check_enemy_render_speed(ev, a):
     """'Enemies fly': rendered enemy speed seen by each client."""
     configured = float(a.get("speed", 2.5))
     tol = float(a.get("tolerance", 1.6))
-    speeds, worst = [], []
+    speeds, worst, n_fast = util.Distribution(), [], 0
     for c in ev["clients"]:
         last = {}
         for s in c["samples"]:
@@ -1176,17 +1262,20 @@ def check_enemy_render_speed(ev, a):
                 p = last.get(row[0])
                 if p and 0.02 < st - p[0] < 0.2:
                     v = math.hypot(row[3] - p[1], row[4] - p[2]) / (st - p[0])
-                    speeds.append(v)
+                    speeds.add(v)
                     if v > configured * tol:
+                        n_fast += 1
                         worst.append({"client": c["index"], "id": row[0], "st": round(st, 2), "speed": round(v, 2)})
+                        if len(worst) > 1000:
+                            worst = sorted(worst, key=lambda w: -w["speed"])[:15]
                 last[row[0]] = (st, row[3], row[4])
     if not speeds:
         return _inconclusive("no rendered enemy samples", source="client samples.ndjson")
-    p99 = util.percentile(speeds, 99)
-    frac = len(worst) / len(speeds)
+    p99 = speeds.percentile(99)
+    frac = n_fast / len(speeds)
     ok = p99 <= configured * tol and frac <= float(a.get("max_fast_fraction", 0.01))
-    return _result(PASS if ok else FAIL, {"p50": round(util.percentile(speeds, 50), 3), "p99": round(p99, 3),
-                                          "max": round(max(speeds), 3), "fast_fraction": round(frac, 4), "n": len(speeds)},
+    return _result(PASS if ok else FAIL, {"p50": round(speeds.percentile(50), 3), "p99": round(p99, 3),
+                                          "max": round(speeds.max(), 3), "fast_fraction": round(frac, 4), "n": len(speeds)},
                    {"p99_max": configured * tol, "max_fast_fraction": a.get("max_fast_fraction", 0.01)},
                    source="client rendered enemy positions (LocalTransform) between consecutive samples",
                    sampling=f"client {ev['scenario'].get('sample_hz')} Hz",
@@ -1232,9 +1321,10 @@ def check_reconnect(ev, a):
     first_uid = hist.get("first_user_id")
     final_uid = ids[k]
     lo, hi = _window(ev)
-    inside = [r for r in ev["server"]["entities"] if r.get("st") is not None and lo <= r["st"] <= hi]
-    # The last sample INSIDE the scenario window: after it, clients are quitting on purpose.
-    last = inside[-1] if inside else None
+    last = None
+    for r in ev["server"]["entities"]:
+        if r.get("st") is not None and lo <= r["st"] <= hi:
+            last = r  # The last sample INSIDE the scenario window: after it, clients quit on purpose.
     players_final = len(_players(last)) if last else None
     rows = _status_in_window(ev)
     online_final = rows[-1].get("players_online") if rows else None
@@ -1270,12 +1360,14 @@ def check_memory_growth(ev, a):
 
 
 def check_entity_stability(ev, a):
-    rows = [r for r in ev["server"]["entities"] if r.get("st") is not None and r["st"] >= float(a.get("skip_first_s", 10))]
-    if len(rows) < 10:
+    from array import array
+    counts = array("l", (len(r["ents"]) for r in ev["server"]["entities"]
+                         if r.get("st") is not None and r["st"] >= float(a.get("skip_first_s", 10))))
+    if len(counts) < 10:
         return _inconclusive("too few samples", source="/debug/entities")
-    q = max(1, len(rows) // 4)
-    first = sum(len(r["ents"]) for r in rows[:q]) / q
-    lastq = sum(len(r["ents"]) for r in rows[-q:]) / q
+    q = max(1, len(counts) // 4)
+    first = sum(counts[:q]) / q
+    lastq = sum(counts[-q:]) / q
     growth = (lastq - first) / max(1.0, first)
     ok = growth <= float(a.get("max_growth_ratio", 0.1))
     return _result(PASS if ok else FAIL, {"first_quarter_mean": round(first, 1), "last_quarter_mean": round(lastq, 1),
@@ -2062,55 +2154,89 @@ def check_entity_lifecycle(ev, a):
     lingering, reuse_bad, reuse_ok = [], [], 0
     removed_total, missing, duplicates = 0, [], []
     for c in ev["clients"]:
-        evs = sorted((e for e in c["events"] if e.get("event") in ("entity_added", "entity_removed", "entities_reset")
-                      and e.get("t") is not None), key=lambda e: e["t"])
-        if not any(e["event"] in ("entity_added", "entity_removed") for e in evs) or not c["samples"]:
+        # Compact, time-ordered entity events: (t, kind, id, frame, x, y, rx, ry).
+        evs = sorted(((e["t"], e["event"], e.get("id"), e.get("frame"), e.get("x"), e.get("y"), e.get("rx"), e.get("ry"))
+                      for e in c["events"] if e.get("event") in ("entity_added", "entity_removed", "entities_reset")
+                      and e.get("t") is not None), key=lambda e: e[0])
+        if not any(e[1] in ("entity_added", "entity_removed") for e in evs) or not c["samples"]:
             missing.append(c["index"])
             continue
-        samples = [(s["t"], {r[0]: r for r in s.get("ents", [])}) for s in c["samples"] if s.get("t") is not None]
-        for s in c["samples"]:
-            ids_ = [r[0] for r in s.get("ents", [])]
-            if len(ids_) != len(set(ids_)) and len(duplicates) < 20:
-                duplicates.append({"client": c["index"], "t": s.get("t"),
-                                   "ids": sorted({i for i in ids_ if ids_.count(i) > 1})})
-        stimes = [t for t, _ in samples]
-        drawn = {}  # id -> sorted (time, frame) it was drawn at (one index, so a soak stays linear)
-        frames_of = [s.get("frame") for s in c["samples"] if s.get("t") is not None]
-        for (t, ents), fr in zip(samples, frames_of):
-            for eid in ents:
-                drawn.setdefault(eid, []).append((t, fr))
+        # For each event, the next entity_added of the same id or the next entities_reset after it
+        # (one backward pass; the old forward scan was quadratic on a soak).
+        nxt = [None] * len(evs)
+        next_add, next_reset = {}, None
+        for i in range(len(evs) - 1, -1, -1):
+            t, kind, eid = evs[i][0], evs[i][1], evs[i][2]
+            cand = next_add.get(eid)
+            if next_reset is not None and (cand is None or next_reset < cand):
+                cand = next_reset
+            nxt[i] = cand
+            if kind == "entity_added":
+                next_add[eid] = i
+            elif kind == "entities_reset":
+                next_reset = i
+        windows = {}      # id -> [lo, hi, re_frame, removal event index, resolved]
+        queries = []      # (removal t, id, add event index): last drawn position before a reused id's removal
         removed_at = {}
-        for i, e in enumerate(evs):
-            if e["event"] == "entities_reset":
+        for i, (t, kind, eid, frame, x, y, rx, ry) in enumerate(evs):
+            if kind == "entities_reset":
                 removed_at.clear()
                 continue
-            eid = e.get("id")
-            if e["event"] == "entity_removed":
+            if kind == "entity_removed":
                 removed_total += 1
-                removed_at[eid] = e["t"]
-                nxt = next((f for f in evs[i + 1:] if f.get("id") == eid and f["event"] == "entity_added"
-                            or f["event"] == "entities_reset"), None)
-                lo, hi = e["t"] + grace + sample_dt, (nxt["t"] if nxt is not None else float("inf"))
+                removed_at[eid] = t
+                j = nxt[i]
+                hi = evs[j][0] if j is not None else float("inf")
                 # The id may come back (AOI re-entry, or reuse). entity_added is written at the first
                 # frame that draws it, and the 20 Hz sample of that same frame is stamped a little
                 # earlier in the frame: a sample at or after the re-add frame shows the NEW entity.
-                re_frame = nxt.get("frame") if nxt is not None and nxt["event"] == "entity_added" else None
-                hits = [(t, fr) for t, fr in drawn.get(eid, [])
-                        if lo < t < hi and not (re_frame is not None and fr is not None and fr >= re_frame)]
-                if hits:
-                    lingering.append({"client": c["index"], "id": eid, "removed_t": round(e["t"], 3),
-                                      "still_drawn_t": round(hits[0][0], 3), "frame": hits[0][1]})
-            elif e["event"] == "entity_added" and eid in removed_at and e.get("rx") is not None:
-                prev = next((ents[eid] for t, ents in reversed(samples[:bisect_left(stimes, removed_at[eid])])
-                             if eid in ents), None)
-                d = math.hypot(e["rx"] - e["x"], e["ry"] - e["y"])
-                row = {"client": c["index"], "id": eid, "t": round(e["t"], 3), "first_drawn_from_spawn": round(d, 3),
-                       "from_previous_entity": None if prev is None else round(math.hypot(e["rx"] - prev[3], e["ry"] - prev[4]), 3)}
-                if d > tol:
-                    reuse_bad.append(row)
-                else:
-                    reuse_ok += 1
+                re_frame = evs[j][3] if j is not None and evs[j][1] == "entity_added" else None
+                windows.setdefault(eid, []).append([t + grace + sample_dt, hi, re_frame, i, False])
+            elif kind == "entity_added" and eid in removed_at and rx is not None:
+                queries.append((removed_at[eid], eid, i))
                 removed_at.pop(eid, None)
+        queries.sort(key=lambda q: q[0])
+        q_next, last_seen, prev_at = 0, {}, {}
+        hits = {}
+        for smp in c["samples"]:
+            ids_ = [r[0] for r in smp.get("ents", [])]
+            if len(ids_) != len(set(ids_)) and len(duplicates) < 20:
+                duplicates.append({"client": c["index"], "t": smp.get("t"),
+                                   "ids": sorted({i for i in ids_ if ids_.count(i) > 1})})
+            t = smp.get("t")
+            if t is None:
+                continue
+            # Positions "before the removal" are those of samples strictly earlier than it.
+            while q_next < len(queries) and queries[q_next][0] <= t:
+                rt, eid, i = queries[q_next]
+                prev_at[i] = last_seen.get(eid)
+                q_next += 1
+            fr = smp.get("frame")
+            for r in smp.get("ents", []):
+                eid = r[0]
+                last_seen[eid] = r
+                for w in windows.get(eid, ()):
+                    if not w[4] and w[0] < t < w[1] and not (w[2] is not None and fr is not None and fr >= w[2]):
+                        w[4] = True
+                        hits[w[3]] = (t, fr)
+        while q_next < len(queries):
+            rt, eid, i = queries[q_next]
+            prev_at[i] = last_seen.get(eid)
+            q_next += 1
+        for i in sorted(hits):
+            t_hit, fr = hits[i]
+            lingering.append({"client": c["index"], "id": evs[i][2], "removed_t": round(evs[i][0], 3),
+                              "still_drawn_t": round(t_hit, 3), "frame": fr})
+        for rt, eid, i in sorted(queries, key=lambda q: q[2]):
+            t, _, _, _, x, y, rx, ry = evs[i]
+            prev = prev_at.get(i)
+            d = math.hypot(rx - x, ry - y)
+            row = {"client": c["index"], "id": eid, "t": round(t, 3), "first_drawn_from_spawn": round(d, 3),
+                   "from_previous_entity": None if prev is None else round(math.hypot(rx - prev[3], ry - prev[4]), 3)}
+            if d > tol:
+                reuse_bad.append(row)
+            else:
+                reuse_ok += 1
     if missing:
         return _inconclusive(f"no entity_added/entity_removed events or samples for client(s) {missing} "
                              "(player without hook C3)", source="events.ndjson entity_*")
@@ -2128,21 +2254,57 @@ def check_entity_lifecycle(ev, a):
                            "duplicate_ids": duplicates})
 
 
-def _render_tracks(c, skip, stalls):
-    """{entity id: ([render_tick], [x], [y])} of remote (not locally predicted) entities."""
-    out = {}
-    for s in c["samples"]:
-        rt, st = s.get("render_tick"), s.get("st")
+def _render_rows(c, skip, stalls):
+    """(render_tick, id, x, y) of remote (not locally predicted) entities, in sample order."""
+    for smp in c["samples"]:
+        rt, st = smp.get("render_tick"), smp.get("st")
         if rt is None or st is None or st < skip or _in_stall(stalls, st, st, slack=0.5):
             continue
-        for row in s.get("ents", []):
+        for row in smp.get("ents", []):
             if row[2] == 1 or row[1] == "projectile":
                 continue
-            tr = out.setdefault(row[0], ([], [], []))
-            tr[0].append(float(rt))
-            tr[1].append(row[3])
-            tr[2].append(row[4])
-    return out
+            yield float(rt), row[0], row[3], row[4]
+
+
+class _TrackWindow:
+    """One client's rendered remote positions for a sliding render-tick window, filled from a
+    stream: {id: ([ticks], [x], [y])}, ticks increasing per id. A row whose tick goes backwards
+    (a reconnect to a restarted server) is skipped and counted."""
+
+    def __init__(self, rows):
+        self._rows = iter(rows)
+        self._head = next(self._rows, None)
+        self.tracks = {}
+        self.last = None
+        self.backwards = 0
+
+    @property
+    def done(self) -> bool:
+        return self._head is None
+
+    def first_tick(self):
+        return None if self._head is None else self._head[0]
+
+    def fill(self, until: float) -> None:
+        while self._head is not None and self._head[0] < until:
+            tick, eid, x, y = self._head
+            if self.last is not None and tick < self.last:
+                self.backwards += 1
+            else:
+                self.last = tick
+                tr = self.tracks.get(eid)
+                if tr is None:
+                    tr = self.tracks[eid] = ([], [], [])
+                tr[0].append(tick)
+                tr[1].append(x)
+                tr[2].append(y)
+            self._head = next(self._rows, None)
+
+    def prune(self, before: float) -> None:
+        for tr in self.tracks.values():
+            k = bisect_left(tr[0], before)
+            if k:
+                del tr[0][:k], tr[1][:k], tr[2][:k]
 
 
 def _all_server_teleports(ev, max_speed):
@@ -2187,8 +2349,8 @@ def check_cross_client_convergence(ev, a):
         return _inconclusive("server tick rate unknown", source="/status")
     stalls = host_stalls(ev)
     skip = float(a.get("skip_first_s", 2.0))
-    tracks = [_render_tracks(c, skip, stalls) for c in ev["clients"]]
-    missing = [c["index"] for c, t in zip(ev["clients"], tracks) if not t]
+    wins = [_TrackWindow(_render_rows(c, skip, stalls)) for c in ev["clients"]]
+    missing = [c["index"] for c, w in zip(ev["clients"], wins) if w.done]
     if missing:
         return _inconclusive(f"no samples with render_tick for client(s) {missing} (player without hook C4)",
                              source="samples.ndjson render_tick")
@@ -2197,43 +2359,59 @@ def check_cross_client_convergence(ev, a):
     window = float(a.get("teleport_window_s", 0.5)) * hz
     teleports = {eid: sorted((lo - window, hi + window) for lo, hi in spans)
                  for eid, spans in _all_server_teleports(ev, max_speed).items()}
-    from array import array
-    dists, worst, near_teleport = array("d"), [], 0
-    for i, ta in enumerate(tracks):
-        for j, tb in enumerate(tracks):
-            if i == j:
-                continue
-            for eid, (ticks, xs, ys) in ta.items():
-                other = tb.get(eid)
-                if other is None:
+    dists, worst, near_teleport = util.Distribution(), [], 0
+    # Pairs are formed window by window of render ticks (60 s at 60 Hz), each client's rows kept
+    # only for the window plus the bracket margin: memory follows the window, not the run (T41).
+    span = float(a.get("window_ticks", 3600))
+    margin = max_gap + 1.0
+    w0 = min(w.first_tick() for w in wins if not w.done)
+    while True:
+        w1 = w0 + span
+        for w in wins:
+            w.fill(w1 + margin)
+        for i, wa in enumerate(wins):
+            for j, wb in enumerate(wins):
+                if i == j:
                     continue
-                bt, bx, by = other
-                spans = teleports.get(eid, [])
-                starts = [lo for lo, _ in spans]
-                for k, tick in enumerate(ticks):
-                    if spans:
-                        q = bisect_right(starts, tick) - 1
-                        if q >= 0 and tick <= spans[q][1] or q + 1 < len(spans) and spans[q + 1][0] <= tick:
-                            near_teleport += 1
+                for eid, (ticks, xs, ys) in wa.tracks.items():
+                    other = wb.tracks.get(eid)
+                    if other is None:
+                        continue
+                    bt, bx, by = other
+                    spans = teleports.get(eid, [])
+                    starts = [lo for lo, _ in spans]
+                    for k in range(bisect_left(ticks, w0), bisect_left(ticks, w1)):
+                        tick = ticks[k]
+                        if spans:
+                            q = bisect_right(starts, tick) - 1
+                            if q >= 0 and tick <= spans[q][1] or q + 1 < len(spans) and spans[q + 1][0] <= tick:
+                                near_teleport += 1
+                                continue
+                        m = bisect_left(bt, tick)
+                        if m == 0 or m >= len(bt) or bt[m] - bt[m - 1] > max_gap or bt[m] == bt[m - 1]:
                             continue
-                    m = bisect_left(bt, tick)
-                    if m == 0 or m >= len(bt) or bt[m] - bt[m - 1] > max_gap or bt[m] == bt[m - 1]:
-                        continue
-                    step = math.hypot(bx[m] - bx[m - 1], by[m] - by[m - 1])
-                    if step > max_speed * 1.5 * (bt[m] - bt[m - 1]) / hz + 0.2:
-                        continue
-                    f = (tick - bt[m - 1]) / (bt[m] - bt[m - 1])
-                    d = math.hypot(xs[k] - (bx[m - 1] + f * (bx[m] - bx[m - 1])), ys[k] - (by[m - 1] + f * (by[m] - by[m - 1])))
-                    dists.append(d)
-                    if d > float(a.get("max", 1.0)) and len(worst) < 15:
-                        worst.append({"a": i, "b": j, "id": eid, "render_tick": tick, "dist": round(d, 3)})
+                        step = math.hypot(bx[m] - bx[m - 1], by[m] - by[m - 1])
+                        if step > max_speed * 1.5 * (bt[m] - bt[m - 1]) / hz + 0.2:
+                            continue
+                        f = (tick - bt[m - 1]) / (bt[m] - bt[m - 1])
+                        d = math.hypot(xs[k] - (bx[m - 1] + f * (bx[m] - bx[m - 1])),
+                                       ys[k] - (by[m - 1] + f * (by[m] - by[m - 1])))
+                        dists.add(d)
+                        if d > float(a.get("max", 1.0)) and len(worst) < 15:
+                            worst.append({"a": i, "b": j, "id": eid, "render_tick": tick, "dist": round(d, 3)})
+        if all(w.done and (w.last is None or w.last < w1) for w in wins):
+            break
+        for w in wins:
+            w.prune(w1 - margin)
+        w0 = w1
     if len(dists) < int(a.get("min_pairs", 50)):
         return _inconclusive(f"{len(dists)} comparable pairs (need {a.get('min_pairs', 50)})", source="samples.ndjson")
-    p95, mx = util.percentile(dists, 95), max(dists)
+    p95, mx = dists.percentile(95), dists.max()
     ok = p95 <= float(a.get("p95", 0.35)) and mx <= float(a.get("max", 1.0))
-    return _result(PASS if ok else FAIL, {"pairs": len(dists), "p50": round(util.percentile(dists, 50), 4),
+    return _result(PASS if ok else FAIL, {"pairs": len(dists), "p50": round(dists.percentile(50), 4),
                                           "p95": round(p95, 4), "max": round(mx, 4),
-                                          "skipped_near_server_teleport": near_teleport},
+                                          "skipped_near_server_teleport": near_teleport,
+                                          "skipped_ticks_backwards": sum(w.backwards for w in wins)},
                    {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0),
                     "teleport_window_s": a.get("teleport_window_s", 0.5)},
                    source="samples.ndjson rendered remote positions keyed by render_tick (C4), client pairs",
@@ -2319,13 +2497,17 @@ def check_graceful_leave(ev, a):
                "outcome": (c["summary"] or {}).get("outcome"),
                "disconnected": any(x.get("event") == "disconnected" for x in c["events"])}
         t = ev["traj"].get(uid) if uid else None
-        after = [r for r in ev["server"]["entities"] if r.get("st") is not None and st is not None and r["st"] > st + timeout]
-        if t is None or st is None or not after:
+        after = [r["st"] for r in ev["server"]["entities"]
+                 if r.get("st") is not None and st is not None and r["st"] > st + timeout
+                 and any(x[0] == uid for x in r["ents"])]
+        any_after = st is not None and any(r.get("st") is not None and r["st"] > st + timeout
+                                           for r in ev["server"]["entities"])
+        if t is None or st is None or not any_after:
             row["result"] = "no server samples to judge the removal"
             unjudged += 1
             rows.append(row)
             continue
-        still = [r["st"] for r in after if any(x[0] == uid for x in r["ents"])]
+        still = after
         last_seen = max((s for s in t["st"] if s >= st), default=None)
         row.update({"server_removed_after_s": None if last_seen is None else round(last_seen - st, 2),
                     "present_after_timeout": len(still)})

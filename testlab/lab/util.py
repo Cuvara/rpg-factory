@@ -8,6 +8,7 @@ disabled, so the same code works from Git Bash, PowerShell or cmd.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import re
@@ -71,8 +72,8 @@ def write_json(path: Path, data) -> None:
             time.sleep(0.02)
 
 
-def read_ndjson(path: Path) -> list:
-    rows = []
+def iter_ndjson(path: Path):
+    """Rows of an ndjson file, one at a time. A cut-short last line (a killed writer) is skipped."""
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -80,13 +81,94 @@ def read_ndjson(path: Path) -> list:
                 if not line:
                     continue
                 try:
-                    rows.append(json.loads(line))
+                    yield json.loads(line)
                 except json.JSONDecodeError:
                     # The last line of a file a killed client was writing may be cut short.
                     continue
     except FileNotFoundError:
-        pass
-    return rows
+        return
+
+
+def read_ndjson(path: Path) -> list:
+    return list(iter_ndjson(path))
+
+
+class LazyNdjson:
+    """The rows of an ndjson file, read again on every iteration and never held in memory: a 1 h soak's
+    samples.ndjson is gigabytes as Python objects (T41). Behaves like a read-only sequence for
+    iteration, truthiness, len() and reversed()."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    def __iter__(self):
+        return iter_ndjson(self.path)
+
+    def __bool__(self) -> bool:
+        return next(iter(self), None) is not None
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __reversed__(self):
+        return reversed(list(self))
+
+    def __repr__(self) -> str:
+        return f"LazyNdjson({self.path})"
+
+
+class Distribution:
+    """Values for percentile/max/len without keeping all of them: exact (every value, as util.percentile
+    on a list) up to `exact_cap` values, then a histogram of `resolution` bins. A histogram percentile
+    is the bin's lower edge, within `resolution` of the exact value; max stays exact."""
+
+    def __init__(self, exact_cap: int = 1_000_000, resolution: float = 1e-6):
+        from array import array
+        self._exact = array("d")
+        self._bins: dict | None = None
+        self._cap, self._res = exact_cap, resolution
+        self._n, self._max = 0, None
+
+    def add(self, v: float) -> None:
+        self._n += 1
+        if self._max is None or v > self._max:
+            self._max = v
+        if self._bins is None:
+            self._exact.append(v)
+            if len(self._exact) > self._cap:
+                self._bins = {}
+                for x in self._exact:
+                    self._bin(x)
+                from array import array
+                self._exact = array("d")
+        else:
+            self._bin(v)
+
+    def _bin(self, v: float) -> None:
+        k = math.floor(v / self._res)
+        self._bins[k] = self._bins.get(k, 0) + 1
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __bool__(self) -> bool:
+        return self._n > 0
+
+    def max(self):
+        return self._max
+
+    def percentile(self, p: float):
+        if self._n == 0:
+            return None
+        if self._bins is None:
+            return percentile(self._exact, p)
+        rank = max(1, min(self._n, int(-(-p / 100.0 * self._n // 1))))
+        seen = 0
+        for k in sorted(self._bins):
+            seen += self._bins[k]
+            if seen >= rank:
+                return min(k * self._res, self._max)
+        return self._max
 
 
 def http_get(url: str, timeout: float = 3.0) -> tuple[int, bytes]:

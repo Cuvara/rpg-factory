@@ -2234,5 +2234,81 @@ class ConvergenceNearTeleportTests(unittest.TestCase):
         self.assertEqual(spans["p"], [(1492, 1504)])  # last pre-respawn sample to the respawned sample
 
 
+class BoundedMemoryAnalysisTests(unittest.TestCase):
+    """T41: a 1 h soak's analysis took ~13 GB. Evidence files are streamed (util.LazyNdjson), large
+    value sets kept in util.Distribution, convergence pairs formed per render-tick window and
+    entity_lifecycle merged with the sample stream. Results must equal the pre-T41 analysis."""
+
+    def _results(self, mod, run):
+        ev = mod.load_evidence(run)
+        out = {}
+        for r in mod.evaluate(ev):
+            m = r.get("measured")
+            if isinstance(m, dict):
+                m = {k: v for k, v in m.items() if k != "skipped_ticks_backwards"}
+            out[r["id"]] = (r["status"], m, r.get("threshold"), r.get("detail"))
+        return out
+
+    def test_results_equal_the_pre_streaming_analysis(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import reference_analyze_171c573 as old
+        import synthetic_soak
+        with tempfile.TemporaryDirectory() as d:
+            run = synthetic_soak.write(Path(d), 820, 8)
+            new_r, old_r = self._results(analyze, run), self._results(old, run)
+            self.assertEqual(set(new_r), set(old_r))
+            for k in old_r:
+                self.assertEqual(new_r[k], old_r[k], k)
+            # the synthetic run exercises the heavy checks
+            self.assertGreater(new_r["cross_client_convergence"][1]["pairs"], 1000)
+            self.assertGreater(new_r["entity_lifecycle"][1]["removed"], 5)
+
+    def test_peak_memory_stays_near_the_evidence_size(self):
+        import tracemalloc
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import reference_analyze_171c573 as old
+        import synthetic_soak
+
+        def peak(mod, run):
+            tracemalloc.start()
+            mod.evaluate(mod.load_evidence(run))
+            value = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            return value
+
+        with tempfile.TemporaryDirectory() as d:
+            run = synthetic_soak.write(Path(d), 600, 16)
+            size = sum(p.stat().st_size for p in run.rglob("*") if p.is_file())
+            new_peak, old_peak = peak(analyze, run), peak(old, run)
+        # The pre-T41 analysis held every sample, event and entity row as Python objects: about 7x the
+        # evidence size, growing with the run. The streamed one keeps compact arrays (trajectories,
+        # frames, value sets up to 1 M) and per-window buffers. Fails if a check holds a whole file again.
+        self.assertLess(new_peak, 3.0 * size, (new_peak, old_peak, size))
+        self.assertLess(new_peak * 2.5, old_peak, (new_peak, old_peak, size))
+
+    def test_distribution_is_exact_below_its_cap_and_close_above(self):
+        import random
+        rnd = random.Random(7)
+        vals = [rnd.random() for _ in range(5000)]
+        exact, binned = util.Distribution(), util.Distribution(exact_cap=100)
+        for v in vals:
+            exact.add(v)
+            binned.add(v)
+        for p in (50, 95, 99):
+            self.assertEqual(exact.percentile(p), util.percentile(vals, p))
+            self.assertAlmostEqual(binned.percentile(p), util.percentile(vals, p), delta=1e-6)
+        self.assertEqual((len(binned), binned.max()), (5000, max(vals)))
+        self.assertIsNone(util.Distribution().percentile(50))
+
+    def test_lazy_ndjson_reads_on_every_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.ndjson"
+            _write(p, '{"a": 1}\n{"a": 2}\n{"a"')
+            lazy = util.LazyNdjson(p)
+            self.assertEqual([r["a"] for r in lazy], [1, 2])
+            self.assertEqual((len(lazy), bool(lazy), [r["a"] for r in reversed(lazy)]), (2, True, [2, 1]))
+            self.assertFalse(util.LazyNdjson(Path(d) / "missing.ndjson"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -121,6 +121,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - `cross_client_convergence` skips pairs within 0.5 s of a server-side respawn or teleport of the
     compared entity (`teleport_window_s`): next to one, one client may already draw the new position.
     The final soak's maximum (18.56) was such a pair.
+  - **Analysis memory bounded (T41).** A 1 h soak's analysis needed about 13 GB. Samples, events,
+    inputs and server entity rows are now streamed from their files (`util.LazyNdjson`) instead of
+    held as Python objects; trajectories and frames are float arrays; large value sets use
+    `util.Distribution` (exact up to 1 M values, then 1e-6 bins); `cross_client_convergence` forms
+    pairs per 60 s render-tick window; `entity_lifecycle` merges its windows with the sample stream
+    (its quadratic next-event scan is gone). On a synthetic soak the peak drops from about 7x to
+    2x the evidence size; results equal the pre-change analysis (frozen reference test).
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
