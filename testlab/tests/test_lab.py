@@ -2310,5 +2310,76 @@ class BoundedMemoryAnalysisTests(unittest.TestCase):
             self.assertFalse(util.LazyNdjson(Path(d) / "missing.ndjson"))
 
 
+class StallCatchupRuleTests(unittest.TestCase):
+    """Lead rule for S13 (runs 20261022T221641Z-S13-7fud, 20261022T222006Z-S13-uwrf): on the stalled
+    client, remote jumps/divergence inside the catch-up window (through the frame after the frame
+    whose dt contains the stall) are not judged; one local major correction per stall is allowed."""
+
+    def _ev(self, jumps):
+        ev = _ev(clients=2, duration=40)
+        c = ev["clients"][0]
+        for x in ev["clients"]:
+            x["summary"] = {"outcome": "completed"}
+            x["events"] = [{"event": "in_world", "st": -1}]
+        # uwrf client 0: 2 s stall; frames 27.0039 (1.3 ms), 27.0079 (dt 2006 ms = the stall), 27.0108, 27.0149
+        frames = analyze.FrameSeries()
+        for st, dt in [(26.99, 16.0), (27.0039, 1.3), (27.0079, 2006.2), (27.0108, 3.7), (27.0149, 4.7), (27.0163, 1.5)]:
+            frames.append((st, dt))
+        c["frames"] = frames
+        c["events"] += [{"event": "stall", "t": 36.678162, "st": 27.000843, "ms": 2000, "start": 34.67739,
+                         "end": 36.678089, "actual_ms": 2000.7}]
+        c["events"] += [dict({"event": "render_jump", "type": "player"}, **j) for j in jumps]
+        return ev
+
+    def test_the_catch_up_window_ends_at_the_frame_after_the_stall_frame(self):
+        w = analyze.stall_windows(self._ev([])["clients"][0], 40)
+        self.assertEqual(len(w), 1)
+        self.assertAlmostEqual(w[0][0], 25.0, delta=0.01)   # stall start on the scenario clock
+        self.assertAlmostEqual(w[0][1], 27.0149, delta=1e-6)  # f20068 (after the dt-2006 frame) ends where f20069 starts
+        self.assertAlmostEqual(w[0][2], 30.0, delta=0.01)   # +5 s for local corrections
+
+    def test_remote_catch_up_is_excluded_and_one_local_correction_allowed(self):
+        # uwrf: the events of frame 20068 are stamped at 27.01080, after the frame's own 27.01076
+        jumps = [{"st": 27.0108015, "id": "r1", "local": False, "step": 7.5},
+                 {"st": 27.0108015, "id": "me", "local": True, "step": 1.25}]
+        res = analyze.check_render_jumps(self._ev(jumps), {"max_local": 0, "max_remote_per_client_min": 0})
+        self.assertEqual(res["status"], analyze.PASS, res["measured"])
+        self.assertEqual((res["measured"]["stall_catchup"], res["measured"]["stall_local_correction"]), (1, 1))
+
+    def test_a_jump_on_the_second_frame_after_the_stall_still_fails(self):
+        jumps = [{"st": 27.0149, "id": "r1", "local": False, "step": 7.5}]
+        res = analyze.check_render_jumps(self._ev(jumps), {"max_local": 0, "max_remote_per_client_min": 0})
+        self.assertEqual(res["status"], analyze.FAIL)
+
+    def test_a_second_local_correction_fails(self):
+        jumps = [{"st": 27.0108, "id": "me", "local": True, "step": 1.25},
+                 {"st": 27.0667, "id": "me", "local": True, "step": 1.0}]  # uwrf
+        res = analyze.check_render_jumps(self._ev(jumps), {"max_local": 0, "max_remote_per_client_min": 2.0})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["measured"]["local_major"], 1)
+
+    def test_other_clients_are_never_excluded(self):
+        ev = self._ev([])
+        ev["clients"][1]["events"].append({"event": "render_jump", "type": "player", "st": 27.0108, "id": "r1",
+                                           "local": False, "step": 7.5})
+        res = analyze.check_render_jumps(ev, {"max_local": 0, "max_remote_per_client_min": 0})
+        self.assertEqual(res["status"], analyze.FAIL)
+
+    def test_remote_divergence_samples_in_the_catch_up_window_are_excluded(self):
+        ents = [_row(k * 0.2, [["r1", "player", 0.0, 0.0, 100, 100, 0, 5]]) for k in range(200)]
+        ev = self._ev([])
+        ev["server"]["entities"], ev["traj"] = ents, analyze.trajectories(ents)
+        for x in ev["clients"]:
+            x["samples"] = [{"t": 100 + k * 0.05, "st": 3 + k * 0.05, "ents": [["r1", "player", 0, 0.0, 0.0, 0.0, 0.0]]}
+                            for k in range(600)]
+        ev["clients"][0]["samples"].append({"t": 0, "st": 27.004, "ents": [["r1", "player", 0, 6.265, 0.0, 0.0, 0.0]]})
+        res = analyze.check_position_divergence(ev, {"types": ["player"], "p95": 0.35, "max": 1.0})
+        self.assertEqual(res["status"], analyze.PASS, res["measured"])
+        self.assertEqual(res["measured"]["excluded_stall_catchup_samples"] >= 1, True)
+        ev["clients"][0]["samples"][-1]["st"] = 27.02  # after the catch-up frame: judged
+        self.assertEqual(analyze.check_position_divergence(ev, {"types": ["player"], "p95": 0.35, "max": 1.0})["status"],
+                         analyze.FAIL)
+
+
 if __name__ == "__main__":
     unittest.main()

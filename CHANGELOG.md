@@ -128,6 +128,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     pairs per 60 s render-tick window; `entity_lifecycle` merges its windows with the sample stream
     (its quadratic next-event scan is gone). On a synthetic soak the peak drops from about 7x to
     2x the evidence size; results equal the pre-change analysis (frozen reference test).
+  - **S13 stall catch-up rule (Lead decision).** On a client with a scripted stall, remote render
+    jumps and remote divergence from the stall start through the frame after the frame whose dt
+    contains the stall are not judged (the world moved while the process was frozen; one-frame
+    binder drain lag); one local major correction per stall is allowed within 5 s, a second FAILs.
+    Other clients and later frames are never excluded. COVERAGE.md statuses refreshed (T31 runs,
+    hooks S1-S4 and the delivery trace done, graceful-leave fix upstream).
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice

@@ -100,6 +100,14 @@ CHECK_DEFAULTS = [
     ("cross_client_convergence", "teleport_window_s", 0.5, "probe spacing 0.2 s + bracket 0.2 s + interpolation delay "
                                                            "0.1 s around a server respawn or teleport"),
     ("stall_recovery", "recover_s / judge_s / p95", "1.0 / 3.0 / 0.5", f"{POLICY}; 0.5 inherited from local divergence"),
+    ("stall catch-up (render_jumps, position_divergence)", "remote catch-up window",
+     "stall start .. the frame after the frame whose dt contains the stall",
+     "Lead rule for S13 (T41): the world moved while the process was frozen; Unity's dt reports the previous "
+     "frame and the binder state of frame N-1 is drawn in frame N (client docs/TESTLAB.md). Stalled client "
+     "only, remote entities only"),
+    ("stall catch-up (render_jumps)", "local major corrections allowed per stall", "1 within 5 s",
+     "Lead rule for S13 (T41), Netcode D1 contract: one correction after a stall; a second one FAILs. The 5 s "
+     f"window is {POLICY}"),
     ("graceful_leave", "leave_timeout_s", 5.0, f"{POLICY}; below the 60 s KCP idle timeout"),
     ("debug_kill_respawn", "respawn_within_s", 2.0, "one world interval (67 ms) + 1 Hz /status probe + queue; rounded up"),
     ("cast_damage_bound", "cooldown / power / reach", "content", "content/abilities.json at the run's server commit"),

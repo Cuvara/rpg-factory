@@ -510,10 +510,17 @@ def _divergence(ev, a, *, local: bool):
     import heapq
     worst, seq = [], 0  # the 15 largest (stable for ties), not every row over the limit
     stalls = host_stalls(ev)
+    excluded_catchup = 0
     for c in ev["clients"]:
+        # Remote entities drawn in a scripted stall's catch-up window are not judged (Lead rule S13):
+        # the world moved while the process was frozen. Local positions are never excluded.
+        catchup = [] if local else [(w[0], w[1]) for w in stall_windows(c, float(ev["scenario"].get("duration_s", 0)))]
         for s in c["samples"]:
             st = s.get("st")
             if st is None or st < float(a.get("skip_first_s", 2.0)):
+                continue
+            if catchup and any(lo <= st < hi for lo, hi in catchup):
+                excluded_catchup += 1
                 continue
             in_stall = _in_stall(stalls, st, st, slack=0.5)
             for row in s.get("ents", []):
@@ -543,12 +550,12 @@ def _divergence(ev, a, *, local: bool):
                     elif item[:2] > worst[0][:2]:
                         heapq.heapreplace(worst, item)
     worst = [w[2] for w in sorted(worst, key=lambda w: (-w[0], -w[1]))]
-    return rendered, received, worst, stalled
+    return rendered, received, worst, stalled, excluded_catchup
 
 
 def check_position_divergence(ev, a):
     local = bool(a.get("local", False))
-    rendered, received, worst, stalled = _divergence(ev, a, local=local)
+    rendered, received, worst, stalled, excluded_catchup = _divergence(ev, a, local=local)
     if len(rendered) < int(a.get("min_samples", 50)):
         return _inconclusive(f"{len(rendered)} comparable samples (< {a.get('min_samples', 50)})",
                              source="client samples.ndjson vs server /debug/entities")
@@ -571,7 +578,8 @@ def check_position_divergence(ev, a):
                    {"p50": round(rendered.percentile(50), 4), "p95": round(p95, 4), "max": round(mx, 4),
                     "received_p95": None if rp95 is None else round(rp95, 4), "samples": len(rendered),
                     "in_host_stall": len(stalled),
-                    "max_in_host_stall": round(stalled.max(), 4) if stalled else None},
+                    "max_in_host_stall": round(stalled.max(), 4) if stalled else None,
+                    **({"excluded_stall_catchup_samples": excluded_catchup} if excluded_catchup else {})},
                    {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0)},
                    source=("rendered LocalTransform of the " + ("local predicted player" if local else "remote entities") +
                            " vs the server's authoritative polyline in a time window around the sample"),
@@ -598,12 +606,28 @@ def check_render_jumps(ev, a):
         js = [e for e in c["events"] if e.get("event") == "render_jump" and (e.get("st") or -1) >= skip]
         per_client[c["index"]] = len(js)
         near = {"samples": _samples_near(c, [e.get("st") for e in js], before=0.25, after=0.15)}
+        windows = stall_windows(c, float(ev["scenario"].get("duration_s", 0)))
+        allowance = [1] * len(windows)
         stalls = host_stalls(ev)
         stall_events = all_stall_events
         for e in js:
             if e.get("type") in set(a.get("ignore_types", ["projectile"])):
                 counts["ignored_type"] = counts.get("ignored_type", 0) + 1
                 continue
+            est = e.get("st")
+            if windows and est is not None:
+                # Lead rule S13: on the stalled client, a REMOTE jump inside the stall's catch-up
+                # window is the world catching up (not judged); ONE local major correction per stall
+                # is allowed (Netcode D1 contract), a second one counts.
+                if not e.get("local") and any(w[0] <= est < w[1] for w in windows):
+                    counts["stall_catchup"] = counts.get("stall_catchup", 0) + 1
+                    continue
+                if e.get("local") and (e.get("step") or 0) >= major_step:
+                    k = next((i for i, w in enumerate(windows) if w[0] <= est <= w[2] and allowance[i]), None)
+                    if k is not None:
+                        allowance[k] = 0
+                        counts["stall_local_correction"] = counts.get("stall_local_correction", 0) + 1
+                        continue
             if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.3, after=1.0):
                 counts["host_stall"] = counts.get("host_stall", 0) + 1
                 stall_events.append(e)
@@ -638,7 +662,7 @@ def check_render_jumps(ev, a):
     minutes = max(1e-6, float(ev["scenario"].get("duration_s", 60)) / 60.0)
     n = max(1, len(ev["clients"]))
     rate = {k: round(v / minutes / n, 3) for k, v in counts.items()
-            if k not in ("server_teleport", "host_stall", "ignored_type")}
+            if k not in ("server_teleport", "host_stall", "ignored_type", "stall_catchup", "stall_local_correction")}
     def passes(c):
         r = {k: c[k] / minutes / n for k in ("remote_major", "local_minor", "remote_minor")}
         return (c["local_major"] <= int(a.get("max_local", 0)) and
@@ -674,6 +698,47 @@ def check_render_jumps(ev, a):
                    detail={"per_client": per_client, "largest": attributed},
                    artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]] +
                              [str(c["dir"] / "shots") for c in ev["clients"]])
+
+
+def stall_windows(c: dict, duration: float, local_window_s: float = 5.0) -> list:
+    """Scripted stalls of one client (C2 hook, events.ndjson `stall`) on its scenario clock, as
+    (start_st, catchup_end_st, local_end_st); a time t is in the catch-up window when
+    start_st <= t < catchup_end_st.
+
+    The catch-up frame is the frame AFTER the frame whose dt contains the stall, and catchup_end_st is
+    the start of the frame after it: events and samples are stamped a little later than the frame's
+    own frames.csv time, inside the same frame.
+    Unity's frame dt reports the previous frame, and the binder state captured in frame N-1 is drawn
+    in frame N (client docs/TESTLAB.md, render.csv "Which render clock"), so that frame is where the
+    world that moved while the process was frozen is first drawn. local_end_st bounds the local
+    corrections attributed to the stall: start + local_window_s, the next stall or the end of the run
+    (Lead rule for S13, 2026-10-23)."""
+    out = []
+    stalls = sorted((e for e in c["events"] if e.get("event") == "stall" and e.get("t") is not None
+                     and e.get("st") is not None and e.get("start") is not None and e.get("end") is not None),
+                    key=lambda e: e["start"])
+    frames = c.get("frames")
+    sts = list(frames.st) if isinstance(frames, FrameSeries) else [f[0] for f in (frames or [])]
+    dts = list(frames.dt) if isinstance(frames, FrameSeries) else [f[1] for f in (frames or [])]
+    for k, e in enumerate(stalls):
+        off = e["t"] - e["st"]
+        start, end = e["start"] - off, e["end"] - off
+        need = 0.5 * float(e.get("actual_ms") or e.get("ms") or 0)
+        catchup = end
+        i = bisect_left(sts, start)
+        while i < len(sts):
+            if dts[i] >= need:
+                # frames i (dt holds the stall), i + 1 (the catch-up frame); the window ends where
+                # frame i + 2 starts.
+                if i + 2 < len(sts):
+                    catchup = sts[i + 2]
+                elif i + 1 < len(sts):
+                    catchup = sts[i + 1] + dts[i + 1] / 1000.0
+                break
+            i += 1
+        nxt = stalls[k + 1]["start"] - (stalls[k + 1]["t"] - stalls[k + 1]["st"]) if k + 1 < len(stalls) else float("inf")
+        out.append((start, max(catchup, end), min(start + local_window_s, nxt, duration)))
+    return out
 
 
 def _samples_near(c: dict, times, before: float, after: float) -> list:
