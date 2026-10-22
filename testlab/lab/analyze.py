@@ -15,7 +15,7 @@ import re
 from bisect import bisect_left, bisect_right
 from pathlib import Path
 
-from . import util
+from . import provenance, util
 
 PASS, FAIL, INCONCLUSIVE, INFO = "PASS", "FAIL", "INCONCLUSIVE", "INFO"
 
@@ -279,11 +279,13 @@ def check_same_game_server(ev, a):
 
 
 def check_players_online(ev, a):
+    if not ev["clients"] and "expected" not in a:
+        return _inconclusive("no clients in this run", source="/status")
     expected = int(a.get("expected", len(ev["clients"]))) + int(a.get("plus_bots", 0) and (ev["scenario"].get("bots") or {}).get("players", 0))
     rows = _status_in_window(ev)
-    if not rows:
-        return _inconclusive("no /status samples inside the scenario window", source="/status")
-    vals = [r.get("players_online") for r in rows]
+    vals = [r.get("players_online") for r in rows if r.get("players_online") is not None]
+    if not vals:
+        return _inconclusive("no /status players_online sample inside the scenario window", source="/status")
     mode = a.get("mode", "max")
     measured = max(vals) if mode == "max" else vals[-1]
     return _result(PASS if measured == expected else FAIL, measured, expected,
@@ -294,8 +296,10 @@ def check_players_online(ev, a):
 
 def check_redis(ev, a):
     r = ev["redis"]
-    if not r:
-        return _inconclusive("redis.json missing", source="redis (docker exec rpgs-redis)")
+    if not r or r.get("session_keys") is None:
+        return _inconclusive("redis.json missing or without a session count", source="redis (docker exec rpgs-redis)")
+    if not ev["clients"] and "sessions" not in a:
+        return _inconclusive("no clients in this run", source="redis (docker exec rpgs-redis)")
     sessions = r.get("session_keys")
     members = r.get("map_members") or []
     exp_sessions = int(a.get("sessions", len(ev["clients"])))
@@ -325,6 +329,12 @@ _LOG_ERROR = re.compile(r"(FATAL|NullReferenceException|IndexOutOfRangeException
 
 def check_client_log_clean(ev, a):
     allow = [re.compile(p) for p in a.get("allow", [])]
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="player.log")
+    no_log = [c["index"] for c in ev["clients"] if not any(t.strip() for t in c["logs"].values())]
+    if no_log:
+        return _inconclusive(f"no player log for client(s) {no_log}: a log that was never written has no "
+                             "exceptions to find", source="player.log")
     hits = {}
     for c in ev["clients"]:
         lines = []
@@ -540,8 +550,10 @@ def check_render_jumps(ev, a):
             by_type[e.get("type")] = by_type.get(e.get("type"), 0) + 1
             events.append({"client": c["index"], "class": key,
                            **{k: e.get(k) for k in ("st", "id", "type", "local", "step", "allowed", "dt_ms")}})
-    if not any(c["summary"] for c in ev["clients"]):
-        return _inconclusive("no client summary", source="client events.ndjson render_jump")
+    missing = [c["index"] for c in ev["clients"] if not c["summary"] or not c["events"]]
+    if not ev["clients"] or missing:
+        return _inconclusive(f"no summary or events.ndjson for client(s) {missing or 'all'}: jumps that were never "
+                             "recorded are not absent", source="client events.ndjson render_jump")
     minutes = max(1e-6, float(ev["scenario"].get("duration_s", 60)) / 60.0)
     n = max(1, len(ev["clients"]))
     rate = {k: round(v / minutes / n, 3) for k, v in counts.items()
@@ -648,6 +660,8 @@ def check_snapshot_cadence(ev, a):
     if rows:
         hz = rows[-1].get("sim_world_hz")
     hz = float(a.get("expected_hz", hz or 15))
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client snapshots.ndjson")
     per = {}
     bad = 0
     host_explained = 0
@@ -701,7 +715,7 @@ def check_frame_time(ev, a):
         ok = (f.get("p95_ms") or 1e9) <= float(a.get("p95_ms", 33.4)) and (f.get("p99_ms") or 1e9) <= float(a.get("p99_ms", 50))
         bad += 0 if ok else 1
         per[c["index"]] = {k: f.get(k) for k in ("count", "p50_ms", "p95_ms", "p99_ms", "max_ms", "long_frames")}
-    if missing == len(ev["clients"]):
+    if not ev["clients"] or missing == len(ev["clients"]):
         return _inconclusive("no frame statistics", source="client summary.json frames")
     status = FAIL if bad else (INCONCLUSIVE if missing else PASS)
     return _result(status, per, {"p95_ms": a.get("p95_ms", 33.4), "p99_ms": a.get("p99_ms", 50)},
@@ -715,6 +729,8 @@ def check_server_tick(ev, a):
     rows = _status_in_window(ev)
     if not rows:
         return _inconclusive("no /status samples", source="/status achieved_tick_hz")
+    if not any(r.get("achieved_tick_hz") is not None for r in rows):
+        return _inconclusive("no achieved_tick_hz in the /status samples", source="/status achieved_tick_hz")
     crit = rows[-1].get("sim_critical_hz") or 60
     min_hz = min(r.get("achieved_tick_hz") or 0 for r in rows)
     budget_ms = 1000.0 / crit
@@ -1167,6 +1183,8 @@ def check_combat_effect(ev, a):
 def check_reconnect(ev, a):
     ids = _user_ids(ev)
     k = int(a.get("client", 0))
+    if k >= len(ev["clients"]):
+        return _inconclusive(f"client {k} is not in this run", source="run.json client history")
     c = ev["clients"][k]
     hist = c["history"]
     launches = [h for h in hist.get("history", []) if h.get("event") == "launch"]
@@ -1303,7 +1321,12 @@ CHECKS = {
 def check_host_quiet(ev, a):
     """INFO: host-wide stalls seen during the run (several client processes stalling at once)."""
     stalls = host_stalls(ev)
-    return _result(INFO, {"host_stalls": len(stalls)}, None,
+    quiet = (ev["meta"].get("provenance") or {}).get("host_quiet") or {}
+    return _result(INFO, {"host_stalls": len(stalls),
+                          "clients_with_frames": sum(1 for c in ev["clients"] if c.get("frames")),
+                          "load_start": quiet.get("load_start") or ev["meta"].get("host_load_at_start"),
+                          "load_end": quiet.get("load_end")},
+                   None,
                    source="client frames.csv, frames >= 250 ms ending within 250 ms in >= 2 processes",
                    sampling="every frame", detail={"stalls": [(round(a, 2), round(b, 2), c) for a, b, c in stalls[:20]]},
                    rationale="a stall shared by separate processes is the host, not the game; checks it explains are "
@@ -1311,6 +1334,35 @@ def check_host_quiet(ev, a):
 
 
 CHECKS["host_quiet"] = check_host_quiet
+
+
+def check_provenance(ev, a):
+    """The run directory matches the provenance its run record carries (lab/provenance.py): every
+    required field is present, the run id is the directory's, and the scenario, the evidence files
+    and the client summaries are the ones written by this run. Any problem is INCONCLUSIVE, so a
+    stale, copied or incomplete run can never grade PASS."""
+    problems = provenance.verify(ev["run_dir"], ev["meta"], ev["scenario"], ev["clients"])
+    prov = ev["meta"].get("provenance") or {}
+    measured = {"run_id": prov.get("run_id"), "factory": (prov.get("factory") or {}).get("sha"),
+                "server": (prov.get("server") or {}).get("sha"),
+                "server_image": (prov.get("server") or {}).get("image_id"),
+                "client": (prov.get("client") or {}).get("sha"), "netcode": (prov.get("netcode") or {}).get("sha"),
+                "player_exe": ((prov.get("player") or {}).get("exe_sha256") or "")[:16] or None,
+                "scenario": (prov.get("scenario") or {}).get("id"),
+                "scenario_version": (prov.get("scenario") or {}).get("version"),
+                "evidence_files": len(prov.get("manifest") or {})}
+    return _result(INCONCLUSIVE if problems else PASS, measured, "complete and matching the run directory",
+                   source="run.json provenance vs the files in the run directory", sampling="whole run",
+                   rationale="evidence is only evidence for what it was recorded against; an analysis of a run whose "
+                             "provenance is missing or does not match cannot vouch for any commit",
+                   detail={"problems": problems}, artifacts=[str(ev["run_dir"] / "run.json")])
+
+
+CHECKS["provenance"] = check_provenance
+
+# Appended to every evaluation when the scenario does not list them.
+ALWAYS = (("provenance", "run provenance (commits, image, player, scenario, evidence hashes)"),
+          ("host_quiet", "host-wide stalls (environment)"))
 
 
 def evaluate(ev: dict) -> list[dict]:
@@ -1329,9 +1381,10 @@ def evaluate(ev: dict) -> list[dict]:
             res["detail"]["would_be"] = res["status"]
             res["status"] = INFO
         out.append({"id": a["id"], "check": a["check"], "title": a.get("title", ""), **res})
-    if not any(a.get("check") == "host_quiet" for a in ev["scenario"].get("assertions", [])):
-        out.append({"id": "host_quiet", "check": "host_quiet", "title": "host-wide stalls (environment)",
-                    **check_host_quiet(ev, {})})
+    listed = {a.get("check") for a in ev["scenario"].get("assertions", [])}
+    for check, title in ALWAYS:
+        if check not in listed:
+            out.append({"id": check, "check": check, "title": title, **CHECKS[check](ev, {})})
     return out
 
 

@@ -37,6 +37,9 @@ DEFAULTS = {
     "disruptions": [],
     "assertions": [],
     "join_timeout_s": 120,
+    # Ask the game server for its per-snapshot delivery trace (GAMESERVER_SNAPSHOT_TRACE, contract
+    # C1); the harness copies it to server/snapshot-trace.csv for `analyze --delivery`.
+    "snapshot_trace": False,
 }
 
 

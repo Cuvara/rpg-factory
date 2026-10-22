@@ -5,11 +5,16 @@
     python testlab/testlab.py run S01 [S02 ...] [--server-repo PATH] [--player PATH] [--build-server]
     python testlab/testlab.py suite smoke|crowding|load|soak|full
     python testlab/testlab.py sweep S07 --levels 0,25,50,100 [--stop-on-fail]
-    python testlab/testlab.py analyze <run_dir>          # re-evaluate stored evidence
+    python testlab/testlab.py analyze <run_dir> [--out DIR]      # re-evaluate stored evidence
+    python testlab/testlab.py analyze --delivery <run_dir> [--out DIR]   # snapshot delivery path (#473)
+    python testlab/testlab.py leak-check <player> [--expect-testlab]     # TestLab code in a build?
     python testlab/testlab.py build-client [--project PATH] [--out PATH]
     python testlab/testlab.py build-loadtest [--server-repo PATH]
     python testlab/testlab.py stack up|down|status
     python testlab/testlab.py clean                      # kill orphaned players of interrupted runs
+
+run, suite and sweep stop the scratch stack when they finish (also on failure and Ctrl-C) unless
+--keep-stack is given.
 
 Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness/usage error. Docs: testlab/README.md.
 """
@@ -24,19 +29,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, report, runner, scenarios, stack, util  # noqa: E402
+from lab import analyze, clients, config, delivery, leakcheck, report, runner, scenarios, stack, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
 
 
+def _path(arg: str) -> Path:
+    """A path argument as this Python sees it. Git Bash normally rewrites `/c/...` arguments for a
+    Windows program, but not with MSYS_NO_PATHCONV=1 (which the WSL commands need) or inside
+    `--opt=/c/...`; Windows Python would read `/c/x` as a folder `c` on the current drive, so
+    convert here."""
+    if util.IS_WINDOWS and arg.startswith("/"):
+        return Path(util.to_windows_path(arg))
+    return Path(arg)
+
+
 def _cfg(args) -> config.LabConfig:
-    overrides = {
-        "server_repo": getattr(args, "server_repo", None),
-        "player_exe": getattr(args, "player", None),
-        "client_project": getattr(args, "project", None),
-        "runs_root": getattr(args, "runs_root", None),
-    }
-    return config.load(Path(args.config) if getattr(args, "config", None) else None, overrides)
+    overrides = {key: (_path(v) if v else None) for key, v in (
+        ("server_repo", getattr(args, "server_repo", None)),
+        ("player_exe", getattr(args, "player", None)),
+        ("client_project", getattr(args, "project", None)),
+        ("runs_root", getattr(args, "runs_root", None)))}
+    return config.load(_path(args.config) if getattr(args, "config", None) else None, overrides)
 
 
 def _worst(outcomes: list[str]) -> int:
@@ -63,18 +77,36 @@ def _overrides(args) -> dict:
         o["duration_s"] = args.duration
     if getattr(args, "clients", None):
         o["clients"] = args.clients
+    if getattr(args, "snapshot_trace", False):
+        o["snapshot_trace"] = True
     return o
+
+
+def _with_stack_teardown(cfg: config.LabConfig, args, body):
+    """Run `body()` and stop the scratch stack afterwards - on success, failure, harness error and
+    Ctrl-C - unless --keep-stack. Only the scratch project is stopped (stack.down)."""
+    try:
+        return body()
+    finally:
+        if not getattr(args, "keep_stack", False):
+            try:
+                print(f"testlab: {stack.down(cfg)}", flush=True)
+            except Exception as exc:  # never mask the run's own outcome or interrupt
+                util.eprint(f"testlab: stopping the scratch stack failed: {type(exc).__name__}: {exc}")
 
 
 def cmd_run(args) -> int:
     cfg = _cfg(args)
-    outcomes = []
-    for name in args.scenarios:
-        res = runner.run(cfg, name, overrides=_overrides(args), build_server=args.build_server,
-                         keep_clients=args.keep_clients)
-        outcomes.append(res["outcome"])
-        args.build_server = False  # build once per invocation
-    return _worst(outcomes)
+
+    def body():
+        outcomes = []
+        for name in args.scenarios:
+            res = runner.run(cfg, name, overrides=_overrides(args), build_server=args.build_server,
+                             keep_clients=args.keep_clients)
+            outcomes.append(res["outcome"])
+            args.build_server = False  # build once per invocation
+        return _worst(outcomes)
+    return _with_stack_teardown(cfg, args, body)
 
 
 def cmd_suite(args) -> int:
@@ -89,6 +121,10 @@ def cmd_suite(args) -> int:
 def cmd_sweep(args) -> int:
     """Increasing bot levels on one scenario; stops at the first FAIL when asked."""
     cfg = _cfg(args)
+    return _with_stack_teardown(cfg, args, lambda: _sweep(cfg, args))
+
+
+def _sweep(cfg, args) -> int:
     levels = [int(x) for x in args.levels.split(",")]
     rows, first_fail = [], None
     for level in levels:
@@ -123,14 +159,36 @@ def _sweep_key(res: dict) -> dict:
 
 
 def cmd_analyze(args) -> int:
-    run_dir = Path(args.run_dir)
+    run_dir = _path(args.run_dir)
+    if not (run_dir / "run.json").exists() and not (run_dir / "scenario.json").exists():
+        util.eprint(f"testlab: {run_dir} is not a run directory (no run.json, no scenario.json)")
+        return 3
+    out_dir = _path(args.out) if args.out else run_dir
+    if args.delivery:
+        doc = delivery.analyze(run_dir, gap_ms=args.gap_ms, bucket_s=args.bucket_s)
+        j, m = delivery.write(doc, out_dir)
+        print(f"delivery {doc['completeness']}: {m}  classes {doc['classes']}  scopes {doc['scopes']}")
+        for line in doc["missing"]:
+            print(f"  missing: {line}")
+        return 0 if doc["completeness"] == "COMPLETE" else 2
     ev = analyze.load_evidence(run_dir)
     results = analyze.evaluate(ev)
     harness_error = (ev["meta"] or {}).get("harness_error")
     outcome = analyze.overall(results, harness_error)
-    report.write(run_dir, ev, results, outcome, harness_error)
-    print(f"{outcome}: {run_dir / 'report.md'}")
+    report.write(run_dir, ev, results, outcome, harness_error, out_dir=out_dir)
+    print(f"{outcome}: {out_dir / 'report.md'}")
     return report.EXIT_CODES.get(outcome, 2)
+
+
+def cmd_leak_check(args) -> int:
+    """Exit 0 when the build matches the expectation (no TestLab code, or with --expect-testlab
+    TestLab code present), 1 when it does not, 3 when no player was found."""
+    res = leakcheck.inspect(_path(args.player))
+    print(json.dumps(res, indent=2))
+    if res["verdict"] == "ERROR":
+        return 3
+    present = res["verdict"] == "TESTLAB_PRESENT"
+    return 0 if present == bool(args.expect_testlab) else 1
 
 
 def cmd_build_client(args) -> int:
@@ -229,30 +287,35 @@ def main(argv=None) -> int:
     sub.add_parser("list").set_defaults(fn=cmd_list)
     r = sub.add_parser("run")
     r.add_argument("scenarios", nargs="+")
-    for sp in (r,):
-        sp.add_argument("--build-server", action="store_true")
-        sp.add_argument("--keep-clients", action="store_true")
-        sp.add_argument("--duration", type=float)
-        sp.add_argument("--clients", type=int)
-    r.set_defaults(fn=cmd_run)
     s = sub.add_parser("suite")
     s.add_argument("name")
-    s.add_argument("--build-server", action="store_true")
-    s.add_argument("--keep-clients", action="store_true")
-    s.add_argument("--duration", type=float)
-    s.add_argument("--clients", type=int)
-    s.set_defaults(fn=cmd_suite)
     w = sub.add_parser("sweep")
     w.add_argument("scenario")
     w.add_argument("--levels", required=True)
     w.add_argument("--stop-on-fail", action="store_true")
-    w.add_argument("--build-server", action="store_true")
-    w.add_argument("--duration", type=float)
-    w.add_argument("--clients", type=int)
+    for sp in (r, s, w):
+        sp.add_argument("--build-server", action="store_true")
+        sp.add_argument("--duration", type=float)
+        sp.add_argument("--clients", type=int)
+        sp.add_argument("--keep-stack", action="store_true", help="leave the scratch stack running afterwards")
+        sp.add_argument("--snapshot-trace", action="store_true",
+                        help="record the server snapshot trace (GAMESERVER_SNAPSHOT_TRACE) into server/")
+    for sp in (r, s):
+        sp.add_argument("--keep-clients", action="store_true")
+    r.set_defaults(fn=cmd_run)
+    s.set_defaults(fn=cmd_suite)
     w.set_defaults(fn=cmd_sweep)
     a = sub.add_parser("analyze")
     a.add_argument("run_dir")
+    a.add_argument("--out", help="write results/report (or delivery.*) here instead of into the run directory")
+    a.add_argument("--delivery", action="store_true", help="snapshot delivery-path analysis (server trace C1, client trace C2)")
+    a.add_argument("--gap-ms", type=float, default=250.0)
+    a.add_argument("--bucket-s", type=float, default=300.0)
     a.set_defaults(fn=cmd_analyze)
+    lc = sub.add_parser("leak-check")
+    lc.add_argument("player", help="player exe, build directory, StandaloneWindows64, <Name>_Data or Managed folder")
+    lc.add_argument("--expect-testlab", action="store_true", help="the build SHOULD contain TestLab (a testlab build)")
+    lc.set_defaults(fn=cmd_leak_check)
     b = sub.add_parser("build-client")
     b.add_argument("--out")
     b.add_argument("--rebuild-scene", action="store_true",

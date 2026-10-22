@@ -33,6 +33,35 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     pursuit or spawn evidence INCONCLUSIVE.
   - `--player` accepts a build directory; sweep files are named by scenario id; the atomic JSON
     write retries while a player holds the file (Windows).
+  - **Run provenance.** `run.json` records factory, server and client commits, the scratch server
+    image id, the embedded Netcode commit (`VERIFY-PROVENANCE.txt`), player exe and managed-code
+    hashes, scenario id, version and file hash, host load at start and end, start and end, and a
+    sha256 manifest of the evidence files. Every evaluation appends a `provenance` assertion: a
+    missing record, a missing field, a run id that is not the directory's, or evidence changed
+    after the run is INCONCLUSIVE. Runs recorded before this change therefore re-grade
+    INCONCLUSIVE instead of PASS. `results.json` names the run it analyses (`analysis` block);
+    `analyze --out DIR` leaves the run directory untouched.
+  - **Missing evidence is never PASS, for every check** (tested per check with absent and empty
+    inputs). Fixed: `client_log_clean` passed with no player log, `snapshot_cadence` with no
+    clients, `render_jumps` with a client's events missing, `players_online` and `redis` with
+    zero clients.
+  - **Cleanup.** `run`, `suite` and `sweep` stop the scratch stack when they finish, also on
+    failure and Ctrl-C (`--keep-stack` keeps it). Ctrl-C stops the players, writes the run record
+    and re-raises. Every docker action refuses a container outside `rpgs-*`, and a misconfigured
+    `container_prefix` cannot widen the container filter to `rpg-*`.
+  - **`leak-check <player>`** reports whether a built player contains TestLab code
+    (`NDC.TestLab*` assembly, `CUVARA_TESTLAB`, TestLab type names) without building or running it.
+  - **`analyze --delivery <run>`** (rpg-mmo-server#473): joins the server snapshot trace (C1,
+    `--snapshot-trace` / `snapshot_trace: true` sets `GAMESERVER_SNAPSHOT_TRACE` and copies the
+    file into `server/`) with the client trace (C2 `delivery.csv`, `render.csv`). It reports per
+    client and 5-minute bucket the send and receive gaps, relative one-way delay, queue, drops,
+    KCP retransmissions and send queue, and classifies every receive gap over 250 ms as
+    SERVER_LATE, QUEUE, CLIENT, KCP, PATH or UNKNOWN and ALL-CLIENTS or SINGLE-CLIENT. It is
+    diagnostic only.
+  - `testlab/docs/COVERAGE.md`: readiness areas mapped to scenarios and checks, with the gaps.
+  - Paths given to the CLI in Git Bash form (`/c/...`) work with Windows Python. The README states
+    which commands run in Git Bash and which also run in WSL, and that `build-client` regenerates
+    the scene only with `--rebuild-scene`.
 - `skills/measure/references/legs.md`: the testlab as the multi-client verification leg.
 
 ## [1.0.5] - 2026-10-22

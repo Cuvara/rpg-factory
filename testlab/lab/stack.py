@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import time
 from pathlib import Path
@@ -32,8 +33,29 @@ ALWAYS_ENV = {
 }
 
 
+# Where the game server writes its per-snapshot delivery trace (contract C1) inside the scratch
+# container when a scenario sets `snapshot_trace: true`. /tmp is writable for the runtime user.
+SNAPSHOT_TRACE_PATH = "/tmp/testlab-snapshot-trace.csv"
+
+
 class StackError(RuntimeError):
     pass
+
+
+SCRATCH_PREFIX = "rpgs-"
+
+
+def is_scratch_name(cfg: LabConfig, name: str) -> bool:
+    """True only for a scratch-stack container name. The prefix itself must be a scratch prefix,
+    so a misconfigured `container_prefix` ("rpg-", "") can never widen the filter to the
+    developer's default stack (`rpg-*`)."""
+    prefix = cfg.container_prefix or ""
+    return prefix.startswith(SCRATCH_PREFIX) and name.startswith(prefix)
+
+
+def assert_scratch_name(cfg: LabConfig, name: str) -> None:
+    if not is_scratch_name(cfg, name):
+        raise StackError(f"refusing to act on container '{name}': only {SCRATCH_PREFIX}* (the scratch stack) is ours")
 
 
 def _port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -51,7 +73,7 @@ def scratch_containers(cfg: LabConfig) -> dict:
     for line in res.stdout.splitlines():
         if "\t" in line:
             name, status = line.split("\t", 1)
-            if name.startswith(cfg.container_prefix):
+            if is_scratch_name(cfg, name):
                 out[name] = status
     return out
 
@@ -74,6 +96,8 @@ def preflight(cfg: LabConfig) -> dict:
         raise StackError(
             f"{cfg.deploy_dir / 'stack.sh'} predates STACK_SCRATCH_EXTRA_ENV (rpg-mmo-server branch "
             "feat/testlab/autonomous-playtest); scenario server settings could not be applied")
+    for name in (cfg.gameserver_container, cfg.redis_container):
+        assert_scratch_name(cfg, name)
     if b"\r\n" in (cfg.deploy_dir / "stack.sh").read_bytes():
         raise StackError(f"{cfg.deploy_dir / 'stack.sh'} has CRLF line endings; bash in WSL cannot run it")
     return report
@@ -117,7 +141,31 @@ def env_for(scenario: dict, cfg: LabConfig | None = None) -> dict:
         env["GAMESERVER_ENEMY_SEED"] = str(scenario["seed"])
     for k, v in (scenario.get("server_env") or {}).items():
         env[str(k)] = str(v)
+    if scenario.get("snapshot_trace"):
+        env["GAMESERVER_SNAPSHOT_TRACE"] = SNAPSHOT_TRACE_PATH
     return env
+
+
+def compose_forwards(cfg: LabConfig, var: str) -> bool:
+    """The compose file passes `var` into the containers (the game server's environment is an
+    explicit list, so a setting compose does not forward never reaches the server)."""
+    try:
+        text = (cfg.deploy_dir / "docker-compose.yml").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return re.search(rf"^\s*-?\s*{re.escape(var)}\s*[:=]", text, re.M) is not None
+
+
+def fetch_snapshot_trace(cfg: LabConfig, dest: Path) -> dict:
+    """Copy the server's snapshot trace out of the scratch game server container into the run dir."""
+    assert_scratch_name(cfg, cfg.gameserver_container)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    res = util.wsl(cfg.wsl_distro, f"docker cp {cfg.gameserver_container}:{SNAPSHOT_TRACE_PATH} "
+                                   f"'{util.to_wsl_path(dest)}'", timeout=300)
+    ok = res.returncode == 0 and dest.exists()
+    return {"container_path": SNAPSHOT_TRACE_PATH, "copied": ok, "path": str(dest) if ok else None,
+            "bytes": dest.stat().st_size if ok else None,
+            "error": None if ok else (res.stderr or res.stdout).strip()[:300]}
 
 
 def _env_hash(env: dict) -> str:
@@ -167,6 +215,7 @@ def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_rest
 
 
 def restart_gameserver(cfg: LabConfig) -> None:
+    assert_scratch_name(cfg, cfg.gameserver_container)
     res = util.wsl(cfg.wsl_distro, f"docker restart {cfg.gameserver_container}", timeout=120)
     if res.returncode != 0:
         raise StackError(f"docker restart {cfg.gameserver_container} failed: {res.stderr.strip()[:300]}")
@@ -192,6 +241,7 @@ def wait_ready(cfg: LabConfig, map_id: str, timeout: float) -> None:
 
 
 def redis_cli(cfg: LabConfig, args: str) -> list[str]:
+    assert_scratch_name(cfg, cfg.redis_container)
     res = util.wsl(cfg.wsl_distro,
                    f"docker exec {cfg.redis_container} sh -c 'redis-cli ${{REDIS_PASSWORD:+-a \"$REDIS_PASSWORD\"}} "
                    f"--no-auth-warning {args}'", timeout=30)
@@ -210,6 +260,7 @@ def redis_session_keys(cfg: LabConfig) -> list[str]:
 
 def docker_stats(cfg: LabConfig) -> dict | None:
     """CPU% and memory of the scratch game server container."""
+    assert_scratch_name(cfg, cfg.gameserver_container)
     res = util.wsl(cfg.wsl_distro,
                    f"docker stats --no-stream --format '{{{{.CPUPerc}}}}\t{{{{.MemUsage}}}}' {cfg.gameserver_container}",
                    timeout=30)
@@ -237,5 +288,12 @@ def _bytes(s: str):
 
 
 def down(cfg: LabConfig) -> str:
+    """Stop the scratch stack (`stack.sh --scratch down`: compose project rpg-mmo-scratch only)."""
+    for name in (cfg.gameserver_container, cfg.redis_container):
+        assert_scratch_name(cfg, name)
     res = util.wsl(cfg.wsl_distro, f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && ./stack.sh --scratch down", timeout=600)
-    return f"exit={res.returncode}"
+    # The state file says which settings the running stack has; a stopped stack has none.
+    state = cfg.runs_root / "stack" / "state.json"
+    if res.returncode == 0 and state.exists():
+        state.unlink()
+    return f"stack.sh --scratch down exit={res.returncode}"

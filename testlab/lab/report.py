@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from . import SCHEMA_RESULT, util
@@ -10,12 +11,20 @@ from . import SCHEMA_RESULT, util
 EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2}
 
 
-def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_error: str | None) -> dict:
+def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_error: str | None,
+          out_dir: Path | None = None) -> dict:
     meta = ev["meta"]
     sc = ev["scenario"]
+    out_dir = Path(out_dir) if out_dir is not None else Path(run_dir)
+    prov = next((r for r in results if r.get("check") == "provenance"), None)
     doc = {
         "schema": SCHEMA_RESULT,
         "run_id": meta.get("run_id"),
+        # Which run this analysis is of, and by which harness: a results.json copied next to other
+        # evidence still names its own run.
+        "analysis": {"run_id": meta.get("run_id"), "run_dir": str(run_dir), "run_dir_name": Path(run_dir).name,
+                     "analyzed_utc": util.utc_stamp(), "factory_sha": _factory_sha(),
+                     "provenance": None if prov is None else prov["status"]},
         "scenario": {"id": sc.get("id"), "version": sc.get("version"), "title": sc.get("title")},
         "outcome": outcome,
         "exit_code": EXIT_CODES.get(outcome, 2),
@@ -35,9 +44,19 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
             for c in ev["clients"]
         ],
     }
-    util.write_json(run_dir / "results.json", doc)
-    (run_dir / "report.md").write_text(_markdown(doc, ev), encoding="utf-8")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    util.write_json(out_dir / "results.json", doc)
+    with open(out_dir / "report.md", "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(_markdown(doc, ev))
     return doc
+
+
+def _factory_sha() -> str | None:
+    try:
+        return subprocess.run(["git", "-C", str(Path(__file__).resolve().parents[2]), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=30).stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def _fmt(v) -> str:
@@ -54,6 +73,9 @@ def _markdown(doc: dict, ev: dict) -> str:
         f"# Testlab run {doc['run_id']}",
         "",
         f"**Outcome: {doc['outcome']}** (exit {doc['exit_code']}) - scenario `{sc.get('id')}` v{sc.get('version')}: {sc.get('title')}",
+        "",
+        f"Analysis of run `{doc['analysis']['run_dir_name']}` at {doc['analysis']['analyzed_utc']} by factory "
+        f"`{(doc['analysis']['factory_sha'] or 'unknown')[:10]}`; provenance **{doc['analysis']['provenance']}**.",
         "",
     ]
     if doc["harness_error"]:

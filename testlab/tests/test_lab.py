@@ -155,7 +155,9 @@ class AnalysisTests(unittest.TestCase):
         ev = _ev()
         ev["scenario"]["assertions"] = [{"id": "x", "check": "nope"}, {"id": "y", "check": "reconnect", "client": 9}]
         out = analyze.evaluate(ev)
-        self.assertEqual([r["status"] for r in out], [analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INFO])  # + host_quiet
+        # + provenance (no record: INCONCLUSIVE) and host_quiet (INFO), appended to every evaluation
+        self.assertEqual([r["status"] for r in out],
+                         [analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INFO])
         self.assertEqual(analyze.overall(out), analyze.INCONCLUSIVE)
 
     def test_overall_fail_dominates_and_info_never_decides(self):
@@ -264,6 +266,7 @@ class AnalysisTests(unittest.TestCase):
         for c in ev["clients"]:
             c["summary"] = {"outcome": "completed"}
             c["frames"] = [(5.0, 800.0)]
+            c["events"] = [{"event": "in_world", "st": -1.0}]
         ev["clients"][0]["events"] = [
             {"event": "render_jump", "st": 5.1, "id": "p", "type": "player", "local": True, "step": 3.0}]
         self.assertEqual(analyze.check_render_jumps(ev, {"max_local": 0})["status"], analyze.INCONCLUSIVE)
@@ -465,6 +468,596 @@ class AnalysisTests(unittest.TestCase):
             p = Path(d) / "m.txt"
             p.write_text('# HELP x\nfoo_total{a="b"} 3\nbar 1.5e2\n', encoding="utf-8")
             self.assertEqual(analyze.parse_prometheus(p), {'foo_total{a="b"}': 3.0, "bar": 150.0})
+
+
+# =========================================================================== harness reliability
+
+def _all_assertions():
+    """One assertion per registered check, with the parameters a check cannot run without."""
+    extra = {"trajectory_bound": {"client": 0, "axis": "y", "max": 1.0}}
+    return [{"id": f"a_{name}", "check": name, **extra.get(name, {})} for name in sorted(analyze.CHECKS)]
+
+
+class MissingEvidenceTests(unittest.TestCase):
+    """Absent or empty evidence never grades PASS - for every check the lab has."""
+
+    INFO_ONLY = {"host_quiet", "bots_joined"}  # environment / not-applicable reports, never decide a run
+
+    def _statuses(self, ev):
+        ev["scenario"]["assertions"] = _all_assertions()
+        return {r["check"]: r["status"] for r in analyze.evaluate(ev)}
+
+    def test_every_check_without_evidence_is_never_pass(self):
+        for clients in (0, 1, 3):
+            statuses = self._statuses(_ev(clients=clients))
+            self.assertEqual(set(statuses), set(analyze.CHECKS))
+            for check, status in statuses.items():
+                allowed = {analyze.INFO} if check in self.INFO_ONLY else {analyze.INCONCLUSIVE, analyze.FAIL}
+                self.assertIn(status, allowed, f"{check} with {clients} client(s) and no evidence: {status}")
+
+    def test_files_that_exist_but_are_empty_are_missing_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "20260101T000000Z-T-abcd"
+            for rel in ("client-0/summary.json", "client-0/events.ndjson", "client-0/snapshots.ndjson",
+                        "client-0/samples.ndjson", "client-0/frames.csv", "client-0/player.log",
+                        "server/entities.ndjson", "server/status.ndjson", "server/metrics-start.txt",
+                        "server/metrics-end.txt", "redis.json"):
+                (run / rel).parent.mkdir(parents=True, exist_ok=True)
+                (run / rel).write_text("", encoding="utf-8")
+            sc = _scenario(clients=1, assertions=_all_assertions())
+            (run / "scenario.json").write_text(json.dumps(sc), encoding="utf-8")
+            (run / "run.json").write_text(json.dumps({"run_id": run.name}), encoding="utf-8")
+            ev = analyze.load_evidence(run)
+            for r in analyze.evaluate(ev):
+                if r["check"] not in self.INFO_ONLY:
+                    self.assertNotEqual(r["status"], analyze.PASS, r["check"])
+
+    def test_log_check_needs_a_log(self):
+        ev = _ev(clients=2)
+        self.assertEqual(analyze.check_client_log_clean(ev, {})["status"], analyze.INCONCLUSIVE)
+        for c in ev["clients"]:
+            c["logs"] = {"player.log": "[TestLab] in world\n"}
+        self.assertEqual(analyze.check_client_log_clean(ev, {})["status"], analyze.PASS)
+        self.assertEqual(analyze.check_client_log_clean(_ev(clients=0), {})["status"], analyze.INCONCLUSIVE)
+
+    def test_cadence_with_no_clients_is_inconclusive(self):
+        ev = _ev(clients=0, status=[{"_st": 1, "sim_world_hz": 15}])
+        self.assertEqual(analyze.check_snapshot_cadence(ev, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_render_jumps_need_every_clients_events(self):
+        ev = _ev(clients=2)
+        for c in ev["clients"]:
+            c["summary"] = {"outcome": "completed"}
+        ev["clients"][0]["events"] = [{"event": "in_world", "st": -1}]
+        self.assertEqual(analyze.check_render_jumps(ev, {})["status"], analyze.INCONCLUSIVE)
+        ev["clients"][1]["events"] = [{"event": "in_world", "st": -1}]
+        self.assertEqual(analyze.check_render_jumps(ev, {})["status"], analyze.PASS)
+
+    def test_zero_clients_cannot_satisfy_online_or_redis_counts(self):
+        ev = _ev(clients=0, status=[{"_st": 1, "players_online": 0}])
+        ev["redis"] = {"session_keys": 0, "map_members": ["gs"]}
+        self.assertEqual(analyze.check_players_online(ev, {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_redis(ev, {})["status"], analyze.INCONCLUSIVE)
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
+def _run_dir(root: Path, run_id="20260101T000000Z-T-abcd", *, netcode_embedded=True, netcode_sha="5fa8f37"):
+    """A finished run directory with a complete provenance record."""
+    from lab import provenance
+    run = root / run_id
+    sc = _scenario(clients=1)
+    _write(run / "scenario.json", json.dumps(sc))
+    _write(run / "client-0" / "summary.json", json.dumps({"run_id": run_id, "user_id": "u0"}))
+    _write(run / "server" / "entities.ndjson", '{"st": 1, "ents": []}\n')
+    prov = {
+        "schema": provenance.SCHEMA, "run_id": run_id,
+        "factory": {"sha": "f" * 40}, "server": {"sha": "s" * 40, "image_id": "sha256:" + "i" * 64},
+        "client": {"sha": "c" * 40},
+        "netcode": {"embedded": netcode_embedded, "sha": netcode_sha},
+        "player": {"exe_sha256": "e" * 64, "managed_sha256": "m" * 64},
+        "scenario": {"id": sc["id"], "version": sc["version"], "sha256": provenance.sha256_file(run / "scenario.json")},
+        "host_quiet": {"load_start": {"cpu_load_pct": 5}, "load_end": {"cpu_load_pct": 6}},
+        "started_utc": "20260101T000000Z", "ended_utc": "20260101T000100Z",
+        "manifest": provenance.manifest(run),
+    }
+    _write(run / "run.json", json.dumps({"run_id": run_id, "provenance": prov}))
+    return run
+
+
+class ProvenanceTests(unittest.TestCase):
+    def _status(self, run):
+        return analyze.check_provenance(analyze.load_evidence(run), {})
+
+    def test_complete_matching_record_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = self._status(_run_dir(Path(d)))
+            self.assertEqual(res["status"], analyze.PASS, res["detail"])
+            self.assertEqual(res["measured"]["evidence_files"], 3)
+
+    def test_a_run_without_a_record_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            _write(run / "run.json", json.dumps({"run_id": run.name}))
+            self.assertEqual(self._status(run)["status"], analyze.INCONCLUSIVE)
+
+    def test_each_required_field_is_required(self):
+        from lab import provenance
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            full = json.loads((run / "run.json").read_text(encoding="utf-8"))
+            for path, _ in provenance.REQUIRED:
+                meta = copy.deepcopy(full)
+                cur = meta["provenance"]
+                *parents, leaf = path.split(".")
+                for p in parents:
+                    cur = cur[p]
+                cur[leaf] = None
+                _write(run / "run.json", json.dumps(meta))
+                res = self._status(run)
+                self.assertEqual(res["status"], analyze.INCONCLUSIVE, path)
+                self.assertTrue(any(path in p for p in res["detail"]["problems"]), (path, res["detail"]["problems"]))
+
+    def test_embedded_netcode_must_name_its_commit(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._status(_run_dir(Path(d), netcode_sha=None))["status"], analyze.INCONCLUSIVE)
+        with tempfile.TemporaryDirectory() as d:  # manifest pin, nothing embedded: no commit needed
+            self.assertEqual(self._status(_run_dir(Path(d), netcode_embedded=False, netcode_sha=None))["status"],
+                             analyze.PASS)
+
+    def test_record_from_another_run_or_changed_evidence_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            moved = run.with_name("20260202T000000Z-T-wxyz")  # a run copied under another id
+            run.rename(moved)
+            problems = self._status(moved)["detail"]["problems"]
+            self.assertTrue(any("does not match the run directory" in p for p in problems), problems)
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            _write(run / "server" / "entities.ndjson", '{"st": 2, "ents": []}\n')
+            problems = self._status(run)["detail"]["problems"]
+            self.assertTrue(any("server/entities.ndjson changed" in p for p in problems), problems)
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            (run / "server" / "entities.ndjson").unlink()
+            problems = self._status(run)["detail"]["problems"]
+            self.assertTrue(any("server/entities.ndjson is missing" in p for p in problems), problems)
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            sc = json.loads((run / "scenario.json").read_text(encoding="utf-8"))
+            sc["version"] = 2
+            _write(run / "scenario.json", json.dumps(sc))
+            problems = self._status(run)["detail"]["problems"]
+            self.assertTrue(any("scenario.json is T v2" in p for p in problems), problems)
+            self.assertTrue(any("scenario.json changed" in p for p in problems), problems)
+
+    def test_a_client_summary_from_another_run_is_caught(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            meta = json.loads((run / "run.json").read_text(encoding="utf-8"))
+            meta["provenance"]["manifest"] = {}  # isolate the run-id comparison from the hash check
+            _write(run / "run.json", json.dumps(meta))
+            _write(run / "client-0" / "summary.json", json.dumps({"run_id": "20251231T000000Z-T-old0"}))
+            problems = self._status(run)["detail"]["problems"]
+            self.assertTrue(any("belongs to run 20251231T000000Z-T-old0" in p for p in problems), problems)
+
+    def test_provenance_is_appended_to_every_evaluation_and_blocks_pass(self):
+        ev = _ev()
+        ev["scenario"]["assertions"] = [{"id": "c", "check": "bots_joined"}]
+        out = analyze.evaluate(ev)
+        self.assertEqual([r["check"] for r in out], ["bots_joined", "provenance", "host_quiet"])
+        self.assertEqual(analyze.overall(out), analyze.INCONCLUSIVE)
+
+    def test_player_record_reads_the_build_provenance_files(self):
+        from lab import provenance
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "verify-build"
+            exe = root / "StandaloneWindows64" / "IndieRPGMMOAdventure.exe"
+            _write(exe, "stub")
+            _write(exe.parent / "IndieRPGMMOAdventure_Data" / "Managed" / "NDC.Scripts.dll", "code")
+            _write(root / "VERIFY-PROVENANCE.txt", "netcode 5fa8f37fb74b963fb34582e0d44610f8c49f130f client 47ec933\n")
+            _write(root / "testlab-build.json", json.dumps({"client_head": "47ec933", "embedded_packages": [
+                {"name": "com.cuvara.netcode", "version": "0.48.0", "cs_sha256": "8036"}]}))
+            rec = provenance.player_record(exe)
+            self.assertEqual(rec["netcode"]["sha"], "5fa8f37fb74b963fb34582e0d44610f8c49f130f")
+            self.assertTrue(rec["netcode"]["embedded"])
+            self.assertEqual(rec["built_from_client"], "47ec933")
+            self.assertEqual(len(rec["exe_sha256"]), 64)
+            self.assertEqual(len(rec["managed_sha256"]), 64)
+            _write(exe.parent / "IndieRPGMMOAdventure_Data" / "Managed" / "NDC.Scripts.dll", "other code")
+            self.assertNotEqual(provenance.player_record(exe)["managed_sha256"], rec["managed_sha256"])
+
+    def test_results_name_the_run_they_analyse(self):
+        from lab import report
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            out = Path(d) / "elsewhere"
+            ev = analyze.load_evidence(run)
+            results = analyze.evaluate(ev)
+            doc = report.write(run, ev, results, analyze.overall(results), None, out_dir=out)
+            self.assertEqual(doc["analysis"]["run_id"], run.name)
+            self.assertEqual(doc["analysis"]["run_dir_name"], run.name)
+            self.assertEqual(doc["analysis"]["provenance"], analyze.PASS)
+            self.assertTrue((out / "results.json").exists())
+            self.assertFalse((run / "results.json").exists())  # --out never writes into the run dir
+
+
+class ScratchIsolationTests(unittest.TestCase):
+    def _cfg(self, d, **kw):
+        from lab import config
+        return config.LabConfig(workspace=Path(d), runs_root=Path(d), **kw)
+
+    def test_container_filter_matches_only_scratch_containers(self):
+        from unittest import mock
+        from lab import stack
+        listing = ("rpg-gameserver\tUp 2 hours\nrpg-redis\tUp 2 hours\nrpgs-gameserver\tUp 1 minute\n"
+                   "rpgs-redis\tExited (0)\nrpg-nakama\tUp\nmy-rpgs-x\tUp\nrpgsx-y\tUp\n")
+        done = __import__("subprocess").CompletedProcess([], 0, listing, "")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack.util, "wsl", return_value=done):
+            self.assertEqual(sorted(stack.scratch_containers(self._cfg(d))), ["rpgs-gameserver", "rpgs-redis"])
+            # A misconfigured prefix cannot widen the filter to the default stack.
+            for bad in ("rpg-", "rpg", ""):
+                self.assertEqual(stack.scratch_containers(self._cfg(d, container_prefix=bad)), {}, bad)
+
+    def test_actions_on_a_non_scratch_container_are_refused(self):
+        from unittest import mock
+        from lab import stack
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack.util, "wsl") as wsl:
+            cfg = self._cfg(d, gameserver_container="rpg-gameserver", redis_container="rpg-redis")
+            for fn in (stack.restart_gameserver, stack.down, stack.docker_stats,
+                       lambda c: stack.redis_cli(c, "ping"),
+                       lambda c: stack.fetch_snapshot_trace(c, Path(d) / "t.csv")):
+                with self.assertRaises(stack.StackError):
+                    fn(cfg)
+            wsl.assert_not_called()
+
+    def test_snapshot_trace_sets_the_server_env_and_needs_the_compose_passthrough(self):
+        from lab import stack
+        self.assertNotIn("GAMESERVER_SNAPSHOT_TRACE", stack.env_for({"map": "map_01"}))
+        env = stack.env_for({"map": "map_01", "snapshot_trace": True})
+        self.assertEqual(env["GAMESERVER_SNAPSHOT_TRACE"], stack.SNAPSHOT_TRACE_PATH)
+        with tempfile.TemporaryDirectory() as d:
+            cfg = self._cfg(d, server_repo=Path(d))
+            compose = Path(d) / "backend" / "deploy" / "docker-compose.yml"
+            _write(compose, "services:\n  gameserver:\n    environment:\n      GAMESERVER_DEBUG_ENTITIES: ${X:-}\n")
+            self.assertFalse(stack.compose_forwards(cfg, "GAMESERVER_SNAPSHOT_TRACE"))
+            _write(compose, compose.read_text() + "      GAMESERVER_SNAPSHOT_TRACE: ${GAMESERVER_SNAPSHOT_TRACE:-}\n")
+            self.assertTrue(stack.compose_forwards(cfg, "GAMESERVER_SNAPSHOT_TRACE"))
+
+
+class CleanupTests(unittest.TestCase):
+    """Every run stops its players on success, failure, timeout and Ctrl-C; every invocation stops
+    the scratch stack unless asked to keep it."""
+
+    def _patched_run(self, d, wait_phase_effect):
+        from unittest import mock
+        from lab import clients, config, runner, stack, provenance
+        exe = Path(d) / "build" / "StandaloneWindows64" / "IndieRPGMMOAdventure.exe"
+        _write(exe, "stub")
+        _write(exe.parent / "IndieRPGMMOAdventure_Data" / "Managed" / "NDC.TestLab.dll", "lab")
+        cfg = config.LabConfig(workspace=Path(d), runs_root=Path(d) / "runs-root", player_exe=exe,
+                               server_repo=Path(d) / "server", client_project=Path(d) / "client")
+        stopped = []
+
+        def fake_launch(cfg_, sc, p, plan, control):
+            p.proc, p.pid = None, 4242
+            p.history.append({"event": "launch", "pid": 4242})
+
+        class FakeProbe:
+            def __init__(self, cfg_, out, entity_hz):
+                self.out, self.start_mono, self.counts = out, None, {"entities": 0}
+                out.mkdir(parents=True, exist_ok=True)
+
+            def scrape_metrics(self, name):
+                (self.out / f"metrics-{name}.txt").write_text("", encoding="utf-8")
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        def fake_stop(players):
+            stopped.extend(p.index for p in players)
+            return ["stopped"]
+
+        patches = [
+            mock.patch.object(runner, "_host_load", return_value={"cpu_load_pct": 1.0, "free_mem_mb": 1}),
+            mock.patch.object(clients, "clean_orphans", return_value=[]),
+            mock.patch.object(stack, "preflight", return_value={"conflicts": []}),
+            mock.patch.object(stack, "ensure", return_value={"actions": []}),
+            mock.patch.object(provenance, "docker_image_id", return_value="sha256:" + "0" * 64),
+            mock.patch.object(runner, "ServerProbe", FakeProbe),
+            mock.patch.object(clients, "launch", side_effect=fake_launch),
+            mock.patch.object(clients, "wait_phase", side_effect=wait_phase_effect),
+            mock.patch.object(clients, "stop", side_effect=fake_stop),
+            mock.patch.object(runner.time, "sleep"),
+        ]
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        return cfg, stopped
+
+    def _run_json(self, cfg):
+        runs = list((cfg.runs_root / "runs").iterdir())
+        self.assertEqual(len(runs), 1)
+        return json.loads((runs[0] / "run.json").read_text(encoding="utf-8"))
+
+    def test_ctrl_c_stops_players_records_the_run_and_reraises(self):
+        from lab import runner
+        with tempfile.TemporaryDirectory() as d:
+            cfg, stopped = self._patched_run(d, KeyboardInterrupt)
+            with self.assertRaises(KeyboardInterrupt):
+                runner.run(cfg, "S01", quiet=True)
+            self.assertEqual(stopped, [0, 1, 2])
+            meta = self._run_json(cfg)
+            self.assertIn("KeyboardInterrupt", meta["harness_error"])
+            self.assertEqual(meta["provenance"]["run_id"], meta["run_id"])
+            self.assertEqual(json.loads((cfg.runs_root / "active-pids.json").read_text()), {})
+
+    def test_a_join_timeout_stops_players_and_is_never_pass(self):
+        from lab import clients, runner
+        with tempfile.TemporaryDirectory() as d:
+            cfg, stopped = self._patched_run(d, clients.ClientError("timeout after 120s waiting for all clients"))
+            res = runner.run(cfg, "S01", quiet=True)
+            self.assertEqual(stopped, [0, 1, 2])
+            self.assertEqual(res["outcome"], analyze.INCONCLUSIVE)
+            self.assertIn("timeout", self._run_json(cfg)["harness_error"])
+
+    def test_every_invocation_stops_the_scratch_stack(self):
+        from unittest import mock
+        import testlab as cli
+        from lab import runner, stack
+        for effect, keep in ((None, False), (KeyboardInterrupt, False), (RuntimeError("boom"), False), (None, True)):
+            with mock.patch.object(stack, "down", return_value="down") as down, \
+                    mock.patch.object(runner, "run", side_effect=effect,
+                                      return_value={"outcome": "PASS", "assertions": [], "run_id": "r"}):
+                args = cli.main.__globals__["argparse"].Namespace(
+                    scenarios=["S01"], build_server=False, keep_clients=False, keep_stack=keep, duration=None,
+                    clients=None, snapshot_trace=False, config=None, server_repo=None, player=None, project=None,
+                    runs_root=None)
+                if effect is None:
+                    self.assertEqual(cli.cmd_run(args), 0)
+                else:
+                    with self.assertRaises(effect if isinstance(effect, type) else type(effect)):
+                        cli.cmd_run(args)
+                self.assertEqual(down.call_count, 0 if keep else 1, (effect, keep))
+
+    def test_git_bash_paths_reach_windows_python_converted(self):
+        import testlab as cli
+        if util.IS_WINDOWS:
+            self.assertEqual(str(cli._path("/c/Workspaces/x")), "C:\\Workspaces\\x")
+        self.assertEqual(cli._path("relative/run"), Path("relative/run"))
+
+
+class LeakCheckTests(unittest.TestCase):
+    def _player(self, root: Path, files: dict) -> Path:
+        exe = root / "StandaloneWindows64" / "Game.exe"
+        _write(exe, "stub")
+        for name, data in files.items():
+            p = exe.parent / "Game_Data" / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        return root
+
+    def test_a_production_build_is_clean(self):
+        from lab import leakcheck
+        with tempfile.TemporaryDirectory() as d:
+            root = self._player(Path(d), {"Managed/NDC.Scripts.DI.dll": b"MZ GameplayInput DeviceGameplayInputSource",
+                                          "ScriptingAssemblies.json": b'{"names":["NDC.Scripts.DI.dll"]}'})
+            for target in (root, root / "StandaloneWindows64", root / "StandaloneWindows64" / "Game.exe",
+                           root / "StandaloneWindows64" / "Game_Data" / "Managed"):
+                res = leakcheck.inspect(target)
+                self.assertEqual(res["verdict"], "CLEAN", target)
+                self.assertEqual(res["backend"], "mono")
+
+    def test_testlab_assembly_types_and_define_are_found(self):
+        from lab import leakcheck
+        cases = {
+            "assembly file": {"Managed/NDC.TestLab.dll": b"MZ"},
+            "type in another assembly": {"Managed/NDC.Scripts.DI.dll": b"MZ\x00ScriptedInputSource\x00"},
+            "utf-16 user string": {"Managed/Assembly-CSharp.dll": "CUVARA_TESTLAB".encode("utf-16-le")},
+            "assembly list": {"Managed/NDC.Scripts.dll": b"MZ", "ScriptingAssemblies.json": b'["NDC.TestLab.dll"]'},
+            "il2cpp metadata": {"il2cpp_data/Metadata/global-metadata.dat": b"\x00TestLabRunner\x00"},
+        }
+        for label, files in cases.items():
+            with tempfile.TemporaryDirectory() as d:
+                res = leakcheck.inspect(self._player(Path(d), files))
+                self.assertEqual(res["verdict"], "TESTLAB_PRESENT", label)
+
+    def test_no_player_is_an_error_not_clean(self):
+        from lab import leakcheck
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(leakcheck.inspect(Path(d))["verdict"], "ERROR")
+            _write(Path(d) / "X_Data" / "readme.txt", "")
+            self.assertEqual(leakcheck.inspect(Path(d))["verdict"], "ERROR")
+
+    def test_cli_exit_codes(self):
+        import testlab as cli
+        with tempfile.TemporaryDirectory() as d:
+            clean = self._player(Path(d) / "clean", {"Managed/NDC.Scripts.dll": b"MZ"})
+            lab = self._player(Path(d) / "lab", {"Managed/NDC.TestLab.dll": b"MZ"})
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["leak-check", str(clean)]), 0)
+                self.assertEqual(cli.main(["leak-check", str(lab)]), 1)
+                self.assertEqual(cli.main(["leak-check", str(lab), "--expect-testlab"]), 0)
+                self.assertEqual(cli.main(["leak-check", str(clean), "--expect-testlab"]), 1)
+                self.assertEqual(cli.main(["leak-check", str(Path(d) / "none")]), 3)
+
+
+# =========================================================================== delivery path (#473)
+
+TICK_US = 1_000_000 // 60  # 60 Hz world ticks; snapshots every 4 ticks (15 Hz)
+SNAP_TICKS = 4
+
+
+def _c1_row(uid, tick, write_us, *, enqueue_lag=1000, queue_depth=0, dropped=0, wait_snd=0, retrans=0):
+    gather = write_us - enqueue_lag - 500
+    return (f"conn-{uid},{uid},{tick},{gather},{write_us - enqueue_lag},{write_us},{write_us + 200},900,"
+            f"{queue_depth},{dropped},{wait_snd},128,128,{retrans},200")
+
+
+class DeliveryFixture:
+    """A synthetic run: N clients receiving snapshots every 4 ticks, with the server writing them on
+    a 60 Hz clock; individual snapshots can be delayed at one stage of the path."""
+
+    def __init__(self, root: Path, clients=2, snaps=200, c1=True, c2=True):
+        self.run = root / "20260101T000000Z-T-dlvr"
+        self.clients, self.snaps, self.c1, self.c2 = clients, snaps, c1, c2
+        self.delays = {}  # (client or None, snap index) -> dict(stage=..., ms=...)
+
+    def delay(self, idx, stage, ms, client=None, **kw):
+        self.delays[(client, idx)] = {"stage": stage, "ms": ms, **kw}
+        return self
+
+    def _d(self, ci, idx):
+        return self.delays.get((ci, idx)) or self.delays.get((None, idx))
+
+    def build(self) -> Path:
+        sc = _scenario(clients=self.clients)
+        _write(self.run / "scenario.json", json.dumps(sc))
+        _write(self.run / "run.json", json.dumps({"run_id": self.run.name}))
+        server = ["conn_id,user_id,world_tick,gather_us,enqueue_us,write_start_us,write_end_us,bytes,queue_depth,"
+                  "dropped_oldest_total,kcp_wait_snd,kcp_snd_wnd,kcp_rmt_wnd,kcp_retrans_total,kcp_rto_ms"]
+        for ci in range(self.clients):
+            uid = f"user-{ci}"
+            _write(self.run / f"client-{ci}" / "summary.json", json.dumps({"user_id": uid}))
+            deliv = ["world_tick,recv_us,applied_us,bytes,full,entities,frame"]
+            render = ["frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms"]
+            frames = ["frame,t,dt_ms,scenario_t"]
+            ndjson = []
+            server_shift = client_shift = 0
+            retrans = 0
+            offset_us = 5_000_000 + ci * 777_000  # each player has its own clock origin
+            for k in range(self.snaps):
+                tick = 1000 + k * SNAP_TICKS
+                d = self._d(ci, k)
+                stage = d["stage"] if d else None
+                extra = d["ms"] * 1000 if d else 0
+                write = tick * TICK_US + server_shift + (extra if stage in ("server", "queue") else 0)
+                if stage == "server":
+                    server_shift += 0  # a one-off late write
+                lag = 1000 + (extra if stage == "queue" else 0)
+                if stage == "kcp":
+                    retrans += 3
+                wait = 40 if stage == "kcp" else 0
+                server.append(_c1_row(uid, tick, write, enqueue_lag=lag, wait_snd=wait, retrans=retrans))
+                recv = offset_us + tick * TICK_US + 30_000 + (extra if stage in ("server", "queue", "kcp", "path", "client") else 0)
+                deliv.append(f"{tick},{recv if self.c2 else ''},{recv + 400},900,0,6,{k}")
+                ndjson.append(json.dumps({"t": (recv + 400) / 1e6, "tick": tick}))
+                render.append(f"{k},{offset_us + tick * TICK_US + 38_000},{tick - 6},{tick},{tick},{recv},8.0")
+                if stage == "client":
+                    frames.append(f"{k},{recv / 1e6:.6f},{extra / 1000 + 5:.3f},1")
+            _write(self.run / f"client-{ci}" / "delivery.csv", "\n".join(deliv) + "\n")
+            _write(self.run / f"client-{ci}" / "snapshots.ndjson", "\n".join(ndjson) + "\n")
+            _write(self.run / f"client-{ci}" / "frames.csv", "\n".join(frames) + "\n")
+            _write(self.run / f"client-{ci}" / "render.csv", "\n".join(render) + "\n")
+        if self.c1:
+            _write(self.run / "server" / "snapshot-trace.csv", "\n".join(server) + "\n")
+        return self.run
+
+
+class DeliveryTests(unittest.TestCase):
+    def _analyze(self, fx):
+        from lab import delivery
+        return delivery.analyze(fx.build())
+
+    def _only_gap(self, doc, client="0"):
+        gaps = doc["clients"][client]["gaps"]
+        self.assertEqual(len(gaps), 1, gaps)
+        return gaps[0]
+
+    def test_each_cause_gets_its_class(self):
+        for stage, cls in (("server", "SERVER_LATE"), ("queue", "QUEUE"), ("kcp", "KCP"), ("path", "PATH"),
+                           ("client", "CLIENT")):
+            with tempfile.TemporaryDirectory() as d:
+                doc = self._analyze(DeliveryFixture(Path(d)).delay(100, stage, 400, client=0))
+                g = self._only_gap(doc)
+                self.assertEqual(g["class"], cls, (stage, g))
+                self.assertEqual(g["scope"], "SINGLE-CLIENT", stage)
+                self.assertEqual(doc["completeness"], "COMPLETE")
+
+    def test_a_gap_every_client_shares_is_all_clients(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = self._analyze(DeliveryFixture(Path(d), clients=3).delay(100, "server", 400))
+            for c in ("0", "1", "2"):
+                g = self._only_gap(doc, c)
+                self.assertEqual((g["class"], g["scope"]), ("SERVER_LATE", "ALL-CLIENTS"))
+
+    def test_without_the_server_trace_server_classes_are_unknown(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = self._analyze(DeliveryFixture(Path(d), c1=False).delay(100, "queue", 400, client=0))
+            self.assertEqual(self._only_gap(doc)["class"], "UNKNOWN")
+            self.assertEqual(doc["completeness"], "INCOMPLETE")
+            self.assertTrue(any("server trace" in m for m in doc["missing"]))
+
+    def test_without_c2_recv_us_path_is_unknown_never_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = self._analyze(DeliveryFixture(Path(d), c2=False).delay(100, "path", 400, client=0))
+            g = self._only_gap(doc)
+            self.assertEqual(g["class"], "UNKNOWN")
+            self.assertIn("recv_us", g["reason"])
+            self.assertEqual(doc["clients"]["0"]["recv_source"], "applied_us")
+            self.assertEqual(doc["completeness"], "INCOMPLETE")
+
+    def test_pre_c2_recorder_falls_back_to_main_thread_time(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = DeliveryFixture(Path(d)).delay(100, "client", 400, client=0)
+            run = fx.build()
+            for ci in range(2):
+                (run / f"client-{ci}" / "delivery.csv").unlink()
+            from lab import delivery
+            doc = delivery.analyze(run)
+            self.assertEqual(doc["clients"]["0"]["recv_source"], "t")
+            self.assertEqual(self._only_gap(doc)["class"], "CLIENT")
+
+    def test_minus_one_fields_are_unknown_not_zero(self):
+        from lab import delivery
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t.csv"
+            _write(p, "conn_id,user_id,world_tick,gather_us,enqueue_us,write_start_us,write_end_us,bytes,queue_depth,"
+                      "dropped_oldest_total,kcp_wait_snd,kcp_snd_wnd,kcp_rmt_wnd,kcp_retrans_total,kcp_rto_ms\n"
+                      "c,u,10,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1\n")
+            row = delivery.read_server_trace(p)["u"][10]
+            self.assertTrue(all(v is None for k, v in row.items() if k not in ("conn_id", "world_tick")))
+            self.assertIsNone(delivery.read_server_trace(Path(d) / "absent.csv"))
+            gap = {"tick_a": 10, "tick_b": 14, "recv_a_us": 0, "recv_b_us": 400_000, "gap_us": 400_000}
+            cls, why, _ = delivery.classify_gap(gap, {10: row, 14: row}, [], "recv_us", explain_fraction=0.5,
+                                                slack_us=50_000)
+            self.assertEqual(cls, "UNKNOWN", why)
+
+    def test_buckets_report_send_and_receive_gaps_and_relative_one_way_delay(self):
+        with tempfile.TemporaryDirectory() as d:
+            # 5-minute buckets at 60 Hz ticks are 18000 ticks: 200 snapshots x 4 ticks fit in one.
+            doc = self._analyze(DeliveryFixture(Path(d), clients=1).delay(100, "path", 400, client=0))
+            b = doc["clients"]["0"]["buckets"][0]
+            self.assertAlmostEqual(b["server_send_gap_ms"]["p50"], SNAP_TICKS * TICK_US / 1000, delta=0.1)
+            self.assertAlmostEqual(b["client_recv_gap_ms"]["max"], SNAP_TICKS * TICK_US / 1000 + 400, delta=0.1)
+            self.assertEqual(b["client_gaps_over_limit"], 1)
+            # Each player's clock has a different origin; relative one-way delay removes it.
+            self.assertEqual(b["one_way_rel_ms"]["p50"], 0.0)
+            self.assertAlmostEqual(b["one_way_rel_ms"]["max"], 400.0, delta=0.1)
+            self.assertEqual(self._only_gap(doc)["scope"], "UNKNOWN")  # no other client to compare with
+
+    def test_cli_writes_delivery_files_where_asked(self):
+        import contextlib
+        import io
+        import testlab as cli
+        with tempfile.TemporaryDirectory() as d:
+            run = DeliveryFixture(Path(d)).delay(10, "queue", 400, client=1).build()
+            out = Path(d) / "out"
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["analyze", "--delivery", str(run), "--out", str(out)]), 0)
+            doc = json.loads((out / "delivery.json").read_text(encoding="utf-8"))
+            self.assertEqual(doc["classes"]["QUEUE"], 1)
+            self.assertIn("QUEUE", (out / "delivery.md").read_text(encoding="utf-8"))
+            self.assertFalse((run / "delivery.json").exists())
 
 
 if __name__ == "__main__":

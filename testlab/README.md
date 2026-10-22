@@ -18,6 +18,18 @@ python3 testlab/testlab.py run S09 --duration 3600                  # 1-hour soa
 
 Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error.
 
+`run`, `suite` and `sweep` stop the scratch stack when they finish: on success, failure, harness error and Ctrl-C. Pass `--keep-stack` to leave it running for the next invocation. Players are stopped at the end of every run in all of these cases.
+
+### Where each command works
+
+| Command | Windows Git Bash (or PowerShell, cmd) with Windows Python | WSL Ubuntu with Linux Python |
+|---|---|---|
+| `run`, `suite`, `sweep`, `stack`, `clean`, `build-client`, `build-loadtest` | yes | no: the players are Windows processes and process control uses `tasklist`/`taskkill` |
+| `analyze`, `analyze --delivery`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
+| `python3 -B testlab/tests/test_lab.py` | yes | yes |
+
+In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewrites `/c/...` arguments for Windows programs; the CLI also converts them itself, so they work with `MSYS_NO_PATHCONV=1` too. WSL commands are run from Python through `wsl.exe -d Ubuntu --exec bash -c` with path conversion disabled.
+
 ## What runs where
 
 | Part | Repo | Path |
@@ -57,12 +69,21 @@ python3 testlab/testlab.py build-loadtest    # only for S07
 python3 testlab/testlab.py run S01
 ```
 
-`build-client` runs three Unity batch steps in the configured project:
-1. `TestLabSceneBuilder.Build` regenerates the test scene from `MainScene`.
+`build-client` runs Unity batch steps in the configured project:
+1. Only with `--rebuild-scene`: `TestLabSceneBuilder.Build` regenerates the test scene from `MainScene`. Regeneration is not byte-deterministic, so by default the committed scene is used.
 2. `TestLabSceneBuilder.Validate` fails on missing scripts, a missing `MainSceneScope` or `DotsWorldBridge`, or a missing arena.
 3. `PlayerBuilder.Build` builds the player with `-bootScene Assets/Scenes/Tests/MultiplayerCombatTest.unity -extraDefines CUVARA_TESTLAB`.
 
-It writes `testlab-build.json` next to the player: the client commit, uncommitted changes, defines, and every package embedded under `Packages/`. Every report shows this provenance.
+It writes `testlab-build.json` next to the player: the client commit, uncommitted changes, defines, and every package embedded under `Packages/`. A build that embeds an unreleased Netcode commit must also carry `VERIFY-PROVENANCE.txt` (`netcode <sha> client <sha>`) in the same folder; the run's provenance record reads both.
+
+## Test code in production builds (`leak-check`)
+
+```
+python3 testlab/testlab.py leak-check <player exe | build dir | StandaloneWindows64 | _Data | Managed>
+python3 testlab/testlab.py leak-check <testlab build> --expect-testlab
+```
+
+It inspects a built player without running it: every `Managed/*.dll`, `ScriptingAssemblies.json` and `RuntimeInitializeOnLoads.json` (Mono), or `GameAssembly.dll` and `global-metadata.dat` (IL2CPP). A finding is an `NDC.TestLab*` assembly, the `CUVARA_TESTLAB` define string, or a TestLab runtime type name (`TestLabRunner`, `ScriptedInputSource`, `DeliveryRecorder`, ...), in UTF-8 or UTF-16. The verdict is `CLEAN`, `TESTLAB_PRESENT` or `ERROR` (no player found, never clean). Exit `0` when the build matches the expectation (clean, or with `--expect-testlab` present), `1` when it does not, `3` on error. It does not build anything.
 
 ## Design (architecture decision record)
 
@@ -71,7 +92,7 @@ It writes `testlab-build.json` next to the player: the client commit, uncommitte
 - A second `SendInput` caller. It would make the recorded and sent input streams diverge.
 - Transform writes. These would bypass exactly what is under test.
 
-**Decision 2 - the runtime ships only in testlab builds.** `NDC.TestLab` has `defineConstraints: ["CUVARA_TESTLAB || UNITY_INCLUDE_TESTS"]`. It compiles in the Editor, so EditMode tests cover it, and in players built with `-extraDefines CUVARA_TESTLAB`. It is absent from a normal player (verified by building both; see the client CHANGELOG). Even inside a testlab build it does nothing unless the player is started with `-testlab-plan`.
+**Decision 2 - the runtime ships only in testlab builds.** `NDC.TestLab` has `defineConstraints: ["CUVARA_TESTLAB || UNITY_INCLUDE_TESTS"]`. It compiles in the Editor, so EditMode tests cover it, and in players built with `-extraDefines CUVARA_TESTLAB`. It is absent from a normal player; `leak-check` verifies a given build (`control-no-define` is `CLEAN`, the testlab builds are `TESTLAB_PRESENT`). Even inside a testlab build it does nothing unless the player is started with `-testlab-plan`.
 
 **Decision 3 - the test scene is generated, not edited.** `MultiplayerCombatTest.unity` is MainScene plus a script-free `TestLabArena`: a 5-unit ground grid and a mirror of the server collision boxes, shown only for the map that defines them. Spawn points, obstacles and enemy density are server-authoritative. A scenario sets them through the server configuration (map id, `GAMESERVER_ENEMY_*`, seed), so the scene cannot drift from the game.
 
@@ -110,6 +131,8 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 | S09 | Soak: memory slope, entity drift, accumulated errors (default 300 s) |
 | S10 | Regression replay of the 2026-10-21 report, with before/after reference numbers |
 
+What each readiness area is covered by, and the gaps (with the client and server hooks they need): [`docs/COVERAGE.md`](docs/COVERAGE.md).
+
 ## Adding a scenario
 
 Copy a file in `scenarios/` and change these fields:
@@ -128,13 +151,37 @@ Copy a file in `scenarios/` and change these fields:
 | File | Contents |
 |---|---|
 | `report.md`, `results.json` | outcome, per-assertion measurement, threshold, source, artifacts; build provenance |
-| `run.json` | repos and commits, player fingerprint, stack actions, timeline, client launches |
+| `run.json` | repos and commits, player fingerprint, stack actions, timeline, client launches, and the `provenance` record (below) |
 | `scenario.json` | the scenario exactly as run (defaults applied) |
-| `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png` |
-| `server/` | `entities.ndjson` (authoritative positions), `status.ndjson`, `container.ndjson`, `metrics-{start,end,after}.txt` |
+| `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png`; with a C2 recorder also `delivery.csv` and `render.csv` |
+| `server/` | `entities.ndjson` (authoritative positions), `status.ndjson`, `container.ndjson`, `metrics-{start,end,after}.txt`; with `snapshot_trace` also `snapshot-trace.csv` |
 | `redis.json`, `orchestrator.log`, `stack-up.log`, `harness-error.txt` | |
 
-`python3 testlab/testlab.py analyze <run_dir>` re-grades stored evidence. Use it after a check changes, or to review a run without re-running it.
+`python3 testlab/testlab.py analyze <run_dir>` re-grades stored evidence. Use it after a check changes, or to review a run without re-running it. It writes `results.json` and `report.md` into the run directory; `--out DIR` writes them elsewhere and leaves the run directory untouched (use it on runs other people rely on).
+
+## Provenance (every run, every analysis)
+
+When a run ends, `run.json` gets a `provenance` record (`lab/provenance.py`):
+- factory, server and client commits (the client commit the player was BUILT from, `testlab-build.json`), and whether each tree was dirty;
+- the image id the scratch game server container ran (`docker inspect rpgs-gameserver`);
+- the Netcode the player embedded: version and source hash from `testlab-build.json`, commit from `VERIFY-PROVENANCE.txt`;
+- the player exe sha256 and one sha256 over every managed assembly;
+- scenario id, version and the sha256 of `scenario.json` as run;
+- host load at start and end (`host_quiet`; the stalls themselves are graded by the `host_quiet` assertion);
+- start and end instants, and a manifest of every evidence file (`client-N/`, `server/`, `bots/`, `scenario.json`, `redis.json`) with its sha256.
+
+Every evaluation appends the `provenance` assertion. It is PASS only when every field is present, the run id is the directory's own, the scenario and every evidence file still hash as recorded, and every client summary names this run. Anything else is INCONCLUSIVE, so a run copied under another id, re-used evidence, or a run without a record (runs before this change) cannot grade PASS. `results.json` carries an `analysis` block (run id, run directory, time, factory commit, provenance status).
+
+## Snapshot delivery path (`analyze --delivery`, rpg-mmo-server#473)
+
+```
+python3 testlab/testlab.py run S09 --duration 3600 --snapshot-trace    # or "snapshot_trace": true in a scenario
+python3 testlab/testlab.py analyze --delivery <run_dir> [--out DIR] [--gap-ms 250] [--bucket-s 300]
+```
+
+With `snapshot_trace` the stack sets `GAMESERVER_SNAPSHOT_TRACE=/tmp/testlab-snapshot-trace.csv` in the scratch game server, restarts it so the trace starts with the run, and copies the file to `server/snapshot-trace.csv` at the end. The compose file must forward `GAMESERVER_SNAPSHOT_TRACE`; the run refuses to start otherwise.
+
+The analysis (`lab/delivery.py`) joins the server trace (contract C1) and the client trace (contract C2: `delivery.csv`, `render.csv`) on (user id, world tick). Per client and per 5-minute bucket it reports: server send inter-gap, client receive inter-gap, one-way delay relative to that client's minimum (no clock offset), queue depth and queue delay, dropped, KCP retransmissions, `kcp_wait_snd`, and render snapshot age. Every client receive gap over 250 ms is classified SERVER_LATE, QUEUE, CLIENT, KCP, PATH or UNKNOWN, and ALL-CLIENTS or SINGLE-CLIENT; the rules are in the module docstring. Missing inputs make the classes that need them UNKNOWN and the output INCOMPLETE (exit 2). It is diagnostic: it never grades a run PASS. Without C2 the receive time falls back to the main-thread `t` of `snapshots.ndjson`, so a main-thread stall shows up as CLIENT.
 
 ## Failure triage
 
@@ -151,6 +198,8 @@ Copy a file in `scenarios/` and change these fields:
 | `position_divergence` with layer "snapshot or transport" | `snapshots.ndjson` gaps, `/status` replication gap | the client never received the server's path |
 | `kcp_health` dropped `no_session` | `metrics-after.txt` vs `metrics-end.txt` | a client quit inside the window |
 | INCONCLUSIVE everywhere | `harness-error.txt`, `server/` empty | stack not ready, debug endpoint off, player without `NDC.TestLab.dll` |
+| `provenance` INCONCLUSIVE | `detail.problems` | run predates provenance, evidence changed or copied after the run, build without `VERIFY-PROVENANCE.txt` for an embedded Netcode |
+| `snapshot_cadence` FAIL, gaps grow over a soak | `analyze --delivery` classes and buckets | CLIENT: main-thread stalls (e.g. the overlay cost bug, run `20261022T112220Z-S09-eeoa`); the server classes need `--snapshot-trace` |
 
 ## Limits (stated, not hidden)
 
