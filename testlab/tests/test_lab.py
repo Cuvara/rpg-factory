@@ -134,6 +134,16 @@ class ConfigTests(unittest.TestCase):
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_distinct_user_ids_needs_at_least_two_clients(self):
+        self.assertEqual(analyze.check_distinct_user_ids(_ev(clients=0), {})["status"], analyze.INCONCLUSIVE)
+        one = _ev(clients=1)
+        one["clients"][0]["summary"] = {"user_id": "u0"}
+        self.assertEqual(analyze.check_distinct_user_ids(one, {})["status"], analyze.INCONCLUSIVE)
+        two = _ev(clients=2)
+        for i, c in enumerate(two["clients"]):
+            c["summary"] = {"user_id": f"u{i}"}
+        self.assertEqual(analyze.check_distinct_user_ids(two, {})["status"], analyze.PASS)
+
     def test_missing_evidence_is_inconclusive_never_pass(self):
         ev = _ev()
         for check in ("players_online", "server_tick", "kcp_health", "enemy_crowding", "frame_time",

@@ -254,6 +254,9 @@ def check_distinct_user_ids(ev, a):
     known = [i for i in ids if i]
     if len(known) < len(ids):
         return _inconclusive(f"user id unknown for {len(ids) - len(known)} client(s)", source="client status/summary")
+    if len(known) < 2:
+        return _inconclusive(f"{len(known)} client identity(ies): distinctness needs at least two",
+                             source="client status/summary")
     ok = len(set(known)) == len(known)
     return _result(PASS if ok else FAIL, len(set(known)), len(known), source="client summary.json user_id (Nakama)",
                    sampling="per client", rationale="a shared identity makes logins evict each other",
