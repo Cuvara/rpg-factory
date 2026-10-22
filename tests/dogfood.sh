@@ -66,10 +66,14 @@ PROMPT[tech-go]="Analyze only: in the rpg-mmo-server Go gateway, how do I run on
 EXPECT[tech-go]="server-services go-backend"; HANDOFF[tech-go]=""; SHOWS[tech-go]="SKIP|skip"
 PROMPT[tech-unity]="Analyze only: how do I run just the HudEcsLifecycleTests EditMode tests of the IndieRPGMMOAdventure Unity client right now, and why can they not be PlayMode tests?"
 EXPECT[tech-unity]="client-integration unity-client-tech"; HANDOFF[tech-unity]=""; SHOWS[tech-unity]="HUMAN_REQUIRED|not reachable|Editor is closed|Editor closed"
+PROMPT[tech-dots]="Analyze only: in the UnityDots package, should a new projectile cleanup system use Schedule or ScheduleParallel, and how do I prove in an EditMode test that it was installed into the right system group?"
+EXPECT[tech-dots]="unity-package unity-dots"; HANDOFF[tech-dots]=""; SHOWS[tech-dots]="SystemOrderVerifier|ParallelScheduling"
+PROMPT[tech-netcode]="Analyze only: in the Netcode package, why can a client running at 20 fps see snapshots up to 50 ms late before interpolation even starts, and which headless tests cover the KCP session?"
+EXPECT[tech-netcode]="unity-package netcode-client"; HANDOFF[tech-netcode]=""; SHOWS[tech-netcode]="KcpTransport|PlayerLoop|frame"
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity)
+scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")

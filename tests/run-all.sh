@@ -88,6 +88,7 @@ else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
 else skp "registry facts re-probed in the repos" "--no-workspace"; fi
 run "skill citation checker (fixture repos)" env -u TMPDIR tests/skill-citations.test.sh
+run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 if $use_ws; then run "skill line citations point at their symbols (integration branches)" python3 -B scripts/checks/skill-citations.py
 else skp "skill line citations against the repos" "--no-workspace"; fi
 if $use_ws; then run "routing + history replay" tests/routing.test.sh

@@ -116,6 +116,10 @@ PY3
 )
 if [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
 
+# every skill appears everywhere the plugin lists, routes, tests and documents skills (and no SCAFFOLD: left)
+tp_out=$(cd "$ROOT" && CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B scripts/skill-touchpoints.py --all 2>&1)
+if [ $? -eq 0 ]; then ok; else bad "skill touchpoints (skill-touchpoints.py --all):"; grep '^MISSING' <<<"$tp_out" | sed 's/^MISSING  /      /' | head -20; fi
+
 # line citations: backticked and anchored (needs no repos; tests/skill-citations.test.sh and the live
 # run in run-all.sh check them against the code)
 cite_out=$(cd "$ROOT" && CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B scripts/checks/skill-citations.py --offline 2>&1); cite_rc=$?

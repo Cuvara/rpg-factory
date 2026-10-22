@@ -341,6 +341,10 @@ skchk allow rpg-factory:server-services tech-a
 skchk allow rpg-factory:go-backend tech-a                   # after a used_by lead: allowed
 skchk deny  rpg-factory:go-backend tech-b                   # per session
 skchk allow other-plugin:go-backend tech-b                  # other plugins are not Factory skills
+# every registry tech skill (new ones included, nothing to edit here): denied first, allowed after its first lead
+while IFS=$'\t' read -r t lead; do
+  skchk deny  "rpg-factory:$t" "every-$t"; skchk allow "rpg-factory:$lead" "every-$t"; skchk allow "rpg-factory:$t" "every-$t"
+done < <(jq -r '.skills | to_entries[] | select(.value.kind == "tech") | "\(.key)\t\(.value.used_by[0])"' "$ROOT/registry.json")
 reason=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:unity-dots"},cwd:$d,session_id:"tech-c"}' \
   | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
 case "$reason" in *'/scripts/factory-context.sh"'*"rpg-factory:unity-package"*) pass=$((pass + 1));;

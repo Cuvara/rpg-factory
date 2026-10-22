@@ -5,6 +5,24 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- **Skill authoring workflow.** Adding a skill meant about 25 hand edits across the registry, skills,
+  tests, docs and evals, and several lists had already gone stale (unity-dots and netcode-client were missing
+  from the factory-core tech list, the README diagram and tech table, and dogfood; go-backend and
+  dotnet-gameserver had no eval grader).
+  - `scripts/new-skill.py` scaffolds a lead or tech skill: `SKILL.md` with every section skills-lint
+    requires and `SCAFFOLD:` markers, plus the registry entry (order after the existing skills of its kind,
+    so it never outranks one in routing ties; module ownership or contract driver; `dev_tools.used_by`;
+    `cite_roots`). It refuses anything it cannot validate and rewrites `registry.json` only when a JSON
+    round trip reproduces it byte for byte.
+  - `scripts/skill-touchpoints.py` (read-only, run by `skills-lint.sh --all`) checks that every skill is
+    in the factory-core Skills section, the skill-contract diagram, the README diagram and tables,
+    `.claude/CLAUDE.md` (names and counts), the plugin manifests' lead count, a routing scenario, a
+    dogfood scenario and an eval grader - and that no `SCAFFOLD:` marker is left.
+  - Repo-local skill `.claude/skills/skill-author/` (not a plugin skill): the order of work from the
+    learning-loop gate to a green run-all.
+  - The stale places were fixed; new dogfood scenarios `tech-dots`, `tech-netcode` and evals
+    `go-single-test`, `dotnet-single-test`. The routing test's tech list and the Skill-hook test now come
+    from the registry, so a new tech skill needs no edit there. `tests/new-skill.test.sh` (22 cases).
 - **Citation drift guard (`scripts/checks/skill-citations.py`).** Skills cite product code by
   `path:line`; nothing checked those lines, and a smoke test after 1.0.0 found 9 of 12 sampled server
   citations pointing at the wrong code (e.g. `WriteLoopAsync` cited at `Connection.cs:841`, now 1019). The
