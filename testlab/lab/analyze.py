@@ -492,12 +492,12 @@ def check_render_jumps(ev, a):
             # (0.8 s at max_speed, +20%): only then is it a teleport rather than ordinary motion.
             walkable = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)) * 0.8 * 1.2
             respawned = _server_respawned(ev, e.get("id"), e.get("st"))
-            received_step = _received_step(c, e.get("id"), e.get("st"))
+            received_step = _received_step(c, e.get("id"), e.get("st"),
+                                           max_speed=float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)))
             explained = server_step is not None and server_step >= 0.8 * (e.get("step") or 0)
             # The client's own received stream (20 Hz) resolves a teleport the 5 Hz server
             # probe aliases: the server put the entity elsewhere in ONE snapshot.
-            received_teleport = (received_step is not None and received_step >= 0.8 * (e.get("step") or 0)
-                                 and received_step > float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)) * 0.15)
+            received_teleport = received_step is not None and received_step >= 0.8 * (e.get("step") or 0)
             if received_teleport or (explained and (respawned or server_step > walkable)):
                 counts["server_teleport"] = counts.get("server_teleport", 0) + 1
                 events.append({"client": c["index"], "class": "server_teleport", "server_step": round(server_step, 3),
@@ -551,10 +551,14 @@ def check_render_jumps(ev, a):
                              [str(c["dir"] / "shots") for c in ev["clients"]])
 
 
-def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15):
+def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15, max_speed=6.0, tick_hz=60.0):
     """Largest jump in the position this client RECEIVED for the entity (the snapshot stream,
-    sampled at the plan's sample_hz) between consecutive samples in [st-before, st+after]. Unlike
-    the 5 Hz server probe this sees a teleport the server made between two of its samples."""
+    sampled at the plan's sample_hz) between consecutive samples in [st-before, st+after] that no
+    entity could have WALKED in the server time between them (the samples' world_tick delta,
+    at 1.5x max_speed plus 0.2 units). Unlike the 5 Hz server probe this sees a teleport the
+    server made between two of its samples; the server-tick bound keeps a late snapshot burst
+    (a long but legitimate step after a delivery gap) from passing as one. None when no
+    consecutive pair exceeded the bound."""
     prev = None
     best = None
     for s in client.get("samples", []):
@@ -566,10 +570,15 @@ def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15):
         row = next((r for r in s.get("ents", []) if r[0] == eid and len(r) >= 7), None)
         if row is None:
             continue
+        wt = s.get("world_tick")
         if prev is not None:
             d = math.hypot(row[5] - prev[0], row[6] - prev[1])
-            best = d if best is None or d > best else best
-        prev = (row[5], row[6])
+            dticks = (wt - prev[2]) if (wt is not None and prev[2] is not None) else None
+            if dticks is not None and dticks >= 0:
+                walk = max_speed * 1.5 * max(dticks, 1) / tick_hz + 0.2
+                if d > walk and (best is None or d > best):
+                    best = d
+        prev = (row[5], row[6], wt)
     return best
 
 
@@ -907,8 +916,14 @@ def check_enemy_pursuit(ev, a):
             if d0 <= settle and d1 <= settle:
                 rel = math.hypot((n[2] - e[2]) - (t1[2] - target[2]), (n[3] - e[3]) - (t1[3] - target[3]))
                 settled_rel.append(rel / dt)
-    if far_steps == 0:
-        return _inconclusive(f"no enemy moved while farther than {far} from its target", source="/debug/entities")
+    min_far = int(a.get("min_far_steps", 50))
+    if far_steps < min_far:
+        return _inconclusive(f"{far_steps} enemy steps farther than {far} from a target (need {min_far})",
+                             source="/debug/entities")
+    min_settled = int(a.get("min_settled_samples", 50))
+    if a.get("max_settled_speed") is not None and len(settled_rel) < min_settled:
+        return _inconclusive(f"{len(settled_rel)} settled-enemy samples (need {min_settled}) for the settled bound",
+                             source="/debug/entities")
     ratio = approaching / far_steps
     findings = []
     status = PASS
@@ -963,12 +978,15 @@ def check_spawn_overlap(ev, a):
             spawns.append({"st": round(r["st"], 2), "id": p[0], "x": round(p[2], 3), "y": round(p[3], 3),
                            "nearest_player": None if nearest is None else round(nearest, 3)})
     judged = [s for s in spawns if s["nearest_player"] is not None]
-    if not judged:
-        return _inconclusive("no player spawned while another player was in the world", source="/debug/entities")
+    min_judged = int(a.get("min_judged", 2))
+    if len(judged) < min_judged:
+        return _inconclusive(f"{len(judged)} of {len(spawns)} placements had another live player to compare with "
+                             f"(need {min_judged})", source="/debug/entities")
     bad = [s for s in judged if s["nearest_player"] < min_d]
     ok = len(bad) <= int(a.get("max_overlapping", 0))
     return _result(PASS if ok else FAIL,
-                   {"spawns": len(spawns), "judged": len(judged), "overlapping": len(bad),
+                   {"spawns": len(spawns), "judged": len(judged), "unjudged": len(spawns) - len(judged),
+                    "overlapping": len(bad),
                     "min_nearest": min(s["nearest_player"] for s in judged)},
                    {"min_distance": min_d, "max_overlapping": a.get("max_overlapping", 0)},
                    source="server /debug/entities: first appearance or respawn (dead -> alive, or HP from below half "

@@ -254,12 +254,27 @@ class AnalysisTests(unittest.TestCase):
         ev = _ev(entities=ents, duration=20)
         c = ev["clients"][0]
         c["summary"] = {"outcome": "completed"}
-        c["samples"] = [{"st": 15.31, "ents": [["p", "player", 1, -1.28, 0.0, -1.167, 0.0]]},
-                        {"st": 15.366, "ents": [["p", "player", 1, -0.35, 0.0, 0.0, 0.0]]}]
+        c["samples"] = [{"st": 15.31, "world_tick": 900, "ents": [["p", "player", 1, -1.28, 0.0, -1.167, 0.0]]},
+                        {"st": 15.366, "world_tick": 904, "ents": [["p", "player", 1, -0.35, 0.0, 0.0, 0.0]]}]
         c["events"] = [{"event": "render_jump", "st": 15.362, "id": "p", "type": "player", "local": True, "step": 1.14}]
         res = analyze.check_render_jumps(ev, {"max_local": 0})
         self.assertEqual(res["measured"]["server_teleport"], 1)
         self.assertEqual(res["status"], analyze.PASS)
+
+    def test_a_late_snapshot_burst_is_not_a_server_teleport(self):
+        # The client received 1.0 units in one step, but 12 server ticks (200 ms) passed between
+        # the two snapshots: walkable, so a 1.1-unit local render jump is the client's defect.
+        ev = _ev(entities=[_row(15.0 + 0.2 * k, [["p", "player", 1.0 * k, 0.0, 100, 100, 0, 5]]) for k in range(3)],
+                 duration=20)
+        c = ev["clients"][0]
+        c["summary"] = {"outcome": "completed"}
+        c["samples"] = [{"st": 15.31, "world_tick": 900, "ents": [["p", "player", 1, 0.0, 0.0, 0.0, 0.0]]},
+                        {"st": 15.366, "world_tick": 912, "ents": [["p", "player", 1, 1.0, 0.0, 1.0, 0.0]]}]
+        c["events"] = [{"event": "render_jump", "st": 15.362, "id": "p", "type": "player", "local": True, "step": 1.1}]
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual(res["measured"]["server_teleport"], 0)
+        self.assertEqual(res["measured"]["local_major"], 1)
+        self.assertEqual(res["status"], analyze.FAIL)
 
     def test_replication_gap_with_missing_samples_is_inconclusive(self):
         rows = [{"_st": float(i), "snapshot_max_update_gap_ms": 100} for i in range(10)]
@@ -290,11 +305,11 @@ class AnalysisTests(unittest.TestCase):
                      ["m1", "mob", 50.0 - sign * 2.5 * st, 0.0, 16, 16, 0, 2.5]]
             return _row(st, ents)
         ok = _ev(entities=[sample(i * 0.1, 1) for i in range(30)], duration=3)
-        res = analyze.check_enemy_pursuit(ok, {"skip_first_s": 0})
+        res = analyze.check_enemy_pursuit(ok, {"skip_first_s": 0, "min_far_steps": 10})
         self.assertEqual(res["status"], analyze.PASS, res)
         self.assertGreater(res["measured"]["far_steps"], 0)
         bad = _ev(entities=[sample(i * 0.1, -1) for i in range(30)], duration=3)
-        res = analyze.check_enemy_pursuit(bad, {"skip_first_s": 0})
+        res = analyze.check_enemy_pursuit(bad, {"skip_first_s": 0, "min_far_steps": 10})
         self.assertEqual(res["status"], analyze.FAIL)
         self.assertTrue(0.4 < res["measured"]["pursuit_ratio"] < 0.6, res["measured"])  # m0 closes, m1 flees
 
@@ -306,12 +321,20 @@ class AnalysisTests(unittest.TestCase):
                     ["m1", "mob", -10.0 + 2.5 * st, 5.0, 16, 16, 0, 2.5]]
             return _row(st, ents)
         still = analyze.check_enemy_pursuit(_ev(entities=[sample(i * 0.1, False) for i in range(30)], duration=3),
-                                            {"skip_first_s": 0, "max_settled_speed": 0.3})
+                                            {"skip_first_s": 0, "max_settled_speed": 0.3,
+                                             "min_far_steps": 10, "min_settled_samples": 10})
         self.assertEqual(still["measured"]["settled_rel_speed_p95"], 0.0, "following a walking player is not jitter")
         self.assertEqual(still["status"], analyze.PASS)
         shaky = analyze.check_enemy_pursuit(_ev(entities=[sample(i * 0.1, True) for i in range(30)], duration=3),
-                                            {"skip_first_s": 0, "max_settled_speed": 0.3})
+                                            {"skip_first_s": 0, "max_settled_speed": 0.3,
+                                             "min_far_steps": 10, "min_settled_samples": 10})
         self.assertEqual(shaky["status"], analyze.FAIL)
+
+    def test_pursuit_with_too_few_far_steps_is_inconclusive(self):
+        rows = [_row(i * 0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5],
+                               ["m", "mob", -10.0 + 0.25 * i, 0.0, 16, 16, 0, 2.5]]) for i in range(5)]
+        self.assertEqual(analyze.check_enemy_pursuit(_ev(entities=rows, duration=1), {"skip_first_s": 0})["status"],
+                         analyze.INCONCLUSIVE)
 
     def test_pursuit_without_far_motion_is_inconclusive(self):
         rows = [_row(i * 0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["m", "mob", 1.0, 0.0, 16, 16, 0, 2.5]])
@@ -324,7 +347,7 @@ class AnalysisTests(unittest.TestCase):
             rows = [_row(0.0, [["a", "player", 0.0, 0.0, 100, 100, 0, 5]])]
             rows += [_row(0.1 * k, [["a", "player", 0.0, 0.0, 100, 100, 0, 5],
                                     ["b", "player", second_at, 0.0, 100, 100, 0, 5]]) for k in range(1, 5)]
-            return analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {"min_distance": 0.5})
+            return analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {"min_distance": 0.5, "min_judged": 1})
         self.assertEqual(run(0.0)["status"], analyze.FAIL)
         self.assertEqual(run(0.0)["measured"]["overlapping"], 1)
         self.assertEqual(run(2.0)["status"], analyze.PASS)
@@ -333,9 +356,11 @@ class AnalysisTests(unittest.TestCase):
         rows = [_row(0.0, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 9.0, 0.0, 100, 100, 0, 5]]),
                 _row(0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 9.0, 0.0, 0, 100, 1, 5]]),
                 _row(0.2, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 0.1, 0.0, 100, 100, 0, 5]])]
-        res = analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {"min_distance": 0.5})
+        res = analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {"min_distance": 0.5, "min_judged": 1})
         self.assertEqual(res["status"], analyze.FAIL)
         self.assertEqual(res["detail"]["overlapping"][0]["id"], "b")
+        # Three placements judged (a and b joining together, b respawning) meet the default minimum.
+        self.assertEqual(analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {})["measured"]["judged"], 3)
 
     def test_spawn_overlap_with_one_player_is_inconclusive(self):
         rows = [_row(0.1 * k, [["a", "player", 0.0, 0.0, 100, 100, 0, 5]]) for k in range(5)]
