@@ -114,8 +114,19 @@ for n in "${scenarios[@]}"; do
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
   outcome=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .subtype // ""' | tail -1)
   sid=$(grep '^{' "$f" | jq -r 'select(.type=="system" and .subtype=="init") | .session_id' | head -1)
-  sdir=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; print(os.path.join(fstate.scratch(), fstate.session_key(sys.argv[2])))" "$ROOT/scripts/lib" "${sid:-none}")
-  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '\r' | tr '\n' ';')
+  # the headless session's hooks may resolve another scratch root than this shell (Python 3.14 on Windows: TMPDIR
+  # "/tmp" is not absolute, so they fall back to persistent()/tmp): probe both, prefer the one holding the session
+  sdir=$(python3 -B -c "
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import fstate
+key = fstate.session_key(sys.argv[2])
+roots = list(dict.fromkeys([fstate.scratch(), os.path.join(fstate.persistent(), 'tmp')]))
+cands = [os.path.join(r, key) for r in roots]
+print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/lib" "${sid:-none}")
+  # the reader knows the on-disk layout (ADVISORIES.d/ + legacy file) and probes both roots itself
+  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '' | tr '
+' ';')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
   if [ -n "${MODE[$n]:-}" ]; then  # declared via --mode, or recorded by the Skill hook in the session's state

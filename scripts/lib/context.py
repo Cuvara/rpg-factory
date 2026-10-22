@@ -7,10 +7,13 @@ renders a compact markdown snapshot or full JSON.
 
 Usage (via factory-context.sh):
   [--repo <key>|all] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--explain]
-  [--full] [--toolchain] [--submodules]
+  [--full] [--toolchain] [--submodules] [--mode analyze|plan|implement|validate|review|resume]
   --repo      default: the repo (or worktree) containing the cwd, else all registered repos
-  --paths     resolve only these repo-relative paths (requires a single repo); everything after
-              --paths is a path. Use it when the tree holds pre-existing user changes.
+  --paths     resolve only these paths (requires a single repo); everything after --paths is a path.
+              Repo-relative, repo-prefixed, absolute (C:\\, C:/, /c/, /mnt/c/) and glob forms are
+              accepted. Use it when the tree holds pre-existing user changes.
+  --mode      declare the Factory execution mode (also --mode=<m>); the hooks then add advisories for
+              state changes in read-only modes - advisory only, they never block
   --lead      override the lead skill; must be one of the candidates (else exit 2)
   --explain   why every registered skill was or was not selected
   --full      include all rules, all human gates, all known issues, full toolchain versions
@@ -20,6 +23,7 @@ Usage (via factory-context.sh):
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -32,7 +36,7 @@ REGISTRY = os.path.join(PLUGIN_ROOT, "registry.json")
 RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 
 
-MODES = {  # the Factory execution-mode contract (enforced by the hooks once declared)
+MODES = {  # the Factory execution-mode contract (the hooks add advisories once declared; they never block)
     "analyze":   "read-only. Explain what exists and what a change would touch. Invoke the lead skill for its domain rules; change nothing.",
     "plan":      "read-only. Invoke the lead skill, then produce the plan from its workflow: files, legs, obligations, checks (tier + command), gates. Change nothing.",
     "implement": "full workflow: branch, implement, obligations, validate with run-checks.py, verify, report.",
@@ -178,22 +182,51 @@ def status_files(d, submodules):
     return files
 
 
+def native_abs(p):
+    """Map a forward-slash path written in another shell's drive form to this platform's form: on Windows
+    the git-bash `/c/...` and WSL `/mnt/c/...` forms become `C:/...`; elsewhere `C:/...` becomes
+    `/mnt/c/...`. Anything else is returned unchanged."""
+    if os.name == "nt":
+        m = re.match(r"^/(?:mnt/)?([A-Za-z])(/.*)?$", p)
+        if m:
+            return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+        # git-bash rewrites an argument /mnt/c/x into <Git install>/mnt/c/x (MSYS path conversion)
+        m = re.match(r"^[A-Za-z]:/.*?/mnt/([A-Za-z])(/.*)?$", p)
+        if m and not os.path.exists(p):
+            return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+    else:
+        m = re.match(r"^([A-Za-z]):(/.*)?$", p)
+        if m:
+            return f"/mnt/{m.group(1).lower()}{m.group(2) or '/'}"
+    return p
+
+
+def rel_to(p, d):
+    """Forward-slash path of absolute p relative to d, or None when p is outside d (or on another drive)."""
+    try:
+        rel = os.path.relpath(p, d).replace(os.sep, "/")
+    except ValueError:  # Windows: p and d are on different drives
+        return None
+    return None if rel == ".." or rel.startswith("../") else rel
+
+
 def norm_paths(paths, d, rep):
     """Make --paths repo-relative: strip ./, a leading repo directory (`rpg-mmo-server/backend/..`),
-    absolute paths inside the repo; expand globs that match. Models pass all of these."""
+    absolute paths inside the repo (C:\\ and C:/, git-bash /c/ and WSL /mnt/c/ forms); expand globs
+    that match. Models pass all of these. Results always use forward slashes."""
     out = []
     prefix = rep["path"].strip("/") + "/"
     for p in paths:
-        p = p.strip().strip('"').strip("'").replace("\\", "/")
+        p = native_abs(p.strip().strip('"').strip("'").replace("\\", "/"))
         if os.path.isabs(p):
-            rel = os.path.relpath(p, d)
-            p = rel if not rel.startswith("..") else p
+            rel = rel_to(p, d)
+            p = rel if rel is not None else p
         while p.startswith("./"):
             p = p[2:]
         if p.startswith(prefix) and not os.path.exists(os.path.join(d, p)):
             p = p[len(prefix):]
         if any(c in p for c in "*?["):
-            hits = sorted(os.path.relpath(h, d) for h in glob.glob(os.path.join(d, p), recursive=True))
+            hits = sorted(r for r in (rel_to(h, d) for h in glob.glob(os.path.join(d, p), recursive=True)) if r is not None)
             if hits:
                 out += hits[:50]
                 continue
@@ -308,7 +341,7 @@ def render(snap, reg, args):
             add(f"- {r}")
     add(f"Workspace `{snap['workspace']}`. Live snapshot: recompute per task; changed paths listed at task start are the user's baseline.")
     if snap.get("mode"):
-        add(f"**Mode: {snap['mode']}** - {MODES[snap['mode']]} (the hooks enforce read-only modes; switch with `--mode implement` only when the user asked)")
+        add(f"**Mode: {snap['mode']}** - {MODES[snap['mode']]} (advisory: the hooks warn on state-changing commands and file writes in read-only modes, they do not block - keep to the mode; switch with `--mode implement` only when the user asked)")
     cl = snap.get("cwd_clone")
     if cl:
         add(f"**The current directory is an embedded clone** `{cl['in']}/{cl['path']}` (of `{cl['of']}`): gitignored user state inside "
@@ -317,7 +350,7 @@ def render(snap, reg, args):
     add("")
     add("**Rules:** " + "; ".join(f"**{g['id']}** {g['rule']}" if args["full"] else f"**{g['id']}**" for g in reg["global_rules"])
         + ("" if args["full"] else " (full text: `--full` or registry `global_rules`)"))
-    add("**Human gates:** " + ", ".join(g["id"] + (" (deny)" if g.get("decision") == "deny" else "") for g in reg["human_gates"])
+    add("**Human gates:** " + ", ".join(g["id"] + (" (high)" if g.get("decision") == "deny" else "") for g in reg["human_gates"])
         + " - no tag or release without explicit release authorization in this task; otherwise stop at READY_TO_TAG.")
     if snap.get("services"):
         add("**Services:** " + ", ".join(f"`{sid}` {'reachable' if s['reachable'] else 'not reachable'} ({s['probe']})"

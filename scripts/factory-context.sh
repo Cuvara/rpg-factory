@@ -4,8 +4,12 @@
 #
 # Usage: factory-context.sh [--repo <key>|all] [--paths <path>...] [--base <ref>] [--json]
 #                           [--lead <skill>] [--explain] [--full] [--toolchain] [--submodules]
+#                           [--mode analyze|plan|implement|validate|review|resume]
 #   --repo       default: the repo/worktree containing the cwd, else every registered repo
-#   --paths      resolve ONLY these paths (single repo); everything after --paths is a path
+#   --paths      resolve ONLY these paths (single repo); everything after --paths is a path. Repo-relative,
+#                repo-prefixed, absolute (C:\ , C:/ , /c/ , /mnt/c/) and glob forms are accepted
+#   --mode       declare the Factory execution mode for this session (also --mode=<m>); the hooks then add
+#                advisories for state changes in read-only modes - they never block
 #   --lead       override the lead skill (must be a candidate; exit 2 otherwise)
 #   --explain    why each registered skill was or was not selected
 #   --full       all rules, gates, known issues and tool versions

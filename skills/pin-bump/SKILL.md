@@ -12,7 +12,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 ## Applies when / Not when
 
 - **Applies:** "move the client to Netcode vX.Y.Z", "pin sgl-vX.Y.Z", "bump the build toolkit to vN", a manifest/lock mismatch, a stale DOTS Sample, or the final leg of `wire-contract` or `unity-package` after the lead tagged.
-- **Not:** editing package code (`unity-package`); editing Shared.GameLogic (`server-realtime`); testing unreleased package code in the client (`client-package-toggle` human gate, never committed); creating or pushing tags (the lead - denied by the guard).
+- **Not:** editing package code (`unity-package`); editing Shared.GameLogic (`server-realtime`); testing unreleased package code in the client (`client-package-toggle` human gate, never committed); creating or pushing tags (the lead's, or the agent's only with explicit release authorization from the user in the current task; the guard raises a high advisory, it does not block).
 
 ## Scope
 
