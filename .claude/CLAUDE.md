@@ -25,7 +25,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
-  enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`.
+  enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`. New skills start
+  from `scripts/new-skill.py` and are done when `scripts/skill-touchpoints.py <s>` is OK (`.claude/skills/skill-author`).
 - A skill's `path:line` citation names the symbol it shows (anchor) and must pass
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json` and `marketplace.json` together with a
@@ -56,6 +57,9 @@ env -u TMPDIR tests/devtools.test.sh       # dev tool probes, snapshot/doctor li
 scripts/check-registry.sh [--structure-only]
 env -u TMPDIR tests/skill-citations.test.sh  # citation checker on fixture repos
 python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill path:line vs integration branches
+python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
+python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
+env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--explain] [--json]

@@ -75,6 +75,7 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
                                                         │ load when the work needs the technology
                                                   tech skills (never routed; routing line "tech")
                                                   dotnet-gameserver · go-backend · unity-client-tech
+                                                  unity-dots · netcode-client
               └────────────────┬─────────────────┘
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
@@ -109,6 +110,8 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `dotnet-gameserver` | server-realtime, wire-contract, measure | tick order and rates, ECS world locking, zero-alloc idioms and guards, SGL C# limits, Net layer, xUnit idioms and filters, NativeAOT |
 | `go-backend` | server-services, wire-contract | module wiring without go.work, entry points, storage seams, test doubles, single Go tests, integration-test skips |
 | `unity-client-tech` | client-integration, unity-package, pin-bump | Entities system install and world lifecycle, UniTask and main thread, VContainer, asmdef/test assemblies, domain reload, WebGL, single Unity tests |
+| `unity-dots` | unity-package, client-integration, measure | ECS or classic C#, system group tree and bootstrap install, `SystemOrderVerifier`, the package ECB singleton, measured Schedule vs ScheduleParallel thresholds, archetype-stable spawning, sync points, allocators, ECS tests |
+| `netcode-client` | unity-package, wire-contract, client-integration, measure | TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning and merge, interpolation clock, prediction and reconciliation, reconnect, per-packet allocations, headless tests |
 
 **Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry
 `dev_tools` it uses (Unity MCP, Go LSP, C# LSP, pg-aiguide, context-mode, codex, dotnet, go, protoc,
@@ -369,6 +372,9 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
   [--skill <s>] [--suggest]` resolves every `path:line` at the repos' integration branches and fails on a
   moved symbol, an unanchored citation or a line past the end (`--suggest` prints the corrected line).
   `skills-lint.sh` runs its repo-free part; `run-all.sh` runs the fixture suite and the live check.
+- New skills: `scripts/new-skill.py` scaffolds `SKILL.md` and the registry entry, `scripts/skill-touchpoints.py`
+  lists every other place the skill must appear (skills-lint runs it for all skills); the order of work is the
+  repo-local `.claude/skills/skill-author` skill.
 - `tests/dogfood.sh` runs real headless Claude sessions and asserts which skills were invoked;
   `--installed` uses the installed plugin (no `--plugin-dir`) and asserts the runtime version.
 
