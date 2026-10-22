@@ -70,6 +70,14 @@ class LabConfig:
             self.loadtest_exe = self.runs_root / "bin" / ("loadtest.exe" if util.IS_WINDOWS else "loadtest")
         for f in ("server_repo", "client_project", "player_exe", "runs_root", "unity_exe", "loadtest_exe"):
             setattr(self, f, Path(getattr(self, f)))
+        # A build directory is accepted for --player: the exe inside it, or inside its
+        # StandaloneWindows64 folder (what build-client --out writes).
+        if self.player_exe.is_dir():
+            for cand in (self.player_exe / "IndieRPGMMOAdventure.exe",
+                         self.player_exe / "StandaloneWindows64" / "IndieRPGMMOAdventure.exe"):
+                if cand.is_file():
+                    self.player_exe = cand
+                    break
 
     @property
     def deploy_dir(self) -> Path:

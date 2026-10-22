@@ -106,7 +106,9 @@ def cmd_sweep(args) -> int:
             first_fail = level
             if args.stop_on_fail:
                 break
-    out = cfg.runs_root / "sweeps" / f"{util.utc_stamp()}-{args.scenario}.json"
+    # The scenario id, not the argument: a scenario given as a file path would otherwise put
+    # path separators into the file name and write the sweep into a nested directory.
+    out = cfg.runs_root / "sweeps" / f"{util.utc_stamp()}-{base['id']}.json"
     util.write_json(out, {"scenario": args.scenario, "levels": rows, "first_failing_level": first_fail})
     print(f"sweep written: {out}; first failing level: {first_fail}")
     return _worst([r["outcome"] for r in rows])

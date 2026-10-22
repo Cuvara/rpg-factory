@@ -99,6 +99,18 @@ def _row(st, ents):
     return {"st": st, "tick": int(st * 60), "ents": ents}
 
 
+class ConfigTests(unittest.TestCase):
+    def test_a_build_directory_resolves_to_its_player_exe(self):
+        import tempfile
+        from lab import config
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "StandaloneWindows64" / "IndieRPGMMOAdventure.exe"
+            exe.parent.mkdir()
+            exe.write_bytes(b"")
+            self.assertEqual(config.LabConfig(workspace=Path(d), player_exe=Path(d)).player_exe, exe)
+            self.assertEqual(config.LabConfig(workspace=Path(d), player_exe=exe.parent).player_exe, exe)
+
+
 class AnalysisTests(unittest.TestCase):
     def test_missing_evidence_is_inconclusive_never_pass(self):
         ev = _ev()
