@@ -3531,7 +3531,11 @@
         "server"
       ],
       "summary": "C# game server + Shared.GameLogic: ECS systems, phases, replication, knobs, metrics, golden vectors, AOT.",
-      "order": 30
+      "order": 30,
+      "cite_roots": {
+        "": "server:backend/gameserver-dotnet",
+        "backend/": "server:backend"
+      }
     },
     "server-services": {
       "kind": "repo",
@@ -3573,6 +3577,10 @@
         "server"
       ],
       "order": 90,
+      "cite_roots": {
+        "": "server:backend/gameserver-dotnet",
+        "backend/": "server:backend"
+      },
       "used_by": [
         "server-realtime",
         "wire-contract",
@@ -3615,6 +3623,10 @@
         "client"
       ],
       "order": 93,
+      "cite_roots": {
+        "": "unitydots:",
+        "client:": "client:"
+      },
       "used_by": [
         "unity-package",
         "client-integration",
@@ -3630,6 +3642,11 @@
         "client"
       ],
       "order": 94,
+      "cite_roots": {
+        "": "netcode:",
+        "dots:": "unitydots:",
+        "client:": "client:Assets/Scripts"
+      },
       "used_by": [
         "unity-package",
         "wire-contract",

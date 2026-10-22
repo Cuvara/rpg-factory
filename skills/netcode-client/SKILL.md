@@ -32,17 +32,20 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 ## Architecture
 
 - **Two hops.** Gateway: `TcpTransport`, optional TLS with an exact-bytes certificate pin
-  (`Runtime/Transport/TcpTransport.cs:30-37,286,322-337`). Gameplay: **KCP/UDP only** since 0.47.0; a
-  join reply naming `tcp` or empty is refused (`CHANGELOG.md:7-10,28-30`). No WebGL gameplay
+  (`PinValidator`, `Runtime/Transport/TcpTransport.cs:30-37,286,322-349`). Gameplay: **KCP/UDP only** since
+  0.47.0; a join reply naming `tcp` or empty is refused (`TransportKinds.RequireGameplay`,
+  `CHANGELOG.md:7-10,28-30`). No WebGL gameplay: the constructor throws `NotSupportedException`
   (`Runtime/Transport/KcpTransport.cs:43-44`).
-- **Pump.** `KcpTransport` reads with `UniTask.Delay(1, Realtime, PlayerLoopTiming.Update)` (`:221`) and
-  runs the KCP update timer on the PlayerLoop too (`:313`): frame rate bounds receive latency and ARQ
-  timing. `KcpClientSession` is Unity-free and takes one lock per public member (`KcpClientSession.cs:15-27`);
-  its tuning must equal the server's (`:31-37`). `Kcp.cs` is a byte-compatible port of kcp-go (`:6-20`).
+- **Pump.** `KcpTransport` reads with `UniTask.Delay(1, Realtime, PlayerLoopTiming.Update)`
+  (`Runtime/Transport/KcpTransport.cs:221`) and runs the KCP update timer on the PlayerLoop too
+  (`KcpClientSession.TuningInterval`, `:313`): frame rate bounds receive latency and ARQ timing.
+  `KcpClientSession` is Unity-free and takes one lock per public member (`KcpClientSession.cs:16-32`);
+  its tuning must equal the server's `KcpTuning` (`:34-42`). `Kcp` is a byte-compatible port of kcp-go
+  (`Runtime/Transport/Kcp.cs:6-22`).
 - **Crypto.** `KcpCrypto` is kcp-go AES-CFB with a CRC32 - confidentiality, **no integrity**
   (`Runtime/Transport/KcpCrypto.cs:8-22`). Authenticated encryption is the sealed session
   (`Runtime/Crypto/`: X25519 + HKDF + ChaCha20-Poly1305, Ed25519 server identity; BouncyCastle because
-  IL2CPP lacks the primitives, `SealedCrypto.cs:15-28`).
+  IL2CPP lacks the primitives - no `ChaCha20Poly1305`, `SealedCrypto.cs:15-32`).
 - **Codec.** Protobuf default, JSON legacy; `EncodingSniffer` decides by the first byte (`{` JSON, `0x08`
   Protobuf, `Runtime/Codec/EncodingSniffer.cs:24-41`). Protocol range: `WireProtocolVersion.Current` and
   `MinimumServerVersion` (`Runtime/Protocol/WireProtocolVersion.cs:65,75`). `Generated/Wire.cs` is a byte
@@ -50,23 +53,26 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 - **Snapshots.** `SnapshotResolver` interns handles (`EntityHandleTable`) and aborts the whole snapshot on
   an unknown handle - the caller resyncs (`Runtime/Snapshot/SnapshotResolver.cs:13-29`). The field merge is
   `Shared.GameLogic`'s `SnapshotMerger`, behind `WorldState`, which is not thread-safe
-  (`Runtime/World/WorldState.cs:9-37`). Into ECS: `dots:Runtime.Netcode/DotsEntityView.cs` only enqueues
-  (`:20`; producer thread latched, `:59-68`); `NetworkViewCommandSystem` drains in `SnapshotApplyGroup` and
+  (`Runtime/World/WorldState.cs:9-37`). Into ECS: `dots:Runtime.Netcode/DotsEntityView.cs` only enqueues for
+  `NetworkViewCommandSystem` (`:20-21`); the first caller thread is latched as the producer and any
+  other thread gets `InvalidOperationException` (`:59-68`). `NetworkViewCommandSystem` drains in `SnapshotApplyGroup` and
   drops commands from an older session generation (`dots:Runtime.Netcode/NetworkViewCommandSystem.cs:100,151,182`).
 - **Interpolation.** One `InterpolationClock` per connection, in ticks, never snapped - only dilated
   within `MaxClockRateAdjust`, so `RenderTick` strictly increases (`Runtime/Interpolation/InterpolationClock.cs:26-33,164-182`).
   Defaults: `InterpolationConfig.Default` (`Runtime/Interpolation/InterpolationConfig.cs:142-157`). One
-  evaluator for GameObject and ECS paths (`Documentation~/INTERPOLATION.md:13-15`); the ECS job is
-  `dots:Runtime.Netcode/RemoteInterpolationJob.cs:49-66` (excludes the predicted entity).
+  evaluator, `SnapshotInterpolation.Evaluate`, for GameObject and ECS paths (`Documentation~/INTERPOLATION.md`
+  "How it works"); the ECS job excludes the predicted entity (`PredictedTransform`,
+  `dots:Runtime.Netcode/RemoteInterpolationJob.cs:49-66`).
 - **Prediction.** `LocalMovePredictor` replays inputs through the shared `MovementSystem.TryMove` - the
   server's exact entry point, never a re-implementation (`Runtime/Prediction/LocalMovePredictor.cs:36-40`,
-  `Documentation~/PREDICTION.md:48-49`). Movement only, on purpose (`PREDICTION.md:29-31`); projectiles via
-  `ProjectilePredictor` (hits never predicted, `Runtime/Prediction/ProjectilePredictor.cs:81-82`). In ECS,
-  `dots:Runtime.Netcode.Prediction/LocalPredictionSystem.cs` reconciles once per merged snapshot
+  `Documentation~/PREDICTION.md` "Replay through Shared.GameLogic"). Movement only, on purpose
+  (`PREDICTION.md` "LocalMovePredictor"); projectiles via `ProjectilePredictor` (hits never predicted, they
+  arrive as `GAME_EVENT_TYPE_PROJECTILE_HIT`, `Runtime/Prediction/ProjectilePredictor.cs:81-82`). In ECS,
+  `dots:Runtime.Netcode.Prediction/LocalPredictionSystem.cs` reconciles once per new `WorldState.Tick`
   (`:183-239`): `SetServerSpeed`, then `PredictionClockSteering.SampleTickRate`/`OnSnapshot` (`:201-214`),
   then `Reconcile` (3D or 2D motor), then `Advance` every frame (`:262`).
 - **Input.** One component owns input per scene: it samples, sends, and records the same tick on the
-  predictor (`client:DI/Dots/DotsWorldBridge.cs:63-67,233-260`).
+  predictor (`RecordInput`, `client:DI/Dots/DotsWorldBridge.cs:63-67,233-260`).
 - **Reconnect.** `ReconnectPolicy` decides Never / Reconnect / ReconnectAfterDelay from the close reason
   (`Runtime/Client/ReconnectPolicy.cs:9-60`); a reconnect is a new session generation everywhere downstream.
 
@@ -74,30 +80,36 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 
 - Anything order-dependent on the predictor (`RecordInput`, `Reconcile`, `Advance`) runs on the main
   thread, one predicted entity (`dots:Runtime.Netcode.Prediction/LocalPredictionSystem.cs:60-66`).
-- Model selection is by protocol, not configuration (`PREDICTION.md:83`); a missing optional field means the
-  old behaviour, not zero (`PREDICTION.md:181`).
-- Interpolate by server tick, never by arrival time; out-of-order and duplicate ticks are rejected
-  (`INTERPOLATION.md:19,39-40`).
-- Unity-free code (`KcpClientSession`, `Kcp`, codecs, predictor) stays Unity-free so the headless suite
-  can compile it (`KcpClientSession.cs:15-19`).
+- Model selection is by protocol, not configuration (`UseServerProtocol`, `PREDICTION.md` "3D movement:
+  the character motor"); a missing optional field means the old behaviour, not zero (`PREDICTION.md`
+  "Which history entry a snapshot describes: `ack_applied_tick`", "No field, no change").
+- Interpolate by server tick, never by arrival time; out-of-order and duplicate ticks are rejected by
+  `InterpolationRing.Accepts` (`INTERPOLATION.md` "Tick-based bracketing", "Buffer").
+- Unity-free code (`KcpClientSession`, `Kcp`, codecs, predictor) stays Unity-free - no `UnityEngine` - so
+  the headless suite can compile it (`KcpClientSession.cs:16-20`).
 
 ## Pitfalls
 
 - **Per-packet allocations, no pooling anywhere** (no `ArrayPool` in `Runtime/`):
   `KcpCrypto.Seal` creates an RNG and a nonce array per datagram (`KcpCrypto.cs:84-85`);
-  `KcpClientSession.cs:301,344,370`; `Kcp.cs:248-249,405-407,482,488,639`; `FrameBuffer.cs:107`;
-  `SnapshotResolver.cs:85,240,250,267-269`; `client:DI/Dots/DotsWorldBridge.cs:241` (`new InputMessage` per send).
+  fresh arrays filled by `Buffer.BlockCopy` (`KcpClientSession.cs:301,344,370`); `Segment` data and
+  datagrams (`Kcp.cs:248-249,405-407,482,488,639`); frame bodies (`Buffer.BlockCopy`, `FrameBuffer.cs:107`);
+  lists, stat arrays and `ToArray` (`SnapshotResolver.cs:85,240,250,267-269`); a new `InputMessage` per
+  send (`client:DI/Dots/DotsWorldBridge.cs:241`).
   Fixing them is a package change measured before and after (`measure`, GC alloc per frame).
-- **Frame-rate-bound receive** (`KcpTransport.cs:221,313`): a client at 20 fps adds up to 50 ms before a
+- **Frame-rate-bound receive** (`UniTask.Delay`, `KcpTransport.cs:221,313`): a client at 20 fps adds up to 50 ms before a
   snapshot is even read. Do not "fix" lag in interpolation/prediction tuning before ruling this out.
 - **Hidden hard dependency:** the Runtime asmdef references `Shared.GameLogic` unconditionally
   (`Runtime/Cuvara.Netcode.Runtime.asmdef:6`) while `package.json` lists it only under
-  `x-manualDependencies` (`package.json:29-30`). The consumer must install the SGL pin.
+  `x-manualDependencies` (`Shared.GameLogic`, `package.json:29-30`). The consumer must install the SGL pin.
 - **Dev auth fallback:** `NetworkBootstrap` mints an HS256 dev JWT when no `IAuthProvider` is registered and
   defaults to the JSON codec (`Runtime/Bootstrap/NetworkBootstrap.cs:125,136-162`). Never ship a scene relying on it.
-- **Doc drift:** `PREDICTION.md:37-43` names `PredictAndSend`/`RenderPosition` (not in code);
-  `INTERPOLATION.md:50-51,67` show old config names and an old `Advance` signature; `JsonWireCodec.cs:15`
-  says JSON is the only encoding. Trust the code.
+- **Doc drift:** `PREDICTION.md` "Key methods" names `PredictAndSend` and a predictor `RenderPosition`
+  (neither exists on `LocalMovePredictor`); `INTERPOLATION.md` "InterpolationConfig" lists `MaxSamples` /
+  `ExtrapolationLimit` 0.0 (code: `RingCapacity`, `MaxExtrapolation` 0.050) and "InterpolationClock"
+  shows an old `Advance(deltaTime, newestReceivedTick, secondsPerTick)` (code:
+  `Advance(deltaSeconds, config)`); the `JsonWireCodec` remarks say JSON is the only encoding (`JsonWireCodec.cs:13-25`), but
+  `ProtobufWireCodec` exists. Trust the code.
 
 ## Testing
 
@@ -108,7 +120,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 - **EditMode in Unity:** `Tests/Editor` (prediction: `LocalMovePredictorTests`, `PredictionHarness`,
   `Reconcile*Tests`; transport: `KcpCoreTests`, `KcpCryptoTests`, `SealedTransportTests`; `GoldenVectors.cs`
   compares SGL vectors bit for bit). Runs only inside the client project (gate `client-package-toggle`) or CI.
-- **PlayMode** `Tests/Runtime` needs a live backend (`LiveBackend.cs:17-31`, `CUVARA_*` env) - external.
+- **PlayMode** `Tests/Runtime` needs a live backend (`CUVARA_*` env, `LiveBackendConfig`, `LiveBackend.cs:17-31`) - external.
   `PredictionLatencyMeasurement.cs` is a `measure` harness.
 
 ## Tools

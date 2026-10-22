@@ -13,6 +13,18 @@ structure_only=false
 [ "${1:-}" = "--structure-only" ] && structure_only=true
 
 if ! jq empty "$REGISTRY" 2>/dev/null; then echo "FAIL: $REGISTRY is not valid JSON"; exit 1; fi
+# a duplicate key is valid JSON, and jq and Python both keep the last one silently
+dups=$(python3 -B -c '
+import json, sys
+def hook(pairs):
+    seen = set()
+    for k, _ in pairs:
+        if k in seen:
+            print(k)
+        seen.add(k)
+    return dict(pairs)
+json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=hook)' "$REGISTRY" 2>&1)
+if [ -n "$dups" ]; then echo "FAIL: $REGISTRY has duplicate keys (the last one wins silently): $(sort -u <<<"$dups" | tr '\n' ' ')"; exit 1; fi
 
 # ---- structure (jq emits one line per problem)
 problems=$(jq -r '
@@ -45,6 +57,9 @@ problems=$(jq -r '
           (select(($c.driver // null) != null and ($r.skills[$c.driver] // null) == null) | "contract \($c.id): unknown driver skill \($c.driver)")),
       (($r.contracts // []) | map(.id) | group_by(.) | map(select(length > 1))[] | "duplicate contract id: \(.[0])"),
       (($r.skills // {}) | to_entries[] | select((.value.kind // "") | IN("repo","cross-repo","core","tech") | not) | "skill \(.key): kind must be repo|cross-repo|core|tech"),
+      (($r.skills // {}) | to_entries[] | .key as $s | (.value.cite_roots // {}) | to_entries[]
+        | select((.value | split(":")[0]) as $k | ($r.repos[$k] // null) == null)
+        | "skill \($s): cite_roots \(.key | tojson) -> unknown repo in \(.value)"),
       (($r.skills // {}) | to_entries[] | select(.value.kind == "tech") as $t
         | (select(($t.value.used_by // []) | length == 0) | "tech skill \($t.key): used_by (repo/cross-repo skills) missing"),
           (($t.value.used_by // [])[] | select((($r.skills[.].kind) // "") | IN("repo","cross-repo") | not)

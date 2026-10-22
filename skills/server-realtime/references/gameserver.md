@@ -1,6 +1,6 @@
 # Game server architecture map and wiring recipes
 
-Verified 2026-09-30 against rpg-mmo-server `develop` @ 5023a3d. Every path is relative to
+Verified 2026-10-21 against rpg-mmo-server `origin/develop` @ e982a6d. Every path is relative to
 `backend/gameserver-dotnet/` unless it says otherwise. Re-check a line number before you cite it.
 
 ## Map
@@ -38,9 +38,9 @@ ADR-19 d4), `GoldenVectors/` (aoi, combat, movement, snapshot_merger, validation
 - `ISimulationPhase` (`Server/ISimulationPhase.cs:27`) has one member, `Tick(ulong)`. It runs after
   input and before snapshots, and takes its own write scope through `EcsWorld.UpdateComponents` or
   `ReadAll`.
-- `ServerOptions.SimulationPhaseFactory` (`Server/GameServer.cs:388`) is invoked in the host
-  constructor (`:883`) with `(world, loggerFactory, onGroupRan)`.
-- `Program.cs:983` picks the factory. `LoadTestSpawner` is used when `loadTestEntities > 0` (it never
+- `ServerOptions.SimulationPhaseFactory` (`Server/GameServer.cs:417`) is invoked in the host
+  constructor (`Invoke`, `:953`) with `(world, loggerFactory, onGroupRan)`.
+- `Program.cs` picks the factory (`SimulationPhaseFactory` `Program.cs:1066`). `LoadTestSpawner` is used when `loadTestEntities > 0` (it never
   composes: its entities are tagged `EnemyAi`). Otherwise `EnemySpawner` and/or `BotPlayerSpawner`
   are used, with enemies first and the two wrapped in `CompositeSimulationPhase` when both are on.
   Otherwise the factory is `null`.

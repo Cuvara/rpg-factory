@@ -35,28 +35,32 @@ knobs, metrics, golden vectors and the AOT warning baseline:
 
 - **Tick thread.** `TickLoop.RunAsync` (`GameServer/Server/TickLoop.cs:357`) runs a dedicated
   `AboveNormal` thread, not an async loop on the ThreadPool (#248), paced in `Stopwatch` ticks with
-  sleep-then-spin (`RunOnDedicatedThread` `:384`, loop `:426-442`). Overruns are metrics; a backlog past `MaxLagTicks` is dropped, not chased.
-- **One base tick** (`TickOnce`, `:494`), in order:
+  sleep-then-spin (`RunOnDedicatedThread` `:384`, `SpinWait` loop `:423-445`). Overruns are metrics; a backlog past `MaxLagTicks` is dropped, not chased.
+- **One base tick** (`TickOnce`, `TickLoop.cs:510`), in order:
   1. `ApplyStructuralChanges` - deferred spawns/despawns (ADR-11: no Arch `CommandBuffer` under AOT).
   2. Critical work **inline in the loop body**, not `IEcsSystem` classes: drain inputs, rebind
      stale handles, coalesce to the newest input per entity, then one `UpdateComponents` scope for
-     `InputHandler.ProcessInput` (movement and attack) and held movement (`:517-579`).
-  3. `_simulationPhase?.Tick` - the declared systems of the groups due this tick (`:584`).
-  4. Only on World-rate ticks (`:610`): reset counters, then gather under **one** read lock
+     `InputHandler.ProcessInput` (movement and attack) or, with no input, held movement
+     (`DrainInputs` to `RunCriticalWithoutInput`, `TickLoop.cs:529-587`).
+  3. `_simulationPhase?.Tick` - the declared systems of the groups due this tick
+     (`_simulationPhase`, `TickLoop.cs:600`).
+  4. Only on World-rate ticks (`_rates.RunsOn`, `TickLoop.cs:626`): reset counters, then gather under **one** read lock
      (`ReadAll`, or `ReadAllParallel` at >= `GatherParallelMinViewers` viewers, `:136`, and only
      with `GAMESERVER_GATHER_WORKERS` > 1). Each connection stages its view and signals its write task.
   5. Encode and send happen **off the tick**, on each connection's write task
-     (`GameServer/Net/Connection.cs:314` `GatherSnapshotView`, `:841` `WriteLoopAsync`, bounded
-     `DropOldest` channel). Tick events are cleared only after the gather (`TickLoop.cs:747`).
+     (`GatherSnapshotView` `GameServer/Net/Connection.cs:371`, `WriteLoopAsync` `:1019`, bounded
+     `DropOldest` channel `:885`). Tick events are cleared only after the gather
+     (`_tickEvents` `TickLoop.cs:763`).
 - **Rates** (ADR-13). Three groups, `Critical`/`World`/`Background`, defaults in
-  `GameServer/Server/SimulationRates.cs:59-65`. Base rate = critical rate; the others must divide it
-  or `TryCreate` rejects the config at startup (`:256`, `:266`). Snapshots ship at the World rate,
+  `DefaultCriticalHz`..`DefaultBackgroundHz` in `GameServer/Server/SimulationRates.cs:59-65`. Base rate =
+  critical rate; the others must divide it or `TryCreate` (`:208`) rejects the config at startup
+  (`SIM_WORLD_HZ` `:256`, `SIM_BACKGROUND_HZ` `:266`). Snapshots ship at the World rate,
   because the base rate would break the ADR-7 mobile bandwidth budget. `MovementHz` is the value the
   join reply advertises as `tick_rate` - moving movement to another group is a wire change.
-- **ECS world** (`GameServer/World/EcsWorld.cs`). Arch behind one `ReaderWriterLockSlim` (`:178`),
+- **ECS world** (`GameServer/World/EcsWorld.cs`). Arch behind one `ReaderWriterLockSlim` (`:202`),
   because network threads spawn/despawn and enqueue input while the tick runs. API: `ReadAll`
-  (`:943`), `ReadAllParallel` (`:1100`), `UpdateComponents<TState>` (`:1177`),
-  `UpdateComponentsParallel` (`:1239`, not used by the tick; proves the ADR-12 preconditions).
+  (`:1011`), `ReadAllParallel` (`:1158`), `UpdateComponents<TState>` (`:1235`),
+  `UpdateComponentsParallel` (`:1297`, not used by the tick; proves the ADR-12 preconditions).
   Every write scope applies deferred structural changes on exit. No Arch type reaches SGL.
 - **Shared.GameLogic.** `Shared.GameLogic/Shared.GameLogic.csproj` targets registry fact `sgl-target-frameworks`,
   pins `LangVersion` (fact `sgl-langversion`, Unity 6's C#), disables implicit usings and unsafe code to match the asmdef.
@@ -72,7 +76,7 @@ knobs, metrics, golden vectors and the AOT warning baseline:
 
 - **Static lambda + state overload** for every world scope on a hot path:
   `_world.UpdateComponents(this, static (self, writer) => self.ProcessInputBatch(writer));`
-  (`TickLoop.cs:560`). The capturing form measured ~104 B/tick (comment above it).
+  (`TickLoop.cs:575`). The capturing form measured ~104 B/tick (comment above it).
 - Reused scratch, never per-tick `new`: `_inputs`, `_newestInputIndex`, `_viewers` grow once and are
   cleared (`TickLoop.cs`). In systems, mutable fields only as `[SimulationScratch]`
   (`GameServer/Server/SimulationScratchAttribute.cs`).
@@ -86,14 +90,14 @@ knobs, metrics, golden vectors and the AOT warning baseline:
 ## Pitfalls
 
 - **Arch's read path writes** (#176). Iterate only queries from `_readQueries`
-  (`EcsWorld.cs:383`); a raw Arch query under the read lock corrupted the enumerator and the heap.
+  (`EcsWorld.cs:407`); a raw Arch query under the read lock corrupted the enumerator and the heap.
 - **Allocations that look harmless:** a capturing lambda, an interpolated rejection string, an
   unguarded debug log on the combat branch (#249, `GameServer.Tests/Bench/TickAllocationBench.cs`).
   The always-on guard covers the snapshot path only, so input/combat changes need the opt-in bench.
 - **Counter and event lifetimes span two rates.** Input runs every base tick, broadcast every
   World tick: clearing tick events at the top of the base tick lost 3 of 4 damage events
-  (`TickLoop.cs:731-747`, `Server/TickEventBroadcastTests.cs`); resetting counters inside the
-  viewer guard replayed stale values forever (#401, `TickLoop.cs:628-670`).
+  (`_tickEvents` `TickLoop.cs:747-763`, `Server/TickEventBroadcastTests.cs`); resetting counters inside the
+  viewer guard replayed stale values forever (#401, `_snapshotAnchorMissingDelta` `TickLoop.cs:658-686`).
 - **A clean AOT publish proves nothing.** Arch allocates chunk arrays with
   `Array.CreateInstance`; a component without an `ArchAotHints` line publishes with no warning and
   throws on the first spawn (ADR-11 d4). Reflection JSON, `MakeGenericType`, `Activator`, dynamic

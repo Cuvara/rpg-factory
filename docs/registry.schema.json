@@ -330,6 +330,14 @@
               "type": "string"
             },
             "description": "tech skills only: the repo/cross-repo skills whose work needs this technology."
+          },
+          "cite_roots": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[a-z]+:"
+            },
+            "description": "Where this skill's `path:line` citations resolve (scripts/checks/skill-citations.py): citation prefix (\"\" = default, \"dots:\", \"backend/\", ...) -> \"<repo key>:<subpath>\". Default \"\" -> the first repo's root; every repo directory name is a prefix already."
           }
         }
       }

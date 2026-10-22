@@ -4,6 +4,31 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- **Citation drift guard (`scripts/checks/skill-citations.py`).** Skills cite product code by
+  `path:line`; nothing checked those lines, and a smoke test after 1.0.0 found 9 of 12 sampled server
+  citations pointing at the wrong code (e.g. `WriteLoopAsync` cited at `Connection.cs:841`, now 1019). The
+  checker reads every line citation in `SKILL.md` and `references/*.md` (full paths, ranges, lists, bare
+  `:N` continuations, bare basenames, `dots:`/`client:` and repo-name prefixes) and resolves it at each
+  repo's integration branch (`origin/<default_branch>`, `--ref repo=REF` to override) - never the working
+  tree. Each line citation needs an **anchor**, the symbol it shows written in backticks before it; the
+  anchor must occur within the cited lines +/- 3, else `drift` (with `--suggest`, the corrected line).
+  Lines past the end, missing or ambiguous files and line citations outside backticks fail too; a missing
+  repo is SKIP. New registry field `skills.<s>.cite_roots` (schema + `check-registry.sh`) says where a
+  skill's paths resolve. `skills-lint.sh` runs the repo-free part (`--offline`: backticked and anchored),
+  `run-all.sh` the fixture suite `tests/skill-citations.test.sh` and the live check against the workspace.
+  The rule is in `skill-contract.md` ("Line citations are checked against the code").
+
+- `check-registry.sh` rejects duplicate keys in `registry.json`: they are valid JSON and jq and Python
+  silently keep the last one (a duplicated `cite_roots` hid that another skill had none).
+
+### Changed
+- `skill-contract.md` "New skill" names every required registry field (`order`, `used_by`, `cite_roots`).
+
+### Fixed
+- The skills' line citations, refreshed against the integration branches: drifted lines moved, every
+  citation anchored, claims that no longer hold corrected.
+
 ## [1.0.2] - 2026-10-21
 
 Fix: read-only inspection of a gated script (`sed -n`, `cat`, `grep`, `head`) no longer asks for a human

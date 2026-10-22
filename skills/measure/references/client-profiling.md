@@ -1,10 +1,11 @@
 # Client profiling (frame time, GC, ECS)
 
-Verified 2026-10-14 against IndieRPGMMOAdventure and the com.cuvara.* repos. Client measurement has
+Verified 2026-10-21 against IndieRPGMMOAdventure `origin/develop` @ `c2cf32c` and the com.cuvara.* repos
+(UnityDots `origin/main` @ `c3be200`). Client measurement has
 almost no instrumentation yet: one `ProfilerMarker` in all repos
 (`UnityDots/Runtime.Netcode/NetworkViewCommandSystem.cs:115`), no `Unity.PerformanceTesting` use, and the
 package's own rule is "profiler markers, allocation and queue metrics, then targeted optimisation against
-a recorded baseline. No capacity claim before this" (`UnityDots/ROADMAP.md:88-89`). So most client
+a recorded baseline. No capacity claim before this" (`UnityDots/ROADMAP.md`, "Planned, in order" item 3, D11). So most client
 claims start with *adding the instrument*, then a record, then the run.
 
 ## What to measure
@@ -37,7 +38,7 @@ tolerance", with the tolerance taken from repeat variance.
 2. **Device benchmark (the client's recorded number).** `BenchmarkRecorder` in
    `Assets/Scenes/DeviceBenchmark.unity` - see `legs.md` "Client: device benchmark" for phases, overrides
    and validity rules. Stress population: `Assets/Scripts/Benchmark/Dots/DotsStressBenchmark.cs` (uses a
-   prebuilt `EntityArchetype`, `:175`).
+   prebuilt `EntityArchetype` from `CreateArchetype`, `:175`).
 3. **Performance test (repeatable in CI later).** `com.unity.test-framework.performance` is resolved
    transitively (registry fact `perf-testing-version`); a test asmdef referencing `Unity.PerformanceTesting`
    can use `[Test, Performance]` + `Measure.Method(...).WarmupCount().MeasurementCount().Run()` or
