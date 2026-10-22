@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S07P",
-  "version": 2,
+  "version": 3,
   "title": "Sustained load, players only (enemy AI off): network and replication capacity",
   "description": "As S07 with GAMESERVER_ENEMIES=false, so the population is exactly the bots plus three rendered players. Separates player capacity from the enemy population, which scales 45 per player when enemies are on. Same ADR-7 caveat. GAMESERVER_CAPACITY is raised to 1000 so levels above 100 measure the server, not the default 100-player cap.",
   "clients": 3,
@@ -88,6 +88,11 @@
       "check": "memory_growth",
       "max_server_mib_per_min": 20,
       "informational": true
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
     }
   ],
   "server_env": {

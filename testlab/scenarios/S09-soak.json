@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S09",
-  "version": 1,
+  "version": 2,
   "title": "Soak: repeated movement and combat cycles, leak and drift checks",
   "description": "Default 300 s; pass --duration for a longer soak. Memory slope of the server container, entity-count drift, accumulated errors and render jumps over the whole run.",
   "clients": 3,
@@ -29,6 +29,9 @@
     { "id": "tick", "check": "server_tick" },
     { "id": "kcp", "check": "kcp_health" },
     { "id": "render_jumps", "check": "render_jumps", "max_local": 0, "max_remote_per_client_min": 2.0 },
-    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 }
+    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" },
+    { "id": "prediction_snaps", "check": "prediction_bound", "title": "local prediction hard snaps per client-minute" },
+    { "id": "enemy_budget", "check": "enemy_budget", "title": "live enemies never exceed the server's hard budget" }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S05",
-  "version": 1,
+  "version": 2,
   "title": "Enemy targeting and crowding: together, spread, retreat, approach, target switch",
   "description": "Enemies pick the nearest live player every world tick (EnemyMoveSystem). With players together, one pile is expected; once they spread, the crowd must split by geometry. Overlap is reported against the absence of separation in the AI (design gap, INFO).",
   "clients": 3,
@@ -137,6 +137,21 @@
     {
       "id": "tick",
       "check": "server_tick"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "title": "local prediction hard snaps per client-minute"
+    },
+    {
+      "id": "enemy_budget",
+      "check": "enemy_budget",
+      "title": "live enemies never exceed the server's hard budget"
     }
   ]
 }

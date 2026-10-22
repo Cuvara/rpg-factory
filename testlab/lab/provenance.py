@@ -77,13 +77,19 @@ def read_verify_provenance(build_root: Path) -> dict | None:
 
 
 def netcode_record(build: dict | None, verify: dict | None) -> dict:
-    """Which Netcode the player embedded. A build that embeds com.cuvara.netcode under Packages/ (an
-    unreleased commit) must name that commit; a build without an embedded copy used the manifest pin."""
+    """Which Netcode the player compiled. A build that embeds com.cuvara.netcode under Packages/ (an
+    unreleased commit) must name that commit; a build without an embedded copy used the manifest
+    pin. The commit comes from VERIFY-PROVENANCE.txt (verification builds) or from the `netcode`
+    block build-client writes into testlab-build.json (embedded git HEAD or packages-lock hash)."""
     embedded = [p for p in ((build or {}).get("embedded_packages") or []) if p.get("name") == "com.cuvara.netcode"]
-    rec = {"embedded": bool(embedded), "sha": (verify or {}).get("netcode"),
-           "version": embedded[0].get("version") if embedded else None,
+    written = (build or {}).get("netcode") or {}
+    sha, source = (verify or {}).get("netcode"), (verify or {}).get("path") if (verify or {}).get("netcode") else None
+    if not sha and written.get("sha"):
+        sha, source = written["sha"], f"testlab-build.json netcode ({written.get('source')})"
+    rec = {"embedded": bool(embedded), "sha": sha,
+           "version": embedded[0].get("version") if embedded else written.get("version"),
            "cs_sha256": embedded[0].get("cs_sha256") if embedded else None,
-           "source": (verify or {}).get("path") if (verify or {}).get("netcode") else None}
+           "dirty": written.get("dirty"), "source": source}
     if build is None:
         rec["embedded"] = None  # unknown: no testlab-build.json
     return rec

@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S06",
-  "version": 1,
+  "version": 2,
   "title": "Replication and interpolation: known movement schedules, divergence and jitter",
   "description": "One client circles continuously, one shuttles back and forth across the origin (both signs of x and y), one observes. Every client compares what it renders for the others (and itself) with the server's authoritative path, with enemies chasing all three.",
   "clients": 3,
@@ -34,6 +34,8 @@
     { "id": "enemy_render_speed", "check": "enemy_render_speed", "speed": 2.5 },
     { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 },
     { "id": "replication_gap", "check": "snapshot_update_gap", "max_gap_ms": 200 },
-    { "id": "kcp", "check": "kcp_health" }
+    { "id": "kcp", "check": "kcp_health" },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" },
+    { "id": "prediction_snaps", "check": "prediction_bound", "title": "local prediction hard snaps per client-minute" }
   ]
 }

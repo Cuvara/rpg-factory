@@ -74,7 +74,7 @@ python3 testlab/testlab.py run S01
 2. `TestLabSceneBuilder.Validate` fails on missing scripts, a missing `MainSceneScope` or `DotsWorldBridge`, or a missing arena.
 3. `PlayerBuilder.Build` builds the player with `-bootScene Assets/Scenes/Tests/MultiplayerCombatTest.unity -extraDefines CUVARA_TESTLAB`.
 
-It writes `testlab-build.json` next to the player: the client commit, uncommitted changes, defines, and every package embedded under `Packages/`. A build that embeds an unreleased Netcode commit must also carry `VERIFY-PROVENANCE.txt` (`netcode <sha> client <sha>`) in the same folder; the run's provenance record reads both.
+It writes `testlab-build.json` next to the player: the client commit, uncommitted changes, defines, and every package embedded under `Packages/`. Its `netcode` block names the Netcode commit the build compiled: the HEAD of an embedded git clone, or the `packages-lock.json` hash of the manifest pin. An embedded copy without `.git` has no commit to name; such a build must carry `VERIFY-PROVENANCE.txt` (`netcode <sha> client <sha>`, written by the verification build script) or its runs grade provenance INCONCLUSIVE. The run's provenance record reads both files.
 
 ## Test code in production builds (`leak-check`)
 
@@ -130,6 +130,18 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 | S08 | Reconnect: a client process is killed and relaunched on the same device |
 | S09 | Soak: memory slope, entity drift, accumulated errors (default 300 s) |
 | S10 | Regression replay of the 2026-10-21 report, with before/after reference numbers |
+| S11 | Resync after a game-server restart (`restart_gameserver` at 20 s, grace window 20-40 s): clients back InWorld, ticks restart only in a new session, cadence and rendering judged outside the grace window |
+| S12 | S03's movement with the server at 30 Hz critical / 15 Hz world (`SIM_CRITICAL_HZ`, `SIM_WORLD_HZ`): the client must adopt the advertised tick rate; `server_config` proves the rates were in force |
+
+## Readiness checks with derived bounds
+
+- `snapshot_order`: per client, received world ticks never go backwards and never repeat inside one session. A session starts at each `net_state` InWorld event, so a reconnect to a restarted server may restart the ticks. It reads `snapshots.ndjson` and, when present, C2 `delivery.csv`.
+- `enemy_bounds`: every live enemy in `/debug/entities` stays inside `bounds` of `backend/content/maps/<map>.json`, read at the server commit of the run (`git show`). The map id comes from the stack's `GAMESERVER_MAP_ID`, checked against the scenario and the server's redis registration (`/status` has no map id). A map without a file is INCONCLUSIVE: the server's flat fallback bounds are not reported. Enemies inside a blocking box (top more than 0.4 above the ground, `content/README.md`) are INFO unless `obstacles_are_failure`.
+- `enemy_budget`: live enemies (`/status enemies_alive`, `/debug/entities`) never exceed the hard budget the server reports in force (`/status enemy_ai` `budget=N`, `GAMESERVER_ENEMY_BUDGET`). The lab sets no budget. `budget_reached` says whether the run pushed the population that far.
+- `render_freshness` (C2 `render.csv` `snapshot_age_ms`, the age of the newest received snapshot at each frame on the player's own clock): **p99 <= TargetDelay + MaxExtrapolation = 100 + 50 = 150 ms**, from Netcode `InterpolationConfig.Default`, which the client's `DotsWorldBridge` uses. Older than that, the render clock has passed every sample and the extrapolation allowance, so remote entities are drawn frozen. The age is measured on one clock, so RTT and clock offset do not enter the bound. Frames inside host-wide stalls are set aside (INCONCLUSIVE when only they would fail it). Without C2 it is INCONCLUSIVE.
+- `prediction_bound`: **at most 6 hard prediction snaps per client-minute** (`summary.json` `prediction.snaps`). The fixed builds snapped at most 3.05 per client-minute in every run on 2026-10-22 (S09 `20261022T112220Z-S09-eeoa`: 177-183 in 3600 s; S02/S04/S05/S08/S10: 1-3 in 40-70 s). The pre-fix build snapped 12-67 (S10 `20261022T054359Z-S10-g0tz`: 4-8 in 40 s; S09 `20261022T054502Z-S09-q61b`: 209-335 in 300 s). 6 is twice the worst fixed rate and half the best broken one. `max_correction` is reported, not judged: respawns move the local player 14-40 units and count in it. Windows shorter than 20 s are INCONCLUSIVE.
+- `server_config`: the `SIM_*` rates a scenario sets (or an `expect` map of `/status` fields) are what `/status` reports in every sample. Otherwise INCONCLUSIVE: the run did not test the configuration it names.
+- `snapshot_cadence` and `render_freshness` accept `exclude_s: [[t0, t1], ...]` (scenario seconds) for an interruption a scenario causes on purpose. `clients_in_world` accepts `reentered_after_s`.
 
 What each readiness area is covered by, and the gaps (with the client and server hooks they need): [`docs/COVERAGE.md`](docs/COVERAGE.md).
 
@@ -203,6 +215,7 @@ The analysis (`lab/delivery.py`) joins the server trace (contract C1) and the cl
 
 ## Limits (stated, not hidden)
 
+- **No network impairment.** Every run uses the host's loopback path. Latency, loss and reordering (`tc netem` on the scratch UDP port, COVERAGE F7) would change shared WSL networking and need the user's approval, so reconciliation and delivery are not tested under them.
 - **Capacity numbers are host-bound.** Players, bots and the server share one machine (ADR-7). S07 reports the first failing level on this host, not a server ceiling.
 - **Frame times** come from three rendered players on one GPU. Use them for regressions, not as a device budget.
 - **GC allocation per frame** needs a development build. Release testlab players report `gc.valid: false`.

@@ -42,6 +42,9 @@ def load_evidence(run_dir: Path) -> dict:
             "plan": util.read_json(d / "plan.json", default={}) or {},
             "logs": {p.name: p.read_text(encoding="utf-8", errors="replace") for p in logs},
             "frames": _read_frames(d / "frames.csv"),
+            # C2 files are read by the checks that need them (render.csv has a row per frame).
+            "delivery_csv": d / "delivery.csv",
+            "render_csv": d / "render.csv",
             "history": (meta.get("clients") or {}).get(str(i), {}),
         })
     server_dir = run_dir / "server"
@@ -243,10 +246,22 @@ def check_clients_in_world(ev, a):
     missing = [c["index"] for c in ev["clients"]
                if not any(e.get("event") == "in_world" for e in c["events"])]
     n = len(ev["clients"])
+    detail = {"missing": missing}
+    after = a.get("reentered_after_s")
+    if after is not None:
+        # After a disruption (S11 server restart): each client must be back in the world, i.e. a
+        # net_state InWorld event at or after scenario time `after`.
+        not_back = [c["index"] for c in ev["clients"]
+                    if not any(e.get("event") == "net_state" and e.get("state") == "InWorld"
+                               and (e.get("st") if e.get("st") is not None else -1) >= float(after) for e in c["events"])]
+        detail["not_back_in_world_after_s"] = {"after_s": float(after), "clients": not_back}
+        missing = sorted(set(missing) | set(not_back))
     return _result(PASS if not missing and n else FAIL, n - len(missing), n,
-                   source="client events.ndjson 'in_world' (NetworkClientState.InWorld)", sampling="per client",
-                   rationale="every launched client must complete auth, gateway redirect and KCP join",
-                   detail={"missing": missing}, artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]])
+                   source="client events.ndjson 'in_world' / net_state InWorld (NetworkClientState.InWorld)",
+                   sampling="per client",
+                   rationale="every launched client must complete auth, gateway redirect and KCP join"
+                             + (" and re-join after the disruption" if after is not None else ""),
+                   detail=detail, artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]])
 
 
 def check_distinct_user_ids(ev, a):
@@ -675,9 +690,14 @@ def check_snapshot_cadence(ev, a):
             per[c["index"]] = "no data"
             bad += 1
             continue
+        # Windows a scenario expects an interruption in (e.g. a server restart and its grace
+        # period, S11) are left out: gaps touching them are not judged, nor counted in the rate.
+        excl = [(start + float(w[0]), start + float(w[1])) for w in a.get("exclude_s", [])]
         inside = [x["t"] for x in snaps if start <= x["t"] <= start + dur]
-        gaps = [b - a2 for a2, b in zip(inside, inside[1:])]
-        rate = len(inside) / dur if dur else 0
+        gaps = [b - a2 for a2, b in zip(inside, inside[1:]) if not any(e0 <= b and a2 <= e1 for e0, e1 in excl)]
+        kept = [t for t in inside if not any(e0 <= t <= e1 for e0, e1 in excl)]
+        judged_s = dur - sum(min(e1, start + dur) - max(e0, start) for e0, e1 in excl if e1 > start and e0 < start + dur)
+        rate = len(kept) / judged_s if judged_s > 0 else 0
         max_gap = max(gaps) * 1000 if gaps else None
         p99_gap = util.percentile([g * 1000 for g in gaps], 99) if gaps else None
         ok = (abs(rate - hz) <= hz * float(a.get("rate_tolerance", 0.2)) and max_gap is not None and
@@ -686,7 +706,8 @@ def check_snapshot_cadence(ev, a):
             # Every over-limit gap overlaps a host-wide stall: the evidence cannot say anything
             # about the netcode, so this client's row is inconclusive rather than failed.
             limit = float(a.get("max_gap_ms", 250)) / 1000.0
-            over = [(a2 - start, b - start) for a2, b in zip(inside, inside[1:]) if b - a2 > limit]
+            over = [(a2 - start, b - start) for a2, b in zip(inside, inside[1:]) if b - a2 > limit
+                    and not any(e0 <= b and a2 <= e1 for e0, e1 in excl)]
             if over and all(_in_stall(stalls, g0, g1) for g0, g1 in over) and \
                     abs(rate - hz) <= hz * float(a.get("rate_tolerance", 0.2)):
                 host_explained += 1
@@ -1397,3 +1418,381 @@ def overall(results: list[dict], harness_error: str | None = None) -> str:
     if INCONCLUSIVE in statuses or not statuses:
         return INCONCLUSIVE
     return PASS
+
+
+# --------------------------------------------------------------------------- readiness checks (COVERAGE.md F2-F6)
+
+def _csv_dicts(path):
+    """Rows of a CSV file as dicts; [] when it does not exist."""
+    import csv
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return list(csv.DictReader(fh))
+    except (OSError, TypeError):
+        return []
+
+
+def _num_or_none(v):
+    try:
+        return None if v in (None, "") else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _session_starts(c) -> list:
+    """Player-clock seconds at which each session reached InWorld (net_state events). A client
+    that only logged `in_world` has one session from the start."""
+    starts = [e["t"] for e in c["events"] if e.get("event") == "net_state" and e.get("state") == "InWorld"
+              and e.get("t") is not None]
+    return sorted(starts)
+
+
+def _order_stats(rows, starts):
+    """rows: [(t_seconds, tick)] in receive order. Backward steps and duplicates per session."""
+    backward, dups, sessions = [], 0, set()
+    seen, newest, cur = set(), None, None
+    for t, tick in rows:
+        sess = bisect_right(starts, t) - 1 if starts else 0
+        sessions.add(sess)
+        if sess != cur:
+            cur, seen, newest = sess, set(), None
+        if tick in seen:
+            dups += 1
+        elif newest is not None and tick < newest:
+            if len(backward) < 20:
+                backward.append({"t": round(t, 3), "tick": tick, "after": newest, "session": sess})
+            else:
+                backward.append(None)
+        seen.add(tick)
+        newest = tick if newest is None else max(newest, tick)
+    return {"rows": len(rows), "sessions": len(sessions), "backward": len(backward),
+            "duplicates": dups, "examples": [b for b in backward if b][:10]}
+
+
+def check_snapshot_order(ev, a):
+    """Per client, received world ticks never go backwards inside one session, and no tick is
+    received twice. A session starts at each net_state InWorld (join, reconnect); a new session
+    may restart the tick sequence (a restarted server starts again from its first tick)."""
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client snapshots.ndjson")
+    min_rows = int(a.get("min_snapshots", 10))
+    per, missing, backward, dups = {}, [], 0, 0
+    for c in ev["clients"]:
+        starts = _session_starts(c)
+        sources = {}
+        rows = [(float(x["t"]), int(x["tick"])) for x in c["snapshots"]
+                if x.get("t") is not None and x.get("tick") is not None]
+        if rows:
+            sources["snapshots.ndjson"] = _order_stats(rows, starts)
+        drows = []
+        for r in _csv_dicts(c.get("delivery_csv")):
+            tick, t_us = _num_or_none(r.get("world_tick")), _num_or_none(r.get("applied_us"))
+            if tick is not None and t_us is not None:
+                drows.append((t_us / 1e6, int(tick)))
+        if drows:
+            sources["delivery.csv"] = _order_stats(drows, starts)
+        if not sources or max(s["rows"] for s in sources.values()) < min_rows:
+            missing.append(c["index"])
+        per[c["index"]] = sources
+        backward += max((s["backward"] for s in sources.values()), default=0)
+        dups += max((s["duplicates"] for s in sources.values()), default=0)
+    if missing:
+        return _inconclusive(f"fewer than {min_rows} received snapshots for client(s) {missing}",
+                             source="client snapshots.ndjson / delivery.csv")
+    ok = backward <= int(a.get("max_backward", 0)) and dups <= int(a.get("max_duplicates", 0))
+    return _result(PASS if ok else FAIL, {"backward": backward, "duplicates": dups},
+                   {"max_backward": a.get("max_backward", 0), "max_duplicates": a.get("max_duplicates", 0)},
+                   source="client snapshots.ndjson (tick, main-thread t) and C2 delivery.csv (world_tick, applied_us); "
+                          "sessions from events.ndjson net_state InWorld",
+                   sampling="every received snapshot",
+                   rationale="the server's world tick only grows within one connection; a tick received out of order "
+                             "or twice is applied out of order or twice (stale state, interpolation running backwards)",
+                   detail={"per_client": per},
+                   artifacts=[str(c["dir"] / "snapshots.ndjson") for c in ev["clients"]])
+
+
+def _map_source(ev, a, map_id):
+    """(map dict | None, source) for content/maps/<map_id>.json at the server commit the run used
+    (`git show <sha>:...`), falling back to the server checkout's working tree."""
+    import json as _json
+    import subprocess
+    meta = ev["meta"] or {}
+    repo = a.get("server_repo") or (meta.get("config") or {}).get("server_repo")
+    if not repo:
+        return None, "no server_repo in run.json config"
+    sha = ((meta.get("provenance") or {}).get("server") or {}).get("sha") or ((meta.get("repos") or {}).get("server") or {}).get("head")
+    rel = f"backend/content/maps/{map_id}.json"
+    if sha:
+        try:
+            res = subprocess.run(["git", "-C", str(repo), "show", f"{sha}:{rel}"], capture_output=True, timeout=30)
+            if res.returncode == 0:
+                return _json.loads(res.stdout.decode("utf-8")), f"{rel} at server {sha[:10]}"
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    path = Path(repo) / rel
+    if path.exists():
+        try:
+            return _json.loads(path.read_text(encoding="utf-8")), f"{path} (working tree; commit {sha or 'unknown'} not readable)"
+        except ValueError:
+            return None, f"{path} is not valid JSON"
+    return None, f"{rel} does not exist (server {str(sha)[:10] if sha else 'commit unknown'})"
+
+
+def _run_map_id(ev):
+    """The map the scratch server ran: GAMESERVER_MAP_ID the stack was started with (run.json
+    stack.env), checked against the scenario and the server's own registration (redis
+    servers:map:<map> members, taken mid-run). /status does not report a map id."""
+    sc_map = ev["scenario"].get("map")
+    env_map = (((ev["meta"] or {}).get("stack") or {}).get("env") or {}).get("GAMESERVER_MAP_ID")
+    members = ev["redis"].get("map_members") or []
+    problems = []
+    if env_map and sc_map and env_map != sc_map:
+        problems.append(f"stack GAMESERVER_MAP_ID {env_map} != scenario map {sc_map}")
+    if ev["redis"] and not members:
+        problems.append(f"no server registered under servers:map:{sc_map}")
+    return env_map or sc_map, {"scenario": sc_map, "stack_env": env_map, "registered": members}, problems
+
+
+def check_enemy_bounds(ev, a):
+    """Every live enemy the server reports stays inside the map's bounds (content/maps/<map>.json).
+    Enemy footprints inside a blocking box (top more than the 0.4 step height above the ground,
+    content/README.md 'Map geometry') are reported; they fail only with obstacles_are_failure."""
+    map_id, where, problems = _run_map_id(ev)
+    if problems:
+        return _inconclusive("; ".join(problems), source="run.json stack env, redis.json")
+    geo, src = _map_source(ev, a, map_id)
+    if geo is None:
+        return _inconclusive(f"map {map_id}: {src}. Without a map file the server uses flat bounds from "
+                             "--map-width/--map-height (GAMESERVER_MAP_WIDTH/HEIGHT or GameConstants defaults), which "
+                             "/status does not report; bounds unknown", source="backend/content/maps")
+    b = geo.get("bounds") or {}
+    if not all(k in b for k in ("minX", "minY", "maxX", "maxY")):
+        return _inconclusive(f"{src} has no complete bounds", source=src)
+    eps = float(a.get("tolerance", 0.01))
+    step = float(a.get("step_height", 0.4))
+    blocking = [x for x in geo.get("boxes", []) if float(x.get("maxZ", 0)) > step]
+    lo, hi = _window(ev)
+    outside, inside_box, n = [], [], 0
+    for r in ev["server"]["entities"]:
+        if r.get("st") is None or not lo <= r["st"] <= hi:
+            continue
+        for e in _alive_enemies(r):
+            n += 1
+            x, y = e[2], e[3]
+            if x < b["minX"] - eps or x > b["maxX"] + eps or y < b["minY"] - eps or y > b["maxY"] + eps:
+                if len(outside) < 20:
+                    outside.append({"st": round(r["st"], 2), "id": e[0], "x": x, "y": y})
+                else:
+                    outside.append(None)
+            for box in blocking:
+                if box["minX"] + eps < x < box["maxX"] - eps and box["minY"] + eps < y < box["maxY"] - eps:
+                    if len(inside_box) < 20:
+                        inside_box.append({"st": round(r["st"], 2), "id": e[0], "x": x, "y": y, "box": box})
+                    else:
+                        inside_box.append(None)
+    if n < int(a.get("min_samples", 50)):
+        return _inconclusive(f"{n} live-enemy positions in the window (need {a.get('min_samples', 50)})",
+                             source="/debug/entities")
+    status = FAIL if outside else PASS
+    if inside_box and status == PASS:
+        status = FAIL if a.get("obstacles_are_failure") else INFO
+    return _result(status, {"enemy_positions": n, "outside_bounds": len(outside), "inside_blocking_box": len(inside_box)},
+                   {"bounds": b, "tolerance": eps, "blocking_boxes": len(blocking),
+                    "obstacles_are_failure": bool(a.get("obstacles_are_failure"))},
+                   source=f"server /debug/entities enemy positions vs {src}",
+                   sampling=f"{ev['scenario'].get('server_sample_hz')} Hz server samples",
+                   rationale="the server clamps positions into the map bounds (content/README.md); an enemy outside them "
+                             "is a movement or separation step that escaped the clamp. Boxes are reported, not judged by "
+                             "default: whether enemies collide with static boxes is a gameplay rule"
+                             + ("" if blocking else "; this map defines no blocking box"),
+                   detail={"map": map_id, "map_evidence": where, "outside": [o for o in outside if o],
+                           "inside_box": [o for o in inside_box if o]},
+                   artifacts=[str(ev["run_dir"] / "server" / "entities.ndjson")])
+
+
+_BUDGET = re.compile(r"\bbudget=(\d+)")
+
+
+def check_enemy_budget(ev, a):
+    """The live enemy count never exceeds the hard enemy budget the server reports in force
+    (/status enemy_ai `budget=N`, GAMESERVER_ENEMY_BUDGET, rpg-mmo-server#468). The lab chooses no
+    budget; it records the one the server ran with."""
+    rows = _status_in_window(ev)
+    if not rows:
+        return _inconclusive("no /status samples inside the scenario window", source="/status enemy_ai")
+    ai = [r.get("enemy_ai") for r in rows if r.get("enemy_ai") is not None]
+    if not ai:
+        return _inconclusive("/status has no enemy_ai field", source="/status enemy_ai")
+    if all(x == "off" for x in ai):
+        return _inconclusive("enemy AI is off in this run", source="/status enemy_ai")
+    budgets = sorted({int(m.group(1)) for x in ai for m in [_BUDGET.search(x)] if m})
+    if not budgets:
+        return _inconclusive("/status enemy_ai does not report budget=N (server hook: echo GAMESERVER_ENEMY_BUDGET)",
+                             source="/status enemy_ai")
+    counted = [r for r in rows if r.get("enemies_alive") is not None]
+    if len(counted) < int(a.get("min_samples", 10)):
+        return _inconclusive(f"{len(counted)} /status samples with enemies_alive (need {a.get('min_samples', 10)})",
+                             source="/status enemies_alive")
+    over, over_cap = [], 0
+    max_alive = 0
+    for r in counted:
+        m = _BUDGET.search(r.get("enemy_ai") or "")
+        budget = int(m.group(1)) if m else budgets[-1]
+        alive = int(r["enemies_alive"])
+        max_alive = max(max_alive, alive)
+        if alive > budget:
+            over.append({"st": round(r["_st"], 1), "enemies_alive": alive, "budget": budget})
+        if r.get("enemy_ai_max_now") is not None and alive > int(r["enemy_ai_max_now"]):
+            over_cap += 1
+    lo, hi = _window(ev)
+    probe_max = max((len(_alive_enemies(r)) for r in ev["server"]["entities"]
+                     if r.get("st") is not None and lo <= r["st"] <= hi), default=None)
+    if probe_max is not None and probe_max > min(budgets):
+        over.append({"source": "/debug/entities", "max_alive": probe_max, "budget": min(budgets)})
+    return _result(FAIL if over else PASS,
+                   {"max_enemies_alive": max_alive, "max_alive_debug_entities": probe_max, "budget": budgets,
+                    "budget_reached": max_alive >= min(budgets), "samples_over_cap_now": over_cap},
+                   {"max": "budget reported by /status enemy_ai"},
+                   source="/status enemies_alive and enemy_ai budget=N; /debug/entities live mobs",
+                   sampling=f"1 Hz /status ({len(counted)} samples), server entity samples",
+                   rationale="the hard budget is the ceiling of the enemy population whatever the player count "
+                             "(cap = min(MAX + MAX_PER_PLAYER x players, BUDGET)). budget_reached false means the run "
+                             "never pushed the population to the budget, so PASS only says it was not exceeded. "
+                             "Samples above enemy_ai_max_now are reported, not judged: that cap falls when players leave "
+                             "and live enemies are not removed for it",
+                   detail={"over": over[:20]},
+                   artifacts=[str(ev["run_dir"] / "server" / "status.ndjson")])
+
+
+# Netcode InterpolationConfig.Default (Runtime/Interpolation/InterpolationConfig.cs, the client's
+# DotsWorldBridge uses Default): the render clock runs TargetDelay behind the newest received
+# tick and may extrapolate MaxExtrapolation past it before remote entities hold still.
+INTERP_TARGET_DELAY_MS = 100.0
+INTERP_MAX_EXTRAPOLATION_MS = 50.0
+
+
+def check_render_freshness(ev, a):
+    """Age of the newest received snapshot at each rendered frame (C2 render.csv snapshot_age_ms).
+    Bound = TargetDelay + MaxExtrapolation (Netcode InterpolationConfig.Default, 100 + 50 ms): a frame
+    whose newest snapshot is older than that has run the render clock past every sample and past the
+    extrapolation allowance, so remote entities are drawn frozen. p99 decides; frames in host-wide
+    stalls are set aside the same way as elsewhere (INCONCLUSIVE when only they would fail it)."""
+    import csv
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client render.csv")
+    bound = float(a.get("target_delay_ms", INTERP_TARGET_DELAY_MS)) + float(a.get("max_extrapolation_ms",
+                                                                                   INTERP_MAX_EXTRAPOLATION_MS))
+    dur = float(ev["scenario"].get("duration_s", 0))
+    excl = [(float(w[0]), float(w[1])) for w in a.get("exclude_s", [])]
+    stalls = host_stalls(ev)
+    per, missing, worst_all, worst_quiet = {}, [], [], []
+    for c in ev["clients"]:
+        start = (c["summary"] or {}).get("start_realtime")
+        ages, quiet = [], []
+        try:
+            with open(c.get("render_csv") or "", encoding="utf-8", newline="") as fh:
+                for r in csv.DictReader(fh):
+                    t_us, age = _num_or_none(r.get("t_us")), _num_or_none(r.get("snapshot_age_ms"))
+                    if t_us is None or age is None or start is None:
+                        continue
+                    st = t_us / 1e6 - start
+                    if not 0 <= st <= dur or any(e0 <= st <= e1 for e0, e1 in excl):
+                        continue
+                    ages.append(age)
+                    if not _in_stall(stalls, st, st, slack=0.3, after=1.0):
+                        quiet.append(age)
+        except OSError:
+            pass
+        if not ages:
+            missing.append(c["index"])
+            continue
+        p99, p99q = util.percentile(ages, 99), util.percentile(quiet, 99) if quiet else None
+        per[c["index"]] = {"frames": len(ages), "p50_ms": round(util.percentile(ages, 50), 1), "p99_ms": round(p99, 1),
+                           "max_ms": round(max(ages), 1), "p99_outside_host_stalls_ms": None if p99q is None else round(p99q, 1)}
+        worst_all.append(p99)
+        worst_quiet.append(p99q if p99q is not None else p99)
+    if missing:
+        return _inconclusive(f"no C2 render.csv snapshot ages for client(s) {missing} (player without the delivery "
+                             "recorder, or no frame inside the window)", source="client render.csv")
+    fails, fails_quiet = max(worst_all) > bound, max(worst_quiet) > bound
+    status = FAIL if fails_quiet else (INCONCLUSIVE if fails else PASS)
+    return _result(status, per, {"p99_ms": bound, "formula": "TargetDelay + MaxExtrapolation",
+                                 "target_delay_ms": a.get("target_delay_ms", INTERP_TARGET_DELAY_MS),
+                                 "max_extrapolation_ms": a.get("max_extrapolation_ms", INTERP_MAX_EXTRAPOLATION_MS)},
+                   source="C2 render.csv snapshot_age_ms (now - receive time of the newest snapshot, player clock)",
+                   sampling="every rendered frame in the scenario window",
+                   rationale="snapshot_age_ms is a receive age on the player's own clock, so RTT and clock offset do not "
+                             "enter it. Beyond TargetDelay + MaxExtrapolation the interpolator has no sample left to "
+                             "draw toward and holds remote entities still: the player sees a freeze",
+                   artifacts=[str(c["dir"] / "render.csv") for c in ev["clients"]])
+
+
+def check_prediction_bound(ev, a):
+    """Local-prediction hard snaps per client-minute stay under a bound taken from measured runs.
+
+    Bound (default 6 snaps per client-minute): the fixed candidate builds (verify-netcode-5fa8f37 and
+    7e6c9d8) snapped at most 3.05 per client-minute in every scenario run on 2026-10-22 (e.g. S09
+    20261022T112220Z-S09-eeoa: 177-183 snaps in 3600 s; S02/S05/S08/S10: 1-3 snaps in 40-70 s), while
+    the pre-fix testlab build snapped 12-67 per client-minute (S10 20261022T054359Z-S10-g0tz: 4-8 in
+    40 s; S09 20261022T054502Z-S09-q61b: 209-335 in 300 s). 6 is twice the worst fixed rate and half
+    the best broken one. max_correction is reported, not judged: respawns move the local player
+    14-40 units and are counted in it."""
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client summary.json prediction")
+    bound = float(a.get("max_snaps_per_client_min", 6.0))
+    min_s = float(a.get("min_seconds", 20.0))  # S03, the shortest moving scenario, is 22 s
+    per, missing, over = {}, [], []
+    for c in ev["clients"]:
+        s = c["summary"] or {}
+        p, secs = s.get("prediction") or {}, s.get("scenario_seconds")
+        if not p.get("present") or p.get("snaps") is None or not secs or secs < min_s:
+            missing.append(c["index"])
+            continue
+        rate = p["snaps"] / (secs / 60.0)
+        per[c["index"]] = {"snaps": p["snaps"], "seconds": round(secs, 1), "snaps_per_min": round(rate, 2),
+                           "smoothed": p.get("smoothed"), "max_correction": p.get("max_correction")}
+        if rate > bound:
+            over.append(c["index"])
+    if missing:
+        return _inconclusive(f"no prediction counters over >= {min_s:.0f} s for client(s) {missing}",
+                             source="client summary.json prediction")
+    return _result(FAIL if over else PASS, per, {"max_snaps_per_client_min": bound},
+                   source="client summary.json prediction.snaps (LocalMovePredictor hard corrections)",
+                   sampling="whole scenario, per client",
+                   rationale="a hard snap is a correction too large to smooth: the local player jumps. The bound "
+                             "separates the measured fixed builds (<= 3.05/min) from the broken one (>= 12/min); see "
+                             "the check docstring for the runs",
+                   detail={"over": over})
+
+
+_RATE_FIELDS = {"SIM_CRITICAL_HZ": "sim_critical_hz", "SIM_WORLD_HZ": "sim_world_hz",
+                "SIM_BACKGROUND_HZ": "sim_background_hz"}
+
+
+def check_server_config(ev, a):
+    """The server ran with the settings the scenario asked for: each SIM_* rate in server_env (and
+    any `expect` {status_field: value}) equals what /status reports in every sample. A scenario
+    whose setting did not reach the server has not tested what it claims: INCONCLUSIVE."""
+    want = {_RATE_FIELDS[k]: int(v) for k, v in (ev["scenario"].get("server_env") or {}).items() if k in _RATE_FIELDS}
+    want.update(a.get("expect") or {})
+    if not want:
+        return _inconclusive("the scenario sets nothing this check can compare", source="scenario server_env")
+    rows = _status_in_window(ev)
+    if not rows:
+        return _inconclusive("no /status samples inside the scenario window", source="/status")
+    seen = {k: sorted({r.get(k) for r in rows}, key=str) for k in want}
+    wrong = {k: seen[k] for k, v in want.items() if seen[k] != [v]}
+    res = _result(PASS if not wrong else INCONCLUSIVE, seen, want, source="/status", sampling=f"{len(rows)} samples",
+                  rationale="evidence about a configuration only counts when that configuration was in force",
+                  detail={"mismatch": wrong})
+    return res
+
+
+CHECKS.update({
+    "snapshot_order": check_snapshot_order,
+    "enemy_bounds": check_enemy_bounds,
+    "enemy_budget": check_enemy_budget,
+    "render_freshness": check_render_freshness,
+    "prediction_bound": check_prediction_bound,
+    "server_config": check_server_config,
+})

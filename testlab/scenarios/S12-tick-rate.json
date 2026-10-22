@@ -1,0 +1,211 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S12",
+  "version": 1,
+  "title": "Non-default tick rate: S03 movement with the server at 30 Hz critical / 15 Hz world",
+  "description": "S03's scripted movement on dev_arena (enemies off) with SIM_CRITICAL_HZ=30 and SIM_WORLD_HZ=15. 30/15 is a pair SimulationRates.TryCreate accepts (15 and the default background 5 both divide 30, none exceeds it, all under MaxHz 240). Only the movement rate changes: the world rate, and so the snapshot cadence and bandwidth, stays at the default 15 Hz, so a difference from S03 is the client adopting the advertised tick rate (JoinTokenResponse.tick_rate = MovementHz = critical), not the snapshot stream. server_config proves the rates were in force.",
+  "clients": 3,
+  "map": "dev_arena",
+  "seed": 3,
+  "server_env": {
+    "GAMESERVER_ENEMIES": "false",
+    "SIM_CRITICAL_HZ": "30",
+    "SIM_WORLD_HZ": "15"
+  },
+  "duration_s": 22,
+  "screenshots_s": [
+    2,
+    8,
+    15,
+    21
+  ],
+  "per_client": [
+    {
+      "steps": [
+        {
+          "t0": 1,
+          "t1": 3,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 3,
+          "t1": 5,
+          "mode": "move",
+          "x": 0,
+          "y": 1
+        },
+        {
+          "t0": 5,
+          "t1": 8,
+          "mode": "move",
+          "x": -1,
+          "y": -1
+        },
+        {
+          "t0": 8,
+          "t1": 9.5,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 9.5,
+          "t1": 15,
+          "mode": "circle",
+          "rate": 1.5
+        },
+        {
+          "t0": 16,
+          "t1": 19,
+          "mode": "move",
+          "x": 0,
+          "y": -1
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 1,
+          "t1": 7,
+          "mode": "toward_point",
+          "px": -3,
+          "py": 5,
+          "stop_distance": 0.3
+        },
+        {
+          "t0": 7,
+          "t1": 14,
+          "mode": "toward_point",
+          "px": 0,
+          "py": 25,
+          "stop_distance": 0.3
+        },
+        {
+          "t0": 15,
+          "t1": 18,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 1,
+          "t1": 8,
+          "mode": "toward_client",
+          "target_client": 0,
+          "stop_distance": 1.0
+        },
+        {
+          "t0": 8,
+          "t1": 14,
+          "mode": "circle",
+          "rate": -1.0
+        },
+        {
+          "t0": 15,
+          "t1": 18,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        }
+      ]
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "inputs_consumed",
+      "check": "inputs_consumed",
+      "min_cos": 0.9,
+      "min_distance_fraction": 0.5
+    },
+    {
+      "id": "north_wall",
+      "check": "trajectory_bound",
+      "client": 1,
+      "axis": "y",
+      "t0": 7,
+      "t1": 14,
+      "max": 19.0,
+      "reach_at_least": 17.5,
+      "rationale": "client 1 walks toward (0,25); dev_arena's north wall spans y 19..20, so the server must stop it below 19 while letting it get close"
+    },
+    {
+      "id": "local_divergence",
+      "check": "position_divergence",
+      "local": true,
+      "types": [
+        "player"
+      ],
+      "p95": 0.5,
+      "max": 1.5
+    },
+    {
+      "id": "remote_player_divergence",
+      "check": "position_divergence",
+      "types": [
+        "player"
+      ],
+      "p95": 0.35,
+      "max": 1.0
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "max_local": 0,
+      "max_remote_per_client_min": 2.0
+    },
+    {
+      "id": "snapshots",
+      "check": "snapshot_cadence",
+      "max_gap_ms": 250,
+      "expected_hz": 15
+    },
+    {
+      "id": "kcp",
+      "check": "kcp_health"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "title": "local prediction hard snaps per client-minute"
+    },
+    {
+      "id": "server_rates",
+      "check": "server_config",
+      "title": "the server ran at 30/15 Hz (/status)"
+    },
+    {
+      "id": "tick",
+      "check": "server_tick",
+      "title": "achieved tick rate vs the configured 30 Hz"
+    },
+    {
+      "id": "render_freshness",
+      "check": "render_freshness",
+      "title": "age of the newest snapshot at each frame (C2)"
+    }
+  ]
+}

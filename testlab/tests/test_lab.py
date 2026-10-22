@@ -1060,5 +1060,253 @@ class DeliveryTests(unittest.TestCase):
             self.assertFalse((run / "delivery.json").exists())
 
 
+# =========================================================================== readiness checks (COVERAGE F1-F6)
+
+def _snap_rows(ticks, t0=10.0, dt=1 / 15):
+    return [{"t": t0 + k * dt, "tick": tick} for k, tick in enumerate(ticks)]
+
+
+class SnapshotOrderTests(unittest.TestCase):
+    def _ev(self, *tick_lists, events=None):
+        ev = _ev(clients=len(tick_lists))
+        for c, ticks in zip(ev["clients"], tick_lists):
+            c["snapshots"] = _snap_rows(ticks)
+            c["events"] = list(events or [])
+        return ev
+
+    def test_increasing_ticks_pass(self):
+        ev = self._ev(list(range(100, 200, 4)), list(range(100, 200, 4)))
+        self.assertEqual(analyze.check_snapshot_order(ev, {})["status"], analyze.PASS)
+
+    def test_a_backward_tick_or_a_duplicate_fails(self):
+        ticks = list(range(100, 200, 4))
+        back = ticks[:10] + [ticks[5]] + ticks[10:]
+        res = analyze.check_snapshot_order(self._ev(back), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["measured"]["duplicates"], 1)  # tick seen before in this session
+        older = ticks[:10] + [ticks[5] + 1] + ticks[10:]
+        res = analyze.check_snapshot_order(self._ev(older), {})
+        self.assertEqual((res["status"], res["measured"]["backward"]), (analyze.FAIL, 1))
+
+    def test_a_new_session_may_restart_the_ticks(self):
+        ticks = list(range(1000, 1100, 4)) + list(range(4, 100, 4))  # server restarted at row 25
+        restart_t = 10.0 + 25 / 15 - 0.01
+        events = [{"event": "net_state", "state": "InWorld", "t": 9.0},
+                  {"event": "net_state", "state": "Connecting", "t": restart_t - 0.5},
+                  {"event": "net_state", "state": "InWorld", "t": restart_t}]
+        self.assertEqual(analyze.check_snapshot_order(self._ev(ticks, events=events), {})["status"], analyze.PASS)
+        # The same restart without a new session is ticks running backwards.
+        self.assertEqual(analyze.check_snapshot_order(self._ev(ticks, events=events[:1]), {})["status"], analyze.FAIL)
+
+    def test_c2_delivery_csv_is_checked_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            ev = self._ev(list(range(100, 200, 4)))
+            p = Path(d) / "delivery.csv"
+            _write(p, "world_tick,recv_us,applied_us,bytes,full,entities,frame\n"
+                      "100,,10000000,,0,1,1\n104,,10066000,,0,1,2\n96,,10133000,,0,1,3\n" +
+                      "".join(f"{108 + 4 * k},,{10200000 + 66000 * k},,0,1,{4 + k}\n" for k in range(10)))
+            ev["clients"][0]["delivery_csv"] = p
+            res = analyze.check_snapshot_order(ev, {})
+            self.assertEqual(res["status"], analyze.FAIL)
+            self.assertEqual(res["detail"]["per_client"][0]["delivery.csv"]["backward"], 1)
+
+    def test_too_few_snapshots_is_inconclusive(self):
+        self.assertEqual(analyze.check_snapshot_order(self._ev([1, 2, 3]), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_snapshot_order(_ev(clients=0), {})["status"], analyze.INCONCLUSIVE)
+
+
+def _enemy_row(st, positions):
+    return _row(st, [[f"e{i}", "mob", x, y, 10, 10, 0, 2.5] for i, (x, y) in enumerate(positions)])
+
+
+class EnemyBoundsTests(unittest.TestCase):
+    MAP = {"bounds": {"minX": -20, "minY": -20, "maxX": 20, "maxY": 20},
+           "boxes": [{"minX": -4, "minY": 4, "minZ": 0, "maxX": -2, "maxY": 6, "maxZ": 0.3},
+                     {"minX": 5, "minY": 5, "minZ": 0, "maxX": 8, "maxY": 8, "maxZ": 3}]}
+
+    def _ev(self, d, positions, map_id="dev_arena", env_map="dev_arena"):
+        _write(Path(d) / "backend" / "content" / "maps" / "dev_arena.json", json.dumps(self.MAP))
+        ev = _ev(entities=[_enemy_row(1 + i * 0.2, positions) for i in range(30)], duration=10, map=map_id)
+        ev["meta"] = {"config": {"server_repo": str(d)}, "stack": {"env": {"GAMESERVER_MAP_ID": env_map}}}
+        ev["redis"] = {"session_keys": 1, "map_members": [f"gs-dotnet-{map_id}"]}
+        return ev
+
+    def test_inside_bounds_passes_outside_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(analyze.check_enemy_bounds(self._ev(d, [(0, 0), (19.9, -19.9)]), {})["status"], analyze.PASS)
+            res = analyze.check_enemy_bounds(self._ev(d, [(0, 0), (20.5, 0)]), {})
+            self.assertEqual(res["status"], analyze.FAIL)
+            self.assertEqual(res["measured"]["outside_bounds"], 30)
+
+    def test_blocking_boxes_are_reported_and_steps_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(analyze.check_enemy_bounds(self._ev(d, [(-3, 5), (0, 0)]), {})["status"], analyze.PASS)
+            ev = self._ev(d, [(6, 6), (0, 0)])
+            self.assertEqual(analyze.check_enemy_bounds(ev, {})["status"], analyze.INFO)
+            self.assertEqual(analyze.check_enemy_bounds(ev, {"obstacles_are_failure": True})["status"], analyze.FAIL)
+
+    def test_no_map_file_or_unclear_map_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = analyze.check_enemy_bounds(self._ev(d, [(0, 0)] * 3, map_id="map_01", env_map="map_01"), {})
+            self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+            self.assertIn("does not exist", res["detail"]["why"])
+            ev = self._ev(d, [(0, 0)] * 3, map_id="dev_arena", env_map="map_01")
+            self.assertEqual(analyze.check_enemy_bounds(ev, {})["status"], analyze.INCONCLUSIVE)
+            ev = self._ev(d, [(0, 0)])  # 30 positions < 50
+            self.assertEqual(analyze.check_enemy_bounds(ev, {})["status"], analyze.INCONCLUSIVE)
+
+
+class EnemyBudgetTests(unittest.TestCase):
+    def _ev(self, alive, ai="chase=on max=30+45/player budget=10 seed=1", cap=10, ents=None):
+        status = [{"_st": 1 + i, "enemy_ai": ai, "enemies_alive": n, "enemy_ai_max_now": cap} for i, n in enumerate(alive)]
+        return _ev(duration=30, status=status, entities=ents or [])
+
+    def test_at_most_the_reported_budget_passes(self):
+        res = analyze.check_enemy_budget(self._ev([5] * 5 + [10] * 10), {})
+        self.assertEqual(res["status"], analyze.PASS)
+        self.assertEqual(res["measured"]["budget"], [10])
+        self.assertTrue(res["measured"]["budget_reached"])
+
+    def test_one_over_the_budget_fails(self):
+        self.assertEqual(analyze.check_enemy_budget(self._ev([10] * 14 + [11]), {})["status"], analyze.FAIL)
+        ents = [_enemy_row(1 + i, [(k, 0) for k in range(12)]) for i in range(3)]
+        self.assertEqual(analyze.check_enemy_budget(self._ev([10] * 15, ents=ents), {})["status"], analyze.FAIL)
+
+    def test_without_a_reported_budget_it_is_inconclusive(self):
+        self.assertEqual(analyze.check_enemy_budget(self._ev([5] * 15, ai="chase=on max=30"), {})["status"],
+                         analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_enemy_budget(self._ev([0] * 15, ai="off"), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_enemy_budget(self._ev([5] * 3), {})["status"], analyze.INCONCLUSIVE)
+
+
+class RenderFreshnessTests(unittest.TestCase):
+    def _ev(self, d, ages_per_client, start=10.0):
+        ev = _ev(clients=len(ages_per_client), duration=10)
+        for c, ages in zip(ev["clients"], ages_per_client):
+            p = Path(d) / f"render-{c['index']}.csv"
+            rows = ["frame,t_us,render_tick,clock_newest_tick,newest_tick,newest_recv_us,snapshot_age_ms"]
+            for k, age in enumerate(ages):
+                t_us = int((start + 0.5 + k * 0.016) * 1e6)
+                rows.append(f"{k},{t_us},100,104,104,{t_us - int(age * 1000)},{age}")
+            _write(p, "\n".join(rows) + "\n")
+            c["render_csv"] = p
+            c["summary"] = {"start_realtime": start}
+        return ev
+
+    def test_bound_is_target_delay_plus_max_extrapolation(self):
+        with tempfile.TemporaryDirectory() as d:
+            ok = self._ev(d, [[20 + (k % 50) for k in range(300)]] * 2)
+            res = analyze.check_render_freshness(ok, {})
+            self.assertEqual(res["status"], analyze.PASS)
+            self.assertEqual(res["threshold"]["p99_ms"], 150.0)
+            stale = self._ev(d, [[20] * 280 + [400] * 20, [20] * 300])
+            self.assertEqual(analyze.check_render_freshness(stale, {})["status"], analyze.FAIL)
+
+    def test_stale_frames_only_inside_a_host_stall_are_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            ev = self._ev(d, [[20] * 280 + [400] * 20] * 2)
+            stall_st = 0.5 + 285 * 0.016
+            for c in ev["clients"]:
+                c["frames"] = [(stall_st, 800.0)]
+            self.assertEqual(analyze.check_render_freshness(ev, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_missing_c2_is_inconclusive(self):
+        ev = _ev(clients=2)
+        for c in ev["clients"]:
+            c["summary"] = {"start_realtime": 1.0}
+            c["render_csv"] = Path("does-not-exist.csv")
+        self.assertEqual(analyze.check_render_freshness(ev, {})["status"], analyze.INCONCLUSIVE)
+
+
+class PredictionBoundTests(unittest.TestCase):
+    def _ev(self, *snaps, seconds=60.0, present=True):
+        ev = _ev(clients=len(snaps))
+        for c, n in zip(ev["clients"], snaps):
+            c["summary"] = {"scenario_seconds": seconds,
+                            "prediction": {"present": present, "snaps": n, "max_correction": 14.0}}
+        return ev
+
+    def test_measured_fixed_rates_pass_and_broken_rates_fail(self):
+        self.assertEqual(analyze.check_prediction_bound(self._ev(3, 3, 3), {})["status"], analyze.PASS)  # S02 58sn
+        self.assertEqual(analyze.check_prediction_bound(self._ev(183, seconds=3600), {})["status"], analyze.PASS)  # eeoa
+        self.assertEqual(analyze.check_prediction_bound(self._ev(8, seconds=40), {})["status"], analyze.FAIL)  # g0tz
+        self.assertEqual(analyze.check_prediction_bound(self._ev(335, seconds=300), {})["status"], analyze.FAIL)  # q61b
+
+    def test_without_counters_or_long_enough_window_it_is_inconclusive(self):
+        self.assertEqual(analyze.check_prediction_bound(self._ev(0, seconds=15), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_prediction_bound(self._ev(0, present=False), {})["status"], analyze.INCONCLUSIVE)
+
+
+class ServerConfigTests(unittest.TestCase):
+    def test_rates_in_force_must_match_the_scenario(self):
+        ev = _ev(duration=10, status=[{"_st": 1, "sim_critical_hz": 30, "sim_world_hz": 15}] * 3,
+                 server_env={"SIM_CRITICAL_HZ": "30", "SIM_WORLD_HZ": "15"})
+        self.assertEqual(analyze.check_server_config(ev, {})["status"], analyze.PASS)
+        ev["server"]["status"][1] = {"_st": 2, "sim_critical_hz": 60, "sim_world_hz": 15}
+        self.assertEqual(analyze.check_server_config(ev, {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_server_config(_ev(), {})["status"], analyze.INCONCLUSIVE)
+
+
+class DisruptionWindowTests(unittest.TestCase):
+    def test_cadence_leaves_out_an_expected_interruption(self):
+        ev = _ev(clients=1, duration=60, status=[{"_st": 5, "sim_world_hz": 15}])
+        c = ev["clients"][0]
+        c["summary"] = {"start_realtime": 100.0}
+        c["snapshots"] = [{"t": 100.0 + k / 15.0} for k in range(900) if not 20 * 15 <= k < 32 * 15]
+        self.assertEqual(analyze.check_snapshot_cadence(ev, {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_snapshot_cadence(ev, {"exclude_s": [[20, 40]]})["status"], analyze.PASS)
+
+    def test_clients_must_be_back_in_world_after_the_restart(self):
+        ev = _ev(clients=2)
+        for c in ev["clients"]:
+            c["events"] = [{"event": "in_world", "st": -1}, {"event": "net_state", "state": "InWorld", "st": -1}]
+        self.assertEqual(analyze.check_clients_in_world(ev, {})["status"], analyze.PASS)
+        self.assertEqual(analyze.check_clients_in_world(ev, {"reentered_after_s": 20})["status"], analyze.FAIL)
+        for c in ev["clients"]:
+            c["events"].append({"event": "net_state", "state": "InWorld", "st": 27.5})
+        self.assertEqual(analyze.check_clients_in_world(ev, {"reentered_after_s": 20})["status"], analyze.PASS)
+
+    def test_s11_and_s12_are_consistent(self):
+        s11 = scenarios.load("S11")
+        restart = [d for d in s11["disruptions"] if d["kind"] == "restart_gameserver"]
+        self.assertEqual(len(restart), 1)
+        by_id = {a["id"]: a for a in s11["assertions"]}
+        grace = by_id["snapshots"]["exclude_s"][0]
+        self.assertEqual(grace[0], restart[0]["at_s"])
+        for aid in ("local_divergence", "remote_player_divergence", "render_jumps"):
+            self.assertEqual(by_id[aid]["skip_first_s"], grace[1], aid)
+        self.assertEqual(by_id["in_world"]["reentered_after_s"], restart[0]["at_s"])
+        s12 = scenarios.load("S12")
+        crit, world = int(s12["server_env"]["SIM_CRITICAL_HZ"]), int(s12["server_env"]["SIM_WORLD_HZ"])
+        # SimulationRates.TryCreate: every group divides the critical rate, none exceeds it, <= 240 Hz.
+        self.assertTrue(crit <= 240 and world <= crit and crit % world == 0 and crit % 5 == 0)
+        self.assertNotEqual(crit, 60)
+        self.assertIn("server_config", {a["check"] for a in s12["assertions"]})
+
+
+class NetcodeProvenanceTests(unittest.TestCase):
+    def test_build_client_records_the_netcode_commit(self):
+        import testlab as cli
+        from lab import provenance
+        with tempfile.TemporaryDirectory() as d:
+            proj = Path(d)
+            _write(proj / "Packages" / "packages-lock.json", json.dumps({"dependencies": {"com.cuvara.netcode": {
+                "version": "https://github.com/Cuvara/Netcode.git#v0.47.0", "source": "git",
+                "hash": "1971df40301f69cf0731df6eb80151d58272ea75"}}}))
+            rec = cli.netcode_provenance(proj)
+            self.assertEqual((rec["embedded"], rec["sha"]), (False, "1971df40301f69cf0731df6eb80151d58272ea75"))
+            nc = provenance.netcode_record({"embedded_packages": [], "netcode": rec}, None)
+            self.assertEqual(nc["sha"], rec["sha"])
+            # An embedded copy without .git cannot name its commit: provenance stays INCONCLUSIVE.
+            _write(proj / "Packages" / "com.cuvara.netcode" / "package.json",
+                   json.dumps({"name": "com.cuvara.netcode", "version": "0.48.0"}))
+            rec = cli.netcode_provenance(proj)
+            self.assertEqual((rec["embedded"], rec["sha"], rec["version"]), (True, None, "0.48.0"))
+            with tempfile.TemporaryDirectory() as r:
+                run = _run_dir(Path(r), netcode_sha=None)
+                problems = analyze.check_provenance(analyze.load_evidence(run), {})["detail"]["problems"]
+                self.assertTrue(any("netcode.sha missing" in p for p in problems), problems)
+
+
 if __name__ == "__main__":
     unittest.main()

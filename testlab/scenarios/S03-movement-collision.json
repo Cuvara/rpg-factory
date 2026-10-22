@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S03",
-  "version": 1,
+  "version": 2,
   "title": "Movement and collision on dev_arena: axes, diagonals, turns, obstacles, close approach",
   "description": "Enemies off so only player movement is measured. dev_arena (walled 40x40 arena, a low box at (-4..-2, 4..6), north wall at y=19..20, spawn (0,-10)). Every scripted move segment must move the server entity the scripted way; rendered positions (local predicted and remote interpolated) are compared with the server's.",
   "clients": 3,
@@ -178,6 +178,16 @@
     {
       "id": "kcp",
       "check": "kcp_health"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "title": "local prediction hard snaps per client-minute"
     }
   ]
 }

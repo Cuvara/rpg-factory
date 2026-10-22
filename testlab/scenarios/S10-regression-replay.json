@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S10",
-  "version": 1,
+  "version": 2,
   "title": "Regression replay: the original three-client report, then walking off the spawn in every direction",
   "description": "Replays the 2026-10-21 report: three idle players on map_01 while the enemy population fills up, then each walks away from the shared spawn into a different quadrant, including negative x and y. Before the predictor-bounds fix (client develop c2cf32c) the walkers toward negative x or y rubber-banded on every snapshot. Reference numbers are in the reference block.",
   "clients": 3,
@@ -151,6 +151,21 @@
       "id": "enemy_render_speed",
       "check": "enemy_render_speed",
       "speed": 2.5
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "title": "local prediction hard snaps per client-minute"
+    },
+    {
+      "id": "enemy_budget",
+      "check": "enemy_budget",
+      "title": "live enemies never exceed the server's hard budget"
     }
   ]
 }

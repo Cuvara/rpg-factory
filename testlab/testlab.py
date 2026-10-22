@@ -153,7 +153,7 @@ def _sweep(cfg, args) -> int:
 def _sweep_key(res: dict) -> dict:
     key = {}
     for a in res["assertions"]:
-        if a["check"] in ("server_tick", "kcp_health", "snapshot_cadence", "frame_time", "bots_joined", "snapshot_update_gap"):
+        if a["check"] in ("server_tick", "kcp_health", "snapshot_cadence", "frame_time", "bots_joined", "snapshot_update_gap", "enemy_budget"):
             key[a["id"]] = {"status": a["status"], "measured": a.get("measured")}
     return key
 
@@ -221,9 +221,35 @@ def cmd_build_client(args) -> int:
     dirty = bool(subprocess.run(["git", "-C", str(project), "status", "--porcelain"], capture_output=True, text=True).stdout.strip())
     util.write_json(out_root / "testlab-build.json", {"client_head": head, "client_dirty": dirty, "project": str(project),
                                                       "built_utc": util.utc_stamp(), "defines": ["CUVARA_TESTLAB"],
-                                                      "embedded_packages": _embedded_packages(project)})
+                                                      "embedded_packages": _embedded_packages(project),
+                                                      "netcode": netcode_provenance(project)})
     print(f"build-client: OK -> {out_root}")
     return 0
+
+
+def netcode_provenance(project: Path) -> dict:
+    """Which com.cuvara.netcode a build compiles, written into testlab-build.json so the run's
+    provenance names a commit (lab/provenance.py):
+    - an embedded package under Packages/ that is a git clone: its HEAD (and whether it is dirty);
+    - an embedded copy without .git: version and source hash only; its commit is unknown unless the
+      build also writes VERIFY-PROVENANCE.txt (the verification build script does);
+    - otherwise the manifest pin: packages-lock.json `hash` (the commit Unity resolved) and `version`
+      (the git URL with its tag)."""
+    packages = project / "Packages"
+    for d in sorted(packages.iterdir()) if packages.is_dir() else []:
+        meta = util.read_json(d / "package.json", {}) or {} if d.is_dir() else {}
+        if meta.get("name") != "com.cuvara.netcode":
+            continue
+        rec = {"embedded": True, "version": meta.get("version"), "path": str(d), "sha": None, "dirty": None,
+               "source": "embedded copy without .git (commit unknown)"}
+        if (d / ".git").exists():
+            head = subprocess.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            status = subprocess.run(["git", "-C", str(d), "status", "--porcelain"], capture_output=True, text=True).stdout
+            rec.update({"sha": head or None, "dirty": bool(status.strip()), "source": "embedded git clone HEAD"})
+        return rec
+    lock = (util.read_json(packages / "packages-lock.json", {}) or {}).get("dependencies", {}).get("com.cuvara.netcode") or {}
+    return {"embedded": False, "version": lock.get("version"), "sha": lock.get("hash"), "dirty": False,
+            "source": "Packages/packages-lock.json (manifest pin)" if lock else "not found in packages-lock.json"}
 
 
 def _embedded_packages(project: Path) -> list[dict]:

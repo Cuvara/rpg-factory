@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S08",
-  "version": 1,
+  "version": 2,
   "title": "Reconnect and lifecycle: a client process dies and comes back on the same device",
   "description": "Client 2 is killed at t=10 s (no graceful disconnect, as in a crash) and relaunched 3 s later with the same device id. It must come back as the same Nakama user with exactly one player entity, inside the server's 30 s hold window.",
   "clients": 3,
@@ -23,6 +23,8 @@
     { "id": "players_online_end", "check": "players_online", "mode": "last" },
     { "id": "redis", "check": "redis" },
     { "id": "kcp", "check": "kcp_health", "max_sessions_closed": 2 },
-    { "id": "logs_clean", "check": "client_log_clean" }
+    { "id": "logs_clean", "check": "client_log_clean" },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" },
+    { "id": "prediction_snaps", "check": "prediction_bound", "title": "local prediction hard snaps per client-minute" }
   ]
 }

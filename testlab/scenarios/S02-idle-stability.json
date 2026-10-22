@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S02",
-  "version": 1,
+  "version": 2,
   "title": "Idle stability: three idle clients while the enemy population fills up",
   "description": "Reproduces the original report (three idle players, ~165 enemies). Measures what each client renders against the server's authoritative positions, render discontinuities, snapshot cadence and the enemy crowd.",
   "clients": 3,
@@ -24,6 +24,9 @@
     { "id": "enemy_server_speed", "check": "enemy_server_speed", "speed": 2.5 },
     { "id": "enemy_render_speed", "check": "enemy_render_speed", "speed": 2.5 },
     { "id": "crowding", "check": "enemy_crowding", "max_share_when_spread": 0.9, "overlap_radius": 0.4, "max_overlap_ratio": 0.1, "overlap_is_failure": true },
-    { "id": "pursuit", "check": "enemy_pursuit", "min_pursuit_ratio": 0.95, "max_settled_speed": 0.3 }
+    { "id": "pursuit", "check": "enemy_pursuit", "min_pursuit_ratio": 0.95, "max_settled_speed": 0.3 },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" },
+    { "id": "prediction_snaps", "check": "prediction_bound", "title": "local prediction hard snaps per client-minute" },
+    { "id": "enemy_budget", "check": "enemy_budget", "title": "live enemies never exceed the server's hard budget" }
   ]
 }

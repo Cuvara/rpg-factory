@@ -59,6 +59,19 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     SERVER_LATE, QUEUE, CLIENT, KCP, PATH or UNKNOWN and ALL-CLIENTS or SINGLE-CLIENT. It is
     diagnostic only.
   - `testlab/docs/COVERAGE.md`: readiness areas mapped to scenarios and checks, with the gaps.
+  - **Factory-only coverage gaps closed (COVERAGE F1-F6).** New checks: `snapshot_order` (no
+    backward or repeated world tick within a session), `enemy_bounds` (enemies inside the map
+    file's bounds at the run's server commit), `enemy_budget` (live enemies within the budget
+    the server reports), `render_freshness` (C2 snapshot age p99 within TargetDelay +
+    MaxExtrapolation, 150 ms), `prediction_bound` (at most 6 hard snaps per client-minute,
+    derived from the 2026-10-22 runs) and `server_config` (the scenario's `SIM_*` rates were in
+    force). Each is INCONCLUSIVE on missing evidence. New scenarios S11 (resync after a
+    game-server restart) and S12 (30/15 Hz tick rate). `snapshot_cadence` and
+    `render_freshness` take `exclude_s` windows; `clients_in_world` takes `reentered_after_s`.
+    S01-S10 gain `snapshot_order`, and `prediction_bound`/`enemy_budget` where they apply
+    (versions bumped).
+  - `build-client` writes a `netcode` block (embedded git HEAD or packages-lock hash) into
+    `testlab-build.json`, so a build-client player's provenance names its Netcode commit.
   - Paths given to the CLI in Git Bash form (`/c/...`) work with Windows Python. The README states
     which commands run in Git Bash and which also run in WSL, and that `build-client` regenerates
     the scene only with `--rebuild-scene`.

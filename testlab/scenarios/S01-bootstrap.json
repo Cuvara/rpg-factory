@@ -1,7 +1,7 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S01",
-  "version": 1,
+  "version": 2,
   "title": "Bootstrap and readiness: three real clients join one world",
   "description": "Isolated stack, three rendered players with distinct device ids. Proves identity, one shared game server (ADR-2), sessions, and that every client receives snapshots at the world rate.",
   "clients": 3,
@@ -21,6 +21,7 @@
     { "id": "logs_clean", "check": "client_log_clean", "title": "no exception in any player log" },
     { "id": "snapshots", "check": "snapshot_cadence", "title": "snapshots arrive at the world rate", "max_gap_ms": 250 },
     { "id": "kcp", "check": "kcp_health", "title": "no dropped datagrams or closed sessions" },
-    { "id": "tick", "check": "server_tick", "title": "server holds its tick rate" }
+    { "id": "tick", "check": "server_tick", "title": "server holds its tick rate" },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" }
   ]
 }
