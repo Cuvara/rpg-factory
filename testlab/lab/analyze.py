@@ -104,8 +104,12 @@ def host_stalls(ev: dict, min_ms: float = 250.0, window_s: float = 0.25) -> list
     return stalls
 
 
-def _in_stall(stalls, t0: float, t1: float, slack: float = 0.3) -> bool:
-    return any(a - slack <= t1 and t0 <= b + slack for a, b, _ in stalls)
+def _in_stall(stalls, t0: float, t1: float, slack: float = 0.3, after: float | None = None) -> bool:
+    """Overlap with a host-wide stall, widened by `slack` before it and `after` (default `slack`)
+    after it. A stall's consequences land after it ends: inputs that could not be sent past the
+    server's silence timeout are reconciled when the next acknowledgements arrive."""
+    tail = slack if after is None else after
+    return any(a - slack <= t1 and t0 <= b + tail for a, b, _ in stalls)
 
 
 def parse_prometheus(path: Path) -> dict:
@@ -477,7 +481,7 @@ def check_render_jumps(ev, a):
             if e.get("type") in set(a.get("ignore_types", ["projectile"])):
                 counts["ignored_type"] = counts.get("ignored_type", 0) + 1
                 continue
-            if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.3):
+            if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.3, after=1.0):
                 counts["host_stall"] = counts.get("host_stall", 0) + 1
                 stall_events.append(e)
                 continue
@@ -488,8 +492,13 @@ def check_render_jumps(ev, a):
             # (0.8 s at max_speed, +20%): only then is it a teleport rather than ordinary motion.
             walkable = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)) * 0.8 * 1.2
             respawned = _server_respawned(ev, e.get("id"), e.get("st"))
+            received_step = _received_step(c, e.get("id"), e.get("st"))
             explained = server_step is not None and server_step >= 0.8 * (e.get("step") or 0)
-            if explained and (respawned or server_step > walkable):
+            # The client's own received stream (20 Hz) resolves a teleport the 5 Hz server
+            # probe aliases: the server put the entity elsewhere in ONE snapshot.
+            received_teleport = (received_step is not None and received_step >= 0.8 * (e.get("step") or 0)
+                                 and received_step > float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)) * 0.15)
+            if received_teleport or (explained and (respawned or server_step > walkable)):
                 counts["server_teleport"] = counts.get("server_teleport", 0) + 1
                 events.append({"client": c["index"], "class": "server_teleport", "server_step": round(server_step, 3),
                                **{k: e.get(k) for k in ("st", "id", "type", "local", "step", "allowed", "dt_ms")}})
@@ -540,6 +549,28 @@ def check_render_jumps(ev, a):
                    detail={"per_client": per_client, "largest": attributed},
                    artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]] +
                              [str(c["dir"] / "shots") for c in ev["clients"]])
+
+
+def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15):
+    """Largest jump in the position this client RECEIVED for the entity (the snapshot stream,
+    sampled at the plan's sample_hz) between consecutive samples in [st-before, st+after]. Unlike
+    the 5 Hz server probe this sees a teleport the server made between two of its samples."""
+    prev = None
+    best = None
+    for s in client.get("samples", []):
+        t = s.get("st")
+        if t is None or t < st - before:
+            continue
+        if t > st + after:
+            break
+        row = next((r for r in s.get("ents", []) if r[0] == eid and len(r) >= 7), None)
+        if row is None:
+            continue
+        if prev is not None:
+            d = math.hypot(row[5] - prev[0], row[6] - prev[1])
+            best = d if best is None or d > best else best
+        prev = (row[5], row[6])
+    return best
 
 
 def _server_respawned(ev, eid, st, before=0.4, after=0.3) -> bool:
@@ -782,7 +813,13 @@ def check_enemy_crowding(ev, a):
     if max_share_spread is not None and max_share_spread > float(a.get("max_share_when_spread", 0.9)):
         findings.append(f"with players >= {a.get('spread_distance', 10)} apart, one player still drew "
                         f"{max_share_spread:.0%} of enemies")
-        status = FAIL
+        # Concentration alone is not a defect under the nearest-player rule: enemies that chased
+        # one player stay with it after the others walk away. Whether they follow the rule is
+        # what enemy_pursuit checks. A scenario may still declare concentration a failure.
+        if a.get("share_is_failure", False):
+            status = FAIL
+        elif status == PASS:
+            status = INFO
     if overlap is not None and overlap > float(a.get("max_overlap_ratio", 0.5)):
         findings.append(f"median {overlap:.0%} of enemies overlap another enemy within {overlap_r} units")
         status = FAIL if a.get("overlap_is_failure", False) else (status if status in (FAIL, INCONCLUSIVE) else INFO)
@@ -793,16 +830,153 @@ def check_enemy_crowding(ev, a):
                 "median_nn": util.percentile([s["nn_median"] for s in per_sample if s["nn_median"] is not None], 50)}
     return _result(status, measured,
                    {"max_share_when_spread": a.get("max_share_when_spread", 0.9),
+                    "share_is_failure": a.get("share_is_failure", False),
                     "max_overlap_ratio": a.get("max_overlap_ratio", 0.5),
                     "overlap_is_failure": a.get("overlap_is_failure", False)},
                    source="server /debug/entities; target derived with the server's own rule (nearest live player, "
                           "EnemyMoveSystem/PlayerTargetBuffer.TryNearest)",
                    sampling=f"{len(per_sample)} evenly spaced server samples",
-                   rationale="concentration on one player is EXPECTED when players stand together (nearest-player rule); "
-                             "it is a defect only when players are spread and one still draws nearly all. Overlap is a "
-                             "design gap (no separation exists in EnemyAiSystems), reported as INFO unless the scenario "
-                             "declares separation required",
+                   rationale="target distribution follows the nearest-live-player rule: concentration on one "
+                             "player is reported (INFO) but is a failure only when the scenario sets share_is_failure, "
+                             "because enemies that closed on one player stay with it after the others leave (product "
+                             "decision recorded in rpg-mmo-server#469; rule conformance is enemy_pursuit). Overlap "
+                             "fails when the scenario sets overlap_is_failure (server separation on, #469)",
                    detail={"findings": findings, "timeline": per_sample[:: max(1, len(per_sample) // 20)]},
+                   artifacts=[str(ev["run_dir"] / "server" / "entities.ndjson")])
+
+
+def _nearest_player(e, players):
+    best, bd = None, None
+    for p in players:
+        d = math.hypot(e[2] - p[2], e[3] - p[3])
+        if bd is None or d < bd:
+            best, bd = p, d
+    return best, bd
+
+
+def check_enemy_pursuit(ev, a):
+    """Enemies follow the server's targeting rule, and a settled crowd holds still.
+
+    Pursuit: an enemy farther than `far_distance` from its nearest live player, that moved
+    between two consecutive server samples, must have moved toward where that player stood
+    (within `max_heading_deg` of the bearing). Heading, not distance: a player walking away at
+    5 u/s outruns a 2.5 u/s chaser, so the distance grows while the pursuit is correct. Near the target,
+    queueing, sliding and separation legitimately move an enemy sideways or back, so the rule is
+    asserted only where none of them applies. Settled: enemies within `settle_distance` of their
+    target in both samples; their speed relative to the target is the jitter a client sees.
+    """
+    lo, hi = _window(ev)
+    rows = [r for r in ev["server"]["entities"]
+            if r.get("st") is not None and lo + float(a.get("skip_first_s", 5)) <= r["st"] <= hi]
+    if len(rows) < 2:
+        return _inconclusive("fewer than two server entity samples in window", source="/debug/entities")
+    far = float(a.get("far_distance", 3.0))
+    settle = float(a.get("settle_distance", 2.6))
+    moving_eps = float(a.get("moving_epsilon", 0.02))
+    cos_max = math.cos(math.radians(float(a.get("max_heading_deg", 45))))
+    far_steps = approaching = 0
+    away = []
+    settled_rel = []
+    for r0, r1 in zip(rows, rows[1:]):
+        dt = r1["st"] - r0["st"]
+        if not 0.03 <= dt <= 0.6:
+            continue
+        players0 = {p[0]: p for p in _players(r0)}
+        players1 = {p[0]: p for p in _players(r1)}
+        if not players0:
+            continue
+        e1 = {e[0]: e for e in _alive_enemies(r1)}
+        for e in _alive_enemies(r0):
+            n = e1.get(e[0])
+            if n is None:
+                continue
+            target, d0 = _nearest_player(e, players0.values())
+            t1 = players1.get(target[0])
+            if t1 is None:
+                continue
+            d1 = math.hypot(n[2] - t1[2], n[3] - t1[3])
+            moved = math.hypot(n[2] - e[2], n[3] - e[3])
+            if d0 > far and moved > moving_eps:
+                far_steps += 1
+                cos = ((n[2] - e[2]) * (target[2] - e[2]) + (n[3] - e[3]) * (target[3] - e[3])) / (moved * d0)
+                if cos >= cos_max:
+                    approaching += 1
+                elif len(away) < 20:
+                    away.append({"st": round(r0["st"], 2), "id": e[0], "target": target[0],
+                                 "d0": round(d0, 3), "d1": round(d1, 3), "heading_deg": round(math.degrees(math.acos(max(-1.0, min(1.0, cos)))), 1)})
+            if d0 <= settle and d1 <= settle:
+                rel = math.hypot((n[2] - e[2]) - (t1[2] - target[2]), (n[3] - e[3]) - (t1[3] - target[3]))
+                settled_rel.append(rel / dt)
+    if far_steps == 0:
+        return _inconclusive(f"no enemy moved while farther than {far} from its target", source="/debug/entities")
+    ratio = approaching / far_steps
+    findings = []
+    status = PASS
+    if ratio < float(a.get("min_pursuit_ratio", 0.95)):
+        findings.append(f"only {ratio:.1%} of {far_steps} far enemy steps headed for the nearest live player")
+        status = FAIL
+    settled_p95 = round(util.percentile(settled_rel, 95), 3) if settled_rel else None
+    if a.get("max_settled_speed") is not None and settled_p95 is not None \
+            and settled_p95 > float(a["max_settled_speed"]):
+        findings.append(f"settled enemies move at p95 {settled_p95} u/s relative to their target")
+        status = FAIL
+    return _result(status, {"far_steps": far_steps, "pursuit_ratio": round(ratio, 4),
+                             "settled_samples": len(settled_rel), "settled_rel_speed_p95": settled_p95,
+                             "settled_rel_speed_median": round(util.percentile(settled_rel, 50), 3) if settled_rel else None},
+                   {"min_pursuit_ratio": a.get("min_pursuit_ratio", 0.95), "far_distance": far,
+                    "max_heading_deg": a.get("max_heading_deg", 45),
+                    "max_settled_speed": a.get("max_settled_speed")},
+                   source="server /debug/entities, consecutive samples; target = nearest live player "
+                          "(the server's rule, PlayerTargetBuffer.TryNearest)",
+                   sampling=f"{len(rows)} server samples",
+                   rationale="an enemy far from every player has no crowd to queue in, so every step it takes must "
+                             "close on its target; the settled speed is how much a crowd at its target still moves "
+                             "(jitter), measured relative to the target so a walking player is not counted",
+                   detail={"findings": findings, "away": away},
+                   artifacts=[str(ev["run_dir"] / "server" / "entities.ndjson")])
+
+
+def check_spawn_overlap(ev, a):
+    """Fresh player placements (first appearance, respawn) do not land on another live player."""
+    min_d = float(a.get("min_distance", 0.5))
+    rows = [r for r in ev["server"]["entities"] if r.get("st") is not None]
+    if not rows:
+        return _inconclusive("no server entity samples", source="/debug/entities")
+    seen = {}
+    spawns = []
+    for r in rows:
+        players = _players(r) + [e for e in r["ents"] if e[1] == "player" and e[6]]
+        alive = [p for p in players if not p[6] and (p[4] or 0) > 0]
+        for p in players:
+            prev = seen.get(p[0])
+            fresh = prev is None
+            if prev is not None and (prev[6] or (prev[4] or 0) <= 0) and not p[6] and (p[4] or 0) > 0:
+                fresh = True
+            mx = p[5] or 0
+            if prev is not None and mx > 0 and (prev[4] or 0) < 0.5 * mx and (p[4] or 0) >= mx:
+                fresh = True
+            seen[p[0]] = p
+            if not fresh or p[6]:
+                continue
+            others = [q for q in alive if q[0] != p[0]]
+            nearest = min((math.hypot(p[2] - q[2], p[3] - q[3]) for q in others), default=None)
+            spawns.append({"st": round(r["st"], 2), "id": p[0], "x": round(p[2], 3), "y": round(p[3], 3),
+                           "nearest_player": None if nearest is None else round(nearest, 3)})
+    judged = [s for s in spawns if s["nearest_player"] is not None]
+    if not judged:
+        return _inconclusive("no player spawned while another player was in the world", source="/debug/entities")
+    bad = [s for s in judged if s["nearest_player"] < min_d]
+    ok = len(bad) <= int(a.get("max_overlapping", 0))
+    return _result(PASS if ok else FAIL,
+                   {"spawns": len(spawns), "judged": len(judged), "overlapping": len(bad),
+                    "min_nearest": min(s["nearest_player"] for s in judged)},
+                   {"min_distance": min_d, "max_overlapping": a.get("max_overlapping", 0)},
+                   source="server /debug/entities: first appearance or respawn (dead -> alive, or HP from below half "
+                          "to full) of each player, distance to every other live player in the same sample",
+                   sampling=f"{len(rows)} server samples",
+                   rationale="every new or respawned player used to start on the same point (rpg-mmo-server#469); "
+                             "GAMESERVER_SPAWN_SCATTER spreads them",
+                   detail={"overlapping": bad[:20], "spawns": spawns[:40]},
                    artifacts=[str(ev["run_dir"] / "server" / "entities.ndjson")])
 
 
@@ -1050,6 +1224,8 @@ CHECKS = {
     "kcp_health": check_kcp_health,
     "snapshot_update_gap": check_snapshot_update_gap,
     "enemy_crowding": check_enemy_crowding,
+    "enemy_pursuit": check_enemy_pursuit,
+    "spawn_overlap": check_spawn_overlap,
     "enemy_server_speed": check_enemy_server_speed,
     "enemy_render_speed": check_enemy_render_speed,
     "combat_effect": check_combat_effect,

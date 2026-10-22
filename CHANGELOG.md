@@ -19,6 +19,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness error.
   - Design, commands, artifacts and triage: `testlab/README.md`.
   - `tests/run-all.sh` runs its unit tests (`testlab/tests/test_lab.py`) and loads every scenario.
+  - Crowd checks for rpg-mmo-server#469: `spawn_overlap` (no fresh or respawned player starts
+    within 0.5 units of another), `enemy_pursuit` (an enemy far from every player heads for the
+    nearest one; settled-crowd speed relative to its target). `enemy_crowding` overlap is a failure
+    where the scenario declares separation (S02, S05, S10). Concentration on one player is INFO
+    unless a scenario sets `share_is_failure`, because it follows the nearest-player rule.
+  - `render_jumps` classifies a jump as a server teleport when the client's own received stream
+    shows the same step, and gives host stalls a 1 s tail window, so a respawn the server probe
+    aliased is not counted against interpolation or prediction.
 - `skills/measure/references/legs.md`: the testlab as the multi-client verification leg.
 
 ## [1.0.5] - 2026-10-22

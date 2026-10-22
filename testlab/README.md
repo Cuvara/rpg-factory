@@ -144,6 +144,9 @@ Copy a file in `scenarios/` and change these fields:
 | `port conflict` in preflight | `stack.py preflight` | something other than `rpgs-*` holds 9000/9501/8350 |
 | `render_jumps` local_major | `largest` in the detail, `client-N/samples.ndjson` (`pred` vs received), `shots/anomaly*.png` | prediction disagreeing with the server (e.g. the predictor-bounds bug, S10) |
 | `render_jumps` server_teleport | nothing; informational | a respawn or teleport the server made |
+| `spawn_overlap` FAIL | `detail.overlapping` (player, time, position, nearest other player) | a fresh or respawned player placed on another (rpg-mmo-server#469); `GAMESERVER_SPAWN_SCATTER=0` reproduces it |
+| `enemy_crowding` overlap FAIL | `timeline` (`nn_p10`, `overlap_ratio`) | enemy separation off or not converging (`GAMESERVER_ENEMY_SEPARATION`, #469). Concentration on one player is INFO: it follows the nearest-player rule, which `enemy_pursuit` checks |
+| `enemy_pursuit` FAIL | `detail.away` (enemy, target, heading) | an enemy far from every player not heading for the nearest one; `settled_rel_speed_p95` above its bound is a crowd that still jitters at its target |
 | `position_divergence` with layer "interpolation" | the worst rows, `samples.ndjson` | the client received the right position and drew it elsewhere |
 | `position_divergence` with layer "snapshot or transport" | `snapshots.ndjson` gaps, `/status` replication gap | the client never received the server's path |
 | `kcp_health` dropped `no_session` | `metrics-after.txt` vs `metrics-end.txt` | a client quit inside the window |

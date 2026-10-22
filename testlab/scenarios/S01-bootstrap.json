@@ -12,6 +12,7 @@
   "client_defaults": { "steps": [], "actions": [] },
   "assertions": [
     { "id": "in_world", "check": "clients_in_world", "title": "every client reached IN WORLD" },
+    { "id": "spawn_overlap", "check": "spawn_overlap", "min_distance": 0.5, "title": "no player starts on top of another (#469)" },
     { "id": "identities", "check": "distinct_user_ids", "title": "three distinct Nakama users" },
     { "id": "one_server", "check": "same_game_server", "title": "all clients assigned the same game server" },
     { "id": "players_online", "check": "players_online", "title": "server reports every client online" },

@@ -132,8 +132,20 @@
       "id": "crowding",
       "check": "enemy_crowding",
       "max_share_when_spread": 0.9,
-      "max_overlap_ratio": 0.5,
+      "overlap_radius": 0.4,
+      "max_overlap_ratio": 0.1,
+      "overlap_is_failure": true,
       "require_spread": true
+    },
+    {
+      "id": "pursuit",
+      "check": "enemy_pursuit",
+      "min_pursuit_ratio": 0.95
+    },
+    {
+      "id": "spawn_overlap",
+      "check": "spawn_overlap",
+      "min_distance": 0.5
     },
     {
       "id": "enemy_render_speed",

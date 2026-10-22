@@ -18,6 +18,7 @@
   ],
   "assertions": [
     { "id": "in_world", "check": "clients_in_world" },
+    { "id": "spawn_overlap", "check": "spawn_overlap", "min_distance": 0.5, "title": "no player starts on top of another (#469)" },
     { "id": "completed", "check": "clients_completed" },
     { "id": "logs_clean", "check": "client_log_clean" },
     { "id": "combat", "check": "combat_effect", "min_damaged": 3 },

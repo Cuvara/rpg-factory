@@ -246,6 +246,21 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(res["measured"]["player_entities_final"], 3)
         self.assertEqual(res["status"], analyze.PASS)
 
+    def test_a_respawn_the_server_probe_aliased_is_seen_in_the_received_stream(self):
+        # Server probe at 5 Hz misses the instant; the client received -1.17 -> 0 in one snapshot.
+        ents = [_row(15.0, [["p", "player", 0.0, 0.0, 1, 100, 0, 5]]),
+                _row(15.22, [["p", "player", -0.83, 0.0, 1, 100, 0, 5]]),
+                _row(15.42, [["p", "player", -0.25, 0.0, 100, 100, 0, 5]])]
+        ev = _ev(entities=ents, duration=20)
+        c = ev["clients"][0]
+        c["summary"] = {"outcome": "completed"}
+        c["samples"] = [{"st": 15.31, "ents": [["p", "player", 1, -1.28, 0.0, -1.167, 0.0]]},
+                        {"st": 15.366, "ents": [["p", "player", 1, -0.35, 0.0, 0.0, 0.0]]}]
+        c["events"] = [{"event": "render_jump", "st": 15.362, "id": "p", "type": "player", "local": True, "step": 1.14}]
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual(res["measured"]["server_teleport"], 1)
+        self.assertEqual(res["status"], analyze.PASS)
+
     def test_replication_gap_with_missing_samples_is_inconclusive(self):
         rows = [{"_st": float(i), "snapshot_max_update_gap_ms": 100} for i in range(10)]
         rows[3].pop("snapshot_max_update_gap_ms")
@@ -262,7 +277,69 @@ class AnalysisTests(unittest.TestCase):
         self.assertNotEqual(res["status"], analyze.FAIL, "a pile on players standing together is the AI design")
         spread = _ev(entities=[sample(6 + i * 0.2, [0, 15, -15]) for i in range(30)], duration=20)
         res = analyze.check_enemy_crowding(spread, {"spread_distance": 10, "max_share_when_spread": 0.9})
+        self.assertEqual(res["status"], analyze.INFO, "concentration alone follows the nearest-player rule")
+        res = analyze.check_enemy_crowding(spread, {"spread_distance": 10, "max_share_when_spread": 0.9,
+                                                    "share_is_failure": True})
         self.assertEqual(res["status"], analyze.FAIL)
+
+    def test_pursuit_passes_when_far_enemies_close_on_the_nearest_player(self):
+        def sample(st, sign):
+            ents = [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 40.0, 0.0, 100, 100, 0, 5]]
+            # m0 near a walks to a; m1 near b walks to b (or away from it when sign is -1).
+            ents += [["m0", "mob", -10.0 + 2.5 * st, 0.0, 16, 16, 0, 2.5],
+                     ["m1", "mob", 50.0 - sign * 2.5 * st, 0.0, 16, 16, 0, 2.5]]
+            return _row(st, ents)
+        ok = _ev(entities=[sample(i * 0.1, 1) for i in range(30)], duration=3)
+        res = analyze.check_enemy_pursuit(ok, {"skip_first_s": 0})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertGreater(res["measured"]["far_steps"], 0)
+        bad = _ev(entities=[sample(i * 0.1, -1) for i in range(30)], duration=3)
+        res = analyze.check_enemy_pursuit(bad, {"skip_first_s": 0})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertTrue(0.4 < res["measured"]["pursuit_ratio"] < 0.6, res["measured"])  # m0 closes, m1 flees
+
+    def test_pursuit_settled_jitter_is_relative_to_the_target(self):
+        def sample(st, jitter):
+            dx = (0.1 if int(st * 10) % 2 else -0.1) if jitter else 0.0
+            ents = [["a", "player", st, 0.0, 100, 100, 0, 5],
+                    ["m0", "mob", st + 1.0 + dx, 0.0, 16, 16, 0, 2.5],
+                    ["m1", "mob", -10.0 + 2.5 * st, 5.0, 16, 16, 0, 2.5]]
+            return _row(st, ents)
+        still = analyze.check_enemy_pursuit(_ev(entities=[sample(i * 0.1, False) for i in range(30)], duration=3),
+                                            {"skip_first_s": 0, "max_settled_speed": 0.3})
+        self.assertEqual(still["measured"]["settled_rel_speed_p95"], 0.0, "following a walking player is not jitter")
+        self.assertEqual(still["status"], analyze.PASS)
+        shaky = analyze.check_enemy_pursuit(_ev(entities=[sample(i * 0.1, True) for i in range(30)], duration=3),
+                                            {"skip_first_s": 0, "max_settled_speed": 0.3})
+        self.assertEqual(shaky["status"], analyze.FAIL)
+
+    def test_pursuit_without_far_motion_is_inconclusive(self):
+        rows = [_row(i * 0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["m", "mob", 1.0, 0.0, 16, 16, 0, 2.5]])
+                for i in range(20)]
+        self.assertEqual(analyze.check_enemy_pursuit(_ev(entities=rows, duration=2), {"skip_first_s": 0})["status"],
+                         analyze.INCONCLUSIVE)
+
+    def test_spawn_overlap_flags_players_starting_on_the_same_point(self):
+        def run(second_at):
+            rows = [_row(0.0, [["a", "player", 0.0, 0.0, 100, 100, 0, 5]])]
+            rows += [_row(0.1 * k, [["a", "player", 0.0, 0.0, 100, 100, 0, 5],
+                                    ["b", "player", second_at, 0.0, 100, 100, 0, 5]]) for k in range(1, 5)]
+            return analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {"min_distance": 0.5})
+        self.assertEqual(run(0.0)["status"], analyze.FAIL)
+        self.assertEqual(run(0.0)["measured"]["overlapping"], 1)
+        self.assertEqual(run(2.0)["status"], analyze.PASS)
+
+    def test_spawn_overlap_counts_a_respawn_onto_another_player(self):
+        rows = [_row(0.0, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 9.0, 0.0, 100, 100, 0, 5]]),
+                _row(0.1, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 9.0, 0.0, 0, 100, 1, 5]]),
+                _row(0.2, [["a", "player", 0.0, 0.0, 100, 100, 0, 5], ["b", "player", 0.1, 0.0, 100, 100, 0, 5]])]
+        res = analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {"min_distance": 0.5})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["detail"]["overlapping"][0]["id"], "b")
+
+    def test_spawn_overlap_with_one_player_is_inconclusive(self):
+        rows = [_row(0.1 * k, [["a", "player", 0.0, 0.0, 100, 100, 0, 5]]) for k in range(5)]
+        self.assertEqual(analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {})["status"], analyze.INCONCLUSIVE)
 
     def test_inputs_consumed_compares_direction_and_distance(self):
         ents = [_row(i * 0.2, [["u", "player", 5.0 * max(0, i * 0.2 - 1), 0.0, 100, 100, 0, 5.0]]) for i in range(30)]
