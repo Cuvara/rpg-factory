@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- The README "Version" line still said 1.0.0 through 1.0.1-1.0.3; `run-all.sh`'s version check now covers it
+  (VERSION == plugin.json == marketplace == CHANGELOG section == README).
+
 ## [1.0.3] - 2026-10-22
 
 Hotfix: the hooks never ask for confirmation and never block; every former ask/deny rule reaches the agent

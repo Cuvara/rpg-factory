@@ -51,9 +51,10 @@ msrc=$(jq -r '.plugins[0].source' .claude-plugin/marketplace.json)
   || bad "manifest consistency" "plugin=$name marketplace=$mname source=$msrc"
 ver=$(jq -r .version .claude-plugin/plugin.json); mver=$(jq -r '.plugins[0].version // empty' .claude-plugin/marketplace.json)
 fver=$(tr -d '[:space:]' < VERSION 2>/dev/null)
-{ [ "$ver" = "$fver" ] && [ -z "$mver" -o "$mver" = "$ver" ] && grep -q "^## \[$ver\]" CHANGELOG.md; } \
-  && ok "version: VERSION == plugin.json == marketplace == CHANGELOG section ($ver)" \
-  || bad "version consistency" "VERSION=$fver plugin=$ver marketplace=$mver changelog section missing?"
+rver=$(sed -n 's/^Version \([0-9][0-9.]*\) (see `VERSION`).*/\1/p' README.md)
+{ [ "$ver" = "$fver" ] && [ -z "$mver" -o "$mver" = "$ver" ] && grep -q "^## \[$ver\]" CHANGELOG.md && [ "$rver" = "$ver" ]; } \
+  && ok "version: VERSION == plugin.json == marketplace == CHANGELOG section == README ($ver)" \
+  || bad "version consistency" "VERSION=$fver plugin=$ver marketplace=$mver README=${rver:-none} changelog section missing?"
 [ -f "skills/factory-core/SKILL.md" ] && head -5 skills/factory-core/SKILL.md | grep -q '^name: factory-core$' \
   && ok "skill: factory-core frontmatter name" || bad "skill: factory-core frontmatter name"
 for ref in $(grep -o 'references/[a-z-]*\.md' skills/factory-core/SKILL.md | sort -u); do
