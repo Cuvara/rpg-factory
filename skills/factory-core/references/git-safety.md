@@ -1,8 +1,9 @@
 # Git safety
 
 The policy has two layers: the rules below, which you follow, and the PreToolUse guard
-(`scripts/git-guard.py`, Bash **and** PowerShell), which asks the user (or denies, for tags) when a
-command would break them. Following the rules means the guard never fires.
+(`scripts/git-guard.py`, Bash **and** PowerShell), which flags a command that would break them. Since 1.0.3
+the guard is **advisory only**: it never asks the user and never blocks; the command runs and you receive
+`rpg-factory advisory (high|warn): <rule>` as context. The rules are yours to keep.
 
 ## Rules
 
@@ -52,7 +53,7 @@ command would break them. Following the rules means the guard never fires.
 13. **A stash is never assumed to be yours.** Other sessions and the user stash too. Inspect it first
     (`git stash list`, `git stash show -p stash@{n}`) and note its SHA (`git rev-parse stash@{n}`)
     before any `apply`/`pop`; never `drop` or `clear`. When a stash is unavoidable, use the visible
-    path: `git stash push -m "rpg-factory: <reason>" -- <paths>` (the guard asks) and note the SHA.
+    path: `git stash push -m "rpg-factory: <reason>" -- <paths>` (the guard flags it) and note the SHA.
 14. **One mutating command per worktree at a time.** Do not run two state-changing commands against
     the same worktree in parallel (or alongside another session working there). Read-only
     investigation (`git status`, `log`, `diff`, `reflog`, `stash list/show`) may run in parallel.
@@ -65,26 +66,26 @@ expanded first: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, 
 parsed recursively, repo git aliases are expanded, and PowerShell is tokenized with its own
 quoting (`` ` `` escape, `&` call operator, `git.exe`).
 
-| Command | Decision | Why |
+| Command | Advisory | Why |
 |---|---|---|
-| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing or fetching into tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`) | **deny** | agents never tag |
-| `gh release create/upload/edit`, `gh api` REST writes to `/git/tags`, tag refs or `/releases`, `gh api graphql` mutations creating a tag ref or release | **deny** | agents never tag |
-| `gh repo delete/archive`, `gh api -X DELETE repos/<o>/<r>` (or the GraphQL equivalents) | **deny** | irreversible |
-| any other `gh api` write (method from `-X`, else POST when fields/`--input` are given), GraphQL mutations, GraphQL from a file; mutating `gh` verbs (repo edit/rename/sync, secret/variable set, workflow enable/disable, run cancel, pr close/comment/edit, label create...) | ask | remote-only change |
-| `reset --hard/--merge/--keep`, `reset <commit>` on a protected branch, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | ask | discards work or moves a protected branch |
-| `clean -f...` | ask | deletes untracked files |
-| `stash` (push/save/pop/drop/clear) | ask | moves or drops uncommitted changes |
-| `branch -D`, `branch -f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`, `prune` | ask | rewrites or drops refs |
-| `push` (any; force and delete-ref variants named) | ask | publishes or rewrites remote state |
-| `add -A/--all/./:/`, `commit -a` | ask | stages the user's changes |
-| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull` (unless `--ff-only`) on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | ask | protected branch |
-| `branch -m/-d` of a protected branch; `fetch <src>:<dst>` into a local branch (`+` forced or not) | ask | moves or drops a protected/local branch |
-| `remote add/set-url/remove/rename`, `config` writes to `alias.*`, `remote.*.url/pushurl`, `url.*.insteadOf`, `core.hooksPath`, `credential.*`; `symbolic-ref` writes | ask | redirects fetch/push or hides what runs |
-| `commit --amend`, `rebase`, `filter-branch/filter-repo` | ask | rewrites history |
-| `submodule update/deinit/sync/foreach/add/set-url` | ask | changes submodule checkouts or sources |
-| `worktree remove/prune --force` | ask | deletes a worktree with its changes |
-| git run through an interpreter one-liner, or a program that is `$VAR` / `$(...)` / backticks | ask | the guard cannot see what runs |
-| any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | ask (or the gate's `decision`); a read-only command (`cat`, `grep`, `sed -n 10,40p`, `git log`) that only names a gated script passes when the gate is `read_only_exempt` (every matching gate except `secrets`) | human gate |
+| `tag <name>`, `tag -d`, `push --tags/--follow-tags`, pushing or fetching into tag refs (`refs/tags/*`, `v*`, `sgl-v*`, `core-baseline*`) | **high** | agents never tag |
+| `gh release create/upload/edit`, `gh api` REST writes to `/git/tags`, tag refs or `/releases`, `gh api graphql` mutations creating a tag ref or release | **high** | agents never tag |
+| `gh repo delete/archive`, `gh api -X DELETE repos/<o>/<r>` (or the GraphQL equivalents) | **high** | irreversible |
+| any other `gh api` write (method from `-X`, else POST when fields/`--input` are given), GraphQL mutations, GraphQL from a file; mutating `gh` verbs (repo edit/rename/sync, secret/variable set, workflow enable/disable, run cancel, pr close/comment/edit, label create...) | warn | remote-only change |
+| `reset --hard/--merge/--keep`, `reset <commit>` on a protected branch, `checkout -- <p>` / `checkout .` / `checkout -f`, `restore <p>` (not `--staged`), `switch -f/--discard-changes` | warn | discards work or moves a protected branch |
+| `clean -f...` | warn | deletes untracked files |
+| `stash` (push/save/pop/drop/clear) | warn | moves or drops uncommitted changes |
+| `branch -D`, `branch -f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`, `prune` | warn | rewrites or drops refs |
+| `push` (any; force and delete-ref variants named) | warn | publishes or rewrites remote state |
+| `add -A/--all/./:/`, `commit -a` | warn | stages the user's changes |
+| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull` (unless `--ff-only`) on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | warn | protected branch |
+| `branch -m/-d` of a protected branch; `fetch <src>:<dst>` into a local branch (`+` forced or not) | warn | moves or drops a protected/local branch |
+| `remote add/set-url/remove/rename`, `config` writes to `alias.*`, `remote.*.url/pushurl`, `url.*.insteadOf`, `core.hooksPath`, `credential.*`; `symbolic-ref` writes | warn | redirects fetch/push or hides what runs |
+| `commit --amend`, `rebase`, `filter-branch/filter-repo` | warn | rewrites history |
+| `submodule update/deinit/sync/foreach/add/set-url` | warn | changes submodule checkouts or sources |
+| `worktree remove/prune --force` | warn | deletes a worktree with its changes |
+| git run through an interpreter one-liner, or a program that is `$VAR` / `$(...)` / backticks | warn | the guard cannot see what runs |
+| any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | warn (`high` when the gate's `decision` is `deny`); a read-only command (`cat`, `grep`, `sed -n 10,40p`, `git log`) that only names a gated script passes when the gate is `read_only_exempt` (every matching gate except `secrets`) | human gate |
 
 The guard ignores quoted text and heredoc bodies (a commit message mentioning `git tag` is fine),
 follows `cd <dir> &&` and `git -C <dir>`, knows that `git checkout -b feat/x && git commit`
@@ -97,9 +98,10 @@ Read-only `gh` (view/list/checks/diff/status/search, `gh api` GET, GraphQL queri
 ## File tools and modes
 
 - `scripts/file-guard.py` (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Read`, workspace only): writes into an
-  embedded clone, submodule content, a registry generated path, or secrets **ask**; secret reads ask.
-- The Factory mode declared with `factory-context.sh --mode <m>` is enforced by both guards: `analyze`, `plan`,
-  `review` deny writes and mutating commands; `validate` allows only `run-checks.py` (and read-only commands).
+  embedded clone, submodule content, a registry generated path, or secrets get a **warn** advisory; secret reads too.
+- The Factory mode declared with `factory-context.sh --mode <m>` is flagged by both guards (advisory, never blocked):
+  `analyze`, `plan`, `review` flag writes and mutating commands as **high**; `validate` flags anything but
+  `run-checks.py` (and read-only commands).
 - Not inspected: MCP tools that write files (Unity-MCP asset/scene tools) - the `unity-asset-edit` gate is the
   control there.
 

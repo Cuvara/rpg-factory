@@ -319,7 +319,7 @@
     },
     {
       "id": "no-tags",
-      "rule": "Agents never create or push tags in ANY workspace repo (v*, sgl-v*, core-baseline-*). Tags are release actions of the lead. Skills stop at 'ready to tag <repo> <tag>' with evidence; the git guard denies tag creation and tag pushes.",
+      "rule": "Agents never create or push tags in ANY workspace repo (v*, sgl-v*, core-baseline-*). Tags are release actions of the lead. Skills stop at 'ready to tag <repo> <tag>' with evidence; the git guard flags tag creation and tag pushes (advisory high).",
       "source": "rpg-mmo-server/backend/TEAM.md; user decision 2026-09-30 (package repos)"
     },
     {
@@ -3659,7 +3659,7 @@
   "human_gates": [
     {
       "id": "tag",
-      "rule": "Creating, deleting or pushing tags in any repo - the lead only. The guard denies it.",
+      "rule": "Creating, deleting or pushing tags in any repo - the lead only. The guard flags it (advisory high).",
       "decision": "deny"
     },
     {

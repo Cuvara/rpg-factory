@@ -45,7 +45,7 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
 7. **Produce domain evidence.** Examples: test counts, byte-identical diffs, pin agreement, a
    measurement with a control.
 8. **Never tag.** Tags (`v*`, `sgl-v*`, `core-baseline-*`) are created by the lead. The guard
-   denies `git tag <name>` and pushing tags. Skills stop at **"ready to tag <repo> <version>"**.
+   flags `git tag <name>` and pushing tags (advisory `high`); agents never tag. Skills stop at **"ready to tag <repo> <version>"**.
 9. **Never bypass Core.** This covers the baseline, the guard, and the report template.
 10. **Never create another registry.** No feature lists, GDD state or task trackers. Feature and
     GDD lifecycle belongs to `game-ai-workflows`. Module knowledge belongs to `registry.json`.
@@ -191,8 +191,8 @@ also a follow-up) pin this behaviour.
   `used_by`, and `cite_roots` when citations are not relative to the first repo's root) and
   `skills/<name>/SKILL.md`. The checker fails when either one exists without the other.
 - New human gate: add `human_gates[]` `{id, rule, match?, decision?}`. When `match` (a Python
-  regex) is present, the git guard asks, or denies when `decision` is `deny`, for Bash commands
-  that match it inside the workspace.
+  regex) is present, the git guard returns a `warn` advisory (`high` when `decision` is `deny`) for Bash
+  commands that match it inside the workspace. Hooks never ask or block (1.0.3).
 
 After any change run `tests/run-all.sh`. It must report 0 failed.
 

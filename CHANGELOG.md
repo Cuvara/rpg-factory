@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-22
+
+Hotfix: the hooks never ask for confirmation and never block; every former ask/deny rule reaches the agent
+as an advisory. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin update
+rpg-factory@rpg-factory`) and start a new session. Also ships the citation drift guard (PR #6, new optional
+registry field `skills.<s>.cite_roots`) and the skill authoring workflow (PR #9). No command-line changes.
+
 ### Added
 - **Skill authoring workflow.** Adding a skill meant about 25 hand edits across the registry, skills,
   tests, docs and evals, and several lists had already gone stale (unity-dots and netcode-client were missing
@@ -41,6 +48,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   silently keep the last one (a duplicated `cite_roots` hid that another skill had none).
 
 ### Changed
+- **Hooks are advisory only: they never ask the user and never block the agent.** Agents using the plugin
+  still stopped for a human Yes/No: every guard rule returned a `permissionDecision` - `ask` (destructive git,
+  any push, rebase, stash, human gates, file-guard rules) shows a confirmation prompt only a person can answer,
+  and `deny` (tags and GitHub Releases, `gh repo delete/archive`, read-only execution modes, a tech skill before
+  its lead) blocked the call. Now `git-guard.py`, `file-guard.py` and `factory_session.py --skill` never emit a
+  `permissionDecision`. A match is returned as `additionalContext`
+  `rpg-factory advisory (high|warn): <rule>` - `high` for the former deny class, `warn` for the former ask
+  class - and the tool call proceeds through Claude Code's normal permission flow (the user's own settings
+  are untouched). The classifiers and rule texts are unchanged; the policy in `git-safety.md` stays as
+  guidance for the agent.
+- Tests read the advisory level (`high` / `warn` / `allow`) instead of a decision, and every test command
+  fails if any hook output contains `permissionDecision`. `tests/session-state.test.sh` adds direct probes
+  (rebase, force push, tag, `gh repo delete`, `reset --hard`, multi-client, `kubectl`, a tech skill before its
+  lead). `installed-safety.sh` still executes only commands with no advisory.
 - `skill-contract.md` "New skill" names every required registry field (`order`, `used_by`, `cite_roots`).
 
 ### Fixed

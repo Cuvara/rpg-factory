@@ -32,9 +32,9 @@ header says the install state is not CURRENT, tell the user (this session may ru
 | `resume` | asks to continue interrupted work | `factory-status.py`, then continue at the first incomplete step (implement rules) | redo finished legs |
 
 Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill arguments) and in the Route call
-(`factory-context.sh --mode <mode> ...`). The hooks then **enforce** it: in
-analyze/plan/review every file write and mutating command is denied; validate allows only `run-checks.py`.
-Switch mode only when the user asks for it (e.g. "now implement it") - never to get past a denial.
+(`factory-context.sh --mode <mode> ...`). The hooks then **flag** departures (advisory only, they never block):
+in analyze/plan/review every file write and mutating command gets a `high` advisory; validate flags anything but
+`run-checks.py`. Respect the mode yourself. Switch mode only when the user asks for it (e.g. "now implement it").
 Every mode except validate/resume invokes the lead skill: its workflow is where the plan comes from.
 
 ## Workflow
@@ -107,13 +107,14 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
 
 ## Git safety and human gates
 
-- The guard (Bash **and** PowerShell) **denies** tag creation/deletion/push, `gh api` tag refs and
-  `gh release create`; it **asks** before destructive git, any push, `add -A`, commits/merges/
-  cherry-picks/reverts on protected branches, ref rewrites, submodule updates, commands it cannot
-  see through (interpreters, `$VAR`/`$(...)` as the program) and registry `human_gates`.
-- GitHub: `gh` reads pass; tag/release creation (REST or GraphQL) and repository deletion are
-  **denied**; every other remote mutation (branch protection, PRs, settings, refs) asks.
-- File tools (Write/Edit/MultiEdit/NotebookEdit) ask before touching embedded clones
+- The hooks are **advisory only** (1.0.3): they never ask the user and never block. A tool call that
+  matches a rule runs, and you receive `rpg-factory advisory (high|warn): <rule>` as context - weigh it
+  and follow the policy in `references/git-safety.md`.
+- `high` (Bash **and** PowerShell): tag creation/deletion/push, `gh api` tag refs, `gh release create`,
+  repository deletion; `warn`: destructive git, any push, `add -A`, commits/merges/cherry-picks/reverts
+  on protected branches, ref rewrites, submodule updates, commands the guard cannot see through
+  (interpreters, `$VAR`/`$(...)` as the program), other remote `gh` mutations and registry `human_gates`.
+- File tools (Write/Edit/MultiEdit/NotebookEdit) get a `warn` advisory for embedded clones
   (`Packages/com.cuvara.*`), submodule content, generated paths or secrets.
 - Stage explicit paths only. Policy: `references/git-safety.md`.
 

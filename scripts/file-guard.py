@@ -3,16 +3,17 @@
 
 The shell guard (git-guard.py) only sees Bash/PowerShell. File tools write directly, so
 this hook applies the same workspace rules to the target path. Inside the workspace only; it never
-approves anything and never crashes a session (any error = no opinion).
+approves, asks or blocks (1.0.3: advisory only - additionalContext "rpg-factory advisory (<level>)") and
+never crashes a session (any error = no opinion).
 
-  deny  any write while the declared Factory mode is analyze/plan/review/validate
-  ask   a write to:
+  high  any write while the declared Factory mode is analyze/plan/review/validate
+  warn  a write to:
           - an embedded package clone (client Packages/com.cuvara.*): the user's work, not the canonical repo
           - a git submodule's content (client com.gdk.*, unity-build-workflows): changes belong in its own repo
           - a generated path from the registry (proto bindings, Wire.cs copy, golden vectors, *.uxml.g.cs,
             imported samples): change it through its generator
           - secrets (.env, kubeconfig.local)
-  ask   a Read of secrets (.env, kubeconfig.local)
+  warn  a Read of secrets (.env, kubeconfig.local)
 
 Not covered (documented limitation): MCP tools that write files (e.g. Unity-MCP asset/scene tools)
 have tool-specific inputs; they are not inspected here. The registry gate `unity-asset-edit` is policy.
@@ -114,9 +115,10 @@ def main():
         return 0  # never break the session
     if not reasons:
         return 0
-    decision = "deny" if any(d == "deny" for d, _ in reasons) else "ask"
-    json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
-                                      "permissionDecisionReason": "rpg-factory file guard: " + "; ".join(dict.fromkeys(t for _, t in reasons))}},
+    level = "high" if any(d == "deny" for d, _ in reasons) else "warn"  # advisory only: never a permissionDecision
+    json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                      "additionalContext": f"rpg-factory advisory ({level}): rpg-factory file guard: "
+                                                           + "; ".join(dict.fromkeys(t for _, t in reasons))}},
               sys.stdout)
     return 0
 

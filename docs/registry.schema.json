@@ -366,12 +366,13 @@
               "ask",
               "deny"
             ],
-            "default": "ask"
+            "default": "ask",
+            "description": "Advisory level (hooks never ask or block since 1.0.3): ask -> rpg-factory advisory (warn), deny -> rpg-factory advisory (high)."
           },
           "read_only_exempt": {
             "type": "boolean",
             "default": false,
-            "description": "The git guard skips this gate when the whole command is read-only (factory_session.is_read_only: cat, grep, sed -n Np, git log ...), so inspecting a gated script does not ask. Never set it on a gate about reading (secrets)."
+            "description": "The git guard skips this gate when the whole command is read-only (factory_session.is_read_only: cat, grep, sed -n Np, git log ...), so inspecting a gated script gets no advisory. Never set it on a gate about reading (secrets)."
           }
         }
       }
