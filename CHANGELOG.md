@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-22
+
+Skill development features. Skills' `path:line` citations are now checked against the product repos'
+integration branches (every citation names the symbol it shows), and new skills are scaffolded and checked
+for every place they must appear. All 323 existing line citations were refreshed. Update the plugin
+(`claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`) and start a
+new session. No command-line or hook changes; the registry gains the optional `skills.<s>.cite_roots` field.
+
 ### Added
 - **Skill authoring workflow.** Adding a skill meant about 25 hand edits across the registry, skills,
   tests, docs and evals, and several lists had already gone stale (unity-dots and netcode-client were missing
