@@ -934,7 +934,10 @@ def check_reconnect(ev, a):
     launches = [h for h in hist.get("history", []) if h.get("event") == "launch"]
     first_uid = hist.get("first_user_id")
     final_uid = ids[k]
-    last = ev["server"]["entities"][-1] if ev["server"]["entities"] else None
+    lo, hi = _window(ev)
+    inside = [r for r in ev["server"]["entities"] if r.get("st") is not None and lo <= r["st"] <= hi]
+    # The last sample INSIDE the scenario window: after it, clients are quitting on purpose.
+    last = inside[-1] if inside else None
     players_final = len(_players(last)) if last else None
     rows = _status_in_window(ev)
     online_final = rows[-1].get("players_online") if rows else None

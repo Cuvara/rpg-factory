@@ -235,6 +235,17 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(res["status"], analyze.PASS)
         self.assertEqual(res["measured"]["ignored_type"], 1)
 
+    def test_reconnect_reads_the_last_sample_inside_the_window(self):
+        rows = [_row(st, [[f"p{i}", "player", 0.0, 0.0, 100, 100, 0, 5] for i in range(3)]) for st in (1.0, 5.0, 9.5)]
+        rows.append(_row(11.0, [["p0", "player", 0.0, 0.0, 100, 100, 0, 5]]))  # teardown, after the window
+        ev = _ev(clients=3, entities=rows, duration=10, status=[{"_st": 9.0, "players_online": 3}])
+        for i, c in enumerate(ev["clients"]):
+            c["summary"] = {"user_id": f"p{i}"}
+        ev["clients"][2]["history"] = {"first_user_id": "p2", "history": [{"event": "launch"}, {"event": "launch"}]}
+        res = analyze.check_reconnect(ev, {"client": 2})
+        self.assertEqual(res["measured"]["player_entities_final"], 3)
+        self.assertEqual(res["status"], analyze.PASS)
+
     def test_replication_gap_with_missing_samples_is_inconclusive(self):
         rows = [{"_st": float(i), "snapshot_max_update_gap_ms": 100} for i in range(10)]
         rows[3].pop("snapshot_max_update_gap_ms")
