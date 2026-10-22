@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
+  delegated work: the main session is the lead and integrator; one worktree per implementation task (Orca-managed
+  or `isolation: "worktree"`, never a second clone); one Unity writer per client project; shared exclusive
+  resources go to one task at a time and a task without one reports `NOT_RUN`; QA and review run in parallel on
+  a recorded candidate commit; the lead re-verifies, integrates in dependency order and cleans up only its own
+  worktrees. Orca is the preferred coordinator (load `orca skills get orchestration`; never a decision gate for
+  routine work) with Claude Code worktree agents as the fallback. Tags, releases, deploys and `human_gates` keep
+  their rules; nothing new asks or blocks. factory-core `SKILL.md`, `git-safety.md` (rule 10 now points here,
+  rule 5 names the lead's integration-branch merges), `report.md` (optional parallel-work ledger) and
+  `.claude/CLAUDE.md` point to it without copying it.
+- `tests/skills-lint.sh` checks the policy is linked, exists in one copy, contains no blocking wording and keeps
+  the release and `human_gates` rules; `tests/parallel-policy.test.sh` proves those checks fail on a mutated
+  plugin copy; `tests/orca-commands.test.sh` verifies every cited `orca` command against `orca --help` (skipped
+  when Orca is not installed, and in `--no-workspace` runs).
+
 ## [1.0.5] - 2026-10-22
 
 Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay

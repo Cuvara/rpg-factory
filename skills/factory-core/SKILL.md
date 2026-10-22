@@ -36,6 +36,8 @@ Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill argu
 in analyze/plan/review every file write and mutating command gets a `high` advisory; validate flags anything but
 `run-checks.py`. Respect the mode yourself. Switch mode only when the user asks for it (e.g. "now implement it").
 Every mode except validate/resume invokes the lead skill: its workflow is where the plan comes from.
+Parallel work: the main session is the lead and integrator; it delegates in worktrees, runs QA in parallel and
+integrates the results - `references/parallel-work.md`.
 
 ## Workflow
 
@@ -151,5 +153,6 @@ requested before its lead runs with an advisory - then route and invoke the lead
 - `references/git-safety.md` - before any branch, stage, commit or cleanup.
 - `references/report.md` - before the final report (always).
 - `references/skill-contract.md` - routing precedence and how skills compose.
+- `references/parallel-work.md` - before delegating, dispatching workers or integrating their branches.
 
 All paths above are relative to `${CLAUDE_SKILL_DIR}`.

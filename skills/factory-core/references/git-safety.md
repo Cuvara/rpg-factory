@@ -22,7 +22,8 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    `commit -a`.
 5. **Commit, push, PR, merge only on request; tags and releases only when authorized.** Commit
    messages follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target
-   `develop`, and the repos squash-merge. Without explicit release authorization from the user in the
+   `develop`, and the repos squash-merge. Merging worker branches into the task's integration branch is
+   the lead's decision (`parallel-work.md`); merging into protected branches and pushing stay on request. Without explicit release authorization from the user in the
    current task, an agent creates no tag (`v*`, `sgl-v*`, `core-baseline-*`) and publishes no release in
    any repo: skills stop at "ready to tag" with evidence and the lead tags. When the user explicitly
    authorizes a release in the current task, the agent performs exactly the authorized merge, version,
@@ -46,9 +47,8 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    client repo. Changes go to their own repos.
 9. **Never commit `file:` package paths.** `toggle-packages.sh dev` writes them and leaves
    `packages-lock.json` untouched.
-10. **Worktrees.** They're fine for parallel server work (`isolation: "worktree"` for
-    subagents). Avoid them for the client, where each worktree needs a multi-GB Unity
-    `Library/` import.
+10. **Worktrees and parallel agents:** `parallel-work.md` (one worktree per task; one Unity
+    writer per client project).
 11. **Leave the tree as you found it plus your change.** Before reporting, `git status` in
     each touched repo must show exactly the baseline plus your files.
 12. **Never stash, reset or clean to get a clean tree.** Run `git status` before anything that can
