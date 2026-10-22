@@ -134,6 +134,8 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 | S12 | S03's movement with the server at 30 Hz critical / 15 Hz world (`SIM_CRITICAL_HZ`, `SIM_WORLD_HZ`): the client must adopt the advertised tick rate; `server_config` proves the rates were in force |
 | S13 | Client stall recovery: client 0's main thread stops 500 ms at 10 s and 2000 ms at 25 s (plan action `stall`); graded by `stall_recovery`, `prediction_bound` and `render_jumps` local |
 | S08G | Graceful disconnect: client 2 leaves at 15 s with plan action `quit` (`NetworkClient.Disconnect()`); `graceful_leave`, outcome `left`, 2 players online at the end |
+| S14 | Deterministic death and respawn: client 1 killed at 12 s and 27 s with disruption `debug_kill` (POST /debug/kill); enemy phase on with no population and attacks off. Graded: respawn, spawn placement, client 1 snaps only at its respawns, remote clients without jump or overshoot, no duplicate entity |
+| S15 | Combat authority, negative path: client 0 `cast_spam` every 100 ms (below the ability cooldown) and `cast_at_point` beyond the projectile range; `input_rejections` (`ability_on_cooldown`) and `cast_damage_bound` |
 
 ## Readiness checks with derived bounds
 
@@ -150,6 +152,12 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 - `stall_recovery` (hook C2): after each `stall` event, the stalled client's local player is back on the server path: local divergence p95 <= 0.5 (the S03/S10/S12 local bound) over [end + 1 s, end + 4 s]. The 1 s recovery allowance is a test parameter. Hard snaps during each stall are reported.
 - `graceful_leave` (hook C6): a client that ran `quit` ends with outcome `left` and a `disconnected` event, and its player is gone from `/debug/entities` (and from the other clients, with C3) within 5 s. That is a test bound far under the 60 s KCP idle timeout (`KcpTuning.IdleTimeoutMs`) that cleans up a silent client.
 - Plan actions `stall` (`ms`), `quit`, `reconnect`, `cast_at_point` (`x`, `y`) and `cast_spam` (`interval_ms`) are accepted and expanded (client `docs/TESTLAB.md` "Coverage hooks"); one-shot actions need only `t0`. `clients_completed` takes `expected_outcomes` (e.g. `{"2": "left"}`).
+- Disruption `debug_kill` (`at_s`, `client`): POST `/debug/kill` `{"id": <user id>}` on the scratch server (rpg-mmo-server hook S1, `GAMESERVER_DEBUG_ENTITIES=on`). Every disruption is recorded in `disruptions.ndjson` with its scenario time; a kill records the HTTP status, outcome, server tick and `hp_before`. An assertion with `requires_debug_kill: true` is INCONCLUSIVE when no kill ran or one was not confirmed (anything but HTTP 200 `killed`).
+- `debug_kill_respawn`: each confirmed kill is followed within 2 s by /status `player_respawns` +1 and the player alive at full HP (the respawn runs within one world interval; /status is probed at 1 Hz).
+- `input_rejections`: `gameserver_inputs_rejected_total{reason}` deltas (hook S2): `expect_positive` reasons rose, `expect_zero` reasons did not. A server without a reason's series is INCONCLUSIVE.
+- `cast_damage_bound`: in each `cast_spam` / `cast_at_point` window of the one casting client, enemy HP lost <= (floor(window / cooldown) + 1) x the ability's damage power, and for `cast_at_point` no enemy farther than range + radius + 1 from the caster loses HP. Ability = the content's first projectile ability (what the client casts), read from `content/abilities.json` at the run's server commit. Projectiles have no aim-range check (`AbilityLogic.ValidateCast`), so a beyond-range aim is accepted and must expire at its range.
+- `enemy_bounds` reads `/status` `map_bounds` first (hook S4; source `map_file` or `configured_size`) and falls back to the map file; with neither it is INCONCLUSIVE.
+- `prediction_bound` also takes `max_unexplained` (absolute, per client) and `expected_explained` (`{client: n}`); `entity_lifecycle` takes `require_removal: false` and fails on a sample that draws one id twice.
 
 What each readiness area is covered by, and the gaps (with the client and server hooks they need): [`docs/COVERAGE.md`](docs/COVERAGE.md).
 

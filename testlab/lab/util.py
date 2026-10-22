@@ -100,6 +100,23 @@ def http_get(url: str, timeout: float = 3.0) -> tuple[int, bytes]:
         return 0, b""
 
 
+def http_post_json(url: str, payload: dict, timeout: float = 5.0) -> tuple[int, dict | None]:
+    """POST a JSON body; (status, parsed JSON body or None). Status 0 when nothing answered."""
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status, body = resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        status, body = exc.code, (exc.read() if exc.fp else b"")
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return 0, None
+    try:
+        return status, json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return status, None
+
+
 def http_json(url: str, timeout: float = 3.0):
     status, body = http_get(url, timeout)
     if status != 200:

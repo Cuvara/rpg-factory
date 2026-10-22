@@ -1,0 +1,135 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S14",
+  "version": 1,
+  "title": "Deterministic death and respawn: client 1 is killed twice through /debug/kill",
+  "description": "map_01, three clients. The enemy phase stays on because it owns the player respawn rule, but with no population (GAMESERVER_ENEMY_MAX, _MAX_PER_PLAYER, _WAVE_SIZE, _WAVE_SIZE_PER_PLAYER = 0) and enemy attacks off, so nothing else kills anyone. Client 1 walks away from the spawn, then is killed at 12 s and 27 s with POST /debug/kill (rpg-mmo-server hook S1: death through CombatResolver.ApplyDamage, respawn by the normal rule within one world interval). Graded: the respawn happened; respawn placement does not land on another player; client 1's only prediction snaps are the two respawns; remote clients draw the teleport without a jump or overshoot; no duplicate entity. Every assertion that depends on the kill is INCONCLUSIVE if the server did not confirm it (a server without the hook answers 404).",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 14,
+  "duration_s": 40,
+  "server_env": {
+    "GAMESERVER_ENEMY_MAX": "0",
+    "GAMESERVER_ENEMY_MAX_PER_PLAYER": "0",
+    "GAMESERVER_ENEMY_WAVE_SIZE": "0",
+    "GAMESERVER_ENEMY_WAVE_SIZE_PER_PLAYER": "0",
+    "GAMESERVER_ENEMY_ATTACKS": "false"
+  },
+  "screenshots_s": [
+    11,
+    13,
+    28
+  ],
+  "per_client": [
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 38,
+          "mode": "circle",
+          "rate": 0.5
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 6,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 15,
+          "t1": 19,
+          "mode": "move",
+          "x": 0,
+          "y": 1
+        }
+      ]
+    },
+    {
+      "steps": []
+    }
+  ],
+  "disruptions": [
+    {
+      "at_s": 12,
+      "kind": "debug_kill",
+      "client": 1
+    },
+    {
+      "at_s": 27,
+      "kind": "debug_kill",
+      "client": 1
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "respawn",
+      "check": "debug_kill_respawn",
+      "title": "each confirmed kill is followed by a respawn"
+    },
+    {
+      "id": "spawn_overlap",
+      "check": "spawn_overlap",
+      "requires_debug_kill": true,
+      "title": "respawn placement does not land on another player"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "requires_debug_kill": true,
+      "max_unexplained": 0,
+      "expected_explained": {
+        "0": 0,
+        "1": 2,
+        "2": 0
+      },
+      "title": "client 1 snaps exactly at its respawns, and nowhere else"
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "requires_debug_kill": true,
+      "max_local": 0,
+      "max_remote_per_client_min": 0,
+      "title": "no rendered jump beyond the server's own teleports"
+    },
+    {
+      "id": "remote_player_divergence",
+      "check": "position_divergence",
+      "requires_debug_kill": true,
+      "types": [
+        "player"
+      ],
+      "p95": 0.35,
+      "max": 1.0,
+      "title": "remote clients draw the respawned player on the server path (no overshoot)"
+    },
+    {
+      "id": "entity_lifecycle",
+      "check": "entity_lifecycle",
+      "requires_debug_kill": true,
+      "require_removal": false,
+      "title": "no duplicate entity for the respawned player"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S15",
+  "version": 1,
+  "title": "Combat authority, negative path: casts faster than the cooldown and aimed beyond the projectile range",
+  "description": "map_01, enemies standing still (GAMESERVER_ENEMY_CHASE=false) and harmless (GAMESERVER_ENEMY_ATTACKS=false); only client 0 casts. The client casts the content's first projectile ability (Fire Bolt: cooldownTicks 45, projectile range 25 at server 11f0140/c7ad277; the check reads the values from content/abilities.json at the run's server commit). 5-15 s: cast_spam every 100 ms at the nearest enemy within 25, far below the cooldown, so the server must refuse most casts as ability_on_cooldown. 20-30 s: cast_at_point at (60, 0), beyond the projectile range. Projectiles have no aim-range check (the aim only gives the direction, AbilityLogic.ValidateCast), so these casts are accepted and the projectile must expire at its range: no enemy beyond reach may lose HP. In both windows enemy HP loss is bounded by the casts the cooldown lets through times the ability's power.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 15,
+  "duration_s": 35,
+  "server_env": {
+    "GAMESERVER_ENEMY_CHASE": "false",
+    "GAMESERVER_ENEMY_ATTACKS": "false"
+  },
+  "screenshots_s": [
+    10,
+    25
+  ],
+  "per_client": [
+    {
+      "steps": [],
+      "actions": [
+        {
+          "t0": 5,
+          "t1": 15,
+          "kind": "cast_spam",
+          "interval_ms": 100,
+          "range": 25
+        },
+        {
+          "t0": 20,
+          "t1": 30,
+          "kind": "cast_at_point",
+          "interval_s": 1.0,
+          "x": 60,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "steps": []
+    },
+    {
+      "steps": []
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "combat",
+      "check": "combat_effect",
+      "min_damaged": 1,
+      "title": "accepted casts do damage (positive control)"
+    },
+    {
+      "id": "rejections",
+      "check": "input_rejections",
+      "expect_positive": [
+        "ability_on_cooldown"
+      ],
+      "title": "the server refuses casts inside the cooldown, and counts them by reason"
+    },
+    {
+      "id": "cast_damage_bound",
+      "check": "cast_damage_bound",
+      "client": 0,
+      "title": "refused casts do no damage; projectiles do not hit beyond their range"
+    },
+    {
+      "id": "kcp",
+      "check": "kcp_health"
+    }
+  ]
+}

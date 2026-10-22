@@ -19,7 +19,7 @@ _ACTION_KINDS = {"cast_nearest_enemy", "cast_forward", "jump",
                  # Coverage hooks C2/C5/C6 (client docs/TESTLAB.md "Coverage hooks"): one-shot at t0.
                  "cast_at_point", "cast_spam", "stall", "quit", "reconnect"}
 _ONE_SHOT = {"stall", "quit", "reconnect"}
-_DISRUPTIONS = {"kill_client", "restart_gameserver"}
+_DISRUPTIONS = {"kill_client", "restart_gameserver", "debug_kill"}
 
 DEFAULTS = {
     "clients": 3,
@@ -102,6 +102,8 @@ def validate(sc: dict) -> None:
     for d in sc["disruptions"]:
         if d.get("kind") not in _DISRUPTIONS:
             raise ScenarioError(f"{sc['id']}: unknown disruption {d.get('kind')}")
+        if d["kind"] in ("kill_client", "debug_kill") and not 0 <= int(d.get("client", -1)) < int(sc["clients"]):
+            raise ScenarioError(f"{sc['id']}: disruption {d['kind']} needs a client index: {d}")
     if not sc["assertions"]:
         raise ScenarioError(f"{sc['id']}: a scenario without assertions cannot pass or fail")
     ids = [a.get("id") for a in sc["assertions"]]

@@ -87,6 +87,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     reported, the rest are graded at 4 per client-minute (fixed builds at most 2.0, pre-fix runs
     7.5 or more, derived from every stored run). It was 6 total snaps per client-minute, which
     counted correct respawn snaps as errors.
+  - **Server hooks S1/S2/S4 (rpg-mmo-server #475).** Disruption `debug_kill` (POST /debug/kill,
+    recorded with HTTP status and server tick in `disruptions.ndjson`; `requires_debug_kill`
+    assertions are INCONCLUSIVE unless the kill was confirmed). Checks `debug_kill_respawn`,
+    `input_rejections` (per-reason rejection deltas) and `cast_damage_bound` (refused casts do no
+    damage; no hit beyond the projectile's reach; numbers read from content/abilities.json).
+    `enemy_bounds` reads /status `map_bounds` first. Scenarios S14 (deterministic death and
+    respawn) and S15 (combat negative path) join the `readiness` suite.
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice

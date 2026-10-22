@@ -185,7 +185,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                 mark("metrics_end")
             while disruptions and now_st >= float(disruptions[0]["at_s"]):
                 d = disruptions.pop(0)
-                _disrupt(cfg, sc, d, players, pending_relaunch, probe, log)
+                _disrupt(cfg, sc, d, players, pending_relaunch, probe, log, run_dir)
                 mark("disruption", **d)
             for item in list(pending_relaunch):
                 if util.mono() >= item[0]:
@@ -301,8 +301,12 @@ def _take_redis(cfg, sc, run_dir):
     })
 
 
-def _disrupt(cfg, sc, d, players, pending, probe, log):
+def _disrupt(cfg, sc, d, players, pending, probe, log, run_dir=None):
+    """Apply one disruption and append what happened to disruptions.ndjson (the evidence the
+    checks read: a debug_kill that did not answer 200 makes its dependent assertions INCONCLUSIVE)."""
     kind = d["kind"]
+    record = {"kind": kind, "at_s": d.get("at_s"), "client": d.get("client"), "mono": util.mono(),
+              "st": probe.scenario_time(util.mono()) if probe is not None else None}
     if kind == "kill_client":
         p = players[int(d["client"])]
         if p.proc and p.proc.poll() is None:
@@ -314,6 +318,25 @@ def _disrupt(cfg, sc, d, players, pending, probe, log):
     elif kind == "restart_gameserver":
         log("disruption: restarting scratch game server")
         stack.restart_gameserver(cfg)
+    elif kind == "debug_kill":
+        record.update(debug_kill(cfg, players[int(d["client"])]))
+        log(f"disruption: debug_kill client {d['client']} -> HTTP {record.get('http_status')} {record.get('response')}")
+    if run_dir is not None:
+        with open(run_dir / "disruptions.ndjson", "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(record) + "\n")
+
+
+def debug_kill(cfg: LabConfig, player) -> dict:
+    """POST /debug/kill (rpg-mmo-server hook S1, needs GAMESERVER_DEBUG_ENTITIES=on) for a player's
+    user id. Returns the HTTP status, the server's answer (outcome, tick, hp_before) and ok =
+    HTTP 200 with outcome killed. Anything else is recorded, never retried."""
+    uid = (player.status() or {}).get("user_id")
+    if not uid:
+        return {"user_id": None, "http_status": None, "response": None, "ok": False, "error": "client user id unknown"}
+    status, body = util.http_post_json(cfg.debug_kill_url, {"id": uid}, timeout=5)
+    ok = status == 200 and (body or {}).get("outcome") == "killed"
+    return {"user_id": uid, "http_status": status, "response": body, "ok": ok,
+            "server_tick": (body or {}).get("tick")}
 
 
 def _start_bots(cfg: LabConfig, sc: dict, run_dir: Path, log):

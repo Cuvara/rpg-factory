@@ -63,6 +63,8 @@ def load_evidence(run_dir: Path) -> dict:
         },
         "redis": util.read_json(run_dir / "redis.json", default={}) or {},
         "bots": util.read_json(run_dir / "bots" / "loadtest.json", default=None),
+        # What each scripted disruption did (runner._disrupt): debug_kill HTTP status, outcome, tick.
+        "disruptions": util.read_ndjson(run_dir / "disruptions.ndjson"),
     }
     ev["traj"] = trajectories(entities)
     return ev
@@ -1396,6 +1398,13 @@ def evaluate(ev: dict) -> list[dict]:
             out.append({"id": a.get("id"), "check": a.get("check"), **_inconclusive(
                 f"unknown check '{a.get('check')}'", source="scenario")})
             continue
+        failed_kills = _failed_debug_kills(ev) if a.get("requires_debug_kill") else []
+        if a.get("requires_debug_kill") and (failed_kills or not _debug_kills(ev)):
+            # The assertion depends on a scripted kill the server did not confirm: it cannot pass.
+            out.append({"id": a["id"], "check": a["check"], "title": a.get("title", ""), **_inconclusive(
+                "depends on debug_kill, which " + ("did not run" if not _debug_kills(ev) else
+                                                   f"failed: {failed_kills}"), source="disruptions.ndjson")})
+            continue
         try:
             res = fn(ev, a)
         except Exception as exc:  # a broken check is INCONCLUSIVE, never a silent PASS
@@ -1555,18 +1564,42 @@ def _run_map_id(ev):
     return env_map or sc_map, {"scenario": sc_map, "stack_env": env_map, "registered": members}, problems
 
 
+def _status_map_bounds(ev):
+    """/status map_id and map_bounds (rpg-mmo-server S4) from the last sample that has them, as
+    {"map_id", "bounds": {minX, minY, maxX, maxY}, "source"}; None on a server without the hook."""
+    for r in reversed(ev["server"]["status"]):
+        mb = r.get("map_bounds")
+        if isinstance(mb, dict) and all(k in mb for k in ("min_x", "min_y", "max_x", "max_y")):
+            return {"map_id": r.get("map_id"), "source": mb.get("source"),
+                    "bounds": {"minX": mb["min_x"], "minY": mb["min_y"], "maxX": mb["max_x"], "maxY": mb["max_y"]}}
+    return None
+
+
 def check_enemy_bounds(ev, a):
     """Every live enemy the server reports stays inside the map's bounds (content/maps/<map>.json).
     Enemy footprints inside a blocking box (top more than the 0.4 step height above the ground,
     content/README.md 'Map geometry') are reported; they fail only with obstacles_are_failure."""
     map_id, where, problems = _run_map_id(ev)
+    reported = _status_map_bounds(ev)
+    if reported is not None:
+        # rpg-mmo-server hook S4: the bounds the running server clamps to, map file or configured size.
+        if reported["map_id"] and map_id and reported["map_id"] != map_id:
+            return _inconclusive(f"/status map_id {reported['map_id']} != configured {map_id}", source="/status")
+        map_id = reported["map_id"] or map_id
+        where["status_map_id"] = reported["map_id"]
+        problems = [p for p in problems if not p.startswith("no server registered")]
+        geo, src = {"bounds": reported["bounds"], "boxes": []}, f"/status map_bounds ({reported['source']})"
+        file_geo, _ = _map_source(ev, a, map_id)
+        if file_geo:
+            geo["boxes"] = file_geo.get("boxes", [])  # obstacles are only in the map file
     if problems:
         return _inconclusive("; ".join(problems), source="run.json stack env, redis.json")
-    geo, src = _map_source(ev, a, map_id)
+    if reported is None:
+        geo, src = _map_source(ev, a, map_id)
     if geo is None:
         return _inconclusive(f"map {map_id}: {src}. Without a map file the server uses flat bounds from "
-                             "--map-width/--map-height (GAMESERVER_MAP_WIDTH/HEIGHT or GameConstants defaults), which "
-                             "/status does not report; bounds unknown", source="backend/content/maps")
+                             "--map-width/--map-height (GAMESERVER_MAP_WIDTH/HEIGHT or GameConstants defaults), and this "
+                             "server's /status has no map_bounds (hook S4); bounds unknown", source="backend/content/maps")
     b = geo.get("bounds") or {}
     if not all(k in b for k in ("minX", "minY", "maxX", "maxY")):
         return _inconclusive(f"{src} has no complete bounds", source=src)
@@ -1855,11 +1888,17 @@ def check_prediction_bound(ev, a):
         per[c["index"]] = {"snaps": p["snaps"], "explained_by_server_teleport": explained,
                            "unexplained": unexplained, "server_teleports": len(tps), "seconds": round(secs, 1),
                            "unexplained_per_min": round(rate, 2), "max_correction": p.get("max_correction")}
-        if rate > bound:
+        if rate > bound or (a.get("max_unexplained") is not None and unexplained > int(a["max_unexplained"])):
+            over.append(c["index"])
+        want = (a.get("expected_explained") or {}).get(str(c["index"]))
+        if want is not None and explained != int(want):
+            per[c["index"]]["expected_explained"] = int(want)
             over.append(c["index"])
     if missing:
         return _inconclusive("; ".join(missing), source="client summary.json / samples.ndjson prediction")
     return _result(FAIL if over else PASS, per, {"max_unexplained_per_client_min": bound,
+                                                 "max_unexplained": a.get("max_unexplained"),
+                                                 "expected_explained": a.get("expected_explained"),
                                                  "match_window_ticks": win},
                    source="client samples.ndjson pred.snaps rises vs server /debug/entities respawns and teleports "
                           "of the same player, matched by world tick",
@@ -1970,7 +2009,7 @@ def check_entity_lifecycle(ev, a):
     max_speed = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0))
     tol = max_speed * grace + 0.2
     lingering, reuse_bad, reuse_ok = [], [], 0
-    removed_total, missing = 0, []
+    removed_total, missing, duplicates = 0, [], []
     for c in ev["clients"]:
         evs = sorted((e for e in c["events"] if e.get("event") in ("entity_added", "entity_removed", "entities_reset")
                       and e.get("t") is not None), key=lambda e: e["t"])
@@ -1978,6 +2017,11 @@ def check_entity_lifecycle(ev, a):
             missing.append(c["index"])
             continue
         samples = [(s["t"], {r[0]: r for r in s.get("ents", [])}) for s in c["samples"] if s.get("t") is not None]
+        for s in c["samples"]:
+            ids_ = [r[0] for r in s.get("ents", [])]
+            if len(ids_) != len(set(ids_)) and len(duplicates) < 20:
+                duplicates.append({"client": c["index"], "t": s.get("t"),
+                                   "ids": sorted({i for i in ids_ if ids_.count(i) > 1})})
         stimes = [t for t, _ in samples]
         drawn = {}  # id -> sorted sample times it was drawn at (one index, so a soak stays linear)
         for t, ents in samples:
@@ -2014,17 +2058,18 @@ def check_entity_lifecycle(ev, a):
     if missing:
         return _inconclusive(f"no entity_added/entity_removed events or samples for client(s) {missing} "
                              "(player without hook C3)", source="events.ndjson entity_*")
-    if removed_total == 0:
+    if removed_total == 0 and a.get("require_removal", True):
         return _inconclusive("no entity was removed during the run: despawn not exercised", source="events.ndjson")
-    return _result(FAIL if lingering or reuse_bad else PASS,
+    return _result(FAIL if lingering or reuse_bad or duplicates else PASS,
                    {"removed": removed_total, "lingering": len(lingering), "reused_ids_checked": reuse_ok + len(reuse_bad),
-                    "reused_drawn_elsewhere": len(reuse_bad)},
+                    "reused_drawn_elsewhere": len(reuse_bad), "samples_with_duplicate_ids": len(duplicates)},
                    {"despawn_grace_s": round(grace + sample_dt, 3), "reuse_tolerance": round(tol, 3)},
                    source="client events.ndjson entity_added/entity_removed (C3) vs samples.ndjson rendered entities",
                    sampling=f"rendered samples at {ev['scenario'].get('sample_hz')} Hz",
                    rationale="a removed entity left on screen is a ghost; a reused id drawn where the previous entity "
                              "was is a stale view entry interpolating between two different entities",
-                   detail={"lingering": lingering[:20], "reuse_drawn_elsewhere": reuse_bad[:20]})
+                   detail={"lingering": lingering[:20], "reuse_drawn_elsewhere": reuse_bad[:20],
+                           "duplicate_ids": duplicates})
 
 
 def _render_tracks(c, skip, stalls):
@@ -2217,4 +2262,209 @@ CHECKS.update({
     "cross_client_convergence": check_cross_client_convergence,
     "stall_recovery": check_stall_recovery,
     "graceful_leave": check_graceful_leave,
+})
+
+
+# --------------------------------------------------------------------------- server hooks S1/S2 (T20)
+
+def _debug_kills(ev):
+    return [d for d in ev.get("disruptions", []) if d.get("kind") == "debug_kill"]
+
+
+def _failed_debug_kills(ev):
+    return [{"client": d.get("client"), "http_status": d.get("http_status"),
+             "outcome": (d.get("response") or {}).get("outcome"), "error": d.get("error")}
+            for d in _debug_kills(ev) if not d.get("ok")]
+
+
+def check_debug_kill_respawn(ev, a):
+    """Every scripted kill (disruption debug_kill: POST /debug/kill, rpg-mmo-server hook S1) was
+    confirmed by the server (HTTP 200, outcome killed) and was followed by a respawn: /status
+    player_respawns rises by one per kill within respawn_within_s (default 2 s: the respawn runs
+    within one world interval, 67 ms at 15 Hz, per the hook's tests; /status is probed at 1 Hz and
+    the request is queued to the tick), and the player is alive at full HP in /debug/entities
+    after it. A kill that did not answer 200 is INCONCLUSIVE, never PASS."""
+    kills = _debug_kills(ev)
+    if not kills:
+        return _inconclusive("no debug_kill disruption ran", source="disruptions.ndjson")
+    failed = _failed_debug_kills(ev)
+    if failed:
+        return _inconclusive(f"debug_kill not confirmed by the server: {failed}", source="disruptions.ndjson")
+    within = float(a.get("respawn_within_s", 2.0))
+    status = [r for r in ev["server"]["status"] if r.get("_st") is not None and r.get("player_respawns") is not None]
+    if not status:
+        return _inconclusive("/status has no player_respawns", source="/status player_respawns")
+    rows, bad = [], 0
+    for d in kills:
+        st, uid = d.get("st"), d.get("user_id")
+        before = [r["player_respawns"] for r in status if r["_st"] <= st]
+        after = [r["player_respawns"] for r in status if st < r["_st"] <= st + within]
+        if st is None or not before or not after:
+            return _inconclusive(f"no /status samples around the kill at st={st}", source="/status player_respawns")
+        respawned = max(after) - before[-1]
+        t = ev["traj"].get(uid) or {}
+        mx = t.get("max_hp") or 0
+        back = any(st < s2 <= st + within + 1.0 and not dd and mx and (hp or 0) >= mx
+                   for s2, hp, dd in zip(t.get("st", []), t.get("hp", []), t.get("dead", [])))
+        ok = respawned >= 1 and back
+        bad += 0 if ok else 1
+        rows.append({"client": d.get("client"), "st": None if st is None else round(st, 2), "server_tick": d.get("server_tick"),
+                     "hp_before": (d.get("response") or {}).get("hp_before"), "respawns_counted": respawned,
+                     "alive_full_hp_after": back, "ok": ok})
+    return _result(FAIL if bad else PASS, rows, {"respawn_within_s": within},
+                   source="disruptions.ndjson (POST /debug/kill), /status player_respawns, /debug/entities",
+                   sampling="1 Hz /status, 5 Hz entities",
+                   rationale="a player killed through the normal damage path must come back through the normal respawn "
+                             "rule; a kill without a respawn leaves the player dead in the world",
+                   artifacts=[str(ev["run_dir"] / "disruptions.ndjson")])
+
+
+def _rejections_by_reason(metrics: dict) -> dict:
+    out = {}
+    for k, v in metrics.items():
+        if k.startswith("gameserver_inputs_rejected_total{"):
+            m = re.search(r'reason="([^"]+)"', k)
+            if m:
+                out[m.group(1)] = out.get(m.group(1), 0.0) + v
+    return out
+
+
+def check_input_rejections(ev, a):
+    """Per-reason input rejections over the scenario window (gameserver_inputs_rejected_total{reason},
+    rpg-mmo-server hook S2): each reason in expect_positive rose; each in expect_zero did not."""
+    start = _rejections_by_reason(ev["server"]["metrics_start"])
+    end = _rejections_by_reason(ev["server"]["metrics_end"])
+    if not end:
+        return _inconclusive("no gameserver_inputs_rejected_total series in the end scrape", source="/metrics")
+    want_pos, want_zero = list(a.get("expect_positive", [])), list(a.get("expect_zero", []))
+    unknown = [r for r in want_pos + want_zero if r not in end]
+    if unknown:
+        return _inconclusive(f"the server publishes no series for reason(s) {unknown} (a build without hook S2)",
+                             source="/metrics")
+    delta = {r: end[r] - start.get(r, 0.0) for r in end}
+    bad = [r for r in want_pos if delta[r] <= 0] + [r for r in want_zero if delta[r] != 0]
+    return _result(FAIL if bad else PASS, {r: delta[r] for r in sorted(delta) if delta[r] or r in want_pos + want_zero},
+                   {"positive": want_pos, "zero": want_zero},
+                   source="/metrics gameserver_inputs_rejected_total{map_id,reason}, scenario start -> end",
+                   sampling="2 scrapes", detail={"failed": bad},
+                   rationale="the server must refuse what its rules forbid, and say why",
+                   artifacts=[str(ev["run_dir"] / "server")])
+
+
+def _content_projectile_ability(ev, a):
+    """The ability the client casts: the first `projectile` ability in content/abilities.json
+    (client Catalog.FirstProjectileAbility), read at the run's server commit."""
+    import json as _json
+    import subprocess
+    meta = ev["meta"] or {}
+    repo = a.get("server_repo") or (meta.get("config") or {}).get("server_repo")
+    sha = ((meta.get("provenance") or {}).get("server") or {}).get("sha") or ((meta.get("repos") or {}).get("server") or {}).get("head")
+    rel = "backend/content/abilities.json"
+    doc, src = None, None
+    if repo and sha:
+        try:
+            res = subprocess.run(["git", "-C", str(repo), "show", f"{sha}:{rel}"], capture_output=True, timeout=30)
+            if res.returncode == 0:
+                doc, src = _json.loads(res.stdout.decode("utf-8")), f"{rel} at server {sha[:10]}"
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    if doc is None and repo and (Path(repo) / rel).exists():
+        doc, src = _json.loads((Path(repo) / rel).read_text(encoding="utf-8")), f"{Path(repo) / rel} (working tree)"
+    for ab in (doc or {}).get("abilities", []):
+        if ab.get("delivery") == "projectile" and ab.get("projectile"):
+            power = sum(float(e.get("power", 0)) for e in ab.get("effects", []) if e.get("kind") == "damage")
+            return {"id": ab.get("id"), "name": ab.get("name"), "power": power, "cooldown_ticks": ab.get("cooldownTicks", 0),
+                    "range": float(ab["projectile"]["range"]), "radius": float(ab["projectile"].get("radius", 0)),
+                    "speed": float(ab["projectile"]["speed"]), "source": src}
+    return None
+
+
+def _hp_lost(t, lo, hi):
+    loss, prev = 0.0, None
+    for s2, hp in zip(t["st"], t["hp"]):
+        if lo <= s2 <= hi and prev is not None and hp is not None and hp < prev:
+            loss += prev - hp
+        prev = hp if hp is not None else prev
+    return loss
+
+
+def check_cast_damage_bound(ev, a):
+    """Rejected casts do no damage. For the casting client's cast_spam and cast_at_point windows,
+    the HP enemies lose is at most (casts the cooldown lets through) x (the ability's damage power):
+    floor(window / cooldown) + 1 accepted casts, cooldown = cooldownTicks / tick_rate, power = the
+    sum of the ability's damage effects (defense only lowers it). Both numbers are read from
+    content/abilities.json at the run's server commit. For cast_at_point windows, an enemy that was
+    farther than the projectile's reach (range + radius + 1) from the caster for the whole window
+    must lose no HP. Only one client may cast in the scenario, and enemy attacks must be off, so no
+    other source changes enemy HP."""
+    k = int(a.get("client", 0))
+    if k >= len(ev["clients"]):
+        return _inconclusive(f"client {k} is not in this run", source="plan.json")
+    others = [c["index"] for c in ev["clients"] if c["index"] != k and any(
+        str(x.get("kind", "")).startswith("cast") for x in c["plan"].get("actions", []))]
+    if others:
+        return _inconclusive(f"clients {others} also cast: damage cannot be attributed", source="plan.json")
+    ab = _content_projectile_ability(ev, a)
+    if ab is None:
+        return _inconclusive("no projectile ability readable in content/abilities.json", source="content")
+    hz = _tick_hz(ev, a)
+    if not hz or not ab["cooldown_ticks"]:
+        return _inconclusive("tick rate or cooldown unknown", source="/status tick_rate, content")
+    cooldown_s = float(ab["cooldown_ticks"]) / hz
+    c = ev["clients"][k]
+    uid = _user_ids(ev)[k]
+    caster = ev["traj"].get(uid) if uid else None
+    mobs = {eid: t for eid, t in ev["traj"].items() if t["type"] == "mob"}
+    windows = [x for x in c["plan"].get("actions", []) if x.get("kind") in ("cast_spam", "cast_at_point")]
+    if not windows or not mobs or caster is None:
+        return _inconclusive("no cast window, no enemies or no caster trajectory", source="plan.json, /debug/entities")
+    reach = ab["range"] + ab["radius"] + float(a.get("reach_margin", 1.0))
+    rows, bad, unexercised = [], 0, 0
+    for w in windows:
+        t0, t1 = float(w["t0"]), float(w["t1"])
+        hi = t1 + ab["range"] / ab["speed"] + 0.5
+        accepted = int((t1 - t0) // cooldown_s) + 1
+        bound = accepted * ab["power"]
+        loss = sum(_hp_lost(t, t0, hi) for t in mobs.values())
+        row = {"kind": w["kind"], "window": [t0, t1], "max_accepted_casts": accepted, "hp_bound": bound,
+               "enemy_hp_lost": round(loss, 2)}
+        if w["kind"] == "cast_spam" and float(w.get("interval_ms", 100)) / 1000.0 >= cooldown_s:
+            row["result"] = "interval not below the cooldown: cooldown not exercised"
+            unexercised += 1
+        elif w["kind"] == "cast_at_point":
+            far = []
+            for eid, t in mobs.items():
+                ds = [math.hypot(x - p[0], y - p[1]) for s2, x, y in zip(t["st"], t["x"], t["y"]) if t0 <= s2 <= hi
+                      for p in [_pos_at(caster, s2)] if p is not None]
+                if ds and min(ds) > reach and _hp_lost(t, t0, hi) > 0:
+                    far.append({"id": eid, "min_distance": round(min(ds), 2)})
+            p0 = _pos_at(caster, t0)
+            aim_d = None if p0 is None else math.hypot(float(w.get("x", 0)) - p0[0], float(w.get("y", 0)) - p0[1])
+            row.update({"aim_distance": None if aim_d is None else round(aim_d, 2), "hit_beyond_reach": far})
+            if far:
+                bad += 1
+            if aim_d is None or aim_d <= ab["range"]:
+                row["note"] = "aim point not beyond the projectile range"
+        if loss > bound + 1e-6:
+            row["over_bound"] = True
+            bad += 1
+        if w["kind"] == "cast_spam" and loss == 0 and "result" not in row:
+            row["result"] = "no enemy was hit: the bound was not exercised"
+            unexercised += 1
+        rows.append(row)
+    status = FAIL if bad else (INCONCLUSIVE if unexercised else PASS)
+    return _result(status, rows, {"ability": {k2: ab[k2] for k2 in ("id", "name", "power", "cooldown_ticks", "range",
+                                                                    "radius", "speed")},
+                                  "cooldown_s": round(cooldown_s, 3), "reach": reach},
+                   source=f"plan.json cast windows, /debug/entities enemy HP and caster position, {ab['source']}",
+                   sampling=f"server {ev['scenario'].get('server_sample_hz')} Hz",
+                   rationale="a cast the server refuses (cooldown) must not damage anything, and a projectile must not "
+                             "hit beyond the range the content gives it (projectiles have no aim-range check: the aim "
+                             "only gives the direction, AbilityLogic.ValidateCast)")
+
+
+CHECKS.update({
+    "debug_kill_respawn": check_debug_kill_respawn,
+    "input_rejections": check_input_rejections,
+    "cast_damage_bound": check_cast_damage_bound,
 })

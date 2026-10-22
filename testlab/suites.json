@@ -4,7 +4,7 @@
   "movement": ["S03", "S06"],
   "combat": ["S04"],
   "lifecycle": ["S08", "S08G"],
-  "readiness": ["S11", "S12", "S13", "S08G"],
+  "readiness": ["S11", "S12", "S13", "S08G", "S14", "S15"],
   "soak": ["S09"],
   "full": ["S01", "S02", "S03", "S04", "S05", "S06", "S08", "S10"]
 }

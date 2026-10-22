@@ -92,6 +92,10 @@ class LabConfig:
         return f"http://127.0.0.1:{self.status_port}/metrics"
 
     @property
+    def debug_kill_url(self) -> str:
+        return f"http://127.0.0.1:{self.status_port}/debug/kill"
+
+    @property
     def debug_entities_url(self) -> str:
         return f"http://127.0.0.1:{self.status_port}/debug/entities"
 

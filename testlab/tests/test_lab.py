@@ -1591,5 +1591,233 @@ class NetcodeProvenanceTests(unittest.TestCase):
                 self.assertTrue(any("netcode.sha missing" in p for p in problems), problems)
 
 
+# =========================================================================== server hooks S1/S2/S4 (T20)
+
+def _kill_record(st=12.0, ok=True, status=200, outcome="killed", client=1, uid="u1"):
+    return {"kind": "debug_kill", "client": client, "st": st, "user_id": uid, "http_status": status, "ok": ok,
+            "response": {"ok": ok, "outcome": outcome, "tick": 720, "hp_before": 100}, "server_tick": 720}
+
+
+class DebugKillHarnessTests(unittest.TestCase):
+    def test_debug_kill_posts_the_user_id_and_records_the_answer(self):
+        from unittest import mock
+        from lab import config, runner
+        cfg = config.LabConfig(workspace=Path("."), runs_root=Path("."))
+        player = mock.Mock()
+        player.status.return_value = {"user_id": "u1"}
+        with mock.patch.object(runner.util, "http_post_json", return_value=(200, {"outcome": "killed", "tick": 9})) as post:
+            rec = runner.debug_kill(cfg, player)
+        post.assert_called_once_with("http://127.0.0.1:9501/debug/kill", {"id": "u1"}, timeout=5)
+        self.assertEqual((rec["ok"], rec["http_status"], rec["server_tick"]), (True, 200, 9))
+        for status, body in ((404, {"outcome": "not_found"}), (409, {"outcome": "already_dead"}), (0, None)):
+            with mock.patch.object(runner.util, "http_post_json", return_value=(status, body)):
+                self.assertFalse(runner.debug_kill(cfg, player)["ok"], status)
+        player.status.return_value = {}
+        self.assertFalse(runner.debug_kill(cfg, player)["ok"])
+
+    def test_disrupt_appends_the_record(self):
+        from unittest import mock
+        from lab import config, runner
+        with tempfile.TemporaryDirectory() as d:
+            cfg = config.LabConfig(workspace=Path(d), runs_root=Path(d))
+            p = mock.Mock()
+            p.status.return_value = {"user_id": "u1"}
+            with mock.patch.object(runner.util, "http_post_json", return_value=(200, {"outcome": "killed", "tick": 9})):
+                runner._disrupt(cfg, {}, {"at_s": 12, "kind": "debug_kill", "client": 0}, [p], [], None, lambda m: None,
+                                Path(d))
+            rows = util.read_ndjson(Path(d) / "disruptions.ndjson")
+            self.assertEqual((rows[0]["kind"], rows[0]["ok"], rows[0]["at_s"]), ("debug_kill", True, 12))
+
+    def test_scenario_disruption_needs_a_client(self):
+        with self.assertRaises(scenarios.ScenarioError):
+            scenarios.validate(_scenario(disruptions=[{"at_s": 1, "kind": "debug_kill"}]))
+        scenarios.validate(_scenario(clients=2, disruptions=[{"at_s": 1, "kind": "debug_kill", "client": 1}]))
+
+
+class DebugKillGatingTests(unittest.TestCase):
+    def _ev(self, kills):
+        ev = _ev(clients=1)
+        ev["disruptions"] = kills
+        ev["scenario"]["assertions"] = [{"id": "x", "check": "clients_in_world", "requires_debug_kill": True}]
+        ev["clients"][0]["events"] = [{"event": "in_world"}]
+        return ev
+
+    def test_a_dependent_assertion_cannot_pass_without_a_confirmed_kill(self):
+        self.assertEqual(analyze.evaluate(self._ev([]))[0]["status"], analyze.INCONCLUSIVE)
+        failed = self._ev([_kill_record(ok=False, status=404, outcome="not_found")])
+        res = analyze.evaluate(failed)[0]
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+        self.assertIn("404", res["detail"]["why"])
+        self.assertEqual(analyze.evaluate(self._ev([_kill_record()]))[0]["status"], analyze.PASS)
+
+
+class DebugKillRespawnTests(unittest.TestCase):
+    def _ev(self, respawned=True, kill=None, status_field=True):
+        # Player u1 walks at x=10, dies at st 12.1, respawns at the spawn (0,0) at 12.2 when respawned.
+        rows = []
+        for k in range(100):
+            st = k * 0.2
+            dead = respawned is False and st >= 12.1
+            x = 0.0 if (respawned and st >= 12.2) else 10.0
+            rows.append(_row(st, [["u1", "player", x, 0.0, 0 if dead else 100, 100, 1 if dead else 0, 5]]))
+        status = [{"_st": float(s), **({"player_respawns": 1 if (respawned and s >= 13) else 0} if status_field else {})}
+                  for s in range(20)]
+        ev = _ev(clients=2, entities=rows, status=status, duration=20)
+        ev["disruptions"] = [kill or _kill_record()]
+        return ev
+
+    def test_kill_then_respawn_passes(self):
+        res = analyze.check_debug_kill_respawn(self._ev(), {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual(res["measured"][0]["server_tick"], 720)
+
+    def test_no_respawn_fails(self):
+        self.assertEqual(analyze.check_debug_kill_respawn(self._ev(respawned=False), {})["status"], analyze.FAIL)
+
+    def test_unconfirmed_kill_or_missing_counter_is_inconclusive(self):
+        bad = _kill_record(ok=False, status=503, outcome="busy")
+        self.assertEqual(analyze.check_debug_kill_respawn(self._ev(kill=bad), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_debug_kill_respawn(self._ev(status_field=False), {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_debug_kill_respawn(_ev(), {})["status"], analyze.INCONCLUSIVE)
+
+
+class InputRejectionTests(unittest.TestCase):
+    K = 'gameserver_inputs_rejected_total{map_id="map_01",reason="%s"}'
+
+    def _ev(self, start, end):
+        return _ev(metrics_start={self.K % r: v for r, v in start.items()},
+                   metrics_end={self.K % r: v for r, v in end.items()})
+
+    def test_expected_reasons_must_rise(self):
+        ev = self._ev({"ability_on_cooldown": 2, "ability_out_of_range": 0}, {"ability_on_cooldown": 40, "ability_out_of_range": 0})
+        self.assertEqual(analyze.check_input_rejections(ev, {"expect_positive": ["ability_on_cooldown"]})["status"], analyze.PASS)
+        self.assertEqual(analyze.check_input_rejections(ev, {"expect_positive": ["ability_out_of_range"]})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_input_rejections(ev, {"expect_zero": ["ability_on_cooldown"]})["status"], analyze.FAIL)
+
+    def test_a_server_without_the_series_is_inconclusive(self):
+        self.assertEqual(analyze.check_input_rejections(_ev(), {"expect_positive": ["x"]})["status"], analyze.INCONCLUSIVE)
+        ev = self._ev({"other": 0}, {"other": 1})
+        self.assertEqual(analyze.check_input_rejections(ev, {"expect_positive": ["ability_on_cooldown"]})["status"],
+                         analyze.INCONCLUSIVE)
+
+
+ABILITIES = {"abilities": [
+    {"id": 1, "name": "Bolt", "delivery": "entity", "range": 8, "effects": [{"kind": "damage", "power": 10}], "cooldownTicks": 30},
+    {"id": 4, "name": "Fire Bolt", "delivery": "projectile", "effects": [{"kind": "damage", "power": 15}],
+     "projectile": {"speed": 20, "radius": 0.3, "range": 25}, "cooldownTicks": 45}]}
+
+
+class CastDamageBoundTests(unittest.TestCase):
+    def _ev(self, d, hits_spam=5, far_hit=False, other_casts=False):
+        _write(Path(d) / "backend" / "content" / "abilities.json", json.dumps(ABILITIES))
+        rows = []
+        hp_near, hp_far = 100, 100
+        for k in range(200):
+            st = k * 0.2
+            if 5 <= st <= 15 and k % 5 == 0 and hits_spam > 0:
+                hp_near -= 15
+                hits_spam -= 1
+            if far_hit and st == 22.0:
+                hp_far -= 15
+            rows.append(_row(st, [["u0", "player", 0.0, 0.0, 100, 100, 0, 5],
+                                  ["near", "mob", 10.0, 0.0, max(hp_near, 0), 100, 0, 2.5],
+                                  ["far", "mob", 40.0, 0.0, hp_far, 100, 0, 2.5]]))
+        ev = _ev(clients=2, entities=rows, duration=40, status=[{"_st": 1, "tick_rate": 60}])
+        ev["meta"] = {"config": {"server_repo": str(d)}}
+        ev["clients"][0]["summary"] = {"user_id": "u0"}
+        ev["clients"][0]["plan"] = {"actions": [
+            {"t0": 5, "t1": 15, "kind": "cast_spam", "interval_ms": 100, "range": 25},
+            {"t0": 20, "t1": 30, "kind": "cast_at_point", "interval_s": 1.0, "x": 60, "y": 0}]}
+        if other_casts:
+            ev["clients"][1]["plan"] = {"actions": [{"t0": 1, "t1": 2, "kind": "cast_forward"}]}
+        return ev
+
+    def test_damage_within_the_cooldown_bound_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = analyze.check_cast_damage_bound(self._ev(d), {})
+            self.assertEqual(res["status"], analyze.PASS, res)
+            self.assertEqual(res["threshold"]["ability"]["cooldown_ticks"], 45)  # read from content, not chosen
+            self.assertEqual(res["measured"][0]["max_accepted_casts"], 14)     # 10 s / 0.75 s + 1
+
+    def test_more_damage_than_the_cooldown_allows_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            ev = self._ev(d, hits_spam=6)
+            ev["clients"][0]["plan"]["actions"][0]["t1"] = 7  # 2 s window: at most 3 casts = 45 HP
+            self.assertEqual(analyze.check_cast_damage_bound(ev, {})["status"], analyze.FAIL)
+
+    def test_a_hit_beyond_the_projectile_reach_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = analyze.check_cast_damage_bound(self._ev(d, far_hit=True), {})
+            self.assertEqual(res["status"], analyze.FAIL)
+            self.assertEqual(res["measured"][1]["hit_beyond_reach"][0]["id"], "far")
+
+    def test_unattributable_or_unexercised_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(analyze.check_cast_damage_bound(self._ev(d, other_casts=True), {})["status"], analyze.INCONCLUSIVE)
+            self.assertEqual(analyze.check_cast_damage_bound(self._ev(d, hits_spam=0), {})["status"], analyze.INCONCLUSIVE)
+        ev = _ev(clients=1)
+        self.assertEqual(analyze.check_cast_damage_bound(ev, {})["status"], analyze.INCONCLUSIVE)
+
+
+class StatusMapBoundsTests(unittest.TestCase):
+    def _ev(self, positions, status_map="map_01"):
+        status = [{"_st": 1, "map_id": status_map,
+                   "map_bounds": {"min_x": -50, "min_y": -50, "max_x": 50, "max_y": 50, "source": "configured_size"}}]
+        ev = _ev(entities=[_enemy_row(1 + i * 0.2, positions) for i in range(30)], duration=10, map="map_01", status=status)
+        ev["meta"] = {"stack": {"env": {"GAMESERVER_MAP_ID": "map_01"}}}
+        return ev
+
+    def test_status_bounds_judge_a_map_without_a_file(self):
+        res = analyze.check_enemy_bounds(self._ev([(0, 0), (49, -49)]), {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertIn("/status map_bounds (configured_size)", res["source"])
+        self.assertEqual(analyze.check_enemy_bounds(self._ev([(0, 0), (51, 0)]), {})["status"], analyze.FAIL)
+
+    def test_a_status_map_id_that_disagrees_is_inconclusive(self):
+        self.assertEqual(analyze.check_enemy_bounds(self._ev([(0, 0)] * 2, status_map="dev_arena"), {})["status"],
+                         analyze.INCONCLUSIVE)
+
+
+class RespawnScenarioTests(unittest.TestCase):
+    def test_s14_expects_one_explained_snap_per_kill(self):
+        sc = scenarios.load("S14")
+        kills = [d for d in sc["disruptions"] if d["kind"] == "debug_kill"]
+        pb = next(a for a in sc["assertions"] if a["check"] == "prediction_bound")
+        self.assertEqual(pb["expected_explained"][str(kills[0]["client"])], len(kills))
+        self.assertEqual(pb["max_unexplained"], 0)
+        self.assertEqual(sc["server_env"]["GAMESERVER_ENEMY_ATTACKS"], "false")
+        dependent = [a for a in sc["assertions"] if a.get("requires_debug_kill")]
+        self.assertGreaterEqual(len(dependent), 5)
+
+    def test_s15_casts_from_one_client_only(self):
+        sc = scenarios.load("S15")
+        casters = [i for i, p in enumerate(sc["per_client"]) if p.get("actions")]
+        self.assertEqual(casters, [0])
+        kinds = {a["kind"] for a in sc["per_client"][0]["actions"]}
+        self.assertEqual(kinds, {"cast_spam", "cast_at_point"})
+        self.assertEqual(sc["server_env"]["GAMESERVER_ENEMY_ATTACKS"], "false")
+
+
+class LifecycleDuplicateTests(unittest.TestCase):
+    def test_duplicate_ids_in_one_sample_fail_even_without_removals(self):
+        ev = _ev(clients=1)
+        c = ev["clients"][0]
+        c["events"] = [{"event": "entity_added", "t": 100.0, "id": "p", "x": 0, "y": 0, "rx": 0, "ry": 0}]
+        c["samples"] = [_sample(100 + k * 0.05, [["p", "player", 0, 0, 0, 0, 0]]) for k in range(20)]
+        self.assertEqual(analyze.check_entity_lifecycle(ev, {"require_removal": False})["status"], analyze.PASS)
+        self.assertEqual(analyze.check_entity_lifecycle(ev, {})["status"], analyze.INCONCLUSIVE)
+        c["samples"][5]["ents"].append(["p", "player", 0, 3, 0, 3, 0])
+        self.assertEqual(analyze.check_entity_lifecycle(ev, {"require_removal": False})["status"], analyze.FAIL)
+
+    def test_prediction_bound_expected_explained_and_absolute_limit(self):
+        t = PredictionBoundTests()
+        ev = t._ev([1504, 2604], [1500, 2600])
+        self.assertEqual(analyze.check_prediction_bound(ev, {"expected_explained": {"0": 2}, "max_unexplained": 0})["status"],
+                         analyze.PASS)
+        self.assertEqual(analyze.check_prediction_bound(ev, {"expected_explained": {"0": 3}})["status"], analyze.FAIL)
+        ev = t._ev([1504, 400], [1500])
+        self.assertEqual(analyze.check_prediction_bound(ev, {"max_unexplained": 0})["status"], analyze.FAIL)
+
+
 if __name__ == "__main__":
     unittest.main()
