@@ -23,6 +23,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     reads the real session state path (`fstate.scratch()`, not `/tmp/rpg-factory`).
   - regression cases in `git-guard.test.sh` (early go-backend, early unity-dots, normal order, no second
     auto-correction, never a permission decision, the hook always exits 0) and `session-state.test.sh`.
+- The README "Version" line still said 1.0.0 through 1.0.1-1.0.3; `run-all.sh`'s version check now covers it
+  (VERSION == plugin.json == marketplace == CHANGELOG section == README).
 
 ## [1.0.3] - 2026-10-22
 

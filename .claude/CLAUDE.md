@@ -29,7 +29,7 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   from `scripts/new-skill.py` and are done when `scripts/skill-touchpoints.py <s>` is OK (`.claude/skills/skill-author`).
 - A skill's `path:line` citation names the symbol it shows (anchor) and must pass
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
-- **Releases:** bump `VERSION`, `.claude-plugin/plugin.json` and `marketplace.json` together with a
+- **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json` and the README "Version" line together with a
   `CHANGELOG.md` section (run-all checks it). The local directory marketplace loads this checkout in
   place (what is checked out is what sessions run); the install record only updates on a version
   change: `claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`,
