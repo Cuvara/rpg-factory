@@ -41,6 +41,7 @@ def load_evidence(run_dir: Path) -> dict:
             "inputs": util.read_ndjson(d / "inputs.ndjson"),
             "plan": util.read_json(d / "plan.json", default={}) or {},
             "logs": {p.name: p.read_text(encoding="utf-8", errors="replace") for p in logs},
+            "frames": _read_frames(d / "frames.csv"),
             "history": (meta.get("clients") or {}).get(str(i), {}),
         })
     server_dir = run_dir / "server"
@@ -62,6 +63,49 @@ def load_evidence(run_dir: Path) -> dict:
     }
     ev["traj"] = trajectories(entities)
     return ev
+
+
+def _read_frames(path: Path) -> list:
+    """[(scenario_t, dt_ms)] for frames inside the scenario window (scenario_t >= 0)."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            next(fh, None)
+            for line in fh:
+                parts = line.strip().split(",")
+                if len(parts) < 4 or parts[3] in ("", "null"):
+                    continue
+                try:
+                    st, dt = float(parts[3]), float(parts[2])
+                except ValueError:
+                    continue
+                if st >= 0:
+                    out.append((st, dt))
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def host_stalls(ev: dict, min_ms: float = 250.0, window_s: float = 0.25) -> list:
+    """Frames of >= min_ms that END within window_s of each other in at least two separate client
+    processes: the whole host stalled (another process, the OS, I/O), not one client. Returns
+    [(start_st, end_st, clients)]."""
+    long_frames = []
+    for c in ev["clients"]:
+        for st, dt in c.get("frames", []):
+            if dt >= min_ms:
+                long_frames.append((st, dt, c["index"]))
+    long_frames.sort()
+    stalls = []
+    for st, dt, idx in long_frames:
+        peers = {i for s2, d2, i in long_frames if abs(s2 - st) <= window_s}
+        if len(peers) >= 2:
+            stalls.append((st - dt / 1000.0, st, sorted(peers)))
+    return stalls
+
+
+def _in_stall(stalls, t0: float, t1: float, slack: float = 0.3) -> bool:
+    return any(a - slack <= t1 and t0 <= b + slack for a, b, _ in stalls)
 
 
 def parse_prometheus(path: Path) -> dict:
@@ -190,6 +234,8 @@ def _client_files(c, *names):
 # --------------------------------------------------------------------------- checks
 
 def check_clients_in_world(ev, a):
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client events.ndjson")
     missing = [c["index"] for c in ev["clients"]
                if not any(e.get("event") == "in_world" for e in c["events"])]
     n = len(ev["clients"])
@@ -255,6 +301,8 @@ def check_redis(ev, a):
 
 
 def check_clients_completed(ev, a):
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client summary.json")
     bad = {c["index"]: (c["summary"] or {}).get("outcome") for c in ev["clients"]
            if (c["summary"] or {}).get("outcome") != "completed"}
     return _result(PASS if not bad else FAIL, len(ev["clients"]) - len(bad), len(ev["clients"]),
@@ -291,7 +339,7 @@ def check_inputs_consumed(ev, a):
     min_cos = float(a.get("min_cos", 0.9))
     min_fraction = float(a.get("min_distance_fraction", 0.5))
     settle = float(a.get("settle_s", 0.5))
-    rows, failures, checked = [], 0, 0
+    rows, failures, checked, unverified = [], 0, 0, 0
     for c in ev["clients"]:
         uid = ids[c["index"]]
         t = ev["traj"].get(uid) if uid else None
@@ -308,6 +356,7 @@ def check_inputs_consumed(ev, a):
             p0, p1 = _pos_at(t, s["t0"] + settle), _pos_at(t, s["t1"])
             if p0 is None or p1 is None:
                 rows.append({"client": c["index"], "step": [s["t0"], s["t1"]], "result": "no samples"})
+                unverified += 1
                 continue
             checked += 1
             dx, dy = p1[0] - p0[0], p1[1] - p0[1]
@@ -323,7 +372,8 @@ def check_inputs_consumed(ev, a):
                          "moves_read": reads, "ok": ok})
     if checked == 0:
         return _inconclusive("no move segment had server samples on both ends", source="/debug/entities + plan.json")
-    return _result(PASS if failures == 0 else FAIL, f"{checked - failures}/{checked} segments",
+    status = FAIL if failures else (INCONCLUSIVE if unverified else PASS)
+    return _result(status, f"{checked - failures}/{checked} segments ({unverified} unverified)",
                    {"min_cos": min_cos, "min_distance_fraction": min_fraction},
                    source="plan.json move steps vs server /debug/entities trajectory of the client's own player",
                    sampling=f"server positions at {ev['scenario'].get('server_sample_hz')} Hz",
@@ -404,12 +454,17 @@ def check_render_jumps(ev, a):
     major_step = float(a.get("major_step", 1.0))
     skip = float(a.get("skip_first_s", 2.0))
     per_client, events = {}, []
-    counts = {"local_major": 0, "local_minor": 0, "remote_major": 0, "remote_minor": 0, "server_teleport": 0}
+    counts = {"local_major": 0, "local_minor": 0, "remote_major": 0, "remote_minor": 0, "server_teleport": 0,
+              "host_stall": 0}
     by_type = {}
     for c in ev["clients"]:
         js = [e for e in c["events"] if e.get("event") == "render_jump" and (e.get("st") or -1) >= skip]
         per_client[c["index"]] = len(js)
+        stalls = host_stalls(ev)
         for e in js:
+            if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.5):
+                counts["host_stall"] = counts.get("host_stall", 0) + 1
+                continue
             # A step the SERVER also made (respawn, teleport, portal) is the game, not a render
             # defect: the server path covered >= 80% of the rendered step around that instant.
             server_step = _server_displacement(ev, e.get("id"), e.get("st"))
@@ -417,8 +472,8 @@ def check_render_jumps(ev, a):
             # (0.8 s at max_speed, +20%): only then is it a teleport rather than ordinary motion.
             walkable = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0)) * 0.8 * 1.2
             respawned = _server_respawned(ev, e.get("id"), e.get("st"))
-            if respawned or (server_step is not None and server_step >= 0.8 * (e.get("step") or 0)
-                             and server_step > walkable):
+            explained = server_step is not None and server_step >= 0.8 * (e.get("step") or 0)
+            if explained and (respawned or server_step > walkable):
                 counts["server_teleport"] = counts.get("server_teleport", 0) + 1
                 events.append({"client": c["index"], "class": "server_teleport", "server_step": round(server_step, 3),
                                **{k: e.get(k) for k in ("st", "id", "type", "local", "step", "allowed", "dt_ms")}})
@@ -432,7 +487,7 @@ def check_render_jumps(ev, a):
         return _inconclusive("no client summary", source="client events.ndjson render_jump")
     minutes = max(1e-6, float(ev["scenario"].get("duration_s", 60)) / 60.0)
     n = max(1, len(ev["clients"]))
-    rate = {k: round(v / minutes / n, 3) for k, v in counts.items() if k != "server_teleport"}
+    rate = {k: round(v / minutes / n, 3) for k, v in counts.items() if k not in ("server_teleport", "host_stall")}
     ok = (counts["local_major"] <= int(a.get("max_local", 0)) and
           rate["remote_major"] <= float(a.get("max_remote_per_client_min", 2.0)) and
           rate["local_minor"] <= float(a.get("max_local_minor_per_client_min", 30.0)) and
@@ -498,6 +553,8 @@ def check_snapshot_cadence(ev, a):
     hz = float(a.get("expected_hz", hz or 15))
     per = {}
     bad = 0
+    host_explained = 0
+    stalls = host_stalls(ev)
     for c in ev["clients"]:
         s = c["summary"] or {}
         snaps = [x for x in c["snapshots"] if x.get("t") is not None]
@@ -514,10 +571,22 @@ def check_snapshot_cadence(ev, a):
         p99_gap = util.percentile([g * 1000 for g in gaps], 99) if gaps else None
         ok = (abs(rate - hz) <= hz * float(a.get("rate_tolerance", 0.2)) and max_gap is not None and
               max_gap <= float(a.get("max_gap_ms", 250)))
+        if not ok and max_gap is not None:
+            # Every over-limit gap overlaps a host-wide stall: the evidence cannot say anything
+            # about the netcode, so this client's row is inconclusive rather than failed.
+            limit = float(a.get("max_gap_ms", 250)) / 1000.0
+            over = [(a2 - start, b - start) for a2, b in zip(inside, inside[1:]) if b - a2 > limit]
+            if over and all(_in_stall(stalls, g0, g1) for g0, g1 in over) and \
+                    abs(rate - hz) <= hz * float(a.get("rate_tolerance", 0.2)):
+                host_explained += 1
+                per[c["index"]] = {"rate_hz": round(rate, 2), "max_gap_ms": round(max_gap, 1),
+                                   "ok": "host stall", "gaps_in_host_stall": len(over)}
+                continue
         bad += 0 if ok else 1
         per[c["index"]] = {"rate_hz": round(rate, 2), "p99_gap_ms": p99_gap and round(p99_gap, 1),
                            "max_gap_ms": max_gap and round(max_gap, 1), "ok": ok}
-    return _result(PASS if bad == 0 else FAIL, per,
+    status = FAIL if bad else (INCONCLUSIVE if host_explained else PASS)
+    return _result(status, per,
                    {"rate_hz": hz, "rate_tolerance": a.get("rate_tolerance", 0.2), "max_gap_ms": a.get("max_gap_ms", 250)},
                    source="client snapshots.ndjson receive times (NetworkClient.SnapshotReceived, monotonic)",
                    sampling="every snapshot", rationale="snapshots ship at SIM_WORLD_HZ; a long gap is a visible freeze "
@@ -676,13 +745,17 @@ def check_enemy_crowding(ev, a):
     overlap = util.percentile([s["overlap_ratio"] for s in per_sample], 50)
     findings = []
     status = PASS
+    if max_share_spread is None and a.get("require_spread"):
+        findings.append(f"players were never >= {a.get('spread_distance', 10)} apart: the spread criterion "
+                        "was not exercised")
+        status = INCONCLUSIVE
     if max_share_spread is not None and max_share_spread > float(a.get("max_share_when_spread", 0.9)):
         findings.append(f"with players >= {a.get('spread_distance', 10)} apart, one player still drew "
                         f"{max_share_spread:.0%} of enemies")
         status = FAIL
     if overlap is not None and overlap > float(a.get("max_overlap_ratio", 0.5)):
         findings.append(f"median {overlap:.0%} of enemies overlap another enemy within {overlap_r} units")
-        status = FAIL if a.get("overlap_is_failure", False) else (status if status == FAIL else INFO)
+        status = FAIL if a.get("overlap_is_failure", False) else (status if status in (FAIL, INCONCLUSIVE) else INFO)
     measured = {"samples": len(per_sample), "median_overlap_ratio": overlap,
                 "median_max_target_share": util.percentile([s["max_target_share"] for s in per_sample], 50),
                 "max_target_share_when_spread": max_share_spread,
@@ -954,6 +1027,19 @@ CHECKS = {
 }
 
 
+def check_host_quiet(ev, a):
+    """INFO: host-wide stalls seen during the run (several client processes stalling at once)."""
+    stalls = host_stalls(ev)
+    return _result(INFO, {"host_stalls": len(stalls)}, None,
+                   source="client frames.csv, frames >= 250 ms ending within 250 ms in >= 2 processes",
+                   sampling="every frame", detail={"stalls": [(round(a, 2), round(b, 2), c) for a, b, c in stalls[:20]]},
+                   rationale="a stall shared by separate processes is the host, not the game; checks it explains are "
+                             "INCONCLUSIVE, and the run should be repeated on a quiet host")
+
+
+CHECKS["host_quiet"] = check_host_quiet
+
+
 def evaluate(ev: dict) -> list[dict]:
     out = []
     for a in ev["scenario"].get("assertions", []):
@@ -970,6 +1056,9 @@ def evaluate(ev: dict) -> list[dict]:
             res["detail"]["would_be"] = res["status"]
             res["status"] = INFO
         out.append({"id": a["id"], "check": a["check"], "title": a.get("title", ""), **res})
+    if not any(a.get("check") == "host_quiet" for a in ev["scenario"].get("assertions", [])):
+        out.append({"id": "host_quiet", "check": "host_quiet", "title": "host-wide stalls (environment)",
+                    **check_host_quiet(ev, {})})
     return out
 
 

@@ -36,7 +36,7 @@ def _ev(clients=1, duration=10.0, entities=None, status=None, metrics_start=None
         "scenario": sc,
         "clients": [{"index": i, "dir": Path(f"client-{i}"), "status": {}, "summary": None, "summaries": [],
                      "events": [], "samples": [], "snapshots": [], "inputs": [], "plan": {}, "logs": {},
-                     "history": {}} for i in range(clients)],
+                     "history": {}, "frames": []} for i in range(clients)],
         "server": {"entities": ents, "status": status or [], "container": [],
                    "metrics_start": metrics_start or {}, "metrics_end": metrics_end or {}},
         "redis": {},
@@ -111,7 +111,7 @@ class AnalysisTests(unittest.TestCase):
         ev = _ev()
         ev["scenario"]["assertions"] = [{"id": "x", "check": "nope"}, {"id": "y", "check": "reconnect", "client": 9}]
         out = analyze.evaluate(ev)
-        self.assertEqual([r["status"] for r in out], [analyze.INCONCLUSIVE, analyze.INCONCLUSIVE])
+        self.assertEqual([r["status"] for r in out], [analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INFO])  # + host_quiet
         self.assertEqual(analyze.overall(out), analyze.INCONCLUSIVE)
 
     def test_overall_fail_dominates_and_info_never_decides(self):
@@ -174,6 +174,45 @@ class AnalysisTests(unittest.TestCase):
         res = analyze.check_render_jumps(ev, {"max_local": 0})
         self.assertEqual(res["measured"]["server_teleport"], 1)
         self.assertEqual(res["status"], analyze.PASS)
+
+    def test_review_findings_are_not_false_passes(self):
+        # Zero clients: never "all completed".
+        self.assertEqual(analyze.check_clients_completed(_ev(clients=0), {})["status"], analyze.INCONCLUSIVE)
+        # A move step with no server samples is not silently skipped.
+        ents = [_row(i * 0.2, [["u", "player", 5.0 * max(0, i * 0.2 - 1), 0.0, 100, 100, 0, 5.0]]) for i in range(30)]
+        ev = _ev(entities=ents, duration=20)
+        ev["clients"][0]["summary"] = {"user_id": "u", "input": {"moves_read": 9}}
+        ev["clients"][0]["plan"] = {"steps": [{"t0": 1, "t1": 4, "mode": "move", "x": 1, "y": 0},
+                                              {"t0": 10, "t1": 14, "mode": "move", "x": 1, "y": 0}]}
+        self.assertEqual(analyze.check_inputs_consumed(ev, {})["status"], analyze.INCONCLUSIVE)
+        # A respawn does not excuse a rendered jump the server's motion does not explain.
+        ents = [_row(i * 0.2, [["p", "player", 3.0 if i * 0.2 < 5 else 2.5, 1.0, 3 if i * 0.2 < 5 else 100, 100, 0, 5]])
+                for i in range(50)]
+        ev = _ev(entities=ents, duration=10)
+        ev["clients"][0]["summary"] = {"outcome": "completed"}
+        ev["clients"][0]["events"] = [
+            {"event": "render_jump", "st": 5.1, "id": "p", "type": "player", "local": True, "step": 6.0}]
+        self.assertEqual(analyze.check_render_jumps(ev, {"max_local": 0})["measured"]["local_major"], 1)
+
+    def test_crowding_without_a_spread_interval_is_inconclusive_when_required(self):
+        def sample(st):
+            ents = [[f"p{i}", "player", x, 0.0, 100, 100, 0, 5] for i, x in enumerate([0, 0.5, 1.0])]
+            ents += [[f"m{j}", "mob", 0.5, 0.01 * j, 16, 16, 0, 2.5] for j in range(20)]
+            return _row(st, ents)
+        ev = _ev(entities=[sample(6 + i * 0.2) for i in range(30)], duration=20)
+        self.assertEqual(analyze.check_enemy_crowding(ev, {"spread_distance": 10, "require_spread": True})["status"],
+                         analyze.INCONCLUSIVE)
+
+    def test_a_gap_explained_by_a_host_wide_stall_is_inconclusive_not_fail(self):
+        ev = _ev(clients=2, duration=10, status=[{"_st": 5, "sim_world_hz": 15}])
+        for c in ev["clients"]:
+            c["summary"] = {"start_realtime": 100.0}
+            c["snapshots"] = [{"t": 100.0 + k / 15.0} for k in range(150) if not 70 <= k < 82]
+            c["frames"] = [(k / 60.0, 16.7) for k in range(600)] + [(5.45, 800.0)]
+        res = analyze.check_snapshot_cadence(ev, {"max_gap_ms": 250})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+        ev["clients"][1]["frames"] = [(k / 60.0, 16.7) for k in range(600)]  # only one process stalled
+        self.assertEqual(analyze.check_snapshot_cadence(ev, {"max_gap_ms": 250})["status"], analyze.FAIL)
 
     def test_crowding_concentration_is_a_defect_only_when_players_are_spread(self):
         def sample(st, players):

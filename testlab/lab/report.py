@@ -66,6 +66,10 @@ def _markdown(doc: dict, ev: dict) -> str:
     p = doc.get("player") or {}
     lines.append(f"| player | {p.get('exe')} (NDC.TestLab.dll {((p.get('testlab_dll') or {}).get('sha256')) or 'MISSING'}) |")
     b = p.get("build") or {}
+    configured = ((doc.get("repos") or {}).get("client") or {}).get("head")
+    if b.get("client_head") and configured and b["client_head"] != configured:
+        lines.append(f"| **provenance** | player built from client `{b['client_head'][:10]}` but the configured project is at "
+                     f"`{configured[:10]}`: the evidence describes the BUILT commit |")
     lines.append(f"| player built from | `{(b.get('client_head') or 'unknown')[:10]}`{' + uncommitted changes' if b.get('client_dirty') else ''}"
                  f" in {b.get('project')} at {b.get('built_utc')} defines {b.get('defines')} |")
     for pkg in b.get("embedded_packages") or []:

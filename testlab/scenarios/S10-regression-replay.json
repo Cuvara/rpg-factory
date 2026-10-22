@@ -8,7 +8,11 @@
   "map": "map_01",
   "seed": 10,
   "duration_s": 40,
-  "screenshots_s": [10, 25, 38],
+  "screenshots_s": [
+    10,
+    25,
+    38
+  ],
   "reference": {
     "before_fix_run": "20261021T180845Z-S05-oomi",
     "before_fix_local_render_jumps": 3048,
@@ -16,20 +20,125 @@
     "expected_after_fix": "0 local render jumps"
   },
   "per_client": [
-    { "steps": [ { "t0": 15, "t1": 22, "mode": "move", "x": -1, "y": 0 }, { "t0": 22, "t1": 29, "mode": "move", "x": 1, "y": 0 } ] },
-    { "steps": [ { "t0": 15, "t1": 22, "mode": "move", "x": 0, "y": -1 }, { "t0": 22, "t1": 29, "mode": "move", "x": 0, "y": 1 } ] },
-    { "steps": [ { "t0": 15, "t1": 22, "mode": "move", "x": -0.7, "y": -0.7 }, { "t0": 22, "t1": 29, "mode": "move", "x": 0.7, "y": 0.7 } ] }
+    {
+      "steps": [
+        {
+          "t0": 15,
+          "t1": 22,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 22,
+          "t1": 29,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 15,
+          "t1": 22,
+          "mode": "move",
+          "x": 0,
+          "y": -1
+        },
+        {
+          "t0": 22,
+          "t1": 29,
+          "mode": "move",
+          "x": 0,
+          "y": 1
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 15,
+          "t1": 22,
+          "mode": "move",
+          "x": -0.7,
+          "y": -0.7
+        },
+        {
+          "t0": 22,
+          "t1": 29,
+          "mode": "move",
+          "x": 0.7,
+          "y": 0.7
+        }
+      ]
+    }
   ],
   "assertions": [
-    { "id": "in_world", "check": "clients_in_world" },
-    { "id": "completed", "check": "clients_completed" },
-    { "id": "logs_clean", "check": "client_log_clean" },
-    { "id": "inputs_consumed", "check": "inputs_consumed", "min_cos": 0.9, "min_distance_fraction": 0.5 },
-    { "id": "render_jumps", "check": "render_jumps", "max_local": 0, "max_remote_per_client_min": 2.0 },
-    { "id": "local_divergence", "check": "position_divergence", "local": true, "types": ["player"], "p95": 0.5, "max": 1.5 },
-    { "id": "remote_player_divergence", "check": "position_divergence", "types": ["player"], "p95": 0.35, "max": 1.0 },
-    { "id": "remote_mob_divergence", "check": "position_divergence", "types": ["mob"], "p95": 0.35, "max": 1.0 },
-    { "id": "crowding", "check": "enemy_crowding", "max_share_when_spread": 0.9, "max_overlap_ratio": 0.5 },
-    { "id": "enemy_render_speed", "check": "enemy_render_speed", "speed": 2.5 }
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "inputs_consumed",
+      "check": "inputs_consumed",
+      "min_cos": 0.9,
+      "min_distance_fraction": 0.5
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "max_local": 0,
+      "max_remote_per_client_min": 2.0
+    },
+    {
+      "id": "local_divergence",
+      "check": "position_divergence",
+      "local": true,
+      "types": [
+        "player"
+      ],
+      "p95": 0.5,
+      "max": 1.5
+    },
+    {
+      "id": "remote_player_divergence",
+      "check": "position_divergence",
+      "types": [
+        "player"
+      ],
+      "p95": 0.35,
+      "max": 1.0
+    },
+    {
+      "id": "remote_mob_divergence",
+      "check": "position_divergence",
+      "types": [
+        "mob"
+      ],
+      "p95": 0.35,
+      "max": 1.0
+    },
+    {
+      "id": "crowding",
+      "check": "enemy_crowding",
+      "max_share_when_spread": 0.9,
+      "max_overlap_ratio": 0.5,
+      "require_spread": true
+    },
+    {
+      "id": "enemy_render_speed",
+      "check": "enemy_render_speed",
+      "speed": 2.5
+    }
   ]
 }
