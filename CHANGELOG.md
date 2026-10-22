@@ -94,6 +94,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     damage; no hit beyond the projectile's reach; numbers read from content/abilities.json).
     `enemy_bounds` reads /status `map_bounds` first. Scenarios S14 (deterministic death and
     respawn) and S15 (combat negative path) join the `readiness` suite.
+  - **Server image revision.** `--build-server` passes the server HEAD as `STACK_GIT_REVISION`
+    (stack.sh stamps it into `org.opencontainers.image.revision`); provenance records the running
+    image's label and is INCONCLUSIVE when it is missing or differs from the recorded server SHA.
+    Server trees whose stack.sh predates the variable are recorded as `label unsupported`.
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice

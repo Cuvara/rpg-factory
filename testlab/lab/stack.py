@@ -192,8 +192,16 @@ def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_rest
             for k, v in sorted(env.items()):
                 fh.write(f"{k}={v}\n")
         flags = "" if build else " --no-build"
+        revision = ""
+        if build and supports_git_revision(cfg):
+            # Stamp the image with the source it is built from (org.opencontainers.image.revision),
+            # so provenance can prove the running container is that commit.
+            sha = server_head(cfg)
+            if sha:
+                revision = f"STACK_GIT_REVISION='{sha}' "
+                record["stamped_revision"] = sha
         cmd = (f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && "
-               f"STACK_SCRATCH_EXTRA_ENV='{util.to_wsl_path(env_file)}' ./stack.sh --scratch up{flags}")
+               f"{revision}STACK_SCRATCH_EXTRA_ENV='{util.to_wsl_path(env_file)}' ./stack.sh --scratch up{flags}")
         started = util.mono()
         res = util.wsl(cfg.wsl_distro, cmd, timeout=3600)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +220,37 @@ def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_rest
     wait_ready(cfg, env.get("GAMESERVER_MAP_ID", "map_01"), timeout=120)
     record["health"] = health(cfg)
     return record
+
+
+REVISION_LABEL = "org.opencontainers.image.revision"
+
+
+def supports_git_revision(cfg: LabConfig) -> bool:
+    """stack.sh stamps STACK_GIT_REVISION into the images (rpg-mmo-server 1dc89ed and later)."""
+    try:
+        return "STACK_GIT_REVISION" in (cfg.deploy_dir / "stack.sh").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def server_head(cfg: LabConfig) -> str | None:
+    """The server checkout's HEAD (Windows git: the worktree is a Windows path), 40-hex or None."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(cfg.server_repo), "rev-parse", "HEAD"], capture_output=True,
+                             text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out if re.fullmatch(r"[0-9a-f]{40}", out) else None
+
+
+def image_revision(cfg: LabConfig) -> str | None:
+    """The org.opencontainers.image.revision label of the image the scratch game server runs."""
+    assert_scratch_name(cfg, cfg.gameserver_container)
+    res = util.wsl(cfg.wsl_distro, "docker inspect --format '{{ index .Config.Labels \"" + REVISION_LABEL + "\" }}' "
+                   + cfg.gameserver_container, timeout=60)
+    out = res.stdout.strip()
+    return out if res.returncode == 0 and re.fullmatch(r"[0-9a-f]{7,40}", out) else None
 
 
 def restart_gameserver(cfg: LabConfig) -> None:

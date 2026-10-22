@@ -188,6 +188,15 @@ def verify(run_dir: Path, meta: dict, scenario: dict, clients: list[dict]) -> li
     elif nc.get("embedded") and not nc.get("sha"):
         problems.append("provenance.netcode.sha missing: the player embeds com.cuvara.netcode but its build has no "
                         "VERIFY-PROVENANCE.txt naming the commit")
+    srv = prov.get("server") or {}
+    if srv.get("label_supported"):
+        rev, sha = srv.get("image_revision"), srv.get("sha")
+        if not rev:
+            problems.append("server image has no revision label although stack.sh supports STACK_GIT_REVISION "
+                            "(image built without it: rebuild with --build-server)")
+        elif not sha or not sha.startswith(rev) and not rev.startswith(sha):
+            problems.append(f"server image revision {rev[:12]} != recorded server sha {str(sha)[:12]}: the container "
+                            "does not run the recorded source (rebuild with --build-server)")
     name = Path(run_dir).name
     for label, rid in (("provenance.run_id", prov.get("run_id")), ("run.json run_id", meta.get("run_id"))):
         if rid and rid != name:

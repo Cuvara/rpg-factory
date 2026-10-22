@@ -101,6 +101,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
     harness_error = None
     interrupted = False
     server_image = None
+    server_label = None
 
     def mark(event: str, **kw) -> None:
         meta["timeline"].append({"event": event, "mono": util.mono(), **kw})
@@ -128,6 +129,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         for action in meta["stack"]["actions"]:
             log("stack: " + action)
         server_image = provenance.docker_image_id(cfg, cfg.gameserver_container)
+        server_label = {"supported": stack.supports_git_revision(cfg), "revision": stack.image_revision(cfg)}
         mark("stack_ready")
 
         probe = ServerProbe(cfg, run_dir / "server", entity_hz=float(sc["server_sample_hz"]))
@@ -250,7 +252,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         meta["harness_error"] = harness_error
         meta["ended_utc"] = util.utc_stamp()
         try:
-            meta["provenance"] = _provenance(cfg, meta, run_dir, server_image)
+            meta["provenance"] = _provenance(cfg, meta, run_dir, server_image, server_label)
         except Exception as exc:  # an incomplete record grades INCONCLUSIVE; never lose run.json
             meta["provenance"] = {"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"}
         util.write_json(run_dir / "run.json", meta)
@@ -268,7 +270,8 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
     return result
 
 
-def _provenance(cfg: LabConfig, meta: dict, run_dir: Path, server_image: str | None) -> dict:
+def _provenance(cfg: LabConfig, meta: dict, run_dir: Path, server_image: str | None,
+                server_label: dict | None = None) -> dict:
     """The run record's provenance block (lab/provenance.py); verified by every analysis."""
     repos = meta.get("repos") or {}
     player = provenance.player_record(cfg.player_exe)
@@ -277,7 +280,11 @@ def _provenance(cfg: LabConfig, meta: dict, run_dir: Path, server_image: str | N
         "run_id": meta["run_id"],
         "factory": {"sha": (repos.get("factory") or {}).get("head"), "dirty": (repos.get("factory") or {}).get("dirty")},
         "server": {"sha": (repos.get("server") or {}).get("head"), "dirty": (repos.get("server") or {}).get("dirty"),
-                   "image_id": server_image, "container": cfg.gameserver_container},
+                   "image_id": server_image, "container": cfg.gameserver_container,
+                   # org.opencontainers.image.revision of that image; label_supported false when the
+                   # server's stack.sh predates STACK_GIT_REVISION (recorded as 'label unsupported').
+                   "image_revision": (server_label or {}).get("revision"),
+                   "label_supported": (server_label or {}).get("supported")},
         # The commit the player was BUILT from (testlab-build.json), not the configured checkout.
         "client": {"sha": player.get("built_from_client"), "dirty": player.get("built_dirty"),
                    "configured_head": (repos.get("client") or {}).get("head")},

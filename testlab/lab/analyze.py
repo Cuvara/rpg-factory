@@ -1371,6 +1371,9 @@ def check_provenance(ev, a):
     measured = {"run_id": prov.get("run_id"), "factory": (prov.get("factory") or {}).get("sha"),
                 "server": (prov.get("server") or {}).get("sha"),
                 "server_image": (prov.get("server") or {}).get("image_id"),
+                "server_image_revision": ((prov.get("server") or {}).get("image_revision")
+                                          if (prov.get("server") or {}).get("label_supported") is not False
+                                          else "label unsupported"),
                 "client": (prov.get("client") or {}).get("sha"), "netcode": (prov.get("netcode") or {}).get("sha"),
                 "player_exe": ((prov.get("player") or {}).get("exe_sha256") or "")[:16] or None,
                 "scenario": (prov.get("scenario") or {}).get("id"),

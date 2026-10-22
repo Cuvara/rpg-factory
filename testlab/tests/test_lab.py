@@ -771,6 +771,7 @@ class CleanupTests(unittest.TestCase):
             mock.patch.object(stack, "preflight", return_value={"conflicts": []}),
             mock.patch.object(stack, "ensure", return_value={"actions": []}),
             mock.patch.object(provenance, "docker_image_id", return_value="sha256:" + "0" * 64),
+            mock.patch.object(stack, "image_revision", return_value=None),
             mock.patch.object(runner, "ServerProbe", FakeProbe),
             mock.patch.object(clients, "launch", side_effect=fake_launch),
             mock.patch.object(clients, "wait_phase", side_effect=wait_phase_effect),
@@ -1817,6 +1818,74 @@ class LifecycleDuplicateTests(unittest.TestCase):
         self.assertEqual(analyze.check_prediction_bound(ev, {"expected_explained": {"0": 3}})["status"], analyze.FAIL)
         ev = t._ev([1504, 400], [1500])
         self.assertEqual(analyze.check_prediction_bound(ev, {"max_unexplained": 0})["status"], analyze.FAIL)
+
+
+class ImageRevisionTests(unittest.TestCase):
+    """--build-server stamps STACK_GIT_REVISION; provenance proves the container runs that source."""
+    SHA = "a" * 40
+
+    def _cfg(self, d, supported=True):
+        from lab import config
+        _write(Path(d) / "backend" / "deploy" / "stack.sh",
+               "STACK_SCRATCH_EXTRA_ENV\n" + ("STACK_GIT_REVISION\n" if supported else ""))
+        return config.LabConfig(workspace=Path(d), runs_root=Path(d), server_repo=Path(d))
+
+    def _ensure_cmd(self, d, supported, build=True):
+        from unittest import mock
+        from lab import stack
+        cfg = self._cfg(d, supported)
+        done = __import__("subprocess").CompletedProcess([], 0, "", "")
+        with mock.patch.object(stack, "health", return_value={"ok": False}), \
+                mock.patch.object(stack, "wait_ready"), \
+                mock.patch.object(stack, "server_head", return_value=self.SHA), \
+                mock.patch.object(stack.util, "wsl", return_value=done) as wsl:
+            rec = stack.ensure(cfg, {"A": "1"}, build=build, log_path=Path(d) / "up.log", force_restart_gameserver=False)
+        return wsl.call_args_list[0][0][1], rec
+
+    def test_build_stamps_the_server_head_when_stack_sh_supports_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            cmd, rec = self._ensure_cmd(d, supported=True)
+            self.assertIn(f"STACK_GIT_REVISION='{self.SHA}'", cmd)
+            self.assertEqual(rec["stamped_revision"], self.SHA)
+        with tempfile.TemporaryDirectory() as d:
+            cmd, rec = self._ensure_cmd(d, supported=False)
+            self.assertNotIn("STACK_GIT_REVISION", cmd)
+        with tempfile.TemporaryDirectory() as d:
+            cmd, _ = self._ensure_cmd(d, supported=True, build=False)
+            self.assertNotIn("STACK_GIT_REVISION", cmd)
+
+    def test_image_revision_reads_the_label(self):
+        from unittest import mock
+        from lab import stack
+        with tempfile.TemporaryDirectory() as d:
+            cfg = self._cfg(d)
+            for out, want in ((self.SHA + "\n", self.SHA), ("<no value>\n", None), ("", None)):
+                done = __import__("subprocess").CompletedProcess([], 0, out, "")
+                with mock.patch.object(stack.util, "wsl", return_value=done) as wsl:
+                    self.assertEqual(stack.image_revision(cfg), want)
+                self.assertIn("org.opencontainers.image.revision", wsl.call_args[0][1])
+
+    def _status(self, d, **server):
+        run = _run_dir(Path(d))
+        meta = json.loads((run / "run.json").read_text(encoding="utf-8"))
+        meta["provenance"]["server"].update(server)
+        _write(run / "run.json", json.dumps(meta))
+        return analyze.check_provenance(analyze.load_evidence(run), {})
+
+    def test_provenance_requires_the_label_to_match_when_supported(self):
+        sha = "s" * 40  # _run_dir's recorded server sha
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._status(d, label_supported=True, image_revision=sha)["status"], analyze.PASS)
+        with tempfile.TemporaryDirectory() as d:
+            res = self._status(d, label_supported=True, image_revision="b" * 40)
+            self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+            self.assertTrue(any("does not run the recorded source" in p for p in res["detail"]["problems"]))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._status(d, label_supported=True, image_revision=None)["status"], analyze.INCONCLUSIVE)
+        with tempfile.TemporaryDirectory() as d:
+            res = self._status(d, label_supported=False, image_revision=None)
+            self.assertEqual(res["status"], analyze.PASS)
+            self.assertEqual(res["measured"]["server_image_revision"], "label unsupported")
 
 
 if __name__ == "__main__":

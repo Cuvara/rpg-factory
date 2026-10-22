@@ -191,7 +191,7 @@ Copy a file in `scenarios/` and change these fields:
 
 When a run ends, `run.json` gets a `provenance` record (`lab/provenance.py`):
 - factory, server and client commits (the client commit the player was BUILT from, `testlab-build.json`), and whether each tree was dirty;
-- the image id the scratch game server container ran (`docker inspect rpgs-gameserver`);
+- the image id the scratch game server container ran (`docker inspect rpgs-gameserver`) and its `org.opencontainers.image.revision` label. With `--build-server` the harness passes the server checkout's HEAD as `STACK_GIT_REVISION`, which stack.sh (rpg-mmo-server 1dc89ed and later) stamps into the image; the `provenance` assertion is then INCONCLUSIVE when the label is missing or differs from the recorded server SHA. A server whose stack.sh predates the variable is recorded as `label unsupported`;
 - the Netcode the player embedded: version and source hash from `testlab-build.json`, commit from `VERIFY-PROVENANCE.txt`;
 - the player exe sha256 and one sha256 over every managed assembly;
 - scenario id, version and the sha256 of `scenario.json` as run;
