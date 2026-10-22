@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- **`testlab/`: autonomous multiplayer gameplay tests with real, rendered Unity clients.**
+  `python3 testlab/testlab.py run|suite|sweep|analyze|build-client|build-loadtest|stack|clean`.
+  - It starts the isolated scratch stack (`stack.sh --scratch` + `STACK_SCRATCH_EXTRA_ENV`) and
+    launches N players with distinct devices.
+  - It drives them through scenario files (S01-S10: bootstrap, idle stability, movement and
+    collision, combat, crowding, replication, load sweep, reconnect, soak, regression replay)
+    through the client's `IGameplayInputSource` seam. No focus or keyboard is needed.
+  - It records client traces and server-authoritative positions (`/debug/entities`) and grades
+    every assertion PASS / FAIL / INCONCLUSIVE / INFO with source, sampling, threshold and
+    artifacts. Missing evidence is never a PASS.
+  - Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness error.
+  - Design, commands, artifacts and triage: `testlab/README.md`.
+  - `tests/run-all.sh` runs its unit tests (`testlab/tests/test_lab.py`) and loads every scenario.
+- `skills/measure/references/legs.md`: the testlab as the multi-client verification leg.
+
 ## [1.0.5] - 2026-10-22
 
 Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay

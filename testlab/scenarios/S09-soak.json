@@ -1,0 +1,34 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S09",
+  "version": 1,
+  "title": "Soak: repeated movement and combat cycles, leak and drift checks",
+  "description": "Default 300 s; pass --duration for a longer soak. Memory slope of the server container, entity-count drift, accumulated errors and render jumps over the whole run.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 9,
+  "duration_s": 300,
+  "screenshots_s": [60, 180, 295],
+  "per_client": [
+    { "steps": [ { "t0": 2, "t1": 298, "mode": "circle", "rate": 0.6 } ] },
+    { "steps": [
+      { "t0": 2, "t1": 60, "mode": "toward_nearest_enemy", "stop_distance": 3 },
+      { "t0": 60, "t1": 120, "mode": "away_from_nearest_enemy" },
+      { "t0": 120, "t1": 180, "mode": "toward_point", "px": -10, "py": -10 },
+      { "t0": 180, "t1": 240, "mode": "toward_point", "px": 10, "py": 10 },
+      { "t0": 240, "t1": 298, "mode": "toward_client", "target_client": 0, "stop_distance": 2 }
+    ], "actions": [ { "t0": 2, "t1": 298, "kind": "cast_nearest_enemy", "interval_s": 0.8 } ] },
+    { "steps": [], "actions": [ { "t0": 2, "t1": 298, "kind": "cast_nearest_enemy", "interval_s": 1.0 } ] }
+  ],
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world" },
+    { "id": "completed", "check": "clients_completed" },
+    { "id": "logs_clean", "check": "client_log_clean" },
+    { "id": "memory", "check": "memory_growth", "max_server_mib_per_min": 2.0 },
+    { "id": "entities", "check": "entity_stability", "skip_first_s": 60, "max_growth_ratio": 0.1 },
+    { "id": "tick", "check": "server_tick" },
+    { "id": "kcp", "check": "kcp_health" },
+    { "id": "render_jumps", "check": "render_jumps", "max_local": 0, "max_remote_per_client_min": 2.0 },
+    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 }
+  ]
+}

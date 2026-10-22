@@ -29,7 +29,7 @@ while IFS= read -r f; do json_count=$((json_count + 1)); run "json: $f" jq empty
   < <(find . -name '*.json' -not -path './.git/*' | sort)
 [ "$json_count" -ge 4 ] && ok "json files found: $json_count" || bad "json files found: $json_count (expected >= 4)"
 for f in scripts/*.sh scripts/checks/*.sh tests/*.sh; do run "bash -n: $f" bash -n "$f"; done
-for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
+for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py testlab/*.py testlab/lab/*.py testlab/tests/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
 run "jq compile: scripts/lib/resolve.jq" \
   jq -e --arg repo server --argjson files '[]' --argjson subst '{}' --argjson tools '{}' -f scripts/lib/resolve.jq registry.json
 find scripts tests -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
@@ -97,6 +97,11 @@ while IFS= read -r h; do
 done < <(jq -r '.. | .command? // empty' hooks/hooks.json)
 rm -rf "$HT"
 [ -z "$hfail" ] && ok "hooks: a missing or exit-2 script never blocks (exit 0, stdout passes through)" || bad "hooks fail-safe" "$hfail"
+
+# ---- testlab (pure parts: scenarios, plan expansion, analysis checks; no stack, no Unity)
+run "testlab: unit tests" python3 -B testlab/tests/test_lab.py
+run "testlab: scenarios load" python3 -B testlab/testlab.py list
+find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only

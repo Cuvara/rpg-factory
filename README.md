@@ -369,6 +369,20 @@ Troubleshooting:
 
 Explicit invocation: `/rpg-factory:<skill> <task>`.
 
+## Testlab (autonomous multiplayer tests)
+
+`testlab/` runs real, rendered Unity players against an isolated backend with scripted input, then
+grades the run from client traces and server-authoritative positions:
+
+```
+python3 testlab/testlab.py run S01          # 3-client smoke
+python3 testlab/testlab.py suite full       # the regression suite
+python3 testlab/testlab.py sweep S07 --levels 0,25,50,100,150,200
+```
+
+It needs the client's `NDC.TestLab` build (`testlab.py build-client`) and an rpg-mmo-server checkout
+with the scratch-stack hooks. See `testlab/README.md`.
+
 ## Development
 
 - `registry.json` (schema v3) is the source of truth for module knowledge: modules, contracts,

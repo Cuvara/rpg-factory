@@ -1,0 +1,28 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S08",
+  "version": 1,
+  "title": "Reconnect and lifecycle: a client process dies and comes back on the same device",
+  "description": "Client 2 is killed at t=10 s (no graceful disconnect, as in a crash) and relaunched 3 s later with the same device id. It must come back as the same Nakama user with exactly one player entity, inside the server's 30 s hold window.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 8,
+  "duration_s": 40,
+  "join_timeout_s": 120,
+  "redis_at_s": 35,
+  "screenshots_s": [5, 30],
+  "disruptions": [ { "at_s": 10, "kind": "kill_client", "client": 2, "relaunch_after_s": 3 } ],
+  "per_client": [
+    { "steps": [ { "t0": 2, "t1": 38, "mode": "circle", "rate": 0.5 } ] },
+    { "steps": [] },
+    { "steps": [ { "t0": 2, "t1": 9, "mode": "move", "x": 1, "y": 0 }, { "t0": 20, "t1": 25, "mode": "move", "x": -1, "y": 0 } ] }
+  ],
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world" },
+    { "id": "reconnect", "check": "reconnect", "client": 2 },
+    { "id": "players_online_end", "check": "players_online", "mode": "last" },
+    { "id": "redis", "check": "redis" },
+    { "id": "kcp", "check": "kcp_health", "max_sessions_closed": 2 },
+    { "id": "logs_clean", "check": "client_log_clean" }
+  ]
+}

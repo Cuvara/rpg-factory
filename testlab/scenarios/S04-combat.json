@@ -1,0 +1,29 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S04",
+  "version": 1,
+  "title": "Combat: scripted projectile casts through the real cast path damage enemies",
+  "description": "MainScene's only attack is the projectile skillshot (Q / right mouse). The testlab presses it through IGameplayInputSource and aims at the nearest enemy, so AbilityId, aim, projectile prediction and the server's hit resolution all run on the production path.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 4,
+  "duration_s": 40,
+  "screenshots_s": [10, 25, 38],
+  "per_client": [
+    { "steps": [], "actions": [ { "t0": 5, "t1": 38, "kind": "cast_nearest_enemy", "interval_s": 0.6, "range": 12 } ] },
+    { "steps": [ { "t0": 5, "t1": 35, "mode": "toward_nearest_enemy", "stop_distance": 3 } ],
+      "actions": [ { "t0": 5, "t1": 38, "kind": "cast_nearest_enemy", "interval_s": 0.6, "range": 12 } ] },
+    { "steps": [ { "t0": 5, "t1": 35, "mode": "circle", "rate": 0.8 } ],
+      "actions": [ { "t0": 5, "t1": 38, "kind": "cast_forward", "interval_s": 1.0 }, { "t0": 6, "t1": 38, "kind": "jump", "interval_s": 3.0 } ] }
+  ],
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world" },
+    { "id": "completed", "check": "clients_completed" },
+    { "id": "logs_clean", "check": "client_log_clean" },
+    { "id": "combat", "check": "combat_effect", "min_damaged": 3 },
+    { "id": "render_jumps", "check": "render_jumps", "max_local": 0, "max_remote_per_client_min": 2.0 },
+    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 },
+    { "id": "kcp", "check": "kcp_health" },
+    { "id": "tick", "check": "server_tick" }
+  ]
+}
