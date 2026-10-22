@@ -2145,6 +2145,29 @@ def _render_tracks(c, skip, stalls):
     return out
 
 
+def _all_server_teleports(ev, max_speed):
+    """{entity id: [(tick_lo, tick_hi)]} of every server-side respawn (dead -> alive, or HP from below
+    half to full) or non-walkable step (1.5 x max_speed + 0.2 between probe samples), all entities in
+    one pass over /debug/entities."""
+    out, prev = {}, {}
+    for r in ev["server"]["entities"]:
+        tick, st = r.get("tick"), r.get("st")
+        if tick is None or st is None:
+            continue
+        for e in r["ents"]:
+            eid = e[0]
+            p = prev.get(eid)
+            if p is not None and tick > p[0]:
+                mx = e[5] or 0
+                respawn = (p[5] and not e[6]) or (mx > 0 and p[4] is not None and e[4] is not None
+                                                  and p[4] < 0.5 * mx and e[4] >= mx)
+                speed = float(e[7]) if len(e) > 7 and e[7] else max_speed
+                if respawn or math.hypot(e[2] - p[2], e[3] - p[3]) > 1.5 * max(speed, max_speed) * max(st - p[1], 1e-3) + 0.2:
+                    out.setdefault(eid, []).append((p[0], tick))
+            prev[eid] = (tick, st, e[2], e[3], e[4], e[6])
+    return out
+
+
 def check_cross_client_convergence(ev, a):
     """Two clients drawing the same remote entity at the same server tick draw it in the same place
     (C4 hook: samples.ndjson render_tick, the tick the row's positions were drawn at). For every pair
@@ -2152,7 +2175,11 @@ def check_cross_client_convergence(ev, a):
     two samples around T. Thresholds are those of the remote position_divergence assertions (p95 0.35,
     max 1.0): two views of one interpolated stream must agree at least as well as each agrees with
     the server. Pairs across a server teleport (B's two samples further apart than an entity can walk)
-    are skipped."""
+    are skipped, and so is every pair within teleport_window_s (default 0.5 s: probe spacing 0.2 s
+    plus the 0.2 s bracket plus the interpolation delay) of a server-side respawn or teleport of that
+    entity (/debug/entities): around one, one client may already draw the new position while the
+    other still draws the old one (T31 final soak 20261022T200348Z-S09-uc3e: the 15 worst pairs, max
+    18.56, were 3-14 ticks before a player respawn)."""
     if len(ev["clients"]) < 2:
         return _inconclusive("needs at least two clients", source="samples.ndjson render_tick")
     hz = _tick_hz(ev, a)
@@ -2167,7 +2194,11 @@ def check_cross_client_convergence(ev, a):
                              source="samples.ndjson render_tick")
     max_gap = float(a.get("max_bracket_s", 0.2)) * hz
     max_speed = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0))
-    dists, worst = [], []
+    window = float(a.get("teleport_window_s", 0.5)) * hz
+    teleports = {eid: sorted((lo - window, hi + window) for lo, hi in spans)
+                 for eid, spans in _all_server_teleports(ev, max_speed).items()}
+    from array import array
+    dists, worst, near_teleport = array("d"), [], 0
     for i, ta in enumerate(tracks):
         for j, tb in enumerate(tracks):
             if i == j:
@@ -2177,7 +2208,14 @@ def check_cross_client_convergence(ev, a):
                 if other is None:
                     continue
                 bt, bx, by = other
+                spans = teleports.get(eid, [])
+                starts = [lo for lo, _ in spans]
                 for k, tick in enumerate(ticks):
+                    if spans:
+                        q = bisect_right(starts, tick) - 1
+                        if q >= 0 and tick <= spans[q][1] or q + 1 < len(spans) and spans[q + 1][0] <= tick:
+                            near_teleport += 1
+                            continue
                     m = bisect_left(bt, tick)
                     if m == 0 or m >= len(bt) or bt[m] - bt[m - 1] > max_gap or bt[m] == bt[m - 1]:
                         continue
@@ -2194,8 +2232,10 @@ def check_cross_client_convergence(ev, a):
     p95, mx = util.percentile(dists, 95), max(dists)
     ok = p95 <= float(a.get("p95", 0.35)) and mx <= float(a.get("max", 1.0))
     return _result(PASS if ok else FAIL, {"pairs": len(dists), "p50": round(util.percentile(dists, 50), 4),
-                                          "p95": round(p95, 4), "max": round(mx, 4)},
-                   {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0)},
+                                          "p95": round(p95, 4), "max": round(mx, 4),
+                                          "skipped_near_server_teleport": near_teleport},
+                   {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0),
+                    "teleport_window_s": a.get("teleport_window_s", 0.5)},
                    source="samples.ndjson rendered remote positions keyed by render_tick (C4), client pairs",
                    sampling=f"client {ev['scenario'].get('sample_hz')} Hz",
                    rationale="clients interpolate the same server stream; at the same render tick they must draw an "

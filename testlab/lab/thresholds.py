@@ -97,6 +97,8 @@ CHECK_DEFAULTS = [
     ("entity_lifecycle", "despawn grace", "150 ms + one sample", "TargetDelay + MaxExtrapolation (InterpolationConfig.Default)"),
     ("entity_lifecycle", "reuse tolerance", "max_speed x 0.15 + 0.2", "same grace; 0.2 " + POLICY),
     ("cross_client_convergence", "p95 / max / min_pairs", "0.35 / 1.0 / 50", "inherited from remote position_divergence"),
+    ("cross_client_convergence", "teleport_window_s", 0.5, "probe spacing 0.2 s + bracket 0.2 s + interpolation delay "
+                                                           "0.1 s around a server respawn or teleport"),
     ("stall_recovery", "recover_s / judge_s / p95", "1.0 / 3.0 / 0.5", f"{POLICY}; 0.5 inherited from local divergence"),
     ("graceful_leave", "leave_timeout_s", 5.0, f"{POLICY}; below the 60 s KCP idle timeout"),
     ("debug_kill_respawn", "respawn_within_s", 2.0, "one world interval (67 ms) + 1 Hz /status probe + queue; rounded up"),

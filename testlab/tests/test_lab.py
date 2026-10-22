@@ -2188,5 +2188,51 @@ class LeaverIdentityAndReentryTests(unittest.TestCase):
         self.assertEqual(res["detail"]["lingering"][0]["frame"], 7000)
 
 
+class ConvergenceNearTeleportTests(unittest.TestCase):
+    """T37: final soak 20261022T200348Z-S09-uc3e - the worst convergence pairs (max 18.56) were 3-14
+    ticks before a player respawn: one client already drew the respawn position, the other not yet."""
+
+    def _ev(self, a_early_ticks=25, offset=0.0, respawn=True):
+        # Server: player p walks +x at 2 u/s; at tick 1500 it dies and respawns 18 units away.
+        rows = []
+        for k in range(120):
+            tick = 1000 + k * 12
+            x = (tick - 1000) / 60 * 2.0 + (18.0 if respawn and tick >= 1500 else 0.0)
+            dead = respawn and 1488 <= tick < 1500
+            rows.append({"st": k * 0.2, "tick": tick, "ents": [["p", "player", x, 0.0, 0 if dead else 100, 100,
+                                                                1 if dead else 0, 5]]})
+        ev = _ev(clients=2, entities=rows, duration=24, status=[{"_st": 1, "tick_rate": 60}])
+        for c in ev["clients"]:
+            samples = []
+            for k in range(450):
+                t = 103.0 + 0.013 * c["index"] + k * 0.05
+                tick = 1000 + (t - 103.0) * 60
+                # client 0 shows the respawn a_early_ticks before client 1 does
+                jump_at = 1500 - (a_early_ticks if c["index"] == 0 else 0)
+                x = (tick - 1000) / 60 * 2.0 + (18.0 if respawn and tick >= jump_at else 0.0)
+                if c["index"] == 1:
+                    x += offset
+                samples.append(_sample(t, [["p", "player", 0, x, 0.0, x, 0.0]], tick))
+            c["samples"] = samples
+        return ev
+
+    def test_pairs_next_to_a_server_respawn_are_skipped(self):
+        res = analyze.check_cross_client_convergence(self._ev(), {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertGreater(res["measured"]["skipped_near_server_teleport"], 0)
+        res = analyze.check_cross_client_convergence(self._ev(), {"teleport_window_s": 0})
+        self.assertEqual(res["status"], analyze.FAIL)  # the old behaviour: an 18-unit "divergence"
+        self.assertGreater(res["measured"]["max"], 15)
+
+    def test_divergence_away_from_teleports_still_fails(self):
+        res = analyze.check_cross_client_convergence(self._ev(a_early_ticks=0, offset=0.6, respawn=False), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["measured"]["skipped_near_server_teleport"], 0)
+
+    def test_all_server_teleports_finds_respawns_and_jumps(self):
+        spans = analyze._all_server_teleports(self._ev(), 6.0)
+        self.assertEqual(spans["p"], [(1492, 1504)])  # last pre-respawn sample to the respawned sample
+
+
 if __name__ == "__main__":
     unittest.main()

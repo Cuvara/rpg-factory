@@ -118,6 +118,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     run.json, so `graceful_leave` is judged instead of INCONCLUSIVE. `entity_lifecycle` no longer counts
     the sample of an entity's re-add frame (AOI re-entry) as a ghost of its earlier removal.
     `graceful_leave` names a dead_link session close (the polite disconnect frame never arrived).
+  - `cross_client_convergence` skips pairs within 0.5 s of a server-side respawn or teleport of the
+    compared entity (`teleport_window_s`): next to one, one client may already draw the new position.
+    The final soak's maximum (18.56) was such a pair.
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
