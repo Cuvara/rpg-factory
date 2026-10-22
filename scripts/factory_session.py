@@ -365,7 +365,13 @@ def is_read_only(payload):
 def main():
     if len(sys.argv) == 3 and sys.argv[1] in ("--skills", "--advisories"):
         kind = "SKILLS" if sys.argv[1] == "--skills" else "ADVISORIES"
-        for line in read_events(session_dir(sys.argv[2], create=False), kind):
+        # the hooks of another process may have resolved a different scratch root (on Windows a hook process can
+        # see TMPDIR=/tmp, not absolute for native Python, and fall back to persistent()/tmp): read the root that
+        # actually holds this session
+        key = fstate.session_key(sys.argv[2])
+        roots = [fstate.scratch(), os.path.join(fstate.persistent(), "tmp")]
+        sd = next((os.path.join(r, key) for r in roots if os.path.isdir(os.path.join(r, key))), session_dir(sys.argv[2], create=False))
+        for line in read_events(sd, kind):
             print(line)
         return 0
     if sys.argv[1:] != ["--skill"]:

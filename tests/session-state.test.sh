@@ -125,6 +125,10 @@ python3 -B "$SESS" --skill <<<"$(skpl rpg-factory:go-backend legacy)" >/dev/null
 [ "$(python3 -B "$SESS" --skills legacy | tr -d '\r' | tr '\n' ' ')" = "factory-core server-services go-backend " ] \
   && [ "$(python3 -B "$SESS" --advisories legacy | tr -d '\r')" = "go-backend warn lead-missing" ] \
   && ok "legacy SKILLS / ADVISORIES files read, a lead in them counts" || no "legacy: $(python3 -B "$SESS" --skills legacy | tr '\n' ' ')"
+# the readers find a session whose hooks resolved the other scratch root (persistent()/tmp instead of $TMPDIR)
+mkdir -p "$TMP/state/tmp/other-root"; printf 'unity-dots warn lead-missing\n' > "$TMP/state/tmp/other-root/ADVISORIES"
+[ "$(python3 -B "$SESS" --advisories other-root | tr -d '\r')" = "unity-dots warn lead-missing" ] \
+  && ok "--advisories reads a session written under the persistent()/tmp root" || no "other-root advisories: $(python3 -B "$SESS" --advisories other-root)"
 # a bare registry skill name is this plugin's skill (recorded and gated); unknown bare names are ignored
 o=$(python3 -B "$SESS" --skill <<<"$(skpl go-backend bare)")
 jq -e '.hookSpecificOutput.updatedInput.skill == "rpg-factory:factory-core"' <<<"$o" >/dev/null && [ "$(python3 -B "$SESS" --skills bare | tr -d '\r')" = factory-core ] \
