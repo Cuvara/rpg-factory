@@ -88,8 +88,10 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   - SessionStart: `install-status.py --session`.
   - PreToolUse Bash|PowerShell: `git-guard.py`.
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
-  - PreToolUse Skill: `factory_session.py --skill`, which records the execution mode and gives a `kind: tech` skill a `high`
-    advisory until one of its `used_by` leads ran in the session (it still runs). Both guards import `factory_session` for the mode.
+  - PreToolUse Skill: `factory_session.py --skill`, which records the execution mode and keeps `kind: tech` skills behind
+    their leads without blocking: requested before factory-core, the call is auto-corrected to factory-core
+    (`updatedInput`, once per session); before one of its `used_by` leads, it runs with a `high` advisory. Each advisory
+    is logged to the session's `ADVISORIES` file (tests, dogfood). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
   covered by `tests/commands.test.sh`.

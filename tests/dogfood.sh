@@ -34,7 +34,7 @@ LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r 
 # MODE:    the Factory mode the session must declare (factory-context.sh --mode <m>), if set.
 # TOOLRUN: a script the session must run (e.g. run-checks.py), if set.
 # SHOWS:   text the transcript must contain (command output), if set; RAW scenarios send the prompt as-is.
-declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW
+declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW CORRECTS
 PROMPT[realtime-knob]="Add a configurable GAMESERVER_ tick-rate knob to the rpg-mmo-server C# game server and expose the value in force on /status."
 EXPECT[realtime-knob]="server-realtime"; HANDOFF[realtime-knob]=""
 PROMPT[nakama-rpc]="Add a new Nakama RPC party_kick to rpg-mmo-server and call it from the Unity client's party service."
@@ -70,10 +70,14 @@ PROMPT[tech-dots]="Analyze only: in the UnityDots package, should a new projecti
 EXPECT[tech-dots]="unity-package unity-dots"; HANDOFF[tech-dots]=""; SHOWS[tech-dots]="SystemOrderVerifier|ParallelScheduling"
 PROMPT[tech-netcode]="Analyze only: in the Netcode package, why can a client running at 20 fps see snapshots up to 50 ms late before interpolation even starts, and which headless tests cover the KCP session?"
 EXPECT[tech-netcode]="unity-package netcode-client"; HANDOFF[tech-netcode]=""; SHOWS[tech-netcode]="KcpTransport|PlayerLoop|frame"
+# a tech skill requested before factory-core on purpose: the Skill hook loads factory-core instead (never
+# blocks), and the session must still route to the lead, load go-backend and finish
+PROMPT[tech-first]="Your very first action: invoke the Skill tool with skill rpg-factory:go-backend. Then, analyze only: in the rpg-mmo-server Go gateway, how do I run one gateway test with the race detector?"
+EXPECT[tech-first]="server-services go-backend"; HANDOFF[tech-first]=""; CORRECTS[tech-first]="go-backend"; SHOWS[tech-first]="-race"
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode)
+scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
@@ -99,16 +103,23 @@ for n in "${scenarios[@]}"; do
     [ "$lv" = "$VERSION" ] || why+="version=$lv; "
     [ -n "${RAW[$n]:-}" ] || grep -qE "rpg-factory runtime $VERSION \\(installed[^)]*\\), installed $VERSION, source $VERSION - install state \\*\\*CURRENT" "$f" || why+="snapshot runtime line missing/not CURRENT; "
   fi
-  # Skill calls that ran: a call the Skill hook denied (tool_result is_error, e.g. a tech skill before its lead)
-  # never loaded the skill, so it is not an invocation
-  used=$(grep '^{' "$f" | jq -rs '[.[] | select(.type=="user") | .message.content[]? | objects | select(.type=="tool_result" and .is_error==true) | .tool_use_id] as $denied
-    | .[] | select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | select(.id as $i | $denied | index($i) | not) | .input.skill' | sed 's/^rpg-factory://' | tr '\n' ' ')
+  # the skills that loaded, in order ("Launching skill: rpg-factory:X" results): an auto-corrected call
+  # (requested a tech skill, the Skill hook loaded factory-core) counts as what loaded; an errored call loaded nothing
+  used=$(grep '^{' "$f" | jq -r 'select(.type=="user") | .message.content[]? | objects | select(.type=="tool_result" and (.is_error | not))
+    | (.content | if type == "array" then map(.text? // "") | join(" ") else tostring end) | capture("Launching skill: (?<s>[^ \\n\"]+)")? | .s' | sed 's/^rpg-factory://' | tr '\n' ' ')
+  corrected=$(grep '^{' "$f" | jq -rs '[.[] | select(.type=="user") | .message.content[]? | objects | select(.type=="tool_result")
+      | {id: .tool_use_id, got: ((.content | if type == "array" then map(.text? // "") | join(" ") else tostring end) | capture("Launching skill: (?<s>[^ \\n\"]+)")? | .s)}] as $r
+    | .[] | select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and .name=="Skill") | .id as $i | .input.skill as $want
+    | ($r[] | select(.id == $i) | .got) as $got | select($got != null and $got != $want) | "\($want | sub("^rpg-factory:"; ""))>\($got | sub("^rpg-factory:"; ""))"' | tr '\n' ' ')
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
+  outcome=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .subtype // ""' | tail -1)
+  sid=$(grep '^{' "$f" | jq -r 'select(.type=="system" and .subtype=="init") | .session_id' | head -1)
+  sdir=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; print(os.path.join(fstate.scratch(), sys.argv[2]))" "$ROOT/scripts/lib" "${sid:-none}")
+  advisories=$(cat "$sdir/ADVISORIES" 2>/dev/null | tr '\n' ';')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
   if [ -n "${MODE[$n]:-}" ]; then  # declared via --mode, or recorded by the Skill hook in the session's state
-    sid=$(grep '^{' "$f" | jq -r 'select(.type=="system" and .subtype=="init") | .session_id' | head -1)
-    recorded=$(cat "/tmp/rpg-factory/$sid/MODE" 2>/dev/null)
+    recorded=$(cat "$sdir/MODE" 2>/dev/null)
     { grep -qE -- "--mode[= ]${MODE[$n]}\b" <<<"$cmds" || [ "$recorded" = "${MODE[$n]}" ]; } || why+="mode ${MODE[$n]} not declared (recorded: ${recorded:-none}); "
   fi
   if [ -n "${TOOLRUN[$n]:-}" ]; then grep -q "${TOOLRUN[$n]}" <<<"$cmds" || why+="${TOOLRUN[$n]} not run; "; fi
@@ -124,16 +135,31 @@ for n in "${scenarios[@]}"; do
     for a in "${alts[@]}"; do grep -qw "$a" <<<"$used" && hit=true; done
     $hit || why+="expected $e not invoked; "
   done
-  # a tech skill is supporting context: some owning (repo/cross-repo) skill must be invoked before it
-  first_tech=""; owner_before=false
+  # a tech skill is supporting context. Hooks never block (1.0.3), so a tech skill that loads before any
+  # owning skill passes only if the Skill hook warned the session about it, one of its used_by leads loaded
+  # later, and the session finished; otherwise the lead's rules and gates never applied
+  first_tech=""; owner_before=false; note=""
   for u in $used; do
     k=$(jq -r --arg s "$u" '.skills[$s].kind // ""' "$ROOT/registry.json")
     if [ "$k" = "tech" ]; then first_tech=$u; break; fi
     case "$k" in repo|cross-repo) owner_before=true;; esac
   done
-  [ -z "$first_tech" ] || $owner_before || why+="tech skill $first_tech invoked before any owning skill; "
+  if [ -n "$first_tech" ] && ! $owner_before; then
+    leads=$(jq -r --arg s "$first_tech" '.skills[$s].used_by[]' "$ROOT/registry.json")
+    after=${used#*"$first_tech"}; lead_after=""
+    for l in $leads; do grep -qw "$l" <<<"$after" && lead_after=$l; done
+    grep -q "$first_tech warn" <<<"$advisories" || why+="tech skill $first_tech loaded before any owning skill without a Skill-hook advisory; "
+    [ -n "$lead_after" ] || why+="tech skill $first_tech loaded first and none of its leads ($(tr '\n' ' ' <<<"$leads")) ran afterwards; "
+    note=" (tech-first $first_tech: warned, lead $lead_after ran after)"
+  fi
+  [ "$outcome" = success ] || why+="session did not finish (result: ${outcome:-none}); "
+  if [ -n "${CORRECTS[$n]:-}" ]; then  # this scenario requests a tech skill before factory-core on purpose
+    grep -q "${CORRECTS[$n]}>factory-core" <<<"$corrected" || why+="${CORRECTS[$n]} requested first was not auto-corrected to factory-core (corrected: ${corrected:-none}); "
+    grep -q "${CORRECTS[$n]} autocorrect factory-core" <<<"$advisories" || why+="no autocorrect advisory logged for ${CORRECTS[$n]}; "
+    note="$note (auto-corrected ${corrected% })"
+  fi
   for h in ${HANDOFF[$n]:-}; do grep -qw "$h" <<<"$used $answer" || why+="hand-off $h not named; "; done
-  if [ -z "$why" ]; then pass=$((pass + 1)); r=PASS; else fail=$((fail + 1)); r="FAIL: $why"; fi
+  if [ -z "$why" ]; then pass=$((pass + 1)); r="PASS$note"; else fail=$((fail + 1)); r="FAIL: $why"; fi
   printf '%-20s | %-26s | %-28s | %-40s | %s\n' "$n" "${lv:-?} ${src:-?}" "${EXPECT[$n]}${HANDOFF[$n]:+ > ${HANDOFF[$n]:-}}" "${used:-none}" "$r"
 done
 echo "dogfood: $((pass + fail)) run, $pass passed, $fail failed (model $model; $($installed && echo "installed $VERSION" || echo plugin-dir); ${elapsed}s wall, parallel; transcripts in $OUT)"
