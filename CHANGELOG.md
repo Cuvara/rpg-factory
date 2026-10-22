@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+- **Hooks are advisory only: they never ask the user and never block the agent.** Agents using the plugin
+  still stopped for a human Yes/No: every guard rule returned a `permissionDecision` - `ask` (destructive git,
+  any push, rebase, stash, human gates, file-guard rules) shows a confirmation prompt only a person can answer,
+  and `deny` (tags and GitHub Releases, `gh repo delete/archive`, read-only execution modes, a tech skill before
+  its lead) blocked the call. Now `git-guard.py`, `file-guard.py` and `factory_session.py --skill` never emit a
+  `permissionDecision`. A match is returned as `additionalContext`
+  `rpg-factory advisory (high|warn): <rule>` - `high` for the former deny class, `warn` for the former ask
+  class - and the tool call proceeds through Claude Code's normal permission flow (the user's own settings
+  are untouched). The classifiers and rule texts are unchanged; the policy in `git-safety.md` stays as
+  guidance for the agent.
+- Tests read the advisory level (`high` / `warn` / `allow`) instead of a decision, and every test command
+  fails if any hook output contains `permissionDecision`. `tests/session-state.test.sh` adds direct probes
+  (rebase, force push, tag, `gh repo delete`, `reset --hard`, multi-client, `kubectl`, a tech skill before its
+  lead). `installed-safety.sh` still executes only commands with no advisory.
+
 ## [1.0.2] - 2026-10-21
 
 Fix: read-only inspection of a gated script (`sed -n`, `cat`, `grep`, `head`) no longer asks for a human

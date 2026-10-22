@@ -64,7 +64,7 @@ This skill **drives**; legs implement. It edits only `server.proto` (the `.proto
    update codecs/JSON/version, headless tests, CHANGELOG, then `package-ready.py` for "ready to tag".
    Evidence: `bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/wire-parity.sh` → both `OK` lines.
 4. **Gate - tag (H).** Stop. Report "ready to tag Netcode vX.Y.Z" with the evidence table. The lead tags; the
-   guard denies agent tagging. Resume only when the user says the tag exists.
+   guard flags agent tagging (advisory). Resume only when the user says the tag exists.
 5. **Leg 3 - client.** Invoke `pin-bump` for `com.cuvara.netcode vX.Y.Z` (and SGL if it moved). Client fallout
    (DI, session, HUD) → `client-integration`.
 6. **Report.** Core template + one validation table per repo + the contract evidence table below.

@@ -3,7 +3,10 @@
 
 Reads the hook payload on stdin. For commands that run inside the RPG MMO workspace it
 expands the command into the programs that will actually run, peeling wrappers and
-recursing into nested shells, then classifies every git / gh invocation:
+recursing into nested shells, then classifies every git / gh invocation. Advisory only (1.0.3): the
+hook never asks the user and never blocks; a match is returned as additionalContext
+"rpg-factory advisory (<level>): ..." for the agent to weigh. Internally the classes are still
+"deny" (reported as level high) and "ask" (level warn):
 
   - "deny"  creating, deleting or pushing tags (git tag, push --tags / tag refs, update-ref
             on tags, gh api .../git/refs|tags, gh release create) - agents never tag
@@ -19,9 +22,10 @@ stdbuf, ionice, setsid, xargs, find -exec/-execdir. Nested: bash|sh|zsh|dash -c,
 cmd(.exe) /c|/k, powershell|pwsh -c|-Command, PowerShell `&` call operator.
 
 Git run by a script file or a program is invisible to text analysis (documented limitation).
-A declared Factory execution mode (scripts/factory_session.py) keeps analyze/plan/review read-only.
+A declared Factory execution mode (scripts/factory_session.py) flags state changes in analyze/plan/review.
 
-Never approves: no output + exit 0 = "no opinion". Any internal error = no opinion; each
+Never approves or denies: no output + exit 0 = "no opinion", advisory output = still no decision. Any
+internal error = no opinion; each
 part (git analysis, human gates, mode) fails independently. RPG_FACTORY_GUARD=off disables it.
 """
 import json
@@ -736,15 +740,18 @@ def main():
             pass
     if not reasons:
         return 0
-    decision = "deny" if any(d == "deny" for d, _ in reasons) else "ask"
-    json.dump({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": "rpg-factory guard: " + "; ".join(dict.fromkeys(t for _, t in reasons)),
-        }
-    }, sys.stdout)
+    json.dump(advisory("rpg-factory guard", reasons), sys.stdout)
     return 0
+
+
+def advisory(who, reasons):
+    """Advisory only (1.0.3): never a permissionDecision, so the hook neither asks the user nor blocks the agent.
+    The former deny class is level `high`, the former ask class `warn`; the text reaches the agent as context."""
+    level = "high" if any(d == "deny" for d, _ in reasons) else "warn"
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": f"rpg-factory advisory ({level}): {who}: " + "; ".join(dict.fromkeys(t for _, t in reasons)),
+    }}
 
 
 if __name__ == "__main__":

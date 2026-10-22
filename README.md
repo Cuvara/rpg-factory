@@ -35,9 +35,9 @@ works too).
 ## Execution modes
 
 `analyze`, `plan`, `implement`, `validate`, `review`, `resume`. factory-core picks the mode from the request
-and declares it (`factory-context.sh --mode <m>`); the hooks then **enforce** it for the session: in
-`analyze` / `plan` / `review` every file write and state-changing command is denied, `validate` may only run
-`run-checks.py`. Every mode except validate/resume still invokes the lead skill - a plan comes from the
+and declares it (`factory-context.sh --mode <m>`); the hooks then **flag** departures for the session: in
+`analyze` / `plan` / `review` every file write and state-changing command gets a `high` advisory, `validate`
+flags anything but `run-checks.py`. The hooks never block (advisory only since 1.0.3). Every mode except validate/resume still invokes the lead skill - a plan comes from the
 lead's workflow. Switching (e.g. to `implement`) is only done when you ask for it.
 
 ### Plugin boundaries
@@ -210,7 +210,7 @@ in every repo (`feat/wire/party` in server, Netcode and client) so the legs are 
 
 ## Git safety and human gates
 
-Three layers, all inside the workspace (plus `gh` commands naming a workspace repo, wherever they run):
+Three layers, all inside the workspace (plus `gh` commands naming a workspace repo, wherever they run). Since 1.0.3 the hooks are **advisory only**: they never ask you to confirm and never block the agent. A match is passed to the agent as context (`rpg-factory advisory (high|warn): ...`); `high` marks the former deny class, `warn` the former ask class.
 
 1. **Rules** in `skills/factory-core/references/git-safety.md` (baseline preservation, explicit
    staging, `<type>/<area>/<topic>` branches, never tag).
@@ -218,14 +218,14 @@ Three layers, all inside the workspace (plus `gh` commands naming a workspace re
    into what actually runs: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`,
    `xargs`, `find -exec`), nested shells (`bash -c`, `sh -c`, `eval`, `cmd /c`, `powershell -c`),
    repo git aliases, PowerShell quoting and the `&` call operator.
-   - **Denies:** creating, deleting or pushing tags; tag/release creation through `gh` (REST
+   - **Advisory `high`:** creating, deleting or pushing tags; tag/release creation through `gh` (REST
      `git/tags`, tag refs, `/releases`; GraphQL `createRef refs/tags/...`, `createRelease`;
      `gh release create/edit/upload`); repository deletion/archival (`gh repo delete/archive`,
      `DELETE repos/<o>/<r>`).
-   - **Asks:** every other GitHub mutation - `gh api` writes (method as gh decides it), GraphQL
+   - **Advisory `warn`:** every other GitHub mutation - `gh api` writes (method as gh decides it), GraphQL
      mutations or queries from a file, branch protection / rulesets, `gh repo edit/rename/sync`,
      secrets, variables, workflows, runs, PR/issue mutations. Read-only `gh` passes.
-   - **Asks:** destructive git (`reset --hard`, `clean -f`, `checkout --`, `restore`, `stash`,
+   - **Advisory `warn`:** destructive git (`reset --hard`, `clean -f`, `checkout --`, `restore`, `stash`,
      `branch -D/-f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`), any
      `push`, `add -A`, `commit`/`merge`/`cherry-pick`/`revert`/`am`/`pull --rebase`/`reset <commit>`
      on protected branches (worktrees use their main checkout's list), `pull` without `--ff-only`,
@@ -236,8 +236,8 @@ Three layers, all inside the workspace (plus `gh` commands naming a workspace re
      `.env`/`kubeconfig.local`, `toggle-packages.sh`, Docker stack lifecycle, backups, load runs,
      Unity batch builds, `schema_migrations` writes).
 3. **File guard** - `scripts/file-guard.py`, PreToolUse on `Write|Edit|MultiEdit|NotebookEdit|Read`:
-   writes into embedded clones, submodule content, registry generated paths or secrets ask; secret
-   reads ask; writes in a read-only mode are denied.
+   writes into embedded clones, submodule content, registry generated paths or secrets get a `warn`
+   advisory, as do secret reads; writes in a read-only mode get a `high` advisory. Nothing is blocked.
 Where Factory keeps state (`scripts/lib/fstate.py`, always absolute, never inside a repo): per-session
 scratch (the declared mode, the skills run) under `$TMPDIR` if it is a usable absolute directory, else
 `/tmp`; check evidence under `$XDG_STATE_HOME/rpg-factory` (default `~/.local/state/rpg-factory`).
@@ -348,7 +348,7 @@ Troubleshooting:
   factory-status.py: rollout stage, READY_TO_TAG packages, unpinned releases, in-flight topic branches.
 
 > Measure whether the new importance weighting improves bytes/player/tick.
-  factory-core → measure: expected value + control + run id before running; bench.sh legs (asks first).
+  factory-core → measure: expected value + control + run id before running; bench.sh legs (load-run advisory).
 ```
 
 Explicit invocation: `/rpg-factory:<skill> <task>`.
@@ -375,7 +375,7 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
 - **Local protoc is not the CI pin** (registry fact `protoc-ci-pin`). `generate.sh` output would drift locally; leave regeneration to CI, or install the pinned version.
 - **No local cluster tooling.** kubectl, helm, promtool and kubeconform are not installed. Cluster checks are external and human-gated.
 - **Plugin evals with Bash are blocked on this machine** (`claude plugin eval` refuses Bash because of a symlink in `~/.docker`). Behaviour is verified with deterministic tests and headless dogfood sessions instead.
-- **The guard reads command text.** Anything it cannot see through asks; git run by a script file or a background process is not seen (the git-safety rules are the control there). Remote-only GitHub changes are only controlled by the guard. Another agent runtime (e.g. Codex) is outside all layers.
+- **The guard reads command text.** Anything it cannot see through gets a `warn` advisory; git run by a script file or a background process is not seen (the git-safety rules are the control there). Remote-only GitHub changes are only flagged by the guard (advisory, not blocked). Another agent runtime (e.g. Codex) is outside all layers.
 - **MCP tools are not inspected.** Unity-MCP asset/scene edits are controlled by the `unity-asset-edit` human gate (policy), not by a hook.
 - **Evidence identity** covers the check's directory plus the paths of its module's same-repo dependencies (registry `depends_on`); untracked files count by name, size and mtime (not contents). Changes in *another* repo are not part of it (a package's new tag reaches a consumer through its pin file, which is in the consumer repo).
 - **Hook cost:** one guard process per Bash/PowerShell call and one file-guard process per file tool call; no SessionStart repository scan and no post-command comparison (both left with the tripwire in 1.0.1). Python start-up alone is ~0.1 s on native Windows.

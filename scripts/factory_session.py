@@ -124,8 +124,9 @@ def mode_from_text(text):
 def skill_hook(payload):
     """PreToolUse(Skill): when a Factory skill is invoked with an explicit mode in its arguments ("plan only",
     "mode: validate"), record it - so the mode holds even if the model never runs the Route command.
-    Also keeps tech skills (registry kind "tech") behind their leads: a tech skill is denied until one of its
-    `used_by` skills ran in this session, so its "how it works" never replaces routing, rules and gates."""
+    Also keeps tech skills (registry kind "tech") behind their leads: a tech skill invoked before one of its
+    `used_by` skills ran in this session gets an advisory (it still runs - 1.0.3: hooks never block), so its
+    "how it works" does not replace routing, rules and gates."""
     ti = payload.get("tool_input") or {}
     name = str(ti.get("skill", ""))
     if not name.startswith("rpg-factory:"):
@@ -141,13 +142,12 @@ def skill_hook(payload):
     if spec.get("kind") == "tech" and leads and not seen.intersection(leads):
         root = PLUGIN_ROOT.replace("\\", "/").rstrip("/")
         print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse", "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"rpg-factory: `{short}` is a supporting tech skill and never runs first. Route the task "
-                f"(`bash \"{root}/scripts/factory-context.sh\" --mode <mode> --repo <key> --paths <files>`), invoke the "
-                f"lead it prints - for {short} one of: " + ", ".join(f"rpg-factory:{s}" for s in leads)
-                + f" - and then rpg-factory:{short}.")}}))
-        return 0
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                f"rpg-factory advisory (high): `{short}` is a supporting tech skill and should not run first. Route the "
+                f"task (`bash \"{root}/scripts/factory-context.sh\" --mode <mode> --repo <key> --paths <files>`), invoke "
+                f"the lead it prints - for {short} one of: " + ", ".join(f"rpg-factory:{s}" for s in leads)
+                + f" - and use rpg-factory:{short} as supporting context.")}}))
     with open(seen_file, "a", encoding="utf-8") as fh:
         fh.write(short + "\n")
     return 0

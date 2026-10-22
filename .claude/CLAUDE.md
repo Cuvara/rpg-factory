@@ -14,8 +14,10 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Hooks must stay fast (one guard process per command, no repository scan) and must never crash a session.
   No hook snapshots repository state, latches a session or needs an acknowledgement (the tripwire was
   removed on purpose; do not bring back a post-command lock under another name).
-- The git guard never approves and never crashes a session (errors mean "no opinion"); it denies only tag
-  creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`). Every new bypass found gets a
+- No hook asks the user or blocks the agent: hooks emit only `additionalContext` advisories
+  (`rpg-factory advisory (high|warn): ...`), never a `permissionDecision` (removed on purpose in 1.0.3; do not
+  bring back ask/deny). The git guard never crashes a session (errors mean "no opinion"); `high` marks tag
+  creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`) and repo deletion. Every new bypass found gets a
   case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
   in `scripts/file-guard.py`; execution modes are enforced by both guards. Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a `CHANGELOG.md` entry under [Unreleased].
@@ -78,8 +80,8 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   - SessionStart: `install-status.py --session`.
   - PreToolUse Bash|PowerShell: `git-guard.py`.
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
-  - PreToolUse Skill: `factory_session.py --skill`, which records the execution mode and denies a `kind: tech` skill
-    until one of its `used_by` leads ran in the session. Both guards import `factory_session` for the mode.
+  - PreToolUse Skill: `factory_session.py --skill`, which records the execution mode and gives a `kind: tech` skill a `high`
+    advisory until one of its `used_by` leads ran in the session (it still runs). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
   covered by `tests/commands.test.sh`.

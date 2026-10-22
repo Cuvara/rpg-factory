@@ -21,32 +21,32 @@ mkdir -p "$C/Assets/Samples/Mine"; echo u > "$C/Assets/Samples/Mine/u.cs"  # unt
 pass=0; fail=0
 dec() { # tool path [session]
   local o; o=$(jq -cn --arg t "$1" --arg p "$2" --arg s "${3:-fg}" --arg d "$C" '{tool_name:$t,tool_input:{file_path:$p,content:"x"},cwd:$d,session_id:$s}' | python3 -B "$FG")
-  jq -r '.hookSpecificOutput.permissionDecision // "allow"' <<<"${o:-{\}}"; }
+  jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${o:-{\}}"; }
 t() { local g; g=$(dec "$2" "$3" "${4:-fg}"); if [ "$g" = "$1" ]; then pass=$((pass + 1)); echo "PASS  $1  $2 ${3#$TMP/}"; else fail=$((fail + 1)); echo "FAIL  expected $1 got $g  $2 ${3#$TMP/}"; fi; }
 t allow Write "$C/Assets/Scripts/Net/NewFile.cs"
 t allow Edit  "$S/backend/deploy/compose.yml"
 t allow Edit  "$C/Assets/Scripts/Net/Client.cs"                         # pre-existing change: no session baseline any more
-t ask   Write "$C/Assets/Samples/Mine/u.cs"                             # generated Assets/Samples/
-t ask   Edit  "$C/Packages/com.cuvara.dots/a.cs"                        # embedded clone
-t ask   Write "$C/Packages/com.gdk.core/s.cs"                           # submodule content
-t ask   Edit  "$S/backend/shared/proto/gen/wire.pb.go"                  # generated (proto bindings)
-t ask   Write "$C/Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"    # generated (uxml codegen)
-t ask   MultiEdit "$C/Assets/Scripts/Foo.uxml.g.cs"                     # generated glob
-t ask   Write "$S/backend/deploy/.env"                                   # secrets
-t ask   Read  "$S/backend/deploy/kubeconfig.local"
-t ask   Read  "$S/backend/deploy/.env.local"
+t warn   Write "$C/Assets/Samples/Mine/u.cs"                             # generated Assets/Samples/
+t warn   Edit  "$C/Packages/com.cuvara.dots/a.cs"                        # embedded clone
+t warn   Write "$C/Packages/com.gdk.core/s.cs"                           # submodule content
+t warn   Edit  "$S/backend/shared/proto/gen/wire.pb.go"                  # generated (proto bindings)
+t warn   Write "$C/Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"    # generated (uxml codegen)
+t warn   MultiEdit "$C/Assets/Scripts/Foo.uxml.g.cs"                     # generated glob
+t warn   Write "$S/backend/deploy/.env"                                   # secrets
+t warn   Read  "$S/backend/deploy/kubeconfig.local"
+t warn   Read  "$S/backend/deploy/.env.local"
 t allow Read  "$S/backend/deploy/.env.example"                            # documentation, not a secret
 t allow Edit  "$S/backend/deploy/.env.example"
 t allow Read  "$S/backend/TEAM.md"
 t allow Read  "$C/Packages/com.cuvara.dots/a.cs"                         # reading user state is fine
 t allow Write "$TMP/outside/file.txt"                                     # outside the workspace
 t allow Edit  "Assets/Scripts/Net/Other.cs"                               # relative path resolved against cwd
-t ask   Edit  "Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"      # relative generated path
+t warn   Edit  "Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"      # relative generated path
 # modes: analyze/plan/review/validate forbid file changes (declared through the shell guard, same session)
 declare_mode() { jq -cn --arg c "bash $ROOT/scripts/factory-context.sh --mode $1" --arg d "$C" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"fg"}' | python3 -B "$ROOT/scripts/git-guard.py" >/dev/null; }
-declare_mode plan;      t deny  Write "$C/Assets/Scripts/Net/NewFile.cs"; t allow Read "$C/Assets/Scripts/Net/Client.cs"
-declare_mode validate;  t deny  Edit  "$S/backend/deploy/compose.yml"
-declare_mode review;    t deny  MultiEdit "$C/Assets/Scripts/Net/NewFile.cs"
+declare_mode plan;      t high  Write "$C/Assets/Scripts/Net/NewFile.cs"; t allow Read "$C/Assets/Scripts/Net/Client.cs"
+declare_mode validate;  t high  Edit  "$S/backend/deploy/compose.yml"
+declare_mode review;    t high  MultiEdit "$C/Assets/Scripts/Net/NewFile.cs"
 declare_mode implement; t allow Write "$C/Assets/Scripts/Net/NewFile.cs"
 
 # 1.0.1: the tripwire latch is gone - stale latch files from older versions never deny a write
