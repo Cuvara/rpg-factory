@@ -133,7 +133,7 @@ assert "deploy-only change -> no tech skill" server \
   "$(lead server-ops) and (.routing.legs == []) and (.routing.tech == [])" backend/deploy/monitoring/prometheus.yaml
 
 # a tech skill can never be forced into ownership, and --explain names it as supporting context
-for t in dotnet-gameserver go-backend unity-client-tech unity-dots netcode-client; do
+for t in $(jq -r '.skills | to_entries[] | select(.value.kind == "tech") | .key' "$ROOT/registry.json"); do
   if bash "$CTX" --repo server --paths backend/gameserver-dotnet/GameServer/Server/TickLoop.cs --lead "$t" >/dev/null 2>&1; then
     fail=$((fail + 1)); echo "FAIL  --lead $t accepted (tech skills are never lead)"
   else pass=$((pass + 1)); echo "PASS  --lead $t rejected (tech skills are never lead)"; fi
