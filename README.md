@@ -365,6 +365,10 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
   factory-status fixtures, install-status, facts, routing properties and history replay, the live
   check scripts, Netcode headless tests, and `claude plugin validate --strict`. `--release` also
   requires the installed plugin to be CURRENT. It must report 0 failed.
+- Skill line citations are checked against the code: `python3 -B scripts/checks/skill-citations.py
+  [--skill <s>] [--suggest]` resolves every `path:line` at the repos' integration branches and fails on a
+  moved symbol, an unanchored citation or a line past the end (`--suggest` prints the corrected line).
+  `skills-lint.sh` runs its repo-free part; `run-all.sh` runs the fixture suite and the live check.
 - `tests/dogfood.sh` runs real headless Claude sessions and asserts which skills were invoked;
   `--installed` uses the installed plugin (no `--plugin-dir`) and asserts the runtime version.
 

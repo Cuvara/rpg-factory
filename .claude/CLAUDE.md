@@ -26,6 +26,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`.
+- A skill's `path:line` citation names the symbol it shows (anchor) and must pass
+  `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json` and `marketplace.json` together with a
   `CHANGELOG.md` section (run-all checks it). The local directory marketplace loads this checkout in
   place (what is checked out is what sessions run); the install record only updates on a version
@@ -52,6 +54,8 @@ python3 -B tests/routing-properties.test.py
 tests/skills-lint.sh                       # skill contract, tech sections, ## Tools vs dev_tools
 env -u TMPDIR tests/devtools.test.sh       # dev tool probes, snapshot/doctor lines, no secrets printed
 scripts/check-registry.sh [--structure-only]
+env -u TMPDIR tests/skill-citations.test.sh  # citation checker on fixture repos
+python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill path:line vs integration branches
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--explain] [--json]

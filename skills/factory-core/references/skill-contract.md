@@ -74,6 +74,14 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
   depends on a package version names the fact (e.g. `entities-version`), never a remembered version.
 - Every `## Pitfalls` bullet cites a file (`path:line` or a backticked path) or an issue (`#123`) that
   proves it (lint). A pitfall nobody can point at is an opinion.
+- **Line citations are checked against the code** (`scripts/checks/skill-citations.py`). Form: a
+  backticked `path:N`, `:N-M` or `:N,M-K`; a bare `` `:N` `` continues the last file named earlier in the same
+  section (a heading resets it). Each one has an **anchor**: the symbol it shows, backticked, after the previous citation
+  and before this one - `` `TickOnce` (`GameServer/Server/TickLoop.cs:510`) ``; the anchor's last segment
+  must occur within the cited lines +/- 3 at the repo's integration branch. Paths resolve through
+  registry `skills.<s>.cite_roots` (prefix -> `repo:subpath`; repo directory names are prefixes too).
+  No anchor, a moved symbol or a line past the end fails `tests/run-all.sh`; `--suggest` prints the fix.
+  Cite a doc by its section name, not a line.
 - Optional review file: `references/<area>-review.md`, a checklist factory-core step 11 applies when the
   skill is in `routing.tech` (e.g. `unity-dots` `references/ecs-review.md`).
 
@@ -179,8 +187,9 @@ also a follow-up) pin this behaviour.
   optionally `upstream` (where released versions come from), `watchers` (independent consumers) and
   `co_edit` (exact lines another skill may touch); only `source`/`copies` route.
   Every `path` must exist in its repo.
-- New skill: add `skills.<name>` = `{kind, repos, summary}` and `skills/<name>/SKILL.md`. The
-  checker fails when either one exists without the other.
+- New skill: add `skills.<name>` = `{kind, repos, summary, order}` (a free `order`; tech skills also
+  `used_by`, and `cite_roots` when citations are not relative to the first repo's root) and
+  `skills/<name>/SKILL.md`. The checker fails when either one exists without the other.
 - New human gate: add `human_gates[]` `{id, rule, match?, decision?}`. When `match` (a Python
   regex) is present, the git guard returns a `warn` advisory (`high` when `decision` is `deny`) for Bash
   commands that match it inside the workspace. Hooks never ask or block (1.0.3).
