@@ -101,7 +101,16 @@ t Bash high "$S" "cmd.exe /c git tag v9"
 t Bash high "$S" "powershell.exe -Command \"git tag v9\""
 t Bash high "$S" "cd $S && git tag v9"
 t Bash high "$WS" "git -C rpg-mmo-server tag v9"
+# 1.0.5: reserved words, a heredoc fed to a shell, gh repository selectors (allowed before)
+t Bash high "$S" "if true; then git tag v9; fi"
+t Bash high "$S" "{ git tag v9; }"
+t Bash high "$S" "f() { git tag v9; }; f"
+t Bash high "$S" "bash <<'EOF'
+git tag v9
+EOF"
+t Bash high "$S" "gh --repo Cuvara/rpg-mmo-server release create v9.9.9"
 echo "== PowerShell tool"
+t PowerShell high "$S" 'if ($true) { git tag v9 }'
 t PowerShell high "$S" "git tag v9.9.9"
 t PowerShell high "$S" "& git push origin --tags"
 t PowerShell high "$S" "git.exe tag v9"
