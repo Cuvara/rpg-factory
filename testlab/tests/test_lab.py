@@ -214,6 +214,24 @@ class AnalysisTests(unittest.TestCase):
         ev["clients"][1]["frames"] = [(k / 60.0, 16.7) for k in range(600)]  # only one process stalled
         self.assertEqual(analyze.check_snapshot_cadence(ev, {"max_gap_ms": 250})["status"], analyze.FAIL)
 
+    def test_jumps_hidden_only_by_a_host_stall_make_the_result_inconclusive(self):
+        ents = [_row(i * 0.2, [["p", "player", 0.0, 0.0, 100, 100, 0, 5]]) for i in range(50)]
+        ev = _ev(clients=2, entities=ents, duration=10)
+        for c in ev["clients"]:
+            c["summary"] = {"outcome": "completed"}
+            c["frames"] = [(5.0, 800.0)]
+        ev["clients"][0]["events"] = [
+            {"event": "render_jump", "st": 5.1, "id": "p", "type": "player", "local": True, "step": 3.0}]
+        self.assertEqual(analyze.check_render_jumps(ev, {"max_local": 0})["status"], analyze.INCONCLUSIVE)
+        ev["clients"][1]["frames"] = []  # not host-wide any more: a real local snap
+        self.assertEqual(analyze.check_render_jumps(ev, {"max_local": 0})["status"], analyze.FAIL)
+
+    def test_replication_gap_with_missing_samples_is_inconclusive(self):
+        rows = [{"_st": float(i), "snapshot_max_update_gap_ms": 100} for i in range(10)]
+        rows[3].pop("snapshot_max_update_gap_ms")
+        ev = _ev(duration=10, status=rows)
+        self.assertEqual(analyze.check_snapshot_update_gap(ev, {})["status"], analyze.INCONCLUSIVE)
+
     def test_crowding_concentration_is_a_defect_only_when_players_are_spread(self):
         def sample(st, players):
             ents = [[f"p{i}", "player", x, 0.0, 100, 100, 0, 5] for i, x in enumerate(players)]

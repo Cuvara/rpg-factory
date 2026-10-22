@@ -456,14 +456,17 @@ def check_render_jumps(ev, a):
     per_client, events = {}, []
     counts = {"local_major": 0, "local_minor": 0, "remote_major": 0, "remote_minor": 0, "server_teleport": 0,
               "host_stall": 0}
+    all_stall_events = []
     by_type = {}
     for c in ev["clients"]:
         js = [e for e in c["events"] if e.get("event") == "render_jump" and (e.get("st") or -1) >= skip]
         per_client[c["index"]] = len(js)
         stalls = host_stalls(ev)
+        stall_events = all_stall_events
         for e in js:
-            if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.5):
+            if e.get("st") is not None and _in_stall(stalls, e["st"], e["st"], slack=0.3):
                 counts["host_stall"] = counts.get("host_stall", 0) + 1
+                stall_events.append(e)
                 continue
             # A step the SERVER also made (respawn, teleport, portal) is the game, not a render
             # defect: the server path covered >= 80% of the rendered step around that instant.
@@ -488,10 +491,21 @@ def check_render_jumps(ev, a):
     minutes = max(1e-6, float(ev["scenario"].get("duration_s", 60)) / 60.0)
     n = max(1, len(ev["clients"]))
     rate = {k: round(v / minutes / n, 3) for k, v in counts.items() if k not in ("server_teleport", "host_stall")}
-    ok = (counts["local_major"] <= int(a.get("max_local", 0)) and
-          rate["remote_major"] <= float(a.get("max_remote_per_client_min", 2.0)) and
-          rate["local_minor"] <= float(a.get("max_local_minor_per_client_min", 30.0)) and
-          rate["remote_minor"] <= float(a.get("max_remote_minor_per_client_min", 30.0)))
+    def passes(c):
+        r = {k: c[k] / minutes / n for k in ("remote_major", "local_minor", "remote_minor")}
+        return (c["local_major"] <= int(a.get("max_local", 0)) and
+                r["remote_major"] <= float(a.get("max_remote_per_client_min", 2.0)) and
+                r["local_minor"] <= float(a.get("max_local_minor_per_client_min", 30.0)) and
+                r["remote_minor"] <= float(a.get("max_remote_minor_per_client_min", 30.0)))
+
+    ok = passes(counts)
+    # Would the jumps set aside as host stalls have failed it? Then the evidence cannot decide:
+    # INCONCLUSIVE (rerun on a quiet host), never PASS.
+    with_stalls = dict(counts)
+    for e in all_stall_events:
+        key = ("local" if e.get("local") else "remote") + ("_major" if (e.get("step") or 0) >= major_step else "_minor")
+        with_stalls[key] += 1
+    hidden_by_stall = ok and not passes(with_stalls)
     attributed = []
     for e in sorted(events, key=lambda x: -(x.get("step") or 0))[:30]:
         t = ev["traj"].get(e["id"])
@@ -500,7 +514,7 @@ def check_render_jumps(ev, a):
         p0, p1 = _pos_at(t, e["st"] - 0.25), _pos_at(t, e["st"] + 0.05)
         server_step = None if p0 is None or p1 is None else round(math.hypot(p1[0] - p0[0], p1[1] - p0[1]), 3)
         attributed.append({**e, "server_step_0p3s": server_step})
-    return _result(PASS if ok else FAIL,
+    return _result(FAIL if not ok else (INCONCLUSIVE if hidden_by_stall else PASS),
                    {**counts, "per_client_min": rate, "by_type": by_type},
                    {"local_major": a.get("max_local", 0), "remote_major_per_client_min": a.get("max_remote_per_client_min", 2.0),
                     "local_minor_per_client_min": a.get("max_local_minor_per_client_min", 30.0),
@@ -514,7 +528,7 @@ def check_render_jumps(ev, a):
                              [str(c["dir"] / "shots") for c in ev["clients"]])
 
 
-def _server_respawned(ev, eid, st, before=0.6, after=0.3) -> bool:
+def _server_respawned(ev, eid, st, before=0.4, after=0.3) -> bool:
     """The server respawned the entity around st: its HP went from below half to full (a respawn
     puts a player back at the spawn point, which is a teleport whatever the distance)."""
     t = ev["traj"].get(eid)
@@ -530,19 +544,16 @@ def _server_respawned(ev, eid, st, before=0.6, after=0.3) -> bool:
     return False
 
 
-def _server_displacement(ev, eid, st, before=0.6, after=0.2):
-    """Largest distance the server moved the entity between any two samples in [st-before, st+after]."""
+def _server_displacement(ev, eid, st, before=0.4, after=0.2):
+    """Largest distance the server moved the entity between two CONSECUTIVE samples in
+    [st-before, st+after] - a single server step, not the sum of ordinary motion."""
     t = ev["traj"].get(eid)
     if not t or st is None:
         return None
     pts = [(x, y) for s2, x, y in zip(t["st"], t["x"], t["y"]) if st - before <= s2 <= st + after]
     if len(pts) < 2:
         return None
-    best = 0.0
-    for i in range(len(pts)):
-        for j in range(i + 1, len(pts)):
-            best = max(best, math.hypot(pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]))
-    return best
+    return max(math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(len(pts) - 1))
 
 
 def check_snapshot_cadence(ev, a):
@@ -684,8 +695,13 @@ def check_snapshot_update_gap(ev, a):
     vals = [r.get("snapshot_max_update_gap_ms") for r in rows if r.get("snapshot_max_update_gap_ms") is not None]
     shed = _delta(ev, "gameserver_snapshots_entities_shed_total")
     gathered = _delta(ev, "gameserver_snapshots_entities_gathered_total")
-    if not vals:
-        return _inconclusive("field absent", source="/status snapshot_max_update_gap_ms")
+    if not vals or len(vals) < len(rows):
+        return _inconclusive(f"field present in {len(vals)} of {len(rows)} /status samples",
+                             source="/status snapshot_max_update_gap_ms")
+    expected = float(ev["scenario"].get("duration_s", 0)) * 0.8  # 1 Hz probe; 80% coverage
+    if len(rows) < expected:
+        return _inconclusive(f"only {len(rows)} /status samples for a {ev['scenario'].get('duration_s')} s window",
+                             source="/status snapshot_max_update_gap_ms")
     mx = max(vals)
     ok = mx <= float(a.get("max_gap_ms", 200))
     return _result(PASS if ok else FAIL, {"max_update_gap_ms": mx, "shed": shed, "gathered": gathered,
