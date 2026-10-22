@@ -174,9 +174,7 @@ def status(a, ws, repo, rdir, meta, commit):
 
 def main():
     a = parse_args(sys.argv[1:])
-    ws = REG["workspace"]["root_default"]
-    env_ws = os.environ.get(REG["workspace"]["root_env"])
-    ws = env_ws if env_ws and os.path.isdir(env_ws) else ws
+    ws = fstate.workspace(REG)
     ctx_cmd = ["bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
     if a["paths"]:
         ctx_cmd += ["--paths", *a["paths"]]
@@ -263,16 +261,18 @@ def main():
             failed_ids.add(c["id"])
         results.append(res)
 
-    outdir = os.path.join(fstate.persistent(), "evidence", fstate.workspace_key(ws), "runs")
-    os.makedirs(outdir, exist_ok=True)
     record = {"repo": a["repo"], "path": rdir, "branch": repo["branch"], "commit": commit, "timestamp": stamp,
               "paths": a["paths"] or [f["path"] for f in repo["files"]], "routing": repo["routing"], "results": results}
-    rf = os.path.join(outdir, f"{a['repo']}-{stamp}.json")
-    json.dump(record, open(rf, "w", encoding="utf-8"), indent=2)
+    if a["dry"]:
+        rf = None  # --dry-run records nothing: no run record, no evidence
+    else:
+        outdir = os.path.join(fstate.persistent(), "evidence", fstate.workspace_key(ws), "runs")
+        rf = os.path.join(outdir, f"{a['repo']}-{stamp}-{fstate.unique_suffix()}.json")  # unique: parallel runs never collide
+        fstate.write_json(rf, record, indent=2)
     if a["json"]:
         print(json.dumps(record, indent=2))
     else:
-        print(f"Checks for {a['repo']} @ {repo['branch']} {commit[:7]} (evidence: {rf})")
+        print(f"Checks for {a['repo']} @ {repo['branch']} {commit[:7]} (evidence: {rf or 'none, --dry-run'})")
         print("| Tier | Module | Check | State | Evidence / reason | Time |")
         print("|---|---|---|---|---|---|")
         for x in results:

@@ -66,11 +66,11 @@ jq -e '.hookSpecificOutput | has("permissionDecision") | not' <<<"${o:-{\}}" >/d
 sk=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:go-backend"},cwd:$d,session_id:"adv-tech"}' | python3 -B "$SESS" --skill)
 jq -e '(.hookSpecificOutput | has("permissionDecision") | not) and (.hookSpecificOutput.updatedInput.skill == "rpg-factory:factory-core")
         and (.hookSpecificOutput.additionalContext | startswith("rpg-factory advisory (high)"))' <<<"$sk" >/dev/null \
-  && grep -qx factory-core "$TMP/rpg-factory/adv-tech/SKILLS" && ok "tech skill before factory-core: auto-corrected to factory-core, no decision (recorded)" || no "tech skill: ${sk:0:200}"
+  && grep -qx factory-core <<<"$(python3 -B "$SESS" --skills adv-tech)" && ok "tech skill before factory-core: auto-corrected to factory-core, no decision (recorded)" || no "tech skill: ${sk:0:200}"
 sk=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:go-backend"},cwd:$d,session_id:"adv-tech"}' | python3 -B "$SESS" --skill)
 jq -e '(.hookSpecificOutput | has("permissionDecision") | not) and (.hookSpecificOutput | has("updatedInput") | not)
         and (.hookSpecificOutput.additionalContext | test("This call continues"))' <<<"$sk" >/dev/null \
-  && grep -qx go-backend "$TMP/rpg-factory/adv-tech/SKILLS" && ok "tech skill before its lead: advisory, the call runs as requested (recorded)" || no "tech skill 2nd: ${sk:0:200}"
+  && grep -qx go-backend <<<"$(python3 -B "$SESS" --skills adv-tech)" && ok "tech skill before its lead: advisory, the call runs as requested (recorded)" || no "tech skill 2nd: ${sk:0:200}"
 
 # ---- state paths never resolve relative to the cwd, whatever TMPDIR is
 PROBE="$TMP/cwdprobe"; mkdir -p "$PROBE" "$TMP/tmpok"
@@ -89,6 +89,115 @@ is_abs "$(cd "$PROBE" && env -u TMPDIR python3 -B -c "import sys; sys.path.inser
 # ---- the session hook: bad usage and bad input never break a session
 out=$(python3 -B "$SESS" 2>&1; echo "rc=$?"); case "$out" in *"usage:"*"rc=2") ok "factory_session.py without --skill: usage, exit 2";; *) no "usage: $out";; esac
 out=$(echo 'garbage' | python3 -B "$SESS" --skill; echo "rc=$?"); [ "$out" = "rc=0" ] && ok "malformed Skill payload -> no opinion" || no "malformed: $out"
+
+# ---- 1.0.5 robustness: parallel Skill calls, atomic MODE, safe session ids, unwritable state
+skpl() { jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" --arg a "${3:-x}" '{tool_name:"Skill",tool_input:{skill:$sk,args:$a},cwd:$d,session_id:$s}'; }
+# 20 parallel early tech-skill calls: exactly one is auto-corrected, every call is recorded (no lost lines)
+# (the processes import the hook first and start together on a go-file, so the race window is really hit)
+python3 -B - "$ROOT/scripts" "$TMP" <<'PY'
+import json, os, subprocess, sys, time
+code = ("import io, json, os, sys, time; sys.path.insert(0, %r); import factory_session as fs\n"
+        "fs.load_registry(); fs.guard\n"
+        "while not os.path.exists(%r): time.sleep(0.001)\n"
+        "out = io.StringIO(); sys.stdout = out\n"
+        "fs.skill_hook({'tool_name': 'Skill', 'tool_input': {'skill': 'rpg-factory:go-backend', 'args': 'x'}, 'session_id': 'par-tech'})\n"
+        "open(sys.argv[1], 'w').write(out.getvalue())\n") % (sys.argv[1], os.path.join(sys.argv[2], "par-go"))
+ps = [subprocess.Popen([sys.executable, "-B", "-c", code, os.path.join(sys.argv[2], f"par-{i}.out")]) for i in range(20)]
+time.sleep(3)  # every process is waiting on the go-file
+open(os.path.join(sys.argv[2], "par-go"), "w").close()
+for p in ps:
+    p.wait()
+PY
+swaps=$(cat "$TMP"/par-*.out | grep -c '"updatedInput"')
+[ "$swaps" = 1 ] && ok "20 parallel tech calls before factory-core: exactly one auto-correction" || no "parallel auto-corrections: $swaps"
+sk_all=$(python3 -B "$SESS" --skills par-tech | tr -d '\r')
+[ "$(grep -c . <<<"$sk_all")" = 20 ] && [ "$(grep -cx factory-core <<<"$sk_all")" = 1 ] && [ "$(grep -cx go-backend <<<"$sk_all")" = 19 ] \
+  && ok "parallel calls: all 20 loads recorded (1 factory-core, 19 go-backend)" || no "parallel SKILLS: $(tr '\n' ' ' <<<"$sk_all")"
+adv_all=$(python3 -B "$SESS" --advisories par-tech | tr -d '\r')
+[ "$(grep -c . <<<"$adv_all")" = 20 ] && [ "$(grep -cx 'go-backend autocorrect factory-core' <<<"$adv_all")" = 1 ] \
+  && [ "$(grep -cx 'go-backend warn lead-missing' <<<"$adv_all")" = 19 ] && ok "parallel calls: all 20 advisories recorded, one autocorrect" \
+  || no "parallel ADVISORIES: $(tr '\n' ';' <<<"$adv_all")"
+for i in $(seq 1 30); do python3 -B "$SESS" --skill <<<"$(skpl rpg-factory:server-services par-many)" >/dev/null & done; wait
+[ "$(python3 -B "$SESS" --skills par-many | grep -c .)" = 30 ] && ok "30 parallel lead calls: 30 records" || no "30 parallel: $(python3 -B "$SESS" --skills par-many | grep -c .) records"
+# sequential order is kept; legacy one-file logs of older sessions are still read
+mkdir -p "$TMP/rpg-factory/legacy"; printf 'factory-core\nserver-services\n' > "$TMP/rpg-factory/legacy/SKILLS"; echo "go-backend warn lead-missing" > "$TMP/rpg-factory/legacy/ADVISORIES"
+python3 -B "$SESS" --skill <<<"$(skpl rpg-factory:go-backend legacy)" >/dev/null
+[ "$(python3 -B "$SESS" --skills legacy | tr -d '\r' | tr '\n' ' ')" = "factory-core server-services go-backend " ] \
+  && [ "$(python3 -B "$SESS" --advisories legacy | tr -d '\r')" = "go-backend warn lead-missing" ] \
+  && ok "legacy SKILLS / ADVISORIES files read, a lead in them counts" || no "legacy: $(python3 -B "$SESS" --skills legacy | tr '\n' ' ')"
+# a bare registry skill name is this plugin's skill (recorded and gated); unknown bare names are ignored
+o=$(python3 -B "$SESS" --skill <<<"$(skpl go-backend bare)")
+jq -e '.hookSpecificOutput.updatedInput.skill == "rpg-factory:factory-core"' <<<"$o" >/dev/null && [ "$(python3 -B "$SESS" --skills bare | tr -d '\r')" = factory-core ] \
+  && ok "bare 'go-backend': gated like rpg-factory:go-backend" || no "bare name: ${o:0:200}"
+o=$(python3 -B "$SESS" --skill <<<"$(skpl no-such-skill bare2)"); [ -z "$o" ] && [ -z "$(python3 -B "$SESS" --skills bare2)" ] \
+  && ok "bare unknown skill name: no opinion, nothing recorded" || no "bare unknown: $o"
+# MODE is replaced atomically: concurrent writers and readers never see a torn value
+python3 -B - "$ROOT/scripts" <<'PY' && ok "MODE: 4 writers x 150 + reader, no torn read" || no "MODE torn read"
+import os, subprocess, sys
+sys.path.insert(0, sys.argv[1]); import factory_session as fs
+sd = fs.session_dir("mode-race")
+code = ("import sys; sys.path.insert(0, %r); import factory_session as fs\nsd = fs.session_dir('mode-race')\n"
+        "for i in range(150):\n    try: fs.write_mode(sd, sys.argv[1])\n    except OSError: pass\n") % sys.argv[1]
+ps = [subprocess.Popen([sys.executable, "-B", "-c", code, m]) for m in ("plan", "analyze", "review", "implement")]
+bad = set()
+while any(p.poll() is None for p in ps):
+    v = fs.read(os.path.join(sd, "MODE"))
+    if v is not None and v not in fs.MODES:
+        bad.add(v)
+leftover = [f for f in os.listdir(sd) if f.endswith(".tmp")]
+print("torn:", bad, "tmp left:", leftover) if bad or leftover else None
+sys.exit(1 if bad or leftover else 0)
+PY
+# mode detection: only a command that RUNS the routing script declares a mode; a phrase that only says
+# "do not implement" is no declaration
+python3 -B - "$ROOT/scripts" "$SERVER" <<'PY' && ok "mode recorded only when factory-context.sh / context.py actually runs" || no "mode detection"
+import sys; sys.path.insert(0, sys.argv[1]); import factory_session as fs
+cases = [("grep -n factory-context.sh --mode review README.md", None), ("echo factory-context.sh --mode plan", None),
+         ("cat scripts/factory-context.sh --mode plan", None), ("bash scripts/factory-context.sh --mode plan --repo server", "plan"),
+         ("scripts/factory-context.sh --mode=review", "review"), ("python3 -B scripts/lib/context.py --mode analyze", "analyze"),
+         ("cd /x && bash \"C:/p/scripts/factory-context.sh\" --repo server --mode validate", "validate")]
+bad = []
+for cmd, want in cases:
+    got = fs.record_mode({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": sys.argv[2], "session_id": "mode-detect"})
+    if got != want:
+        bad.append((cmd, want, got))
+for args, want in [("Do not implement anything yet, just look", None), ("don't implement it", None), ("plan only", "plan"),
+                   ("mode: plan", "plan"), ("analyze only", "analyze"), ("review only", "review"), ("validate only", "validate")]:
+    if fs.mode_from_text(args) != want:
+        bad.append((args, want, fs.mode_from_text(args)))
+print(bad) if bad else None
+sys.exit(1 if bad else 0)
+PY
+# session ids: one safe path component, distinct ids stay distinct, a plain (UUID) id is unchanged
+python3 -B - "$ROOT/scripts/lib" <<'PY' && ok "session_key: '..', '.', '', long, '/', unicode -> safe and distinct; UUID unchanged" || no "session_key"
+import os, re, sys; sys.path.insert(0, sys.argv[1]); import fstate
+uuid = "3f2b8c1e-9a4d-4e7b-8f00-123456789abc"
+ids = ["..", ".", "", None, "x" * 300, "a/b", "a:b", "a_b", "s\u00e9", "s\u00e8", "../../etc", "C:\\x", "-rf"]
+keys = [fstate.session_key(i) for i in ids]
+ok = fstate.session_key(uuid) == uuid and fstate.session_key("default") == "default" == fstate.session_key("")
+ok = ok and all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}", k) for k in keys)
+ok = ok and len(set(k for i, k in zip(ids, keys) if i not in ("", None))) == len(ids) - 2
+print(list(zip(ids, keys))) if not ok else None
+sys.exit(0 if ok else 1)
+PY
+pl=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:factory-core",args:"plan only"},cwd:$d,session_id:".."}')
+python3 -B "$SESS" --skill <<<"$pl" >/dev/null
+[ ! -e "$TMP/MODE" ] && [ -n "$(ls "$TMP"/rpg-factory/s-*/MODE 2>/dev/null)" ] && ok "session id '..': state stays inside the scratch root" || no "session id '..' escaped"
+# the advisory and the correction are never lost because the session log cannot be written (L4)
+mkdir -p "$TMP/rpg-factory/nolog/SKILLS" "$TMP/rpg-factory/nolog/ADVISORIES"; touch "$TMP/rpg-factory/nolog/SKILLS.d" "$TMP/rpg-factory/nolog/ADVISORIES.d"
+o=$(python3 -B "$SESS" --skill <<<"$(skpl rpg-factory:go-backend nolog)"; echo "rc=$?")
+jq -e '.hookSpecificOutput.updatedInput.skill == "rpg-factory:factory-core"' <<<"${o%rc=*}" >/dev/null && [ "${o##*rc=}" = 0 ] \
+  && ok "logs unwritable: the auto-correction is still returned, exit 0" || no "logs unwritable: $o"
+touch "$TMP/rpg-factory/nostate"
+o=$(python3 -B "$SESS" --skill <<<"$(skpl rpg-factory:go-backend nostate)"; echo "rc=$?")
+jq -e '(.hookSpecificOutput.additionalContext | startswith("rpg-factory advisory (high)")) and (.hookSpecificOutput | has("updatedInput") | not)' <<<"${o%rc=*}" >/dev/null \
+  && [ "${o##*rc=}" = 0 ] && ok "session dir unusable: advisory still returned (no correction without state), exit 0" || no "no state: $o"
+# scratch(): a candidate whose rpg-factory/ cannot be created is skipped (L5); persistent() is absolute with no HOME (L6)
+mkdir -p "$TMP/blocked"; touch "$TMP/blocked/rpg-factory"
+r=$(TMPDIR="$TMP/blocked" python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate, os; r=fstate.scratch(); assert os.path.isdir(r), r; print(r)" 2>&1)
+is_abs "$r" && [ "$(fwd "$r")" != "$TMP/blocked/rpg-factory" ] && ok "scratch(): \$TMPDIR/rpg-factory is a file -> next candidate ($r)" || no "scratch fallback: $r"
+r=$(env -u RPG_FACTORY_STATE_DIR -u XDG_STATE_HOME HOME=rel USERPROFILE=rel HOMEDRIVE= HOMEPATH= python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate; print(fstate.persistent())" 2>&1)
+is_abs "$r" && ok "persistent(): relative HOME -> absolute ($r)" || no "persistent fallback: $r"
 
 total=$((pass + fail))
 echo "session-state tests: $total run, $pass passed, $fail failed"

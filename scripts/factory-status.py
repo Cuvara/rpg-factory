@@ -42,9 +42,10 @@ from functools import lru_cache
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
-WS = os.environ.get(REG["workspace"]["root_env"]) or REG["workspace"]["root_default"]
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import evidence  # noqa: E402
+import fstate  # noqa: E402
+WS = fstate.workspace(REG)  # same rule as run-checks.py: both read the same evidence
 REPO_BY_NAME = {}
 for _k, _r in REG["repos"].items():
     _m = re.search(r"github\.com[:/][^/]+/([^/.]+)", _r.get("remote", ""))
@@ -346,7 +347,7 @@ def main():
             rows = []
             defs = {(m["id"], c["id"]): c for m in REG["modules"] for t in ("fast", "extended") for c in m["checks"][t]}
             for rec in recs:
-                chk = rec.get("definition") or {**defs.get((rec.get("module"), rec.get("check")), {}), "run": rec.get("command"), "cwd": rec.get("cwd")}
+                chk = rec.get("definition") if isinstance(rec.get("definition"), dict) and rec.get("definition") else {**defs.get((rec.get("module"), rec.get("check")), {}), "run": rec.get("command"), "cwd": rec.get("cwd")}
                 state, detail = evidence.assess(rec, rdir(key), chk)
                 rows.append({"check": f"{rec.get('module')}/{rec.get('check')}", "state": state, "detail": detail})
             st["evidence"][key] = rows

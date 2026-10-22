@@ -2,18 +2,26 @@
 """rpg-factory session state - the Factory execution mode and the tech-skill order, per session.
 
   --skill  (PreToolUse, Skill) records an explicit mode from a Factory skill's arguments ("plan only",
-           "mode: validate") and denies a `kind: tech` skill until one of its `used_by` leads ran in
-           this session.
+           "mode: validate") and keeps a `kind: tech` skill behind its leads without ever blocking: requested
+           before factory-core it is auto-corrected to factory-core (updatedInput, once per session);
+           after factory-core but before one of its `used_by` leads it runs with an advisory.
+  --skills <session-id>      print the skills that loaded in a session, one per line, in order
+  --advisories <session-id>  print the advisories the Skill hook gave a session, one per line, in order
 
 As a module (git-guard.py, file-guard.py): record_mode() / current_mode() for `factory-context.sh
 --mode <m>`, is_read_only() and runs_checks() to decide what a read-only or validate mode still allows.
 
-State: per-session scratch in fstate.scratch()/<session>/ (MODE, SKILLS) - always absolute, never inside a repo.
+State: per-session scratch in fstate.scratch()/<fstate.session_key(id)>/ - always absolute, never inside a repo:
+  MODE           the declared mode (replaced atomically)
+  SKILLS.d/      one file per loaded skill, ADVISORIES.d/ one file per advisory (parallel hooks lose nothing:
+                 appends to one file are not atomic on Windows). Legacy SKILLS / ADVISORIES files are still read.
+  CORRECTED      created exclusively by the one call that is auto-corrected to factory-core
 """
 import json
 import os
 import re
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
@@ -55,19 +63,69 @@ def guard():
     return mod
 
 
-def state_dir(payload):
-    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str((payload or {}).get("session_id") or "default"))
-    d = os.path.join(fstate.scratch(), sid)
-    os.makedirs(d, exist_ok=True)
+def session_dir(sid, create=True):
+    d = os.path.join(fstate.scratch(), fstate.session_key(sid))
+    if create:
+        os.makedirs(d, exist_ok=True)
     return d
 
 
+def state_dir(payload):
+    return session_dir((payload or {}).get("session_id"))
+
+
 def read(p):
+    for attempt in range(8):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                return fh.read().strip()
+        except PermissionError:  # Windows: the file is being replaced (fstate.write_text) for a moment
+            if os.path.isdir(p):
+                return None
+            time.sleep(0.01 * (attempt + 1))
+        except OSError:
+            return None
+    return None
+
+
+def write_mode(sd, mode):
+    fstate.write_text(os.path.join(sd, "MODE"), mode)  # atomic: a concurrent reader never sees a torn mode
+
+
+def log_event(sd, kind, text):
+    """One file per event under <sd>/<kind>.d/ - lossless under parallel hooks on Windows and Linux. The name
+    sorts in time order; the content is the event."""
+    d = os.path.join(sd, kind + ".d")
+    fstate.write_text(os.path.join(d, f"{time.time_ns():020d}-{fstate.unique_suffix()}"), text)
+
+
+def read_events(sd, kind):
+    """The legacy one-file log (older sessions) followed by the per-event files, in order."""
+    out = (read(os.path.join(sd, kind)) or "").splitlines()
+    d = os.path.join(sd, kind + ".d")
     try:
-        with open(p, encoding="utf-8", errors="replace") as fh:
-            return fh.read().strip()
+        names = sorted(f for f in os.listdir(d) if not f.endswith(".tmp"))
     except OSError:
-        return None
+        names = []
+    for f in names:
+        t = read(os.path.join(d, f))
+        if t:
+            out.append(t)
+    return [x.strip() for x in out if x.strip()]
+
+
+def seen_skills(sd):
+    return set(read_events(sd, "SKILLS"))
+
+
+def claim_correction(sd):
+    """True for exactly one caller per session: the auto-correction to factory-core happens once, even when
+    several Skill calls arrive in parallel. Unwritable state: no claim (warn, never loop on corrections)."""
+    try:
+        os.close(os.open(os.path.join(sd, "CORRECTED"), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        return True
+    except OSError:
+        return False
 
 
 def load_registry():
@@ -93,19 +151,43 @@ def record_mode(payload):
     g = guard()
     shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
     for argv in g.expand(command, shell=shell):
-        if any(os.path.basename(a) in ("factory-context.sh", "context.py") for a in argv[:3]):
-            for i, a in enumerate(argv):
-                m = a.split("=", 1)[1] if a.startswith("--mode=") else (argv[i + 1] if a == "--mode" and i + 1 < len(argv) else None)
-                if m in MODES:
-                    open(os.path.join(state_dir(payload), "MODE"), "w", encoding="utf-8").write(m)
-                    return m
+        at = runs_context(g, argv)
+        if at is None:
+            continue
+        args = argv[at + 1:]
+        for i, a in enumerate(args):
+            m = a.split("=", 1)[1] if a.startswith("--mode=") else (args[i + 1] if a == "--mode" and i + 1 < len(args) else None)
+            if m in MODES:
+                write_mode(state_dir(payload), m)
+                return m
+    return None
+
+
+CONTEXT_SCRIPTS = ("factory-context.sh", "context.py")
+INTERPRETERS = {"bash", "sh", "bash.exe", "sh.exe", "python", "python3", "python.exe", "python3.exe", "py", "py.exe"}
+
+
+def runs_context(g, argv):
+    """Index of the routing script in argv when this command runs it (`factory-context.sh ...`,
+    `bash factory-context.sh ...`, `python3 -B context.py ...`), else None. `grep factory-context.sh --mode x`
+    or `echo factory-context.sh --mode x` only mention it."""
+    if not argv:
+        return None
+    if os.path.basename(argv[0].replace("\\", "/")) in CONTEXT_SCRIPTS:
+        return 0
+    if g.prog(argv[0]) in INTERPRETERS:
+        i = 1
+        while i < len(argv) and argv[i] in ("-B", "-u", "-x", "-e", "-E", "-s"):  # interpreter flags, no value
+            i += 1
+        if i < len(argv) and os.path.basename(argv[i].replace("\\", "/")) in CONTEXT_SCRIPTS:
+            return i
     return None
 
 
 MODE_PHRASES = [  # explicit phrases only - an unqualified request is not a mode declaration
     (r"\bmode\s*[:=]?\s*(analy[sz]e|plan|implement|validate|review|resume)\b", None),
     (r"\b(analy[sz]e|analysis)[- ]only\b|\bonly analy[sz]e\b", "analyze"),
-    (r"\bplan(ning)?[- ]only\b|\bonly plan\b|\bjust (a )?plan\b|\bdo not implement\b|\bdon'?t implement\b", "plan"),
+    (r"\bplan(ning)?[- ]only\b|\bonly plan\b|\bjust (a )?plan\b", "plan"),  # "do not implement" alone is no declaration
     (r"\bvalidat(e|ion)[- ]only\b|\bonly validate\b", "validate"),
     (r"\breview[- ]only\b|\bonly review\b", "review"),
 ]
@@ -128,30 +210,40 @@ def skill_hook(payload):
     advisory only): requested before factory-core, the call is auto-corrected to factory-core (updatedInput,
     once per session); after factory-core but before one of its `used_by` leads, it runs with an advisory
     naming the leads (only routing knows which one applies). Each advisory is logged to the session's
-    ADVISORIES file."""
+    ADVISORIES.d/ (read them with --advisories)."""
     ti = payload.get("tool_input") or {}
     name = str(ti.get("skill", ""))
-    if not name.startswith("rpg-factory:"):
+    skills = (load_registry() or {}).get("skills") or {}
+    if name.startswith("rpg-factory:"):
+        short = name.split(":", 1)[1]
+    elif ":" not in name and name in skills:
+        short = name  # a bare registry skill name ("go-backend") is this plugin's skill
+    else:
         return 0
+    try:
+        sd = state_dir(payload)
+    except OSError:
+        sd = None  # no state: still advise, never correct (nothing could record that it happened)
     m = mode_from_text(ti.get("args"))
-    if m in MODES:
-        open(os.path.join(state_dir(payload), "MODE"), "w", encoding="utf-8").write(m)
-    short = name.split(":", 1)[1]
-    sd = state_dir(payload)
-    seen_file = os.path.join(sd, "SKILLS")
-    seen = set((read(seen_file) or "").split())
-    spec = ((load_registry() or {}).get("skills") or {}).get(short) or {}
+    if m in MODES and sd:
+        try:
+            write_mode(sd, m)
+        except OSError:
+            pass
+    seen = seen_skills(sd) if sd else set()
+    spec = skills.get(short) or {}
     leads = [s for s in spec.get("used_by") or [] if isinstance(s, str)]
-    loads = short
+    loads, event = short, None
     if spec.get("kind") == "tech" and leads and not seen.intersection(leads):
         root = PLUGIN_ROOT.replace("\\", "/").rstrip("/")
         route = f"`bash \"{root}/scripts/factory-context.sh\" --mode <mode> --repo <key> --paths <files>`"
         lead_list = ", ".join(f"rpg-factory:{s}" for s in leads)
         out = {"hookEventName": "PreToolUse"}
-        if "factory-core" not in seen:
+        if "factory-core" not in seen and sd and claim_correction(sd):
             # auto-correct, never block: the one safe target is factory-core (it routes and names the real lead).
             # The Skill tool honours updatedInput (verified 2026-10-22, not documented for Skill). Once per
-            # session: factory-core is recorded below, so this branch cannot repeat and cannot loop.
+            # session: only the call that creates CORRECTED is corrected (parallel calls included), so this
+            # branch cannot repeat and cannot loop.
             out["updatedInput"] = dict(ti, skill="rpg-factory:factory-core")
             loads = "factory-core"
             out["additionalContext"] = (
@@ -161,18 +253,22 @@ def skill_hook(payload):
                 f"{lead_list} - then invoke rpg-factory:{short} again as supporting context.")
             event = f"{short} autocorrect factory-core"
         else:
-            # factory-core ran but no lead: several leads can own this technology and only routing knows which,
-            # so warn and let the call run (1.0.3: hooks never block)
+            # factory-core ran (or the one corrected call is loading it) but no lead: several leads can own this
+            # technology and only routing knows which, so warn and let the call run (1.0.3: hooks never block)
             out["additionalContext"] = (
                 f"rpg-factory advisory (high): `{short}` is a supporting tech skill and no lead skill has run yet. "
                 f"This call continues. Next: route the task ({route}) and invoke the lead it prints - for {short} one "
                 f"of: {lead_list} - its rules, gates and validation apply; use rpg-factory:{short} as supporting context.")
             event = f"{short} warn lead-missing"
-        with open(os.path.join(sd, "ADVISORIES"), "a", encoding="utf-8") as fh:
-            fh.write(event + "\n")  # evidence for tests and dogfood: what the hook told the session
-        print(json.dumps({"hookSpecificOutput": out}))
-    with open(seen_file, "a", encoding="utf-8") as fh:
-        fh.write(loads + "\n")  # the skill that actually loads (factory-core when auto-corrected)
+        print(json.dumps({"hookSpecificOutput": out}))  # the advisory first: logging below is best-effort
+        sys.stdout.flush()
+    if sd:
+        try:
+            if event:
+                log_event(sd, "ADVISORIES", event)  # evidence for tests and dogfood: what the hook told the session
+            log_event(sd, "SKILLS", loads)  # the skill that actually loads (factory-core when auto-corrected)
+        except OSError:
+            pass
     return 0
 
 
@@ -267,8 +363,14 @@ def is_read_only(payload):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] in ("--skills", "--advisories"):
+        kind = "SKILLS" if sys.argv[1] == "--skills" else "ADVISORIES"
+        for line in read_events(session_dir(sys.argv[2], create=False), kind):
+            print(line)
+        return 0
     if sys.argv[1:] != ["--skill"]:
-        print("usage: factory_session.py --skill  (PreToolUse hook on the Skill tool; reads the payload on stdin)")
+        print("usage: factory_session.py --skill  (PreToolUse hook on the Skill tool; reads the payload on stdin)\n"
+              "       factory_session.py --skills <session-id> | --advisories <session-id>  (one per line, in order)")
         return 2
     try:
         return skill_hook(json.load(sys.stdin))

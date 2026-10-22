@@ -331,7 +331,7 @@ mcheck allow "touch other-plugin.txt"
 sk() { local o; o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"how do I run one test"},cwd:$d,session_id:$s}' \
   | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill); jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" elif .hookSpecificOutput.updatedInput then "swap:" + .hookSpecificOutput.updatedInput.skill else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${o:-{\}}"; }
 skchk() { local got; got=$(sk "$2" "$3"); if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL skill order expected=$1 got=$got skill=$2 session=$3"; fi; }
-advs() { python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; p = os.path.join(fstate.scratch(), sys.argv[2], 'ADVISORIES'); print(open(p).read().strip() if os.path.exists(p) else '')" "$ROOT/scripts/lib" "$1"; }
+advs() { CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B "$ROOT/scripts/factory_session.py" --advisories "$1" | tr -d '\r'; }
 skchk allow rpg-factory:factory-core tech-a                 # core skill: never gated
 skchk high  rpg-factory:go-backend tech-a                   # tech before its lead: warned, the call still runs
 skchk high  rpg-factory:go-backend tech-a                   # warned again: a warning does not count as a lead
@@ -364,7 +364,7 @@ grep -q permissionDecision <<<"$o_all" && { fail=$((fail + 1)); echo "FAIL skill
 [ "$(advs ord-go)" = "go-backend warn lead-missing" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL early go-backend after factory-core: advisories '$(advs ord-go)'"; }
 [ "$(advs ord-dots)" = "unity-dots autocorrect factory-core" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL early unity-dots before factory-core: advisories '$(advs ord-dots)'"; }
 [ -z "$(advs ord-normal)" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL normal order produced advisories '$(advs ord-normal)'"; }
-seen=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; print(' '.join(open(os.path.join(fstate.scratch(), 'ord-dots', 'SKILLS')).read().split()))" "$ROOT/scripts/lib")
+seen=$(CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B "$ROOT/scripts/factory_session.py" --skills ord-dots | tr -d '\r' | tr '\n' ' ' | sed 's/ $//')
 [ "$seen" = "factory-core unity-package unity-dots" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL session records what loaded (factory-core for the corrected call): '$seen'"; }
 reason=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:unity-dots"},cwd:$d,session_id:"tech-c"}' \
   | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill | jq -r '.hookSpecificOutput.additionalContext // ""')

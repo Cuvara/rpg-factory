@@ -114,8 +114,8 @@ for n in "${scenarios[@]}"; do
   answer=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .result // ""')
   outcome=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .subtype // ""' | tail -1)
   sid=$(grep '^{' "$f" | jq -r 'select(.type=="system" and .subtype=="init") | .session_id' | head -1)
-  sdir=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; print(os.path.join(fstate.scratch(), sys.argv[2]))" "$ROOT/scripts/lib" "${sid:-none}")
-  advisories=$(cat "$sdir/ADVISORIES" 2>/dev/null | tr '\n' ';')
+  sdir=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate, os; print(os.path.join(fstate.scratch(), fstate.session_key(sys.argv[2])))" "$ROOT/scripts/lib" "${sid:-none}")
+  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '\r' | tr '\n' ';')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
   if [ -n "${MODE[$n]:-}" ]; then  # declared via --mode, or recorded by the Skill hook in the session's state

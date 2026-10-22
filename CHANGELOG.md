@@ -37,6 +37,31 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     and the mode is only recorded when the script is actually run - `grep factory-context.sh --mode review` or
     `echo ... --mode plan` no longer switch it.
   - Wording: the module and `classify_gh` docstrings describe advisory levels high/warn, not deny/ask decisions.
+- **Session state and evidence robustness.** Hooks stay advisory-only and never block; tests in
+  `session-state.test.sh`, `run-checks.test.sh` and `factory-status.test.sh` cover each fix.
+  - Evidence records and run records are written atomically (`fstate.write_json`, readers retry the Windows
+    replace window); log and run-record names carry a pid + random suffix, so parallel or same-second runs never
+    share or truncate a file. Only the newest 20 logs per check are kept (never the one the latest record names).
+  - Valid JSON of the wrong shape in the evidence dir (`{"identity":"x"}`, `[1]`, no `state`) is treated as no
+    evidence (NOT_RUN) instead of crashing `run-checks.py --status` and `factory-status.py`.
+  - `run-checks.py --dry-run` writes nothing (no run record).
+  - The auto-correction of an early tech skill to factory-core happens once per session even under parallel Skill
+    calls (claimed by an exclusive `CORRECTED` file; the other calls get the lead-missing advisory).
+  - The Skill hook's logs are one file per event (`SKILLS.d/`, `ADVISORIES.d/`): parallel appends lost lines on
+    Windows. Legacy `SKILLS` / `ADVISORIES` files are still read. Read them with
+    `factory_session.py --skills <session-id>` / `--advisories <session-id>` (used by git-guard.test.sh and dogfood.sh).
+  - `MODE` is replaced atomically (no torn reads). A mode is recorded only when the command really runs
+    `factory-context.sh` / `context.py` (`grep factory-context.sh --mode review` or `echo ...` no longer set it), and
+    "do not implement" alone in Skill arguments is no longer a plan-mode declaration.
+  - The hook prints its advisory / correction before logging; an unwritable log loses nothing the session sees,
+    and with no usable session dir it advises without correcting.
+  - Session ids go through one helper, `fstate.session_key()`: plain ids are unchanged, anything else (`..`, `.`,
+    over 100 characters, characters a substitution would collide) becomes `s-<sha1>`.
+  - A bare registry skill name (`go-backend` without `rpg-factory:`) is recorded and gated like the prefixed name.
+  - `fstate.scratch()` skips a candidate whose `rpg-factory/` cannot be created; `persistent()` falls back to the
+    platform temp dir (absolute on Windows too).
+  - The evidence workspace key is the case-folded real path, and `run-checks.py` and `factory-status.py` resolve
+    `RPG_FACTORY_WORKSPACE` the same way. Evidence stored under the old key shows as NOT_RUN once; rerun the checks.
 
 ## [1.0.4] - 2026-10-22
 
