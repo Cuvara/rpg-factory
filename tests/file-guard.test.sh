@@ -49,6 +49,31 @@ declare_mode validate;  t high  Edit  "$S/backend/deploy/compose.yml"
 declare_mode review;    t high  MultiEdit "$C/Assets/Scripts/Net/NewFile.cs"
 declare_mode implement; t allow Write "$C/Assets/Scripts/Net/NewFile.cs"
 
+# secrets are matched case-insensitively (Windows file systems are)
+t warn  Write "$S/backend/deploy/.ENV"
+t warn  Read  "$S/backend/deploy/KubeConfig.Local"
+t allow Read  "$S/backend/deploy/.ENV.EXAMPLE"
+# a linked worktree of a workspace repo outside the repo directory gets that repo's rules (git common dir)
+WT="$WS/.wt-client-cleanup"; gc "$C" worktree add -q -b cleanup "$WT" >/dev/null 2>&1
+mkdir -p "$WT/Assets/Scripts/UI/Hud/Generated"
+t warn  Write "$WT/Assets/Scripts/UI/Hud/Generated/HudView.uxml.g.cs"   # generated, via the worktree's main checkout
+t warn  Write "$WT/Assets/Samples/Mine/x.cs"                            # generated Assets/Samples/ in the worktree
+t warn  Write "$WT/Packages/com.gdk.core/s.cs"                          # submodule content in the worktree
+t allow Write "$WT/Assets/Scripts/Net/NewFile.cs"
+t warn  Write "$WT/Assets/Scripts/New/Deep/Missing.uxml.g.cs"          # target directory does not exist yet
+# outside the workspace: silent even with RPG_FACTORY_WORKSPACE set and a read-only mode declared
+declare_mode plan
+t allow Write "$TMP/outside/file.txt"
+t allow Write "$TMP/outside/.env"
+t allow Read  "$TMP/outside/.ENV"
+# the mode advisory names a bash-pasteable command: forward slashes, quoted
+o=$(jq -cn --arg p "$C/Assets/Scripts/Net/NewFile.cs" --arg d "$C" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"},cwd:$d,session_id:"fg"}' | python3 -B "$FG" | jq -r '.hookSpecificOutput.additionalContext // ""')
+cmd=$(grep -o '`bash [^`]*`' <<<"$o")
+if [ -n "$cmd" ] && ! grep -q '\\' <<<"$cmd" && grep -q '^`bash "[^"]*/scripts/factory-context.sh" --mode implement`$' <<<"$cmd"; then
+  pass=$((pass + 1)); echo "PASS  mode advisory command is quoted with forward slashes: $cmd"
+else fail=$((fail + 1)); echo "FAIL  mode advisory command: ${cmd:-none} ($o)"; fi
+declare_mode implement
+
 # 1.0.1: the tripwire latch is gone - stale latch files from older versions never deny a write
 python3 -B - "$TMP/state" "$WS" <<'PY2'
 import hashlib, json, os, sys

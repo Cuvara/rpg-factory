@@ -19,7 +19,7 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   bring back ask/deny). The git guard never crashes a session (errors mean "no opinion"); `high` marks tag
   creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`) and repo deletion. Every new bypass found gets a
   case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
-  in `scripts/file-guard.py`; execution modes are enforced by both guards. Each human gate regex and the git evaluation must fail independently.
+  in `scripts/file-guard.py`; both guards raise mode advisories (never a block). Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a `CHANGELOG.md` entry under [Unreleased].
 - Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count. CI
   (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
@@ -39,6 +39,14 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   task, perform the authorized merge, version bump, annotated tag (`vX.Y.Z`, message `rpg-factory X.Y.Z`, on the
   verified merge commit) and GitHub release yourself, within that scope and only after `run-all.sh --release` and
   dogfood pass on that exact commit. Never move, delete or reuse a tag, and never bypass a failing check.
+  Authorized release order (`scripts/release-check.py` is read-only; exit 0/1):
+  1. merge the release PR; 2. check out the merge commit (`main` == `origin/main`, clean tree);
+  3. `python3 -B scripts/release-check.py` (versions agree, `## [X.Y.Z]` present, `[Unreleased]` empty, tag
+  absent locally and on origin, HEAD == origin/main, clean); 4. `tests/run-all.sh --release` and
+  `tests/dogfood.sh --installed` on that commit; 5. `git tag -a vX.Y.Z -m "rpg-factory X.Y.Z"`;
+  6. `python3 -B scripts/release-check.py --verify-tag` (annotated, message, points to HEAD, VERSION at the tag);
+  7. push the tag, `python3 -B scripts/release-check.py --verify-tag --notes > notes.md` and
+  `gh release create vX.Y.Z --verify-tag -F notes.md`.
 - Point-in-time values go in registry `facts[]` with a probe, never in skill prose.
 - Registry facts must be verified against the product repos (file paths, CI workflow
   contents, run logs), not copied from docs that may be stale.
@@ -64,6 +72,8 @@ python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill
 python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
 python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
 env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
+env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
+python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--explain] [--json]
@@ -88,8 +98,10 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   `lib/evidence.py`. `--status` regrades that evidence without running checks.
 - **Derived state:** `factory-status.py` covers rollout stage, READY_TO_TAG, pin drift, uncommitted work and
   STALE evidence. Nothing is stored; it re-derives everything from git each time.
-- **Hooks** (`hooks/hooks.json`):
-  - SessionStart: `install-status.py --session`.
+- **Hooks** (`hooks/hooks.json`): every command ends with `; exit 0` (bash and PowerShell both accept it): exit 2
+  is Claude Code's blocking code and python exits 2 on a missing script, so a missing or broken script must never
+  block; stdout still passes through (run-all tests both).
+  - SessionStart: `install-status.py --session` (never tracebacks; malformed plugin records mean no advisory).
   - PreToolUse Bash|PowerShell: `git-guard.py`.
   - PreToolUse Write|Edit|MultiEdit|NotebookEdit|Read: `file-guard.py`.
   - PreToolUse Skill: `factory_session.py --skill`, which records the execution mode and keeps `kind: tech` skills behind

@@ -243,9 +243,16 @@ Three layers, all inside the workspace (plus `gh` commands naming a workspace re
 3. **File guard** - `scripts/file-guard.py`, PreToolUse on `Write|Edit|MultiEdit|NotebookEdit|Read`:
    writes into embedded clones, submodule content, registry generated paths or secrets get a `warn`
    advisory, as do secret reads; writes in a read-only mode get a `high` advisory. Nothing is blocked.
+   Linked worktrees of a workspace repo (e.g. `.wt-client-cleanup/`) get that repo's rules; paths outside
+   the workspace get no advisory, even with `RPG_FACTORY_WORKSPACE` set.
+
+Every hook command ends with `; exit 0`: a missing or crashing hook script never returns Claude Code's
+blocking exit code 2, and its stdout still reaches the session.
+
 Where Factory keeps state (`scripts/lib/fstate.py`, always absolute, never inside a repo): per-session
-scratch (the declared mode, the skills run) under `$TMPDIR` if it is a usable absolute directory, else
-`/tmp`; check evidence under `$XDG_STATE_HOME/rpg-factory` (default `~/.local/state/rpg-factory`).
+scratch (the declared mode, the skills run) under `$TMPDIR/rpg-factory` if `$TMPDIR` is a usable absolute
+directory, else `/tmp/rpg-factory`, else `<persistent>/tmp` (on Windows, Python 3.13+ does not treat `/tmp`
+as absolute, so hooks there use `~/.local/state/rpg-factory/tmp` unless `TMPDIR` is a Windows path); check evidence under `$XDG_STATE_HOME/rpg-factory` (default `~/.local/state/rpg-factory`).
 Releases up to 1.0.0 also kept a tripwire latch there (`latch/`, `audit/`, `activity/`); nothing reads
 those directories any more, and they can be deleted.
 
@@ -296,14 +303,18 @@ compaction (`/compact`, auto-compact) does not load them either. Start a new ses
 `claude --resume` starts a new process and does load them). Check: in a protected session
 `/rpg-factory:doctor` exists and reports the runtime; if the command is unknown, the plugin is not loaded in
 this session. (Observed 2026-09-30: the session that built and tagged v0.4.0 had started before the first
-install and ran with no Factory hooks; fresh, resumed and `--plugin-dir` sessions denied the same tag.)
+install and ran with no Factory hooks; fresh, resumed and `--plugin-dir` sessions stopped the same tag.
+Historical: that was the pre-1.0.3 guard, which still issued permission decisions; since 1.0.3 the hooks are
+advisory only and a tag gets a `high` advisory, not a block.)
 
 `python3 scripts/install-status.py` reports the mode, what the install loads, the session's
 `CLAUDE_PLUGIN_ROOT`, and a state: `CURRENT`, `STALE` (record or copy older than the source),
 `CONTENT_MISMATCH` (cache mode, same version, different files), `RESTART_REQUIRED` (the session runs
-another copy) or `NOT_INSTALLED`. The SessionStart hook warns when it is not CURRENT, and the
+another copy, or one whose version differs from the source) or `NOT_INSTALLED`. The SessionStart hook warns when it is not CURRENT, and the
 snapshot header shows `rpg-factory runtime <version> (<how it was loaded>)`. With a directory
 marketplace, keep the checkout on a released commit: whatever is checked out is what sessions run.
+install-status (and `/rpg-factory:doctor`) prints an informational `note:` when the source HEAD is not the
+commit of tag `v<VERSION>` (e.g. `source 1.0.4 + 3 commits past v1.0.4`); it does not change the state.
 
 Requirements:
 
@@ -370,6 +381,10 @@ Explicit invocation: `/rpg-factory:<skill> <task>`.
   factory-status fixtures, install-status, facts, routing properties and history replay, the live
   check scripts, Netcode headless tests, and `claude plugin validate --strict`. `--release` also
   requires the installed plugin to be CURRENT. It must report 0 failed.
+- Releases of this plugin: `python3 -B scripts/release-check.py` (read-only) gates the tag - versions agree,
+  the CHANGELOG section exists and `[Unreleased]` is empty, the tag is new locally and on origin, HEAD is the
+  `origin/main` merge commit, the tree is clean; `--verify-tag` checks the annotated tag afterwards and
+  `--notes` prints the release notes. Order: `.claude/CLAUDE.md` "Releases".
 - Skill line citations are checked against the code: `python3 -B scripts/checks/skill-citations.py
   [--skill <s>] [--suggest]` resolves every `path:line` at the repos' integration branches and fails on a
   moved symbol, an unanchored citation or a line past the end (`--suggest` prints the corrected line).

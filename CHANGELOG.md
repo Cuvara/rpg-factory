@@ -62,6 +62,33 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     platform temp dir (absolute on Windows too).
   - The evidence workspace key is the case-folded real path, and `run-checks.py` and `factory-status.py` resolve
     `RPG_FACTORY_WORKSPACE` the same way. Evidence stored under the old key shows as NOT_RUN once; rerun the checks.
+- **Routing, install and docs.**
+  - `factory-context.sh --paths` with an absolute (`C:\`, `C:/`, git-bash `/c/`, WSL `/mnt/c/`) or glob path
+    routed nowhere on Windows (`relpath` returned backslashes, lead null). Paths are normalised to repo-relative
+    forward slashes; another drive no longer raises. New routing scenarios (absolute forms, glob).
+  - A missing hook script made python exit 2, Claude Code's blocking code. Every `hooks.json` command now ends
+    with `; exit 0` (bash and PowerShell); stdout still passes through. run-all checks the wiring and runs each
+    command against a missing and an exit-2 script.
+  - `install-status.py` reported CURRENT for an old cache copy on Windows (backslash `CLAUDE_PLUGIN_ROOT` missed
+    the `/.claude/plugins/cache/` test) and whenever the runtime version differed from the source; both are now
+    RESTART_REQUIRED. `--session` never tracebacks on malformed `installed_plugins.json` /
+    `known_marketplaces.json` and always exits 0. New informational note (doctor, `--json` `notes`) when the
+    source HEAD is not the commit of tag `v<VERSION>` (`source 1.0.4 + N commits past v1.0.4`); no state change.
+  - `file-guard.py`: linked worktrees of a workspace repo (`.wt-client-cleanup/`) get that repo's rules (via the
+    git common dir); paths outside the workspace get no advisory even with `RPG_FACTORY_WORKSPACE` set; the mode
+    advisory command is quoted with forward slashes; secret names match case-insensitively (`.ENV`).
+  - `tests/dogfood.sh` looks for the session's `ADVISORIES` / `MODE` under both `fstate.scratch()` and
+    `persistent()/tmp` (headless hooks on Windows Python 3.14 fall back to the latter).
+  - Agent-facing wording said the hooks enforce or deny (snapshot mode line, `tag (deny)` in Human gates, pin-bump
+    "denied by the guard", `.claude/CLAUDE.md`); it now says advisory (`tag (high)`), pin-bump names the explicit
+    release authorization, README marks the pre-1.0.3 "denied" note historical and states the Windows scratch
+    root, and the `--mode` / path forms are documented in the usage headers. run-all fails if
+    `denied by the guard`, `hooks enforce` or `(deny)` returns in agent-facing text.
+  - New `scripts/release-check.py` (read-only) gates a release before the tag (versions agree, CHANGELOG section,
+    empty `[Unreleased]`, tag absent locally and on origin, HEAD == origin/main, clean tree; `--notes` prints the
+    release notes) and verifies it afterwards (`--verify-tag`: annotated, `rpg-factory X.Y.Z`, at HEAD, VERSION).
+    `tests/release-check.test.sh` (throwaway repo, local bare origin) runs in run-all; the order is in
+    `.claude/CLAUDE.md` "Releases".
 
 ## [1.0.4] - 2026-10-22
 

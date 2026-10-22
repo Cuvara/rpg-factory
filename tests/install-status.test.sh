@@ -58,5 +58,47 @@ chk "[dir] version bumped, record not updated -> STALE (record)" STALE "$(state)
 r=$(HOME="$H" USERPROFILE="$H" CLAUDE_PLUGIN_ROOT="$H/.claude/plugins/cache/rpg-factory/rpg-factory/0.3.0" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC" | jq -r '.runtime.kind')
 chk "[dir] a session on a cache copy is flagged" "stale cache copy" "$r"
 
+echo "-- runtime copy differs from the source (Windows backslash paths, other versions)"
+install 0.3.2 "$(git -C "$SRC" rev-parse HEAD)"
+chk "[dir] record == source again" CURRENT "$(state)"
+OLD="$H/.claude/plugins/cache/rpg-factory/rpg-factory/0.2.9"; mkdir -p "$OLD/.claude-plugin"
+echo '{"name":"rpg-factory","version":"0.2.9"}' > "$OLD/.claude-plugin/plugin.json"
+BS="${OLD//\//\\}"  # C:\Users\...\.claude\plugins\cache\... as Claude Code sets it on Windows
+r=$(HOME="$H" USERPROFILE="$H" CLAUDE_PLUGIN_ROOT="$BS" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC")
+chk "[dir] backslash CLAUDE_PLUGIN_ROOT in the cache is a stale cache copy" "stale cache copy" "$(jq -r .runtime.kind <<<"$r")"
+chk "[dir] backslash old cache copy is not CURRENT" RESTART_REQUIRED "$(jq -r .state <<<"$r")"
+r=$(HOME="$H" USERPROFILE="$H" CLAUDE_PLUGIN_ROOT="$OLD" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC" | jq -r .state)
+chk "[dir] forward-slash old cache copy is not CURRENT" RESTART_REQUIRED "$r"
+OTHER="$TMP/other"; mkdir -p "$OTHER/.claude-plugin"; echo '{"name":"rpg-factory","version":"0.1.0"}' > "$OTHER/.claude-plugin/plugin.json"
+r=$(HOME="$H" USERPROFILE="$H" CLAUDE_PLUGIN_ROOT="$OTHER" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC" | jq -r .state)
+chk "[dir] runtime version != source version (other checkout) is not CURRENT" RESTART_REQUIRED "$r"
+
+echo "-- release note: directory mode runs unreleased commits under the release label (informational)"
+git -C "$SRC" tag v0.3.2
+r=$(HOME="$H" USERPROFILE="$H" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC")
+chk "[dir] HEAD == tag v0.3.2: no note" "CURRENT 0" "$(jq -r '"\(.state) \(.notes | length)"' <<<"$r")"
+echo "d" > "$SRC/file.txt"; git -C "$SRC" -c user.email=t@t -c user.name=t commit -qam v6
+echo "e" > "$SRC/file.txt"; git -C "$SRC" -c user.email=t@t -c user.name=t commit -qam v7
+r=$(HOME="$H" USERPROFILE="$H" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC")
+chk "[dir] 2 commits past the tag: state unchanged" CURRENT "$(jq -r .state <<<"$r")"
+chk "[dir] 2 commits past the tag: note names them" "source 0.3.2 + 2 commits past v0.3.2" "$(jq -r '.notes[0] | split(":")[0]' <<<"$r")"
+out=$(HOME="$H" USERPROFILE="$H" python3 -B "$SRC/scripts/install-status.py" --source "$SRC")
+case "$out" in *"note: source 0.3.2 + 2 commits past v0.3.2"*) pass=$((pass + 1)); echo "PASS  text output (doctor) prints the release note";;
+  *) fail=$((fail + 1)); echo "FAIL  text output lacks the release note: $out";; esac
+out=$(HOME="$H" USERPROFILE="$H" python3 -B "$SRC/scripts/install-status.py" --session --source "$SRC")
+chk "[dir] session hook stays silent when CURRENT (the note is not an advisory)" "" "$out"
+
+echo "-- malformed plugin records: --session never tracebacks, never fails the session"
+for case in 'known_marketplaces.json=[]' 'installed_plugins.json={"plugins":[]}' 'installed_plugins.json={"plugins":{"rpg-factory@rpg-factory":"x"}}' \
+            'installed_plugins.json=[1]' 'known_marketplaces.json={"rpg-factory":{"source":"directory"}}' 'known_marketplaces.json={"rpg-factory":{"source":{"source":"directory","path":5}}}' \
+            'installed_plugins.json={"plugins":{"rpg-factory@rpg-factory":[{"installPath":7}]}}' 'installed_plugins.json=not json'; do
+  install 0.3.2 "$(git -C "$SRC" rev-parse HEAD)"
+  printf '%s\n' "${case#*=}" > "$H/.claude/plugins/${case%%=*}"
+  err=$(HOME="$H" USERPROFILE="$H" python3 -B "$SRC/scripts/install-status.py" --session --source "$SRC" 2>&1 >/dev/null); rc=$?
+  chk "--session with $case: exit 0, no traceback" "0 " "$rc $(grep -c Traceback <<<"$err" | sed 's/^0$//')"
+  err=$(HOME="$H" USERPROFILE="$H" python3 -B "$SRC/scripts/install-status.py" --json --source "$SRC" 2>&1 >/dev/null)
+  chk "--json with $case: no traceback" "" "$(grep Traceback <<<"$err")"
+done
+
 total=$((pass + fail)); echo "install-status tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

@@ -2,7 +2,9 @@
 """rpg-factory file guard - PreToolUse hook for Claude's file tools (Write, Edit, MultiEdit, NotebookEdit, Read).
 
 The shell guard (git-guard.py) only sees Bash/PowerShell. File tools write directly, so
-this hook applies the same workspace rules to the target path. Inside the workspace only; it never
+this hook applies the same workspace rules to the target path. Inside the workspace only (RPG_FACTORY_WORKSPACE
+helps locate it, but a path outside it gets no opinion); a linked worktree of a workspace repo (e.g.
+<ws>/.wt-client-cleanup, found through its git common dir) gets that repo's rules. It never
 approves, asks or blocks (1.0.3: advisory only - additionalContext "rpg-factory advisory (<level>)") and
 never crashes a session (any error = no opinion).
 
@@ -12,8 +14,8 @@ never crashes a session (any error = no opinion).
           - a git submodule's content (client com.gdk.*, unity-build-workflows): changes belong in its own repo
           - a generated path from the registry (proto bindings, Wire.cs copy, golden vectors, *.uxml.g.cs,
             imported samples): change it through its generator
-          - secrets (.env, kubeconfig.local)
-  warn  a Read of secrets (.env, kubeconfig.local)
+          - secrets (.env, kubeconfig.local; case-insensitive)
+  warn  a Read of secrets (.env, kubeconfig.local; case-insensitive)
 
 Not covered (documented limitation): MCP tools that write files (e.g. Unity-MCP asset/scene tools)
 have tool-specific inputs; they are not inspected here. The registry gate `unity-asset-edit` is policy.
@@ -29,7 +31,7 @@ sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-SECRET = re.compile(r"(^|/)(\.env(\.(?!example$|sample$|template$|dist$)[A-Za-z0-9_-]+)?|kubeconfig\.local)$")
+SECRET = re.compile(r"(^|/)(\.env(\.(?!example$|sample$|template$|dist$)[A-Za-z0-9_-]+)?|kubeconfig\.local)$", re.IGNORECASE)
 
 
 def target(payload):
@@ -56,6 +58,50 @@ def gitlinks(repo_dir):
     return [l.split("\t", 1)[1] for l in out.splitlines() if l.startswith("160000 ")]
 
 
+def within(path, root):
+    """path is root or below it (normalised: Windows slashes and case)."""
+    a, b = os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(root))
+    return a == b or a.startswith(b.rstrip("/\\") + os.sep)
+
+
+def git_checkout(path):
+    """(toplevel, main checkout) of the git work tree holding path (nearest existing directory), else (None, None).
+    For a linked worktree the main checkout is the directory of its common .git directory."""
+    import subprocess
+    d = os.path.dirname(path)
+    while d and not os.path.isdir(d):
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None, None
+        d = parent
+    try:
+        out = subprocess.run(["git", "-C", d, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    lines = out.stdout.splitlines() if out.returncode == 0 else []
+    if len(lines) != 2:
+        return None, None
+    top, common = lines[0].strip(), lines[1].strip().rstrip("/")
+    main = os.path.dirname(common) if os.path.basename(common) == ".git" else top
+    return os.path.abspath(top), os.path.abspath(main)
+
+
+def repo_of(path, ws, registry):
+    """(repo key, repo entry, work tree dir) whose rules apply to path: a registry repo directory containing it,
+    else a linked worktree (e.g. <ws>/.wt-client-cleanup) whose main checkout is a registry repo."""
+    for key, r in registry["repos"].items():
+        rdir = os.path.abspath(os.path.join(ws, r["path"]))
+        if within(path, rdir):
+            return key, r, rdir
+    top, main = git_checkout(path)
+    if top and main and os.path.normcase(top) != os.path.normcase(main):
+        for key, r in registry["repos"].items():
+            if os.path.normcase(main) == os.path.normcase(os.path.abspath(os.path.join(ws, r["path"]))):
+                return key, r, top
+    return None, None, None
+
+
 def evaluate(payload, registry):
     tool = payload.get("tool_name")
     path = target(payload)
@@ -64,7 +110,7 @@ def evaluate(payload, registry):
     import factory_session as session  # noqa: E402  (shares the workspace and mode model)
     g = session.guard()
     ws = g.find_workspace(os.path.dirname(path), registry)
-    if not ws:
+    if not ws or not within(path, ws):  # the env root only helps locate the workspace: never an opinion outside it
         return []
     R = []
     if SECRET.search(path.replace("\\", "/")):
@@ -73,12 +119,11 @@ def evaluate(payload, registry):
         return R
     mode = session.current_mode(payload)
     if mode in session.READ_ONLY_MODES or mode == "validate":
+        ctx = session.PLUGIN_ROOT.replace("\\", "/").rstrip("/") + "/scripts/factory-context.sh"  # pasted into bash
         R.append(("deny", f"Factory mode is `{mode}`: no file changes. Switch only when the user asked to implement: "
-                          f"`bash {os.path.join(session.PLUGIN_ROOT, 'scripts', 'factory-context.sh')} --mode implement`"))
-    for key, r in registry["repos"].items():
-        rdir = os.path.abspath(os.path.join(ws, r["path"]))
-        if not (path == rdir or path.startswith(rdir + os.sep)):
-            continue
+                          f"`bash \"{ctx}\" --mode implement`"))
+    key, r, rdir = repo_of(path, ws, registry)
+    if key:
         rel = os.path.relpath(path, rdir).replace("\\", "/")
         for c in r.get("embedded_clones", []):
             if rel == c["path"] or rel.startswith(c["path"].rstrip("/") + "/"):
@@ -94,7 +139,6 @@ def evaluate(payload, registry):
                 if generated_match(rel, gp):
                     R.append(("ask", f"{r['path']}/{rel} is generated ({gp}, module {m['id']}): change it through its generator"))
                     break
-        break
     return R
 
 

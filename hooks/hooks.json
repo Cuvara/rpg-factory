@@ -1,12 +1,12 @@
 {
-  "description": "rpg-factory safety: git guard (Bash and PowerShell tools), file guard, skill order and a stale-install check at session start.",
+  "description": "rpg-factory advisories (fail-safe: every command ends with exit 0, so a missing or broken script never blocks): git guard (Bash and PowerShell tools), file guard, skill order and a stale-install check at session start.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/install-status.py\" --session",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/install-status.py\" --session; exit 0",
             "timeout": 15
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/git-guard.py\"",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/git-guard.py\"; exit 0",
             "timeout": 10
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/file-guard.py\"",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/file-guard.py\"; exit 0",
             "timeout": 10
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/factory_session.py\" --skill",
+            "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/scripts/factory_session.py\" --skill; exit 0",
             "timeout": 10
           }
         ]

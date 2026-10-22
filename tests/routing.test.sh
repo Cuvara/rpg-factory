@@ -69,6 +69,26 @@ assert "move client to Netcode vX -> pin-bump leads; tag gate" client \
   "$(lead pin-bump) and $(contract package-pins) and $(gate tag)" Packages/manifest.json Packages/packages-lock.json
 assert "repo-prefixed path routes like repo-relative" server "(.routing.lead == \"server-ops\")" rpg-mmo-server/backend/deploy/k8s/app/40-gateway.yaml
 assert "comma-joined paths are split" server "(.routing.lead == \"server-services\") and ([.files[].path] | length == 2)" "backend/gateway/server/server.go,backend/nakama/main.go"
+# absolute and glob --paths: repo-relative forward-slash files on every platform (Windows relpath gave backslashes)
+sdir=$(bash "$CTX" --repo server --json --paths backend/docs/BENCHMARK.md 2>/dev/null | jq -r '.repos[0].path // empty')
+if [ -n "$sdir" ]; then
+  fwd="${sdir//\\//}"
+  wirefiles='([.files[].path] == ["backend/shared/proto/wire.proto"])'
+  assert "absolute path (native form) routes like repo-relative" server "$(lead wire-contract) and $wirefiles" "$sdir/backend/shared/proto/wire.proto"
+  assert "absolute path (forward slashes) routes like repo-relative" server "$(lead wire-contract) and $wirefiles" "$fwd/backend/shared/proto/wire.proto"
+  assert "absolute path (backslashes) routes like repo-relative" server "$(lead wire-contract) and $wirefiles" "${fwd//\//\\}\\backend\\shared\\proto\\wire.proto"
+  if command -v cygpath >/dev/null 2>&1; then
+    assert "absolute path (git-bash /c/ form) routes like repo-relative" server "$(lead wire-contract) and $wirefiles" "$(cygpath -u "$fwd")/backend/shared/proto/wire.proto"
+  fi
+  case "$fwd" in [A-Za-z]:/*)
+    drv=$(printf '%s' "${fwd:0:1}" | tr 'A-Z' 'a-z')
+    assert "absolute path (WSL /mnt/c/ form) routes like repo-relative" server "$(lead wire-contract) and $wirefiles" "/mnt/$drv${fwd:2}/backend/shared/proto/wire.proto" ;;
+  esac
+  assert "glob path expands to repo-relative forward-slash files" server \
+    "$(lead wire-contract) and ([.files[].path] | length > 0 and all(test(\"^backend/shared/proto/[^/\\\\\\\\]+\\\\.proto$\")))" './backend/shared/proto/*.proto'
+else
+  skip=$((skip + 1)); echo "SKIP  absolute/glob --paths (server repo not found)"
+fi
 assert "benchmark docs -> measure is the lead" server "(.routing.lead == \"measure\")" backend/docs/BENCHMARK.md
 assert "client end of nakama-rpc names the upstream driver" client "any(.contracts[]; .id == \"nakama-rpc\" and .driver == \"server-services\")" Assets/Scripts/Nakama/Social/PartyService.cs
 assert "bench harness only -> measure leads, server-realtime co-leads" server "(.routing.lead == \"measure\") and (.routing.co_leads | index(\"server-realtime\"))" backend/gameserver-dotnet/GameServer.Tests/Bench/TickAllocationBench.cs

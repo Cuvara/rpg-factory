@@ -64,6 +64,11 @@ missing=$(for f in .claude/CLAUDE.md README.md registry.json skills/factory-core
   grep -qiE "explicit(ly)? (release authorization|authoriz)" "$f" || echo "$f"; done)
 [ -z "$absolute$missing" ] && ok "release policy: default READY_TO_TAG, tag/release only with explicit authorization (${#policy_files[@]} files)" \
   || bad "release policy wording" "absolute 'never tag' text: ${absolute:-none}; no authorization rule in: ${missing:-none}"
+# since 1.0.3 the hooks are advisory only: agent-facing text must not claim they deny, block or enforce
+advisory_files=(.claude/CLAUDE.md README.md scripts/lib/context.py scripts/factory-context.sh commands/*.md skills/*/SKILL.md skills/*/references/*.md)
+blocking=$(grep -nE -i "denied by the guard|hooks enforce|\(deny\)|enforced by (both|the) (guards?|hooks)" "${advisory_files[@]}" 2>/dev/null)
+[ -z "$blocking" ] && ok "advisory wording: no 'denied by the guard' / 'hooks enforce' / '(deny)' in agent-facing text (${#advisory_files[@]} files)" \
+  || bad "advisory wording (hooks never block since 1.0.3)" "$blocking"
 [ -f "skills/factory-core/SKILL.md" ] && head -5 skills/factory-core/SKILL.md | grep -q '^name: factory-core$' \
   && ok "skill: factory-core frontmatter name" || bad "skill: factory-core frontmatter name"
 for ref in $(grep -o 'references/[a-z-]*\.md' skills/factory-core/SKILL.md | sort -u); do
@@ -73,8 +78,24 @@ jq -e '(.hooks.PreToolUse[0].matcher == "Bash|PowerShell")
         and ([.hooks.PreToolUse[0].hooks[].command] | any(test("git-guard.py")))
         and ([.hooks.PreToolUse[] | select(.matcher == "Skill") | .hooks[].command] | any(test("factory_session.py\" --skill")))
         and ([.hooks.SessionStart[0].hooks[].command] | any(test("install-status.py\" --session")))
-        and ([.. | .command? // empty] | all(test("tripwire") | not))' hooks/hooks.json >/dev/null \
-  && ok "hooks: guard on Bash|PowerShell, skill order on Skill, session install check, no tripwire" || bad "hooks wiring"
+        and ([.. | .command? // empty] | all(test("tripwire") | not))
+        and ([.. | .command? // empty] | length >= 4 and all(endswith("; exit 0")))' hooks/hooks.json >/dev/null \
+  && ok "hooks: guard on Bash|PowerShell, skill order on Skill, session install check, no tripwire, every command fail-safe (; exit 0)" || bad "hooks wiring"
+# exit 2 is Claude Code's blocking code (python exits 2 on a missing script): a missing or crashing hook script
+# must exit 0 and its stdout must still reach Claude Code
+HT=$(mktemp_win); mkdir -p "$HT/missing/scripts" "$HT/broken/scripts"
+for f in $(jq -r '[.. | .command? // empty | capture("scripts/(?<f>[a-z_-]+\\.py)").f] | unique[]' hooks/hooks.json); do
+  printf 'import sys\nprint("{\\"marker\\": \\"%s\\"}")\nsys.exit(2)\n' "$f" > "$HT/broken/scripts/$f"
+done
+hfail=""
+while IFS= read -r h; do
+  out=$(CLAUDE_PLUGIN_ROOT="$HT/missing" bash -c "$h" </dev/null 2>/dev/null); rc=$?
+  [ $rc -eq 0 ] && [ -z "$out" ] || hfail+="missing script rc=$rc: $h"$'\n'
+  out=$(CLAUDE_PLUGIN_ROOT="$HT/broken" bash -c "$h" </dev/null 2>/dev/null); rc=$?
+  [ $rc -eq 0 ] && grep -q '"marker"' <<<"$out" || hfail+="exit-2 script rc=$rc stdout='$out': $h"$'\n'
+done < <(jq -r '.. | .command? // empty' hooks/hooks.json)
+rm -rf "$HT"
+[ -z "$hfail" ] && ok "hooks: a missing or exit-2 script never blocks (exit 0, stdout passes through)" || bad "hooks fail-safe" "$hfail"
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
@@ -93,6 +114,7 @@ run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
+run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
 if $use_ws; then run "routing properties over real history" python3 -B tests/routing-properties.test.py
 else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
