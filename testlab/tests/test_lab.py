@@ -387,6 +387,28 @@ class AnalysisTests(unittest.TestCase):
         rows = [_row(0.1 * k, [["a", "player", 0.0, 0.0, 100, 100, 0, 5]]) for k in range(5)]
         self.assertEqual(analyze.check_spawn_overlap(_ev(entities=rows, duration=1), {})["status"], analyze.INCONCLUSIVE)
 
+    def test_inputs_consumed_skips_a_respawn_inside_the_segment(self):
+        # Walking +x at 5 u/s from t=1; killed and put back at the spawn point at t=2.5; walks on.
+        def x_at(st):
+            if st < 1:
+                return 0.0
+            return 5.0 * (st - 1) if st < 2.5 else 5.0 * (st - 2.5)
+        def hp_at(st):
+            return 10 if 2.0 <= st < 2.5 else 100
+        ents = [_row(i * 0.2, [["u", "player", x_at(i * 0.2), 0.0, hp_at(i * 0.2), 100, 0, 5.0]]) for i in range(30)]
+        ev = _ev(entities=ents, duration=6)
+        ev["clients"][0]["summary"] = {"user_id": "u", "input": {"moves_read": 50}}
+        ev["clients"][0]["plan"] = {"steps": [{"t0": 1, "t1": 5, "mode": "move", "x": 1, "y": 0}]}
+        res = analyze.check_inputs_consumed(ev, {})
+        self.assertEqual(res["status"], analyze.PASS, res["detail"])
+        self.assertEqual(res["detail"]["segments"][0]["respawns"], 1)
+        # A player that never moves still fails, respawn or not.
+        still = [_row(i * 0.2, [["u", "player", 0.0, 0.0, hp_at(i * 0.2), 100, 0, 5.0]]) for i in range(30)]
+        ev2 = _ev(entities=still, duration=6)
+        ev2["clients"][0]["summary"] = ev["clients"][0]["summary"]
+        ev2["clients"][0]["plan"] = ev["clients"][0]["plan"]
+        self.assertEqual(analyze.check_inputs_consumed(ev2, {})["status"], analyze.FAIL)
+
     def test_inputs_consumed_compares_direction_and_distance(self):
         ents = [_row(i * 0.2, [["u", "player", 5.0 * max(0, i * 0.2 - 1), 0.0, 100, 100, 0, 5.0]]) for i in range(30)]
         ev = _ev(entities=ents, duration=6)

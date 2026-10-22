@@ -362,18 +362,27 @@ def check_inputs_consumed(ev, a):
                 rows.append({"client": c["index"], "step": [s["t0"], s["t1"]], "result": "no samples"})
                 unverified += 1
                 continue
+            # The displacement the INPUT produced: summed over the samples in the segment, leaving
+            # out any step where the server respawned the player (HP from below half to full, or a
+            # move no input can make). A respawn puts the player back at the spawn point, which is
+            # not the input failing to move it.
+            dx, dy, walked_s, respawns = _input_displacement(t, s["t0"] + settle, s["t1"], speed)
+            if walked_s < 0.5 * (s["t1"] - s["t0"] - settle):
+                rows.append({"client": c["index"], "step": [s["t0"], s["t1"]], "respawns": respawns,
+                             "result": "respawned for most of the segment"})
+                unverified += 1
+                continue
             checked += 1
-            dx, dy = p1[0] - p0[0], p1[1] - p0[1]
             dist = math.hypot(dx, dy)
             want = (s["x"], s["y"])
             wn = math.hypot(*want) or 1.0
             cos = (dx * want[0] + dy * want[1]) / (dist * wn) if dist > 1e-6 else 0.0
-            expected = speed * (s["t1"] - s["t0"] - settle)
+            expected = speed * walked_s
             ok = cos >= min_cos and dist >= min_fraction * expected
             failures += 0 if ok else 1
             rows.append({"client": c["index"], "step": [s["t0"], s["t1"]], "dir": [s["x"], s["y"]],
                          "moved": round(dist, 3), "expected_at_speed": round(expected, 3), "cos": round(cos, 3),
-                         "moves_read": reads, "ok": ok})
+                         "respawns": respawns, "moves_read": reads, "ok": ok})
     if checked == 0:
         return _inconclusive("no move segment had server samples on both ends", source="/debug/entities + plan.json")
     status = FAIL if failures else (INCONCLUSIVE if unverified else PASS)
@@ -384,6 +393,26 @@ def check_inputs_consumed(ev, a):
                    rationale="input issued must be input consumed: the server entity moves in the scripted direction "
                              "at a plausible fraction of its speed (obstacles and stops excepted by the threshold)",
                    detail={"segments": rows})
+
+
+def _input_displacement(t, t0, t1, speed):
+    """Sum of the server's per-sample displacement of an entity over [t0, t1], skipping steps
+    that are respawns (HP from below half to full) or faster than 2x its speed. Returns
+    (dx, dy, seconds covered, respawns skipped)."""
+    max_hp = t.get("max_hp") or 0
+    pts = [(st, x, y, hp) for st, x, y, hp in zip(t["st"], t["x"], t["y"], t["hp"]) if t0 <= st <= t1]
+    dx = dy = covered = 0.0
+    respawns = 0
+    for (s0, x0, y0, h0), (s1, x1, y1, h1) in zip(pts, pts[1:]):
+        step = math.hypot(x1 - x0, y1 - y0)
+        respawned = max_hp > 0 and h0 is not None and h1 is not None and h0 < 0.5 * max_hp and h1 >= max_hp
+        if respawned or step > 2.0 * speed * max(s1 - s0, 1e-3) + 0.2:
+            respawns += 1
+            continue
+        dx += x1 - x0
+        dy += y1 - y0
+        covered += s1 - s0
+    return dx, dy, covered, respawns
 
 
 def _divergence(ev, a, *, local: bool):
@@ -1005,7 +1034,9 @@ def check_spawn_overlap(ev, a):
                           "to full) of each player, distance to every other live player in the same sample",
                    sampling=f"{len(rows)} server samples",
                    rationale="every new or respawned player used to start on the same point (rpg-mmo-server#469); "
-                             "GAMESERVER_SPAWN_SCATTER spreads them",
+                             "GAMESERVER_SPAWN_SCATTER spreads them. A placement with no other live player in the "
+                             "world cannot land on one: it is counted as unjudged, and PASS speaks for the judged "
+                             "placements (at least min_judged of them)",
                    detail={"overlapping": bad[:20], "spawns": spawns[:40]},
                    artifacts=[str(ev["run_dir"] / "server" / "entities.ndjson")])
 
