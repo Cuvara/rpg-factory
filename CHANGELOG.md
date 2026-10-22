@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-22
+
+Hotfix: the hooks never ask for confirmation and never block; every former ask/deny rule reaches the agent
+as an advisory. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin update
+rpg-factory@rpg-factory`) and start a new session. No registry schema or command-line changes.
+
 ### Changed
 - **Hooks are advisory only: they never ask the user and never block the agent.** Agents using the plugin
   still stopped for a human Yes/No: every guard rule returned a `permissionDecision` - `ask` (destructive git,
