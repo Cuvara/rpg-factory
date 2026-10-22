@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-10-22
+
+Fix: tech skills stay behind their lead skills under the advisory-only hooks of 1.0.3, still without blocking or
+asking. A tech skill requested before factory-core loads factory-core instead (auto-corrected); one requested
+before its lead runs with an advisory. Update the plugin (`claude plugin marketplace update rpg-factory && claude
+plugin update rpg-factory@rpg-factory`) and start a new session. No command-line or registry changes.
+
 ### Fixed
 - **Skill order under advisory-only hooks (1.0.3 dogfood regression, `tech-go` and `tech-dots`).** With the
   Skill hook advisory-only, a model could load a tech skill before its lead; dogfood reported it as a failure
