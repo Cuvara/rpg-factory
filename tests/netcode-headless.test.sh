@@ -39,5 +39,28 @@ chk "--server without the tag is an error, not a fallback" "2 blocked" "$rc $(gr
 out=$(RPG_FACTORY_WORKSPACE="$TMP/none" resolve --netcode "$WT"); rc=$?
 chk "no server anywhere -> NOT-RUN(blocked)" "2 blocked" "$rc $(grep -o 'blocked' <<<"$out")"
 
+# ---- the dotnet test status decides together with the TRX counters (a failed or timed-out run can
+# leave a zero-failure TRX behind). A fake `dotnet` first on PATH writes a TRX, then exits/sleeps.
+FAKE="$TMP/fakebin"; mkdir -p "$FAKE"
+cat > "$FAKE/dotnet" <<'SH'
+#!/usr/bin/env bash
+mkdir -p results
+executed=3; [ "${FAKE_DOTNET_MODE:-ok}" = empty ] && executed=0
+printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary><Counters total="3" executed="%s" passed="%s" failed="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$executed" > results/results.trx
+case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 10 ;; esac
+exit 0
+SH
+chmod +x "$FAKE/dotnet"
+NC="$TMP/nc-nosgl"; mkdir -p "$NC/Runtime" "$NC/Tests" "$NC/Tests~/Headless"; : > "$NC/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
+echo '{"name":"com.cuvara.netcode"}' > "$NC/package.json"
+run_fake() { FAKE_DOTNET_MODE="$1" NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" \
+  bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$NC" >"$TMP/out.txt" 2>&1; echo $?; }
+chk "dotnet test passes and the TRX has executed tests -> 0" 0 "$(run_fake ok)"
+chk "dotnet test exits 1 with a zero-failure TRX -> 1" 1 "$(run_fake fail)"
+grep -q "dotnet test exited 1" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  failure reason not printed"; cat "$TMP/out.txt"; }
+chk "dotnet test times out with a zero-failure TRX -> 1" 1 "$(run_fake sleep)"
+grep -q "timed out" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  timeout not reported"; cat "$TMP/out.txt"; }
+chk "dotnet test passes but nothing executed -> 1" 1 "$(run_fake empty)"
+
 echo "netcode-headless: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -18,6 +18,11 @@ from pathlib import Path
 from . import provenance, util
 
 PASS, FAIL, INCONCLUSIVE, INFO = "PASS", "FAIL", "INCONCLUSIVE", "INFO"
+# Run outcome only: every assertion passed, but an informational one would have failed (e.g. the
+# S07/S07P memory slope). Never a clean PASS; exit code 4.
+PASS_WITH_WARNINGS = "PASS_WITH_WARNINGS"
+# A host is reported as loaded at this CPU load (policy, unvalidated; testlab/docs/THRESHOLDS.md).
+HOST_LOAD_WARN_PCT = 50.0
 
 
 # --------------------------------------------------------------------------- evidence loading
@@ -1431,7 +1436,37 @@ def overall(results: list[dict], harness_error: str | None = None) -> str:
         return FAIL
     if INCONCLUSIVE in statuses or not statuses:
         return INCONCLUSIVE
+    if informational_breaches(results):
+        return PASS_WITH_WARNINGS
     return PASS
+
+
+def informational_breaches(results: list[dict]) -> list[dict]:
+    """Informational assertions whose own verdict was FAIL (detail.would_be): reported as INFO, but
+    they keep the run from a clean PASS."""
+    return [r for r in results if r.get("status") == INFO and (r.get("detail") or {}).get("would_be") == FAIL]
+
+
+def qualifications(results: list[dict], meta: dict | None = None) -> list[dict]:
+    """What qualifies the verdict, for the top of the report: informational breaches, and host
+    load - host-wide stalls seen in the run, or CPU load at start/end >= HOST_LOAD_WARN_PCT. Host
+    qualifications do not change the outcome (the timing checks a stall explains are already
+    INCONCLUSIVE); they say the run's timing numbers came from a busy host."""
+    out = [{"kind": "informational_breach", "id": r.get("id"),
+            "text": f"`{r.get('id')}` would be FAIL (informational): measured {r.get('measured')}, "
+                    f"threshold {r.get('threshold')}"} for r in informational_breaches(results)]
+    host = next((r for r in results if r.get("check") == "host_quiet"), None)
+    m = (host or {}).get("measured") or {}
+    if m.get("host_stalls"):
+        out.append({"kind": "host", "text": f"{m['host_stalls']} host-wide stall(s) (frames >= 250 ms in two or more "
+                                           "player processes at once): timing checks they explain are INCONCLUSIVE; "
+                                           "rerun on a quiet host for representative timing"})
+    for when in ("load_start", "load_end"):
+        load = (m.get(when) or {}).get("cpu_load_pct") if isinstance(m.get(when), dict) else None
+        if load is not None and float(load) >= HOST_LOAD_WARN_PCT:
+            out.append({"kind": "host", "text": f"host CPU load {load:.0f} % at {when.split('_')[1]} "
+                                               f"(>= {HOST_LOAD_WARN_PCT:.0f} %): other processes shared the host"})
+    return out
 
 
 # --------------------------------------------------------------------------- readiness checks (COVERAGE.md F2-F6)

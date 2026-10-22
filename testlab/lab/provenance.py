@@ -26,11 +26,35 @@ from . import util
 
 SCHEMA = "rpg.testlab.provenance.v1"
 
-# Evidence the checks read. Outputs of an analysis (results.json, report.md, delivery.*) and files
-# the orchestrator keeps writing after the manifest (orchestrator.log, run.json) are not in it.
+# Evidence the checks read: every file under client-*/, server/ and bots/, and these root files.
+# Outputs of an analysis (results.json, report.md, delivery.*) and files the orchestrator keeps
+# writing after the manifest (orchestrator.log, run.json, control.json, logs) are not evidence.
 MANIFEST_DIRS = ("server", "bots")
-MANIFEST_FILES = ("scenario.json", "redis.json")
+MANIFEST_FILES = ("scenario.json", "redis.json", "disruptions.ndjson")
 MANIFEST_EXCLUDE = re.compile(r"(^|/)(results\.json|report\.md|delivery\.(json|md)|.*\.tmp)$")
+
+# Files every complete run must have recorded (expected_inventory adds the conditional ones).
+SERVER_INVENTORY = ("server/entities.ndjson", "server/status.ndjson", "server/container.ndjson",
+                    "server/metrics-start.txt", "server/metrics-end.txt")
+CLIENT_INVENTORY = ("plan.json", "status.json", "summary.json", "events.ndjson", "snapshots.ndjson",
+                    "samples.ndjson", "frames.csv")
+
+
+def expected_inventory(scenario: dict) -> list[str]:
+    """The evidence files a finished run of `scenario` must have, as relative posix paths: the
+    scenario as run, redis, the server probe, each client's recorder outputs, and the files only some
+    scenarios produce (disruptions.ndjson with disruptions, bots/loadtest.json with bots,
+    server/snapshot-trace.csv with snapshot_trace)."""
+    inv = ["scenario.json", "redis.json", *SERVER_INVENTORY]
+    for i in range(int(scenario.get("clients", 0))):
+        inv += [f"client-{i}/{n}" for n in CLIENT_INVENTORY]
+    if scenario.get("disruptions"):
+        inv.append("disruptions.ndjson")
+    if int((scenario.get("bots") or {}).get("players", 0) or 0) > 0:
+        inv.append("bots/loadtest.json")
+    if scenario.get("snapshot_trace"):
+        inv.append("server/snapshot-trace.csv")
+    return inv
 
 
 def sha256_file(path: Path, chunk: int = 1 << 20) -> str | None:
@@ -127,21 +151,19 @@ def git(repo: Path, *args) -> str | None:
         return None
 
 
-def manifest(run_dir: Path) -> dict:
-    """{relative posix path: sha256} of the evidence files in a run directory."""
-    out = {}
+def evidence_files(run_dir: Path) -> list[Path]:
+    """Every evidence file now in the run directory (the set the manifest records)."""
+    run_dir = Path(run_dir)
     paths = [run_dir / f for f in MANIFEST_FILES]
     paths += sorted(p for p in run_dir.glob("client-*/**/*") if p.is_file())
     for d in MANIFEST_DIRS:
         paths += sorted(p for p in (run_dir / d).glob("**/*") if p.is_file())
-    for p in paths:
-        if not p.is_file():
-            continue
-        rel = p.relative_to(run_dir).as_posix()
-        if MANIFEST_EXCLUDE.search(rel):
-            continue
-        out[rel] = sha256_file(p)
-    return out
+    return [p for p in paths if p.is_file() and not MANIFEST_EXCLUDE.search(p.relative_to(run_dir).as_posix())]
+
+
+def manifest(run_dir: Path) -> dict:
+    """{relative posix path: sha256} of the evidence files in a run directory."""
+    return {p.relative_to(run_dir).as_posix(): sha256_file(p) for p in evidence_files(run_dir)}
 
 
 # Fields a complete record must carry: (dotted path, why it matters).
@@ -213,6 +235,15 @@ def verify(run_dir: Path, meta: dict, scenario: dict, clients: list[dict]) -> li
             problems.append(f"client-{c['index']}/summary.json belongs to run {s['run_id']}")
     recorded = prov.get("manifest") or {}
     if recorded:
+        # Every file the scenario must produce is in the record (a truncated manifest proves nothing
+        # about what it left out), and no evidence file appeared after the run.
+        for rel in expected_inventory(scenario):
+            if rel not in recorded:
+                problems.append(f"evidence file {rel} is not in the manifest (omitted, or never written)")
+        for p in evidence_files(Path(run_dir)):
+            rel = p.relative_to(run_dir).as_posix()
+            if rel not in recorded:
+                problems.append(f"evidence file {rel} is not in the manifest (added after the run)")
         for rel, digest in sorted(recorded.items()):
             now = sha256_file(Path(run_dir) / rel)
             if now is None:

@@ -546,12 +546,16 @@ def _write(path: Path, text: str) -> None:
         fh.write(text)
 
 
-def _run_dir(root: Path, run_id="20260101T000000Z-T-abcd", *, netcode_embedded=True, netcode_sha="5fa8f37"):
+def _run_dir(root: Path, run_id="20260101T000000Z-T-abcd", *, netcode_embedded=True, netcode_sha="5fa8f37",
+             scenario_kw=None):
     """A finished run directory with a complete provenance record."""
     from lab import provenance
     run = root / run_id
-    sc = _scenario(clients=1)
+    sc = _scenario(clients=1, **(scenario_kw or {}))
     _write(run / "scenario.json", json.dumps(sc))
+    # The full evidence inventory of a one-client run (provenance.expected_inventory).
+    for rel in provenance.expected_inventory(sc)[1:]:  # [0] is scenario.json, written above
+        _write(run / rel, "{}\n")
     _write(run / "client-0" / "summary.json", json.dumps({"run_id": run_id, "user_id": "u0"}))
     _write(run / "server" / "entities.ndjson", '{"st": 1, "ents": []}\n')
     prov = {
@@ -573,11 +577,53 @@ class ProvenanceTests(unittest.TestCase):
     def _status(self, run):
         return analyze.check_provenance(analyze.load_evidence(run), {})
 
+    def _problems(self, run):
+        return self._status(run)["detail"]["problems"]
+
+    def _manifest(self, run, edit):
+        meta = json.loads((run / "run.json").read_text(encoding="utf-8"))
+        edit(meta["provenance"]["manifest"])
+        _write(run / "run.json", json.dumps(meta))
+
+    def test_disruptions_are_hashed_and_tampering_is_caught(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d), scenario_kw={"disruptions": [{"at_s": 1, "kind": "debug_kill", "client": 0}]})
+            self.assertIn("disruptions.ndjson", json.loads((run / "run.json").read_text())["provenance"]["manifest"])
+            self.assertEqual(self._status(run)["status"], analyze.PASS)
+            _write(run / "disruptions.ndjson", '{"kind": "debug_kill", "ok": true}\n')  # rewritten after the run
+            self.assertTrue(any("disruptions.ndjson changed" in p for p in self._problems(run)))
+
+    def test_an_omitted_manifest_entry_is_inconclusive(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            self._manifest(run, lambda m: m.pop("client-0/samples.ndjson"))
+            problems = self._problems(run)
+            self.assertTrue(any("client-0/samples.ndjson is not in the manifest (omitted" in p for p in problems), problems)
+        with tempfile.TemporaryDirectory() as d:  # an inventory file never written at all
+            run = _run_dir(Path(d))
+            (run / "server" / "metrics-end.txt").unlink()
+            self._manifest(run, lambda m: m.pop("server/metrics-end.txt"))
+            self.assertEqual(self._status(run)["status"], analyze.INCONCLUSIVE)
+
+    def test_a_scenario_with_disruptions_needs_their_record(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d), scenario_kw={"disruptions": [{"at_s": 1, "kind": "debug_kill", "client": 0}]})
+            (run / "disruptions.ndjson").unlink()
+            self._manifest(run, lambda m: m.pop("disruptions.ndjson"))
+            self.assertTrue(any("disruptions.ndjson is not in the manifest" in p for p in self._problems(run)))
+
+    def test_an_evidence_file_added_after_the_run_is_caught(self):
+        with tempfile.TemporaryDirectory() as d:
+            run = _run_dir(Path(d))
+            _write(run / "disruptions.ndjson", '{"kind": "debug_kill", "ok": true}\n')
+            self.assertTrue(any("disruptions.ndjson is not in the manifest (added after the run)" in p
+                                for p in self._problems(run)))
+
     def test_complete_matching_record_passes(self):
         with tempfile.TemporaryDirectory() as d:
             res = self._status(_run_dir(Path(d)))
             self.assertEqual(res["status"], analyze.PASS, res["detail"])
-            self.assertEqual(res["measured"]["evidence_files"], 3)
+            self.assertEqual(res["measured"]["evidence_files"], 14)  # 2 root + 5 server + 7 client
 
     def test_a_run_without_a_record_is_inconclusive(self):
         with tempfile.TemporaryDirectory() as d:
@@ -908,9 +954,12 @@ class DeliveryFixture:
     """A synthetic run: N clients receiving snapshots every 4 ticks, with the server writing them on
     a 60 Hz clock; individual snapshots can be delayed at one stage of the path."""
 
-    def __init__(self, root: Path, clients=2, snaps=200, c1=True, c2=True):
+    def __init__(self, root: Path, clients=2, snaps=200, c1=True, c2=True, drift=0.0, bin_jitter_ms=0):
         self.run = root / "20260101T000000Z-T-dlvr"
         self.clients, self.snaps, self.c1, self.c2 = clients, snaps, c1, c2
+        # drift: client clock rate relative to the server's (0.08 = client runs 8 % fast);
+        # bin_jitter_ms: extra delay that alternates every 3 s, so no clean delay floor exists.
+        self.drift, self.bin_jitter_ms = drift, bin_jitter_ms
         self.delays = {}  # (client or None, snap index) -> dict(stage=..., ms=...)
 
     def delay(self, idx, stage, ms, client=None, **kw):
@@ -949,7 +998,9 @@ class DeliveryFixture:
                     retrans += 3
                 wait = 40 if stage == "kcp" else 0
                 server.append(_c1_row(uid, tick, write, enqueue_lag=lag, wait_snd=wait, retrans=retrans))
-                recv = offset_us + tick * TICK_US + 30_000 + (extra if stage in ("server", "queue", "kcp", "path", "client") else 0)
+                jitter = self.bin_jitter_ms * 1000 * ((tick * TICK_US // 3_000_000) % 2)
+                recv = offset_us + int(tick * TICK_US * (1 + self.drift)) + 30_000 + jitter + (
+                    extra if stage in ("server", "queue", "kcp", "path", "client") else 0)
                 deliv.append(f"{tick},{recv if self.c2 else ''},{recv + 400},900,0,6,{k}")
                 ndjson.append(json.dumps({"t": (recv + 400) / 1e6, "tick": tick}))
                 render.append(f"{k},{offset_us + tick * TICK_US + 38_000},{tick - 6},{tick},{tick},{recv},8.0")
@@ -1045,6 +1096,44 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(b["one_way_rel_ms"]["p50"], 0.0)
             self.assertAlmostEqual(b["one_way_rel_ms"]["max"], 400.0, delta=0.1)
             self.assertEqual(self._only_gap(doc)["scope"], "UNKNOWN")  # no other client to compare with
+
+    def test_clock_rate_drift_is_fitted_and_removed(self):
+        # The WSL VM clock was measured 7.3 % slow against Windows (t06): test 7 % and 9 % both ways.
+        for drift in (0.07, 0.09, -0.07, -0.09):
+            with tempfile.TemporaryDirectory() as d:
+                doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, drift=drift)
+                                    .delay(450, "path", 400, client=0))
+                c = doc["clients"]["0"]
+                self.assertTrue(c["clock_fit"]["ok"], c["clock_fit"])
+                self.assertAlmostEqual(c["clock_fit"]["rate"], 1 + drift, delta=0.001)
+                owd = [b["one_way_rel_ms"] for b in c["buckets"] if b["one_way_rel_ms"]["n"]]
+                # 60 s of snapshots: uncorrected, the relative delay would sweep |drift| x 60 s = 4.2-5.4 s.
+                self.assertLess(max(o["p99"] for o in owd), 5.0, (drift, owd))
+                self.assertAlmostEqual(max(o["max"] for o in owd), 400.0, delta=5.0)
+                self.assertEqual(self._only_gap(doc)["class"], "PATH")
+
+    def test_server_durations_are_converted_to_client_time(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, drift=0.08))
+            b = doc["clients"]["0"]["buckets"][0]
+            self.assertAlmostEqual(b["server_send_gap_ms"]["p50"], SNAP_TICKS * TICK_US / 1000 * 1.08, delta=0.2)
+            self.assertEqual(doc["clients"]["0"]["server_durations"], "client time (rate-corrected)")
+
+    def test_a_poor_clock_fit_reports_one_way_delay_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as d:
+            doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, bin_jitter_ms=200))
+            c = doc["clients"]["0"]
+            self.assertFalse(c["clock_fit"]["ok"])
+            self.assertTrue(c["one_way_delay"].startswith("unavailable"))
+            self.assertTrue(all(b["one_way_rel_ms"]["p50"] is None for b in c["buckets"]))
+
+    def test_fit_clock_needs_enough_points(self):
+        from lab import delivery
+        self.assertFalse(delivery.fit_clock([(1, 2)] * 3)["ok"])
+        pts = [(k * 100_000, 5_000_000 + int(k * 100_000 * 1.08)) for k in range(200)]
+        fit = delivery.fit_clock(pts)
+        self.assertTrue(fit["ok"])
+        self.assertAlmostEqual(fit["rate"], 1.08, places=4)
 
     def test_cli_writes_delivery_files_where_asked(self):
         import contextlib
@@ -1886,6 +1975,84 @@ class ImageRevisionTests(unittest.TestCase):
             res = self._status(d, label_supported=False, image_revision=None)
             self.assertEqual(res["status"], analyze.PASS)
             self.assertEqual(res["measured"]["server_image_revision"], "label unsupported")
+
+
+class QualifiedVerdictTests(unittest.TestCase):
+    """R3-3: an informational breach (S07/S07P memory) never yields a clean PASS; R3-6: host load is
+    shown next to the verdict."""
+
+    def _memory_ev(self, slope_mib_per_min):
+        mem = next(a for a in scenarios.load("S07")["assertions"] if a["check"] == "memory_growth")
+        self.assertTrue(mem.get("informational"))
+        ev = _ev(clients=1)
+        ev["server"]["container"] = [{"st": k * 5.0, "mem_bytes": int((100 + slope_mib_per_min * k * 5 / 60) * 1024 * 1024)}
+                                     for k in range(12)]
+        ev["scenario"]["assertions"] = [dict(mem)]
+        return ev
+
+    def test_s07_memory_breach_makes_the_run_pass_with_warnings(self):
+        results = [r for r in analyze.evaluate(self._memory_ev(60.0)) if r["check"] == "memory_growth"]
+        self.assertEqual(results[0]["status"], analyze.INFO)
+        self.assertEqual(analyze.overall(results), analyze.PASS_WITH_WARNINGS)
+        self.assertEqual(analyze.qualifications(results)[0]["kind"], "informational_breach")
+        quiet = [r for r in analyze.evaluate(self._memory_ev(1.0)) if r["check"] == "memory_growth"]
+        self.assertEqual(analyze.overall(quiet), analyze.PASS)
+        self.assertEqual(analyze.overall(results + [{"status": analyze.FAIL}]), analyze.FAIL)
+        self.assertEqual(analyze.overall(results + [{"status": analyze.INCONCLUSIVE}]), analyze.INCONCLUSIVE)
+
+    def test_exit_codes_rank_warnings_below_fail_and_inconclusive(self):
+        import testlab as cli
+        from lab import report
+        self.assertEqual(report.EXIT_CODES[analyze.PASS_WITH_WARNINGS], 4)
+        self.assertEqual(cli._worst(["PASS", "PASS_WITH_WARNINGS"]), 4)
+        self.assertEqual(cli._worst(["PASS_WITH_WARNINGS", "INCONCLUSIVE"]), 2)
+        self.assertEqual(cli._worst(["PASS_WITH_WARNINGS", "FAIL"]), 1)
+        self.assertEqual(cli._worst(["PASS"]), 0)
+
+    def test_host_stalls_and_load_qualify_the_verdict_in_the_report(self):
+        from lab import report
+        ev = _ev(clients=2)
+        for c in ev["clients"]:
+            c["frames"] = [(5.0, 800.0)]  # one host-wide stall
+        ev["meta"] = {"run_id": "r", "provenance": {"host_quiet": {"load_start": {"cpu_load_pct": 72.0},
+                                                                   "load_end": {"cpu_load_pct": 10.0}}}}
+        ev["scenario"]["assertions"] = []
+        results = analyze.evaluate(ev)
+        q = analyze.qualifications(results)
+        self.assertEqual([x["kind"] for x in q], ["host", "host"])
+        self.assertIn("host-wide stall(s)", q[0]["text"])
+        self.assertIn("72 %", q[1]["text"])
+        with tempfile.TemporaryDirectory() as d:
+            ev["run_dir"] = Path(d)
+            for c in ev["clients"]:
+                c["dir"] = Path(d) / f"client-{c['index']}"
+            doc = report.write(Path(d), ev, results, analyze.overall(results), None)
+            self.assertEqual(len(doc["qualifications"]), 2)
+            md = (Path(d) / "report.md").read_text(encoding="utf-8")
+            self.assertLess(md.index("**Qualified by:**"), md.index("## Build and environment"))
+        ev["clients"][1]["frames"] = []
+        ev["meta"]["provenance"]["host_quiet"]["load_start"]["cpu_load_pct"] = 20.0
+        self.assertEqual(analyze.qualifications(analyze.evaluate(ev)), [])
+
+
+class ThresholdsDocTests(unittest.TestCase):
+    def test_thresholds_md_is_generated_and_current(self):
+        from lab import thresholds
+        doc = Path(__file__).resolve().parents[1] / "docs" / "THRESHOLDS.md"
+        self.assertEqual(doc.read_text(encoding="utf-8"), thresholds.render(),
+                         "testlab/docs/THRESHOLDS.md is stale: run python3 testlab/testlab.py thresholds --write")
+
+    def test_every_scenario_limit_is_listed_with_a_source(self):
+        from lab import thresholds
+        rows = thresholds.scenario_rows()
+        listed = {(sid, aid) for sid, aid, *_ in rows}
+        for sid in scenarios.list_ids():
+            for a in scenarios.load(sid)["assertions"]:
+                limits = [k for k in a if k not in ("id", "check", "title") and k not in thresholds.NOT_LIMITS
+                          and not k.startswith("requires_")]
+                if limits:
+                    self.assertIn((sid, a["id"]), listed)
+        self.assertTrue(all(r[5] for r in rows))
 
 
 if __name__ == "__main__":

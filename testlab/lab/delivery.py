@@ -17,9 +17,15 @@ Inputs (both optional; whatever is absent makes the answers that need it UNKNOWN
   time then falls back to `applied_us` or `t`, and the answers that need a true receive time
   (PATH) are UNKNOWN.
 
-Server and client are joined on (user_id, world_tick). The two clocks are never compared directly:
-one-way delay is `recv - write_end` relative to that client's minimum, which removes the clock
-offset (and leaves any drift, which over 5-minute buckets is small next to a 250 ms gap).
+Server and client are joined on (user_id, world_tick). The two clocks differ in offset AND rate: the
+server runs in the WSL VM, whose monotonic clock was measured 7.3 percent slow against Windows
+(.testlab-runs/t06/clock-drift-check.txt: WSL uptime / Windows elapsed = 0.927). So per client the
+harness fits recv = a + rate x write_end through the least-delayed snapshot of each time bin (the
+floor of the delay, where queueing is smallest; fit_clock). With a good fit, one-way delay is the
+residual above that line (offset and rate removed), and every server-side duration a class rule
+compares with a client gap (write gap, queue delay) is converted to client time by `rate`. With a
+poor or impossible fit, one-way delay is reported as unavailable, never as a number, and server
+durations are compared uncorrected (flagged in the output).
 
 Every client receive gap longer than `gap_ms` is classified, first match wins:
 - QUEUE: the snapshot waited in the server's send queue (enqueue -> write_start) for at least
@@ -181,9 +187,44 @@ def _overlaps(stalls, lo, hi, min_ms, slack_us):
 
 # --------------------------------------------------------------------------- classification
 
+def fit_clock(pairs: list, *, min_points: int = 5, bin_us: int = 1_000_000, tolerance_us: int = 50_000) -> dict:
+    """Clock relation between the server (x: write time, server us) and one client (y: receive time,
+    client us) from matched snapshots: least squares through the minimum-delay pair of each bin of
+    `bin_us` server time (bin width grows so there are at most 60 bins). ok only with at least
+    `min_points` bins and the 90th percentile of their residuals within `tolerance_us`."""
+    if len(pairs) < min_points * 2:
+        return {"ok": False, "reason": f"{len(pairs)} matched snapshots (need {min_points * 2})"}
+    pairs = sorted(pairs)
+    x0, span = pairs[0][0], pairs[-1][0] - pairs[0][0]
+    width = max(bin_us, span // 60 + 1)
+    best: dict = {}
+    for x, y in pairs:
+        k = (x - x0) // width
+        if k not in best or y - x < best[k][1] - best[k][0]:
+            best[k] = (x, y)
+    pts = list(best.values())
+    if len(pts) < min_points:
+        return {"ok": False, "reason": f"{len(pts)} time bins of {width / 1e6:.1f} s (need {min_points})"}
+    n = len(pts)
+    mx, my = sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n
+    den = sum((p[0] - mx) ** 2 for p in pts)
+    if den == 0:
+        return {"ok": False, "reason": "no spread in server time"}
+    rate = sum((p[0] - mx) * (p[1] - my) for p in pts) / den
+    offset = my - rate * mx
+    res = sorted(abs(p[1] - (offset + rate * p[0])) for p in pts)
+    p90 = res[min(len(res) - 1, int(0.9 * len(res)))]
+    out = {"rate": rate, "skew_pct": round((rate - 1) * 100, 3), "offset_us": offset, "bins": n,
+           "bin_s": round(width / 1e6, 2), "residual_p90_ms": round(p90 / 1000, 2)}
+    if p90 > tolerance_us:
+        return {**out, "ok": False, "reason": f"poor fit: residual p90 {p90 / 1000:.1f} ms > {tolerance_us / 1000:.0f} ms"}
+    return {**out, "ok": True}
+
+
 def classify_gap(gap: dict, srv: dict | None, stalls: list, recv_source: str, *, explain_fraction: float,
-                 slack_us: int) -> tuple[str, str, dict]:
-    """(class, reason, evidence) for one client receive gap between ticks a and b."""
+                 slack_us: int, rate: float = 1.0) -> tuple[str, str, dict]:
+    """(class, reason, evidence) for one client receive gap between ticks a and b. `rate` converts
+    server durations to client time (fit_clock); 1.0 when no fit is available."""
     a, b, gap_us = gap["tick_a"], gap["tick_b"], gap["gap_us"]
     large = explain_fraction * gap_us
     ev: dict = {}
@@ -198,11 +239,11 @@ def classify_gap(gap: dict, srv: dict | None, stalls: list, recv_source: str, *,
     if server and all(server):
         ra, rb = server
         between = [r for t, r in srv.items() if a < t <= b]
-        delays = [r["write_start_us"] - r["enqueue_us"] for r in between
+        delays = [(r["write_start_us"] - r["enqueue_us"]) * rate for r in between
                   if r.get("write_start_us") is not None and r.get("enqueue_us") is not None]
         queue_delay = max(delays) if delays else None
         if ra.get("write_start_us") is not None and rb.get("write_start_us") is not None:
-            write_gap = rb["write_start_us"] - ra["write_start_us"]
+            write_gap = (rb["write_start_us"] - ra["write_start_us"]) * rate
         ev.update({"server_write_gap_ms": None if write_gap is None else round(write_gap / 1000, 1),
                    "queue_delay_ms": None if queue_delay is None else round(queue_delay / 1000, 1),
                    "server_rows_between": len(between),
@@ -281,10 +322,12 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
     scopes = {k: 0 for k in SCOPES}
     for c in clients:
         srv = (trace or {}).get(c["user_id"]) if (trace is not None and c["user_id"]) else None
+        clock = fit_clock(_matched(c, srv)) if srv else {"ok": False, "reason": "no server trace"}
+        rate = clock["rate"] if clock["ok"] else 1.0
         classified = []
         for g in c["long"]:
             cls, why, evd = classify_gap(g, srv, c["stalls"], c["recv_source"],
-                                         explain_fraction=explain_fraction, slack_us=slack_us)
+                                         explain_fraction=explain_fraction, slack_us=slack_us, rate=rate)
             scope = _scope(g, c, clients, gap_ms)
             totals[cls] += 1
             scopes[scope] += 1
@@ -294,7 +337,10 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
         out_clients[str(c["index"])] = {
             "user_id": c["user_id"], "snapshots": len(c["snaps"]), "recv_source": c["recv_source"],
             "server_rows": len(srv) if srv else 0, "frames": len(c["stalls"]), "render_rows": len(c["render"]),
-            "buckets": _buckets(c, srv, bucket_of, gap_ms),
+            "clock_fit": {k: (round(v, 6) if isinstance(v, float) else v) for k, v in clock.items()},
+            "server_durations": "client time (rate-corrected)" if clock["ok"] else "server time (no clock fit)",
+            "one_way_delay": "available" if clock["ok"] else f"unavailable: {clock['reason']}",
+            "buckets": _buckets(c, srv, bucket_of, gap_ms, clock),
             "long_gaps": len(classified),
             "classes": {k: sum(1 for g in classified if g["class"] == k) for k in CLASSES},
             "scopes": {k: sum(1 for g in classified if g["scope"] == k) for k in SCOPES},
@@ -338,7 +384,20 @@ def _scope(g, c, clients, gap_ms):
     return "ALL-CLIENTS"
 
 
-def _buckets(c, srv, bucket_of, gap_ms):
+def _matched(c, srv):
+    """[(server write_end_us, client recv_us)] for the snapshots both sides recorded."""
+    out = []
+    for tick, recv, _, _ in c["snaps"]:
+        r = (srv or {}).get(tick)
+        sent = r and (r.get("write_end_us") if r.get("write_end_us") is not None else r.get("write_start_us"))
+        if sent is not None:
+            out.append((sent, recv))
+    return out
+
+
+def _buckets(c, srv, bucket_of, gap_ms, clock=None):
+    clock = clock or {"ok": False}
+    rate = clock["rate"] if clock.get("ok") else 1.0
     by: dict = {}
     for g in c["gaps"]:
         by.setdefault(bucket_of(g["tick_a"]), {"recv_gaps": [], "send_gaps": [], "owd": [], "rows": []})["recv_gaps"].append(
@@ -349,14 +408,16 @@ def _buckets(c, srv, bucket_of, gap_ms):
         for (ta, ra), (tb, rb) in zip(rows, rows[1:]):
             if ra.get("write_start_us") is not None and rb.get("write_start_us") is not None:
                 by.setdefault(bucket_of(tb), {"recv_gaps": [], "send_gaps": [], "owd": [], "rows": []})["send_gaps"].append(
-                    (rb["write_start_us"] - ra["write_start_us"]) / 1000.0)
+                    (rb["write_start_us"] - ra["write_start_us"]) * rate / 1000.0)
         for t, r in rows:
             by.setdefault(bucket_of(t), {"recv_gaps": [], "send_gaps": [], "owd": [], "rows": []})["rows"].append(r)
-        for tick, recv, _, _ in c["snaps"]:
-            r = srv.get(tick)
-            sent = r and (r.get("write_end_us") if r.get("write_end_us") is not None else r.get("write_start_us"))
-            if sent is not None:
-                one_way.append((tick, recv - sent))
+        if clock.get("ok"):
+            # Residual above the fitted clock line: offset and rate removed (fit_clock).
+            for tick, recv, _, _ in c["snaps"]:
+                r = srv.get(tick)
+                sent = r and (r.get("write_end_us") if r.get("write_end_us") is not None else r.get("write_start_us"))
+                if sent is not None:
+                    one_way.append((tick, recv - (clock["offset_us"] + clock["rate"] * sent)))
     for _, age, _, newest in c["render"]:
         if newest is not None:
             by.setdefault(bucket_of(newest), {"recv_gaps": [], "send_gaps": [], "owd": [], "rows": []}).setdefault(
@@ -376,7 +437,7 @@ def _buckets(c, srv, bucket_of, gap_ms):
             "server_send_gap_ms": _stats(b["send_gaps"]),
             "one_way_rel_ms": _stats(b["owd"]),
             "queue_depth": _stats([r.get("queue_depth") for r in rows]),
-            "queue_delay_ms": _stats([(r["write_start_us"] - r["enqueue_us"]) / 1000.0 for r in rows
+            "queue_delay_ms": _stats([(r["write_start_us"] - r["enqueue_us"]) * rate / 1000.0 for r in rows
                                       if r.get("write_start_us") is not None and r.get("enqueue_us") is not None]),
             "dropped_delta": _delta(rows, "dropped_oldest_total"),
             "kcp_retrans_delta": _delta(rows, "kcp_retrans_total"),
@@ -404,6 +465,8 @@ def markdown(doc: dict) -> str:
         lines += ["", f"## Client {idx} (`{c['user_id']}`)", "",
                   f"{c['snapshots']} snapshots (receive time from `{c['recv_source']}`), {c['server_rows']} server rows, "
                   f"{c['long_gaps']} gaps over the limit.", "",
+                  f"Clock fit (server write -> client receive): {_fit_text(c.get('clock_fit') or {})}. "
+                  f"One-way delay {c.get('one_way_delay')}; server durations in {c.get('server_durations')}.", "",
                   "| Bucket | client recv gap p50/p99/max ms | gaps > limit | server send gap p50/p99/max ms | "
                   "one-way rel p50/p99/max ms | queue depth p50/max | queue delay p99 ms | dropped | retrans | wait_snd p50/max | "
                   "render age p50/p99/max ms |",
@@ -419,6 +482,13 @@ def markdown(doc: dict) -> str:
             for g in sorted(c["gaps"], key=lambda x: -x["gap_ms"])[:20]:
                 lines.append(f"| {g['tick_a']}-{g['tick_b']} | {g['gap_ms']} | {g['class']} | {g['scope']} | {g['reason']} |")
     return "\n".join(lines) + "\n"
+
+
+def _fit_text(fit: dict) -> str:
+    if not fit.get("ok"):
+        return f"none ({fit.get('reason')})"
+    return (f"rate {fit['rate']:.5f} (skew {fit['skew_pct']:+.3f} %), {fit['bins']} bins of {fit['bin_s']} s, "
+            f"residual p90 {fit['residual_p90_ms']} ms")
 
 
 def _v(x):

@@ -73,7 +73,10 @@ fi
 
 echo "source: $src @ $(git -C "$src" rev-parse --short HEAD 2>/dev/null) ($(git -C "$src" status --porcelain 2>/dev/null | wc -l) uncommitted paths included as-is)"
 echo "run:    (cd <copy>/Tests~/Headless && $dotnet test ${sgl_args[*]:-} --logger 'trx;LogFileName=results.trx' --results-directory results)"
-(cd "$work/Tests~/Headless" && timeout 900 "$dotnet" test "${sgl_args[@]}" --logger 'trx;LogFileName=results.trx' --results-directory results 2>&1 | tail -15)
+# The test command's own status decides too: a failed or timed-out run can leave a TRX (an earlier
+# partial one, or counters written before the crash) that alone would read as a pass.
+(cd "$work/Tests~/Headless" && timeout "${NETCODE_HEADLESS_TIMEOUT:-900}" "$dotnet" test "${sgl_args[@]}"   --logger 'trx;LogFileName=results.trx' --results-directory results 2>&1 | tail -15; exit "${PIPESTATUS[0]}")
+test_rc=$?
 
 python3 - "$work/Tests~/Headless/results" <<'PY'
 import glob, sys, xml.etree.ElementTree as ET
@@ -89,3 +92,7 @@ for f in files:
 print("headless tests: discovered={total} executed={executed} passed={passed} failed={failed} skipped/notExecuted={notExecuted}".format(**tot))
 sys.exit(0 if tot["executed"] > 0 and tot["failed"] == 0 else 1)
 PY
+counters_rc=$?
+if [ "$test_rc" -eq 124 ]; then echo "FAIL: dotnet test timed out after ${NETCODE_HEADLESS_TIMEOUT:-900} s"; exit 1; fi
+if [ "$test_rc" -ne 0 ]; then echo "FAIL: dotnet test exited $test_rc"; exit 1; fi
+exit "$counters_rc"

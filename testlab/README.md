@@ -16,7 +16,9 @@ python3 testlab/testlab.py sweep S07 --levels 0,25,50,100,150,200   # load sweep
 python3 testlab/testlab.py run S09 --duration 3600                  # 1-hour soak
 ```
 
-Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error.
+Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error, `4` PASS_WITH_WARNINGS.
+
+**PASS_WITH_WARNINGS** is the outcome when every assertion passed but an `informational` one would have failed (today the S07/S07P memory slope, informational because the bot ramp allocates by design). It is never a clean PASS. The report lists it, and host load, under **Qualified by** next to the verdict: host-wide stalls seen in the run, or CPU load of 50 % or more at start or end. Host qualifications do not change the outcome (the timing checks a stall explains are already INCONCLUSIVE); they say the timing came from a busy host.
 
 `run`, `suite` and `sweep` stop the scratch stack when they finish: on success, failure, harness error and Ctrl-C. Pass `--keep-stack` to leave it running for the next invocation. Players are stopped at the end of every run in all of these cases.
 
@@ -161,6 +163,8 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 
 What each readiness area is covered by, and the gaps (with the client and server hooks they need): [`docs/COVERAGE.md`](docs/COVERAGE.md).
 
+Every limit and grace window, with its derivation or marked "policy, unvalidated": [`docs/THRESHOLDS.md`](docs/THRESHOLDS.md) (generated: `testlab.py thresholds --write`).
+
 ## Adding a scenario
 
 Copy a file in `scenarios/` and change these fields:
@@ -200,6 +204,8 @@ When a run ends, `run.json` gets a `provenance` record (`lab/provenance.py`):
 
 Every evaluation appends the `provenance` assertion. It is PASS only when every field is present, the run id is the directory's own, the scenario and every evidence file still hash as recorded, and every client summary names this run. Anything else is INCONCLUSIVE, so a run copied under another id, re-used evidence, or a run without a record (runs before this change) cannot grade PASS. `results.json` carries an `analysis` block (run id, run directory, time, factory commit, provenance status).
 
+The manifest covers every evidence file: `scenario.json`, `redis.json`, `disruptions.ndjson` and everything under `client-*/`, `server/` and `bots/`. Each scenario has an expected inventory (`provenance.expected_inventory`: the server probe files, each client's recorder outputs, plus `disruptions.ndjson`, `bots/loadtest.json` or `server/snapshot-trace.csv` when the scenario produces them). An inventory file missing from the manifest, an evidence file not in it, or a hash mismatch makes `provenance` INCONCLUSIVE.
+
 ## Snapshot delivery path (`analyze --delivery`, rpg-mmo-server#473)
 
 ```
@@ -210,6 +216,8 @@ python3 testlab/testlab.py analyze --delivery <run_dir> [--out DIR] [--gap-ms 25
 With `snapshot_trace` the stack sets `GAMESERVER_SNAPSHOT_TRACE=/tmp/testlab-snapshot-trace.csv` in the scratch game server, restarts it so the trace starts with the run, and copies the file to `server/snapshot-trace.csv` at the end. The compose file must forward `GAMESERVER_SNAPSHOT_TRACE`; the run refuses to start otherwise.
 
 The analysis (`lab/delivery.py`) joins the server trace (contract C1) and the client trace (contract C2: `delivery.csv`, `render.csv`) on (user id, world tick). Per client and per 5-minute bucket it reports: server send inter-gap, client receive inter-gap, one-way delay relative to that client's minimum (no clock offset), queue depth and queue delay, dropped, KCP retransmissions, `kcp_wait_snd`, and render snapshot age. Every client receive gap over 250 ms is classified SERVER_LATE, QUEUE, CLIENT, KCP, PATH or UNKNOWN, and ALL-CLIENTS or SINGLE-CLIENT; the rules are in the module docstring. Missing inputs make the classes that need them UNKNOWN and the output INCOMPLETE (exit 2). It is diagnostic: it never grades a run PASS. Without C2 the receive time falls back to the main-thread `t` of `snapshots.ndjson`, so a main-thread stall shows up as CLIENT.
+
+**Clock rate.** The server runs in the WSL VM, whose monotonic clock was measured 7.3 % slow against Windows (`.testlab-runs/t06/clock-drift-check.txt`). Subtracting a minimum removes offset, not rate: over a 5-minute bucket a 7-9 % rate error is 21-27 s. So per client the analysis fits receive time = a + rate x write time through the least-delayed snapshot of each time bin, reports the fit (`clock_fit`: rate, skew, bins, residual), takes one-way delay as the residual above that line, and converts the server durations the classes compare (write gap, queue delay, send gap) to client time. With fewer than 5 bins or a residual p90 above 50 ms the one-way delay is reported as unavailable, never as a number.
 
 ## Failure triage
 

@@ -6,9 +6,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_RESULT, util
+from . import SCHEMA_RESULT, analyze, util
 
-EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2}
+EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2, "PASS_WITH_WARNINGS": 4}
 
 
 def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_error: str | None,
@@ -27,6 +27,8 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
                      "provenance": None if prov is None else prov["status"]},
         "scenario": {"id": sc.get("id"), "version": sc.get("version"), "title": sc.get("title")},
         "outcome": outcome,
+        # Shown next to the verdict: informational breaches and host load (analyze.qualifications).
+        "qualifications": analyze.qualifications(results, meta),
         "exit_code": EXIT_CODES.get(outcome, 2),
         "harness_error": harness_error,
         "repos": meta.get("repos"),
@@ -74,6 +76,10 @@ def _markdown(doc: dict, ev: dict) -> str:
         "",
         f"**Outcome: {doc['outcome']}** (exit {doc['exit_code']}) - scenario `{sc.get('id')}` v{sc.get('version')}: {sc.get('title')}",
         "",
+    ]
+    if doc["qualifications"]:
+        lines += ["**Qualified by:**", ""] + [f"- {q['kind']}: {q['text']}" for q in doc["qualifications"]] + [""]
+    lines += [
         f"Analysis of run `{doc['analysis']['run_dir_name']}` at {doc['analysis']['analyzed_utc']} by factory "
         f"`{(doc['analysis']['factory_sha'] or 'unknown')[:10]}`; provenance **{doc['analysis']['provenance']}**.",
         "",

@@ -16,7 +16,8 @@
 run, suite and sweep stop the scratch stack when they finish (also on failure and Ctrl-C) unless
 --keep-stack is given.
 
-Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness/usage error. Docs: testlab/README.md.
+Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness/usage error, 4 PASS_WITH_WARNINGS (an
+informational assertion would have failed). Docs: testlab/README.md.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, delivery, leakcheck, report, runner, scenarios, stack, util  # noqa: E402
+from lab import analyze, clients, config, delivery, leakcheck, report, runner, scenarios, stack, thresholds, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
+THRESHOLDS_DOC = Path(__file__).resolve().parent / "docs" / "THRESHOLDS.md"
 
 
 def _path(arg: str) -> Path:
@@ -54,10 +56,13 @@ def _cfg(args) -> config.LabConfig:
 
 
 def _worst(outcomes: list[str]) -> int:
+    """FAIL 1 > INCONCLUSIVE 2 > PASS_WITH_WARNINGS 4 > PASS 0."""
     if "FAIL" in outcomes:
         return 1
     if "INCONCLUSIVE" in outcomes or not outcomes:
         return 2
+    if "PASS_WITH_WARNINGS" in outcomes:
+        return 4
     return 0
 
 
@@ -178,6 +183,18 @@ def cmd_analyze(args) -> int:
     report.write(run_dir, ev, results, outcome, harness_error, out_dir=out_dir)
     print(f"{outcome}: {out_dir / 'report.md'}")
     return report.EXIT_CODES.get(outcome, 2)
+
+
+def cmd_thresholds(args) -> int:
+    """Print (or --write) testlab/docs/THRESHOLDS.md, generated from lab/thresholds.py and the scenarios."""
+    text = thresholds.render()
+    if args.write:
+        with open(THRESHOLDS_DOC, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        print(f"written: {THRESHOLDS_DOC}")
+    else:
+        print(text)
+    return 0
 
 
 def cmd_leak_check(args) -> int:
@@ -338,6 +355,9 @@ def main(argv=None) -> int:
     a.add_argument("--gap-ms", type=float, default=250.0)
     a.add_argument("--bucket-s", type=float, default=300.0)
     a.set_defaults(fn=cmd_analyze)
+    th = sub.add_parser("thresholds")
+    th.add_argument("--write", action="store_true", help="write testlab/docs/THRESHOLDS.md")
+    th.set_defaults(fn=cmd_thresholds)
     lc = sub.add_parser("leak-check")
     lc.add_argument("player", help="player exe, build directory, StandaloneWindows64, <Name>_Data or Managed folder")
     lc.add_argument("--expect-testlab", action="store_true", help="the build SHOULD contain TestLab (a testlab build)")

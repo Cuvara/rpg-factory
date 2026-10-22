@@ -98,10 +98,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     (stack.sh stamps it into `org.opencontainers.image.revision`); provenance records the running
     image's label and is INCONCLUSIVE when it is missing or differs from the recorded server SHA.
     Server trees whose stack.sh predates the variable are recorded as `label unsupported`.
+  - **Independent review R3 fixes.** Provenance hashes every evidence file (now including
+    `disruptions.ndjson`) and checks each scenario's expected inventory: an omitted, unrecorded
+    or changed file is INCONCLUSIVE. `analyze --delivery` fits each client's clock rate against
+    the server's (the WSL VM clock runs about 7 % slow) and reports one-way delay as unavailable
+    when the fit is poor. A run whose informational assertion would fail (S07/S07P memory) is
+    PASS_WITH_WARNINGS (exit 4), never PASS; the report shows that and host load under
+    "Qualified by". `testlab/docs/THRESHOLDS.md` (generated, kept current by a test) lists every
+    limit with its source or "policy, unvalidated".
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
   (`tests/netcode-headless.test.sh`, in run-all).
+- `netcode-headless.sh` fails when `dotnet test` fails or times out, whatever TRX it left
+  (`NETCODE_HEADLESS_TIMEOUT`, default 900 s).
   - Paths given to the CLI in Git Bash form (`/c/...`) work with Windows Python. The README states
     which commands run in Git Bash and which also run in WSL, and that `build-client` regenerates
     the scene only with `--rebuild-scene`.
