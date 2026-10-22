@@ -5,6 +5,24 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [Unreleased]
 
 ### Fixed
+- **Skill order under advisory-only hooks (1.0.3 dogfood regression, `tech-go` and `tech-dots`).** With the
+  Skill hook advisory-only, a model could load a tech skill before its lead; dogfood reported it as a failure
+  and nothing showed whether the session corrected itself. The hook still never blocks or asks:
+  - a tech skill requested **before factory-core** is auto-corrected: the call loads `rpg-factory:factory-core`
+    instead (`updatedInput`; Claude Code honours it for the Skill tool - verified in a headless session, not
+    documented for Skill), with an advisory naming the route command and the leads. Once per session (factory-core
+    is then recorded), so it cannot repeat or loop. If a Claude Code version ignores `updatedInput`, the tech skill
+    loads and the advisory still applies;
+  - requested **after factory-core but before its lead**, it runs with an actionable advisory ("this call
+    continues", the route command, the leads). No auto-correction there: two to four leads use each tech skill and
+    only routing knows which applies.
+  - every advisory is logged to the session's `ADVISORIES` file, and `SKILLS` records what actually loaded.
+  - `tests/dogfood.sh` now grades what loaded (the "Launching skill" results, so an auto-corrected call counts as
+    factory-core) and passes a tech-first session only with evidence: the hook's advisory for it, one of its leads
+    loading afterwards, and a finished session. New scenario `tech-first` forces the auto-correction. The mode check
+    reads the real session state path (`fstate.scratch()`, not `/tmp/rpg-factory`).
+  - regression cases in `git-guard.test.sh` (early go-backend, early unity-dots, normal order, no second
+    auto-correction, never a permission decision, the hook always exits 0) and `session-state.test.sh`.
 - The README "Version" line still said 1.0.0 through 1.0.1-1.0.3; `run-all.sh`'s version check now covers it
   (VERSION == plugin.json == marketplace == CHANGELOG section == README).
 

@@ -124,9 +124,11 @@ def mode_from_text(text):
 def skill_hook(payload):
     """PreToolUse(Skill): when a Factory skill is invoked with an explicit mode in its arguments ("plan only",
     "mode: validate"), record it - so the mode holds even if the model never runs the Route command.
-    Also keeps tech skills (registry kind "tech") behind their leads: a tech skill invoked before one of its
-    `used_by` skills ran in this session gets an advisory (it still runs - 1.0.3: hooks never block), so its
-    "how it works" does not replace routing, rules and gates."""
+    Also keeps tech skills (registry kind "tech") behind their leads, without ever blocking (1.0.3: hooks are
+    advisory only): requested before factory-core, the call is auto-corrected to factory-core (updatedInput,
+    once per session); after factory-core but before one of its `used_by` leads, it runs with an advisory
+    naming the leads (only routing knows which one applies). Each advisory is logged to the session's
+    ADVISORIES file."""
     ti = payload.get("tool_input") or {}
     name = str(ti.get("skill", ""))
     if not name.startswith("rpg-factory:"):
@@ -135,21 +137,42 @@ def skill_hook(payload):
     if m in MODES:
         open(os.path.join(state_dir(payload), "MODE"), "w", encoding="utf-8").write(m)
     short = name.split(":", 1)[1]
-    seen_file = os.path.join(state_dir(payload), "SKILLS")
+    sd = state_dir(payload)
+    seen_file = os.path.join(sd, "SKILLS")
     seen = set((read(seen_file) or "").split())
     spec = ((load_registry() or {}).get("skills") or {}).get(short) or {}
     leads = [s for s in spec.get("used_by") or [] if isinstance(s, str)]
+    loads = short
     if spec.get("kind") == "tech" and leads and not seen.intersection(leads):
         root = PLUGIN_ROOT.replace("\\", "/").rstrip("/")
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": (
-                f"rpg-factory advisory (high): `{short}` is a supporting tech skill and should not run first. Route the "
-                f"task (`bash \"{root}/scripts/factory-context.sh\" --mode <mode> --repo <key> --paths <files>`), invoke "
-                f"the lead it prints - for {short} one of: " + ", ".join(f"rpg-factory:{s}" for s in leads)
-                + f" - and use rpg-factory:{short} as supporting context.")}}))
+        route = f"`bash \"{root}/scripts/factory-context.sh\" --mode <mode> --repo <key> --paths <files>`"
+        lead_list = ", ".join(f"rpg-factory:{s}" for s in leads)
+        out = {"hookEventName": "PreToolUse"}
+        if "factory-core" not in seen:
+            # auto-correct, never block: the one safe target is factory-core (it routes and names the real lead).
+            # The Skill tool honours updatedInput (verified 2026-10-22, not documented for Skill). Once per
+            # session: factory-core is recorded below, so this branch cannot repeat and cannot loop.
+            out["updatedInput"] = dict(ti, skill="rpg-factory:factory-core")
+            loads = "factory-core"
+            out["additionalContext"] = (
+                f"rpg-factory advisory (high): `{short}` is a supporting tech skill and was requested before "
+                f"factory-core, so this call loads rpg-factory:factory-core instead (auto-corrected; nothing is "
+                f"blocked). Next: route the task ({route}), invoke the lead it prints - for {short} one of: "
+                f"{lead_list} - then invoke rpg-factory:{short} again as supporting context.")
+            event = f"{short} autocorrect factory-core"
+        else:
+            # factory-core ran but no lead: several leads can own this technology and only routing knows which,
+            # so warn and let the call run (1.0.3: hooks never block)
+            out["additionalContext"] = (
+                f"rpg-factory advisory (high): `{short}` is a supporting tech skill and no lead skill has run yet. "
+                f"This call continues. Next: route the task ({route}) and invoke the lead it prints - for {short} one "
+                f"of: {lead_list} - its rules, gates and validation apply; use rpg-factory:{short} as supporting context.")
+            event = f"{short} warn lead-missing"
+        with open(os.path.join(sd, "ADVISORIES"), "a", encoding="utf-8") as fh:
+            fh.write(event + "\n")  # evidence for tests and dogfood: what the hook told the session
+        print(json.dumps({"hookSpecificOutput": out}))
     with open(seen_file, "a", encoding="utf-8") as fh:
-        fh.write(short + "\n")
+        fh.write(loads + "\n")  # the skill that actually loads (factory-core when auto-corrected)
     return 0
 
 
