@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-10-22
+
+Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay
+advisory-only and never block; nothing asks for approval. Fixes: tag/push/destructive commands the guard missed
+(git-bash `/c/` paths, shell blocks and functions, heredocs read by a shell, `gh --repo`), a missing or failing hook
+script can no longer return Claude Code's blocking exit code, atomic and lossless session state and evidence under
+concurrency, absolute `--paths` routing on Windows, stale-install detection, workspace worktrees in file-guard, and a
+pre-tag `scripts/release-check.py`. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin
+update rpg-factory@rpg-factory`) and start a new session. Evidence stored by 1.0.4 shows as NOT_RUN once (new
+workspace key). No command-line or registry changes for users.
+
 ### Changed
 - **Release policy wording matches practice.** The docs, skills, registry rule `no-tags`, snapshot header and guard
   advisories said agents never tag, while 1.0.4 was tagged and released by an agent on the user's explicit
