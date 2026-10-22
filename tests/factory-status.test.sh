@@ -128,6 +128,15 @@ expect "S13 fresh evidence -> PASS on the current tree" 'any(.evidence.server[];
 echo "// edit" >> "$S/backend/shared/messages/messages.go"; s=$(status)
 expect "S13 edit after the run -> STALE" 'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "STALE")' "$s"
 gc "$S" checkout -q -- backend/shared/messages/messages.go
+# valid JSON of the wrong shape next to real evidence is skipped or graded, never a crash (1.0.5)
+EV=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1] + '/scripts/lib'); import evidence; print(evidence.repo_dir_for(sys.argv[2], 'server'))" "$ROOT" "$WS")
+printf '{"identity":"x"}' > "$EV/bad__a.json"; printf '[1]' > "$EV/bad__b.json"; printf '{"identity":{"tree":"t"}}' > "$EV/bad__c.json"
+printf '{"identity":{},"state":"PASS","definition":[1],"scopes":{"x":1}}' > "$EV/bad__d.json"
+s=$(status); rc=$?
+expect "S13 wrong-shape evidence files: status still runs, the real record still graded" \
+  'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "PASS") and ([.evidence.server[] | select(.state == "PASS")] | length) == 1' "$s"
+[ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  wrong-shape evidence: exit 0"; } || { fail=$((fail + 1)); echo "FAIL  wrong-shape evidence: exit $rc"; }
+rm -f "$EV"/bad__*.json
 
 # exit codes
 python3 -B "$ROOT/scripts/factory-status.py" >/dev/null; rc=$?

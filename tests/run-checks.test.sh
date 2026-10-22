@@ -98,5 +98,58 @@ sout=$(sts); sexp t-scoped PASS "scoped check fresh"
 echo "# unrelated" >> "$S/backend/deploy/d.yaml"; sout=$(sts); sexp t-scoped PASS "edit outside the check's dependency closure"
 echo "package shared // dependency edit" > "$S/backend/shared/s.go"; sout=$(sts); sexp t-scoped STALE "edit in a module the check's module depends on"
 
+# ---- 1.0.5 robustness
+okk() { pass=$((pass + 1)); echo "PASS  $1"; }; nok() { fail=$((fail + 1)); echo "FAIL  $1"; }
+snap() { find "$TMP/state" -type f | sort; }
+# --dry-run records nothing: no run record, no evidence, no log
+before=$(snap); python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --dry-run --json >/dev/null
+[ "$before" = "$(snap)" ] && okk "--dry-run writes nothing to the state root" || nok "--dry-run wrote: $(diff <(echo "$before") <(snap) | head -5)"
+# valid JSON of the wrong shape is no evidence: NOT_RUN, never a crash
+EV=$(python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import evidence; print(evidence.repo_dir_for(sys.argv[2], 'server', create=False))" "$P/scripts/lib" "$WS")
+for bad in '{"identity":"x"}' '[1]' '{"identity":{"tree":"x"}}' '"str"' '{"identity":{},"state":7}'; do
+  printf '%s' "$bad" > "$EV/server.gateway__t-pass.json"
+  sout=$(sts 2>&1); src=$?
+  if jq -e . >/dev/null 2>&1 <<<"$sout" && [ "$(sget t-pass)" = NOT_RUN ] && [ $src -le 1 ]; then okk "wrong-shape evidence $bad -> NOT_RUN, no crash"
+  else nok "wrong-shape evidence $bad: rc=$src ${sout:0:200}"; fi
+done
+# a stored record is replaced atomically: a reader polling during 40 rewrites never sees a missing or half record
+python3 -B - "$P/scripts/lib" "$WS" <<'PY' && okk "evidence store vs concurrent reader: never a torn record" || nok "torn evidence record"
+import os, subprocess, sys, time
+sys.path.insert(0, sys.argv[1]); import evidence
+res = {"module": "server.gateway", "check": "t-race", "state": "PASS", "timestamp": "20260101T000000", "identity": {"tree": "t", "head": "h"}}
+evidence.store(sys.argv[2], "server", res, "x" * 20000)
+code = ("import sys; sys.path.insert(0, %r); import evidence\nres = %r\n"
+        "for i in range(40): evidence.store(%r, 'server', res, 'y' * 200000)\n") % (sys.argv[1], res, sys.argv[2])
+w = subprocess.Popen([sys.executable, "-B", "-c", code])
+misses = 0
+while w.poll() is None:
+    if evidence.latest(sys.argv[2], "server", "server.gateway", "t-race") is None:
+        misses += 1
+w.wait()
+print("misses", misses) if misses else None
+sys.exit(1 if misses or w.returncode else 0)
+PY
+# log names are unique per run (same second, parallel) and only the newest 20 per check are kept
+python3 -B - "$P/scripts/lib" "$WS" <<'PY' && okk "logs: unique per store, pruned to the newest 20, latest log kept" || nok "log naming / pruning"
+import os, sys
+sys.path.insert(0, sys.argv[1]); import evidence
+res = {"module": "server.gateway", "check": "t-prune", "state": "PASS", "timestamp": "20260101T000000", "identity": {"tree": "t"}}
+logs = [evidence.store(sys.argv[2], "server", res, f"run {i}") for i in range(25)]
+d = os.path.dirname(logs[-1])
+mine = [f for f in os.listdir(d) if f.startswith("server.gateway__t-prune-")]
+other = [f for f in os.listdir(d) if f.startswith("server.gateway__t-pass-")]
+rec = evidence.latest(sys.argv[2], "server", "server.gateway", "t-prune")
+ok = len(set(logs)) == 25 and len(mine) == 20 and os.path.exists(rec["log"]) and rec["log"] == logs[-1] and other
+print(len(set(logs)), len(mine), rec and rec.get("log"), len(other)) if not ok else None
+sys.exit(0 if ok else 1)
+PY
+ls "$TMP"/state/evidence/*/runs/server-*-*-*.json >/dev/null 2>&1 && okk "run record names carry a unique suffix" || nok "run record name"
+# the workspace key is the case-folded real path: C:/X and c:\x share evidence on Windows
+if [ -n "$RPGF_WINDOWS" ]; then
+  python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate; w = sys.argv[2]; sys.exit(0 if fstate.workspace_key(w) == fstate.workspace_key(w.upper().replace('/', '\\\\')) else 1)" "$P/scripts/lib" "$WS" \
+    && okk "workspace key ignores case and slash style" || nok "workspace key is case-sensitive"
+  sout=$(RPG_FACTORY_WORKSPACE="$(tr '[:lower:]' '[:upper:]' <<<"$WS")" sts); sexp t-scoped STALE "same evidence through an upper-cased RPG_FACTORY_WORKSPACE"
+fi
+
 total=$((pass + fail)); echo "run-checks tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
