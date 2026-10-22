@@ -41,7 +41,7 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: a
 
 ## Pending (cross-repo / release)
 - `factory-status.py` pending items this task created or left: <item -> owning skill> | none
-- Release state: <READY_TO_TAG repo vX.Y.Z (lead tags) | n/a>
+- Release state: <READY_TO_TAG repo vX.Y.Z (lead tags) | tagged vX.Y.Z + release URL (authorized in this task) | n/a>
 
 ## Verification notes
 - Expected vs observed for any measured number.

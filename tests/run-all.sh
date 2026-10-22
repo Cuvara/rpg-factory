@@ -55,6 +55,15 @@ rver=$(sed -n 's/^Version \([0-9][0-9.]*\) (see `VERSION`).*/\1/p' README.md)
 { [ "$ver" = "$fver" ] && [ -z "$mver" -o "$mver" = "$ver" ] && grep -q "^## \[$ver\]" CHANGELOG.md && [ "$rver" = "$ver" ]; } \
   && ok "version: VERSION == plugin.json == marketplace == CHANGELOG section == README ($ver)" \
   || bad "version consistency" "VERSION=$fver plugin=$ver marketplace=$mver README=${rver:-none} changelog section missing?"
+# release policy wording: tags and releases are the lead's by default and the agent's only with explicit release
+# authorization in the current task - no authoritative text may state the absolute "agents never tag" rule again
+policy_files=(.claude/CLAUDE.md README.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
+              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/context.py)
+absolute=$(grep -nE -i "agents never tag|never create the tag|tags are never (done|created) by agents|never tag, never publish|; never tag\b" "${policy_files[@]}" 2>/dev/null)
+missing=$(for f in .claude/CLAUDE.md README.md registry.json skills/factory-core/references/git-safety.md skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md; do
+  grep -qiE "explicit(ly)? (release authorization|authoriz)" "$f" || echo "$f"; done)
+[ -z "$absolute$missing" ] && ok "release policy: default READY_TO_TAG, tag/release only with explicit authorization (${#policy_files[@]} files)" \
+  || bad "release policy wording" "absolute 'never tag' text: ${absolute:-none}; no authorization rule in: ${missing:-none}"
 [ -f "skills/factory-core/SKILL.md" ] && head -5 skills/factory-core/SKILL.md | grep -q '^name: factory-core$' \
   && ok "skill: factory-core frontmatter name" || bad "skill: factory-core frontmatter name"
 for ref in $(grep -o 'references/[a-z-]*\.md' skills/factory-core/SKILL.md | sort -u); do

@@ -318,7 +318,7 @@ def render(snap, reg, args):
     add("**Rules:** " + "; ".join(f"**{g['id']}** {g['rule']}" if args["full"] else f"**{g['id']}**" for g in reg["global_rules"])
         + ("" if args["full"] else " (full text: `--full` or registry `global_rules`)"))
     add("**Human gates:** " + ", ".join(g["id"] + (" (deny)" if g.get("decision") == "deny" else "") for g in reg["human_gates"])
-        + " - agents never tag; stop at READY_TO_TAG.")
+        + " - no tag or release without explicit release authorization in this task; otherwise stop at READY_TO_TAG.")
     if snap.get("services"):
         add("**Services:** " + ", ".join(f"`{sid}` {'reachable' if s['reachable'] else 'not reachable'} ({s['probe']})"
                                          for sid, s in snap["services"].items()))

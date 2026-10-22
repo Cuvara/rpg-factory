@@ -68,11 +68,12 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    why every skill was or was not selected.
 5. **Branch (M).** On a protected branch, create `<type>/<area>/<topic>` from the default branch
    before committing; reuse the **same topic** in every repo of a cross-repo task (factory-status
-   links them). Commit, push, PR, merge are **H** (only on request); tags are never done by agents.
+   links them). Commit, push, PR, merge are **H** (only on request); tags and releases only with the user's
+   explicit release authorization in this task (`references/git-safety.md` rule 5).
 6. **Plan (O/M).** Mandatory across modules, contracts or generated paths.
 7. **Implement (M).** Requested scope only; module rules; generated paths only via their generator.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
-   both sides of contracts, `.meta` files, version bump (never a tag).
+   both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
 9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
    The runner executes and grades the checks; its table and evidence are the only acceptable
    evidence. Evidence is bound to the tree it ran on: after any further edit, `--status` shows it
@@ -81,7 +82,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 11. **Review (O).** Non-trivial diffs: `/code-review`, then the lead's review checklist and the review
     file of every `routing.tech` skill that has one (e.g. the `unity-dots` ECS review checklist).
 12. **Report (M).** `references/report.md`, including the runner table and routing. A release
-    ends at **READY_TO_TAG** - the lead creates the tag.
+    ends at **READY_TO_TAG** - the lead creates the tag, unless the user explicitly authorized the release in this task.
 
 ## Validation states (from run-checks.py)
 

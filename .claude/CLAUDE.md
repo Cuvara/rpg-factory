@@ -34,7 +34,11 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   place (what is checked out is what sessions run); the install record only updates on a version
   change: `claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`,
   restart, then `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
-  Never create the tag - the maintainer does (READY_TO_TAG).
+  Tag and GitHub release: without explicit release authorization from the user in the current task, stop at
+  READY_TO_TAG - the maintainer tags and publishes. When the user explicitly authorizes the release in the current
+  task, perform the authorized merge, version bump, annotated tag (`vX.Y.Z`, message `rpg-factory X.Y.Z`, on the
+  verified merge commit) and GitHub release yourself, within that scope and only after `run-all.sh --release` and
+  dogfood pass on that exact commit. Never move, delete or reuse a tag, and never bypass a failing check.
 - Point-in-time values go in registry `facts[]` with a probe, never in skill prose.
 - Registry facts must be verified against the product repos (file paths, CI workflow
   contents, run logs), not copied from docs that may be stale.

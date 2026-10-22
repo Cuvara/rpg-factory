@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+- **Release policy wording matches practice.** The docs, skills, registry rule `no-tags`, snapshot header and guard
+  advisories said agents never tag, while 1.0.4 was tagged and released by an agent on the user's explicit
+  authorization. They now say: without explicit release authorization from the user in the current task, stop at
+  READY_TO_TAG and the lead tags; with it, perform exactly the authorized merge, version, tag and release steps after
+  the release checks pass on the tagged commit (never move, delete or reuse a tag). No behaviour change: the guard
+  flags the same commands at the same advisory level, nothing blocks or asks. `run-all.sh` fails if the absolute
+  "agents never tag" wording returns or a policy file drops the authorization rule.
+
 ## [1.0.4] - 2026-10-22
 
 Fix: tech skills stay behind their lead skills under the advisory-only hooks of 1.0.3, still without blocking or

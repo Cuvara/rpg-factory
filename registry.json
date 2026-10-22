@@ -319,7 +319,7 @@
     },
     {
       "id": "no-tags",
-      "rule": "Agents never create or push tags in ANY workspace repo (v*, sgl-v*, core-baseline-*). Tags are release actions of the lead. Skills stop at 'ready to tag <repo> <tag>' with evidence; the git guard flags tag creation and tag pushes (advisory high).",
+      "rule": "Without explicit release authorization from the user in the current task, agents create or push no tag in any workspace repo (v*, sgl-v*, core-baseline-*) and publish no release: skills stop at 'ready to tag <repo> <tag>' with evidence and the lead tags. When the user explicitly authorizes the release in the current task, the agent performs the authorized merge, version, tag and release steps within that scope, after the release checks pass on the tagged commit. The git guard flags tag creation, tag pushes and releases (advisory high) either way.",
       "source": "rpg-mmo-server/backend/TEAM.md; user decision 2026-09-30 (package repos)"
     },
     {
