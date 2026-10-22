@@ -175,10 +175,21 @@ def _inconclusive(why, *, source, sampling="n/a", artifacts=None):
 
 
 def _user_ids(ev) -> list:
+    """Each client's user id: summary.json, else status.json, else the last `in_world` event, else the
+    id the orchestrator saw at join (run.json clients.N.first_user_id). A client that left with the
+    quit action writes summary/status AFTER NetworkClient.Disconnect(), when NetworkClient.UserId
+    (Netcode Runtime/Client/NetworkClient.cs:215, derived from the released session) is already
+    empty - the S08G runs 20261022T194023Z-S08G-zvjy and 20261022T194902Z-S08G-zc4m."""
     ids = []
+    clients_meta = (ev.get("meta") or {}).get("clients") or {}
     for c in ev["clients"]:
         uid = (c["summary"] or {}).get("user_id") or c["status"].get("user_id")
-        ids.append(uid)
+        if not uid:
+            uid = next((e.get("user_id") for e in reversed(c["events"])
+                        if e.get("event") == "in_world" and e.get("user_id")), None)
+        if not uid:
+            uid = (clients_meta.get(str(c["index"])) or {}).get("first_user_id")
+        ids.append(uid or None)
     return ids
 
 
@@ -2034,8 +2045,10 @@ def check_tick_adoption(ev, a):
 def check_entity_lifecycle(ev, a):
     """C3 hooks (events.ndjson entity_added / entity_removed / entities_reset) against the 20 Hz
     rendered samples:
-    - despawn: an entity removed at time t is not in any rendered sample after
-      t + TargetDelay + MaxExtrapolation (150 ms) + one sample period, unless its id was added again;
+    - despawn: an entity removed at time t (a despawn, or leaving the client's area of interest)
+      is not in any rendered sample after t + TargetDelay + MaxExtrapolation (150 ms) + one sample
+      period, unless its id was added again (AOI re-entry or reuse) - samples from the re-add frame
+      on show the new entry;
     - id reuse: an id added again after a removal is first drawn at its own spawn position (the
       entity_added rx/ry within max_speed x 150 ms + 0.2 of its first snapshot's x/y), not where the
       previous entity was."""
@@ -2061,10 +2074,11 @@ def check_entity_lifecycle(ev, a):
                 duplicates.append({"client": c["index"], "t": s.get("t"),
                                    "ids": sorted({i for i in ids_ if ids_.count(i) > 1})})
         stimes = [t for t, _ in samples]
-        drawn = {}  # id -> sorted sample times it was drawn at (one index, so a soak stays linear)
-        for t, ents in samples:
+        drawn = {}  # id -> sorted (time, frame) it was drawn at (one index, so a soak stays linear)
+        frames_of = [s.get("frame") for s in c["samples"] if s.get("t") is not None]
+        for (t, ents), fr in zip(samples, frames_of):
             for eid in ents:
-                drawn.setdefault(eid, []).append(t)
+                drawn.setdefault(eid, []).append((t, fr))
         removed_at = {}
         for i, e in enumerate(evs):
             if e["event"] == "entities_reset":
@@ -2074,14 +2088,18 @@ def check_entity_lifecycle(ev, a):
             if e["event"] == "entity_removed":
                 removed_total += 1
                 removed_at[eid] = e["t"]
-                nxt = next((f["t"] for f in evs[i + 1:] if f.get("id") == eid and f["event"] == "entity_added"
+                nxt = next((f for f in evs[i + 1:] if f.get("id") == eid and f["event"] == "entity_added"
                             or f["event"] == "entities_reset"), None)
-                lo, hi = e["t"] + grace + sample_dt, (nxt if nxt is not None else float("inf"))
-                times = drawn.get(eid, [])
-                j = bisect_right(times, lo)
-                if j < len(times) and times[j] < hi:
+                lo, hi = e["t"] + grace + sample_dt, (nxt["t"] if nxt is not None else float("inf"))
+                # The id may come back (AOI re-entry, or reuse). entity_added is written at the first
+                # frame that draws it, and the 20 Hz sample of that same frame is stamped a little
+                # earlier in the frame: a sample at or after the re-add frame shows the NEW entity.
+                re_frame = nxt.get("frame") if nxt is not None and nxt["event"] == "entity_added" else None
+                hits = [(t, fr) for t, fr in drawn.get(eid, [])
+                        if lo < t < hi and not (re_frame is not None and fr is not None and fr >= re_frame)]
+                if hits:
                     lingering.append({"client": c["index"], "id": eid, "removed_t": round(e["t"], 3),
-                                      "still_drawn_t": round(times[j], 3)})
+                                      "still_drawn_t": round(hits[0][0], 3), "frame": hits[0][1]})
             elif e["event"] == "entity_added" and eid in removed_at and e.get("rx") is not None:
                 prev = next((ents[eid] for t, ents in reversed(samples[:bisect_left(stimes, removed_at[eid])])
                              if eid in ents), None)
@@ -2286,9 +2304,16 @@ def check_graceful_leave(ev, a):
         bad += 0 if ok else 1
         rows.append(row)
     status = FAIL if bad else (INCONCLUSIVE if unjudged else PASS)
-    return _result(status, rows, {"leave_timeout_s": timeout, "outcome": "left"},
+    # How the server saw the session end: a dead_link close means the polite disconnect frame never
+    # arrived and the transport gave up on retransmissions (the entity then sits in the reconnect hold).
+    dead_link = _delta(ev, "gameserver_kcp_sessions_closed_total", 'reason="dead_link"')
+    diagnosis = {"kcp_sessions_closed_dead_link": dead_link}
+    if dead_link:
+        diagnosis["note"] = ("the server closed a session by dead_link during the run: the client's polite disconnect "
+                             "frame did not reach it, so the leave was handled as a dropped connection (reconnect hold)")
+    return _result(status, rows, {"leave_timeout_s": timeout, "outcome": "left"}, detail=diagnosis,
                    source="client events.ndjson quit_requested/disconnected, summary.json outcome, server /debug/entities, "
-                          "other clients' entity_removed (C3)",
+                          "other clients' entity_removed (C3), /metrics kcp sessions closed",
                    sampling=f"server {ev['scenario'].get('server_sample_hz')} Hz",
                    rationale="a player who leaves must disappear for everyone at once; one that lingers until the idle "
                              "timeout is a ghost the others can still see and hit")

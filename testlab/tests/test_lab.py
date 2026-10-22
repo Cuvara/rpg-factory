@@ -2133,5 +2133,60 @@ class NakamaPreflightTests(unittest.TestCase):
             stack.check_nakama_module(cfg, build=False)
 
 
+class LeaverIdentityAndReentryTests(unittest.TestCase):
+    """T34: S08G runs zvjy/zc4m - a leaver's summary has user_id "" (written after Disconnect), and
+    an entity re-entering AOI was counted as a ghost by the sample of its own re-add frame."""
+
+    def test_user_id_falls_back_to_the_join_event_and_run_record(self):
+        ev = _ev(clients=2)
+        ev["clients"][0]["summary"] = {"user_id": ""}
+        ev["clients"][0]["status"] = {"user_id": ""}
+        ev["clients"][0]["events"] = [{"event": "in_world", "user_id": "u-join"}]
+        ev["clients"][1]["summary"] = {"user_id": ""}
+        ev["meta"] = {"clients": {"1": {"first_user_id": "u-run"}}}
+        self.assertEqual(analyze._user_ids(ev), ["u-join", "u-run"])
+
+    def test_graceful_leave_is_judged_when_the_leaver_wrote_no_user_id(self):
+        t = GracefulLeaveTests()
+        ev = t._ev(gone_at=15.4)
+        ev["clients"][2]["summary"]["user_id"] = ""
+        ev["clients"][2]["events"].insert(0, {"event": "in_world", "user_id": "u2"})
+        self.assertEqual(analyze.check_graceful_leave(ev, {})["status"], analyze.PASS)
+        ev["clients"][2]["events"] = [e for e in ev["clients"][2]["events"] if e["event"] != "in_world"]
+        self.assertEqual(analyze.check_graceful_leave(ev, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_a_dead_link_close_is_named_in_the_leave_diagnosis(self):
+        t = GracefulLeaveTests()
+        ev = t._ev(gone_at=40)  # held until the end
+        k = 'gameserver_kcp_sessions_closed_total{map_id="map_01",reason="dead_link"}'
+        ev["server"]["metrics_start"], ev["server"]["metrics_end"] = {k: 0.0}, {k: 1.0}
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertIn("polite disconnect frame did not reach it", res["detail"]["note"])
+
+    def _reentry(self, stale_frame):
+        """enemy-96 leaves AOI at t=19.588 (frame 4900) and re-enters at t=22.130123 (frame 9681); the
+        20 Hz sample of frame 9681 is stamped at t=22.130091, just before the entity_added event."""
+        ev = _ev(clients=1, duration=20)
+        c = ev["clients"][0]
+        rows = []
+        for k, (t, fr) in enumerate([(19.5, 4880), (19.8, 4950), (21.0, 7000), (22.130091, 9681), (22.18, 9706)]):
+            drawn = t < 19.6 or fr >= 9681 or (stale_frame and fr == 7000)
+            rows.append({"t": t, "st": t - 7.6, "frame": fr, "ents": [["enemy-96", "mob", 0, 1, 1, 1, 1]] if drawn else []})
+        c["samples"] = rows
+        c["events"] = [
+            {"event": "entity_added", "t": 11.32, "id": "enemy-96", "x": 4.4, "y": 11.2, "rx": 4.4, "ry": 11.2, "frame": 4344},
+            {"event": "entity_removed", "t": 19.588, "id": "enemy-96", "rendered": True, "reason": "removed"},
+            {"event": "entity_added", "t": 22.130123, "id": "enemy-96", "x": 1, "y": 1, "rx": 1, "ry": 1, "frame": 9681}]
+        return analyze.check_entity_lifecycle(ev, {})
+
+    def test_the_re_add_frame_sample_is_not_a_ghost(self):
+        res = self._reentry(stale_frame=False)
+        self.assertEqual(res["status"], analyze.PASS, res["detail"])
+        res = self._reentry(stale_frame=True)  # drawn at frame 7000, between removal and re-entry
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["detail"]["lingering"][0]["frame"], 7000)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -113,6 +113,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     the late snapshot. On the 1 h soaks the clock fit stays poor (the WSL clock rate wanders
     1.073-1.090), so one-way delay is reported unavailable. Preflight fails fast when a server
     worktree has no `modules/nakama.so` and `--build-server` is not set.
+  - **S08G analysis fixes (T34).** A client that left with `quit` writes `summary.json` after
+    `Disconnect()`, with an empty user id; client user ids now fall back to the `in_world` event and
+    run.json, so `graceful_leave` is judged instead of INCONCLUSIVE. `entity_lifecycle` no longer counts
+    the sample of an entity's re-add frame (AOI re-entry) as a ghost of its earlier removal.
+    `graceful_leave` names a dead_link session close (the polite disconnect frame never arrived).
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
