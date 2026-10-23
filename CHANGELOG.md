@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [Unreleased]
 
 ### Fixed
-- **Runner timeout isolation.** Checks run in a Windows Job Object (with verified termination) or a verified POSIX process group; Git Bash is preferred on Windows, and WSL bash receives validated workspace and repository environment values.
+- **Runner timeout isolation.** Checks run in a Windows Job Object or process group with bounded cleanup verification; taskkill fallback verifies the captured process tree, and Git Bash is preferred on Windows while WSL bash receives validated workspace and repository environment values.
 
 ### Added
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for

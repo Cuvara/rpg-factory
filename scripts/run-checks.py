@@ -199,6 +199,23 @@ def wsl_environment(env):
     return env
 
 
+def _verify_windows_pids(pids, is_alive, grace=3):
+    deadline = time.monotonic() + grace
+    remaining = set(pids)
+    while time.monotonic() < deadline:
+        remaining = {pid for pid in pids if is_alive(pid)}
+        if not remaining:
+            return True, set()
+        time.sleep(.05)
+    return False, remaining
+
+
+def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback=""):
+    verified, remaining = _verify_windows_pids(pids, is_alive)
+    status = "success" if exit_code == 0 and verified else f"failed (taskkill exit {exit_code}; remaining pids={sorted(remaining)})"
+    return f"{status}; {fallback}" if fallback else status
+
+
 def _run_windows_check(bash, command, kwargs, timeout):
     """Own a suspended check in a kill-on-close job before it can spawn children."""
     import ctypes
@@ -219,6 +236,43 @@ def _run_windows_check(bash, command, kwargs, timeout):
     kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+
+    def alive(pid):
+        handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+
+    def descendants(root):
+        # Toolhelp snapshot, then walk parent links without relying on wmic.
+        class ENTRY(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]; k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]; k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]
+        snap = k32.CreateToolhelp32Snapshot(2, 0)
+        if snap == wintypes.HANDLE(-1).value: return {int(root)}
+        try:
+            e = ENTRY(); e.dwSize = ctypes.sizeof(e); rows = []
+            ok = k32.Process32FirstW(snap, ctypes.byref(e))
+            while ok:
+                rows.append((int(e.th32ProcessID), int(e.th32ParentProcessID)))
+                e.dwSize = ctypes.sizeof(e); ok = k32.Process32NextW(snap, ctypes.byref(e))
+            found = {int(root)}
+            changed = True
+            while changed:
+                before = len(found); found.update(pid for pid, parent in rows if parent in found); changed = len(found) != before
+            return found
+        finally: kernel.CloseHandle(snap)
     job = kernel.CreateJobObjectW(None, None)
     p = None
     fallback = None
@@ -243,6 +297,13 @@ def _run_windows_check(bash, command, kwargs, timeout):
                     p.kill()
                 try: p.wait(timeout=2)
                 except subprocess.SubprocessError: pass
+            if p:
+                # The assigned process may still be suspended: terminate it, then reap/close it.
+                if p.poll() is None:
+                    try: p.kill(); p.wait(timeout=2)
+                    except (OSError, subprocess.SubprocessError): pass
+                try: p._handle.Close()
+                except Exception: pass
             kernel.CloseHandle(job)
             job = None
             p = None
@@ -270,8 +331,9 @@ def _run_windows_check(bash, command, kwargs, timeout):
             cleanup = "success (job ActiveProcesses=0)" if verified else f"failed (job ActiveProcesses={account.ActiveProcesses})"
         else:
             try:
+                tree = descendants(p.pid)
                 killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, timeout=5)
-                cleanup = ("success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode})") + f"; {fallback}"
+                cleanup = _windows_fallback_cleanup(killer.returncode, tree, alive, fallback)
             except (OSError, subprocess.SubprocessError) as e:
                 cleanup = f"failed ({e}); {fallback}"
         try:
@@ -314,6 +376,23 @@ def run_check(command, cwd, env, timeout):
                 if listing.returncode == 0:
                     pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
                 os.killpg(p.pid, signal.SIGKILL)
+                try:
+                    p.wait(timeout=1)  # reap the direct child before probing group membership
+                except subprocess.TimeoutExpired:
+                    pass
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(p.pid, 0)
+                    except ProcessLookupError:
+                        cleanup = "success"
+                        break
+                    except PermissionError:
+                        cleanup = f"failed (pgid {p.pid} still has members)"
+                        break
+                    time.sleep(.05)
+                else:
+                    cleanup = f"failed (pgid {p.pid} still has members)"
         except (OSError, subprocess.SubprocessError) as e:
             cleanup = f"failed ({e})"
         try:

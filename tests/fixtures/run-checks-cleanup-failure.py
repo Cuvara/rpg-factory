@@ -19,6 +19,9 @@ class FakeProcess:
             raise subprocess.TimeoutExpired("bash", timeout)
         return "", None
 
+    def wait(self, timeout=None):
+        return 0
+
 with patch.object(runner.os, "name", "posix"), \
      patch.object(runner.shutil, "which", return_value="bash"), \
      patch.object(runner.subprocess, "Popen", return_value=FakeProcess()), \
@@ -27,8 +30,26 @@ with patch.object(runner.os, "name", "posix"), \
      patch.object(runner.os, "killpg", side_effect=PermissionError("denied"), create=True):
     code, output, timed_out, cleanup = runner.run_check("sleep", ".", {}, 1)
 
-assert code == 124 and timed_out
-assert "failed" in cleanup and "cleanup=failed" in output
+assert code == 124 and timed_out, (code, timed_out, cleanup, output)
+assert "failed" in cleanup and "cleanup=failed" in output, (cleanup, output)
+
+# A successful killpg call is not proof that every group member exited.
+def group_member(pgid, sig):
+    if sig == 0:
+        raise PermissionError("member remains")
+with patch.object(runner.os, "name", "posix"), \
+     patch.object(runner.shutil, "which", return_value="bash"), \
+     patch.object(runner.subprocess, "Popen", return_value=FakeProcess()), \
+     patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
+     patch.object(runner.signal, "SIGKILL", 9, create=True), \
+     patch.object(runner.os, "killpg", side_effect=group_member, create=True):
+    code, output, timed_out, cleanup = runner.run_check("sleep", ".", {}, 1)
+assert code == 124 and timed_out and "failed" in cleanup and "cleanup=failed" in output
+
+# Even taskkill exit 0 cannot verify a still-live Windows child.
+with patch.object(runner, "_verify_windows_pids", return_value=(False, {4242})):
+    cleanup = runner._windows_fallback_cleanup(0, {4242}, lambda pid: True, "simulated fallback")
+assert cleanup.startswith("failed") and "remaining pids=[4242]" in cleanup
 
 # Exercise Windows path selection and tree-cleanup branches even when this fixture runs on POSIX.
 import ntpath
