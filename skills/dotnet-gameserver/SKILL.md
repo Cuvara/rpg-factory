@@ -48,8 +48,8 @@ knobs, metrics, golden vectors and the AOT warning baseline:
      (`ReadAll`, or `ReadAllParallel` at >= `GatherParallelMinViewers` viewers, `:136`, and only
      with `GAMESERVER_GATHER_WORKERS` > 1). Each connection stages its view and signals its write task.
   5. Encode and send happen **off the tick**, on each connection's write task
-     (`GatherSnapshotView` `GameServer/Net/Connection.cs:371`, `WriteLoopAsync` `:1019`, bounded
-     `DropOldest` channel `:885`). Tick events are cleared only after the gather
+     (`GatherSnapshotView` `GameServer/Net/Connection.cs:392`, `WriteLoopAsync` `:1094`, bounded
+     `DropOldest` channel `:922`). Tick events are cleared only after the gather
      (`_tickEvents` `TickLoop.cs:763`).
 - **Rates** (ADR-13). Three groups, `Critical`/`World`/`Background`, defaults in
   `DefaultCriticalHz`..`DefaultBackgroundHz` in `GameServer/Server/SimulationRates.cs:59-65`. Base rate =

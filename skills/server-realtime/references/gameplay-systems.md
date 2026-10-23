@@ -18,7 +18,7 @@ new value. This page says where gameplay lives and how authority is enforced, no
 | Loot | content `backend/content/loot.json` (server-only) | `CombatResolver.RollLoot :272`, SplitMix64 `LootRandom` per (seed, tick, victim, i) `CombatResolver.cs:286,343-351` | push 100 |
 | Content | `Shared.GameLogic/Content/*Definition.cs`, `ContentValidation.Validate :46` | `GameServer/Content/ContentLoader.cs` (refuses to boot on invalid content, ADR-19) | `/content` fetch |
 | Enemies / AI | - | `Scaffolding/EnemyAi*.cs`, `EnemyCombatSystems.cs` (scaffolding, `IEcsSystem`s) | snapshots |
-| Persistence | - | `Persistence/AsyncSaver.cs` every 30 s (`SaveInterval`, `Server/GameServer.cs:311`); migrations `Persistence/Migrations/` (server-services owns) | - |
+| Persistence | - | `Persistence/AsyncSaver.cs` every 30 s (`SaveInterval`, `Server/GameServer.cs:322`); migrations `Persistence/Migrations/` (server-services owns) | - |
 
 Not present: quests, XP grant, NPC dialogue, PvP, bosses (the unused `Pvp` / `Boss` / `Quest` importance factors, `Snapshot/ReplicationImportance.cs:114-119`).
 Adding one is a design decision first (game-ai-workflows), then plumbing here.
@@ -29,14 +29,14 @@ Adding one is a design decision first (game-ai-workflows), then plumbing here.
    value, an item id not an inventory state.
 2. Decode with `TryRead`, reject malformed payloads with a typed error (`GameplayErrors.InvalidPayload`, `CommandRouter.cs:187-190`); for input,
    add a value to `Input/InputRejection.cs` with its `RejectionWeight` (Benign / LatencyExplicable / Forged,
-   `:197-220`).
+   `:237-260`).
 3. Validate on server state in the tick: entity alive, range checked **after** this tick's movement,
    cooldown in **ticks** (`AttackCooldownTicks`, `InputHandler.cs:232,798-800`), never wall-clock.
 4. Rate-limit at admission (`TryAdmit`, `CommandRouter.cs:134-138`) and keep per-connection queues bounded.
 5. Any randomness is a deterministic function of server state (the loot pattern), never `System.Random`
    on the tick.
 6. Anti-cheat today **observes only** (`InputAnomalyTracker` `Input/InputAnomalyTracker.cs:6-9,42`, `AttackRateAudit` `Input/AttackRateAudit.cs:49-55`;
-   `LogWarning` "Observation only, no action taken", `Server/GameServer.cs:911-928`). A new check records into these;
+   `LogWarning` "Observation only, no action taken", `Server/GameServer.cs:866-883`). A new check records into these;
    turning observation into kicks or bans is a gameplay decision with thresholds - stop and ask.
 7. Tests: one rejection test per new reason, the happy path through `TickLoop.TickOnce()`, and
    `CoreV3/GameplayAllocationTests` still 0 B (a new branch must not allocate).
