@@ -89,6 +89,46 @@ def iter_ndjson(path: Path):
         return
 
 
+def iter_ndjson_reversed(path: Path, block_size: int = 1 << 16):
+    """The rows of iter_ndjson in reverse order, read backwards in blocks from the end of the file:
+    memory is one block plus the longest line, not the file, and a last-match search stops early."""
+    try:
+        fh = open(path, "rb")
+    except FileNotFoundError:
+        return
+    with fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        tail = b""  # the start of a line whose beginning lies in an earlier block
+        while pos > 0:
+            step = min(block_size, pos)
+            pos -= step
+            fh.seek(pos)
+            parts = (fh.read(step) + tail).split(b"\n")
+            tail = parts[0]
+            for raw in reversed(parts[1:]):
+                row = _ndjson_row(raw)
+                if row is not _SKIP:
+                    yield row
+        row = _ndjson_row(tail)
+        if row is not _SKIP:
+            yield row
+
+
+_SKIP = object()
+
+
+def _ndjson_row(raw: bytes):
+    """One ndjson line as iter_ndjson parses it, or _SKIP for a blank or cut-short line."""
+    line = raw.decode("utf-8").strip()
+    if not line:
+        return _SKIP
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError:
+        return _SKIP
+
+
 def read_ndjson(path: Path) -> list:
     return list(iter_ndjson(path))
 
@@ -111,7 +151,7 @@ class LazyNdjson:
         return sum(1 for _ in self)
 
     def __reversed__(self):
-        return reversed(list(self))
+        return iter_ndjson_reversed(self.path)
 
     def __repr__(self) -> str:
         return f"LazyNdjson({self.path})"

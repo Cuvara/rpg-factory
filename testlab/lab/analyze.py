@@ -62,7 +62,8 @@ def load_evidence(run_dir: Path) -> dict:
         "clients": clients,
         "server": {
             "entities": entities,
-            "status": util.read_ndjson(server_dir / "status.ndjson"),
+            # Streamed too: a 1 h soak's status.ndjson is ~30 MB (uc3e), read by a few passes only.
+            "status": util.LazyNdjson(server_dir / "status.ndjson"),
             "container": util.read_ndjson(server_dir / "container.ndjson"),
             "metrics_start": parse_prometheus((server_dir / "metrics-start.txt")),
             "metrics_end": parse_prometheus((server_dir / "metrics-end.txt")),

@@ -2308,6 +2308,83 @@ class BoundedMemoryAnalysisTests(unittest.TestCase):
             self.assertEqual([r["a"] for r in lazy], [1, 2])
             self.assertEqual((len(lazy), bool(lazy), [r["a"] for r in reversed(lazy)]), (2, True, [2, 1]))
             self.assertFalse(util.LazyNdjson(Path(d) / "missing.ndjson"))
+            self.assertEqual(list(reversed(util.LazyNdjson(Path(d) / "missing.ndjson"))), [])
+
+    def test_reversed_rows_equal_the_forward_rows_reversed(self):
+        """R5-1: reversed() reads the file backwards in blocks. Tiny blocks put block edges inside
+        lines and inside multi-byte characters; blank lines, CRLF, a null row and a cut-short last
+        line are parsed or skipped exactly as the forward reader does."""
+        text = ('{"a": 1, "s": "é€ὠ0"}\r\n\n{"a": 2}\nnull\n  \n{"broken"\n'
+                + "".join(f'{{"a": {i}, "pad": "{"x" * (i % 13)}"}}\n' for i in range(3, 200)) + '{"a": 2')
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.ndjson"
+            p.write_bytes(text.encode("utf-8"))
+            forward = util.read_ndjson(p)
+            self.assertEqual(len(forward), 200)
+            for block in (1, 2, 3, 7, 64, 1 << 16):
+                self.assertEqual(list(util.iter_ndjson_reversed(p, block_size=block)), forward[::-1], block)
+            self.assertEqual(list(reversed(util.LazyNdjson(p))), forward[::-1])
+            p.write_bytes(b"")
+            self.assertEqual(list(reversed(util.LazyNdjson(p))), [])
+
+    def test_last_match_on_a_large_stream_stays_bounded(self):
+        """R5-1: a last-match search through reversed() (analyze._user_ids on events.ndjson)
+        no longer loads the whole stream: the tracemalloc peak stays far under the file size even when
+        the only match is the first row, and the result equals the full-list search's."""
+        import tracemalloc
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "events.ndjson"
+            with open(p, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write('{"event": "in_world", "user_id": "u-first"}\n')
+                for i in range(120_000):
+                    fh.write(f'{{"event": "entity_removed", "id": "e{i}", "st": {i * 0.01:.2f}}}\n')
+            size = p.stat().st_size
+            lazy = util.LazyNdjson(p)
+
+            def last_in_world(rows):
+                return next((e.get("user_id") for e in rows
+                             if e.get("event") == "in_world" and e.get("user_id")), None)
+
+            expected = last_in_world(reversed(util.read_ndjson(p)))
+            tracemalloc.start()
+            got = last_in_world(reversed(lazy))
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            self.assertEqual((got, expected), ("u-first", "u-first"))
+            self.assertLess(peak, size / 10, f"peak {peak} B for a {size} B stream")
+            ev = {"meta": {}, "clients": [{"index": 0, "summary": {}, "status": {}, "events": lazy}]}
+            tracemalloc.start()
+            ids = analyze._user_ids(ev)
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            self.assertEqual(ids, ["u-first"])
+            self.assertLess(peak, size / 10, f"_user_ids peak {peak} B for a {size} B stream")
+
+    def test_server_status_is_streamed_and_its_last_match_bounded(self):
+        """R5-1: server status.ndjson (~30 MB in a 1 h soak) is a LazyNdjson, and _status_map_bounds
+        finds the last row with map_bounds without loading the file."""
+        import tracemalloc
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            (run / "server").mkdir(parents=True)
+            p = run / "server" / "status.ndjson"
+            mb = {"min_x": -5, "min_y": -6, "max_x": 7, "max_y": 8, "source": "content"}
+            with open(p, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps({"_st": 0.0, "map_id": "map_01", "map_bounds": mb}) + "\n")
+                for i in range(40_000):
+                    fh.write(json.dumps({"_st": i + 1.0, "players_online": 3, "tick_rate": 60,
+                                         "pad": "x" * 100}) + "\n")
+            size = p.stat().st_size
+            ev = analyze.load_evidence(run)
+            self.assertTrue(isinstance(ev["server"]["status"], util.LazyNdjson), type(ev["server"]["status"]).__name__)
+            expected = analyze._status_map_bounds({"server": {"status": util.read_ndjson(p)}})
+            tracemalloc.start()
+            got = analyze._status_map_bounds(ev)
+            peak = tracemalloc.get_traced_memory()[1]
+            tracemalloc.stop()
+            self.assertEqual(got, expected)
+            self.assertEqual(got["bounds"], {"minX": -5, "minY": -6, "maxX": 7, "maxY": 8})
+            self.assertLess(peak, size / 10, f"peak {peak} B for a {size} B stream")
 
 
 class StallCatchupRuleTests(unittest.TestCase):

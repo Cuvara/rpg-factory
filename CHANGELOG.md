@@ -134,6 +134,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     binder drain lag); one local major correction per stall is allowed within 5 s, a second FAILs.
     Other clients and later frames are never excluded. COVERAGE.md statuses refreshed (T31 runs,
     hooks S1-S4 and the delivery trace done, graceful-leave fix upstream).
+  - **Reverse scans stay bounded (review R5-1).** `reversed()` on a `util.LazyNdjson` read the whole
+    file into a list; it now reads the file backwards in 64 KiB blocks (`util.iter_ndjson_reversed`,
+    same rows and skips as the forward reader), so a last-match search (`_user_ids` on events,
+    `_status_map_bounds`) holds one block and stops at the match. Server `status.ndjson` (~30 MB in a
+    1 h soak) is streamed as well instead of held as a list.
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
