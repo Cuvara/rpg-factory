@@ -71,6 +71,25 @@ OXW="$TMP/orca/other-wt"; git init -q -b main "$TMP/other"; gc "$TMP/other" comm
 gc "$TMP/other" worktree add -q -b feat/o "$OXW" >/dev/null 2>&1
 t allow Read  "$OXW/.env"                                                # main checkout outside the workspace
 t allow Read  "$TMP/orca/missing/.env"                                   # not a repo: no opinion
+# finding an outside worktree runs no git (it reads the worktree's .git file): a Read outside the workspace stays
+# cheap. subprocess is patched in-process, so the count is exact on every platform.
+nogit() { jq -cn --arg p "$1" --arg d "$C" '{tool_name:"Read",tool_input:{file_path:$p},cwd:$d,session_id:"fg"}' | python3 -B -c '
+import runpy, subprocess, sys
+calls = []
+real = subprocess.run
+def spy(*a, **k):
+    calls.append(a[0] if a else k.get("args"))
+    return real(*a, **k)
+subprocess.run = spy
+try:
+    runpy.run_path(sys.argv[1], run_name="__main__")
+except SystemExit:
+    pass
+print("", file=sys.stdout)
+print("GITCALLS", len([c for c in calls if c and "git" in str(c[0])]))' "$FG"; }
+o=$(nogit "$OWS/backend/.env"); grep -q "holds secrets" <<<"$o" && grep -q "^GITCALLS 0$" <<<"$o"   && { pass=$((pass + 1)); echo "PASS  outside-worktree secrets advisory with no git call"; }   || { fail=$((fail + 1)); echo "FAIL  outside-worktree Read ran git or lost its advisory: $(tr '
+' ' ' <<<"$o" | cut -c1-200)"; }
+o=$(nogit "$TMP/outside/plain.txt"); grep -q "^GITCALLS 0$" <<<"$o"   && { pass=$((pass + 1)); echo "PASS  Read outside the workspace runs no git"; }   || { fail=$((fail + 1)); echo "FAIL  Read outside the workspace ran git: $(tail -1 <<<"$o")"; }
 # outside the workspace: silent even with RPG_FACTORY_WORKSPACE set and a read-only mode declared
 declare_mode plan
 t allow Write "$TMP/outside/file.txt"

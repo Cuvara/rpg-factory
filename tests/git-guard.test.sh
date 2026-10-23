@@ -214,6 +214,7 @@ check allow "$SERVER" "git pull --ff-only"
 check allow "$SERVER" "git merge --ff-only origin/develop"          # a fast-forward creates no commit
 check warn "$SERVER" "git merge origin/develop"
 check allow "$SERVER" "git pull --rebase=false --ff-only"           # --rebase=false|no is not a rebase
+check allow "$SERVER" "git pull --rebase=OFF --ff-only"           # --rebase=OFF|no is not a rebase
 check allow "$SERVER" "git pull --rebase=no --ff-only"
 check warn "$SERVER" "git pull --rebase=false"                      # still may merge
 check warn "$SERVER" "git pull --rebase=merges"

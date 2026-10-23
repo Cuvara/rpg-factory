@@ -122,7 +122,8 @@ def evaluate(payload, registry):
     ws = g.find_workspace(os.path.dirname(path), registry)
     shown = None
     if not ws or not within(path, ws):  # the env root only helps locate the workspace: never an opinion outside it
-        top, main = git_checkout(path)  # unless path is in a linked worktree whose main checkout is in a workspace
+        lw = g.linked_worktree(os.path.dirname(path))  # unless path is in a linked worktree whose main checkout is in
+        top, main = lw or (None, None)                  # a workspace (read from its .git file: no git call per Read)
         ws = g.find_workspace(main, registry) if top and main and os.path.normcase(top) != os.path.normcase(main) else None
         if not ws or not within(main, ws) or os.path.normcase(main) == os.path.normcase(ws):
             return []

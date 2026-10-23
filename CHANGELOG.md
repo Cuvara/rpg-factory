@@ -30,7 +30,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   generated paths), from its cwd or through `git -C`; before, every command there was silent. One extra git call,
   only for paths outside the workspace; a main checkout outside it stays silent.
 - Git guard: `merge --ff-only` on a protected branch no longer warns (a fast-forward creates no commit), and
-  `pull --rebase=false|no` is no longer treated as a rebase.
+  `pull --rebase=false|no|off|0` (any case) is no longer treated as a rebase. Finding an outside worktree reads its `.git` file instead of running git, so a Read or git command outside the workspace costs no extra process.
 
 ## [1.0.5] - 2026-10-22
 

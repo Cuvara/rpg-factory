@@ -134,15 +134,42 @@ def main_checkout(top):
     return top
 
 
+def linked_worktree(d):
+    """(toplevel, main checkout) when directory d is inside a linked worktree, read from its `.git` file
+    (`gitdir: <main>/.git/worktrees/<name>`) without running git; else None. A `.git` directory (a main checkout),
+    a submodule's `.git` file (`.git/modules/`) or no `.git` at all is None. Any error is None."""
+    try:
+        while d and not os.path.isdir(d):
+            d = os.path.dirname(d) if os.path.dirname(d) != d else ""
+        while d:
+            dot = os.path.join(d, ".git")
+            if os.path.isdir(dot):
+                return None
+            if os.path.isfile(dot):
+                with open(dot, encoding="utf-8", errors="replace") as f:
+                    line = f.readline().strip()
+                if not line.startswith("gitdir:"):
+                    return None
+                gd = os.path.normpath(os.path.join(d, line[7:].strip()))
+                parts = gd.replace("\\", "/").rsplit("/.git/worktrees/", 1)
+                return (os.path.abspath(d), os.path.abspath(parts[0])) if len(parts) == 2 else None
+            parent = os.path.dirname(d)
+            d = "" if parent == d else parent
+    except (OSError, ValueError):
+        return None
+    return None
+
+
 def outside_workspace(eff, registry, cache):
     """(workspace, main checkout) for a directory outside every workspace that is a linked worktree whose main
     checkout lies in a workspace (an Orca worktree of a workspace repo): git there gets that checkout's rules.
-    One git call, memoised per hook call; any error or a main checkout outside the workspace = None (no opinion)."""
+    No git call (the worktree's `.git` file names its main checkout), memoised per hook call; any error or a main
+    checkout outside the workspace = None (no opinion)."""
     if eff not in cache:
         cache[eff] = None
-        common = git_out(eff, "rev-parse", "--path-format=absolute", "--git-common-dir").rstrip("/\\")
-        if common and os.path.basename(common) == ".git":
-            main = os.path.abspath(os.path.dirname(common))
+        lw = linked_worktree(eff)
+        if lw:
+            main = lw[1]
             ws = find_workspace(main, registry)
             if ws and within(main, ws) and os.path.normcase(main) != os.path.normcase(os.path.abspath(ws)):
                 cache[eff] = (ws, main)
@@ -542,7 +569,7 @@ def classify(sub, args, branch, patterns, cfg):
         if protected and not a & {"--abort", "--quit", "--skip"} and not (sub == "merge" and "--ff-only" in a):
             ask(f"`git {sub}` creates commits on protected branch `{branch}`")
     elif sub == "pull":
-        if protected and (a & {"--rebase", "-r", "--no-ff", "--squash"} or any(x.startswith("--rebase=") and x[9:] not in {"false", "no"} for x in args)):
+        if protected and (a & {"--rebase", "-r", "--no-ff", "--squash"} or any(x.startswith("--rebase=") and x[9:].lower() not in {"false", "no", "off", "0"} for x in args)):
             ask(f"`git pull --rebase/--no-ff/--squash` rewrites or merges into protected branch `{branch}`")
         elif protected and "--ff-only" not in a:
             ask(f"`git pull` may create a merge commit on protected branch `{branch}` - use `git pull --ff-only`")
