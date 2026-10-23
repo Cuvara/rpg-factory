@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- **Runner timeout isolation.** Checks run in a Windows Job Object or process group with bounded cleanup verification; taskkill fallback verifies the captured process tree, and Git Bash is preferred on Windows while WSL bash receives validated workspace and repository environment values.
+
 ### Added
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
   delegated work: the main session is the lead and integrator; one worktree per implementation task (Orca-managed
@@ -29,6 +32,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+
+- Fingerprint dirty and untracked check outputs using a single stat's size, nanosecond mtime and mode (plus symlink target), avoiding reads of large untracked assets; pass Git Bash Windows paths as `C:/...` without requiring `cygpath` on Windows Python's PATH.
+- Isolate each executed validation check's working-tree pollution, terminate its child process tree on timeout, and pass the resolved workspace and checkout through the check environment.
 - **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
   violation (`PermissionError`) for up to 2 s (backoff capped at 50 ms) instead of a fixed 8 / 5 attempts
   (~0.36 s / ~0.3 s), so a record held open under machine load no longer reads as missing (NOT_RUN) and a

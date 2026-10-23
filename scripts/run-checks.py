@@ -8,7 +8,7 @@ through the routing engine, runs the local ones, parses their output and assigns
   FAIL           ran and failed, or ran without evidence (0 tests executed), or left files behind
   SKIPPED        not run by explicit choice (--only filter / --tier excludes it)
   BLOCKED        not run: a check it needs did not PASS in this run (failed, skipped, or listed after it),
-                 or its working directory does not exist
+                 its working directory does not exist, or the workspace cannot be translated for bash
   NOT_AVAILABLE  not run: a required tool is missing on this machine
   HUMAN_REQUIRED not run: extended check without --approve, or an external check (CI, Unity
                  Editor, cluster, Docker stack) that a person must run or authorise
@@ -37,6 +37,9 @@ import json
 import os
 import posixpath
 import re
+import shutil
+import signal
+import stat
 import subprocess
 import sys
 import time
@@ -105,8 +108,303 @@ def git(d, *args):
 
 
 def worktree_state(d):
-    """Paths that are changed/untracked (submodule internals excluded) - to detect check pollution."""
-    return set(l[3:] for l in git(d, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all").splitlines())
+    """Fingerprint changed/untracked paths, including edits to already-dirty files."""
+    entries = git(d, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all").split("\0")
+    paths = set()
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) >= 4:
+            status, path = entry[:2], entry[3:]
+            paths.add(path)
+            if "R" in status or "C" in status:
+                if i < len(entries) and entries[i]:
+                    paths.add(entries[i])  # the source path follows the destination in porcelain -z output
+                i += 1
+    state = {}
+    for path in paths:
+        full = os.path.join(d, path)
+        try:
+            st = os.stat(full, follow_symlinks=False)
+            target = ""
+            if stat.S_ISLNK(st.st_mode):
+                target = ":target=" + os.readlink(full)
+            state[path] = f"size={st.st_size}:mtime_ns={st.st_mtime_ns}:mode={st.st_mode}{target}"
+        except OSError as e:
+            state[path] = f"unreadable:{e}"
+    return state
+
+
+_BASH_SELECTION = None
+
+
+def select_bash():
+    """Select Git Bash when installed and cache the selected runtime flavor."""
+    global _BASH_SELECTION
+    if _BASH_SELECTION is not None:
+        return _BASH_SELECTION
+    if os.name != "nt":
+        _BASH_SELECTION = (shutil.which("bash"), "posix")
+        return _BASH_SELECTION
+    candidates = [r"C:\Program Files\Git\bin\bash.exe", shutil.which("bash")]
+    git = shutil.which("git")
+    if git:
+        try:
+            ep = subprocess.run([git, "--exec-path"], capture_output=True, text=True, timeout=5)
+            if ep.returncode == 0:
+                candidates.insert(0, os.path.abspath(os.path.join(ep.stdout.strip(), "..", "..", "bin", "bash.exe")))
+        except (OSError, subprocess.SubprocessError):
+            pass
+    bash = next((os.path.abspath(x) for x in candidates if x and os.path.isfile(x)), None)
+    if not bash:
+        _BASH_SELECTION = (None, "missing")
+        return _BASH_SELECTION
+    try:
+        p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, timeout=10)
+        probe = (p.stdout + p.stderr).lower()
+        flavor = "wsl" if p.returncode == 0 and "linux" in probe and "microsoft" in probe else \
+                 "gitbash" if p.returncode == 0 and ("mingw" in probe or "msys" in probe) else "unknown"
+    except (OSError, subprocess.SubprocessError):
+        flavor = "unknown"
+    _BASH_SELECTION = (bash, flavor)
+    return _BASH_SELECTION
+
+
+def bash_env_path(path, bash, flavor=None):
+    """Convert native workspace paths to the selected bash's path syntax; fail closed."""
+    if os.name != "nt":
+        return os.path.realpath(path)
+    if flavor is None:
+        _, flavor = select_bash()
+    if flavor == "wsl":
+        conv = subprocess.run([bash, "-c", "wslpath -u \"$1\"", "runner", path], capture_output=True, text=True, timeout=10)
+        return conv.stdout.strip() if conv.returncode == 0 and conv.stdout.strip().startswith("/") else None
+    if flavor != "gitbash":
+        return None
+    # Git Bash accepts the ENV CONTRACT's Windows drive form directly. This
+    # avoids depending on cygpath being visible to Windows Python's PATH.
+    absolute = os.path.abspath(path)
+    drive, tail = os.path.splitdrive(absolute)
+    if not drive or not tail.startswith(("\\", "/")):
+        return None
+    return drive.replace("\\", "/") + tail.replace("\\", "/")
+
+
+def wsl_environment(env):
+    """Bridge already-translated contract values into WSL without path conversion."""
+    names = ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE")
+    entries = [x for x in env.get("WSLENV", "").split(":") if x]
+    env["WSLENV"] = ":".join(dict.fromkeys(entries + list(names)))
+    return env
+
+
+def _verify_windows_pids(pids, is_alive, grace=3):
+    deadline = time.monotonic() + grace
+    remaining = set(pids)
+    while time.monotonic() < deadline:
+        remaining = {pid for pid in pids if is_alive(pid)}
+        if not remaining:
+            return True, set()
+        time.sleep(.05)
+    return False, remaining
+
+
+def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback=""):
+    verified, remaining = _verify_windows_pids(pids, is_alive)
+    status = "success" if exit_code == 0 and verified else f"failed (taskkill exit {exit_code}; remaining pids={sorted(remaining)})"
+    return f"{status}; {fallback}" if fallback else status
+
+
+def _run_windows_check(bash, command, kwargs, timeout):
+    """Own a suspended check in a kill-on-close job before it can spawn children."""
+    import ctypes
+    from ctypes import wintypes
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_ulonglong) for n in ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount", "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+    class BASIC_LIMIT(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong), ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t), ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD), ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+    class EXT_LIMIT(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", BASIC_LIMIT), ("IoInfo", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    class BASIC_ACCOUNT(ctypes.Structure):
+        _fields_ = [("TotalUserTime", ctypes.c_longlong), ("TotalKernelTime", ctypes.c_longlong), ("ThisPeriodTotalUserTime", ctypes.c_longlong), ("ThisPeriodTotalKernelTime", ctypes.c_longlong), ("TotalPageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD), ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+
+    def alive(pid):
+        handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+
+    def descendants(root):
+        # Toolhelp snapshot, then walk parent links without relying on wmic.
+        class ENTRY(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]; k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]; k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]
+        snap = k32.CreateToolhelp32Snapshot(2, 0)
+        if snap == wintypes.HANDLE(-1).value: return {int(root)}
+        try:
+            e = ENTRY(); e.dwSize = ctypes.sizeof(e); rows = []
+            ok = k32.Process32FirstW(snap, ctypes.byref(e))
+            while ok:
+                rows.append((int(e.th32ProcessID), int(e.th32ParentProcessID)))
+                e.dwSize = ctypes.sizeof(e); ok = k32.Process32NextW(snap, ctypes.byref(e))
+            found = {int(root)}
+            changed = True
+            while changed:
+                before = len(found); found.update(pid for pid, parent in rows if parent in found); changed = len(found) != before
+            return found
+        finally: kernel.CloseHandle(snap)
+    job = kernel.CreateJobObjectW(None, None)
+    p = None
+    fallback = None
+    if job:
+        info = EXT_LIMIT()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        try:
+            if not kernel.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                raise OSError(ctypes.get_last_error(), "SetInformationJobObject")
+            p = subprocess.Popen([bash, "-c", command], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004, **kwargs)  # CREATE_SUSPENDED
+            if not kernel.AssignProcessToJobObject(job, wintypes.HANDLE(int(p._handle))):
+                raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject")
+            status = ctypes.WinDLL("ntdll").NtResumeProcess(wintypes.HANDLE(int(p._handle)))
+            if status != 0:
+                raise OSError(f"NtResumeProcess status {status}")
+        except Exception as e:
+            fallback = f"job creation/assignment failed ({e}); taskkill fallback"
+            if p and p.poll() is None:
+                if job:
+                    kernel.TerminateJobObject(job, 1)
+                else:
+                    p.kill()
+                try: p.wait(timeout=2)
+                except subprocess.SubprocessError: pass
+            if p:
+                # The assigned process may still be suspended: terminate it, then reap/close it.
+                if p.poll() is None:
+                    try: p.kill(); p.wait(timeout=2)
+                    except (OSError, subprocess.SubprocessError): pass
+                try: p._handle.Close()
+                except Exception: pass
+            kernel.CloseHandle(job)
+            job = None
+            p = None
+    else:
+        fallback = f"job creation failed ({ctypes.get_last_error()}); taskkill fallback"
+    if p is None:
+        p = subprocess.Popen([bash, "-c", command], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **kwargs)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+        if job:
+            kernel.CloseHandle(job)
+        try: p._handle.Close()
+        except Exception: pass
+        return p.returncode, out or "", False, "not needed"
+    except subprocess.TimeoutExpired:
+        cleanup = "failed"
+        if job:
+            kernel.TerminateJobObject(job, 1)
+            account = BASIC_ACCOUNT()
+            deadline = time.monotonic() + 3
+            verified = False
+            while time.monotonic() < deadline:
+                if kernel.QueryInformationJobObject(job, 1, ctypes.byref(account), ctypes.sizeof(account), None) and account.ActiveProcesses == 0:
+                    verified = True
+                    break
+                time.sleep(.05)
+            cleanup = "success (job ActiveProcesses=0)" if verified else f"failed (job ActiveProcesses={account.ActiveProcesses})"
+        else:
+            try:
+                tree = descendants(p.pid)
+                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, timeout=5)
+                cleanup = _windows_fallback_cleanup(killer.returncode, tree, alive, fallback)
+            except (OSError, subprocess.SubprocessError) as e:
+                cleanup = f"failed ({e}); {fallback}"
+        try:
+            out, _ = p.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            out = ""
+            cleanup += "; process pipes did not close within 3 s"
+        if job:
+            kernel.CloseHandle(job)
+        try: p._handle.Close()
+        except Exception: pass
+        return 124, f"TIMEOUT after {timeout} s; pids={[p.pid]}; cleanup={cleanup}\n{out or ''}", True, cleanup
+
+
+def run_check(command, cwd, env, timeout):
+    """Run bash in an isolated process group and clean up its entire child tree on timeout."""
+    bash, flavor = select_bash()
+    if not bash:
+        return 127, "could not start: bash not found", False, "not started"
+    if flavor == "wsl":
+        required = ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE")
+        checks = " ".join(f'test -n "${{{name}}}" || {{ echo "BLOCKED: WSL environment missing {name}"; exit 97; }};' for name in required)
+        command = checks + " " + command
+    kwargs = dict(cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                  encoding="utf-8", errors="replace", env=env)
+    if os.name == "nt":
+        return _run_windows_check(bash, command, kwargs, timeout)
+    else:
+        p = subprocess.Popen([bash, "-c", command], start_new_session=True, **kwargs)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+        return p.returncode, out or "", False, "not needed"
+    except subprocess.TimeoutExpired:
+        pids = [p.pid]
+        cleanup = "success"
+        try:
+            if os.name == "nt":
+                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, timeout=5)
+                cleanup = "success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode}: {killer.stderr.strip() or killer.stdout.strip()})"
+            else:
+                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, timeout=3)
+                if listing.returncode == 0:
+                    pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
+                os.killpg(p.pid, signal.SIGKILL)
+                try:
+                    p.wait(timeout=1)  # reap the direct child before probing group membership
+                except subprocess.TimeoutExpired:
+                    pass
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(p.pid, 0)
+                    except ProcessLookupError:
+                        cleanup = "success"
+                        break
+                    except PermissionError:
+                        cleanup = f"failed (pgid {p.pid} still has members)"
+                        break
+                    time.sleep(.05)
+                else:
+                    cleanup = f"failed (pgid {p.pid} still has members)"
+        except (OSError, subprocess.SubprocessError) as e:
+            cleanup = f"failed ({e})"
+        try:
+            out, _ = p.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            out = ""
+            cleanup += "; pipes/process did not close within 3 s"
+        return 124, f"TIMEOUT after {timeout} s; pids={pids}; cleanup={cleanup}\n{out or ''}", True, cleanup
 
 
 def parser_for(check):
@@ -234,6 +532,7 @@ def context(a, paths):
 
 def main():
     a = parse_args(sys.argv[1:])
+    requested_ws = os.environ.get(REG["workspace"]["root_env"])
     ws = fstate.workspace(REG)
     repo = context(a, a["paths"])
     rdir = repo["path"]
@@ -264,7 +563,6 @@ def main():
         return next((s for s in sts if s != "PASS"), sts[0] if sts else None)
 
     seen = {}
-    before = None
     for c in repo["checks"]:
         key = (c["module"], c["id"])
         dedup = (c["cwd"], c["run"])
@@ -293,12 +591,9 @@ def main():
         elif dedup in seen:
             # same command + cwd already ran for another module: grade that output against THIS check's
             # definition and record it with this module's own scopes and identity
-            first, out, leftovers = seen[dedup]
+            first, out = seen[dedup]
             scopes = evidence.scopes_for(REG, c["module"], c["cwd"])
             state, counts, reason = grade(parser_for({**m, **c}), first["exit"], out)
-            if leftovers:
-                state = "FAIL"
-                reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
             res.update(state=state, exit=first["exit"], duration_s=0.0, counts=counts,
                        reason=(reason + "; " if reason else "") + f"same command already ran for {first['module']}/{first['check']}; output shared",
                        output_tail=first["output_tail"], identity=evidence.identity(rdir, scopes, {**m, **c}), timestamp=stamp, scopes=scopes,
@@ -311,32 +606,48 @@ def main():
                 state_of[key] = res["state"]
                 results.append(res)
                 continue
-            if before is None:
-                before = worktree_state(rdir)
+            before = worktree_state(rdir)
             scopes = evidence.scopes_for(REG, c["module"], c["cwd"])
             ident = evidence.identity(rdir, scopes, {**m, **c})
             t0 = time.perf_counter()
+            bash, bash_flavor = select_bash()
+            ws_path = bash_env_path(ws, bash, bash_flavor) if bash else None
+            repo_path = bash_env_path(os.path.realpath(rdir), bash, bash_flavor) if bash else None
+            head = git(rdir, "rev-parse", "HEAD").strip()
+            if not os.path.isdir(ws) or (requested_ws and not os.path.isdir(requested_ws)) or not ws_path or not repo_path or not head:
+                res.update(state="BLOCKED", reason="workspace or checkout path cannot be resolved for the selected bash environment")
+                state_of[key] = res["state"]
+                results.append(res)
+                continue
             try:
-                p = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=a["timeout"], errors="replace",
-                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
-                code, out = p.returncode, (p.stdout or "") + (p.stderr or "")
+                check_env = {
+                    **os.environ, "PYTHONDONTWRITEBYTECODE": "1", "RPG_FACTORY_WORKSPACE": ws_path,
+                    "RPG_FACTORY_REPO_DIR": repo_path, "RPG_FACTORY_REPO_KEY": a["repo"], "RPG_FACTORY_HEAD": head,
+                }
+                if bash_flavor == "wsl":
+                    check_env = wsl_environment(check_env)
+                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"])
             except OSError as e:
-                code, out = 127, f"could not start: {e}"
-            except subprocess.TimeoutExpired as e:
-                code, out = 124, f"TIMEOUT after {a['timeout']} s\n" + ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""))
+                code, out, timed_out, cleanup = 127, f"could not start: {e}", False, "not started"
             res["duration_s"] = round(time.perf_counter() - t0, 1)
             res["exit"] = code
             state, counts, reason = grade(parser_for({**m, **c}), code, out)
+            if code == 97 and bash_flavor == "wsl":
+                state, reason = "BLOCKED", out.strip().splitlines()[0] if out.strip() else "WSL environment contract was not received"
             after = worktree_state(rdir)
-            leftovers = sorted(after - before)
+            leftovers = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
             if leftovers:
                 state = "FAIL"
                 reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
+            if timed_out:
+                state = "FAIL"
+                diag = out.splitlines()[0] if out.startswith("TIMEOUT") else f"TIMEOUT after {a['timeout']} s"
+                reason = f"{diag}; cleanup={cleanup}"
             res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
                        identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
             res["log"] = evidence.store(ws, a["repo"], res, out)
-            seen[dedup] = (res, out, leftovers)
+            seen[dedup] = (res, out)
         state_of[key] = res["state"]
         results.append(res)
 
