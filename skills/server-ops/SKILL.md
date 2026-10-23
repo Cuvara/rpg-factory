@@ -2,7 +2,7 @@
 name: server-ops
 description: Use when a change in rpg-mmo-server touches how the backend is packaged, deployed, observed or recovered - Dockerfiles, compose files and stack.sh, k8s/k3s/Agones manifests (fleets, autoscaler, allocation), deploy verification, Prometheus/Grafana config, DB migrations' ops copies and backup/restore scripts, environments.tsv, or the cd.yml / publish-images workflows. Not for game server or gateway code (server-realtime / server-services), not for wire changes (wire-contract), not for benchmarks (measure), and never for applying anything to a cluster or host on its own.
 argument-hint: "[deploy/infra task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*)
 ---
 
 # Server ops - deploy, infra, CI/CD

@@ -2,7 +2,7 @@
 name: pin-bump
 description: Use when the Unity client must move to a released upstream version - a new com.cuvara.netcode, com.cuvara.dots or com.cuvara.uitoolkit tag, or a new Shared.GameLogic sgl-v tag - or when Packages/manifest.json, packages-lock.json or the imported DOTS Sample must be brought back in line with a pin; also moving the client's unity-build-workflows CI toolkit (submodule pointer and the reusable-workflow @vN refs). Cross-repo driver of the sgl-pin and package-pins contracts. Not for changing package code (unity-package), not for local file: testing (a human-gated toggle), never for creating the tag itself.
 argument-hint: "<package> <tag>  e.g. com.cuvara.netcode v0.46.0"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-plan.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-plan.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/unity-package-pins.py:*)
 ---
 
 # Pin bump - move a client pin to a released tag
