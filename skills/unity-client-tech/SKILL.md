@@ -102,7 +102,7 @@ calling skill keeps validation and reporting.
   plays.
 - **World may not exist yet, or be gone.** `HudWorldBridge` keeps polling while the world is null;
   `DotsWorldBridge.TryInstall` instead warns and disables itself (`DotsWorldBridge.cs:288-296`). Any
-  teardown checks `World.IsCreated` first (`DotsWorldBridge.cs:544`; `HudEcsBootstrap.Uninstall`:
+  teardown checks `World.IsCreated` first (`DotsWorldBridge.cs:555`; `HudEcsBootstrap.Uninstall`:
   `HudEcsBootstrap.cs:52`).
 - **Sink before systems.** A sink left registered keeps Presenter -> ViewModel -> visual tree
   alive (`HudWorldBridge` remarks and `OnDestroy`: `HudWorldBridge.cs:31-36,95-105`).

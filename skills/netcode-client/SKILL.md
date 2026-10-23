@@ -95,7 +95,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
   fresh arrays filled by `Buffer.BlockCopy` (`KcpClientSession.cs:424,467,493`); `Segment` data and
   datagrams (`Kcp.cs:248-249,405-407,482,488,639`); frame bodies (`Buffer.BlockCopy`, `FrameBuffer.cs:107`);
   lists, stat arrays and `ToArray` (`SnapshotResolver.cs:85,240,250,267-269`); a new `InputMessage` per
-  send (`client:DI/Dots/DotsWorldBridge.cs:241`).
+  send (`client:DI/Dots/DotsWorldBridge.cs:246`).
   Fixing them is a package change measured before and after (`measure`, GC alloc per frame).
 - **Frame-rate-bound receive** (`UniTask.Delay`, `KcpTransport.cs:248,340`): a client at 20 fps adds up to 50 ms before a
   snapshot is even read. Do not "fix" lag in interpolation/prediction tuning before ruling this out.
