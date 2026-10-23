@@ -17,9 +17,9 @@ Shared.GameLogic (server)                      com.cuvara.* package repos
 ```
 
 - History, 2026-08-11 → 09-24: 20 `sgl-v*` tags and 18 client sgl pin commits. The client skipped v0.2.0, v0.4.0 and v0.5.0. It moved Netcode 21 times against 77 tags, UnityDots 11 times against 30 tags, and UIToolkit 6 times against 8 tags.
-- Pins in the client today (`scripts/checks/pin-status.py`): netcode v0.45.0, dots v0.29.0, uitoolkit v0.7.2, sgl-v0.6.0 and build-pipeline v5.2.0. The last one is the `unity-build-workflows` UPM package; its source is not in the workspace.
+- The client pins netcode, dots, uitoolkit, shared-gamelogic (`sgl-v*`) and build-pipeline; read the current tags live with `scripts/checks/pin-status.py` (never from this file). build-pipeline is the `unity-build-workflows` UPM package; its source is not in the workspace.
 
-## Lock entry anatomy (from 17b7737)
+## Lock entry anatomy (example from 17b7737, not the current pin)
 
 ```json
 "com.cuvara.netcode": {
@@ -36,7 +36,7 @@ Shared.GameLogic (server)                      com.cuvara.* package repos
 ## DOTS Sample (the #135 procedure, client `CLAUDE.md` "The DOTS Sample")
 
 - `Assets/Samples/Netcode/DOTS Sample/` is tracked and version-free. The play client builds it.
-- It is a byte-for-byte copy of `Netcode/Samples~/DOTSSample` at the version recorded in `.sample-source`:
+- It is a byte-for-byte copy of `Netcode/Samples~/DOTSSample` at the version recorded in `.sample-source` (example values; the current pin is what `pin-status.py` reports):
 
   ```
   package=com.cuvara.netcode
