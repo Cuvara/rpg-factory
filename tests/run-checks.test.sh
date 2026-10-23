@@ -38,7 +38,7 @@ jq --arg ws "$WS" '
         {id: "t-isolated-clean2", cwd: ".", run: "echo clean again", evidence: "e"},
         {id: "t-dirty-edit", cwd: ".", run: "echo edited >> backend/gateway/x.go", evidence: "e"},
         {id: "t-large-untracked", cwd: ".", run: "echo clean", evidence: "e"},
-        {id: "t-timeout-tree", cwd: ".", run: "(sleep 20) & echo $! > child.pid; wait", evidence: "e"},
+        {id: "t-timeout-tree", cwd: ".", run: "(sleep 60) & echo $! > child.pid; cat /proc/$!/winpid > child.winpid 2>/dev/null || true; wait", evidence: "e"},
         {id: "t-env", cwd: ".", run: "env | grep '^RPG_FACTORY_'; pwd", evidence: "e"}
       ],
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
@@ -123,19 +123,35 @@ out=$(RPG_FACTORY_WORKSPACE="$TMP/missing workspace" python3 -B "$P/scripts/run-
 if [ -n "$RPGF_WINDOWS" ]; then
   python3 -B - "$P/scripts/run-checks.py" "$WS" "$(command -v bash)" <<'PY'
 import importlib.util, sys, shutil
+from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 real_which = shutil.which
 shutil.which = lambda name: None if name == "cygpath" else real_which(name)
 converted = mod.bash_env_path(sys.argv[2], sys.argv[3])
 assert converted.startswith(sys.argv[2][:2] + "/") and "\\" not in converted, converted
+with patch.object(mod.subprocess, "run", return_value=__import__("subprocess").CompletedProcess([], 0, "/mnt/c/Work Space", "")):
+    assert mod.bash_env_path(r"C:\Work Space", "bash.exe", "wsl") == "/mnt/c/Work Space"
+alias = __import__("os").path.join(__import__("os").environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps", "bash.exe")
+mod._BASH_SELECTION = None
+with patch.object(mod.os, "name", "nt"), patch.object(mod.shutil, "which", side_effect=lambda n: alias if n == "bash" else None), \
+     patch.object(mod.os.path, "isfile", side_effect=lambda p: "WindowsApps" in str(p)), \
+     patch.object(mod.subprocess, "run", return_value=__import__("subprocess").CompletedProcess([], 0, "Linux\n6.6-microsoft-standard-WSL2", "")):
+    assert mod.select_bash() == (alias, "wsl")
+env = mod.wsl_environment({"WSLENV": "EXISTING", "RPG_FACTORY_WORKSPACE": "/mnt/c/work space"})
+assert all(n in env["WSLENV"].split(":") for n in ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE")), env
+assert "/p" not in env["WSLENV"]
 PY
-  [ $? -eq 0 ] && okk "Git Bash environment path works without cygpath" || nok "Git Bash path conversion required cygpath"
+  [ $? -eq 0 ] && okk "Git Bash and WSL path/environment probes pass" || nok "bash path/environment probe failed"
 fi
+start=$(python3 -c 'import time; print(time.monotonic())')
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
+elapsed=$(python3 -c 'import time,sys; print(time.monotonic()-float(sys.argv[1]))' "$start")
+[ "$(awk -v e="$elapsed" 'BEGIN {print (e <= 8) ? "yes" : "no"}')" = yes ] && okk "timeout runner returned within timeout plus cleanup grace (${elapsed}s)" || nok "timeout runner exceeded bound (${elapsed}s)"
 [ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
 if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
-rm -f "$S/child.pid"
+if [ -s "$S/child.winpid" ]; then wpid=$(cat "$S/child.winpid"); tasklist //FI "PID eq $wpid" 2>/dev/null | grep -q "$wpid" && nok "timeout Windows grandchild survived (pid $wpid)" || okk "timeout Windows grandchild was killed"; fi
+rm -f "$S/child.pid" "$S/child.winpid"
 python3 -B "$ROOT/tests/fixtures/run-checks-cleanup-failure.py" "$P/scripts/run-checks.py" && okk "simulated timeout cleanup failure is reported" || nok "simulated cleanup failure was hidden"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-ext --approve t-ext --json)
 expect t-ext PASS
@@ -192,8 +208,14 @@ python3 -B "$ROOT/tests/fixtures/run-checks-log-prune.py" "$P/scripts/lib" "$WS"
 ls "$TMP"/state/evidence/*/runs/server-*-*-*.json >/dev/null 2>&1 && okk "run record names carry a unique suffix" || nok "run record name"
 # the workspace key is the case-folded real path: C:/X and c:\x share evidence on Windows
 if [ -n "$RPGF_WINDOWS" ]; then
-  python3 -B -c "import sys; sys.path.insert(0, sys.argv[1]); import fstate; w = sys.argv[2]; sys.exit(0 if fstate.workspace_key(w) == fstate.workspace_key(w.upper().replace('/', '\\\\')) else 1)" "$P/scripts/lib" "$WS" \
-    && okk "workspace key ignores case and slash style" || nok "workspace key is case-sensitive"
+  python3 -B - "$P/scripts/lib" "$WS" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import fstate
+w = sys.argv[2]
+sys.exit(0 if fstate.workspace_key(w) == fstate.workspace_key(w.upper().replace('/', '\\')) else 1)
+PY
+  [ $? -eq 0 ] && okk "workspace key ignores case and slash style" || nok "workspace key is case-sensitive"
   sout=$(RPG_FACTORY_WORKSPACE="$(tr '[:lower:]' '[:upper:]' <<<"$WS")" sts); sexp t-scoped STALE "same evidence through an upper-cased RPG_FACTORY_WORKSPACE"
 fi
 
