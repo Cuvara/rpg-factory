@@ -97,7 +97,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 | BLOCKED | a needed check did not PASS in this run, or its directory is missing | no |
 | NOT_AVAILABLE | a required tool is missing here | no - say so |
 | HUMAN_REQUIRED | extended check not approved, or external (CI, Unity Editor, cluster, Docker stack) | report as open |
-| SKIPPED | excluded on purpose (`--only`, duplicate command) | n/a |
+| SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`) | n/a |
 | NOT_RUN | (`--status`) declared for this change, never executed | no - run it |
 | STALE | (`--status`) ran, but the tree changed since (HEAD, diff, untracked, check definition) | no - rerun |
 

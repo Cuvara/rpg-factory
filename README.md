@@ -183,7 +183,7 @@ modules and their dependents, runs them, and grades each one:
 | BLOCKED | a `needs` prerequisite did not PASS in this run, or the check directory is missing |
 | NOT_AVAILABLE | a required tool is missing on this machine |
 | HUMAN_REQUIRED | extended check not approved (`--approve <id>`), or external (Unity Editor, CI, Docker stack, cluster) |
-| SKIPPED | excluded on purpose (`--only`, duplicate command) |
+| SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`); a duplicate command is graded on the shared output |
 | NOT_RUN | (`--status`) declared for the change, never executed |
 | STALE | (`--status`) executed, but HEAD, the diff or untracked files in the check's directory, or the check definition changed since |
 

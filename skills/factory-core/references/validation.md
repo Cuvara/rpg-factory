@@ -15,12 +15,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... 
 
 - Use `--paths` with the files *you* changed. Without it the runner resolves the whole working
   tree, which includes the user's pre-existing changes.
-- The list covers touched modules and their dependents; identical commands run once (the second
-  is SKIPPED as a duplicate).
+- The list covers touched modules and their dependents; identical commands run once; the second check
+  is graded on the shared output with its own definition (reason "output shared").
 - `--tier fast` (default) runs fast checks and reports extended/external ones as HUMAN_REQUIRED.
   `--approve <id>` runs a named extended check after the user agreed. `--only <id>` narrows.
 - Each check is graded by its registry `parser` (`go-test`, `dotnet-test`, `exit`,
-  `regex:<pattern>`); `needs` makes a check BLOCKED unless its prerequisite PASSed earlier in the same run.
+  `regex:<pattern>`); `needs` makes a check BLOCKED unless its prerequisite PASSes in the same run (failed, skipped or listed after it: BLOCKED).
 - Before/after `git status` of the product repo is compared: a check that leaves files behind
   is FAIL (pollution), even if it passed.
 - Every executed check is stored with the **identity of the tree it ran on** (HEAD, diff and untracked
