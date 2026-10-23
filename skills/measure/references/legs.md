@@ -89,7 +89,7 @@ Use when a load or bench leg shows a regression and the record must say *where* 
 
 - Metrics first, always available: `gameserver.tick.duration`, `gameserver.sim.group.duration`
   (per group), `gameserver.gc.{allocated.bytes,pause.seconds,heap.bytes}`, `gameserver.achieved_tick_hz`
-  (`GameServer/Observability/GameMetrics.cs:67,75,570,587-597`, `/metrics`). Scrape before and after the leg.
+  (`GameServer/Observability/GameMetrics.cs:68,76,577,590,594,599,604`, `/metrics`). Scrape before and after the leg.
 - `dotnet-counters monitor -p <pid> System.Runtime` / `dotnet-trace collect -p <pid>` (dev tool
   `dotnet-diagnostics`, optional): run against a **JIT** Release build started directly, not the AOT image -
   NativeAOT exposes only part of EventPipe. A trace is attribution evidence; the number still comes from

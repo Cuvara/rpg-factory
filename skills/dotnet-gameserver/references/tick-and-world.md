@@ -34,8 +34,8 @@ the content composition and the new-system recipe are in
 
 **Correction to the older description.** There is no Phase B on the tick thread any more. Encoding
 and sending happen on each connection's write task: `Connection.GatherSnapshotView`
-(`GameServer/Net/Connection.cs:371`) stages the view and writes `SendItem.Snapshot` into a bounded
-`DropOldest` channel (`:885`); `WriteLoopAsync` (`:1019`) encodes against the last snapshot actually sent, so
+(`GameServer/Net/Connection.cs:392`) stages the view and writes `SendItem.Snapshot` into a bounded
+`DropOldest` channel (`:922`); `WriteLoopAsync` (`:1094`) encodes against the last snapshot actually sent, so
 back-pressure coalesces to the newest snapshot and one channel per connection keeps frame order.
 
 ## Rates
