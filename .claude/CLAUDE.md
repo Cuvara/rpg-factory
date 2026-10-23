@@ -71,6 +71,7 @@ tests/skills-lint.sh                       # skill contract, tech sections, ## T
 env -u TMPDIR tests/devtools.test.sh       # dev tool probes, snapshot/doctor lines, no secrets printed
 scripts/check-registry.sh [--structure-only]
 env -u TMPDIR tests/skill-citations.test.sh  # citation checker on fixture repos
+env -u TMPDIR tests/netcode-headless.test.sh  # netcode-headless.sh server resolution (--server, worktrees)
 python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill path:line vs integration branches
 python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
 python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear

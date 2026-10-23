@@ -1,0 +1,42 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S06",
+  "version": 3,
+  "title": "Replication and interpolation: known movement schedules, divergence and jitter",
+  "description": "One client circles continuously, one shuttles back and forth across the origin (both signs of x and y), one observes. Every client compares what it renders for the others (and itself) with the server's authoritative path, with enemies chasing all three.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 6,
+  "duration_s": 45,
+  "screenshots_s": [10, 25, 40],
+  "per_client": [
+    { "steps": [ { "t0": 2, "t1": 43, "mode": "circle", "rate": 1.0 } ] },
+    { "steps": [
+      { "t0": 2, "t1": 5, "mode": "move", "x": -1, "y": 0 },
+      { "t0": 5, "t1": 11, "mode": "move", "x": 1, "y": 0 },
+      { "t0": 11, "t1": 17, "mode": "move", "x": -1, "y": 0 },
+      { "t0": 17, "t1": 23, "mode": "move", "x": 1, "y": 0 },
+      { "t0": 23, "t1": 29, "mode": "move", "x": 0, "y": -1 },
+      { "t0": 29, "t1": 35, "mode": "move", "x": 0, "y": 1 },
+      { "t0": 35, "t1": 41, "mode": "move", "x": -0.7, "y": -0.7 }
+    ] },
+    { "steps": [] }
+  ],
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world" },
+    { "id": "completed", "check": "clients_completed" },
+    { "id": "logs_clean", "check": "client_log_clean" },
+    { "id": "inputs_consumed", "check": "inputs_consumed", "min_cos": 0.9, "min_distance_fraction": 0.5 },
+    { "id": "remote_player_divergence", "check": "position_divergence", "types": ["player"], "p95": 0.35, "max": 1.0 },
+    { "id": "local_divergence", "check": "position_divergence", "local": true, "types": ["player"], "p95": 0.5, "max": 1.5 },
+    { "id": "remote_mob_divergence", "check": "position_divergence", "types": ["mob"], "p95": 0.35, "max": 1.0 },
+    { "id": "render_jumps", "check": "render_jumps", "max_local": 0, "max_remote_per_client_min": 2.0 },
+    { "id": "enemy_render_speed", "check": "enemy_render_speed", "speed": 2.5 },
+    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 },
+    { "id": "replication_gap", "check": "snapshot_update_gap", "max_gap_ms": 200 },
+    { "id": "kcp", "check": "kcp_health" },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" },
+    { "id": "prediction_snaps", "check": "prediction_bound", "title": "local prediction hard snaps per client-minute" },
+    { "id": "cross_client_convergence", "check": "cross_client_convergence", "title": "clients draw a remote entity in the same place at the same render tick (C4)" }
+  ]
+}
