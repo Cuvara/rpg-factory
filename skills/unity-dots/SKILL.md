@@ -83,7 +83,7 @@ Repos `unitydots`, `client`. Owns no module, contract or check.
   job kinds start at `Schedule` until the benchmark (`Tests/Runtime/ParallelSchedulingBenchmark.cs`) gets an arm for them.
 - Spawn with the final component set: every component an entity will need at snapshot rate is added at
   spawn, sample buffer included (`AddBuffer<SnapshotSample>`, `Runtime.Netcode/NetworkViewCommandSystem.cs:303-310`);
-  add a component lazily only once per entity, never per update (`ApplyPose` adds a missing `EntityPose`, `:416-420`).
+  add a component lazily only once per entity, never per update (`ApplyPose` adds a missing `EntityPose`, `:447-453`).
 - Write a singleton only when the value changed - a change filter fires on any write; compare with
   `GetSingleton`, then `SetSingleton` (`client:Assets/Scripts/UI/Hud/Ecs/HudStateSystem.cs:28-31,106-110`).
 - `IJobChunk` only when per-chunk optional components matter (`Runtime/Views/MinimapCollectJob.cs:15-19`);

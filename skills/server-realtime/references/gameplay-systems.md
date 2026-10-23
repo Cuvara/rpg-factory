@@ -36,7 +36,7 @@ Adding one is a design decision first (game-ai-workflows), then plumbing here.
 5. Any randomness is a deterministic function of server state (the loot pattern), never `System.Random`
    on the tick.
 6. Anti-cheat today **observes only** (`InputAnomalyTracker` `Input/InputAnomalyTracker.cs:6-9,42`, `AttackRateAudit` `Input/AttackRateAudit.cs:49-55`;
-   `LogWarning` "Observation only, no action taken", `Server/GameServer.cs:866-883`). A new check records into these;
+   `LogWarning` "Observation only, no action taken", `Server/GameServer.cs:967-983`). A new check records into these;
    turning observation into kicks or bans is a gameplay decision with thresholds - stop and ask.
 7. Tests: one rejection test per new reason, the happy path through `TickLoop.TickOnce()`, and
    `CoreV3/GameplayAllocationTests` still 0 B (a new branch must not allocate).

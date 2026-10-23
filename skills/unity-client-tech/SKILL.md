@@ -82,8 +82,8 @@ calling skill keeps validation and reporting.
 - Prefer constructor / `[Inject]` method injection. `Assets/Scripts/Extensions/DIExtensions.cs`
   (`GetCurrentContainer()`) is a static service locator caching whichever `LifetimeScope`
   `FindFirstObjectByType` hits first; it has no callers - do not add any.
-- Input: branch on `#if ENABLE_INPUT_SYSTEM` / `#elif ENABLE_LEGACY_INPUT_MANAGER` / `#else` zero
-  (`DotsWorldBridge.AimFrom`, `DotsWorldBridge.cs:721-739`); the project is new-Input-System-only (`activeInputHandler: 1` in
+- Input: `DeviceGameplayInputSource.ReadMove` branches on `#if ENABLE_INPUT_SYSTEM` / `#elif ENABLE_LEGACY_INPUT_MANAGER` / `#else` zero
+  (`GameplayInput.cs:81-106`); the project is new-Input-System-only (`activeInputHandler: 1` in
   `ProjectSettings/ProjectSettings.asset`). One component owns input per scene: sampled, sent and
   recorded on the predictor as one stream (`DotsWorldBridge.driveInput`, `DotsWorldBridge.cs:63-67,216-251`).
 - Optional dependency = a gated assembly: `defineConstraints` naming defines that the same asmdef
