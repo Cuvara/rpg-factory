@@ -45,6 +45,14 @@ workspace key). No command-line or registry changes for users.
   "agents never tag" wording returns or a policy file drops the authorization rule.
 
 ### Fixed
+- **Task-scoped routing in the snapshot.** Without `--paths`, uncommitted changes are the user's baseline: the
+  snapshot lists them with their modules but prints no Routing, `Next:`, gates or checks for them and says to route
+  the task with `--paths <files the task will write>` (commits on a feature branch are still routed; JSON keeps the
+  full resolution and adds `task_scope`). A module without skills prints an explicit `**Routing** no specialised
+  lead - factory-core only; follow <CLAUDE.md>` line. An absolute `--paths` entry in a linked worktree of the repo
+  maps to its repo-relative path; one in another repo or outside every repo gets a warning and is not routed as
+  `<repo>.root` (exit 2 when no path is left). `--mode=plan`, `--lead=x` (any `--flag`) after `--paths` end the
+  path list instead of being read as paths. `tests/routing.test.sh` covers each case on a throwaway workspace.
 - **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
   commands were missed or misread and now get the advisory they should:
   - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan
