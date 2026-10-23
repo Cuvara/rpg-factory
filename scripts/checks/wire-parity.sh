@@ -12,20 +12,24 @@
 set -uo pipefail
 
 ws="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
-server="${RPG_FACTORY_REPO_DIR:-}"
+server=""
 netcode=""
-server_arg=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --workspace) ws="$2"; shift 2 ;;
-    --server) server="$2"; server_arg=true; shift 2 ;;
+    --server) server="$2"; shift 2 ;;
     --netcode) netcode="$2"; shift 2 ;;
     *) echo "ERROR: unknown argument $1"; exit 2 ;;
   esac
 done
-if [ -z "$server" ]; then server="$(git rev-parse --show-toplevel 2>/dev/null)"; fi
-if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] && ! $server_arg; then server="$ws/rpg-mmo-server"; fi
-[ -n "$netcode" ] || netcode="$ws/Netcode"
+if [ -z "$server" ]; then
+  if [ "${RPG_FACTORY_REPO_KEY:-}" = server ] && [ -n "${RPG_FACTORY_REPO_DIR:-}" ]; then server="$RPG_FACTORY_REPO_DIR"
+  else server="$ws/rpg-mmo-server"; fi
+fi
+if [ -z "$netcode" ]; then
+  if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] && [ -n "${RPG_FACTORY_REPO_DIR:-}" ]; then netcode="$RPG_FACTORY_REPO_DIR"
+  else netcode="$ws/Netcode"; fi
+fi
 for label in server Netcode; do
   dir="$server"
   [ "$label" = Netcode ] && dir="$netcode"

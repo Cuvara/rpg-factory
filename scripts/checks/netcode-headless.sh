@@ -10,9 +10,15 @@
 set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-src="${RPG_FACTORY_REPO_DIR:-}"
-if [ -z "$src" ]; then src="$(git rev-parse --show-toplevel 2>/dev/null)"; fi
-src="${src:-}"
+src=""
+if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] || [ -z "${RPG_FACTORY_REPO_KEY:-}" ]; then
+  src="${RPG_FACTORY_REPO_DIR:-}"
+fi
+if [ -z "$src" ]; then
+  cwd_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$cwd_top" ] && [ -f "$cwd_top/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj" ]; then src="$cwd_top"; fi
+fi
+if [ -z "$src" ] && [ -n "${RPG_FACTORY_WORKSPACE:-}" ]; then src="$RPG_FACTORY_WORKSPACE/Netcode"; fi
 keep=false
 while [ $# -gt 0 ]; do
   case "$1" in --netcode) src="$2"; shift 2 ;; --keep) keep=true; shift ;; *) echo "unknown arg $1"; exit 2 ;; esac
@@ -53,7 +59,6 @@ run_log="$work/dotnet.log"
 set +e
 (cd "$work/Tests~/Headless" && timeout 900 "$dotnet" test "${sgl_args[@]}" --logger 'trx;LogFileName=results.trx' --results-directory results) >"$run_log" 2>&1
 dotnet_rc=$?
-set -e
 tail -15 "$run_log"
 [ "$dotnet_rc" -eq 0 ] || { echo "FAIL: dotnet test exited $dotnet_rc"; exit 1; }
 
