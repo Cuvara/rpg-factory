@@ -29,6 +29,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+- **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
+  violation (`PermissionError`) for up to 2 s (backoff capped at 50 ms) instead of a fixed 8 / 5 attempts
+  (~0.36 s / ~0.3 s), so a record held open under machine load no longer reads as missing (NOT_RUN) and a
+  replace no longer fails; other platforms keep the short attempt count (`tests/session-state.test.sh`).
 - Git and file guards: a linked worktree outside the workspace root (Orca worktrees, sibling dirs) whose main
   checkout lies in the workspace now gets that checkout's rules (tags, pushes, protected branches, secrets,
   generated paths), from its cwd or through `git -C`; before, every command there was silent. The worktree is

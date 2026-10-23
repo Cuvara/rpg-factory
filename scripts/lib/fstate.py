@@ -90,6 +90,26 @@ def unique_suffix():
     return f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
+_WINDOWS = os.name == "nt"
+LOCK_BUDGET_S = 2.0  # Windows: how long a file held open by another process is retried
+
+
+def _lock_wait(attempt, start, tries, step):
+    """After a PermissionError: sleep and return True to retry, False when the budget is spent. On Windows a
+    reader holding `path` open makes os.replace fail and a replace in flight makes open fail; under machine
+    load that lasts longer than a fixed attempt count, so the budget is time-based (LOCK_BUDGET_S, backoff
+    capped at 50 ms). Elsewhere a PermissionError is a real denial: `tries` attempts, linear `step` backoff."""
+    if _WINDOWS:
+        if time.monotonic() - start >= LOCK_BUDGET_S:
+            return False
+        time.sleep(min(0.005 * (attempt + 1), 0.05))
+        return True
+    if attempt >= tries - 1:
+        return False
+    time.sleep(step * (attempt + 1))
+    return True
+
+
 def write_text(path, text):
     """Atomic: readers (and concurrent hooks) never see a half-written file."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -97,14 +117,15 @@ def write_text(path, text):
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(text)
-        for attempt in range(5):
+        start, attempt = time.monotonic(), 0
+        while True:
             try:
                 os.replace(tmp, path)
                 return
             except PermissionError:  # Windows: another hook process has `path` open for a moment
-                if attempt == 4:
+                if not _lock_wait(attempt, start, 5, 0.02):
                     raise
-                time.sleep(0.02 * (attempt + 1))
+                attempt += 1
     finally:
         if os.path.exists(tmp):
             try:
@@ -119,13 +140,16 @@ def write_json(path, obj, indent=None):
 
 def read_json(path, default=None):
     """The parsed file, or `default` when it is missing or not JSON. On Windows a file that is being replaced
-    (write_text) cannot be opened for a moment: that is retried, never reported as missing."""
-    for attempt in range(8):
+    (write_text) cannot be opened for a moment: that is retried for up to LOCK_BUDGET_S, never reported as
+    missing within that budget."""
+    start, attempt = time.monotonic(), 0
+    while True:
         try:
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except PermissionError:
-            time.sleep(0.01 * (attempt + 1))
+            if not _lock_wait(attempt, start, 8, 0.01):
+                return default
+            attempt += 1
         except (OSError, ValueError):
             return default
-    return default
