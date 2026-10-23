@@ -151,7 +151,7 @@ def select_bash():
     git = shutil.which("git")
     if git:
         try:
-            ep = subprocess.run([git, "--exec-path"], capture_output=True, text=True, timeout=5)
+            ep = subprocess.run([git, "--exec-path"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
             if ep.returncode == 0:
                 candidates.insert(0, os.path.abspath(os.path.join(ep.stdout.strip(), "..", "..", "bin", "bash.exe")))
         except (OSError, subprocess.SubprocessError):
@@ -161,7 +161,7 @@ def select_bash():
         _BASH_SELECTION = (None, "missing")
         return _BASH_SELECTION
     try:
-        p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, timeout=10)
+        p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         probe = (p.stdout + p.stderr).lower()
         flavor = "wsl" if p.returncode == 0 and "linux" in probe and "microsoft" in probe else \
                  "gitbash" if p.returncode == 0 and ("mingw" in probe or "msys" in probe) else "unknown"
@@ -178,7 +178,7 @@ def bash_env_path(path, bash, flavor=None):
     if flavor is None:
         _, flavor = select_bash()
     if flavor == "wsl":
-        conv = subprocess.run([bash, "-c", "wslpath -u \"$1\"", "runner", path], capture_output=True, text=True, timeout=10)
+        conv = subprocess.run([bash, "-c", "wslpath -u \"$1\"", "runner", path], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         return conv.stdout.strip() if conv.returncode == 0 and conv.stdout.strip().startswith("/") else None
     if flavor != "gitbash":
         return None
@@ -334,7 +334,7 @@ def _run_windows_check(bash, command, kwargs, timeout):
         else:
             try:
                 tree = descendants(p.pid)
-                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, timeout=5)
+                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
                 cleanup = _windows_fallback_cleanup(killer.returncode, tree, alive, fallback)
             except (OSError, subprocess.SubprocessError) as e:
                 cleanup = f"failed ({e}); {fallback}"
@@ -373,10 +373,10 @@ def run_check(command, cwd, env, timeout):
         cleanup = "success"
         try:
             if os.name == "nt":
-                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, timeout=5)
+                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
                 cleanup = "success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode}: {killer.stderr.strip() or killer.stdout.strip()})"
             else:
-                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, timeout=3)
+                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3)
                 if listing.returncode == 0:
                     pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
                 os.killpg(p.pid, signal.SIGKILL)
