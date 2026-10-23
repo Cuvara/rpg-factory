@@ -7,18 +7,37 @@
 #  2. The wire protocol version constant must agree in all three places:
 #     C# WireProtocol.ProtocolVersion, Go messages.WireProtocolVersion, Netcode WireProtocolVersion.Current.
 #
-# Usage: wire-parity.sh [--workspace DIR]
+# Usage: wire-parity.sh [--workspace DIR] [--server DIR] [--netcode DIR]
 # Exit 0 = both hold; 1 = a mismatch (printed); 2 = a file is missing.
 set -uo pipefail
 
 ws="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
-[ "${1:-}" = "--workspace" ] && ws="$2"
+server="${RPG_FACTORY_REPO_DIR:-}"
+netcode=""
+server_arg=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --workspace) ws="$2"; shift 2 ;;
+    --server) server="$2"; server_arg=true; shift 2 ;;
+    --netcode) netcode="$2"; shift 2 ;;
+    *) echo "ERROR: unknown argument $1"; exit 2 ;;
+  esac
+done
+if [ -z "$server" ]; then server="$(git rev-parse --show-toplevel 2>/dev/null)"; fi
+if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] && ! $server_arg; then server="$ws/rpg-mmo-server"; fi
+[ -n "$netcode" ] || netcode="$ws/Netcode"
+for label in server Netcode; do
+  dir="$server"
+  [ "$label" = Netcode ] && dir="$netcode"
+  [ -n "$dir" ] && git -C "$dir" rev-parse --show-toplevel >/dev/null 2>&1 || { echo "ERROR: $label target is not a git work tree: ${dir:-<unresolved>}"; exit 2; }
+  printf '%s tree: %s @ %s\n' "$label" "$(git -C "$dir" rev-parse --show-toplevel)" "$(git -C "$dir" rev-parse HEAD)"
+done
 
-server_cs="$ws/rpg-mmo-server/backend/gameserver-dotnet/GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs"
-netcode_cs="$ws/Netcode/Runtime/Protocol/Generated/Wire.cs"
-cs_ver_file="$ws/rpg-mmo-server/backend/gameserver-dotnet/GameServer/Net/WireProtocol.cs"
-go_ver_file="$ws/rpg-mmo-server/backend/shared/messages/messages.go"
-nc_ver_file="$ws/Netcode/Runtime/Protocol/WireProtocolVersion.cs"
+server_cs="$server/backend/gameserver-dotnet/GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs"
+netcode_cs="$netcode/Runtime/Protocol/Generated/Wire.cs"
+cs_ver_file="$server/backend/gameserver-dotnet/GameServer/Net/WireProtocol.cs"
+go_ver_file="$server/backend/shared/messages/messages.go"
+nc_ver_file="$netcode/Runtime/Protocol/WireProtocolVersion.cs"
 
 for f in "$server_cs" "$netcode_cs" "$cs_ver_file" "$go_ver_file" "$nc_ver_file"; do
   [ -f "$f" ] || { echo "ERROR: missing $f"; exit 2; }

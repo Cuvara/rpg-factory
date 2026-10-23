@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- Run wire parity and Netcode headless checks against the candidate checkout, report tested tree SHAs, and fail closed on unresolved trees or unsuccessful test hosts.
+
 ### Added
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
   delegated work: the main session is the lead and integrator; one worktree per implementation task (Orca-managed
