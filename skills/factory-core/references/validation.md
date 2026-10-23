@@ -62,7 +62,7 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
 | `BLOCKED` | A `needs` prerequisite did not PASS in this run (failed, skipped or not run before it), or the check's directory is missing | no |
 | `NOT_AVAILABLE` | A required tool is not resolved on this machine | no - say so |
 | `HUMAN_REQUIRED` | Extended check not approved, or an external environment | open item |
-| `SKIPPED` | Excluded on purpose (`--only`, duplicate command) | n/a |
+| `SKIPPED` | Excluded on purpose (`--only`, `--tier`, `--dry-run`) | n/a |
 | `NOT_RUN` | (`--status`) declared for this change, never executed | no |
 | `STALE` | (`--status`) executed, but the tree or the check changed since | no - rerun |
 
