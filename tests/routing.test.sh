@@ -163,6 +163,54 @@ if grep -q '^- dotnet-gameserver: tech (supporting) - .*(server-realtime)' <<<"$
   pass=$((pass + 1)); echo "PASS  --explain marks tech skills as supporting / unused"
 else fail=$((fail + 1)); echo "FAIL  --explain tech rows: $(grep -E '^- (dotnet-gameserver|go-backend):' <<<"$out")"; fi
 
+echo "== task scope (throwaway fixture workspace)"
+. "$ROOT/scripts/lib/compat.sh"
+FX="$(mktemp_win)" && [ -d "$FX" ] && trap 'rm -rf "$FX"' EXIT
+FW="$FX/ws"; FS="$FW/rpg-mmo-server"; FC="$FW/IndieRPGMMOAdventure"
+fgc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
+mkdir -p "$FS/backend/gateway/server" "$FS/backend/shared/proto" "$FC/ProjectSettings"
+touch "$FS/backend/TEAM.md" "$FS/backend/gateway/server/server.go" "$FS/backend/shared/proto/wire.proto" "$FC/ProjectSettings/ProjectVersion.txt"
+for r in "$FS" "$FC"; do git -C "$r" init -q -b develop; fgc "$r" add -A; fgc "$r" commit -qm init; done
+echo "// user edit" >> "$FS/backend/gateway/server/server.go"           # pre-existing user change = baseline
+fctx() { (cd "$1" && RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" "${@:2}" 2>&1); }
+fexpect() { if eval "$2"; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1"; head -c 600 <<<"$out" | sed 's/^/      /'; fi; }
+out=$(fctx "$FS")
+fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
+  'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'
+fexpect "dirty tree, no --paths: no Routing lead, no Next, no gates, no checks" \
+  '! grep -qE "\*\*Routing\*\*|\*\*Next:\*\*|Gates for this change|^Validation" <<<"$out"'
+out=$(fctx "$FS" --json)
+fexpect "dirty tree, no --paths: JSON task_scope is baseline (full resolution kept for run-checks)" \
+  'jq -e ".repos[0].task_scope == {scope: \"baseline\", lead: null, baseline_paths: [\"backend/gateway/server/server.go\"]} and .repos[0].routing.lead == \"server-services\"" <<<"$out" >/dev/null'
+out=$(fctx "$FS" --paths backend/gateway/server/server.go)
+fexpect "dirty tree, with --paths: routed as before (lead + Next)" \
+  'grep -q "\*\*Routing\*\* lead \`rpg-factory:server-services\`" <<<"$out" && grep -q "\*\*Next:\*\* invoke the Skill tool with \`rpg-factory:server-services\`" <<<"$out" && ! grep -q "Baseline only" <<<"$out"'
+fgc "$FS" worktree add -q "$FX/elsewhere/srv-wt" -b feat/wire/x
+echo "message X {}" >> "$FX/elsewhere/srv-wt/backend/shared/proto/wire.proto"; fgc "$FX/elsewhere/srv-wt" commit -qam "wire"
+echo "// wt user edit" >> "$FX/elsewhere/srv-wt/backend/gateway/server/server.go"
+out=$(fctx "$FX/elsewhere/srv-wt")
+fexpect "feature branch, no --paths: commits routed, uncommitted paths stay baseline" \
+  'grep -q "\*\*Routing\*\* lead \`rpg-factory:wire-contract\`" <<<"$out" && grep -q "covers only the 1 path(s) committed on this branch" <<<"$out" && ! grep -q "lead \`rpg-factory:server-services\`" <<<"$out"'
+out=$(fctx "$FW" --repo server --paths backend/docs/ARCHITECTURE-DECISIONS.md)
+fexpect "module without skills: explicit no-lead fallback line" \
+  'grep -q "\*\*Routing\*\* no specialised lead - factory-core only; follow \`rpg-mmo-server/CLAUDE.md\`" <<<"$out" && ! grep -q "\*\*Next:\*\*" <<<"$out"'
+out=$(fctx "$FW" --repo server --json --paths "$FX/elsewhere/srv-wt/backend/shared/proto/wire.proto")
+fexpect "absolute path in a linked worktree elsewhere -> repo-relative, server.proto, wire-contract" \
+  'jq -e "([.repos[0].files[] | .path + \"=\" + .module] == [\"backend/shared/proto/wire.proto=server.proto\"]) and .repos[0].routing.lead == \"wire-contract\"" <<<"$out" >/dev/null'
+out=$(fctx "$FC" --json --paths "$FS/backend/shared/proto/wire.proto" ProjectSettings/ProjectVersion.txt)
+fexpect "absolute path in another registry repo -> rejected with a warning, never client.root" \
+  'jq -e "(.repos[0].rejected_paths | length == 1 and .[0].repo == \"server\") and ([.repos[0].files[].path] == [\"ProjectSettings/ProjectVersion.txt\"])" <<<"$out" >/dev/null'
+out=$(fctx "$FC" --paths "$FS/backend/shared/proto/wire.proto" ProjectSettings/ProjectVersion.txt)
+fexpect "cross-repo absolute path: warning line in the snapshot" 'grep -q "\*\*Warning: not routed\*\* .*in repo server: use --repo server" <<<"$out"'
+out=$(fctx "$FC" --paths "$FX/nowhere/x.cs"); rc=$?
+fexpect "only paths outside every repo -> exit 2, nothing routed" '[ $rc -eq 2 ] && grep -q "no path left to route" <<<"$out"'
+out=$(fctx "$FW" --repo server --json --paths backend/gateway/server/server.go --mode=plan)
+fexpect "--paths a --mode=plan: the flag ends the path list" \
+  'jq -e ".mode == \"plan\" and ([.repos[0].files[].path] == [\"backend/gateway/server/server.go\"])" <<<"$out" >/dev/null'
+out=$(fctx "$FW" --repo server --json --paths backend/gateway/server/server.go --lead=server-services)
+fexpect "--paths a --lead=x: --flag=value ends the path list and applies" \
+  'jq -e "([.repos[0].files[].path] == [\"backend/gateway/server/server.go\"]) and .repos[0].routing.override" <<<"$out" >/dev/null'
+
 echo "== history (real commits, replayed read-only)"
 history "action_seq wire change"              server rpg-mmo-server       2b1418c "$(lead wire-contract) and $(leg server-realtime)"
 history "Netcode Wire.cs resync (649f078)"    netcode Netcode              649f078 "$(lead wire-contract)"
