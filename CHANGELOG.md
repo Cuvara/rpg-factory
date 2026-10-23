@@ -7,6 +7,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Fixed
 - **Runner timeout isolation.** Checks run in a Windows Job Object or process group with bounded cleanup verification; taskkill fallback verifies the captured process tree, and Git Bash is preferred on Windows while WSL bash receives validated workspace and repository environment values.
 
+- Run wire parity and Netcode headless checks against the candidate checkout, report tested tree SHAs, and fail closed on unresolved trees or unsuccessful test hosts.
+- Grade Netcode TRX results as successful only with a present Completed/Passed outcome, valid counters, executed tests, and zero failed, error, timeout, or aborted tests.
+
 ### Added
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
   delegated work: the main session is the lead and integrator; one worktree per implementation task (Orca-managed
