@@ -61,6 +61,16 @@ t warn  Write "$WT/Assets/Samples/Mine/x.cs"                            # genera
 t warn  Write "$WT/Packages/com.gdk.core/s.cs"                          # submodule content in the worktree
 t allow Write "$WT/Assets/Scripts/Net/NewFile.cs"
 t warn  Write "$WT/Assets/Scripts/New/Deep/Missing.uxml.g.cs"          # target directory does not exist yet
+# a linked worktree OUTSIDE the workspace root (Orca worktree) whose main checkout is in the workspace gets its rules
+OWS="$TMP/orca/server-wt"; gc "$S" worktree add -q -b feat/outside "$OWS" >/dev/null 2>&1; mkdir -p "$OWS/backend/shared/proto/gen"
+t warn  Read  "$OWS/backend/.env"                                        # secrets
+t warn  Write "$OWS/backend/deploy/.env"
+t warn  Edit  "$OWS/backend/shared/proto/gen/wire.pb.go"                 # generated, via the main checkout
+t allow Edit  "$OWS/backend/deploy/compose.yml"
+OXW="$TMP/orca/other-wt"; git init -q -b main "$TMP/other"; gc "$TMP/other" commit -q --allow-empty -m i
+gc "$TMP/other" worktree add -q -b feat/o "$OXW" >/dev/null 2>&1
+t allow Read  "$OXW/.env"                                                # main checkout outside the workspace
+t allow Read  "$TMP/orca/missing/.env"                                   # not a repo: no opinion
 # outside the workspace: silent even with RPG_FACTORY_WORKSPACE set and a read-only mode declared
 declare_mode plan
 t allow Write "$TMP/outside/file.txt"

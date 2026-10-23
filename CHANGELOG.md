@@ -24,6 +24,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   installed, and in `--no-workspace` runs), including that `orca worktree rm` still deletes branches as the
   policy warns.
 
+### Fixed
+- Git and file guards: a linked worktree outside the workspace root (Orca worktrees, sibling dirs) whose main
+  checkout lies in the workspace now gets that checkout's rules (tags, pushes, protected branches, secrets,
+  generated paths), from its cwd or through `git -C`; before, every command there was silent. One extra git call,
+  only for paths outside the workspace; a main checkout outside it stays silent.
+- Git guard: `merge --ff-only` on a protected branch no longer warns (a fast-forward creates no commit), and
+  `pull --rebase=false|no` is no longer treated as a rebase.
+
 ## [1.0.5] - 2026-10-22
 
 Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay

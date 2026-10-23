@@ -4,7 +4,8 @@
 The shell guard (git-guard.py) only sees Bash/PowerShell. File tools write directly, so
 this hook applies the same workspace rules to the target path. Inside the workspace only (RPG_FACTORY_WORKSPACE
 helps locate it, but a path outside it gets no opinion); a linked worktree of a workspace repo (e.g.
-<ws>/.wt-client-cleanup, found through its git common dir) gets that repo's rules. It never
+<ws>/.wt-client-cleanup, found through its git common dir) gets that repo's rules - also when the worktree lies
+outside the workspace root (an Orca worktree): then it is treated as its main checkout in the workspace. It never
 approves, asks or blocks (1.0.3: advisory only - additionalContext "rpg-factory advisory (<level>)") and
 never crashes a session (any error = no opinion).
 
@@ -64,9 +65,18 @@ def within(path, root):
     return a == b or a.startswith(b.rstrip("/\\") + os.sep)
 
 
+_CHECKOUT = {}
+
+
 def git_checkout(path):
     """(toplevel, main checkout) of the git work tree holding path (nearest existing directory), else (None, None).
     For a linked worktree the main checkout is the directory of its common .git directory."""
+    if path not in _CHECKOUT:
+        _CHECKOUT[path] = _git_checkout(path)
+    return _CHECKOUT[path]
+
+
+def _git_checkout(path):
     import subprocess
     d = os.path.dirname(path)
     while d and not os.path.isdir(d):
@@ -110,11 +120,16 @@ def evaluate(payload, registry):
     import factory_session as session  # noqa: E402  (shares the workspace and mode model)
     g = session.guard()
     ws = g.find_workspace(os.path.dirname(path), registry)
+    shown = None
     if not ws or not within(path, ws):  # the env root only helps locate the workspace: never an opinion outside it
-        return []
+        top, main = git_checkout(path)  # unless path is in a linked worktree whose main checkout is in a workspace
+        ws = g.find_workspace(main, registry) if top and main and os.path.normcase(top) != os.path.normcase(main) else None
+        if not ws or not within(main, ws) or os.path.normcase(main) == os.path.normcase(ws):
+            return []
+        shown = f"{path} (worktree of {os.path.relpath(main, ws)})"  # the worktree may sit on another drive
     R = []
     if SECRET.search(path.replace("\\", "/")):
-        R.append(("ask", f"{os.path.relpath(path, ws)} holds secrets - human gate 'secrets'"))
+        R.append(("ask", f"{shown or os.path.relpath(path, ws)} holds secrets - human gate 'secrets'"))
     if tool not in WRITE_TOOLS:
         return R
     mode = session.current_mode(payload)

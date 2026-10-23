@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """rpg-factory git guard (v2) - PreToolUse hook for the Bash and PowerShell tools.
 
-Reads the hook payload on stdin. For commands that run inside the RPG MMO workspace it
+Reads the hook payload on stdin. For commands that run inside the RPG MMO workspace (or in a linked worktree
+outside it whose main checkout is in the workspace, e.g. an Orca worktree: that checkout's rules apply) it
 expands the command into the programs that will actually run, peeling wrappers and
 recursing into nested shells, then classifies every git / gh invocation. Advisory only (1.0.3): the
 hook never asks the user and never blocks; a match is returned as additionalContext
@@ -131,6 +132,21 @@ def main_checkout(top):
     if common and os.path.basename(common.rstrip("/")) == ".git":
         return os.path.dirname(common.rstrip("/"))
     return top
+
+
+def outside_workspace(eff, registry, cache):
+    """(workspace, main checkout) for a directory outside every workspace that is a linked worktree whose main
+    checkout lies in a workspace (an Orca worktree of a workspace repo): git there gets that checkout's rules.
+    One git call, memoised per hook call; any error or a main checkout outside the workspace = None (no opinion)."""
+    if eff not in cache:
+        cache[eff] = None
+        common = git_out(eff, "rev-parse", "--path-format=absolute", "--git-common-dir").rstrip("/\\")
+        if common and os.path.basename(common) == ".git":
+            main = os.path.abspath(os.path.dirname(common))
+            ws = find_workspace(main, registry)
+            if ws and within(main, ws) and os.path.normcase(main) != os.path.normcase(os.path.abspath(ws)):
+                cache[eff] = (ws, main)
+    return cache[eff]
 
 
 def protected_patterns(repo_top, workspace, registry):
@@ -523,10 +539,10 @@ def classify(sub, args, branch, patterns, cfg):
         if "-a" in a or "--all" in a or has_short_flag([x for x in args if not x.startswith("--")], "a"):
             ask("`git commit -a` stages every modified tracked file, including the user's")
     elif sub in {"merge", "cherry-pick", "revert", "am"}:
-        if protected and not a & {"--abort", "--quit", "--skip"}:
+        if protected and not a & {"--abort", "--quit", "--skip"} and not (sub == "merge" and "--ff-only" in a):
             ask(f"`git {sub}` creates commits on protected branch `{branch}`")
     elif sub == "pull":
-        if protected and (a & {"--rebase", "-r", "--no-ff", "--squash"} or any(x.startswith("--rebase=") for x in args)):
+        if protected and (a & {"--rebase", "-r", "--no-ff", "--squash"} or any(x.startswith("--rebase=") and x[9:] not in {"false", "no"} for x in args)):
             ask(f"`git pull --rebase/--no-ff/--squash` rewrites or merges into protected branch `{branch}`")
         elif protected and "--ff-only" not in a:
             ask(f"`git pull` may create a merge commit on protected branch `{branch}` - use `git pull --ff-only`")
@@ -710,6 +726,11 @@ def names_registry_repo(argv, registry):
     return any(sl in text for sl in slugs)
 
 
+def stateless(sub, cfg):
+    """A read whose classification never depends on the branch or the repo (and no alias can redefine it)."""
+    return sub in STATELESS_READ_GIT and not any(c.lower().startswith("alias.") for c in cfg)
+
+
 def new_branch_from(sub, args):
     flags = {"checkout": {"-b", "-B"}, "switch": {"-c", "-C", "--create", "--force-create"}}.get(sub)
     if not flags:
@@ -728,7 +749,7 @@ def evaluate(payload, registry):
     cwd = os.path.abspath(payload.get("cwd") or os.getcwd())
     workspace = find_workspace(cwd, registry)
     reasons = []
-    predicted_branch, repo_state, pattern_cache = {}, {}, {}
+    predicted_branch, repo_state, pattern_cache, linked = {}, {}, {}, {}
     # a command substitution used as the program: $(which git) reset / `which git` push
     verbs = "|".join(sorted(MUTATING_GIT_WORDS, key=len, reverse=True))
     if workspace and re.search(r"(^|[;&|(]\s*)(\$\([^)]*\)|`[^`]*`)\s+(" + verbs + r")\b", command):
@@ -747,8 +768,12 @@ def evaluate(payload, registry):
             continue
         if not ws:
             # outside the workspace: not our business - unless `git -C <dir>` points git into one
+            # or git works in a linked worktree (cwd or `-C`) whose main checkout lies in a workspace
             pre = parse_git(argv)
-            ws = find_workspace(os.path.normpath(os.path.join(cwd, pre[0])), registry) if pre and pre[0] else None
+            eff = os.path.normpath(os.path.join(cwd, pre[0])) if pre and pre[0] else cwd
+            ws = find_workspace(eff, registry) if pre and pre[0] else None
+            if not ws and pre and not stateless(pre[1], pre[3]):
+                ws = (outside_workspace(eff, registry, linked) or (None,))[0]
             if not ws:
                 continue
         here = os.path.relpath(cwd, ws) if within(cwd, ws) else cwd
@@ -769,12 +794,15 @@ def evaluate(payload, registry):
         if not parsed:
             continue
         cdir, sub, args, cfg = parsed
-        if sub in STATELESS_READ_GIT and not any(c.lower().startswith("alias.") for c in cfg):
+        if stateless(sub, cfg):
             continue  # nothing to classify: skip the per-repo git calls (30 x `git status` stay fast)
         eff = os.path.normpath(os.path.join(cwd, cdir)) if cdir else cwd
         ws = find_workspace(eff, registry) or ws  # the directory git works in decides (`git -C` into another workspace)
-        if not within(eff, ws):
-            continue
+        main = None
+        if not within(eff, ws):  # a linked worktree outside the workspace: its main checkout's rules, else silent
+            ws, main = outside_workspace(eff, registry, linked) or (None, None)
+            if not ws:
+                continue
         if eff not in repo_state:  # memoised per directory within this one hook call
             t = git_out(eff, "rev-parse", "--show-toplevel")
             t = os.path.abspath(t) if t else None
@@ -784,7 +812,10 @@ def evaluate(payload, registry):
         if (top, ws) not in pattern_cache:
             pattern_cache[(top, ws)] = protected_patterns(top, ws, registry) if top else DEFAULT_PROTECTED
         patterns = pattern_cache[(top, ws)]
-        where = os.path.relpath(top, ws) if top else os.path.relpath(eff, ws)
+        if main:  # the worktree may sit on another drive (relpath would raise): name it by its main checkout
+            where = f"{os.path.relpath(main, ws)} worktree {top or eff}"
+        else:
+            where = os.path.relpath(top, ws) if top else os.path.relpath(eff, ws)
         if sub not in GIT_BUILTINS and top:
             alias = git_out(eff, "config", "--get", f"alias.{sub}")
             if alias:
