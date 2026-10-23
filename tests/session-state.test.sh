@@ -202,6 +202,42 @@ r=$(TMPDIR="$TMP/blocked" python3 -B -c "import sys; sys.path.insert(0,'$ROOT/sc
 is_abs "$r" && [ "$(fwd "$r")" != "$TMP/blocked/rpg-factory" ] && ok "scratch(): \$TMPDIR/rpg-factory is a file -> next candidate ($r)" || no "scratch fallback: $r"
 r=$(env -u RPG_FACTORY_STATE_DIR -u XDG_STATE_HOME HOME=rel USERPROFILE=rel HOMEDRIVE= HOMEPATH= python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate; print(fstate.persistent())" 2>&1)
 is_abs "$r" && ok "persistent(): relative HOME -> absolute ($r)" || no "persistent fallback: $r"
+# atomic state files: a Windows sharing lock longer than the old fixed retry count (~0.36 s read, ~0.3 s replace)
+# is waited out (time budget), never read as a missing record; elsewhere a PermissionError keeps the short count
+mkdir -p "$TMP/lockt"
+python3 -B - "$ROOT/scripts/lib" "$TMP/lockt" <<'PY' && ok "fstate: a 0.6 s Windows lock -> read_json gets the record, write_text succeeds; non-Windows unchanged" || no "fstate lock retry budget"
+import builtins, os, sys, time; sys.path.insert(0, sys.argv[1]); import fstate
+path = os.path.join(sys.argv[2], "rec.json"); fstate.write_json(path, {"state": "PASS"})
+real_open, real_replace, bad = builtins.open, os.replace, []
+def locked(fn, until, match):
+    def f(*a, **k):
+        if match(a) and time.monotonic() < until[0]:
+            raise PermissionError(13, "sharing violation (simulated)")
+        return fn(*a, **k)
+    return f
+until = [0.0]
+fstate.open = locked(real_open, until, lambda a: a[0] == path)
+os.replace = locked(real_replace, until, lambda a: a[1] == path)
+try:
+    for win in (True, False):
+        fstate._WINDOWS = win
+        until[0] = time.monotonic() + 0.6; r = fstate.read_json(path, default="MISSING")
+        if (r != {"state": "PASS"}) if win else (r != "MISSING"): bad.append(("read", win, r))
+        until[0] = time.monotonic() + 0.6
+        try:
+            fstate.write_json(path, {"state": "FAIL"}); w = "ok"
+        except PermissionError:
+            w = "raised"
+        if w != ("ok" if win else "raised"): bad.append(("write", win, w))
+    fstate._WINDOWS = True  # a lock that never ends is still bounded: default after the budget
+    until[0] = time.monotonic() + 60; t0 = time.monotonic(); r = fstate.read_json(path, default="MISSING")
+    if r != "MISSING" or not 1.5 < time.monotonic() - t0 < 5: bad.append(("endless", r, time.monotonic() - t0))
+finally:
+    del fstate.open; os.replace = real_replace
+left = [f for f in os.listdir(sys.argv[2]) if f.endswith(".tmp")]
+print(bad, left) if bad or left else None
+sys.exit(1 if bad or left else 0)
+PY
 
 total=$((pass + fail))
 echo "session-state tests: $total run, $pass passed, $fail failed"

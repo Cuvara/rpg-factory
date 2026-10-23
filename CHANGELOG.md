@@ -25,6 +25,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   policy warns.
 
 ### Fixed
+- **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
+  violation (`PermissionError`) for up to 2 s (backoff capped at 50 ms) instead of a fixed 8 / 5 attempts
+  (~0.36 s / ~0.3 s), so a record held open under machine load no longer reads as missing (NOT_RUN) and a
+  replace no longer fails; other platforms keep the short attempt count (`tests/session-state.test.sh`).
 - **Truthful check evidence.** A check's identity scope now includes its own module's paths, so editing
   `backend/content/` makes a `content-loader-tests` PASS (run in `backend/gameserver-dotnet`) STALE; a record
   made under another scope is STALE (`check scope changed`), so pre-upgrade records re-grade once. `factory-status`
