@@ -2,7 +2,7 @@
 name: netcode-client
 description: How the client networking in com.cuvara.netcode (Netcode repo) and its DOTS adapter actually work - the TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto versus the sealed session, codecs and the encoding sniffer, snapshot interning and merge, the interpolation clock, local movement prediction and reconciliation with clock steering, projectile prediction, reconnect policy, per-packet allocations, and the headless test project. Use when you write, debug, review or optimise netcode client code, prediction or interpolation, or answer how the client side of the wire behaves. Not for deciding scope, rules, checks or gates (unity-package, wire-contract, client-integration own those), not for wire.proto changes (wire-contract), and not for the server's transport (dotnet-gameserver).
 argument-hint: "[task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/netcode-headless.sh:*)
 ---
 # Netcode client - transport, snapshots, interpolation, prediction
 

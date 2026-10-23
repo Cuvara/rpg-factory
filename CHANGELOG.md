@@ -23,8 +23,24 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `orca --help` and every `--flag` cited with it against that command's `--help` (skipped when Orca is not
   installed, and in `--no-workspace` runs), including that `orca worktree rm` still deletes branches as the
   policy warns.
+- `tests/skills-lint.sh` checks that a skill's `allowed-tools` covers every plugin script its `SKILL.md` or
+  `references/` tell the agent to run (`${CLAUDE_PLUGIN_ROOT}/scripts/...` uses, and backticked bare script names in
+  non-core skills; entry paths match as fnmatch patterns, a named interpreter must match the entry's);
+  `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+- `tests/skills-lint.sh`: the dev-tools and allowed-tools blocks fail closed - a crash of their Python check is a
+  FAIL (it passed silently before), and skill files are read as UTF-8 (a non-ASCII reference crashed the check
+  under a cp1252 locale). `tests/parallel-policy.test.sh` covers both. parallel-work.md says an
+  `isolation: "worktree"` QA/review worker starts from the lead's HEAD and checks the candidate SHA first;
+  the report template's dotnet row no longer asserts "0 failed".
+- Skill `allowed-tools` now grant the scripts the skills run (netcode-client, pin-bump, server-ops, server-realtime,
+  unity-package, wire-contract), so unattended runs no longer hit permission prompts.
+- `git-safety.md` rule 5: PRs target the repo's default branch from `registry.json`, not always `develop`.
+  `repos.md` and dotnet-gameserver describe the gameplay transport as KCP/UDP only (ADR-32). `report.md`'s template
+  uses placeholders instead of asserting a `--status` result and example test counts. `parallel-work.md` section 6
+  runs each QA and review worker in its own worktree at the candidate SHA. pin-chain.md and packages.md point to
+  `pin-status.py` / `package-ready.py` instead of stale pin versions.
 - **Truthful check evidence.** A check's identity scope now includes its own module's paths, so editing
   `backend/content/` makes a `content-loader-tests` PASS (run in `backend/gameserver-dotnet`) STALE; a record
   made under another scope is STALE (`check scope changed`), so pre-upgrade records re-grade once. `factory-status`

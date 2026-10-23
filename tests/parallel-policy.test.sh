@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The parallel-work policy checks in tests/skills-lint.sh bite: on a throwaway copy of this plugin the pristine
 # copy passes the lint, and each mutation (lost link, copied policy text, blocking wording variants, gate-create, a
-# dropped safety rule, a missing policy file) makes the copy's own lint FAIL with the expected message.
+# dropped safety rule, a missing policy file) makes the copy's own lint FAIL with the expected message. The same
+# harness proves the allowed-tools coverage lint bites (a script use the skill's allowed-tools does not grant).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -52,6 +53,14 @@ mutate "human_gates dropped" "safety rule missing from $PW: 'human_gates'" \
 mutate "rule 5 dropped" "safety rule missing from $PW: 'rule 5'" \
   "sed -i 's/rule 5/the rules/g' $PW"
 mutate "orca worktree rm caveat dropped" "cites orca worktree rm without its branch-deletion caveat"   "sed -i 's/also deletes the checked-out local branch/may tidy branches/' $PW"
+mutate "allowed-tools entry dropped" "runs bash scripts/checks/netcode-headless.sh, not covered by allowed-tools" \
+  "sed -i '5s|, Bash(bash [^)]*/netcode-headless.sh:[*])||' skills/netcode-client/SKILL.md"
+mutate "bare script name not granted" "server-ops: skills/server-ops/SKILL.md:" \
+  "echo 'Run \`pin-plan.py\` first.' >> skills/server-ops/SKILL.md"
+mutate "interpreter differs from the entry" "runs python3 -B scripts/factory-status.py, not covered" \
+  "echo 'Run \`python3 -B \${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py\`.' >> skills/server-ops/SKILL.md"
+mutate "allowed-tools lint crashes (unreadable SKILL.md)" "allowed-tools coverage: lint crashed"   "mkdir -p skills/zz-broken/SKILL.md"
+mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops: skills/server-ops/references/zz.md:"   "mkdir -p skills/server-ops/references && printf 'K\xc5\x8d: run \x60pin-plan.py\x60 first.\n' > skills/server-ops/references/zz.md"
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
