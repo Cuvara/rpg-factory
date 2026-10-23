@@ -144,7 +144,7 @@ if [ -f "$pw" ]; then
     copies=$(grep -liF -- "$p" skills/*/SKILL.md skills/*/references/*.md 2>/dev/null | grep -vxF "$pw")
     [ -z "$copies" ] && ok || bad "parallel-work: policy phrase '$p' copied outside $pw: $(echo $copies)"
   done
-  blocking=$(grep -niE 'ask the user|wait for (the user.s )?approval|confirm with the user|permissionDecision' "$pw")
+  blocking=$(grep -niE 'ask the user|prompt the user|wait for (the user.s |user |explicit )?(approval|confirmation)|(get|obtain|need|needs|require|requires) (the user.s |user |explicit )?(approval|confirmation)|confirm with the user|until the user|permissionDecision' "$pw")
   [ -z "$blocking" ] && ok || bad "parallel-work: blocking wording in $pw: $(head -1 <<<"$blocking")"
   gates=$(grep -n 'gate-create' "$pw" | grep -viE '\bnever\b')
   [ -z "$gates" ] && ok || bad "parallel-work: gate-create outside a 'never' sentence: $(head -1 <<<"$gates")"

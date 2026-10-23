@@ -15,10 +15,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   their rules; nothing new asks or blocks. factory-core `SKILL.md`, `git-safety.md` (rule 10 now points here,
   rule 5 names the lead's integration-branch merges), `report.md` (optional parallel-work ledger) and
   `.claude/CLAUDE.md` point to it without copying it.
-- `tests/skills-lint.sh` checks the policy is linked, exists in one copy, contains no blocking wording and keeps
-  the release and `human_gates` rules; `tests/parallel-policy.test.sh` proves those checks fail on a mutated
-  plugin copy; `tests/orca-commands.test.sh` verifies every cited `orca` command against `orca --help` (skipped
-  when Orca is not installed, and in `--no-workspace` runs).
+- `tests/skills-lint.sh` checks the policy is linked, exists in one copy (by its signature phrases), contains no
+  blocking wording (ask/prompt the user, wait for / get / require approval or confirmation, until the user,
+  `permissionDecision`) and keeps the release and `human_gates` rules; `tests/parallel-policy.test.sh` proves those
+  checks fail on a mutated plugin copy; `tests/orca-commands.test.sh` verifies every cited `orca` command against
+  `orca --help` and every `--flag` cited with it against that command's `--help` (skipped when Orca is not
+  installed, and in `--no-workspace` runs).
 
 ## [1.0.5] - 2026-10-22
 

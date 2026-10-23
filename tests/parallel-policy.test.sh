@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The parallel-work policy checks in tests/skills-lint.sh bite: on a throwaway copy of this plugin the pristine
-# copy passes the lint, and each mutation (lost link, copied policy text, blocking wording, gate-create, a
+# copy passes the lint, and each mutation (lost link, copied policy text, blocking wording variants, gate-create, a
 # dropped safety rule, a missing policy file) makes the copy's own lint FAIL with the expected message.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -42,6 +42,9 @@ mutate "'wait for approval' added to the policy" "blocking wording in $PW" \
   "echo '- Wait for approval before integrating.' >> $PW"
 mutate "'ask the user' added to the policy" "blocking wording in $PW" \
   "echo '- Ask the user before each dispatch.' >> $PW"
+mutate "'requires approval' added to the policy" "blocking wording in $PW"   "echo '- Integration requires approval from the user.' >> $PW"
+mutate "'get explicit confirmation' added to the policy" "blocking wording in $PW"   "echo '- Get explicit confirmation before each dispatch.' >> $PW"
+mutate "'until the user' added to the policy" "blocking wording in $PW"   "echo '- Workers idle until the user replies.' >> $PW"
 mutate "gate-create recommended" "gate-create outside a 'never' sentence" \
   "echo '- Use \`orca orchestration gate-create\` before each merge.' >> $PW"
 mutate "human_gates dropped" "safety rule missing from $PW: 'human_gates'" \

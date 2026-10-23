@@ -47,7 +47,7 @@ scope it noticed.
 ## 4. Worktrees
 
 - One worktree per implementation task, on a new `<type>/<area>/<topic>` branch from the recorded base.
-- Only the dispatching tool creates worktrees: Orca (`orca orchestration worker-start` with `--worktree`,
+- Only the dispatching tool creates worktrees: Orca (`orca orchestration worker-start --worktree <selector>`,
   or `orca worktree create`) or a Claude Code agent with `isolation: "worktree"`. Never a second clone,
   never a nested repository.
 - Never edit another task's worktree. Read-only inspection of it is fine.
