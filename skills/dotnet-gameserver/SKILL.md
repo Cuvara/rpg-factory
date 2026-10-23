@@ -67,7 +67,7 @@ knobs, metrics, golden vectors and the AOT warning baseline:
   Unity compiles it as **source** (ADR-10), so the server build is the first place a C# 10 feature
   or a missing `using` must fail.
 - **Net layer.** `GameServer/Net/WireProtocol.cs` (4-byte BE length, Protobuf or legacy JSON per
-  connection, ADR-9); `Net/Transport/` (TCP/KCP, `KcpCrypto` = kcp-go AES PSK, ADR-8);
+  connection, ADR-9); `Net/Transport/` (KCP/UDP only, ADR-32; `KcpCrypto` = kcp-go AES PSK, ADR-8);
   `Net/Sealed/` (X25519 + ChaCha20-Poly1305 sealed session with `SequenceValidator` as the replay
   counter, ADR-22; per-pod Ed25519 `ServerIdentity`, ADR-25); `Net/Security/SessionKey.cs` is
   superseded as an encryption key. `Net/Generated/` is protoc output (wire-contract).

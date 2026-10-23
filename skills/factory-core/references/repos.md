@@ -22,7 +22,7 @@ the client repo holds ~55 C# files. The client consumes the packages as git-tag 
 (`Packages/manifest.json` + `packages-lock.json`) - see contracts `package-pins` and `sgl-pin`.
 
 Communication: Unity client -> Nakama (auth/economy/social) and -> Gateway (auth +
-redirect only, ADR-3) -> Game server (direct TCP/KCP). Wire: 4-byte BE length prefix +
+redirect only, ADR-3; TCP, optionally TLS) -> Game server (direct, KCP/UDP only, ADR-32). Wire: 4-byte BE length prefix +
 Protobuf (legacy JSON accepted), defined once in `backend/shared/proto/wire.proto`.
 `Shared.GameLogic` is pure C# shared by the server and the Unity client (ADR-10), pinned by
 the client as a UPM git dependency `com.rpgmmo.shared-gamelogic#sgl-vX.Y.Z`.

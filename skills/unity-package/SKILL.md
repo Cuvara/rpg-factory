@@ -2,7 +2,7 @@
 name: unity-package
 description: Use when changing the source of a Cuvara Unity package itself - com.cuvara.netcode (Netcode repo), com.cuvara.dots (UnityDots repo) or com.cuvara.uitoolkit (UIToolkit repo) - including its runtime code, tests, samples, docs, CI, generated files, or preparing a package release up to "ready to tag". Also runs the Netcode leg (Wire.cs resync) when wire-contract invokes it. Not for moving the client's pins to a new package tag (pin-bump), not for client code that uses the packages (client-integration), and not for server or proto changes.
 argument-hint: "[package] [task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/netcode-headless.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
 ---
 # Unity package development (Netcode, UnityDots, UIToolkit)
 

@@ -22,7 +22,7 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    `commit -a`.
 5. **Commit, push, PR, merge only on request - except worker commits and task-branch integration inside a
    task the user asked for (`parallel-work.md`); tags and releases only when authorized.** Commit messages
-   follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target `develop`, and the
+   follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target the repo's default branch (`registry.json` `repos.<key>`), and the
    repos squash-merge. Inside a delegated task, worker commits on their task branches and merging worker
    branches into the task's integration branch are the lead's decision (`parallel-work.md`); merging into
    protected branches and pushing stay on request. Without explicit release authorization
@@ -67,7 +67,8 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
 
 ## What the guard does
 
-Inside the workspace (any repo or worktree under it), for Bash and PowerShell. The command is
+Inside the workspace (any repo or worktree under it, and a linked worktree outside it - e.g. an Orca worktree -
+whose main checkout is in the workspace: that checkout's rules apply), for Bash and PowerShell. The command is
 expanded first: wrappers (`env`, `sudo`, `timeout`, `nohup`, `nice`, `command`, `exec`, `xargs`,
 `find -exec`) are peeled, nested shells (`bash/sh -c`, `eval`, `cmd /c`, `powershell -c`) are
 parsed recursively, repo git aliases are expanded, and PowerShell is tokenized with its own
@@ -85,7 +86,7 @@ quoting (`` ` `` escape, `&` call operator, `git.exe`).
 | `branch -D`, `branch -f`, `checkout -B`, `switch -C`, `update-ref`, `gc --prune`, `reflog expire`, `prune` | warn | rewrites or drops refs |
 | `push` (any; force and delete-ref variants named) | warn | publishes or rewrites remote state |
 | `add -A/--all/./:/`, `commit -a` | warn | stages the user's changes |
-| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull` (unless `--ff-only`) on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | warn | protected branch |
+| `commit`, `merge`, `cherry-pick`, `revert`, `am`, `pull` (`merge`/`pull` unless `--ff-only`) on a protected branch (per repo in the registry; a worktree uses its main checkout's list) | warn | protected branch |
 | `branch -m/-d` of a protected branch; `fetch <src>:<dst>` into a local branch (`+` forced or not) | warn | moves or drops a protected/local branch |
 | `remote add/set-url/remove/rename`, `config` writes to `alias.*`, `remote.*.url/pushurl`, `url.*.insteadOf`, `core.hooksPath`, `credential.*`; `symbolic-ref` writes | warn | redirects fetch/push or hides what runs |
 | `commit --amend`, `rebase`, `filter-branch/filter-repo` | warn | rewrites history |
