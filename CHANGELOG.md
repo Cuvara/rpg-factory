@@ -10,7 +10,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   or `isolation: "worktree"`, never a second clone); one Unity writer per client project; shared exclusive
   resources go to one task at a time and a task without one reports `NOT_RUN`; QA and review run in parallel on
   a recorded candidate commit; the lead re-verifies, integrates in dependency order and cleans up only its own
-  worktrees. Orca is the preferred coordinator (load `orca skills get orchestration`; never a decision gate for
+  worktrees, keeping task branches (`orca worktree rm` also deletes a merged checked-out branch, so it is only for
+  disposable branches). Orca is the preferred coordinator (load `orca skills get orchestration`; never a decision gate for
   routine work) with Claude Code worktree agents as the fallback. Tags, releases, deploys and `human_gates` keep
   their rules; nothing new asks or blocks. factory-core `SKILL.md`, `git-safety.md` (rule 10 now points here,
   rule 5 names the lead's integration-branch merges), `report.md` (optional parallel-work ledger) and
@@ -20,7 +21,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `permissionDecision`) and keeps the release and `human_gates` rules; `tests/parallel-policy.test.sh` proves those
   checks fail on a mutated plugin copy; `tests/orca-commands.test.sh` verifies every cited `orca` command against
   `orca --help` and every `--flag` cited with it against that command's `--help` (skipped when Orca is not
-  installed, and in `--no-workspace` runs).
+  installed, and in `--no-workspace` runs), including that `orca worktree rm` still deletes branches as the
+  policy warns.
 
 ## [1.0.5] - 2026-10-22
 

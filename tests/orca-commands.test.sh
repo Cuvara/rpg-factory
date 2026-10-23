@@ -59,6 +59,13 @@ grep -q '^OK orca orchestration worker-start$' <<<"$out" && grep -q '^OK orca sk
 grep -q '^OK orca status --json$' <<<"$out" && grep -q '^OK orca orchestration worker-start --worktree$' <<<"$out" \
   && ok "the cited flags --json and --worktree exist in their commands' --help" || no "cited flags not checked" "$out"
 
+# the policy's cleanup caveat matches Orca: `orca worktree rm` says it deletes the checked-out branch
+if orca worktree rm --help 2>&1 | grep -qi 'delete the checked-out local branch'; then
+  grep -qF 'also deletes the checked-out local branch' "$ROOT/skills/factory-core/references/parallel-work.md"     && ok "orca worktree rm deletes merged branches and parallel-work.md says so"     || no "orca worktree rm deletes merged branches but parallel-work.md does not warn about it"
+else
+  ok "orca worktree rm --help no longer mentions branch deletion (caveat in parallel-work.md is conservative)"
+fi
+
 # the checker bites: made-up commands and flags are reported MISSING
 printf 'Use `orca orchestration made-up-cmd` and `orca nosuch thing`.\n' > "$TMP/bad.md"
 out=$(check "$TMP/bad.md")

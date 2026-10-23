@@ -100,9 +100,11 @@ rule 5).
 
 ## 8. Cleanup
 
-Remove only worktrees that the lead's own tasks created, after they are integrated and clean:
-`git worktree remove <path>` without `--force`, or `orca worktree rm` for Orca-created ones. Keep the
-branches unless the user asks to delete them. Release settled Orca workers with
+Remove only worktrees that the lead's own tasks created, after they are integrated and clean, with
+`git worktree remove <path>` without `--force`. Keep the task branches unless the user asks to delete them.
+`orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see its
+`--help`), so use it only for a worktree whose branch is disposable (an Orca-created QA or review branch
+with no commits) or whose branch the user asked to delete. Release settled Orca workers with
 `orca orchestration worker-release`.
 
 ## 9. Not authorized by this policy

@@ -148,6 +148,9 @@ if [ -f "$pw" ]; then
   [ -z "$blocking" ] && ok || bad "parallel-work: blocking wording in $pw: $(head -1 <<<"$blocking")"
   gates=$(grep -n 'gate-create' "$pw" | grep -viE '\bnever\b')
   [ -z "$gates" ] && ok || bad "parallel-work: gate-create outside a 'never' sentence: $(head -1 <<<"$gates")"
+  if grep -qF 'orca worktree rm' "$pw"; then  # it also deletes merged local branches; the policy keeps branches
+    grep -qF 'also deletes the checked-out local branch' "$pw" && ok       || bad "parallel-work: $pw cites orca worktree rm without its branch-deletion caveat"
+  fi
   for p in 'rule 5' 'explicit release authorization' 'human_gates'; do
     grep -qF -- "$p" "$pw" && ok || bad "parallel-work: safety rule missing from $pw: '$p'"
   done

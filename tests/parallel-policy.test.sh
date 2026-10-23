@@ -51,6 +51,7 @@ mutate "human_gates dropped" "safety rule missing from $PW: 'human_gates'" \
   "sed -i 's/human_gates/gates/g' $PW"
 mutate "rule 5 dropped" "safety rule missing from $PW: 'rule 5'" \
   "sed -i 's/rule 5/the rules/g' $PW"
+mutate "orca worktree rm caveat dropped" "cites orca worktree rm without its branch-deletion caveat"   "sed -i 's/also deletes the checked-out local branch/may tidy branches/' $PW"
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
