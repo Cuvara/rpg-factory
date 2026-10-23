@@ -132,6 +132,32 @@ case "$desc" in *game-ai-workflows*web-game-factory*) ok;; *) bad "factory-core 
 claims=$(grep -lE "^description: .*(game design document|GDD|feature registry|web game)" "$ROOT"/skills/*/SKILL.md | grep -v factory-core || true)
 if [ -z "$claims" ]; then ok; else bad "skills claim other plugins' triggers: $claims"; fi
 
+# parallel-work policy: one canonical copy in factory-core/references/parallel-work.md, linked from the
+# files that defer to it, never blocking, and keeping the release and human-gate rules
+pw="skills/factory-core/references/parallel-work.md"
+if [ -f "$pw" ]; then
+  ok
+  for f in skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md skills/factory-core/references/report.md; do
+    grep -q 'parallel-work\.md' "$f" && ok || bad "parallel-work: $f does not link parallel-work.md"
+  done
+  for p in 'Lead/Integrator' 'worker-start' 'stable candidate commit'; do
+    copies=$(grep -liF -- "$p" skills/*/SKILL.md skills/*/references/*.md 2>/dev/null | grep -vxF "$pw")
+    [ -z "$copies" ] && ok || bad "parallel-work: policy phrase '$p' copied outside $pw: $(echo $copies)"
+  done
+  blocking=$(grep -niE 'ask the user|prompt the user|wait for (the user.s |user |explicit )?(approval|confirmation)|(get|obtain|need|needs|require|requires) (the user.s |user |explicit )?(approval|confirmation)|confirm with the user|until the user|permissionDecision' "$pw")
+  [ -z "$blocking" ] && ok || bad "parallel-work: blocking wording in $pw: $(head -1 <<<"$blocking")"
+  gates=$(grep -n 'gate-create' "$pw" | grep -viE '\bnever\b')
+  [ -z "$gates" ] && ok || bad "parallel-work: gate-create outside a 'never' sentence: $(head -1 <<<"$gates")"
+  if grep -qF 'orca worktree rm' "$pw"; then  # it also deletes merged local branches; the policy keeps branches
+    grep -qF 'also deletes the checked-out local branch' "$pw" && ok       || bad "parallel-work: $pw cites orca worktree rm without its branch-deletion caveat"
+  fi
+  for p in 'rule 5' 'explicit release authorization' 'human_gates'; do
+    grep -qF -- "$p" "$pw" && ok || bad "parallel-work: safety rule missing from $pw: '$p'"
+  done
+else
+  bad "parallel-work: $pw missing"
+fi
+
 total=$((pass + fail))
 echo "skills lint: $total checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
