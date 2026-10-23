@@ -211,6 +211,13 @@ check allow "$FEATURE" "git merge develop"
 check allow "$FEATURE" "git cherry-pick abc123"
 check warn "$SERVER" "git pull"                                # may merge into protected develop (v0.4)
 check allow "$SERVER" "git pull --ff-only"
+check allow "$SERVER" "git merge --ff-only origin/develop"          # a fast-forward creates no commit
+check warn "$SERVER" "git merge origin/develop"
+check allow "$SERVER" "git pull --rebase=false --ff-only"           # --rebase=false|no is not a rebase
+check allow "$SERVER" "git pull --rebase=OFF --ff-only"           # --rebase=OFF|no is not a rebase
+check allow "$SERVER" "git pull --rebase=no --ff-only"
+check warn "$SERVER" "git pull --rebase=false"                      # still may merge
+check warn "$SERVER" "git pull --rebase=merges"
 check allow "$FEATURE" "git pull"
 check allow "$SERVER" "git merge --abort"
 check allow "$SERVER" "git fetch --prune"
@@ -248,6 +255,32 @@ git -C "$SERVER" worktree add -q "$TMP/ws/srv-wt" -b feat/server/wt 2>/dev/null
 check allow "$TMP/ws/srv-wt" "git commit -m 'feat(server): x'"
 git -C "$TMP/ws/srv-wt" switch -q -c release-9 2>/dev/null
 check warn "$TMP/ws/srv-wt" "git commit -m x"
+# ---- linked worktrees OUTSIDE the workspace root (Orca worktrees, sibling dirs) are classified as their main
+# checkout when it lies in the workspace (registry repo or not); a main checkout outside it stays silent
+OWT="$TMP/orca/server-wt"; OPW="$TMP/orca/server-release"; OFW="$TMP/orca/rpgf-wt"; OXW="$TMP/orca/other-wt"
+git -C "$SERVER" worktree add -q "$OWT" -b feat/server/outside 2>/dev/null
+git -C "$SERVER" worktree add -q "$OPW" -b release-7 2>/dev/null
+git -C "$WS" init -q -b main rpg-factory && git -C "$WS/rpg-factory" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$WS/rpg-factory" worktree add -q "$OFW" -b feat/core/outside 2>/dev/null
+git -C "$OUT" worktree add -q "$OXW" -b feat/other 2>/dev/null
+check allow "$OWT" "git commit -m 'feat(server): x'"
+check allow "$OWT" "git status"
+check high "$OWT" "git tag -a v9.9.9 -m x"
+check high "$OWT" "git push origin --tags"
+check warn "$OWT" "git push --force origin main"
+check warn "$OWT" "git reset --hard HEAD~3"
+check high "$SERVER" "git -C $OWT tag -a v9.9.9 -m x"            # from inside the workspace via -C
+check high "$OUT" "git -C $OWT push origin --tags"                # from outside the workspace via -C
+check warn "$OUT" "git -C $OWT push --force origin feat/server/outside"
+check warn "$OPW" "git commit -m x"                               # protected branch in the outside worktree
+check warn "$OPW" "git merge feat/x"
+check high "$OFW" "git tag -a v9.9.9 -m x"                        # non-registry repo whose main checkout is in the workspace
+check warn "$OFW" "git push --force origin main"
+check allow "$OFW" "git commit -m 'feat(core): x'"
+check allow "$OXW" "git tag -a v9.9.9 -m x"                       # main checkout outside the workspace: no opinion
+check allow "$OXW" "git push --force origin main"
+check allow "$SERVER" "git -C $OXW tag v9.9.9"
+check allow "$TMP/orca/missing" "git tag v9.9.9"                  # not a repo / missing dir: no opinion
 # ---- 1.0.1: the tripwire latch is gone - state files left by older versions (a session LATCH, open workspace
 # events, a legacy single-file latch) never block anything
 mkdir -p "$TMP/rpg-factory/guardtest" && echo "test violation" > "$TMP/rpg-factory/guardtest/LATCH"

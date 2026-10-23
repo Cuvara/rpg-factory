@@ -29,6 +29,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+- Git and file guards: a linked worktree outside the workspace root (Orca worktrees, sibling dirs) whose main
+  checkout lies in the workspace now gets that checkout's rules (tags, pushes, protected branches, secrets,
+  generated paths), from its cwd or through `git -C`; before, every command there was silent. The worktree is
+  found from its `.git` file (no extra git process); a main checkout outside the workspace stays silent.
+- Git guard: `merge --ff-only` on a protected branch no longer warns (a fast-forward creates no commit), and
+  `pull --rebase=false|no|off|0` (any case) is no longer treated as a rebase.
 - `tests/skills-lint.sh`: the dev-tools and allowed-tools blocks fail closed - a crash of their Python check is a
   FAIL (it passed silently before), and skill files are read as UTF-8 (a non-ASCII reference crashed the check
   under a cp1252 locale). `tests/parallel-policy.test.sh` covers both. parallel-work.md says an
