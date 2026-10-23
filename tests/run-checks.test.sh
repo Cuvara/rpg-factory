@@ -22,12 +22,19 @@ jq --arg ws "$WS" '
         {id: "t-root",     cwd: ".", run: "test -f {plugin_root}/registry.json && echo \"OK: 1\"", parser: "regex:^OK: \\d+", evidence: "e"},
         {id: "t-needs",   cwd: ".", run: "echo should-not-run", evidence: "e", needs: ["t-fail"]},
         {id: "t-regex",    cwd: ".", run: "echo nothing-useful", parser: "regex:^OK: \\d+", evidence: "e"},
+        {id: "t-elsewhere", cwd: "backend/deploy", run: "echo elsewhere", evidence: "e"},
+        {id: "t-needs-ok", cwd: ".", run: "echo needs-ok", evidence: "e", needs: ["t-pass"]},
+        {id: "t-needs-late", cwd: ".", run: "echo needs-late", evidence: "e", needs: ["t-late"]},
+        {id: "t-late",     cwd: ".", run: "echo late-prereq", evidence: "e"},
         {id: "t-pollute",  cwd: ".", run: "touch leftover.txt", evidence: "e"},
         {id: "t-scoped",   cwd: "backend/gateway", run: "printf \"=== RUN TestS\\n--- PASS: TestS\\nok  s 0.1s\\n\"", parser: "go-test", evidence: "e"}
       ],
       extended: [{id: "t-ext", cwd: ".", run: "echo --- PASS: TestX", parser: "go-test", trigger: "always", evidence: "e"}],
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
-  | (.modules[] | select(.id == "server.nakama")) |= (.tools = ["nosuchtool"] | .checks.fast = [{id: "t-tool", cwd: ".", run: "no-such-tool-xyz", evidence: "e"}])
+  | (.modules[] | select(.id == "server.gateway") | .checks.fast[0].run) as $tpass
+  | (.modules[] | select(.id == "server.shared")) |= (.tools = [] | .checks = {
+      fast: [{id: "t-dup", cwd: ".", run: $tpass, parser: "go-test", evidence: "other text, same command"}], extended: [], external: []})
+  | (.modules[] | select(.id == "server.nakama")) |=(.tools = ["nosuchtool"] | .checks.fast = [{id: "t-tool", cwd: ".", run: "no-such-tool-xyz", evidence: "e"}])
 ' "$ROOT/registry.json" > "$P/registry.json"
 export RPG_FACTORY_WORKSPACE="$WS" CLAUDE_PLUGIN_ROOT="$P" TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"
 pass=0; fail=0
@@ -47,6 +54,9 @@ if [ -n "$RPGF_WINDOWS" ]; then   # the plugin root as Windows reports it (C:\..
   out="$full"
 fi
 expect t-needs BLOCKED
+expect t-needs-ok PASS        # its prerequisite t-pass passed earlier in this run
+expect t-needs-late BLOCKED   # its prerequisite t-late is listed after it: not PASS in this run yet
+expect t-late PASS
 expect t-regex FAIL
 expect t-pollute FAIL
 expect t-ext HUMAN_REQUIRED
@@ -150,6 +160,67 @@ if [ -n "$RPGF_WINDOWS" ]; then
     && okk "workspace key ignores case and slash style" || nok "workspace key is case-sensitive"
   sout=$(RPG_FACTORY_WORKSPACE="$(tr '[:lower:]' '[:upper:]' <<<"$WS")" sts); sexp t-scoped STALE "same evidence through an upper-cased RPG_FACTORY_WORKSPACE"
 fi
+
+# ---- truthful evidence (audit TC-EVIDENCE)
+rc_of() { "$@" >"$TMP/rc.out" 2>&1; echo $?; }
+# the scope covers the check's OWN module even when the check runs elsewhere (t-elsewhere: module gateway, cwd backend/deploy)
+python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-elsewhere --json >/dev/null
+sout=$(sts); sexp t-elsewhere PASS "check running outside its module, fresh"
+echo "package x // own-module edit" > "$S/backend/gateway/x.go"; sout=$(sts)
+sexp t-elsewhere STALE "edit in the check's own module path, outside its cwd"
+# evidence recorded under an older (narrower) scope is STALE: the registry now gives the check another scope
+EVF="$EV/server.gateway__t-elsewhere.json"
+python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-elsewhere --json >/dev/null
+jq '.scopes = ["backend/deploy"]' "$EVF" > "$EVF.tmp" && mv "$EVF.tmp" "$EVF"
+sout=$(sts); sexp t-elsewhere STALE "record made with an older scope"
+jq -e '.checks[] | select(.check == "t-elsewhere") | .detail | test("scope changed")' <<<"$sout" >/dev/null && okk "STALE names the scope change" || nok "scope-change reason"
+# needs: a prerequisite skipped by --only does not count as passed
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-needs-ok --json); rc=$?
+expect t-needs-ok BLOCKED
+jq -e '.results[] | select(.check == "t-needs-ok") | .reason | test("t-pass \\(SKIPPED\\)")' <<<"$out" >/dev/null && okk "BLOCKED names the prerequisite and its state" || nok "needs reason: $(jq -c '.results[] | select(.check == "t-needs-ok") | .reason' <<<"$out")"
+[ $rc -eq 1 ] && okk "--only a check whose prerequisite was skipped: exit 1" || nok "--only t-needs-ok exit $rc"
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-pass t-needs-ok --json)
+expect t-needs-ok PASS
+# two modules share one command (dedup): each gets a record for its OWN definition and identity
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/shared/s.go --only t-pass t-dup --json); rc=$?
+expect t-pass PASS
+expect t-dup PASS
+[ $rc -eq 0 ] && okk "shared command: exit 0" || nok "shared command exit $rc"
+sout=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/shared/s.go --status --json)
+sexp t-pass PASS "first module of a shared command, right after the run"
+sexp t-dup PASS "second module of a shared command (other evidence text), right after the run"
+# a changed registry command: STALE in run-checks --status AND in factory-status
+cp "$P/registry.json" "$TMP/registry.bak"
+jq '(.modules[] | select(.id == "server.gateway") | .checks.fast[] | select(.id == "t-pass") | .run) += " # changed"' "$TMP/registry.bak" > "$P/registry.json"
+sout=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/shared/s.go --status --json)
+sexp t-pass STALE "registry changed the check command"
+fs=$(python3 -B "$P/scripts/factory-status.py" --json 2>/dev/null)
+jq -e '.evidence.server[] | select(.check == "server.gateway/t-pass") | .state == "STALE" and (.detail | test("definition changed"))' <<<"$fs" >/dev/null \
+  && okk "factory-status: changed registry command -> STALE (same grade as run-checks --status)" || nok "factory-status grade: $(jq -c '.evidence.server[]? | select(.check == "server.gateway/t-pass")' <<<"$fs")"
+jq -e '.evidence.server[] | select(.check == "server.shared/t-dup") | .state == "PASS"' <<<"$fs" >/dev/null \
+  && okk "factory-status: unchanged check stays PASS" || nok "factory-status t-dup: $(jq -c '.evidence.server[]? | select(.check == "server.shared/t-dup")' <<<"$fs")"
+cp "$TMP/registry.bak" "$P/registry.json"
+# nothing verified is never a silent success: unknown names and outside paths are usage errors (exit 2)
+RC="$P/scripts/run-checks.py"
+[ "$(rc_of python3 -B "$RC" --repo server --paths backend/gateway/x.go --tier bogus)" = 2 ] && grep -q "unknown --tier" "$TMP/rc.out" && okk "--tier bogus: exit 2" || nok "--tier bogus: $(cat "$TMP/rc.out" | tail -2)"
+[ "$(rc_of python3 -B "$RC" --repo server --paths backend/gateway/x.go --only t-typo)" = 2 ] && grep -q "t-typo" "$TMP/rc.out" && okk "--only typo: exit 2" || nok "--only typo: $(tail -2 "$TMP/rc.out")"
+[ "$(rc_of python3 -B "$RC" --repo server --paths backend/gateway/x.go --timeout abc)" = 2 ] && ! grep -q Traceback "$TMP/rc.out" && okk "--timeout abc: exit 2, no traceback" || nok "--timeout abc: $(tail -2 "$TMP/rc.out")"
+mkdir -p "$TMP/elsewhere"; touch "$TMP/elsewhere/f.go"
+for args in "--paths $TMP/elsewhere/f.go" "--paths $TMP/elsewhere/f.go --status" "--paths ../elsewhere/f.go"             "--paths backend/../../elsewhere/f.go" "--paths backend/gateway/x.go $TMP/elsewhere/f.go"; do
+  # shellcheck disable=SC2086
+  [ "$(rc_of python3 -B "$RC" --repo server $args)" = 2 ] && grep -q "outside the server checkout" "$TMP/rc.out" && okk "path outside the repo ($args): exit 2" || nok "outside path ($args): $(tail -2 "$TMP/rc.out")"
+done
+git -C "$S" worktree add -q "$TMP/wt-server" 2>/dev/null
+# checks run in the checkout run-checks runs in: a file of another linked worktree is a usage error, not
+# evidence from the wrong tree; from inside that worktree the same absolute path is fine
+[ "$(rc_of python3 -B "$RC" --repo server --paths "$TMP/wt-server/backend/gateway/x.go" --dry-run)" = 2 ] && grep -q "another checkout of server" "$TMP/rc.out"   && okk "path in another linked worktree of the repo: exit 2, run from that worktree" || nok "worktree path from main checkout: $(tail -2 "$TMP/rc.out")"
+out=$(cd "$TMP/wt-server" && python3 -B "$RC" --repo server --paths "$TMP/wt-server/backend/gateway/x.go" --dry-run --json); rc=$?
+[ $rc -eq 0 ] && [ "$(st t-pass)" = SKIPPED ] && okk "path inside the worktree run-checks runs in routes like the repo path" || nok "worktree path from the worktree: rc=$rc t-pass=$(st t-pass)"
+git -C "$S" worktree remove --force "$TMP/wt-server"
+o=$(python3 -B "$RC" --repo server --paths backend/TEAM.md 2>&1); rc=$?
+[ $rc -eq 0 ] && grep -q "none registered" <<<"$o" && okk "no check registered for the paths: says so (exit 0)" || nok "none registered: rc=$rc $o"
+o=$(python3 -B "$RC" --repo server --paths backend/TEAM.md --status 2>&1)
+grep -q "none registered" <<<"$o" && okk "--status: no check registered says so" || nok "--status none registered: $o"
 
 total=$((pass + fail)); echo "run-checks tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

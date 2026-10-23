@@ -9,7 +9,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 
 The Factory workflow every rpg-factory skill builds on. Task: $ARGUMENTS
 
-## Live snapshot (computed now - changed paths shown are the user's baseline)
+## Live snapshot (computed now - uncommitted paths shown are the user's baseline, not routed)
 
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh`
 
@@ -55,12 +55,14 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
      it; a shortened relative path needs manual approval and stalls unattended sessions)
    (repo-relative; for a benchmark or measurement that is the bench harness / `docs/BENCHMARK.md` /
    results, not the code being measured).
+   The bare snapshot never routes uncommitted baseline paths; only this call (or branch commits) routes the task.
    Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -
    also when the user only wants a plan or a review; naming the lead is not enough, its workflow,
    validation and gates are in that skill. The lead runs its **legs**. A task spanning repos has
    **one** lead: the driver of the contract that links them (e.g. a Nakama RPC used by the client →
    `server-services`; a wire field → `wire-contract`), shown as **Cross-repo** in the downstream
-   repo's routing; the other repos' skills are its follow-ups.
+   repo's routing; the other repos' skills are its follow-ups. `no specialised lead - factory-core only` means no
+   Skill call: follow the named CLAUDE.md with this workflow. A `Warning: not routed` path needs its own `--repo`.
    **Co-leads** run after the lead in the order shown (code before deploy before measurement).
    **Tech** skills (routing `tech`) are never leads, legs or follow-ups. The lead invokes them (Skill
    tool) before implementing, debugging or reviewing code, or answering how it works or how to test it -
@@ -92,10 +94,10 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 |---|---|---|
 | PASS | ran, exit 0, evidence found (tests executed > 0, expected line present) | yes |
 | FAIL | failed, no evidence (0 tests / all skipped), or left files in a product repo | no - fix |
-| BLOCKED | a needed check failed, or its directory is missing | no |
+| BLOCKED | a needed check did not PASS in this run, or its directory is missing | no |
 | NOT_AVAILABLE | a required tool is missing here | no - say so |
 | HUMAN_REQUIRED | extended check not approved, or external (CI, Unity Editor, cluster, Docker stack) | report as open |
-| SKIPPED | excluded on purpose (`--only`, duplicate command) | n/a |
+| SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`) | n/a |
 | NOT_RUN | (`--status`) declared for this change, never executed | no - run it |
 | STALE | (`--status`) ran, but the tree changed since (HEAD, diff, untracked, check definition) | no - rerun |
 
