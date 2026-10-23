@@ -8,7 +8,7 @@ through the routing engine, runs the local ones, parses their output and assigns
   FAIL           ran and failed, or ran without evidence (0 tests executed), or left files behind
   SKIPPED        not run by explicit choice (--only filter / --tier excludes it)
   BLOCKED        not run: a check it needs did not PASS in this run (failed, skipped, or listed after it),
-                 or its working directory does not exist
+                 its working directory does not exist, or the workspace cannot be translated for bash
   NOT_AVAILABLE  not run: a required tool is missing on this machine
   HUMAN_REQUIRED not run: extended check without --approve, or an external check (CI, Unity
                  Editor, cluster, Docker stack) that a person must run or authorise
@@ -34,9 +34,12 @@ Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among require
       --status: 0 only when every fast check is PASS on the current tree.
 """
 import json
+import hashlib
 import os
 import posixpath
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -105,8 +108,90 @@ def git(d, *args):
 
 
 def worktree_state(d):
-    """Paths that are changed/untracked (submodule internals excluded) - to detect check pollution."""
-    return set(l[3:] for l in git(d, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=all").splitlines())
+    """Fingerprint changed/untracked paths, including edits to already-dirty files."""
+    entries = git(d, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all").split("\0")
+    paths = set()
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) >= 4:
+            status, path = entry[:2], entry[3:]
+            paths.add(path)
+            if "R" in status or "C" in status:
+                if i < len(entries) and entries[i]:
+                    paths.add(entries[i])  # the source path follows the destination in porcelain -z output
+                i += 1
+    state = {}
+    for path in paths:
+        full = os.path.join(d, path)
+        try:
+            if os.path.islink(full):
+                state[path] = "symlink:" + os.readlink(full)
+            elif os.path.isfile(full):
+                h = hashlib.sha256()
+                with open(full, "rb") as f:
+                    for block in iter(lambda: f.read(1024 * 1024), b""):
+                        h.update(block)
+                state[path] = f"{h.hexdigest()}:{os.stat(full).st_mode}"
+            elif os.path.isdir(full):
+                state[path] = "directory"
+            else:
+                state[path] = "missing"
+        except OSError as e:
+            state[path] = f"unreadable:{e}"
+    return state
+
+
+def bash_env_path(path, bash):
+    """Convert native workspace paths to the selected bash's path syntax; fail closed."""
+    if os.name != "nt":
+        return os.path.realpath(path)
+    exe = os.path.normcase(os.path.realpath(bash))
+    if "\\windows\\system32\\bash.exe" in exe:
+        conv = subprocess.run([bash, "-c", "wslpath -u \"$1\"", "runner", path], capture_output=True, text=True, timeout=10)
+        return conv.stdout.strip() if conv.returncode == 0 and conv.stdout.strip().startswith("/") else None
+    cygpath = shutil.which("cygpath")
+    if not cygpath:
+        return None
+    conv = subprocess.run([cygpath, "-u", path], capture_output=True, text=True, timeout=10)
+    return conv.stdout.strip() if conv.returncode == 0 else None
+
+
+def run_check(command, cwd, env, timeout):
+    """Run bash in an isolated process group and clean up its entire child tree on timeout."""
+    bash = shutil.which("bash")
+    if not bash:
+        return 127, "could not start: bash not found", False, "not started"
+    kwargs = dict(cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                  encoding="utf-8", errors="replace", env=env)
+    if os.name == "nt":
+        p = subprocess.Popen([bash, "-c", command], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **kwargs)
+    else:
+        p = subprocess.Popen([bash, "-c", command], start_new_session=True, **kwargs)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+        return p.returncode, out or "", False, "not needed"
+    except subprocess.TimeoutExpired:
+        pids = [p.pid]
+        cleanup = "success"
+        try:
+            if os.name == "nt":
+                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, timeout=5)
+                cleanup = "success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode}: {killer.stderr.strip() or killer.stdout.strip()})"
+            else:
+                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, timeout=3)
+                if listing.returncode == 0:
+                    pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
+                os.killpg(p.pid, signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError) as e:
+            cleanup = f"failed ({e})"
+        try:
+            out, _ = p.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            out = ""
+            cleanup += "; pipes/process did not close within 3 s"
+        return 124, f"TIMEOUT after {timeout} s; pids={pids}; cleanup={cleanup}\n{out or ''}", True, cleanup
 
 
 def parser_for(check):
@@ -234,6 +319,7 @@ def context(a, paths):
 
 def main():
     a = parse_args(sys.argv[1:])
+    requested_ws = os.environ.get(REG["workspace"]["root_env"])
     ws = fstate.workspace(REG)
     repo = context(a, a["paths"])
     rdir = repo["path"]
@@ -264,7 +350,6 @@ def main():
         return next((s for s in sts if s != "PASS"), sts[0] if sts else None)
 
     seen = {}
-    before = None
     for c in repo["checks"]:
         key = (c["module"], c["id"])
         dedup = (c["cwd"], c["run"])
@@ -293,12 +378,9 @@ def main():
         elif dedup in seen:
             # same command + cwd already ran for another module: grade that output against THIS check's
             # definition and record it with this module's own scopes and identity
-            first, out, leftovers = seen[dedup]
+            first, out = seen[dedup]
             scopes = evidence.scopes_for(REG, c["module"], c["cwd"])
             state, counts, reason = grade(parser_for({**m, **c}), first["exit"], out)
-            if leftovers:
-                state = "FAIL"
-                reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
             res.update(state=state, exit=first["exit"], duration_s=0.0, counts=counts,
                        reason=(reason + "; " if reason else "") + f"same command already ran for {first['module']}/{first['check']}; output shared",
                        output_tail=first["output_tail"], identity=evidence.identity(rdir, scopes, {**m, **c}), timestamp=stamp, scopes=scopes,
@@ -311,32 +393,43 @@ def main():
                 state_of[key] = res["state"]
                 results.append(res)
                 continue
-            if before is None:
-                before = worktree_state(rdir)
+            before = worktree_state(rdir)
             scopes = evidence.scopes_for(REG, c["module"], c["cwd"])
             ident = evidence.identity(rdir, scopes, {**m, **c})
             t0 = time.perf_counter()
+            bash = shutil.which("bash")
+            ws_path = bash_env_path(ws, bash) if bash else None
+            repo_path = bash_env_path(os.path.realpath(rdir), bash) if bash else None
+            head = git(rdir, "rev-parse", "HEAD").strip()
+            if not os.path.isdir(ws) or (requested_ws and not os.path.isdir(requested_ws)) or not ws_path or not repo_path or not head:
+                res.update(state="BLOCKED", reason="workspace or checkout path cannot be resolved for the selected bash environment")
+                state_of[key] = res["state"]
+                results.append(res)
+                continue
             try:
-                p = subprocess.run(["bash", "-c", c["run"]], cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=a["timeout"], errors="replace",
-                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
-                code, out = p.returncode, (p.stdout or "") + (p.stderr or "")
+                code, out, timed_out, cleanup = run_check(c["run"], cwd, {
+                    **os.environ, "PYTHONDONTWRITEBYTECODE": "1", "RPG_FACTORY_WORKSPACE": ws_path,
+                    "RPG_FACTORY_REPO_DIR": repo_path, "RPG_FACTORY_REPO_KEY": a["repo"], "RPG_FACTORY_HEAD": head,
+                }, a["timeout"])
             except OSError as e:
-                code, out = 127, f"could not start: {e}"
-            except subprocess.TimeoutExpired as e:
-                code, out = 124, f"TIMEOUT after {a['timeout']} s\n" + ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""))
+                code, out, timed_out, cleanup = 127, f"could not start: {e}", False, "not started"
             res["duration_s"] = round(time.perf_counter() - t0, 1)
             res["exit"] = code
             state, counts, reason = grade(parser_for({**m, **c}), code, out)
             after = worktree_state(rdir)
-            leftovers = sorted(after - before)
+            leftovers = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
             if leftovers:
                 state = "FAIL"
                 reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
+            if timed_out:
+                state = "FAIL"
+                diag = out.splitlines()[0] if out.startswith("TIMEOUT") else f"TIMEOUT after {a['timeout']} s"
+                reason = f"{diag}; cleanup={cleanup}"
             res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
                        identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
             res["log"] = evidence.store(ws, a["repo"], res, out)
-            seen[dedup] = (res, out, leftovers)
+            seen[dedup] = (res, out)
         state_of[key] = res["state"]
         results.append(res)
 

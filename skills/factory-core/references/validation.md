@@ -21,8 +21,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... 
   `--approve <id>` runs a named extended check after the user agreed. `--only <id>` narrows.
 - Each check is graded by its registry `parser` (`go-test`, `dotnet-test`, `exit`,
   `regex:<pattern>`); `needs` makes a check BLOCKED unless its prerequisite PASSes in the same run (failed, skipped or listed after it: BLOCKED).
-- Before/after `git status` of the product repo is compared: a check that leaves files behind
-  is FAIL (pollution), even if it passed.
+- Each executed check is compared with its own pre-run snapshot. Changes to already-dirty files
+  and newly untracked files are FAIL pollution attributed to the check that made them. Gitignored
+  outputs are outside this Git-status based check. Each check runs in an isolated process group;
+  a timeout kills its child tree and is always FAIL (cleanup errors appear in the reason).
+- Every check receives `RPG_FACTORY_WORKSPACE`, `RPG_FACTORY_REPO_DIR`, `RPG_FACTORY_REPO_KEY`,
+  and `RPG_FACTORY_HEAD`. Paths use the selected bash's syntax; on Windows Git Bash paths are
+  translated with `cygpath`, and WSL bash paths with `wslpath`. If translation fails, the check is BLOCKED.
 - Every executed check is stored with the **identity of the tree it ran on** (HEAD, diff and untracked
   files in the check's directory, check definition) and its full log, under
   `~/.local/state/rpg-factory/evidence/`. Cite the log path; the table carries the summary.

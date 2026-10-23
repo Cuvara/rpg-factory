@@ -6,7 +6,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"; cp -r "$ROOT/scripts" "$ROOT/.claude-plugin" "$P/"
-WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
+RUNNER_SOURCE="${1:-${RUN_CHECKS_BASELINE:-}}"
+if [ -n "$RUNNER_SOURCE" ]; then cp "$RUNNER_SOURCE" "$P/scripts/run-checks.py"; fi
+WS="$TMP/work space"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"
 mkdir -p "$S/backend/gateway" "$S/backend/shared" "$S/backend/deploy" "$C/ProjectSettings"; touch "$S/backend/TEAM.md" "$S/backend/gateway/x.go" "$S/backend/shared/s.go" "$S/backend/deploy/d.yaml" "$C/ProjectSettings/ProjectVersion.txt"
 for r in "$S" "$C"; do git -C "$r" init -q -b develop; git -C "$r" -c user.email=t@t -c user.name=t add -A; git -C "$r" -c user.email=t@t -c user.name=t commit -qm init; done
 jq --arg ws "$WS" '
@@ -29,7 +31,15 @@ jq --arg ws "$WS" '
         {id: "t-pollute",  cwd: ".", run: "touch leftover.txt", evidence: "e"},
         {id: "t-scoped",   cwd: "backend/gateway", run: "printf \"=== RUN TestS\\n--- PASS: TestS\\nok  s 0.1s\\n\"", parser: "go-test", evidence: "e"}
       ],
-      extended: [{id: "t-ext", cwd: ".", run: "echo --- PASS: TestX", parser: "go-test", trigger: "always", evidence: "e"}],
+      extended: [
+        {id: "t-ext", cwd: ".", run: "echo --- PASS: TestX", parser: "go-test", trigger: "always", evidence: "e"},
+        {id: "t-isolated-pollute", cwd: ".", run: "touch isolated-leftover.txt", evidence: "e"},
+        {id: "t-isolated-clean", cwd: ".", run: "echo clean", evidence: "e"},
+        {id: "t-isolated-clean2", cwd: ".", run: "echo clean again", evidence: "e"},
+        {id: "t-dirty-edit", cwd: ".", run: "echo edited >> backend/gateway/x.go", evidence: "e"},
+        {id: "t-timeout-tree", cwd: ".", run: "(sleep 20) & echo $! > child.pid; wait", evidence: "e"},
+        {id: "t-env", cwd: ".", run: "env | grep '^RPG_FACTORY_'; pwd", evidence: "e"}
+      ],
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
   | (.modules[] | select(.id == "server.gateway") | .checks.fast[0].run) as $tpass
   | (.modules[] | select(.id == "server.shared")) |= (.tools = [] | .checks = {
@@ -72,7 +82,29 @@ ls "$TMP"/state/evidence/*/runs/server-*.json >/dev/null 2>&1 && { pass=$((pass 
 lg=$(jq -r '.results[] | select(.check == "t-pass") | .log' <<<"$out")
 grep -q -- "--- PASS: TestB" "$lg" 2>/dev/null && { pass=$((pass + 1)); echo "PASS  full log kept ($lg)"; } || { fail=$((fail + 1)); echo "FAIL  full log missing: $lg"; }
 jq -e '.results[] | select(.check == "t-pass") | .identity.tree and .identity.head' <<<"$out" >/dev/null && { pass=$((pass + 1)); echo "PASS  result carries the tree identity"; } || { fail=$((fail + 1)); echo "FAIL  no identity"; }
+okk() { pass=$((pass + 1)); echo "PASS  $1"; }; nok() { fail=$((fail + 1)); echo "FAIL  $1"; }
 rm -f "$S/leftover.txt"
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-isolated-pollute t-isolated-clean --approve t-isolated-pollute t-isolated-clean --json)
+[ "$(jq -r '.results[] | select(.check == "t-isolated-pollute") | .state' <<<"$out")" = FAIL ] && okk "polluting check fails" || nok "polluting check state"
+[ "$(jq -r '.results[] | select(.check == "t-isolated-clean") | .state' <<<"$out")" = PASS ] && okk "later clean check passes despite earlier leftover" || nok "later clean check was blamed"
+rm -f "$S/isolated-leftover.txt"
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-isolated-clean t-isolated-clean2 --approve t-isolated-clean t-isolated-clean2 --json)
+[ "$(jq -r '[.results[] | select(.check | startswith("t-isolated-clean")) | .state] | all(. == "PASS")' <<<"$out")" = true ] && okk "sequential clean checks both pass" || nok "sequential clean checks failed"
+cp "$S/backend/gateway/x.go" "$TMP/x.go.bak"
+echo 'pre-existing dirty content' >> "$S/backend/gateway/x.go"
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-dirty-edit --approve t-dirty-edit --json)
+jq -e '.results[] | select(.check == "t-dirty-edit") | .state == "FAIL" and (.reason | test("backend/gateway/x.go"))' <<<"$out" >/dev/null && okk "edit to already-dirty path is detected" || nok "edit to already-dirty path missed"
+cp "$TMP/x.go.bak" "$S/backend/gateway/x.go"
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-env --approve t-env --json)
+head=$(git -C "$S" rev-parse HEAD)
+jq -e --arg ws "$WS" --arg repo "$S" --arg head "$head" '.results[] | select(.check == "t-env") | .state == "PASS" and (.output_tail | contains("work space") and contains("rpg-mmo-server") and contains("server") and contains($head))' <<<"$out" >/dev/null && okk "bash receives workspace, repo, repo key and head; cwd is correct" || { nok "environment contract"; jq -c '.results[] | select(.check == "t-env") | {state,reason,output_tail}' <<<"$out"; }
+out=$(RPG_FACTORY_WORKSPACE="$TMP/missing workspace" python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-env --approve t-env --json)
+[ "$(jq -r '.results[] | select(.check == "t-env") | .state' <<<"$out")" = BLOCKED ] && okk "missing workspace blocks the check" || nok "missing workspace did not block"
+out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
+[ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
+if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
+rm -f "$S/child.pid"
+python3 -B "$ROOT/tests/fixtures/run-checks-cleanup-failure.py" "$P/scripts/run-checks.py" && okk "simulated timeout cleanup failure is reported" || nok "simulated cleanup failure was hidden"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-ext --approve t-ext --json)
 expect t-ext PASS
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/nakama/main.go --json); rc=$?
@@ -109,7 +141,6 @@ echo "# unrelated" >> "$S/backend/deploy/d.yaml"; sout=$(sts); sexp t-scoped PAS
 echo "package shared // dependency edit" > "$S/backend/shared/s.go"; sout=$(sts); sexp t-scoped STALE "edit in a module the check's module depends on"
 
 # ---- 1.0.5 robustness
-okk() { pass=$((pass + 1)); echo "PASS  $1"; }; nok() { fail=$((fail + 1)); echo "FAIL  $1"; }
 snap() { find "$TMP/state" -type f | sort; }
 # --dry-run records nothing: no run record, no evidence, no log
 before=$(snap); python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --dry-run --json >/dev/null
@@ -123,36 +154,9 @@ for bad in '{"identity":"x"}' '[1]' '{"identity":{"tree":"x"}}' '"str"' '{"ident
   else nok "wrong-shape evidence $bad: rc=$src ${sout:0:200}"; fi
 done
 # a stored record is replaced atomically: a reader polling during 40 rewrites never sees a missing or half record
-python3 -B - "$P/scripts/lib" "$WS" <<'PY' && okk "evidence store vs concurrent reader: never a torn record" || nok "torn evidence record"
-import os, subprocess, sys, time
-sys.path.insert(0, sys.argv[1]); import evidence
-res = {"module": "server.gateway", "check": "t-race", "state": "PASS", "timestamp": "20260101T000000", "identity": {"tree": "t", "head": "h"}}
-evidence.store(sys.argv[2], "server", res, "x" * 20000)
-code = ("import sys; sys.path.insert(0, %r); import evidence\nres = %r\n"
-        "for i in range(40): evidence.store(%r, 'server', res, 'y' * 200000)\n") % (sys.argv[1], res, sys.argv[2])
-w = subprocess.Popen([sys.executable, "-B", "-c", code])
-misses = 0
-while w.poll() is None:
-    if evidence.latest(sys.argv[2], "server", "server.gateway", "t-race") is None:
-        misses += 1
-w.wait()
-print("misses", misses) if misses else None
-sys.exit(1 if misses or w.returncode else 0)
-PY
+python3 -B "$ROOT/tests/fixtures/run-checks-evidence-race.py" "$P/scripts/lib" "$WS" && okk "evidence store vs concurrent reader: never a torn record" || nok "torn evidence record"
 # log names are unique per run (same second, parallel) and only the newest 20 per check are kept
-python3 -B - "$P/scripts/lib" "$WS" <<'PY' && okk "logs: unique per store, pruned to the newest 20, latest log kept" || nok "log naming / pruning"
-import os, sys
-sys.path.insert(0, sys.argv[1]); import evidence
-res = {"module": "server.gateway", "check": "t-prune", "state": "PASS", "timestamp": "20260101T000000", "identity": {"tree": "t"}}
-logs = [evidence.store(sys.argv[2], "server", res, f"run {i}") for i in range(25)]
-d = os.path.dirname(logs[-1])
-mine = [f for f in os.listdir(d) if f.startswith("server.gateway__t-prune-")]
-other = [f for f in os.listdir(d) if f.startswith("server.gateway__t-pass-")]
-rec = evidence.latest(sys.argv[2], "server", "server.gateway", "t-prune")
-ok = len(set(logs)) == 25 and len(mine) == 20 and os.path.exists(rec["log"]) and rec["log"] == logs[-1] and other
-print(len(set(logs)), len(mine), rec and rec.get("log"), len(other)) if not ok else None
-sys.exit(0 if ok else 1)
-PY
+python3 -B "$ROOT/tests/fixtures/run-checks-log-prune.py" "$P/scripts/lib" "$WS" && okk "logs: unique per store, pruned to newest 20, latest log kept" || nok "log naming / pruning"
 ls "$TMP"/state/evidence/*/runs/server-*-*-*.json >/dev/null 2>&1 && okk "run record names carry a unique suffix" || nok "run record name"
 # the workspace key is the case-folded real path: C:/X and c:\x share evidence on Windows
 if [ -n "$RPGF_WINDOWS" ]; then
