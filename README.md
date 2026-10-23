@@ -180,10 +180,10 @@ modules and their dependents, runs them, and grades each one:
 |---|---|
 | PASS | ran, exit 0, the parser found evidence (tests executed > 0, expected line), no files left behind |
 | FAIL | failed; or exit 0 without evidence (0 tests, all skipped); or it polluted the product repo |
-| BLOCKED | a `needs` prerequisite failed, or the check directory is missing |
+| BLOCKED | a `needs` prerequisite did not PASS in this run, or the check directory is missing |
 | NOT_AVAILABLE | a required tool is missing on this machine |
 | HUMAN_REQUIRED | extended check not approved (`--approve <id>`), or external (Unity Editor, CI, Docker stack, cluster) |
-| SKIPPED | excluded on purpose (`--only`, duplicate command) |
+| SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`); a duplicate command is graded on the shared output |
 | NOT_RUN | (`--status`) declared for the change, never executed |
 | STALE | (`--status`) executed, but HEAD, the diff or untracked files in the check's directory, or the check definition changed since |
 

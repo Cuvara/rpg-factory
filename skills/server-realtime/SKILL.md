@@ -2,7 +2,7 @@
 name: server-realtime
 description: Use when changing the C# realtime game server or the Shared.GameLogic package in rpg-mmo-server - tick loop, ECS systems and simulation phases, input handling, snapshot/replication/AOI/importance, scaffolding bots and enemies, GAMESERVER_* knobs, metrics and /status, content loading, NativeAOT, golden vectors. It is the server leg of wire and SGL-pin work. Not for wire.proto, protocol version or the Redis servers:id hash (wire-contract), persistence/migrations, gateway or Nakama (server-services), deploy manifests (server-ops), or benchmarks (measure).
 argument-hint: "[task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*)
 ---
 # Server realtime - C# game server + Shared.GameLogic
 

@@ -2,7 +2,7 @@
 name: wire-contract
 description: Use when changing anything that must stay byte- or value-compatible between the Go gateway, the C# game server, the Netcode package and the Unity client - a network message or protobuf field in wire.proto, the legacy JSON encoding, the wire protocol version, the JoinToken/JWT claims, or the Redis servers:id registry hash shared by C# and Go. Cross-repo driver that orders the server leg, the Netcode resync leg and the client pin leg, and collects the contract evidence. Not for server-only gameplay logic that does not touch the wire (server-realtime) or package-internal changes that keep the wire format (unity-package).
 argument-hint: "[describe the wire change]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/wire-parity.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/checks/wire-parity.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py:*)
 ---
 
 # Wire contract - server → Netcode → client

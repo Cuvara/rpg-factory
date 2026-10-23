@@ -98,7 +98,7 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
     s = os.path.basename(os.path.dirname(f))
     if reg["skills"].get(s, {}).get("kind") == "core":
         continue
-    m = re.search(r"^## Tools\n(.*?)(?=^## |\Z)", open(f).read(), re.M | re.S)
+    m = re.search(r"^## Tools\n(.*?)(?=^## |\Z)", open(f, encoding="utf-8").read(), re.M | re.S)
     if not m:
         print(f"{s}: missing section '## Tools'"); continue
     sec = m.group(1)
@@ -113,8 +113,50 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
             elif s not in next(t for t in reg["dev_tools"] if t["id"] == name)["used_by"]:
                 print(f"{s}: ## Tools names `{name}` but registry dev_tools.{name}.used_by lacks {s}")
 PY3
-)
-if [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
+); tools_rc=$?
+if [ $tools_rc -ne 0 ]; then bad "dev tools sections: lint crashed (rc=$tools_rc): $(tail -1 <<<"$tools_out")"
+elif [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
+
+# allowed-tools covers every plugin script a skill tells the agent to run (else unattended runs hit a
+# permission prompt). Uses: `${CLAUDE_PLUGIN_ROOT}/scripts/<path>` in SKILL.md or references/ (all skills), and
+# a backticked bare script name that is a file in scripts/ or scripts/checks/ (non-core skills; factory-core's
+# references also document maintainer tools and guards it never runs). An entry `Bash(<interp> ${CLAUDE_PLUGIN_ROOT}/
+# scripts/<pattern>:*)` covers a use when <pattern> matches its path under scripts/ (fnmatch: `*` is a wildcard, so
+# `checks/*` covers every check) and, when the use names an interpreter, it equals <interp> (Claude Code
+# matches the command prefix, so `python3 -B` is not covered by a `python3` entry).
+allow_out=$(python3 -B - "$ROOT" <<'PY4'
+import fnmatch, glob, os, re, sys
+root = sys.argv[1]
+names = {os.path.relpath(p, f"{root}/scripts").replace(os.sep, "/")
+         for p in glob.glob(f"{root}/scripts/*") + glob.glob(f"{root}/scripts/checks/*") if os.path.isfile(p)}
+by_base = {}
+for n in names:
+    by_base.setdefault(os.path.basename(n), set()).add(n)
+for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
+    d = os.path.dirname(f); s = os.path.basename(d)
+    lines = open(f, encoding="utf-8").read().splitlines()
+    end = lines.index("---", 1) if lines[:1] == ["---"] and "---" in lines[1:] else 0
+    allowed = next((l[len("allowed-tools: "):] for l in lines[1:end] if l.startswith("allowed-tools: ")), "")
+    entries = re.findall(r"Bash\(([^ ()]+) \$\{CLAUDE_PLUGIN_ROOT\}/scripts/([^:()]+):\*\)", allowed)
+    srcs = [(f, lines, end)] + [(r, open(r, encoding="utf-8").read().splitlines(), 0) for r in sorted(glob.glob(f"{d}/references/*.md"))]
+    for src, text, skip in srcs:
+        for i, line in enumerate(text[skip:], skip + 1):
+            uses = {(m.group(1), m.group(2)) for m in
+                    re.finditer(r"(?:\b((?:bash|sh|python3?)(?: -B)?) )?\$\{CLAUDE_PLUGIN_ROOT\}/scripts/([A-Za-z0-9_./-]+)", line)}
+            if s != "factory-core":
+                for code in re.findall(r"`([^`]+)`", line):
+                    if "CLAUDE_PLUGIN_ROOT" in code:
+                        continue
+                    for tok in re.findall(r"(?:^|[\s/])([A-Za-z0-9_-]+\.(?:py|sh))\b", code):
+                        uses |= {(None, p) for p in by_base.get(tok, ())}
+            for interp, path in sorted(uses, key=str):
+                if path in names and not any(fnmatch.fnmatchcase(path, pat) and interp in (None, cmd) for cmd, pat in entries):
+                    rel = os.path.relpath(src, root).replace(os.sep, "/")
+                    print(f"{s}: {rel}:{i} runs {(interp + ' ') if interp else ''}scripts/{path}, not covered by allowed-tools")
+PY4
+); allow_rc=$?
+if [ $allow_rc -ne 0 ]; then bad "allowed-tools coverage: lint crashed (rc=$allow_rc): $(tail -1 <<<"$allow_out")"
+elif [ -z "$allow_out" ]; then ok; else while IFS= read -r l; do bad "allowed-tools coverage: $l"; done <<<"$allow_out"; fi
 
 # every skill appears everywhere the plugin lists, routes, tests and documents skills (and no SCAFFOLD: left)
 tp_out=$(cd "$ROOT" && CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B scripts/skill-touchpoints.py --all 2>&1)

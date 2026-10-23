@@ -184,6 +184,46 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `orca --help` and every `--flag` cited with it against that command's `--help` (skipped when Orca is not
   installed, and in `--no-workspace` runs), including that `orca worktree rm` still deletes branches as the
   policy warns.
+- `tests/skills-lint.sh` checks that a skill's `allowed-tools` covers every plugin script its `SKILL.md` or
+  `references/` tell the agent to run (`${CLAUDE_PLUGIN_ROOT}/scripts/...` uses, and backticked bare script names in
+  non-core skills; entry paths match as fnmatch patterns, a named interpreter must match the entry's);
+  `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
+
+### Fixed
+- **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
+  violation (`PermissionError`) for up to 2 s (backoff capped at 50 ms) instead of a fixed 8 / 5 attempts
+  (~0.36 s / ~0.3 s), so a record held open under machine load no longer reads as missing (NOT_RUN) and a
+  replace no longer fails; other platforms keep the short attempt count (`tests/session-state.test.sh`).
+- Git and file guards: a linked worktree outside the workspace root (Orca worktrees, sibling dirs) whose main
+  checkout lies in the workspace now gets that checkout's rules (tags, pushes, protected branches, secrets,
+  generated paths), from its cwd or through `git -C`; before, every command there was silent. The worktree is
+  found from its `.git` file (no extra git process); a main checkout outside the workspace stays silent.
+- Git guard: `merge --ff-only` on a protected branch no longer warns (a fast-forward creates no commit), and
+  `pull --rebase=false|no|off|0` (any case) is no longer treated as a rebase.
+- `tests/skills-lint.sh`: the dev-tools and allowed-tools blocks fail closed - a crash of their Python check is a
+  FAIL (it passed silently before), and skill files are read as UTF-8 (a non-ASCII reference crashed the check
+  under a cp1252 locale). `tests/parallel-policy.test.sh` covers both. parallel-work.md says an
+  `isolation: "worktree"` QA/review worker starts from the lead's HEAD and checks the candidate SHA first;
+  the report template's dotnet row no longer asserts "0 failed".
+- Skill `allowed-tools` now grant the scripts the skills run (netcode-client, pin-bump, server-ops, server-realtime,
+  unity-package, wire-contract), so unattended runs no longer hit permission prompts.
+- `git-safety.md` rule 5: PRs target the repo's default branch from `registry.json`, not always `develop`.
+  `repos.md` and dotnet-gameserver describe the gameplay transport as KCP/UDP only (ADR-32). `report.md`'s template
+  uses placeholders instead of asserting a `--status` result and example test counts. `parallel-work.md` section 6
+  runs each QA and review worker in its own worktree at the candidate SHA. pin-chain.md and packages.md point to
+  `pin-status.py` / `package-ready.py` instead of stale pin versions.
+- **Truthful check evidence.** A check's identity scope now includes its own module's paths, so editing
+  `backend/content/` makes a `content-loader-tests` PASS (run in `backend/gameserver-dotnet`) STALE; a record
+  made under another scope is STALE (`check scope changed`), so pre-upgrade records re-grade once. `factory-status`
+  grades evidence against the current registry definition (a changed `run` is STALE there too, like
+  `run-checks --status`) and a record of a check no longer declared is STALE. Two modules sharing one command each
+  get a record graded with their own definition and identity (both PASS right after the run). A check whose
+  `needs` prerequisite did not PASS in this run (failed, skipped by `--only`, listed after it) is BLOCKED.
+  `run-checks` exits 2 on an unknown `--tier`/`--only` name, a bad `--timeout`, a `--paths` entry outside the
+  repo checkout and its linked worktrees (also `../` escapes and paths `factory-context.sh` rejects) and a path in
+  another linked worktree of the repo (checks run in, and evidence describes, the checkout `run-checks` runs in:
+  run it from that worktree), and prints `none registered` when no check is declared for the paths.
+  `validation.md`, factory-core `SKILL.md` and the README describe the new `BLOCKED` meaning.
 
 ## [1.0.5] - 2026-10-22
 
@@ -206,6 +246,14 @@ workspace key). No command-line or registry changes for users.
   "agents never tag" wording returns or a policy file drops the authorization rule.
 
 ### Fixed
+- **Task-scoped routing in the snapshot.** Without `--paths`, uncommitted changes are the user's baseline: the
+  snapshot lists them with their modules but prints no Routing, `Next:`, gates or checks for them and says to route
+  the task with `--paths <files the task will write>` (commits on a feature branch are still routed; JSON keeps the
+  full resolution and adds `task_scope`). A module without skills prints an explicit `**Routing** no specialised
+  lead - factory-core only; follow <CLAUDE.md>` line. An absolute `--paths` entry in a linked worktree of the repo
+  maps to its repo-relative path; one in another repo or outside every repo gets a warning and is not routed as
+  `<repo>.root` (exit 2 when no path is left). `--mode=plan`, `--lead=x` (any `--flag`) after `--paths` end the
+  path list instead of being read as paths. `tests/routing.test.sh` covers each case on a throwaway workspace.
 - **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
   commands were missed or misread and now get the advisory they should:
   - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan

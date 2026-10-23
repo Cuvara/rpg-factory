@@ -13,17 +13,16 @@ Verified 2026-09-30 from each repo's working tree (`git`, `package.json`, `*.asm
   Never tags.
 - No `CLAUDE.md` in any of them.
 - Client consumes them as git-tag pins and lists all three in `Packages/manifest.json`
-  `testables` (client pins today: dots `v0.29.0`, netcode `v0.45.0`, uitoolkit `v0.7.2`,
-  shared-gamelogic `sgl-v0.6.0`).
+  `testables` (current pins: `scripts/checks/pin-status.py` or `factory-status.py`, never this file).
 
 ## Netcode - `com.cuvara.netcode`
 
 | Item | Value |
 |---|---|
 | Remote / integration | `Cuvara/Netcode`, **`develop`** (GitHub default; CI on push develop/main, PR into develop/main) |
-| Version | `0.45.0`, tag `v0.45.0` exists; `[Unreleased]` empty |
-| Branches seen | `feat/view/...`, `fix/samples/...`, `perf/snapshot/...`, `chore/release/0.44.0`, `release/v0.43.0`, `sync-main/v0.41.0` (bot) |
-| Commits | `feat(view): ... (#163)`, release commit `chore(release): 0.45.0 (#176)` = `package.json` + `CHANGELOG.md` only |
+| Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py Netcode` / `factory-status.py` |
+| Branches seen (naming examples, not current versions) | `feat/view/...`, `fix/samples/...`, `perf/snapshot/...`, `chore/release/0.44.0`, `release/v0.43.0`, `sync-main/v0.41.0` (bot) |
+| Commits (examples) | `feat(view): ... (#163)`, release commit `chore(release): 0.45.0 (#176)` = `package.json` + `CHANGELOG.md` only |
 | Deps | unitask 2.5.10, System.Runtime.CompilerServices.Unsafe 6.0.0, unitywebrequest, physics modules |
 
 Assemblies: `Runtime/Cuvara.Netcode.Runtime`, `Runtime/Bootstrap/Cuvara.Netcode.Bootstrap`,
@@ -67,7 +66,7 @@ moving `main` to the tag, auto-merge).
 |---|---|
 | Remote / integration | `Cuvara/UnityDots`, **`main`** (only remote branch; local `develop` has no upstream). CI on push main/develop, PR into any branch |
 | Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py UnityDots` / `factory-status.py` (a bumped package.json with an undated section is not releasable) |
-| Branches / commits seen | `feat/samples-phase-b`, `release/v0.29.0`; `feat: ... (#31)`, `chore: release v0.29.0 — ...` |
+| Branches / commits seen (examples) | `feat/samples-phase-b`, `release/v0.29.0`; `feat: ... (#31)`, `chore: release v0.29.0 — ...` |
 | Deps | entities 1.4.8, burst 1.8.30, collections 2.6.8, mathematics 1.3.2 |
 
 Assemblies (folder -> name): `Runtime` -> `Cuvara.DOTS.Runtime`, `Runtime.DI` -> `Cuvara.DOTS.DI`,
@@ -107,8 +106,8 @@ Moving them is a deliberate task with a compatibility line (RELEASE.md §4).
 | Item | Value |
 |---|---|
 | Remote / integration | `Cuvara/UIToolkit`, **`main`**. CI on push main/develop, **PR into `main` only** |
-| Version | `0.7.2`, tag `v0.7.2`; `[Unreleased]` has entries |
-| Commits seen | `fix(uitoolkit): ...`, `chore: release v0.7.2 — ...`, `ci: ... (#12)` |
+| Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py UIToolkit` / `factory-status.py` |
+| Commits seen (examples) | `fix(uitoolkit): ...`, `chore: release v0.7.2 — ...`, `ci: ... (#12)` |
 | Deps | unitask 2.5.10, uielements module, VContainer 1.16.9 (no shared-gamelogic, no sgl pin in CI) |
 
 Assemblies: `Runtime/Cuvara.UIToolkit`, `Runtime/Ecs/Cuvara.UIToolkit.Ecs`,

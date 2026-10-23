@@ -6,9 +6,11 @@ identity(repo_dir, scope, check) = sha256 of
   + untracked files under <scope>: name, size, mtime (contents are not hashed: the client's
     untracked Unity samples are large; any edit changes mtime)
   + the check definition (command, cwd, parser, evidence text)
-scope = the check's working directory inside the repo ("." = the whole repo) PLUS the paths of every
-module its module depends on (transitively, same repo) - a PASS of the gateway's tests goes STALE when
-backend/shared changes. scopes_for() computes it from the registry; the record stores it.
+scope = the check's working directory inside the repo ("." = the whole repo) PLUS the paths of the check's
+own module (content-loader-tests runs in backend/gameserver-dotnet but reads backend/content/) PLUS the
+paths of every module its module depends on (transitively, same repo) - a PASS of the gateway's tests goes
+STALE when backend/shared changes. scopes_for() computes it from the registry; the record stores it and
+assess() reports STALE when the registry now gives the check another scope.
 
 A stored PASS whose identity differs from the current one is STALE - it proves nothing about
 the tree as it is now. A declared check with no stored evidence is NOT_RUN.
@@ -40,7 +42,7 @@ def definition_hash(check):
 
 
 def scopes_for(registry, module_id, cwd):
-    """The check's directory + the paths of its module's transitive same-repo dependencies."""
+    """The check's directory + the paths of its own module and of its module's transitive same-repo dependencies."""
     mods = {m["id"]: m for m in registry.get("modules", [])}
     m0 = mods.get(module_id)
     out, seen, todo = [cwd or "."], set(), [module_id]
@@ -52,8 +54,7 @@ def scopes_for(registry, module_id, cwd):
         m = mods[mid]
         if m0 and m["repo"] != m0["repo"]:
             continue
-        if mid != module_id:
-            out += [p for p in m.get("paths", []) if p not in ("./", ".")]
+        out += [p for p in m.get("paths", []) if p not in ("./", ".")]
         todo += m.get("depends_on", [])
     return sorted(set(p.rstrip("/") or "." for p in out))
 
@@ -154,14 +155,20 @@ def all_latest(ws, repo):
     return out
 
 
-def assess(rec, repo_dir, check):
-    """Current state of a stored result against the tree as it is now: (state, detail)."""
+def _scope_list(scopes):
+    return scopes if isinstance(scopes, list) and scopes and all(isinstance(s, str) for s in scopes) else None
+
+
+def assess(rec, repo_dir, check, scopes=None):
+    """Current state of a stored result against the tree as it is now: (state, detail).
+    `check` is the CURRENT definition (registry) and `scopes` the check's current scopes_for(): a record made
+    under another definition or another scope proves nothing about the check as declared now."""
     if not valid(rec):
         return "NOT_RUN", "no evidence recorded"
-    scopes = rec.get("scopes")
-    if not (isinstance(scopes, list) and scopes and all(isinstance(s, str) for s in scopes)):
-        scopes = check.get("cwd") or "."
-    now = identity(repo_dir, scopes, check)
+    stored, current = _scope_list(rec.get("scopes")), _scope_list(scopes)
+    if stored and current and sorted(stored) != sorted(current):
+        return "STALE", f"was {rec['state']} ({rec.get('timestamp')}); check scope changed ({', '.join(stored)} -> {', '.join(current)})"
+    now = identity(repo_dir, stored or current or check.get("cwd") or ".", check)
     ident = rec["identity"]
     if ident.get("tree") == now["tree"]:
         return rec["state"], f"at {now['head'][:7]} (current tree)"
