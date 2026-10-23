@@ -77,6 +77,9 @@ scope it noticed.
 
 - Start QA and review on a **stable candidate commit**: record its SHA and give it to both workers. Never
   point them at a tree that is still changing.
+- Each QA and review worker runs in its own worktree checked out at that SHA
+  (`orca orchestration worker-start --worktree new-top-level --base-branch <sha>`, or `isolation: "worktree"`).
+  A result from a shared or changing tree is reported as not independent.
 - When the candidate moves (a fix lands), list which findings and results refer to the old SHA and must be
   redone; re-run only those.
 - Verdicts are PASS, FAIL, NOT_RUN or BLOCKED. NOT_RUN is never a pass.

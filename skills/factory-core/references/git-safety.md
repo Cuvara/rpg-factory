@@ -22,7 +22,7 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    `commit -a`.
 5. **Commit, push, PR, merge only on request - except worker commits and task-branch integration inside a
    task the user asked for (`parallel-work.md`); tags and releases only when authorized.** Commit messages
-   follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target `develop`, and the
+   follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target the repo's default branch (`registry.json` `repos.<key>`), and the
    repos squash-merge. Inside a delegated task, worker commits on their task branches and merging worker
    branches into the task's integration branch are the lead's decision (`parallel-work.md`); merging into
    protected branches and pushing stay on request. Without explicit release authorization

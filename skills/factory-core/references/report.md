@@ -22,10 +22,10 @@ Mode: <analyze | plan | implement | validate | review | resume> (as declared wit
 - [ ] Generated artifacts / .meta / contract other side / version bump (state each or "n/a")
 
 ## Validation
-Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: all current (no STALE/NOT_RUN) · logs: `~/.local/state/rpg-factory/evidence/...`
+Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <result of --status, e.g. all current or the STALE/NOT_RUN checks> · logs: `~/.local/state/rpg-factory/evidence/...`
 | Tier | Check | Cwd | State | Evidence |
 |---|---|---|---|---|
-| fast | server.gateway:go-test | backend/gateway | PASS | 304 passed, 0 failed, 0 skipped |
+| fast | server.gateway:go-test | backend/gateway | PASS | <n> passed, <n> failed, <n> skipped |
 | fast | server.gameserver-dotnet:dotnet-test | backend/gameserver-dotnet | PASS | Total N: P passed, 0 failed, S skipped (SkippableFact: no Redis) |
 | extended | integration-e2e | backend/integration_test | HUMAN_REQUIRED | trigger: redirect contract changed; not approved |
 | external | ci | - | HUMAN_REQUIRED | no PR opened (user did not ask) |
