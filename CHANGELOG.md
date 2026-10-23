@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- `testlab analyze --delivery` now fits server/client clock mapping independently in 10 second windows using one minimum-delay sample per 1 second bin. It reports relative excess above each window's minimum envelope and the empirical p95 fit error bound; absolute one-way delay remains explicitly unavailable, and poor fits yield no delay values or PATH attribution.
+
 ### Added
 
 - **`testlab/`: autonomous multiplayer gameplay tests with real, rendered Unity clients.**

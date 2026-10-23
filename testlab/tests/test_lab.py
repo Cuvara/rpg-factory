@@ -1168,8 +1168,8 @@ class DeliveryTests(unittest.TestCase):
                 doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, drift=drift)
                                     .delay(450, "path", 400, client=0))
                 c = doc["clients"]["0"]
-                self.assertTrue(c["clock_fit"]["ok"], c["clock_fit"])
-                self.assertAlmostEqual(c["clock_fit"]["rate"], 1 + drift, delta=0.001)
+                self.assertGreater(c["clock_fit"]["accepted_windows"], 0, c["clock_fit"])
+                self.assertLessEqual(c["clock_fit"]["max_error_bound_ms"], 10.0)
                 owd = [b["one_way_rel_ms"] for b in c["buckets"] if b["one_way_rel_ms"]["n"]]
                 # 60 s of snapshots: uncorrected, the relative delay would sweep |drift| x 60 s = 4.2-5.4 s.
                 self.assertLess(max(o["p99"] for o in owd), 5.0, (drift, owd))
@@ -1181,15 +1181,37 @@ class DeliveryTests(unittest.TestCase):
             doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, drift=0.08))
             b = doc["clients"]["0"]["buckets"][0]
             self.assertAlmostEqual(b["server_send_gap_ms"]["p50"], SNAP_TICKS * TICK_US / 1000 * 1.08, delta=0.2)
-            self.assertEqual(doc["clients"]["0"]["server_durations"], "client time (rate-corrected)")
+            self.assertEqual(doc["clients"]["0"]["server_durations"], "client time (window-rate-corrected)")
 
-    def test_a_poor_clock_fit_reports_one_way_delay_as_unavailable(self):
+    def test_a_poor_clock_fit_reports_relative_excess_unavailable(self):
         with tempfile.TemporaryDirectory() as d:
             doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, bin_jitter_ms=200))
             c = doc["clients"]["0"]
-            self.assertFalse(c["clock_fit"]["ok"])
-            self.assertTrue(c["one_way_delay"].startswith("unavailable"))
+            self.assertEqual(c["clock_fit"]["accepted_windows"], 0)
+            self.assertIn("relative excess unavailable", c["one_way_delay"])
             self.assertTrue(all(b["one_way_rel_ms"]["p50"] is None for b in c["buckets"]))
+            self.assertTrue(c["gaps"])
+            self.assertTrue(all(g["class"] == "UNKNOWN" for g in c["gaps"]))
+
+    def test_windowed_fit_tracks_wandering_seven_to_nine_percent_rate(self):
+        from lab import delivery
+        pairs = []
+        for window, rate in enumerate((1.07, 1.09, 1.075, 1.085)):
+            start = window * 10_000_000
+            for second in range(10):
+                for sample in range(20):
+                    x = start + second * 1_000_000 + sample * 50_000
+                    queue_us = (sample * 137 + second * 211) % 1800
+                    pairs.append((x, int(3_000_000 + rate * x + queue_us)))
+        fit = delivery.fit_windowed_clock(pairs)
+        accepted = [w for w in fit["windows"].values() if w["ok"]]
+        self.assertEqual(len(accepted), 4, fit)
+        self.assertEqual([round(w["rate"], 3) for w in accepted], [1.07, 1.09, 1.075, 1.085])
+        self.assertTrue(all(w["error_bound_us"] <= 10_000 for w in accepted))
+        excess, bound, _ = delivery._window_excess(fit, 10_500_000,
+                                                   int(3_000_000 + 1.09 * 10_500_000 + 30_000))
+        self.assertGreaterEqual(excess, 28_000)
+        self.assertLessEqual(bound, 10_000)
 
     def test_fit_clock_needs_enough_points(self):
         from lab import delivery
@@ -2193,8 +2215,10 @@ class ScopeAndKcpWindowTests(unittest.TestCase):
         cls, _, ev = delivery.classify_gap(gap, srv, [], "recv_us", explain_fraction=0.5, slack_us=50_000)
         self.assertEqual(cls, "KCP")
         self.assertEqual(ev["retrans_delta"], 37)
-        cls, _, _ = delivery.classify_gap(gap, srv, [], "recv_us", explain_fraction=0.5, slack_us=50_000, after_rows=0)
-        self.assertEqual(cls, "PATH")  # the old window: up to tick b only
+        cls, _, _ = delivery.classify_gap(gap, srv, [], "recv_us", explain_fraction=0.5, slack_us=50_000,
+                                          after_rows=0, relative_excess={"a_ms": 0.0, "b_ms": 400.0,
+                                                                         "error_ms": 3.0})
+        self.assertEqual(cls, "PATH")  # local fit supports receive-side excess
 
 
 class NakamaPreflightTests(unittest.TestCase):
