@@ -29,6 +29,9 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   from `scripts/new-skill.py` and are done when `scripts/skill-touchpoints.py <s>` is OK (`.claude/skills/skill-author`).
 - A skill's `path:line` citation names the symbol it shows (anchor) and must pass
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
+- Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree per task
+  (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
+  only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json` and the README "Version" line together with a
   `CHANGELOG.md` section (run-all checks it). The local directory marketplace loads this checkout in
   place (what is checked out is what sessions run); the install record only updates on a version
@@ -73,6 +76,8 @@ python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill
 python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
 python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
 env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
+env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a throwaway plugin copy
+tests/orca-commands.test.sh                # orca commands cited in parallel-work.md exist (SKIP without orca)
 env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 
@@ -112,7 +117,7 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
   covered by `tests/commands.test.sh`.
-- **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract) routes to
+- **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work) routes to
   8 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
   unity-package, client-integration. 5 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
   unity-client-tech, unity-dots, netcode-client) own no module, are never routed, and appear as `routing.tech` for their `used_by`.

@@ -39,6 +39,11 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: a
 - Lead: <skill> (basis: <lead_basis> | override `--lead`) · co-leads: <skills | none> · legs run: <skills>
 - Follow-ups left: <skill in repo> | none · AMBIGUOUS resolved by: <user | --lead | n/a>
 
+<!-- Only when work was delegated to workers (references/parallel-work.md); otherwise omit this section. -->
+## Parallel work (when delegated)
+| Task | Owner / agent | Worktree | Branch | Base | Candidate SHA | QA / review verdict | Integrated | Cleanup |
+|---|---|---|---|---|---|---|---|---|
+
 ## Pending (cross-repo / release)
 - `factory-status.py` pending items this task created or left: <item -> owning skill> | none
 - Release state: <READY_TO_TAG repo vX.Y.Z (lead tags) | tagged vX.Y.Z + release URL (authorized in this task) | n/a>

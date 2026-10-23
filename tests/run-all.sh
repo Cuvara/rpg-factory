@@ -128,6 +128,10 @@ else skp "registry facts re-probed in the repos" "--no-workspace"; fi
 run "skill citation checker (fixture repos)" env -u TMPDIR tests/skill-citations.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
+run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+if ! $use_ws; then skp "orca commands cited in parallel-work.md" "--no-workspace"
+elif ! command -v orca >/dev/null 2>&1; then skp "orca commands cited in parallel-work.md" "orca not on PATH"
+else run "orca commands cited in parallel-work.md exist in orca --help" tests/orca-commands.test.sh; fi
 if $use_ws; then run "skill line citations point at their symbols (integration branches)" python3 -B scripts/checks/skill-citations.py
 else skp "skill line citations against the repos" "--no-workspace"; fi
 if $use_ws; then run "routing + history replay" tests/routing.test.sh
