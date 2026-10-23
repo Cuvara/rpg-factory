@@ -21,7 +21,7 @@ Verified 2026-09-30 from each repo's working tree (`git`, `package.json`, `*.asm
 |---|---|
 | Remote / integration | `Cuvara/Netcode`, **`develop`** (GitHub default; CI on push develop/main, PR into develop/main) |
 | Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py Netcode` / `factory-status.py` |
-| Branches seen (naming examples, not current versions) | `feat/view/..., `fix/samples/...`, `perf/snapshot/...`, `chore/release/0.44.0`, `release/v0.43.0`, `sync-main/v0.41.0` (bot) |
+| Branches seen (naming examples, not current versions) | `feat/view/...`, `fix/samples/...`, `perf/snapshot/...`, `chore/release/0.44.0`, `release/v0.43.0`, `sync-main/v0.41.0` (bot) |
 | Commits (examples) | `feat(view): ... (#163)`, release commit `chore(release): 0.45.0 (#176)` = `package.json` + `CHANGELOG.md` only |
 | Deps | unitask 2.5.10, System.Runtime.CompilerServices.Unsafe 6.0.0, unitywebrequest, physics modules |
 
