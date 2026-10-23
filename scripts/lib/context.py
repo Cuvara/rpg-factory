@@ -9,11 +9,14 @@ Usage (via factory-context.sh):
   [--repo <key>|all] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--explain]
   [--full] [--toolchain] [--submodules] [--mode analyze|plan|implement|validate|review|resume]
   --repo      default: the repo (or worktree) containing the cwd, else all registered repos
-  --paths     resolve only these paths (requires a single repo); everything after --paths is a path.
-              Repo-relative, repo-prefixed, absolute (C:\\, C:/, /c/, /mnt/c/) and glob forms are
-              accepted. Use it when the tree holds pre-existing user changes.
-  --mode      declare the Factory execution mode (also --mode=<m>); the hooks then add advisories for
-              state changes in read-only modes - advisory only, they never block
+  --paths     resolve only these paths (requires a single repo); the list ends at the next --flag.
+              Repo-relative, repo-prefixed, absolute (C:\\, C:/, /c/, /mnt/c/; also inside a linked
+              worktree of the repo) and glob forms are accepted. An absolute path outside the repo and
+              its worktrees is reported and not routed (exit 2 when no path is left).
+              Without --paths, uncommitted changes are the user's baseline: listed with their modules,
+              never routed; only commits on a feature branch (vs --base) are routed.
+  --mode      declare the Factory execution mode (also --mode=<m>; --repo, --base, --lead likewise); the
+              hooks then add advisories for state changes in read-only modes - advisory only, they never block
   --lead      override the lead skill; must be one of the candidates (else exit 2)
   --explain   why every registered skill was or was not selected
   --full      include all rules, all human gates, all known issues, full toolchain versions
@@ -66,15 +69,15 @@ def parse_args(argv):
     while i < len(argv):
         x = argv[i]
         if x == "--paths":
-            known = {"--repo", "--base", "--lead", "--json", "--explain", "--full", "--toolchain", "--submodules", "--mode"}
             j = i + 1
-            while j < len(argv) and argv[j] not in known:
+            while j < len(argv) and not argv[j].startswith("--"):  # any --flag or --flag=value ends the list
                 a["paths"] += [p for p in argv[j].split(",") if p.strip()]
                 j += 1
             i = j
             continue
-        if x.startswith("--mode="):
-            x, argv = "--mode", argv[:i] + ["--mode", x.split("=", 1)[1]] + argv[i + 1:]
+        if x.split("=", 1)[0] in ("--repo", "--base", "--lead", "--mode") and "=" in x:
+            x, val = x.split("=", 1)
+            argv = argv[:i] + [x, val] + argv[i + 1:]
         if x in ("--repo", "--base", "--lead", "--mode"):
             if i + 1 >= len(argv):
                 die(f"{x} needs a value")
@@ -210,17 +213,49 @@ def rel_to(p, d):
     return None if rel == ".." or rel.startswith("../") else rel
 
 
-def norm_paths(paths, d, rep):
+def worktrees(d):
+    """Every checkout of the repo at d: its main checkout and all linked worktrees (git worktree list)."""
+    out = git(main_checkout(d), "worktree", "list", "--porcelain") or ""
+    return [native_abs(l[9:].strip()) for l in out.splitlines() if l.startswith("worktree ")] or [d]
+
+
+def rel_in_checkouts(p, dirs):
+    """p relative to the first of dirs containing it (the longest, so a worktree nested in a checkout wins)."""
+    for w in sorted(dirs, key=len, reverse=True):
+        rel = rel_to(p, w)
+        if rel is not None:
+            return rel
+    return None
+
+
+def foreign_repo(p, key, reg, ws):
+    """The other registry repo whose checkout (or linked worktree) holds absolute path p, if any."""
+    for k, r in reg["repos"].items():
+        main = os.path.join(ws, r["path"])
+        if k != key and os.path.isdir(main) and rel_in_checkouts(p, [main] + worktrees(main)) is not None:
+            return k
+    return None
+
+
+def norm_paths(paths, d, rep, key=None, reg=None, ws=None):
     """Make --paths repo-relative: strip ./, a leading repo directory (`rpg-mmo-server/backend/..`),
-    absolute paths inside the repo (C:\\ and C:/, git-bash /c/ and WSL /mnt/c/ forms); expand globs
-    that match. Models pass all of these. Results always use forward slashes."""
-    out = []
+    absolute paths inside the repo or one of its linked worktrees (C:\\ and C:/, git-bash /c/ and WSL
+    /mnt/c/ forms); expand globs that match. Models pass all of these. Results always use forward
+    slashes. An absolute path outside every checkout of the repo is not routed: it is returned in
+    `rejected` with the reason, never as a repo-level file."""
+    out, rejected, checkouts = [], [], None
     prefix = rep["path"].strip("/") + "/"
     for p in paths:
         p = native_abs(p.strip().strip('"').strip("'").replace("\\", "/"))
         if os.path.isabs(p):
-            rel = rel_to(p, d)
-            p = rel if rel is not None else p
+            checkouts = checkouts if checkouts is not None else [d] + worktrees(d)
+            rel = rel_in_checkouts(p, checkouts)
+            if rel is None:
+                other = foreign_repo(p, key, reg, ws) if reg and ws else None
+                rejected.append({"path": p, "repo": other, "reason": f"in repo {other}: use --repo {other}" if other
+                                 else "outside every checkout and worktree of this repo"})
+                continue
+            p = rel
         while p.startswith("./"):
             p = p[2:]
         if p.startswith(prefix) and not os.path.exists(os.path.join(d, p)):
@@ -231,10 +266,10 @@ def norm_paths(paths, d, rep):
                 out += hits[:50]
                 continue
         out.append(p)
-    return list(dict.fromkeys(out))
+    return list(dict.fromkeys(out)), rejected
 
 
-def repo_state(key, d, rep, args, reg):
+def repo_state(key, d, rep, args, reg, ws=None):
     if git(d, "rev-parse", "--is-inside-work-tree") is None:
         return {"repo": key, "path": d, "error": "not a git work tree"}
     default = rep["default_branch"]
@@ -250,23 +285,26 @@ def repo_state(key, d, rep, args, reg):
         if len(c) == 2:
             behind, ahead = c
     base = args["base"] or (f"origin/{default}" if git(d, "rev-parse", "--verify", "-q", f"origin/{default}") else default)
+    rejected, committed = [], []
     if args["paths"]:
-        files = [{"path": p, "status": "--", "source": "given"} for p in norm_paths(args["paths"], d, rep)]
+        given, rejected = norm_paths(args["paths"], d, rep, key, reg, ws)
+        files = [{"path": p, "status": "--", "source": "given"} for p in given]
         base_ok = False
     else:
         files = status_files(d, args["submodules"])
         base_ok = branch != default and git(d, "rev-parse", "--verify", "-q", base) is not None
         if base_ok:
             seen = {f["path"] for f in files}
-            for p in (git(d, "diff", "-z", "--name-only", f"{base}...HEAD") or "").split("\0"):
-                if p and p not in seen:
+            committed = [p for p in (git(d, "diff", "-z", "--name-only", f"{base}...HEAD") or "").split("\0") if p]
+            for p in committed:
+                if p not in seen:
                     files.append({"path": p, "status": "C ", "source": "branch"})
     gitlinks = [l.split("\t", 1)[1] for l in (git(d, "ls-files", "-s") or "").splitlines() if l.startswith("160000 ")]
     return {"repo": key, "path": d, "worktree": is_wt, "submodules": gitlinks, "main_checkout": main if is_wt else None, "branch": branch,
             "default_branch": default, "protected": prot, "head": head,
             "upstream": {"ref": up, "ahead": ahead, "behind": behind} if up else None,
-            "branch_diff_base": base if base_ok else None, "files": files,
-            "submodules_scanned": args["submodules"]}
+            "branch_diff_base": base if base_ok else None, "files": files, "rejected_paths": rejected,
+            "committed_paths": committed, "submodules_scanned": args["submodules"]}
 
 
 def resolve(reg, key, files, subst, tools):
@@ -328,7 +366,7 @@ def install_line():
         return {"state": "UNKNOWN"}
 
 
-def render(snap, reg, args):
+def render(snap, reg, args, views):
     out = []
     add = out.append
     code = lambda s: f"`{s}`"
@@ -378,8 +416,29 @@ def render(snap, reg, args):
         if not r.get("submodules_scanned") and r.get("submodules"):
             add(f"- submodules {', '.join(map(code, r['submodules']))}: pointer moves shown above; uncommitted work inside them "
                 "is NOT scanned (`--submodules`, ~9 s) - treat their contents as user state")
+        for x in r.get("rejected_paths", []):
+            add(f"**Warning: not routed** {code(x['path'])} - {x['reason']} (not a {r['repo']} file; never treated as repo-level)")
+        route_cmd = f"`factory-context.sh --repo {r['repo']} --paths <files the task will write>`"
+        v = views.get(r["repo"])
+        if v is None:  # uncommitted changes only: the user's baseline, not the task
+            add(f"**Baseline only - not routed:** the paths above are the user's pre-existing changes, not the task: no lead, "
+                f"checks or gates are derived from them. Route the task with {route_cmd}.")
+            issues = [k for k in reg.get("known_issues", []) if r["repo"] in k["scope"].split(",") or k["scope"] == "workspace"]
+            if issues:
+                add("Known issues here: " + "; ".join(f"**{k['id']}**" + (f" {k['summary']}" if args["full"] else "") for k in issues))
+            continue
+        if v is not r and any(f["source"] == "worktree" for f in r["files"]):
+            add(f"Routing below covers only the {len(v['files'])} path(s) committed on this branch; the uncommitted paths are the "
+                f"user's baseline. Route the task with {route_cmd}.")
+        r = v
         rt = r["routing"]
-        if rt["lead"] or rt["legs"] or rt["follow_ups"]:
+        if not (rt["lead"] or rt["legs"] or rt["follow_ups"]):
+            mods = {m["id"]: m for m in reg["modules"]}
+            docs = list(dict.fromkeys(f"{reg['repos'][r['repo']]['path']}/{mods[t]['claude_md']}" for t in r["touched"]
+                                      if t in mods and mods[t].get("claude_md")))
+            add(f"**Routing** no specialised lead - factory-core only; follow "
+                + (", ".join(map(code, docs)) if docs else code(reg["repos"][r["repo"]]["path"] + "/CLAUDE.md")))
+        else:
             add("**Routing** " + (f"lead {code('rpg-factory:' + rt['lead'])}" if rt["lead"] else "no specialised lead (factory-core only)")
                 + (f" · co-leads {', '.join(rt['co_leads'])}" if rt["co_leads"] else "")
                 + (f" · legs {', '.join(rt['legs'])}" if rt["legs"] else "")
@@ -481,13 +540,16 @@ def main():
     subst = {"{dotnet}": os.path.basename(tools.get("dotnet") or "") or "<dotnet-not-found>", "{plugin_root}": PLUGIN_ROOT.replace("\\", "/")}  # check commands run through bash, which eats backslashes
     services = devtools.probe_services(reg)
     prober = devtools.Prober(ws, reg, services)
-    repos = []
+    repos, views = [], {}
     needed = set()
     for key in keys:
         rep = reg["repos"][key]
         d = here_dir if key == here_key and here_dir else os.path.join(ws, rep["path"])
-        st = repo_state(key, d, rep, args, reg)
+        st = repo_state(key, d, rep, args, reg, ws)
         if not st.get("error"):
+            if args["paths"] and not st["files"]:
+                die("no path left to route: " + "; ".join(f"{x['path']} ({x['reason']})" for x in st["rejected_paths"]))
+            # JSON keeps the full resolution of every listed path (run-checks.py without --paths grades them all)
             st.update(resolve(reg, key, st["files"], subst, tools))
             if args["lead"]:
                 apply_override(st, args["lead"])
@@ -496,7 +558,24 @@ def main():
             rt = st["routing"]
             routed = ([rt["lead"]] if rt["lead"] else []) + rt["co_leads"] + rt["legs"] + rt.get("tech", [])
             st["dev_tools"] = prober.for_skills(routed) if routed else []
-            for c in st["checks"]:
+            # the task scope the snapshot routes: --paths, else only commits on the branch; uncommitted
+            # status paths are the user's baseline and are never routed
+            view = st
+            if not args["paths"]:
+                task = [{"path": p, "status": "C ", "source": "branch"} for p in st["committed_paths"]]
+                view = dict(st, **resolve(reg, key, task, subst, tools)) if task else None
+                if view is not None:
+                    if args["lead"] and args["lead"] in [s["skill"] for s in view["suggested_skills"]]:
+                        apply_override(view, args["lead"])
+                    view["explain"] = explain(view, reg) if args["explain"] else None
+                    vt = view["routing"]
+                    routed = ([vt["lead"]] if vt["lead"] else []) + vt["co_leads"] + vt["legs"] + vt.get("tech", [])
+                    view["dev_tools"] = prober.for_skills(routed) if routed else []
+            st["task_scope"] = {"scope": "paths" if args["paths"] else ("branch" if view is not None else "baseline"),
+                                "lead": view["routing"]["lead"] if view is not None else None,
+                                "baseline_paths": [] if args["paths"] else [f["path"] for f in st["files"] if f["source"] == "worktree"]}
+            views[key] = view
+            for c in (view or {}).get("checks", []):
                 if c["tier"] != "external":
                     for m in reg["modules"]:
                         if m["id"] == c["module"]:
@@ -516,7 +595,7 @@ def main():
     if args["json"]:
         print(json.dumps(snap, indent=None))
     else:
-        print(render(snap, reg, args))
+        print(render(snap, reg, args, views))
 
 
 if __name__ == "__main__":
