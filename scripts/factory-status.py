@@ -46,6 +46,20 @@ sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not 
 import evidence  # noqa: E402
 import fstate  # noqa: E402
 WS = fstate.workspace(REG)  # same rule as run-checks.py: both read the same evidence
+
+
+@lru_cache(maxsize=None)
+def _subst():
+    import context  # noqa: E402 - only needed when evidence exists
+    dotnet = context.which(REG["tools"].get("dotnet", {}).get("candidates", []))
+    return {"{dotnet}": os.path.basename(dotnet or "") or "<dotnet-not-found>", "{plugin_root}": PLUGIN_ROOT.replace("\\", "/")}
+
+
+def substitute(run):
+    """A registry check command as run-checks.py runs it (same substitution as context.py / resolve.jq)."""
+    for k, v in _subst().items():
+        run = run.replace(k, v)
+    return run
 REPO_BY_NAME = {}
 for _k, _r in REG["repos"].items():
     _m = re.search(r"github\.com[:/][^/]+/([^/.]+)", _r.get("remote", ""))
@@ -345,10 +359,15 @@ def main():
         recs = evidence.all_latest(WS, key)
         if recs:
             rows = []
-            defs = {(m["id"], c["id"]): c for m in REG["modules"] for t in ("fast", "extended") for c in m["checks"][t]}
+            defs = {(m["id"], c["id"]): c for m in REG["modules"] if m.get("repo") == key
+                    for t in ("fast", "extended") for c in m["checks"][t]}
             for rec in recs:
-                chk = rec.get("definition") if isinstance(rec.get("definition"), dict) and rec.get("definition") else {**defs.get((rec.get("module"), rec.get("check")), {}), "run": rec.get("command"), "cwd": rec.get("cwd")}
-                state, detail = evidence.assess(rec, rdir(key), chk)
+                cur = defs.get((rec.get("module"), rec.get("check")))
+                if cur is None:
+                    state, detail = "STALE", f"was {rec['state']} ({rec.get('timestamp')}); check no longer declared in the registry"
+                else:  # graded against the CURRENT registry definition, like run-checks --status
+                    chk = {**cur, "cwd": cur.get("cwd") or ".", "run": substitute(cur.get("run") or "")}
+                    state, detail = evidence.assess(rec, rdir(key), chk, evidence.scopes_for(REG, rec["module"], chk["cwd"]))
                 rows.append({"check": f"{rec.get('module')}/{rec.get('check')}", "state": state, "detail": detail})
             st["evidence"][key] = rows
 

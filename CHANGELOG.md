@@ -24,6 +24,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   installed, and in `--no-workspace` runs), including that `orca worktree rm` still deletes branches as the
   policy warns.
 
+### Fixed
+- **Truthful check evidence.** A check's identity scope now includes its own module's paths, so editing
+  `backend/content/` makes a `content-loader-tests` PASS (run in `backend/gameserver-dotnet`) STALE; a record
+  made under another scope is STALE (`check scope changed`), so pre-upgrade records re-grade once. `factory-status`
+  grades evidence against the current registry definition (a changed `run` is STALE there too, like
+  `run-checks --status`) and a record of a check no longer declared is STALE. Two modules sharing one command each
+  get a record graded with their own definition and identity (both PASS right after the run). A check whose
+  `needs` prerequisite did not PASS in this run (failed, skipped by `--only`, listed after it) is BLOCKED.
+  `run-checks` exits 2 on an unknown `--tier`/`--only` name, a bad `--timeout`, a `--paths` entry outside the
+  repo checkout and its linked worktrees (also `../` escapes and paths `factory-context.sh` rejects) and a path in
+  another linked worktree of the repo (checks run in, and evidence describes, the checkout `run-checks` runs in:
+  run it from that worktree), and prints `none registered` when no check is declared for the paths.
+  `validation.md`, factory-core `SKILL.md` and the README describe the new `BLOCKED` meaning.
+
 ## [1.0.5] - 2026-10-22
 
 Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay
