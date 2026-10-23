@@ -21,8 +21,8 @@ Verified 2026-09-30 from each repo's working tree (`git`, `package.json`, `*.asm
 |---|---|
 | Remote / integration | `Cuvara/Netcode`, **`develop`** (GitHub default; CI on push develop/main, PR into develop/main) |
 | Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py Netcode` / `factory-status.py` |
-| Branches seen | `feat/view/...`, `fix/samples/...`, `perf/snapshot/...`, `chore/release/0.44.0`, `release/v0.43.0`, `sync-main/v0.41.0` (bot) |
-| Commits | `feat(view): ... (#163)`, release commit `chore(release): 0.45.0 (#176)` = `package.json` + `CHANGELOG.md` only |
+| Branches seen (naming examples, not current versions) | `feat/view/..., `fix/samples/...`, `perf/snapshot/...`, `chore/release/0.44.0`, `release/v0.43.0`, `sync-main/v0.41.0` (bot) |
+| Commits (examples) | `feat(view): ... (#163)`, release commit `chore(release): 0.45.0 (#176)` = `package.json` + `CHANGELOG.md` only |
 | Deps | unitask 2.5.10, System.Runtime.CompilerServices.Unsafe 6.0.0, unitywebrequest, physics modules |
 
 Assemblies: `Runtime/Cuvara.Netcode.Runtime`, `Runtime/Bootstrap/Cuvara.Netcode.Bootstrap`,
@@ -107,7 +107,7 @@ Moving them is a deliberate task with a compatibility line (RELEASE.md §4).
 |---|---|
 | Remote / integration | `Cuvara/UIToolkit`, **`main`**. CI on push main/develop, **PR into `main` only** |
 | Version | live: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/package-ready.py UIToolkit` / `factory-status.py` |
-| Commits seen | `fix(uitoolkit): ...`, `chore: release v0.7.2 — ...`, `ci: ... (#12)` |
+| Commits seen (examples) | `fix(uitoolkit): ...`, `chore: release v0.7.2 — ...`, `ci: ... (#12)` |
 | Deps | unitask 2.5.10, uielements module, VContainer 1.16.9 (no shared-gamelogic, no sgl pin in CI) |
 
 Assemblies: `Runtime/Cuvara.UIToolkit`, `Runtime/Ecs/Cuvara.UIToolkit.Ecs`,
