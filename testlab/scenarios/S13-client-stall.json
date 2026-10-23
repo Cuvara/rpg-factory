@@ -1,9 +1,9 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S13",
-  "version": 1,
+  "version": 2,
   "title": "Client stall recovery: one client's main thread stops for 500 ms and for 2000 ms",
-  "description": "dev_arena, enemies off, every client moving. Client 0 blocks its main thread (plan action stall, client hook C2: Thread.Sleep) for 500 ms at 10 s and 2000 ms at 25 s, as a GC pause, an alt-tab or a slow disk would. It must reconcile with the server and stay there (stall_recovery), without hard prediction snaps beyond the measured bound (prediction_bound) and without a local rendered jump (render_jumps). The other clients must keep drawing it where the server has it. The stall is one process only, so host_stalls does not set it aside.",
+  "description": "dev_arena, enemies off, every client moving. Client 0 blocks its main thread (plan action stall, client hook C2: Thread.Sleep) for 500 ms at 10 s and 2000 ms at 25 s, as a GC pause, an alt-tab or a slow disk would. It must reconcile with the server and stay there (stall_recovery), without hard prediction snaps beyond the measured bound (prediction_bound) and without a local rendered jump (render_jumps). The other clients must keep drawing it where the server has it. The stall is one process only, so host_stalls does not set it aside. Client 0 also records the Netcode predictor call trace (plan predictor_trace, client-0/trace.ndjson) for a headless replay of its corrections: testlab.py replay-trace <run>.",
   "clients": 3,
   "map": "dev_arena",
   "seed": 13,
@@ -31,6 +31,7 @@
   },
   "per_client": [
     {
+      "predictor_trace": true,
       "steps": [
         {
           "t0": 2,

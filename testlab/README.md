@@ -27,7 +27,7 @@ Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error, `4
 | Command | Windows Git Bash (or PowerShell, cmd) with Windows Python | WSL Ubuntu with Linux Python |
 |---|---|---|
 | `run`, `suite`, `sweep`, `stack`, `clean`, `build-client`, `build-loadtest` | yes | no: the players are Windows processes and process control uses `tasklist`/`taskkill` |
-| `analyze`, `analyze --delivery`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
+| `analyze`, `analyze --delivery`, `replay-trace`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
 | `python3 -B testlab/tests/test_lab.py` | yes | yes |
 
 In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewrites `/c/...` arguments for Windows programs; the CLI also converts them itself, so they work with `MSYS_NO_PATHCONV=1` too. WSL commands are run from Python through `wsl.exe -d Ubuntu --exec bash -c` with path conversion disabled.
@@ -187,7 +187,7 @@ Copy a file in `scenarios/` and change these fields:
 | `report.md`, `results.json` | outcome, per-assertion measurement, threshold, source, artifacts; build provenance |
 | `run.json` | repos and commits, player fingerprint, stack actions, timeline, client launches, and the `provenance` record (below) |
 | `scenario.json` | the scenario exactly as run (defaults applied) |
-| `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png`; with a C2 recorder also `delivery.csv` and `render.csv` |
+| `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png`; with a C2 recorder also `delivery.csv` and `render.csv`; with `predictor_trace` also `trace.ndjson` |
 | `server/` | `entities.ndjson` (authoritative positions), `status.ndjson`, `container.ndjson`, `metrics-{start,end,after}.txt`; with `snapshot_trace` also `snapshot-trace.csv` |
 | `redis.json`, `orchestrator.log`, `stack-up.log`, `harness-error.txt` | |
 
@@ -206,7 +206,7 @@ When a run ends, `run.json` gets a `provenance` record (`lab/provenance.py`):
 
 Every evaluation appends the `provenance` assertion. It is PASS only when every field is present, the run id is the directory's own, the scenario and every evidence file still hash as recorded, and every client summary names this run. Anything else is INCONCLUSIVE, so a run copied under another id, re-used evidence, or a run without a record (runs before this change) cannot grade PASS. `results.json` carries an `analysis` block (run id, run directory, time, factory commit, provenance status).
 
-The manifest covers every evidence file: `scenario.json`, `redis.json`, `disruptions.ndjson` and everything under `client-*/`, `server/` and `bots/`. Each scenario has an expected inventory (`provenance.expected_inventory`: the server probe files, each client's recorder outputs, plus `disruptions.ndjson`, `bots/loadtest.json` or `server/snapshot-trace.csv` when the scenario produces them). An inventory file missing from the manifest, an evidence file not in it, or a hash mismatch makes `provenance` INCONCLUSIVE.
+The manifest covers every evidence file: `scenario.json`, `redis.json`, `disruptions.ndjson` and everything under `client-*/`, `server/` and `bots/`. Each scenario has an expected inventory (`provenance.expected_inventory`: the server probe files, each client's recorder outputs, plus `disruptions.ndjson`, `bots/loadtest.json` or `server/snapshot-trace.csv` when the scenario produces them, and `client-N/trace.ndjson` for each client whose plan has `predictor_trace`). An inventory file missing from the manifest, an evidence file not in it, or a hash mismatch makes `provenance` INCONCLUSIVE.
 
 ## Snapshot delivery path (`analyze --delivery`, rpg-mmo-server#473)
 
@@ -222,6 +222,52 @@ The analysis (`lab/delivery.py`) joins the server trace (contract C1) and the cl
 **Scope and KCP window.** A gap is ALL-CLIENTS when every other client had a long gap at the same time: receive windows overlapping on the server clock (when both clock fits hold), or tick ranges that overlap or touch (one host freeze can leave one client's gap at ticks 182061-182065 and another's at 182065-182069). The KCP class reads the server rows up to tick b and the 4 rows after it, where a retransmission burst lands.
 
 **Clock rate.** The server runs in the WSL VM, whose monotonic clock was measured 7.3 % slow against Windows (`.testlab-runs/t06/clock-drift-check.txt`). Subtracting a minimum removes offset, not rate: over a 5-minute bucket a 7-9 % rate error is 21-27 s. So per client the analysis fits receive time = a + rate x write time through the least-delayed snapshot of each time bin, reports the fit (`clock_fit`: rate, skew, bins, residual), takes one-way delay as the residual above that line, and converts the server durations the classes compare (write gap, queue delay, send gap) to client time. With fewer than 5 bins or a residual p90 above 50 ms the one-way delay is reported as unavailable, never as a number. On the 1 h soaks `20261022T163744Z-S09-sfj5` and `20261022T175111Z-S09-y6vg` the fitted rate is 1.082 and 1.085, but the residual p90 is 1-2 s: the local rate wanders between 1.073 and 1.090 over the hour, and even 30 s windowed fits leave a 40-60 ms median residual, identical for all three clients (`.testlab-runs/reanalysis/T28/<run>/clock-fit-investigation.txt`). The WSL clock is not a fixed-rate clock, so one-way delay is unavailable on these runs, as designed.
+
+## Predictor call trace (`replay-trace`, Netcode >= 8986908)
+
+```
+python3 testlab/testlab.py run S13                                   # client 0 records client-0/trace.ndjson
+python3 testlab/testlab.py replay-trace <run_dir> [--client N] [--out DIR] [--min-correction 0.05] [--window-s 5]
+```
+
+**Turning it on.** `"predictor_trace": true` in a scenario's `client_defaults` or in one `per_client` entry puts
+`predictor_trace` into that client's plan (client `TestLabPlan.predictor_trace`, client docs/TESTLAB.md "Predictor
+call trace"). The player then writes Netcode's call trace of `LocalMovePredictor` and `PredictionClockSteering`
+to `trace.ndjson`: a header (the predictor's `PredictionSettings`, map id, motor), a session line per join, a
+frame marker per frame (realtime `t`, `udt`, `dt`) and one line per call in Netcode's
+`PredictorTraceEvent.AppendJson` form. S13 turns it on for client 0, the stalled client, only. A client with the
+flag must leave `trace.ndjson` (expected inventory); with the flag off the player writes none. A player built
+before the client hook ignores the flag, so its S13 run is INCONCLUSIVE on provenance.
+
+**`replay-trace`** (`lab/predtrace.py`) does not replay. It checks that the trace can be replayed and lists
+what the live predictor recorded, so the Netcode owner knows what a replay must reproduce:
+- **Invalid** (exit 1): no header or `settings_read` false, a second header, an unknown call code, a `Reconcile`
+  not followed by its `ReconcileResult`, a result without a reconcile, steering `OnSnapshot` begin/end not
+  nested, frame numbers not increasing or frame times going back, steering times going back, a damaged line
+  before the last, no frame markers or no calls.
+- **Warnings** (still valid): a cut-short last line, a sink attached after snapshots (`events.ndjson`
+  `trace_attached` with `snapshots_before` > 0), input ticks going back without a `Reset`, counts that differ from
+  `summary.json` `trace`.
+- **Corrections per stall:** every `ReconcileResult` with `LastCorrection` >= `--min-correction` or a new snap,
+  placed in its frame (scenario time from the frame marker), attributed to a scripted stall when it falls within
+  `--window-s` of the stall start (until the next stall), the rest listed as outside stalls.
+- Exit 0 every trace valid, 1 one invalid, 2 no trace in the run, 3 usage. It prints a text summary;
+  `--out DIR` also writes `trace-summary.json` there. It never writes into the run directory.
+
+**The exact replay is Netcode's** (it owns `PredictorTraceReplayer` and its headless project; a file-driven
+entry point is a Netcode follow-up). The recipe, from client docs/TESTLAB.md and Netcode
+`Documentation~/PREDICTION.md` "Replaying a live session":
+1. From the header: `new LocalMovePredictor(new PredictionSettings(tick_rate, speed, new MapBounds(minX, minY,
+   maxX, maxY)))` (`bounds` is `[minX, minY, maxX, maxY]`).
+2. The map geometry for `header.map`: the same JSON the client loads from `Resources/Maps/<map>.json` and the
+   server from `backend/content/maps/<map>.json`, parsed as the client does (`MapGeometryJson.TryParse`,
+   Unity-free) or as the server does. Set it as `PredictorTraceReplayer.Geometry`; the trace's
+   `SetMapGeometry` call applies it.
+3. `PredictorTraceEvent.TryParseJson` every line and `Apply` it in order (lines without `"c"` are skipped by the
+   parser). `ReplaySteering = true` re-decides the steering instead of replaying its effects.
+4. Compare each replayed reconcile's outcome with the recorded `ReconcileResult` (`x` LastCorrection, `y`/`z`
+   the simulated position, `w` snaps, `a` base tick, `b` tick error, `c2` stall resyncs): equal before a fix,
+   and after a fix the corrections `replay-trace` lists for the stall are the ones that must change.
 
 ## Failure triage
 

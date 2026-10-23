@@ -2458,5 +2458,192 @@ class StallCatchupRuleTests(unittest.TestCase):
                          analyze.FAIL)
 
 
+
+def _ev_line(c, a=0, b=0, c2=0, x=0.0, y=0.0, z=0.0, w=0.0, f=0, t=0.0):
+    """One line in Netcode's PredictorTraceEvent.AppendJson form (8986908)."""
+    return (f'{{"c":{c},"a":{a},"b":{b},"c2":{c2},"x":{x!r},"y":{y!r},"z":{z!r},"w":{w!r},'
+            f'"u":0,"v":0,"f":{f},"t":{t!r}}}')
+
+
+class PredictorTraceFixture:
+    """A client-0 directory with a trace.ndjson as the TestLab recorder writes it: header, session,
+    frame markers at 60 Hz on the realtime axis (scenario st = t - 100), a reconcile per frame, and
+    scripted stalls in events.ndjson."""
+
+    OFF = 100.0
+
+    def __init__(self, root: Path):
+        self.dir = root / "client-0"
+        self.dir.mkdir(parents=True)
+        self.lines = [json.dumps({"kind": "header", "schema": "rpg.testlab.predictor-trace.v1", "map": "dev_arena",
+                                  "settings_read": True, "tick_rate": 60, "speed": 5.0,
+                                  "bounds": [-50.0, -50.0, 50.0, 50.0], "tick_rate_is_fallback": False,
+                                  "motor_3d": True}),
+                      json.dumps({"kind": "session", "map": "dev_arena", "protocol": 3, "server_tick_rate": 60,
+                                  "motor_3d": True, "predictor_tick_rate": 60})]
+        self.events = [{"t": self.OFF + 1.0, "st": 1.0, "event": "in_world", "user_id": "u0"}]
+        self.frame = 0
+        self.snaps = 0
+
+    def frames(self, st0: float, st1: float, corrections=None):
+        """Frames from st0 to st1 (scenario s), each with input, steering, a reconcile and an advance;
+        corrections maps a scenario time to (LastCorrection, snap) for the first frame at or after it."""
+        corrections = dict(corrections or {})
+        st = st0
+        while st < st1:
+            self.frame += 1
+            t = self.OFF + st
+            self.lines.append(json.dumps({"frame": self.frame, "t": t, "udt": 1 / 60, "dt": 1 / 60}))
+            self.lines.append(_ev_line(5, a=self.frame, x=1.0))
+            self.lines.append(_ev_line(66, a=self.frame, t=t))
+            self.lines.append(_ev_line(64, a=self.frame, b=self.frame - 2, t=t))
+            corr = 0.0
+            for k in sorted(corrections):
+                if k <= st:
+                    corr, snap = corrections.pop(k)
+                    self.snaps += 1 if snap else 0
+                    break
+            self.lines.append(_ev_line(6, a=self.frame - 2, b=self.frame, c2=self.frame - 2, x=st, y=0.0))
+            self.lines.append(_ev_line(32, a=self.frame, b=0, c2=0, x=corr, y=st, z=0.0, w=float(self.snaps)))
+            self.lines.append(_ev_line(65))
+            self.lines.append(_ev_line(7, x=1 / 60))
+            st = round(st + 1 / 60, 6)
+        return self
+
+    def stall(self, st: float, ms: int):
+        t = self.OFF + st
+        self.events.append({"t": t, "st": st, "event": "stall", "ms": ms, "actual_ms": ms,
+                            "start": t, "end": t + ms / 1000.0})
+        return self
+
+    def build(self, tail: str = "") -> Path:
+        _write(self.dir / "trace.ndjson", "\n".join(self.lines) + "\n" + tail)
+        _write(self.dir / "events.ndjson", "".join(json.dumps(e) + "\n" for e in self.events))
+        calls = sum(1 for ln in self.lines if ln.startswith('{"c"'))
+        _write(self.dir / "summary.json", json.dumps({"trace": {"enabled": True, "file": "trace.ndjson",
+                                                                "events": calls, "frames": self.frame,
+                                                                "predictor_attached": True,
+                                                                "steering_attached": True}}))
+        _write(self.dir / "plan.json", json.dumps({"predictor_trace": True}))
+        return self.dir
+
+
+class PredictorTraceTests(unittest.TestCase):
+    """T56: S13 records the Netcode predictor call trace on the stalled client (plan predictor_trace,
+    client-0/trace.ndjson), provenance requires it there only, and `testlab.py replay-trace` validates
+    it and lists the corrections the live predictor recorded per stall."""
+
+    def _stalled(self, root: Path, tail: str = "") -> Path:
+        # 500 ms stall at st 10: a 1.3 u catch-up correction and a 1.0 u second one; 2000 ms at st 25:
+        # one 1.25 u; and a 0.2 u correction at st 5 outside every stall.
+        fx = PredictorTraceFixture(root).stall(10.0, 500).stall(25.0, 2000)
+        fx.frames(4.9, 5.1, {5.0: (0.2, False)})
+        fx.frames(9.9, 10.7, {10.5: (1.3, True), 10.6: (1.0, True)})
+        fx.frames(24.9, 27.2, {27.0: (1.25, True)})
+        return fx.build(tail)
+
+    def test_s13_traces_client_0_only_and_provenance_requires_it_there(self):
+        from lab import provenance
+        sc = scenarios.load("S13")
+        self.assertEqual(scenarios.traced_clients(sc), [0])
+        self.assertEqual([scenarios.client_plan(sc, i, "r")["predictor_trace"] for i in range(3)], [True, False, False])
+        inv = provenance.expected_inventory(sc)
+        self.assertIn("client-0/trace.ndjson", inv)
+        self.assertNotIn("client-1/trace.ndjson", inv)
+        s01 = scenarios.load("S01")
+        self.assertEqual(scenarios.traced_clients(s01), [])
+        self.assertFalse(scenarios.client_plan(s01, 0, "r")["predictor_trace"])
+        self.assertFalse([p for p in provenance.expected_inventory(s01) if p.endswith("trace.ndjson")])
+        on_all = _scenario(clients=2, client_defaults={"steps": [], "actions": [], "predictor_trace": True})
+        self.assertEqual(scenarios.traced_clients(on_all), [0, 1])
+        with self.assertRaises(scenarios.ScenarioError):
+            scenarios.validate(_scenario(clients=1, per_client=[{"predictor_trace": "yes"}]))
+
+    def test_a_valid_trace_gives_its_corrections_per_stall(self):
+        from lab import predtrace
+        with tempfile.TemporaryDirectory() as d:
+            doc = predtrace.summarise(self._stalled(Path(d)))
+            self.assertTrue(doc["valid"], doc["problems"])
+            self.assertEqual(doc["warnings"], [])
+            self.assertEqual(doc["header"]["map"], "dev_arena")
+            self.assertEqual(doc["sessions"][0]["protocol"], 3)
+            self.assertEqual(doc["counts"]["reconciles"], doc["counts"]["results"])
+            s500, s2000 = doc["stalls"]
+            self.assertEqual((s500["ms"], s500["st"], s500["count"], s500["snaps"], s500["max"]), (500, 10.0, 2, 2, 1.3))
+            self.assertEqual([c["correction"] for c in s500["corrections"]], [1.3, 1.0])
+            self.assertAlmostEqual(s500["corrections"][1]["st"], 10.6, delta=1 / 60)
+            self.assertEqual((s2000["count"], s2000["max"]), (1, 1.25))
+            self.assertEqual((doc["outside_stalls"]["count"], doc["outside_stalls"]["max"]), (1, 0.2))
+            self.assertIn("stall 500 ms at st 10.0: 2 correction(s), 2 snap(s), max 1.3", predtrace.render(doc))
+
+    def test_broken_traces_are_invalid_with_the_reason(self):
+        from lab import predtrace
+        cases = {
+            "no header": (lambda ls: ls[1:], "line 1 is not the header"),
+            "settings unknown": (lambda ls: [ls[0].replace('"settings_read": true', '"settings_read": false')] + ls[1:],
+                                 "settings_read is false"),
+            "reconcile without result": (lambda ls: [x for x in ls if not x.startswith('{"c":32')],
+                                         "Reconcile followed by SteeringOnSnapshotEnd"),
+            "result without reconcile": (lambda ls: [x for x in ls if not x.startswith('{"c":6,')],
+                                         "ReconcileResult without a Reconcile"),
+            "frames backwards": (lambda ls: ls[:2] + ls[2:][::-1], "frames must increase"),
+            "steering not closed": (lambda ls: [x for x in ls if not x.startswith('{"c":65')],
+                                    "SteeringOnSnapshotBegin inside"),
+            "unknown call": (lambda ls: ls + [_ev_line(99)], "unknown call code 99"),
+            "damaged middle line": (lambda ls: ls[:5] + ['{"c":5,'] + ls[5:], "not a JSON object"),
+        }
+        for name, (mutate, reason) in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                fx = PredictorTraceFixture(Path(d)).stall(10.0, 500)
+                fx.frames(9.9, 10.2, {10.0: (1.3, True)})
+                fx.lines = mutate(fx.lines)
+                doc = predtrace.summarise(fx.build())
+                self.assertFalse(doc["valid"], name)
+                self.assertTrue(any(reason in p for p in doc["problems"]), (name, doc["problems"]))
+        with tempfile.TemporaryDirectory() as d:
+            doc = predtrace.summarise(Path(d))
+            self.assertFalse(doc["valid"])
+            self.assertIn("no trace.ndjson", doc["problems"][0])
+
+    def test_a_cut_short_last_line_and_a_late_attach_are_warnings(self):
+        from lab import predtrace
+        with tempfile.TemporaryDirectory() as d:
+            fx = PredictorTraceFixture(Path(d)).stall(10.0, 500)
+            fx.frames(9.9, 10.2, {10.0: (1.3, True)})
+            fx.events.append({"t": 101.0, "st": 1.0, "event": "trace_attached", "target": "steering",
+                              "snapshots_before": 3})
+            doc = predtrace.summarise(fx.build(tail='{"c":7,"a":0'))
+            self.assertTrue(doc["valid"], doc["problems"])
+            self.assertTrue(any("cut-short last line" in w for w in doc["warnings"]), doc["warnings"])
+            self.assertTrue(any("after 3 snapshot(s) (steering)" in w for w in doc["warnings"]), doc["warnings"])
+
+    def test_replay_trace_command_exit_codes_and_output(self):
+        import contextlib
+        import io
+        import testlab as cli
+        with tempfile.TemporaryDirectory() as d:
+            run = Path(d) / "run"
+            self._stalled(run)
+            (run / "client-1").mkdir()
+            _write(run / "client-1" / "plan.json", json.dumps({"predictor_trace": False}))
+            out = Path(d) / "out"
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(cli.main(["replay-trace", str(run), "--out", str(out)]), 0)
+            self.assertIn("VALID", buf.getvalue())
+            doc = json.loads((out / "trace-summary.json").read_text(encoding="utf-8"))
+            self.assertEqual([c["client"] for c in doc["clients"]], [0])
+            self.assertFalse((run / "trace-summary.json").exists())
+            self.assertFalse((run / "client-0" / "trace-summary.json").exists())
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main(["replay-trace", str(run), "--client", "1"]), 1)
+                lines = (run / "client-0" / "trace.ndjson").read_text(encoding="utf-8").splitlines()
+                _write(run / "client-0" / "trace.ndjson", "\n".join(lines[1:]) + "\n")
+                self.assertEqual(cli.main(["replay-trace", str(run)]), 1)
+                empty = Path(d) / "empty"
+                (empty / "client-0").mkdir(parents=True)
+                self.assertEqual(cli.main(["replay-trace", str(empty)]), 2)
+                self.assertEqual(cli.main(["replay-trace", str(Path(d) / "none")]), 3)
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,12 +92,14 @@ def validate(sc: dict) -> None:
     if int(sc["clients"]) < 1:
         raise ScenarioError("clients must be >= 1")
     for block in [sc["client_defaults"], *sc["per_client"]]:
-        for step in block.get("steps", []):
+        if "predictor_trace" in (block or {}) and not isinstance(block["predictor_trace"], bool):
+            raise ScenarioError(f"{sc['id']}: predictor_trace must be true or false: {block['predictor_trace']!r}")
+        for step in (block or {}).get("steps", []):
             if step.get("mode") not in _STEP_MODES:
                 raise ScenarioError(f"{sc['id']}: unknown step mode {step.get('mode')}")
             if float(step.get("t1", 0)) <= float(step.get("t0", 0)):
                 raise ScenarioError(f"{sc['id']}: step t1 must be after t0: {step}")
-        for action in block.get("actions", []):
+        for action in (block or {}).get("actions", []):
             if action.get("kind") not in _ACTION_KINDS:
                 raise ScenarioError(f"{sc['id']}: unknown action kind {action.get('kind')}")
             if action["kind"] == "stall" and int(action.get("ms", 0)) <= 0:
@@ -119,7 +121,7 @@ def client_plan(sc: dict, index: int, run_id: str) -> dict:
     block = copy.deepcopy(sc["client_defaults"])
     if index < len(sc["per_client"]):
         override = sc["per_client"][index] or {}
-        for key in ("steps", "actions"):
+        for key in ("steps", "actions", "predictor_trace"):
             if key in override:
                 block[key] = override[key]
     jump = sc["jump"]
@@ -138,9 +140,23 @@ def client_plan(sc: dict, index: int, run_id: str) -> dict:
         "anomaly_screenshots": int(sc["anomaly_screenshots"]),
         "overlay": bool(sc["overlay"]),
         "quit_on_done": True,
+        # Netcode predictor call trace to trace.ndjson (client hook, Netcode >= 8986908); opt-in per client.
+        "predictor_trace": bool(block.get("predictor_trace", False)),
         "steps": [_step(s) for s in _repeat(block.get("steps", []), sc)],
         "actions": [_action(a) for a in _repeat(block.get("actions", []), sc)],
     }
+
+
+def traced_clients(sc: dict) -> list[int]:
+    """Client indices whose plan turns the predictor call trace on (client_defaults or per_client)."""
+    out = []
+    for i in range(int(sc.get("clients", 0))):
+        block = sc["client_defaults"] or {}
+        if i < len(sc["per_client"]) and "predictor_trace" in (sc["per_client"][i] or {}):
+            block = sc["per_client"][i]
+        if block.get("predictor_trace"):
+            out.append(i)
+    return out
 
 
 def _repeat(items: list, sc: dict) -> list:

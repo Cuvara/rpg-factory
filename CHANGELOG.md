@@ -139,6 +139,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     same rows and skips as the forward reader), so a last-match search (`_user_ids` on events,
     `_status_map_bounds`) holds one block and stops at the match. Server `status.ndjson` (~30 MB in a
     1 h soak) is streamed as well instead of held as a list.
+  - **Predictor call trace (T56).** A scenario can turn on the client's Netcode predictor call trace per
+    client (`"predictor_trace": true` in `client_defaults` or a `per_client` entry; plan `predictor_trace`;
+    client d6c8839, Netcode >= 8986908). S13 (version 2) records it on client 0, the stalled client; the
+    expected provenance inventory then requires `client-0/trace.ndjson`. New `testlab.py replay-trace <run>
+    [--client N] [--out DIR]` (`lab/predtrace.py`) validates the trace (header and settings, frame markers in
+    order, each `Reconcile` followed by its `ReconcileResult`, steering begin/end nesting, steering times) and
+    lists the corrections the live predictor recorded per scripted stall. The exact replay stays with Netcode's
+    `PredictorTraceReplayer`; the recipe is in testlab/README.md "Predictor call trace".
 - `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
   tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
   `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice

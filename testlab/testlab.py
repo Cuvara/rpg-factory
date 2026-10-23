@@ -7,6 +7,7 @@
     python testlab/testlab.py sweep S07 --levels 0,25,50,100 [--stop-on-fail]
     python testlab/testlab.py analyze <run_dir> [--out DIR]      # re-evaluate stored evidence
     python testlab/testlab.py analyze --delivery <run_dir> [--out DIR]   # snapshot delivery path (#473)
+    python testlab/testlab.py replay-trace <run_dir> [--client N] [--out DIR]  # predictor call trace check
     python testlab/testlab.py leak-check <player> [--expect-testlab]     # TestLab code in a build?
     python testlab/testlab.py build-client [--project PATH] [--out PATH]
     python testlab/testlab.py build-loadtest [--server-repo PATH]
@@ -30,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, delivery, leakcheck, report, runner, scenarios, stack, thresholds, util  # noqa: E402
+from lab import analyze, clients, config, delivery, leakcheck, predtrace, report, runner, scenarios, stack, thresholds, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
 THRESHOLDS_DOC = Path(__file__).resolve().parent / "docs" / "THRESHOLDS.md"
@@ -183,6 +184,33 @@ def cmd_analyze(args) -> int:
     report.write(run_dir, ev, results, outcome, harness_error, out_dir=out_dir)
     print(f"{outcome}: {out_dir / 'report.md'}")
     return report.EXIT_CODES.get(outcome, 2)
+
+
+def cmd_replay_trace(args) -> int:
+    """Validate the predictor call trace of a run's client(s) and summarise the corrections it recorded
+    per scripted stall. Exit 0 every trace valid, 1 one is invalid, 2 no trace in the run, 3 usage.
+    The exact replay itself is Netcode's PredictorTraceReplayer (README "Predictor call trace")."""
+    run_dir = _path(args.run_dir)
+    if not run_dir.is_dir():
+        util.eprint(f"testlab: {run_dir} is not a directory")
+        return 3
+    indices = [args.client] if args.client is not None else predtrace.traced_clients(run_dir)
+    if not indices:
+        print(f"no predictor trace in {run_dir} (no client plan with predictor_trace, no trace.ndjson)")
+        return 2
+    docs = []
+    for i in indices:
+        doc = predtrace.summarise(run_dir / f"client-{i}", min_correction=args.min_correction,
+                                  local_window_s=args.window_s)
+        doc["client"] = i
+        docs.append(doc)
+        print(predtrace.render(doc))
+    if args.out:
+        out = _path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        util.write_json(out / "trace-summary.json", {"run_dir": str(run_dir), "clients": docs})
+        print(f"written: {out / 'trace-summary.json'}")
+    return 0 if all(d["valid"] for d in docs) else 1
 
 
 def cmd_thresholds(args) -> int:
@@ -355,6 +383,13 @@ def main(argv=None) -> int:
     a.add_argument("--gap-ms", type=float, default=250.0)
     a.add_argument("--bucket-s", type=float, default=300.0)
     a.set_defaults(fn=cmd_analyze)
+    rt = sub.add_parser("replay-trace", help="validate a client's predictor call trace, corrections per stall")
+    rt.add_argument("run_dir")
+    rt.add_argument("--client", type=int, help="client index (default: every client with a trace)")
+    rt.add_argument("--out", help="also write trace-summary.json here (never into the run directory by default)")
+    rt.add_argument("--min-correction", type=float, default=0.05, help="list corrections from this size (units)")
+    rt.add_argument("--window-s", type=float, default=5.0, help="corrections this long after a stall start count for it")
+    rt.set_defaults(fn=cmd_replay_trace)
     th = sub.add_parser("thresholds")
     th.add_argument("--write", action="store_true", help="write testlab/docs/THRESHOLDS.md")
     th.set_defaults(fn=cmd_thresholds)

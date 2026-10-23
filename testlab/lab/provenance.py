@@ -22,7 +22,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import util
+from . import scenarios, util
 
 SCHEMA = "rpg.testlab.provenance.v1"
 
@@ -44,7 +44,8 @@ def expected_inventory(scenario: dict) -> list[str]:
     """The evidence files a finished run of `scenario` must have, as relative posix paths: the
     scenario as run, redis, the server probe, each client's recorder outputs, and the files only some
     scenarios produce (disruptions.ndjson with disruptions, bots/loadtest.json with bots,
-    server/snapshot-trace.csv with snapshot_trace)."""
+    server/snapshot-trace.csv with snapshot_trace, client-N/trace.ndjson for a client with
+    predictor_trace)."""
     inv = ["scenario.json", "redis.json", *SERVER_INVENTORY]
     for i in range(int(scenario.get("clients", 0))):
         inv += [f"client-{i}/{n}" for n in CLIENT_INVENTORY]
@@ -54,6 +55,10 @@ def expected_inventory(scenario: dict) -> list[str]:
         inv.append("bots/loadtest.json")
     if scenario.get("snapshot_trace"):
         inv.append("server/snapshot-trace.csv")
+    # The predictor call trace is required only from the clients whose plan turns it on; any other
+    # client's trace.ndjson (none is written with the flag off) is still hashed with the client dir.
+    if scenario.get("client_defaults") is not None and scenario.get("per_client") is not None:
+        inv += [f"client-{i}/trace.ndjson" for i in scenarios.traced_clients(scenario)]
     return inv
 
 
