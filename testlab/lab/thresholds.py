@@ -113,7 +113,7 @@ CHECK_DEFAULTS = [
     ("cast_damage_bound", "cooldown / power / reach", "content", "content/abilities.json at the run's server commit"),
     ("cast_damage_bound", "reach_margin", 1.0, POLICY),
     ("delivery (analyze --delivery)", "gap_ms / explain_fraction / bucket_s", "250 / 0.5 / 300", POLICY),
-    ("delivery clock fit", "bins / tolerance", ">= 5 bins / residual p90 <= 50 ms", POLICY),
+    ("delivery windowed clock fit", "window / bins / rate / empirical error", "10 s / >= 5 minima per 1 s bin / 0.8-1.2 / p95 <= 10 ms", "X13 measured 10 s minima fits: residual p95 2.16-3.85 ms on i9fl/e26z; 10 ms is a conservative rejection ceiling; rate range is defensive policy, unvalidated"),
     ("delivery scope", "time-overlap slack", "50 ms", POLICY),
     ("delivery KCP class", "after_rows", 4, f"{POLICY}: rows after tick b where a retransmission burst lands "
                                             "(T06 sfj5 s 738: 3 -> 40 in the next rows)"),
