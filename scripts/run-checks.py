@@ -315,6 +315,8 @@ def _run_windows_check(bash, command, kwargs, timeout):
         out, _ = p.communicate(timeout=timeout)
         if job:
             kernel.CloseHandle(job)
+        try: p._handle.Close()
+        except Exception: pass
         return p.returncode, out or "", False, "not needed"
     except subprocess.TimeoutExpired:
         cleanup = "failed"
@@ -343,6 +345,8 @@ def _run_windows_check(bash, command, kwargs, timeout):
             cleanup += "; process pipes did not close within 3 s"
         if job:
             kernel.CloseHandle(job)
+        try: p._handle.Close()
+        except Exception: pass
         return 124, f"TIMEOUT after {timeout} s; pids={[p.pid]}; cleanup={cleanup}\n{out or ''}", True, cleanup
 
 
