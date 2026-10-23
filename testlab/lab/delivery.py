@@ -28,6 +28,11 @@ poor or impossible fit, one-way delay is reported as unavailable, never as a num
 durations are compared uncorrected (flagged in the output).
 
 Every client receive gap longer than `gap_ms` is classified, first match wins:
+- RECONNECT: the gap spans a session change: the server wrote its two snapshots to different
+  connections (C1 conn_id), or the client ended a session and reconnected between them (events.ndjson
+  net_state Ended / reconnected; the cause from player.log "[Net] game session closed: <cause>"). The
+  two ends then belong to different KCP conversations, so their write gap, queue and retransmission
+  counters cannot be compared (a new conversation restarts kcp_retrans_total at 0). Never SERVER_LATE.
 - QUEUE: the snapshot waited in the server's send queue (enqueue -> write_start) for at least
   `explain_fraction` of the gap.
 - SERVER_LATE: the server's own write gap between the two snapshots is that large (the tick or the
@@ -47,6 +52,7 @@ there is no other client to compare with.
 from __future__ import annotations
 
 import csv
+import re
 from bisect import bisect_right
 from pathlib import Path
 
@@ -57,7 +63,7 @@ TRACE_FILE = "snapshot-trace.csv"
 C1_COLUMNS = ("conn_id", "user_id", "world_tick", "gather_us", "enqueue_us", "write_start_us", "write_end_us",
               "bytes", "queue_depth", "dropped_oldest_total", "kcp_wait_snd", "kcp_snd_wnd", "kcp_rmt_wnd",
               "kcp_retrans_total", "kcp_rto_ms")
-CLASSES = ("SERVER_LATE", "QUEUE", "KCP", "PATH", "CLIENT", "UNKNOWN")
+CLASSES = ("RECONNECT", "SERVER_LATE", "QUEUE", "KCP", "PATH", "CLIENT", "UNKNOWN")
 SCOPES = ("ALL-CLIENTS", "SINGLE-CLIENT", "UNKNOWN")
 
 
@@ -131,6 +137,58 @@ def client_snapshots(client_dir: Path) -> tuple[list, str]:
     return out, "t"
 
 
+_CLOSED = re.compile(r"\[Net\] game session closed: (\w+)")
+
+
+def client_sessions(client_dir: Path) -> list:
+    """The client's session changes, [{"ended_us", "reconnected_us", "cause"}] on the LabClock axis
+    (events.ndjson `t`, seconds since player start, as delivery.csv recv_us / 1e6): a `net_state`
+    Ended (or `entities_reset` without one) starts a change, the next `reconnected` ends it
+    (reconnected_us None when the run ended first). The cause is the n-th "[Net] game session closed:
+    <cause>" line of player.log (no timestamps there, so matched by order), None when absent."""
+    out = []
+    open_ = None
+    for e in util.iter_ndjson(client_dir / "events.ndjson"):
+        ev, t = e.get("event"), e.get("t")
+        if t is None:
+            continue
+        us = int(round(float(t) * 1e6))
+        if (ev == "net_state" and e.get("state") == "Ended") or ev == "entities_reset":
+            if open_ is None:
+                open_ = {"ended_us": us, "reconnected_us": None, "cause": None}
+                out.append(open_)
+        elif ev == "reconnected" and open_ is not None:
+            open_["reconnected_us"] = us
+            open_["generation"] = e.get("generation")
+            open_ = None
+    try:
+        log = (client_dir / "player.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log = ""
+    for s, cause in zip(out, _CLOSED.findall(log)):
+        s["cause"] = cause
+    return out
+
+
+def _session_change(gap: dict, srv: dict | None, sessions: list) -> dict | None:
+    """Evidence that the gap spans a session change, or None."""
+    ra = (srv or {}).get(gap["tick_a"])
+    rb = (srv or {}).get(gap["tick_b"])
+    conn_a, conn_b = (ra or {}).get("conn_id"), (rb or {}).get("conn_id")
+    hit = None
+    for s in sessions:
+        marks = [s["ended_us"]] + ([s["reconnected_us"]] if s["reconnected_us"] is not None else [])
+        if any(gap["recv_a_us"] <= m <= gap["recv_b_us"] for m in marks):
+            hit = s
+            break
+    if hit is None and not (conn_a and conn_b and conn_a != conn_b):
+        return None
+    return {"conn_a": conn_a or None, "conn_b": conn_b or None, "cause": (hit or {}).get("cause"),
+            "session_ended_s": None if hit is None else round(hit["ended_us"] / 1e6, 3),
+            "reconnected_s": None if hit is None or hit["reconnected_us"] is None
+            else round(hit["reconnected_us"] / 1e6, 3)}
+
+
 def read_frames(client_dir: Path) -> tuple[list, list]:
     """(frames, render): frames = [(start_us, end_us, dt_ms)] of every frame on the player clock
     (frames.csv, else consecutive render.csv t_us); render = C2 render.csv rows that carry a
@@ -173,8 +231,23 @@ def _stats(values) -> dict:
 
 
 def _delta(rows, key):
-    vals = [r[key] for r in rows if r.get(key) is not None]
-    return (vals[-1] - vals[0]) if len(vals) >= 2 else None
+    """Growth of a per-connection counter over rows: summed per run of one conn_id (or until the
+    counter goes down), because a new connection (a reconnect) restarts its counters at 0."""
+    total, have, first, last, conn = 0, False, None, None, object()
+    for r in rows:
+        v = r.get(key)
+        if v is None:
+            continue
+        if r.get("conn_id") != conn or (last is not None and v < last[key]):
+            if first is not None and last is not None and last is not first:
+                total += last[key] - first[key]
+                have = True
+            first, conn = r, r.get("conn_id")
+        last = r
+    if first is not None and last is not None and last is not first:
+        total += last[key] - first[key]
+        have = True
+    return total if have else None
 
 
 def _overlaps(stalls, lo, hi, min_ms, slack_us):
@@ -224,11 +297,21 @@ def fit_clock(pairs: list, *, min_points: int = 5, bin_us: int = 1_000_000, tole
 
 def classify_gap(gap: dict, srv: dict | None, stalls: list, recv_source: str, *, explain_fraction: float,
                  slack_us: int, rate: float = 1.0, srv_ticks: list | None = None,
-                 after_rows: int = 4) -> tuple[str, str, dict]:
+                 after_rows: int = 4, sessions: list | None = None) -> tuple[str, str, dict]:
     """(class, reason, evidence) for one client receive gap between ticks a and b. `rate` converts
-    server durations to client time (fit_clock); 1.0 when no fit is available."""
+    server durations to client time (fit_clock); 1.0 when no fit is available. `sessions` are the
+    client's session changes (client_sessions)."""
     a, b, gap_us = gap["tick_a"], gap["tick_b"], gap["gap_us"]
     large = explain_fraction * gap_us
+    change = _session_change(gap, srv, sessions or [])
+    if change is not None:
+        stall = _overlaps(stalls, gap["recv_a_us"], gap["recv_b_us"], large / 1000.0, slack_us)
+        change["client_stall_ms"] = None if stall is None else round(stall, 1)
+        why = "the gap spans a session change (reconnect"
+        why += f" after {change['cause']})" if change.get("cause") else ")"
+        if change["conn_a"] and change["conn_b"] and change["conn_a"] != change["conn_b"]:
+            why += f": server conn {change['conn_a']} -> {change['conn_b']}"
+        return "RECONNECT", why, change
     ev: dict = {}
     if srv is None:
         server = None
@@ -313,7 +396,8 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
         snaps, source = client_snapshots(d)
         stalls, render = read_frames(d)
         clients.append({"index": i, "user_id": summary.get("user_id") or status.get("user_id"), "snaps": snaps,
-                        "recv_source": source, "stalls": stalls, "render": render})
+                        "recv_source": source, "stalls": stalls, "render": render,
+                        "sessions": client_sessions(d)})
     all_ticks = [s[0] for c in clients for s in c["snaps"]]
     tick0 = min(all_ticks) if all_ticks else 0
 
@@ -345,7 +429,7 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
         for g in c["long"]:
             cls, why, evd = classify_gap(g, srv, c["stalls"], c["recv_source"],
                                          explain_fraction=explain_fraction, slack_us=slack_us, rate=rate,
-                                         srv_ticks=srv_ticks)
+                                         srv_ticks=srv_ticks, sessions=c["sessions"])
             scope = _scope(g, c, clients, gap_ms, slack_us)
             totals[cls] += 1
             scopes[scope] += 1
@@ -355,6 +439,9 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
         out_clients[str(c["index"])] = {
             "user_id": c["user_id"], "snapshots": len(c["snaps"]), "recv_source": c["recv_source"],
             "server_rows": len(srv) if srv else 0, "frames": len(c["stalls"]), "render_rows": len(c["render"]),
+            "sessions": [{"ended_s": round(x["ended_us"] / 1e6, 3),
+                          "reconnected_s": None if x["reconnected_us"] is None else round(x["reconnected_us"] / 1e6, 3),
+                          "cause": x["cause"]} for x in c["sessions"]],
             "clock_fit": {k: (round(v, 6) if isinstance(v, float) else v) for k, v in clock.items()},
             "server_durations": "client time (rate-corrected)" if clock["ok"] else "server time (no clock fit)",
             "one_way_delay": "available" if clock["ok"] else f"unavailable: {clock['reason']}",

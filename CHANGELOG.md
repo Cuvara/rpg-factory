@@ -139,6 +139,15 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     same rows and skips as the forward reader), so a last-match search (`_user_ids` on events,
     `_status_map_bounds`) holds one block and stops at the match. Server `status.ndjson` (~30 MB in a
     1 h soak) is streamed as well instead of held as a list.
+  - **Session-aware delivery classes (T58).** `analyze --delivery` classifies a receive gap that spans
+    a session change as RECONNECT (with the cause from player.log when known): a C1 `conn_id` change
+    between its two snapshots, or a client `net_state` Ended / `reconnected` inside it. Joined by user id
+    alone, the e26z post-reconnect gaps read as SERVER_LATE with retransmission deltas of -700..-1295.
+    Bucket counter deltas (retransmissions, dropped) are summed per connection. entity_lifecycle and
+    cross_client_convergence are unchanged: every e26z failure lies between a client's frame freeze and
+    its reconnect (the backlog frame, and client 0's 31 s on a dead session), none after a session
+    change, and the backlog-frame reuse is a real Netcode view defect (T57, Netcode 4520ccf). A test pins
+    that an id added after `entities_reset` is not judged as a reuse.
   - **Predictor call trace (T56).** A scenario can turn on the client's Netcode predictor call trace per
     client (`"predictor_trace": true` in `client_defaults` or a `per_client` entry; plan `predictor_trace`;
     client d6c8839, Netcode >= 8986908). S13 (version 2) records it on client 0, the stalled client; the

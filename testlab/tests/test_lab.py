@@ -945,9 +945,9 @@ TICK_US = 1_000_000 // 60  # 60 Hz world ticks; snapshots every 4 ticks (15 Hz)
 SNAP_TICKS = 4
 
 
-def _c1_row(uid, tick, write_us, *, enqueue_lag=1000, queue_depth=0, dropped=0, wait_snd=0, retrans=0):
+def _c1_row(uid, tick, write_us, *, enqueue_lag=1000, queue_depth=0, dropped=0, wait_snd=0, retrans=0, conn=None):
     gather = write_us - enqueue_lag - 500
-    return (f"conn-{uid},{uid},{tick},{gather},{write_us - enqueue_lag},{write_us},{write_us + 200},900,"
+    return (f"{conn or 'conn-' + uid},{uid},{tick},{gather},{write_us - enqueue_lag},{write_us},{write_us + 200},900,"
             f"{queue_depth},{dropped},{wait_snd},128,128,{retrans},200")
 
 
@@ -962,9 +962,19 @@ class DeliveryFixture:
         # bin_jitter_ms: extra delay that alternates every 3 s, so no clean delay floor exists.
         self.drift, self.bin_jitter_ms = drift, bin_jitter_ms
         self.delays = {}  # (client or None, snap index) -> dict(stage=..., ms=...)
+        self.reconnects = {}  # client -> dict(idx, ms, cause, events, conn)
 
     def delay(self, idx, stage, ms, client=None, **kw):
         self.delays[(client, idx)] = {"stage": stage, "ms": ms, **kw}
+        return self
+
+    def reconnect(self, idx, ms, client=0, cause="TransportError", events=True, conn=True):
+        """Client `client` loses its session after snapshot idx - 1 and is back on a new connection
+        (conn_id ...-b, KCP counters from 0) ms later, from snapshot idx on. Before it the old
+        connection retransmitted 7 segments per snapshot (e26z: +700 over the dead link). events:
+        write the client's net_state Ended / reconnected events and the player.log cause line; conn:
+        give the new session its own conn_id."""
+        self.reconnects[client] = {"idx": idx, "ms": ms, "cause": cause, "events": events, "conn": conn}
         return self
 
     def _d(self, ci, idx):
@@ -986,8 +996,18 @@ class DeliveryFixture:
             server_shift = client_shift = 0
             retrans = 0
             offset_us = 5_000_000 + ci * 777_000  # each player has its own clock origin
+            rc = self.reconnects.get(ci)
+            events = []
             for k in range(self.snaps):
                 tick = 1000 + k * SNAP_TICKS
+                conn = None
+                if rc and k == rc["idx"]:
+                    server_shift += rc["ms"] * 1000
+                    retrans = 0
+                if rc and k < rc["idx"]:
+                    retrans += 7
+                if rc and k >= rc["idx"] and rc["conn"]:
+                    conn = f"conn-{uid}-b"
                 d = self._d(ci, k)
                 stage = d["stage"] if d else None
                 extra = d["ms"] * 1000 if d else 0
@@ -998,15 +1018,24 @@ class DeliveryFixture:
                 if stage == "kcp":
                     retrans += 3
                 wait = 40 if stage == "kcp" else 0
-                server.append(_c1_row(uid, tick, write, enqueue_lag=lag, wait_snd=wait, retrans=retrans))
+                server.append(_c1_row(uid, tick, write, enqueue_lag=lag, wait_snd=wait, retrans=retrans, conn=conn))
                 jitter = self.bin_jitter_ms * 1000 * ((tick * TICK_US // 3_000_000) % 2)
                 recv = offset_us + int(tick * TICK_US * (1 + self.drift)) + 30_000 + jitter + (
-                    extra if stage in ("server", "queue", "kcp", "path", "client") else 0)
+                    extra if stage in ("server", "queue", "kcp", "path", "client") else 0) + (
+                    rc["ms"] * 1000 if rc and k >= rc["idx"] else 0)
+                if rc and rc["events"] and k == rc["idx"]:
+                    events += [{"t": (recv - 400_000) / 1e6, "st": 1.0, "event": "entities_reset", "count": 9},
+                               {"t": (recv - 400_000) / 1e6, "st": 1.0, "event": "net_state", "state": "Ended"},
+                               {"t": (recv - 50_000) / 1e6, "st": 1.0, "event": "reconnected", "generation": 2}]
                 deliv.append(f"{tick},{recv if self.c2 else ''},{recv + 400},900,0,6,{k}")
                 ndjson.append(json.dumps({"t": (recv + 400) / 1e6, "tick": tick}))
                 render.append(f"{k},{offset_us + tick * TICK_US + 38_000},{tick - 6},{tick},{tick},{recv},8.0")
                 if stage == "client":
                     frames.append(f"{k},{recv / 1e6:.6f},{extra / 1000 + 5:.3f},1")
+            if events:
+                _write(self.run / f"client-{ci}" / "events.ndjson", "".join(json.dumps(e) + "\n" for e in events))
+                _write(self.run / f"client-{ci}" / "player.log",
+                       f"[Net] game session closed: {rc['cause']}\n[Net] session ended with {rc['cause']}\n")
             _write(self.run / f"client-{ci}" / "delivery.csv", "\n".join(deliv) + "\n")
             _write(self.run / f"client-{ci}" / "snapshots.ndjson", "\n".join(ndjson) + "\n")
             _write(self.run / f"client-{ci}" / "frames.csv", "\n".join(frames) + "\n")
@@ -1017,6 +1046,40 @@ class DeliveryFixture:
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_a_gap_across_a_reconnect_is_reconnect_never_server_late(self):
+        """T58 (e26z): the server stopped writing to the dead connection and wrote the next snapshot to
+        the new one 3 s later; joined by user id that read as SERVER_LATE with retrans_delta -700. A
+        gap spanning a session change is RECONNECT, with the cause, by the conn_id change alone or by
+        the client's session events alone; the bucket's retransmissions are summed per connection."""
+        from lab import delivery
+        for label, kw in (("conn and events", {}), ("conn only", {"events": False}),
+                          ("events only", {"conn": False})):
+            with self.subTest(label), tempfile.TemporaryDirectory() as d:
+                fx = DeliveryFixture(Path(d)).reconnect(100, 3000, client=0, cause="HeartbeatTimeout", **kw)
+                doc = delivery.analyze(fx.build())
+                g = self._only_gap(doc)
+                self.assertEqual(g["class"], "RECONNECT", g)
+                self.assertNotIn("retrans_delta", g["evidence"])
+                self.assertEqual(doc["classes"]["SERVER_LATE"], 0)
+                self.assertEqual(doc["classes"]["RECONNECT"], 1)
+                if kw.get("events", True):
+                    self.assertEqual(g["evidence"]["cause"], "HeartbeatTimeout")
+                    self.assertIn("after HeartbeatTimeout", g["reason"])
+                    self.assertEqual(doc["clients"]["0"]["sessions"][0]["cause"], "HeartbeatTimeout")
+                if kw.get("conn", True):
+                    self.assertEqual((g["evidence"]["conn_a"], g["evidence"]["conn_b"]), ("conn-user-0", "conn-user-0-b"))
+                retrans = [b["kcp_retrans_delta"] for b in doc["clients"]["0"]["buckets"]
+                           if b["kcp_retrans_delta"] is not None]
+                self.assertTrue(retrans and min(retrans) >= 0, retrans)
+                self.assertFalse(doc["clients"]["1"]["gaps"])
+
+    def test_a_late_server_write_on_one_connection_is_still_server_late(self):
+        with tempfile.TemporaryDirectory() as d:
+            from lab import delivery
+            doc = delivery.analyze(DeliveryFixture(Path(d)).delay(100, "server", 3000, client=0).build())
+            self.assertEqual(self._only_gap(doc)["class"], "SERVER_LATE")
+            self.assertEqual(doc["clients"]["0"]["sessions"], [])
+
     def _analyze(self, fx):
         from lab import delivery
         return delivery.analyze(fx.build())
@@ -1418,6 +1481,20 @@ class EntityLifecycleTests(unittest.TestCase):
         res = analyze.check_entity_lifecycle(self._ev([self.ADD, removed, stale], drawn_until=104.1, reuse_at=106.0), {})
         self.assertEqual(res["status"], analyze.FAIL)
         self.assertEqual(res["detail"]["reuse_drawn_elsewhere"][0]["from_previous_entity"], 0.0)
+
+    def test_an_id_added_after_a_session_change_is_not_a_reuse(self):
+        """T58: a reconnect ends the session with entities_reset; every entity of the new session's
+        first snapshot is new to the view, wherever it stands, so an id removed before the reset is not
+        judged as reused after it. The same add without the reset still fails (e26z: all 80 failures
+        were in the catch-up frame of a frame freeze, before the session ended)."""
+        removed = {"event": "entity_removed", "t": 104.0, "id": "m"}
+        reset = {"event": "entities_reset", "t": 105.0, "count": 1}
+        again = dict(self.ADD, t=106.0, tick=500, x=8.0, y=8.0, rx=1.0, ry=1.0)
+        res = analyze.check_entity_lifecycle(
+            self._ev([self.ADD, removed, reset, again], drawn_until=104.1, reuse_at=106.0), {})
+        self.assertEqual((res["status"], res["measured"]["reused_ids_checked"]), (analyze.PASS, 0))
+        res = analyze.check_entity_lifecycle(self._ev([self.ADD, removed, again], drawn_until=104.1, reuse_at=106.0), {})
+        self.assertEqual((res["status"], res["measured"]["reused_drawn_elsewhere"]), (analyze.FAIL, 1))
 
     def test_without_the_hook_or_a_removal_it_is_inconclusive(self):
         self.assertEqual(analyze.check_entity_lifecycle(self._ev([], drawn_until=200), {})["status"], analyze.INCONCLUSIVE)
