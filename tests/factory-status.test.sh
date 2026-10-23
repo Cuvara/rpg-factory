@@ -115,14 +115,25 @@ expect "S12 uncommitted tracked change in server is reported" '.worktrees.server
 gc "$S" checkout -q -- backend/shared/messages/messages.go
 
 # S13 (v0.4): stored validation evidence is graded against the current tree (PASS -> STALE after an edit)
-python3 -B - "$ROOT" "$WS" "$S" <<'PY'
-import sys, time; sys.path.insert(0, sys.argv[1] + "/scripts/lib")
+# (records are made the way run-checks.py makes them: the registry definition and its scopes_for())
+store_ev() { python3 -B - "$ROOT" "$WS" "$S" "$1" <<'PY'
+import json, sys, time; sys.path.insert(0, sys.argv[1] + "/scripts/lib")
 import evidence
-chk = {"run": "go test ./...", "cwd": "backend/shared", "parser": "go-test", "evidence": "e"}
+reg = json.load(open(sys.argv[1] + "/registry.json", encoding="utf-8"))
+chk = dict(next(c for m in reg["modules"] if m["id"] == "server.shared" for c in m["checks"]["fast"] if c["id"] == "go-test"))
+if sys.argv[4] == "old-run":  # evidence produced before the registry changed the command
+    chk["run"] = "go test ./... -old-flag"
+scopes = evidence.scopes_for(reg, "server.shared", chk["cwd"])
 res = {"module": "server.shared", "check": "go-test", "tier": "fast", "command": chk["run"], "cwd": chk["cwd"], "state": "PASS",
-       "timestamp": time.strftime("%Y%m%dT%H%M%S"), "identity": evidence.identity(sys.argv[3], chk["cwd"], chk), "definition": chk}
+       "timestamp": time.strftime("%Y%m%dT%H%M%S"), "identity": evidence.identity(sys.argv[3], scopes, chk), "scopes": scopes,
+       "definition": {k: chk.get(k) for k in ("run", "cwd", "parser", "evidence")}}
 evidence.store(sys.argv[2], "server", res, "--- PASS: TestX\nok x\n")
 PY
+}
+store_ev old-run; s=$(status)
+expect "S13 evidence made under an older check command -> STALE (definition changed), like run-checks --status" \
+  'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "STALE" and (.detail | test("definition changed")))' "$s"
+store_ev current
 s=$(status)
 expect "S13 fresh evidence -> PASS on the current tree" 'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "PASS")' "$s"
 echo "// edit" >> "$S/backend/shared/messages/messages.go"; s=$(status)
@@ -137,6 +148,12 @@ expect "S13 wrong-shape evidence files: status still runs, the real record still
   'any(.evidence.server[]; .check == "server.shared/go-test" and .state == "PASS") and ([.evidence.server[] | select(.state == "PASS")] | length) == 1' "$s"
 [ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  wrong-shape evidence: exit 0"; } || { fail=$((fail + 1)); echo "FAIL  wrong-shape evidence: exit $rc"; }
 rm -f "$EV"/bad__*.json
+# evidence for a check the registry no longer declares proves nothing about the checks declared now
+printf '{"module":"server.gone","check":"x","state":"PASS","identity":{"tree":"t"}}' > "$EV/server.gone__x.json"
+s=$(status)
+expect "S13 evidence of a check no longer in the registry -> STALE" \
+  'any(.evidence.server[]; .check == "server.gone/x" and .state == "STALE" and (.detail | test("no longer declared")))' "$s"
+rm -f "$EV/server.gone__x.json"
 
 # exit codes
 python3 -B "$ROOT/scripts/factory-status.py" >/dev/null; rc=$?

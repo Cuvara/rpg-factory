@@ -42,6 +42,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   runs each QA and review worker in its own worktree at the candidate SHA. pin-chain.md and packages.md point to
   `pin-status.py` / `package-ready.py` instead of stale pin versions.
 
+### Fixed
+- **Truthful check evidence.** A check's identity scope now includes its own module's paths, so editing
+  `backend/content/` makes a `content-loader-tests` PASS (run in `backend/gameserver-dotnet`) STALE; a record
+  made under another scope is STALE (`check scope changed`), so pre-upgrade records re-grade once. `factory-status`
+  grades evidence against the current registry definition (a changed `run` is STALE there too, like
+  `run-checks --status`) and a record of a check no longer declared is STALE. Two modules sharing one command each
+  get a record graded with their own definition and identity (both PASS right after the run). A check whose
+  `needs` prerequisite did not PASS in this run (failed, skipped by `--only`, listed after it) is BLOCKED.
+  `run-checks` exits 2 on an unknown `--tier`/`--only` name, a bad `--timeout`, a `--paths` entry outside the
+  repo checkout and its linked worktrees (also `../` escapes and paths `factory-context.sh` rejects) and a path in
+  another linked worktree of the repo (checks run in, and evidence describes, the checkout `run-checks` runs in:
+  run it from that worktree), and prints `none registered` when no check is declared for the paths.
+  `validation.md`, factory-core `SKILL.md` and the README describe the new `BLOCKED` meaning.
+
 ## [1.0.5] - 2026-10-22
 
 Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay
@@ -63,6 +77,14 @@ workspace key). No command-line or registry changes for users.
   "agents never tag" wording returns or a policy file drops the authorization rule.
 
 ### Fixed
+- **Task-scoped routing in the snapshot.** Without `--paths`, uncommitted changes are the user's baseline: the
+  snapshot lists them with their modules but prints no Routing, `Next:`, gates or checks for them and says to route
+  the task with `--paths <files the task will write>` (commits on a feature branch are still routed; JSON keeps the
+  full resolution and adds `task_scope`). A module without skills prints an explicit `**Routing** no specialised
+  lead - factory-core only; follow <CLAUDE.md>` line. An absolute `--paths` entry in a linked worktree of the repo
+  maps to its repo-relative path; one in another repo or outside every repo gets a warning and is not routed as
+  `<repo>.root` (exit 2 when no path is left). `--mode=plan`, `--lead=x` (any `--flag`) after `--paths` end the
+  path list instead of being read as paths. `tests/routing.test.sh` covers each case on a throwaway workspace.
 - **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
   commands were missed or misread and now get the advisory they should:
   - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan
