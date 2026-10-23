@@ -33,7 +33,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 
 - **Two hops.** Gateway: `TcpTransport`, optional TLS with an exact-bytes certificate pin
   (`PinValidator`, `Runtime/Transport/TcpTransport.cs:30-37,286,322-349`). Gameplay: **KCP/UDP only** since
-  0.47.0 (`KcpTransport`, `CHANGELOG.md:353-356`); a join reply naming `tcp` or empty is refused (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
+  0.47.0 (`KcpTransport`, `CHANGELOG.md:353-356`). A join reply naming `tcp` or empty is refused (`TransportKinds.ParseGameplay`, `Runtime/Transport/TransportKinds.cs:29-52`); only KCP passes (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
   (`Runtime/Transport/KcpTransport.cs:43-44`).
 - **Pump.** `KcpTransport` reads with `UniTask.Delay(1, Realtime, PlayerLoopTiming.Update)`
   (`Runtime/Transport/KcpTransport.cs:248`) and runs the KCP update timer on the PlayerLoop too
@@ -68,8 +68,8 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
   (`PREDICTION.md` "LocalMovePredictor"); projectiles via `ProjectilePredictor` (hits never predicted, they
   arrive as `GAME_EVENT_TYPE_PROJECTILE_HIT`, `Runtime/Prediction/ProjectilePredictor.cs:81-82`). In ECS,
   `dots:Runtime.Netcode.Prediction/LocalPredictionSystem.cs` reconciles once per new `WorldState.Tick`
-  (`:183-239`): `SetServerSpeed`, then `PredictionClockSteering.SampleTickRate`/`OnSnapshot` (`:220-233`),
-  then `Reconcile` (3D or 2D motor), then `Advance` every frame (`:208-242`).
+  (`:183-239`): `SetServerSpeed`, `PredictionClockSteering.SampleTickRate`/`OnSnapshot`, and
+  `Reconcile` (3D or 2D motor, `:208-242`), then `Advance` every frame (`:269`).
 - **Input.** One component owns input per scene: it samples, sends, and records the same tick on the
   predictor (`RecordInput`, `client:DI/Dots/DotsWorldBridge.cs:63-67,233-260`).
 - **Reconnect.** `ReconnectPolicy` decides Never / Reconnect / ReconnectAfterDelay from the close reason
