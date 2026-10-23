@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- Windows runner cleanup now treats inaccessible or otherwise unqueryable child processes as unknown and fails closed; TRX parser regression cases explicitly target their fixture checkout and assert the parser's diagnostic.
+
 ### Added
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
   delegated work: the main session is the lead and integrator; one worktree per implementation task (Orca-managed

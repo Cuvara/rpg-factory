@@ -203,11 +203,31 @@ def _verify_windows_pids(pids, is_alive, grace=3):
     deadline = time.monotonic() + grace
     remaining = set(pids)
     while time.monotonic() < deadline:
-        remaining = {pid for pid in pids if is_alive(pid)}
+        # The Windows probe is tri-state: only a positively verified gone PID
+        # is clean. Preserve bool support for callers/tests using the old shape.
+        remaining = set()
+        for pid in pids:
+            state = is_alive(pid)
+            still_present = state != "gone" if isinstance(state, str) else bool(state)
+            if still_present:
+                remaining.add(pid)
         if not remaining:
             return True, set()
         time.sleep(.05)
     return False, remaining
+
+
+def _windows_pid_state(kernel, pid, ctypes, wintypes):
+    handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return "gone" if ctypes.get_last_error() == 87 else "unknown"
+    try:
+        code = wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return "unknown"
+        return "alive" if code.value == 259 else "gone"
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback=""):
@@ -241,14 +261,7 @@ def _run_windows_check(bash, command, kwargs, timeout):
     kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
 
     def alive(pid):
-        handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        try:
-            code = wintypes.DWORD()
-            return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
-        finally:
-            kernel.CloseHandle(handle)
+        return _windows_pid_state(kernel, pid, ctypes, wintypes)
 
     def descendants(root):
         # Toolhelp snapshot, then walk parent links without relying on wmic.

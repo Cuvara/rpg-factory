@@ -57,18 +57,24 @@ for mode in crash nonzero failed; do
 done
 headless_cwd_fallback() { (cd "$tmp/headless" && env -u RPG_FACTORY_REPO_DIR -u RPG_FACTORY_REPO_KEY RPG_FACTORY_WORKSPACE="$tmp/ws" DOTNET_MODE=crash bash "$headless_script") >"$tmp/cwd-fallback.log" 2>&1; rc=$?; grep -F "source: $(git -C "$tmp/headless" rev-parse --show-toplevel) @" "$tmp/cwd-fallback.log"; [ "$rc" -ne 0 ]; }
 case_run 'headless standalone cwd fallback resolves Netcode checkout' headless_cwd_fallback
-headless_fixture() { TRX_FILE="$1" DOTNET_MODE=fixture bash "$headless_script" >"$tmp/fixture.log" 2>&1; }
-case_run 'headless accepts real-shape Completed zero-failure TRX' headless_fixture "$root/tests/fixtures/completed-pass.trx"
-case_run 'headless rejects real Failed TRX sample' expect_fail headless_fixture "$root/tests/fixtures/failed.trx"
+headless_fixture() { TRX_FILE="$1" DOTNET_MODE=fixture bash "$headless_script" --netcode "$tmp/headless" >"$tmp/fixture.log" 2>&1; }
+parser_case() {
+  trx="$1" expected="$2" want_success="${3:-false}"
+  headless_fixture "$trx"; rc=$?
+  grep -Fq "$expected" "$tmp/fixture.log" || return 1
+  if [ "$want_success" = true ]; then [ "$rc" -eq 0 ]; else [ "$rc" -ne 0 ]; fi
+}
+case_run 'headless accepts real-shape Completed zero-failure TRX' parser_case "$root/tests/fixtures/completed-pass.trx" 'headless tests: total=' true
+case_run 'headless rejects real Failed TRX sample' parser_case "$root/tests/fixtures/failed.trx" 'FAIL: trx outcome is Failed'
 sed 's/ outcome="Completed"//' "$root/tests/fixtures/completed-pass.trx" > "$tmp/missing-outcome.trx"
-case_run 'headless rejects missing outcome' expect_fail headless_fixture "$tmp/missing-outcome.trx"
+case_run 'headless rejects missing outcome' parser_case "$tmp/missing-outcome.trx" 'FAIL: trx ResultSummary has no outcome'
 for counter in failed error aborted; do
   sed "s/$counter=\"0\"/$counter=\"1\"/" "$root/tests/fixtures/completed-pass.trx" > "$tmp/$counter.trx"
-  case_run "headless rejects nonzero $counter" expect_fail headless_fixture "$tmp/$counter.trx"
+  case_run "headless rejects nonzero $counter" parser_case "$tmp/$counter.trx" 'FAIL: nonzero TRX counters'
 done
 sed 's/executed="397"/executed="0"/' "$root/tests/fixtures/completed-pass.trx" > "$tmp/no-executed.trx"
-case_run 'headless rejects zero executed' expect_fail headless_fixture "$tmp/no-executed.trx"
+case_run 'headless rejects zero executed' parser_case "$tmp/no-executed.trx" 'FAIL: no tests executed'
 printf '<TestRun><ResultSummary outcome="Completed"><Counters' > "$tmp/malformed.trx"
-case_run 'headless rejects malformed XML' expect_fail headless_fixture "$tmp/malformed.trx"
+case_run 'headless rejects malformed XML' parser_case "$tmp/malformed.trx" 'FAIL: cannot parse trx'
 echo "checks-candidate: $checks checks, $passed passed, $failed failed"
 [ "$failed" -eq 0 ]
