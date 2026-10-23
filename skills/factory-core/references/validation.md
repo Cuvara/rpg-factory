@@ -26,8 +26,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... 
   outputs are outside this Git-status based check. Each check runs in an isolated process group;
   a timeout kills its child tree and is always FAIL (cleanup errors appear in the reason).
 - Every check receives `RPG_FACTORY_WORKSPACE`, `RPG_FACTORY_REPO_DIR`, `RPG_FACTORY_REPO_KEY`,
-  and `RPG_FACTORY_HEAD`. Paths use the selected bash's syntax; on Windows Git Bash paths are
-  translated with `cygpath`, and WSL bash paths with `wslpath`. If translation fails, the check is BLOCKED.
+  and `RPG_FACTORY_HEAD`. On Windows the runner checks for WSL `System32/bash.exe` first and uses
+  `wslpath` to produce `/mnt/<drive>/...`; any other `bash.exe` uses forward slash drive form
+  (`C:/...`). If translation fails, the check is BLOCKED.
 - Every executed check is stored with the **identity of the tree it ran on** (HEAD, diff and untracked
   files in the check's directory, check definition) and its full log, under
   `~/.local/state/rpg-factory/evidence/`. Cite the log path; the table carries the summary.

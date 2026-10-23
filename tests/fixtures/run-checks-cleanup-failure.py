@@ -34,13 +34,12 @@ else:
 assert code == 124 and timed_out
 assert "failed" in cleanup and "cleanup=failed" in output
 
-# Exercise the Windows path selection and tree-cleanup branches even when this fixture runs on POSIX.
+# Exercise Windows path selection and tree-cleanup branches even when this fixture runs on POSIX.
+import ntpath
 with patch.object(runner.os, "name", "nt"), \
-     patch.object(runner.os.path, "realpath", side_effect=lambda value: value), \
-     patch.object(runner.shutil, "which", return_value=r"C:\Git\usr\bin\cygpath.exe"), \
-     patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "/c/Work Space/Unity", "")) as convert:
-    assert runner.bash_env_path(r"C:\Work Space\Unity", r"C:\Git\bin\bash.exe") == "/c/Work Space/Unity"
-    assert convert.call_args.args[0][0].endswith("cygpath.exe")
+     patch.object(runner.os, "path", ntpath), \
+     patch.object(runner.shutil, "which", side_effect=lambda name: None if name == "cygpath" else "bash.exe"):
+    assert runner.bash_env_path(r"C:\Work Space\Unity", r"C:\Git\bin\bash.exe") == "C:/Work Space/Unity"
 
 with patch.object(runner.os, "name", "nt"), \
      patch.object(runner.os.path, "realpath", return_value=r"c:\windows\system32\bash.exe"), \

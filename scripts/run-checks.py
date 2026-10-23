@@ -34,12 +34,12 @@ Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among require
       --status: 0 only when every fast check is PASS on the current tree.
 """
 import json
-import hashlib
 import os
 import posixpath
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -126,18 +126,11 @@ def worktree_state(d):
     for path in paths:
         full = os.path.join(d, path)
         try:
-            if os.path.islink(full):
-                state[path] = "symlink:" + os.readlink(full)
-            elif os.path.isfile(full):
-                h = hashlib.sha256()
-                with open(full, "rb") as f:
-                    for block in iter(lambda: f.read(1024 * 1024), b""):
-                        h.update(block)
-                state[path] = f"{h.hexdigest()}:{os.stat(full).st_mode}"
-            elif os.path.isdir(full):
-                state[path] = "directory"
-            else:
-                state[path] = "missing"
+            st = os.stat(full, follow_symlinks=False)
+            target = ""
+            if stat.S_ISLNK(st.st_mode):
+                target = ":target=" + os.readlink(full)
+            state[path] = f"size={st.st_size}:mtime_ns={st.st_mtime_ns}:mode={st.st_mode}{target}"
         except OSError as e:
             state[path] = f"unreadable:{e}"
     return state
@@ -151,11 +144,13 @@ def bash_env_path(path, bash):
     if "\\windows\\system32\\bash.exe" in exe:
         conv = subprocess.run([bash, "-c", "wslpath -u \"$1\"", "runner", path], capture_output=True, text=True, timeout=10)
         return conv.stdout.strip() if conv.returncode == 0 and conv.stdout.strip().startswith("/") else None
-    cygpath = shutil.which("cygpath")
-    if not cygpath:
+    # Git Bash accepts the ENV CONTRACT's Windows drive form directly. This
+    # avoids depending on cygpath being visible to Windows Python's PATH.
+    absolute = os.path.abspath(path)
+    drive, tail = os.path.splitdrive(absolute)
+    if not drive or not tail.startswith(("\\", "/")):
         return None
-    conv = subprocess.run([cygpath, "-u", path], capture_output=True, text=True, timeout=10)
-    return conv.stdout.strip() if conv.returncode == 0 else None
+    return drive.replace("\\", "/") + tail.replace("\\", "/")
 
 
 def run_check(command, cwd, env, timeout):

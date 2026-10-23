@@ -30,6 +30,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- Fingerprint dirty and untracked check outputs using a single stat's size, nanosecond mtime and mode (plus symlink target), avoiding reads of large untracked assets; pass Git Bash Windows paths as `C:/...` without requiring `cygpath` on Windows Python's PATH.
 - Isolate each executed validation check's working-tree pollution, terminate its child process tree on timeout, and pass the resolved workspace and checkout through the check environment.
 - **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
   violation (`PermissionError`) for up to 2 s (backoff capped at 50 ms) instead of a fixed 8 / 5 attempts

@@ -37,6 +37,7 @@ jq --arg ws "$WS" '
         {id: "t-isolated-clean", cwd: ".", run: "echo clean", evidence: "e"},
         {id: "t-isolated-clean2", cwd: ".", run: "echo clean again", evidence: "e"},
         {id: "t-dirty-edit", cwd: ".", run: "echo edited >> backend/gateway/x.go", evidence: "e"},
+        {id: "t-large-untracked", cwd: ".", run: "echo clean", evidence: "e"},
         {id: "t-timeout-tree", cwd: ".", run: "(sleep 20) & echo $! > child.pid; wait", evidence: "e"},
         {id: "t-env", cwd: ".", run: "env | grep '^RPG_FACTORY_'; pwd", evidence: "e"}
       ],
@@ -95,11 +96,42 @@ echo 'pre-existing dirty content' >> "$S/backend/gateway/x.go"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-dirty-edit --approve t-dirty-edit --json)
 jq -e '.results[] | select(.check == "t-dirty-edit") | .state == "FAIL" and (.reason | test("backend/gateway/x.go"))' <<<"$out" >/dev/null && okk "edit to already-dirty path is detected" || nok "edit to already-dirty path missed"
 cp "$TMP/x.go.bak" "$S/backend/gateway/x.go"
+# A large untracked artifact is fingerprinted from one stat, without opening or hashing its contents.
+dd if=/dev/zero of="$S/large-untracked.bin" bs=1M count=32 2>/dev/null
+python3 -B - "$P/scripts/run-checks.py" "$S/large-untracked.bin" "$S" <<'PY'
+import builtins, importlib.util, os, sys
+runner, target, repo = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("runner_under_test", runner)
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+real_open = builtins.open
+def guarded_open(file, *args, **kwargs):
+    if os.path.normcase(os.path.abspath(os.fspath(file))) == os.path.normcase(os.path.abspath(target)):
+        raise AssertionError("worktree_state read the large untracked file")
+    return real_open(file, *args, **kwargs)
+builtins.open = guarded_open
+state = mod.worktree_state(repo)
+assert "large-untracked.bin" in state
+assert state["large-untracked.bin"].startswith("size=")
+PY
+[ $? -eq 0 ] && okk "large untracked file fingerprint does not read contents" || nok "large untracked file was read"
+rm -f "$S/large-untracked.bin"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-env --approve t-env --json)
 head=$(git -C "$S" rev-parse HEAD)
 jq -e --arg ws "$WS" --arg repo "$S" --arg head "$head" '.results[] | select(.check == "t-env") | .state == "PASS" and (.output_tail | contains("work space") and contains("rpg-mmo-server") and contains("server") and contains($head))' <<<"$out" >/dev/null && okk "bash receives workspace, repo, repo key and head; cwd is correct" || { nok "environment contract"; jq -c '.results[] | select(.check == "t-env") | {state,reason,output_tail}' <<<"$out"; }
 out=$(RPG_FACTORY_WORKSPACE="$TMP/missing workspace" python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-env --approve t-env --json)
 [ "$(jq -r '.results[] | select(.check == "t-env") | .state' <<<"$out")" = BLOCKED ] && okk "missing workspace blocks the check" || nok "missing workspace did not block"
+if [ -n "$RPGF_WINDOWS" ]; then
+  python3 -B - "$P/scripts/run-checks.py" "$WS" "$(command -v bash)" <<'PY'
+import importlib.util, sys, shutil
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+real_which = shutil.which
+shutil.which = lambda name: None if name == "cygpath" else real_which(name)
+converted = mod.bash_env_path(sys.argv[2], sys.argv[3])
+assert converted.startswith(sys.argv[2][:2] + "/") and "\\" not in converted, converted
+PY
+  [ $? -eq 0 ] && okk "Git Bash environment path works without cygpath" || nok "Git Bash path conversion required cygpath"
+fi
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
 [ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
 if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
