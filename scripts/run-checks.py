@@ -7,13 +7,15 @@ through the routing engine, runs the local ones, parses their output and assigns
   PASS           ran; exit 0; the parser found positive evidence (e.g. tests executed > 0)
   FAIL           ran and failed, or ran without evidence (0 tests executed), or left files behind
   SKIPPED        not run by explicit choice (--only filter / --tier excludes it)
-  BLOCKED        not run: a check it needs failed, or the repo is not a git work tree
+  BLOCKED        not run: a check it needs did not PASS in this run (failed, skipped, or listed after it),
+                 or its working directory does not exist
   NOT_AVAILABLE  not run: a required tool is missing on this machine
   HUMAN_REQUIRED not run: extended check without --approve, or an external check (CI, Unity
                  Editor, cluster, Docker stack) that a person must run or authorise
   NOT_RUN        (--status) declared for this change, but no evidence was ever recorded
-  STALE          (--status) evidence exists but the tree changed since (HEAD, working-tree diff in
-                 the check's directory, untracked files there, or the check definition)
+  STALE          (--status) evidence exists but the tree changed since (HEAD, working-tree diff or
+                 untracked files in the check's scope: its directory, its module's paths and those of
+                 the modules it depends on), or the check definition or scope changed in the registry
 
 Every executed check is stored with the identity of the tree it ran on (lib/evidence.py) and its
 full log; the table shows a summary only. `--status` grades the declared checks against the
@@ -22,10 +24,13 @@ current tree WITHOUT running anything - a PASS from before an edit shows as STAL
 Usage: run-checks.py --repo <key> [--paths <p>...] [--tier fast|extended|external|all]
                      [--approve <check-id>...] [--only <module/check-id>...] [--timeout SEC]
                      [--dry-run] [--json] [--status]
-  --paths      the files the task changed (default: the repo's working tree + branch diff)
+  --paths      the files the task changed (default: the repo's working tree + branch diff); a path
+               outside the repo checkout and its linked worktrees is a usage error
   --tier       default "fast"; extended/external are listed as HUMAN_REQUIRED unless approved
+  --only       names must match a check declared for these paths (usage error otherwise)
 Evidence: <state root>/evidence/<workspace>/<repo>/ (lib/fstate.py; never inside a repo).
-Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among required checks; 2 usage.
+Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among required checks; 2 usage
+      (unknown --repo/--tier/--only name, bad --timeout, path outside the repo).
       --status: 0 only when every fast check is PASS on the current tree.
 """
 import json
@@ -69,10 +74,24 @@ def parse_args(argv):
             sys.exit(2)
         i += 1
     if not a["repo"] or a["repo"] not in REG["repos"]:
-        print(f"run-checks: --repo <{'|'.join(REG['repos'])}> required", file=sys.stderr)
-        sys.exit(2)
-    a["timeout"] = int(a["timeout"])
+        usage_error(f"--repo <{'|'.join(REG['repos'])}> required")
+    if a["tier"] not in TIERS:
+        usage_error(f"unknown --tier '{a['tier']}'; tiers: {', '.join(TIERS)}")
+    try:
+        a["timeout"] = int(a["timeout"])
+    except (TypeError, ValueError):
+        a["timeout"] = 0
+    if a["timeout"] <= 0:
+        usage_error("--timeout needs a positive number of seconds")
     return a
+
+
+TIERS = ("fast", "extended", "external", "all")
+
+
+def usage_error(msg):
+    print(f"run-checks: {msg}", file=sys.stderr)
+    sys.exit(2)
 
 
 def git(d, *args):
@@ -150,7 +169,7 @@ def status(a, ws, repo, rdir, meta, commit):
             st, detail = "HUMAN_REQUIRED", "external: " + c["run"]
         else:
             rec = evidence.latest(ws, a["repo"], c["module"], c["id"])
-            st, detail = evidence.assess(rec, rdir, {**m, **c})
+            st, detail = evidence.assess(rec, rdir, {**m, **c}, evidence.scopes_for(REG, c["module"], c["cwd"]))
             if st == "NOT_RUN" and c["tier"] == "extended":
                 detail += " (extended: ask the user, then --approve " + c["id"] + ")"
             if rec and st != "NOT_RUN":
@@ -161,6 +180,8 @@ def status(a, ws, repo, rdir, meta, commit):
         print(json.dumps(out, indent=2))
     else:
         print(f"Evidence for {a['repo']} @ {repo['branch']} {commit[:7]} against the CURRENT tree (nothing was run)")
+        if not rows:
+            print(NONE_REGISTERED)
         print("| Tier | Module | Check | State | Detail |")
         print("|---|---|---|---|---|")
         for x in rows:
@@ -172,28 +193,80 @@ def status(a, ws, repo, rdir, meta, commit):
     return 0 if all(x["state"] == "PASS" for x in rows if x["tier"] == "fast") else 1
 
 
-def main():
-    a = parse_args(sys.argv[1:])
-    ws = fstate.workspace(REG)
+NONE_REGISTERED = "Checks: none registered for these paths - nothing to verify."
+
+
+def outside_paths(rdir, files):
+    """--paths that lie outside the repo checkout and its linked worktrees (context.py leaves those absolute
+    or ../ and would route them to <repo>.root). A path inside a linked worktree of the same repo maps to its
+    repo-relative form. Returns (outside, rewrites)."""
+    roots = [l[9:] for l in git(rdir, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")] or [rdir]
+    outside, rewrites = [], {}
+    for f in files:
+        p = f["path"]
+        if p == ".." or p.startswith("../"):
+            outside.append(p)
+        elif os.path.isabs(p):
+            rel = None
+            for r in roots:
+                try:
+                    x = os.path.relpath(p, r).replace(os.sep, "/")
+                except ValueError:  # Windows: another drive
+                    continue
+                if x != ".." and not x.startswith("../"):
+                    rel = x
+                    break
+            if rel is None:
+                outside.append(p)
+            else:
+                rewrites[p] = rel
+    return outside, rewrites
+
+
+def context(a, paths):
     ctx_cmd = ["bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
-    if a["paths"]:
-        ctx_cmd += ["--paths", *a["paths"]]
+    if paths:
+        ctx_cmd += ["--paths", *paths]
     r = subprocess.run(ctx_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, "CLAUDE_PLUGIN_ROOT": PLUGIN_ROOT})
     if r.returncode != 0:
         print(r.stderr, file=sys.stderr)
         sys.exit(2)
-    snap = json.loads(r.stdout)
-    repo = snap["repos"][0]
+    repo = json.loads(r.stdout)["repos"][0]
     if repo.get("error"):
-        print(f"run-checks: {repo['error']}", file=sys.stderr)
-        sys.exit(2)
+        usage_error(repo["error"])
+    return repo
+
+
+def main():
+    a = parse_args(sys.argv[1:])
+    ws = fstate.workspace(REG)
+    repo = context(a, a["paths"])
     rdir = repo["path"]
+    if a["paths"]:
+        outside, rewrites = outside_paths(rdir, repo["files"])
+        if outside:
+            usage_error(f"path(s) outside the {a['repo']} checkout {rdir} and its worktrees: {', '.join(outside)}")
+        if rewrites:  # given inside a linked worktree of this repo: route the repo-relative form
+            repo = context(a, [rewrites.get(f["path"], f["path"]) for f in repo["files"]])
+    unknown = [o for o in a["only"] if not any(o in (c["id"], f"{c['module']}/{c['id']}") for c in repo["checks"])]
+    if unknown:
+        usage_error(f"--only {' '.join(unknown)}: no such check for these paths; declared: "
+                    + (", ".join(f"{c['module']}/{c['id']}" for c in repo["checks"]) or "none"))
     meta = {(m["id"], c["id"]): c for m in REG["modules"] for t in ("fast", "extended", "external") for c in m["checks"][t]}
     commit = git(rdir, "rev-parse", "HEAD").strip()
     stamp = time.strftime("%Y%m%dT%H%M%S")
     if a["status"]:
         return status(a, ws, repo, rdir, meta, commit)
-    results, failed_ids = [], set()
+    results, state_of = [], {}  # (module, check id) -> state in THIS run
+
+    def need_state(module, n):
+        """State of prerequisite `n` in this run: the same module's check, else that id in any module (a
+        non-PASS anywhere wins); None when it has not been graded before the check that needs it."""
+        if (module, n) in state_of:
+            return state_of[(module, n)]
+        sts = [s for (_, i), s in state_of.items() if i == n]
+        return next((s for s in sts if s != "PASS"), sts[0] if sts else None)
+
     seen = {}
     before = None
     for c in repo["checks"]:
@@ -204,12 +277,8 @@ def main():
                "repo": a["repo"], "branch": repo["branch"], "commit": commit, "state": None, "exit": None,
                "duration_s": None, "counts": {}, "reason": None, "output_tail": None, "evidence_expected": c["evidence"]}
         full_id = f"{c['module']}/{c['id']}"
-        if dedup in seen:
-            res.update(state="SKIPPED", reason="same command already ran for another module in this run")
-            first = seen[dedup]
-            if first.get("identity"):  # same command + cwd = same evidence: record it for this module too
-                evidence.store(ws, a["repo"], dict(first, module=c["module"], check=c["id"]), open(first["log"], encoding="utf-8", errors="replace").read())
-        elif a["only"] and full_id not in a["only"] and c["id"] not in a["only"]:
+        unmet = [(n, need_state(c["module"], n)) for n in m.get("needs", []) if need_state(c["module"], n) != "PASS"]
+        if a["only"] and full_id not in a["only"] and c["id"] not in a["only"]:
             res.update(state="SKIPPED", reason="not in --only")
         elif c["tier"] == "external":
             res.update(state="HUMAN_REQUIRED", reason="external: " + c["run"])
@@ -220,16 +289,30 @@ def main():
             res.update(state="SKIPPED", reason=f"tier {c['tier']} not requested (--tier {a['tier']})")
         elif c["missing_tools"]:
             res.update(state="NOT_AVAILABLE", reason="missing tool(s): " + ", ".join(c["missing_tools"]))
-        elif any(n in failed_ids for n in m.get("needs", [])):
-            res.update(state="BLOCKED", reason="a check it needs did not pass: " + ", ".join(n for n in m.get("needs", []) if n in failed_ids))
         elif a["dry"]:
             res.update(state="SKIPPED", reason="--dry-run")
+        elif unmet:  # a prerequisite that did not PASS in this run (failed, skipped, not run yet) proves nothing
+            res.update(state="BLOCKED", reason="needs a check that did not pass in this run: "
+                       + ", ".join(f"{n} ({s or 'not run before it'})" for n, s in unmet))
+        elif dedup in seen:
+            # same command + cwd already ran for another module: grade that output against THIS check's
+            # definition and record it with this module's own scopes and identity
+            first, out, leftovers = seen[dedup]
+            scopes = evidence.scopes_for(REG, c["module"], c["cwd"])
+            state, counts, reason = grade(parser_for({**m, **c}), first["exit"], out)
+            if leftovers:
+                state = "FAIL"
+                reason = (reason + "; " if reason else "") + f"check left {len(leftovers)} untracked/changed path(s) in the repo: {', '.join(leftovers[:5])}"
+            res.update(state=state, exit=first["exit"], duration_s=0.0, counts=counts,
+                       reason=(reason + "; " if reason else "") + f"same command already ran for {first['module']}/{first['check']}; output shared",
+                       output_tail=first["output_tail"], identity=evidence.identity(rdir, scopes, {**m, **c}), timestamp=stamp, scopes=scopes,
+                       definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
+            res["log"] = evidence.store(ws, a["repo"], res, out)
         else:
-            seen[dedup] = res
             cwd = os.path.normpath(os.path.join(rdir, c["cwd"]))
             if not os.path.isdir(cwd):
                 res.update(state="BLOCKED", reason=f"working directory {c['cwd']} does not exist in {rdir}")
-                failed_ids.add(c["id"])
+                state_of[key] = res["state"]
                 results.append(res)
                 continue
             if before is None:
@@ -257,8 +340,8 @@ def main():
                        identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
             res["log"] = evidence.store(ws, a["repo"], res, out)
-        if res["state"] in ("FAIL", "BLOCKED", "NOT_AVAILABLE"):
-            failed_ids.add(c["id"])
+            seen[dedup] = (res, out, leftovers)
+        state_of[key] = res["state"]
         results.append(res)
 
     record = {"repo": a["repo"], "path": rdir, "branch": repo["branch"], "commit": commit, "timestamp": stamp,
@@ -273,6 +356,8 @@ def main():
         print(json.dumps(record, indent=2))
     else:
         print(f"Checks for {a['repo']} @ {repo['branch']} {commit[:7]} (evidence: {rf or 'none, --dry-run'})")
+        if not results:
+            print(NONE_REGISTERED)
         print("| Tier | Module | Check | State | Evidence / reason | Time |")
         print("|---|---|---|---|---|---|")
         for x in results:
