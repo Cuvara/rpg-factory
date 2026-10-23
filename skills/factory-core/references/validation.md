@@ -20,7 +20,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... 
 - `--tier fast` (default) runs fast checks and reports extended/external ones as HUMAN_REQUIRED.
   `--approve <id>` runs a named extended check after the user agreed. `--only <id>` narrows.
 - Each check is graded by its registry `parser` (`go-test`, `dotnet-test`, `exit`,
-  `regex:<pattern>`); `needs` makes a check BLOCKED when a prerequisite failed.
+  `regex:<pattern>`); `needs` makes a check BLOCKED unless its prerequisite PASSed earlier in the same run.
 - Before/after `git status` of the product repo is compared: a check that leaves files behind
   is FAIL (pollution), even if it passed.
 - Every executed check is stored with the **identity of the tree it ran on** (HEAD, diff and untracked
@@ -59,7 +59,7 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
 |---|---|---|
 | `PASS` | Ran, exit 0, parser evidence found (tests executed > 0, expected line present), no pollution | yes |
 | `FAIL` | Ran and failed; or exit 0 with no evidence (0 tests, all skipped); or left files in the repo | no |
-| `BLOCKED` | A `needs` prerequisite failed, or the check's directory is missing | no |
+| `BLOCKED` | A `needs` prerequisite did not PASS in this run (failed, skipped or not run before it), or the check's directory is missing | no |
 | `NOT_AVAILABLE` | A required tool is not resolved on this machine | no - say so |
 | `HUMAN_REQUIRED` | Extended check not approved, or an external environment | open item |
 | `SKIPPED` | Excluded on purpose (`--only`, duplicate command) | n/a |

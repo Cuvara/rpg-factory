@@ -35,6 +35,7 @@ Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among require
 """
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -46,6 +47,7 @@ REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import evidence  # noqa: E402
 import fstate  # noqa: E402
+from context import native_abs  # noqa: E402
 
 
 def parse_args(argv):
@@ -196,31 +198,22 @@ def status(a, ws, repo, rdir, meta, commit):
 NONE_REGISTERED = "Checks: none registered for these paths - nothing to verify."
 
 
-def outside_paths(rdir, files):
-    """--paths that lie outside the repo checkout and its linked worktrees (context.py leaves those absolute
-    or ../ and would route them to <repo>.root). A path inside a linked worktree of the same repo maps to its
-    repo-relative form. Returns (outside, rewrites)."""
-    roots = [l[9:] for l in git(rdir, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")] or [rdir]
-    outside, rewrites = [], {}
-    for f in files:
-        p = f["path"]
-        if p == ".." or p.startswith("../"):
-            outside.append(p)
-        elif os.path.isabs(p):
-            rel = None
-            for r in roots:
-                try:
-                    x = os.path.relpath(p, r).replace(os.sep, "/")
-                except ValueError:  # Windows: another drive
-                    continue
-                if x != ".." and not x.startswith("../"):
-                    rel = x
-                    break
-            if rel is None:
-                outside.append(p)
-            else:
-                rewrites[p] = rel
-    return outside, rewrites
+def within(p, d):
+    p, d = os.path.normcase(os.path.abspath(p)), os.path.normcase(os.path.abspath(d))
+    return p == d or p.startswith(d.rstrip("\\/") + os.sep)
+
+
+def outside_paths(a, repo):
+    """--paths this run cannot verify. context.py drops (and lists in rejected_paths) absolute paths outside
+    every checkout of the repo, and maps a path in another linked worktree of the repo to its repo-relative form -
+    but checks run in the checkout run-checks runs in (repo["path"]), so evidence for that path would come from
+    the wrong tree. Relative ../ paths escape the repo. Returns (outside, elsewhere)."""
+    rdir = repo["path"]
+    outside = [x["path"] for x in repo.get("rejected_paths", [])]
+    outside += [f["path"] for f in repo["files"] if posixpath.normpath(f["path"]) == ".." or posixpath.normpath(f["path"]).startswith("../")]
+    given = [native_abs(p.strip().strip('"').strip("'").replace("\\", "/")) for x in a["paths"] for p in x.split(",") if p.strip()]
+    elsewhere = [p for p in given if os.path.isabs(p) and not within(p, rdir) and p not in outside]
+    return outside, elsewhere
 
 
 def context(a, paths):
@@ -229,6 +222,8 @@ def context(a, paths):
         ctx_cmd += ["--paths", *paths]
     r = subprocess.run(ctx_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, "CLAUDE_PLUGIN_ROOT": PLUGIN_ROOT})
     if r.returncode != 0:
+        if "no path left to route" in r.stderr:  # every --paths entry is outside the repo and its worktrees
+            usage_error(f"path(s) outside the {a['repo']} checkout and its worktrees: {r.stderr.strip()}")
         print(r.stderr, file=sys.stderr)
         sys.exit(2)
     repo = json.loads(r.stdout)["repos"][0]
@@ -243,11 +238,12 @@ def main():
     repo = context(a, a["paths"])
     rdir = repo["path"]
     if a["paths"]:
-        outside, rewrites = outside_paths(rdir, repo["files"])
+        outside, elsewhere = outside_paths(a, repo)
         if outside:
             usage_error(f"path(s) outside the {a['repo']} checkout {rdir} and its worktrees: {', '.join(outside)}")
-        if rewrites:  # given inside a linked worktree of this repo: route the repo-relative form
-            repo = context(a, [rewrites.get(f["path"], f["path"]) for f in repo["files"]])
+        if elsewhere:  # checks run in rdir: evidence for another worktree's file would describe the wrong tree
+            usage_error(f"path(s) in another checkout of {a['repo']}: {', '.join(elsewhere)}; run run-checks from that "
+                        f"checkout (checks run in, and evidence describes, the checkout run-checks runs in: {rdir})")
     unknown = [o for o in a["only"] if not any(o in (c["id"], f"{c['module']}/{c['id']}") for c in repo["checks"])]
     if unknown:
         usage_error(f"--only {' '.join(unknown)}: no such check for these paths; declared: "

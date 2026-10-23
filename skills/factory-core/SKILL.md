@@ -94,7 +94,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 |---|---|---|
 | PASS | ran, exit 0, evidence found (tests executed > 0, expected line present) | yes |
 | FAIL | failed, no evidence (0 tests / all skipped), or left files in a product repo | no - fix |
-| BLOCKED | a needed check failed, or its directory is missing | no |
+| BLOCKED | a needed check did not PASS in this run, or its directory is missing | no |
 | NOT_AVAILABLE | a required tool is missing here | no - say so |
 | HUMAN_REQUIRED | extended check not approved, or external (CI, Unity Editor, cluster, Docker stack) | report as open |
 | SKIPPED | excluded on purpose (`--only`, duplicate command) | n/a |

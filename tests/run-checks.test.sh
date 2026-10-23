@@ -206,13 +206,16 @@ RC="$P/scripts/run-checks.py"
 [ "$(rc_of python3 -B "$RC" --repo server --paths backend/gateway/x.go --only t-typo)" = 2 ] && grep -q "t-typo" "$TMP/rc.out" && okk "--only typo: exit 2" || nok "--only typo: $(tail -2 "$TMP/rc.out")"
 [ "$(rc_of python3 -B "$RC" --repo server --paths backend/gateway/x.go --timeout abc)" = 2 ] && ! grep -q Traceback "$TMP/rc.out" && okk "--timeout abc: exit 2, no traceback" || nok "--timeout abc: $(tail -2 "$TMP/rc.out")"
 mkdir -p "$TMP/elsewhere"; touch "$TMP/elsewhere/f.go"
-for args in "--paths $TMP/elsewhere/f.go" "--paths $TMP/elsewhere/f.go --status" "--paths ../elsewhere/f.go"; do
+for args in "--paths $TMP/elsewhere/f.go" "--paths $TMP/elsewhere/f.go --status" "--paths ../elsewhere/f.go"             "--paths backend/../../elsewhere/f.go" "--paths backend/gateway/x.go $TMP/elsewhere/f.go"; do
   # shellcheck disable=SC2086
   [ "$(rc_of python3 -B "$RC" --repo server $args)" = 2 ] && grep -q "outside the server checkout" "$TMP/rc.out" && okk "path outside the repo ($args): exit 2" || nok "outside path ($args): $(tail -2 "$TMP/rc.out")"
 done
 git -C "$S" worktree add -q "$TMP/wt-server" 2>/dev/null
-out=$(python3 -B "$RC" --repo server --paths "$TMP/wt-server/backend/gateway/x.go" --dry-run --json); rc=$?
-[ $rc -eq 0 ] && [ "$(st t-pass)" = SKIPPED ] && okk "path inside a linked worktree of the repo routes like the repo path" || nok "worktree path: rc=$rc t-pass=$(st t-pass)"
+# checks run in the checkout run-checks runs in: a file of another linked worktree is a usage error, not
+# evidence from the wrong tree; from inside that worktree the same absolute path is fine
+[ "$(rc_of python3 -B "$RC" --repo server --paths "$TMP/wt-server/backend/gateway/x.go" --dry-run)" = 2 ] && grep -q "another checkout of server" "$TMP/rc.out"   && okk "path in another linked worktree of the repo: exit 2, run from that worktree" || nok "worktree path from main checkout: $(tail -2 "$TMP/rc.out")"
+out=$(cd "$TMP/wt-server" && python3 -B "$RC" --repo server --paths "$TMP/wt-server/backend/gateway/x.go" --dry-run --json); rc=$?
+[ $rc -eq 0 ] && [ "$(st t-pass)" = SKIPPED ] && okk "path inside the worktree run-checks runs in routes like the repo path" || nok "worktree path from the worktree: rc=$rc t-pass=$(st t-pass)"
 git -C "$S" worktree remove --force "$TMP/wt-server"
 o=$(python3 -B "$RC" --repo server --paths backend/TEAM.md 2>&1); rc=$?
 [ $rc -eq 0 ] && grep -q "none registered" <<<"$o" && okk "no check registered for the paths: says so (exit 0)" || nok "none registered: rc=$rc $o"
