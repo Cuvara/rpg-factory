@@ -98,7 +98,7 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
     s = os.path.basename(os.path.dirname(f))
     if reg["skills"].get(s, {}).get("kind") == "core":
         continue
-    m = re.search(r"^## Tools\n(.*?)(?=^## |\Z)", open(f).read(), re.M | re.S)
+    m = re.search(r"^## Tools\n(.*?)(?=^## |\Z)", open(f, encoding="utf-8").read(), re.M | re.S)
     if not m:
         print(f"{s}: missing section '## Tools'"); continue
     sec = m.group(1)
@@ -113,8 +113,9 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
             elif s not in next(t for t in reg["dev_tools"] if t["id"] == name)["used_by"]:
                 print(f"{s}: ## Tools names `{name}` but registry dev_tools.{name}.used_by lacks {s}")
 PY3
-)
-if [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
+); tools_rc=$?
+if [ $tools_rc -ne 0 ]; then bad "dev tools sections: lint crashed (rc=$tools_rc): $(tail -1 <<<"$tools_out")"
+elif [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_out" | sed 's/^/      /' | head -20; fi
 
 # allowed-tools covers every plugin script a skill tells the agent to run (else unattended runs hit a
 # permission prompt). Uses: `${CLAUDE_PLUGIN_ROOT}/scripts/<path>` in SKILL.md or references/ (all skills), and
@@ -133,11 +134,11 @@ for n in names:
     by_base.setdefault(os.path.basename(n), set()).add(n)
 for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
     d = os.path.dirname(f); s = os.path.basename(d)
-    lines = open(f).read().splitlines()
+    lines = open(f, encoding="utf-8").read().splitlines()
     end = lines.index("---", 1) if lines[:1] == ["---"] and "---" in lines[1:] else 0
     allowed = next((l[len("allowed-tools: "):] for l in lines[1:end] if l.startswith("allowed-tools: ")), "")
     entries = re.findall(r"Bash\(([^ ()]+) \$\{CLAUDE_PLUGIN_ROOT\}/scripts/([^:()]+):\*\)", allowed)
-    srcs = [(f, lines, end)] + [(r, open(r).read().splitlines(), 0) for r in sorted(glob.glob(f"{d}/references/*.md"))]
+    srcs = [(f, lines, end)] + [(r, open(r, encoding="utf-8").read().splitlines(), 0) for r in sorted(glob.glob(f"{d}/references/*.md"))]
     for src, text, skip in srcs:
         for i, line in enumerate(text[skip:], skip + 1):
             uses = {(m.group(1), m.group(2)) for m in
@@ -153,8 +154,9 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
                     rel = os.path.relpath(src, root).replace(os.sep, "/")
                     print(f"{s}: {rel}:{i} runs {(interp + ' ') if interp else ''}scripts/{path}, not covered by allowed-tools")
 PY4
-)
-if [ -z "$allow_out" ]; then ok; else while IFS= read -r l; do bad "allowed-tools coverage: $l"; done <<<"$allow_out"; fi
+); allow_rc=$?
+if [ $allow_rc -ne 0 ]; then bad "allowed-tools coverage: lint crashed (rc=$allow_rc): $(tail -1 <<<"$allow_out")"
+elif [ -z "$allow_out" ]; then ok; else while IFS= read -r l; do bad "allowed-tools coverage: $l"; done <<<"$allow_out"; fi
 
 # every skill appears everywhere the plugin lists, routes, tests and documents skills (and no SCAFFOLD: left)
 tp_out=$(cd "$ROOT" && CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B scripts/skill-touchpoints.py --all 2>&1)

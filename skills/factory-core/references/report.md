@@ -26,7 +26,7 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <
 | Tier | Check | Cwd | State | Evidence |
 |---|---|---|---|---|
 | fast | server.gateway:go-test | backend/gateway | PASS | <n> passed, <n> failed, <n> skipped |
-| fast | server.gameserver-dotnet:dotnet-test | backend/gameserver-dotnet | PASS | Total N: P passed, 0 failed, S skipped (SkippableFact: no Redis) |
+| fast | server.gameserver-dotnet:dotnet-test | backend/gameserver-dotnet | PASS | Total <n>: <n> passed, <n> failed, <n> skipped (SkippableFact: no Redis) |
 | extended | integration-e2e | backend/integration_test | HUMAN_REQUIRED | trigger: redirect contract changed; not approved |
 | external | ci | - | HUMAN_REQUIRED | no PR opened (user did not ask) |
 

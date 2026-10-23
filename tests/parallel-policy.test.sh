@@ -59,6 +59,8 @@ mutate "bare script name not granted" "server-ops: skills/server-ops/SKILL.md:" 
   "echo 'Run \`pin-plan.py\` first.' >> skills/server-ops/SKILL.md"
 mutate "interpreter differs from the entry" "runs python3 -B scripts/factory-status.py, not covered" \
   "echo 'Run \`python3 -B \${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py\`.' >> skills/server-ops/SKILL.md"
+mutate "allowed-tools lint crashes (unreadable SKILL.md)" "allowed-tools coverage: lint crashed"   "mkdir -p skills/zz-broken/SKILL.md"
+mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops: skills/server-ops/references/zz.md:"   "mkdir -p skills/server-ops/references && printf 'K\xc5\x8d: run \x60pin-plan.py\x60 first.\n' > skills/server-ops/references/zz.md"
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"

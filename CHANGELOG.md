@@ -29,6 +29,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+- `tests/skills-lint.sh`: the dev-tools and allowed-tools blocks fail closed - a crash of their Python check is a
+  FAIL (it passed silently before), and skill files are read as UTF-8 (a non-ASCII reference crashed the check
+  under a cp1252 locale). `tests/parallel-policy.test.sh` covers both. parallel-work.md says an
+  `isolation: "worktree"` QA/review worker starts from the lead's HEAD and checks the candidate SHA first;
+  the report template's dotnet row no longer asserts "0 failed".
 - Skill `allowed-tools` now grant the scripts the skills run (netcode-client, pin-bump, server-ops, server-realtime,
   unity-package, wire-contract), so unattended runs no longer hit permission prompts.
 - `git-safety.md` rule 5: PRs target the repo's default branch from `registry.json`, not always `develop`.
