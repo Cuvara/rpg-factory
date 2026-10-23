@@ -516,8 +516,8 @@ def analyze(run_dir: Path, *, gap_ms: float = 250.0, bucket_s: float = 300.0, ti
                                            "reason": w.get("reason")}
                                           for start, w in sorted(clock.get("windows", {}).items())],
                           "accepted_windows": sum(1 for w in clock.get("windows", {}).values() if w.get("ok")),
-                          "max_error_bound_ms": round(max((w["error_bound_us"] for w in clock.get("windows", {}).values()
-                                                           if w.get("ok")), default=0) / 1000, 2)},
+                          "max_error_bound_ms": (round(max(w["error_bound_us"] for w in clock.get("windows", {}).values()
+                                                            if w.get("ok")) / 1000, 2) if good_rates else None)},
             "server_durations": "client time (window-rate-corrected)" if good_rates else "server time (no valid window fit)",
             "one_way_delay": "absolute one-way delay unavailable; relative excess only" if good_rates else
                              "absolute one-way delay unavailable; relative excess unavailable (no valid window fit)",
@@ -688,8 +688,10 @@ def markdown(doc: dict) -> str:
 
 
 def _fit_text(fit: dict) -> str:
+    error = fit.get("max_error_bound_ms")
+    error_text = "unavailable" if error is None else f"{error} ms"
     return (f"{fit.get('accepted_windows', 0)}/{fit.get('windows', 0)} accepted 10 s windows, "
-            f"maximum empirical p95 fit error {fit.get('max_error_bound_ms', 0)} ms")
+            f"maximum empirical p95 fit error {error_text}")
 
 
 def _v(x):

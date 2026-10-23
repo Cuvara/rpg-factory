@@ -1188,6 +1188,7 @@ class DeliveryTests(unittest.TestCase):
             doc = self._analyze(DeliveryFixture(Path(d), clients=1, snaps=900, bin_jitter_ms=200))
             c = doc["clients"]["0"]
             self.assertEqual(c["clock_fit"]["accepted_windows"], 0)
+            self.assertIsNone(c["clock_fit"]["max_error_bound_ms"])
             self.assertIn("relative excess unavailable", c["one_way_delay"])
             self.assertTrue(all(b["one_way_rel_ms"]["p50"] is None for b in c["buckets"]))
             self.assertTrue(c["gaps"])
