@@ -41,8 +41,6 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   uses placeholders instead of asserting a `--status` result and example test counts. `parallel-work.md` section 6
   runs each QA and review worker in its own worktree at the candidate SHA. pin-chain.md and packages.md point to
   `pin-status.py` / `package-ready.py` instead of stale pin versions.
-
-### Fixed
 - **Truthful check evidence.** A check's identity scope now includes its own module's paths, so editing
   `backend/content/` makes a `content-loader-tests` PASS (run in `backend/gameserver-dotnet`) STALE; a record
   made under another scope is STALE (`check scope changed`), so pre-upgrade records re-grade once. `factory-status`
