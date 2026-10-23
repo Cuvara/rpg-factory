@@ -68,16 +68,33 @@ files = sorted(glob.glob(sys.argv[1] + "/**/*.trx", recursive=True))
 if not files:
     print("FAIL: no .trx produced - nothing was verified"); sys.exit(1)
 ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
-tot = {"total": 0, "executed": 0, "passed": 0, "failed": 0, "notExecuted": 0}
+tot = {k: 0 for k in ("total", "executed", "passed", "failed", "error", "timeout", "aborted")}
 for f in files:
-    summary = ET.parse(f).getroot().find(".//t:ResultSummary", ns)
-    if summary is None or summary.get("outcome", "Passed").lower() != "passed":
-        print(f"FAIL: trx outcome is not Passed: {f}"); sys.exit(1)
+    try:
+        summary = ET.parse(f).getroot().find(".//t:ResultSummary", ns)
+    except (ET.ParseError, OSError) as e:
+        print(f"FAIL: cannot parse trx {f}: {e}"); sys.exit(1)
+    outcome = summary.get("outcome") if summary is not None else None
+    if outcome is None:
+        print(f"FAIL: trx ResultSummary has no outcome: {f}"); sys.exit(1)
+    if outcome.lower() not in ("completed", "passed"):
+        print(f"FAIL: trx outcome is {outcome}: {f}"); sys.exit(1)
     c = summary.find("t:Counters", ns)
     if c is None:
         print(f"FAIL: trx has no counters: {f}"); sys.exit(1)
-    for k in tot:
-        tot[k] += int(c.get(k, 0))
-print("headless tests: discovered={total} executed={executed} passed={passed} failed={failed} skipped/notExecuted={notExecuted}".format(**tot))
-sys.exit(0 if tot["executed"] > 0 and tot["failed"] == 0 else 1)
+    try:
+        counts = {k: int(c.attrib[k]) for k in tot}
+    except (KeyError, ValueError) as e:
+        print(f"FAIL: trx has missing or invalid counter {e}: {f}"); sys.exit(1)
+    for k, value in counts.items():
+        tot[k] += value
+print("headless tests: total={total} executed={executed} passed={passed} failed={failed} error={error} timeout={timeout} aborted={aborted}".format(**tot))
+bad = [k for k in ("failed", "error", "timeout", "aborted") if tot[k] != 0]
+if tot["executed"] <= 0:
+    print("FAIL: no tests executed")
+    sys.exit(1)
+if bad:
+    print("FAIL: nonzero TRX counters: " + ", ".join(f"{k}={tot[k]}" for k in bad))
+    sys.exit(1)
+sys.exit(0)
 PY

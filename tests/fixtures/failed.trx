@@ -1,0 +1,80 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="21329a92-e46a-4e6d-bcbe-76d891a821f6" name="duycu@CUONGND 2026-10-22 22:08:26" runUser="CUONGND\duycu" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-10-22T22:08:26.8240726+07:00" queuing="2026-10-22T22:08:26.8240729+07:00" start="2026-10-22T22:08:25.5197159+07:00" finish="2026-10-22T22:08:26.8275914+07:00" />
+  <TestSettings name="default" id="1312c2ae-0767-4ff4-8f84-836a4a3010b4">
+    <Deployment runDeploymentRoot="duycu_CUONGND_2026-10-22_22_08_26" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="5a216601-e074-48df-93b1-3588335d3798" testId="299d3784-c6b2-2c24-6146-c0e6e1d2fb60" testName="AnOlderSnapshot_DoesNotMoveTheTickBack" computerName="CUONGND" duration="00:00:00.0001930" startTime="2026-10-22T22:08:26.7368211+07:00" endTime="2026-10-22T22:08:26.7370141+07:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5a216601-e074-48df-93b1-3588335d3798" />
+    <UnitTestResult executionId="043bcfb3-1455-4596-9733-42a5bf8a6d70" testId="c3a01b85-091d-784e-5477-1a418afe24db" testName="ADuplicateSnapshot_ChangesNothing" computerName="CUONGND" duration="00:00:00.0090650" startTime="2026-10-22T22:08:26.6978096+07:00" endTime="2026-10-22T22:08:26.7068338+07:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="043bcfb3-1455-4596-9733-42a5bf8a6d70" />
+    <UnitTestResult executionId="37c909a2-5b52-435c-96af-d704fd1c9060" testId="77c98a63-435b-caf6-a1a9-6f879b94f5fc" testName="AnOlderSnapshot_DoesNotDrawAStoppedEntityAtAnOldPosition" computerName="CUONGND" duration="00:00:00.0289550" startTime="2026-10-22T22:08:26.7077645+07:00" endTime="2026-10-22T22:08:26.7367194+07:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="37c909a2-5b52-435c-96af-d704fd1c9060">
+      <Output>
+        <ErrorInfo>
+          <Message>  the entity stopped at x = 3; a late snapshot from x = 2 must not be what is drawn&#xD;
+  Expected: 3.0f +/- 0.001d&#xD;
+  But was:  2.0f&#xD;
+  Off by:   1.0d&#xD;
+</Message>
+          <StackTrace>   at Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests.AnOlderSnapshot_DoesNotDrawAStoppedEntityAtAnOldPosition() in C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests\Editor\SnapshotFreshnessTests.cs:line 134&#xD;
+
+1)    at Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests.AnOlderSnapshot_DoesNotDrawAStoppedEntityAtAnOldPosition() in C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests\Editor\SnapshotFreshnessTests.cs:line 134&#xD;
+
+</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="78ab8f71-8df9-4e43-88e7-8490863870ff" testId="c031c7c4-1846-20cc-62df-e2b8e25d6f62" testName="AnOlderSnapshot_DoesNotOverwriteANewerEntityState" computerName="CUONGND" duration="00:00:00.0004330" startTime="2026-10-22T22:08:26.7370251+07:00" endTime="2026-10-22T22:08:26.7374583+07:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="78ab8f71-8df9-4e43-88e7-8490863870ff">
+      <Output>
+        <ErrorInfo>
+          <Message>  the entity's newest state is tick 108's; tick 104's arrived late and must not replace it&#xD;
+  Expected: 3.0f&#xD;
+  But was:  2.0f&#xD;
+</Message>
+          <StackTrace>   at Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests.AnOlderSnapshot_DoesNotOverwriteANewerEntityState() in C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests\Editor\SnapshotFreshnessTests.cs:line 78&#xD;
+
+1)    at Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests.AnOlderSnapshot_DoesNotOverwriteANewerEntityState() in C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests\Editor\SnapshotFreshnessTests.cs:line 78&#xD;
+
+</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="AnOlderSnapshot_DoesNotOverwriteANewerEntityState" storage="c:\users\duycu\appdata\local\temp\nccr\work-c\tests~\headless\bin\debug\net10.0\cuvara.netcode.tests.headless.dll" id="c031c7c4-1846-20cc-62df-e2b8e25d6f62">
+      <Execution id="78ab8f71-8df9-4e43-88e7-8490863870ff" />
+      <TestMethod codeBase="C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests~\Headless\bin\Debug\net10.0\Cuvara.Netcode.Tests.Headless.dll" adapterTypeName="executor://nunit3testexecutor/" className="Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests" name="AnOlderSnapshot_DoesNotOverwriteANewerEntityState" />
+    </UnitTest>
+    <UnitTest name="AnOlderSnapshot_DoesNotMoveTheTickBack" storage="c:\users\duycu\appdata\local\temp\nccr\work-c\tests~\headless\bin\debug\net10.0\cuvara.netcode.tests.headless.dll" id="299d3784-c6b2-2c24-6146-c0e6e1d2fb60">
+      <Execution id="5a216601-e074-48df-93b1-3588335d3798" />
+      <TestMethod codeBase="C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests~\Headless\bin\Debug\net10.0\Cuvara.Netcode.Tests.Headless.dll" adapterTypeName="executor://nunit3testexecutor/" className="Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests" name="AnOlderSnapshot_DoesNotMoveTheTickBack" />
+    </UnitTest>
+    <UnitTest name="ADuplicateSnapshot_ChangesNothing" storage="c:\users\duycu\appdata\local\temp\nccr\work-c\tests~\headless\bin\debug\net10.0\cuvara.netcode.tests.headless.dll" id="c3a01b85-091d-784e-5477-1a418afe24db">
+      <Execution id="043bcfb3-1455-4596-9733-42a5bf8a6d70" />
+      <TestMethod codeBase="C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests~\Headless\bin\Debug\net10.0\Cuvara.Netcode.Tests.Headless.dll" adapterTypeName="executor://nunit3testexecutor/" className="Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests" name="ADuplicateSnapshot_ChangesNothing" />
+    </UnitTest>
+    <UnitTest name="AnOlderSnapshot_DoesNotDrawAStoppedEntityAtAnOldPosition" storage="c:\users\duycu\appdata\local\temp\nccr\work-c\tests~\headless\bin\debug\net10.0\cuvara.netcode.tests.headless.dll" id="77c98a63-435b-caf6-a1a9-6f879b94f5fc">
+      <Execution id="37c909a2-5b52-435c-96af-d704fd1c9060" />
+      <TestMethod codeBase="C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests~\Headless\bin\Debug\net10.0\Cuvara.Netcode.Tests.Headless.dll" adapterTypeName="executor://nunit3testexecutor/" className="Cuvara.Netcode.Tests.Editor.SnapshotFreshnessTests" name="AnOlderSnapshot_DoesNotDrawAStoppedEntityAtAnOldPosition" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="299d3784-c6b2-2c24-6146-c0e6e1d2fb60" executionId="5a216601-e074-48df-93b1-3588335d3798" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c3a01b85-091d-784e-5477-1a418afe24db" executionId="043bcfb3-1455-4596-9733-42a5bf8a6d70" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="77c98a63-435b-caf6-a1a9-6f879b94f5fc" executionId="37c909a2-5b52-435c-96af-d704fd1c9060" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c031c7c4-1846-20cc-62df-e2b8e25d6f62" executionId="78ab8f71-8df9-4e43-88e7-8490863870ff" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="4" executed="4" passed="2" failed="2" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>NUnit Adapter 4.6.0.0: Test execution started&#xD;
+Running selected tests in C:\Users\duycu\AppData\Local\Temp\nccr\work-c\Tests~\Headless\bin\Debug\net10.0\Cuvara.Netcode.Tests.Headless.dll&#xD;
+   NUnit3TestExecutor discovered 4 of 4 NUnit test cases using Current Discovery mode, Non-Explicit run&#xD;
+NUnit Adapter 4.6.0.0: Test execution complete&#xD;
+</StdOut>
+    </Output>
+  </ResultSummary>
+</TestRun>

@@ -5,6 +5,7 @@ tmp=$(mktemp -d)
 export TMPDIR="$tmp" RPG_FACTORY_STATE_DIR="$tmp/state"
 trap 'rm -rf "$tmp"' EXIT
 checks=0; passed=0; failed=0
+headless_script="${HEADLESS_SCRIPT:-$root/scripts/checks/netcode-headless.sh}"
 case_run() { name="$1"; shift; checks=$((checks+1)); if "$@"; then passed=$((passed+1)); echo "PASS: $name"; else failed=$((failed+1)); echo "FAIL: $name"; fi; }
 expect_fail() { "$@" >/dev/null 2>&1; [ "$?" -ne 0 ]; }
 server="$tmp/server with space"; net="$tmp/ws/Netcode"; mkdir -p "$server/backend/gameserver-dotnet/GameServer/Net/Generated/RpgMmo/Wire/V1" "$server/backend/gameserver-dotnet/GameServer/Net" "$server/backend/shared/messages" "$net/Runtime/Protocol/Generated"
@@ -46,14 +47,28 @@ case "${DOTNET_MODE:-crash}" in
 <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Failed"><Counters total="1" executed="1" passed="0" failed="1" notExecuted="0" /></ResultSummary></TestRun>
 TRX
     exit 0 ;;
+  fixture) mkdir -p results; cp "$TRX_FILE" results/results.trx; exit 0 ;;
 esac
 EOF
 chmod +x "$tmp/bin/dotnet"; export PATH="$tmp/bin:$PATH" RPG_FACTORY_REPO_DIR="$tmp/headless" RPG_FACTORY_WORKSPACE="$tmp/ws"
 for mode in crash nonzero failed; do
-  headless_fail() { DOTNET_MODE="$mode" bash "$root/scripts/checks/netcode-headless.sh" >"$tmp/$mode.log" 2>&1; }
+  headless_fail() { DOTNET_MODE="$mode" bash "$headless_script" >"$tmp/$mode.log" 2>&1; }
   case_run "headless rejects $mode" expect_fail headless_fail
 done
-headless_cwd_fallback() { (cd "$tmp/headless" && env -u RPG_FACTORY_REPO_DIR -u RPG_FACTORY_REPO_KEY RPG_FACTORY_WORKSPACE="$tmp/ws" DOTNET_MODE=crash bash "$root/scripts/checks/netcode-headless.sh") >"$tmp/cwd-fallback.log" 2>&1; rc=$?; grep -F "source: $(git -C "$tmp/headless" rev-parse --show-toplevel) @" "$tmp/cwd-fallback.log"; [ "$rc" -ne 0 ]; }
+headless_cwd_fallback() { (cd "$tmp/headless" && env -u RPG_FACTORY_REPO_DIR -u RPG_FACTORY_REPO_KEY RPG_FACTORY_WORKSPACE="$tmp/ws" DOTNET_MODE=crash bash "$headless_script") >"$tmp/cwd-fallback.log" 2>&1; rc=$?; grep -F "source: $(git -C "$tmp/headless" rev-parse --show-toplevel) @" "$tmp/cwd-fallback.log"; [ "$rc" -ne 0 ]; }
 case_run 'headless standalone cwd fallback resolves Netcode checkout' headless_cwd_fallback
+headless_fixture() { TRX_FILE="$1" DOTNET_MODE=fixture bash "$headless_script" >"$tmp/fixture.log" 2>&1; }
+case_run 'headless accepts real-shape Completed zero-failure TRX' headless_fixture "$root/tests/fixtures/completed-pass.trx"
+case_run 'headless rejects real Failed TRX sample' expect_fail headless_fixture "$root/tests/fixtures/failed.trx"
+sed 's/ outcome="Completed"//' "$root/tests/fixtures/completed-pass.trx" > "$tmp/missing-outcome.trx"
+case_run 'headless rejects missing outcome' expect_fail headless_fixture "$tmp/missing-outcome.trx"
+for counter in failed error aborted; do
+  sed "s/$counter=\"0\"/$counter=\"1\"/" "$root/tests/fixtures/completed-pass.trx" > "$tmp/$counter.trx"
+  case_run "headless rejects nonzero $counter" expect_fail headless_fixture "$tmp/$counter.trx"
+done
+sed 's/executed="397"/executed="0"/' "$root/tests/fixtures/completed-pass.trx" > "$tmp/no-executed.trx"
+case_run 'headless rejects zero executed' expect_fail headless_fixture "$tmp/no-executed.trx"
+printf '<TestRun><ResultSummary outcome="Completed"><Counters' > "$tmp/malformed.trx"
+case_run 'headless rejects malformed XML' expect_fail headless_fixture "$tmp/malformed.trx"
 echo "checks-candidate: $checks checks, $passed passed, $failed failed"
 [ "$failed" -eq 0 ]

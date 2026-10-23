@@ -7,6 +7,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Fixed
 
 - Run wire parity and Netcode headless checks against the candidate checkout, report tested tree SHAs, and fail closed on unresolved trees or unsuccessful test hosts.
+- Grade Netcode TRX results as successful only with a present Completed/Passed outcome, valid counters, executed tests, and zero failed, error, timeout, or aborted tests.
 
 ### Added
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
