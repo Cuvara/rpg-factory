@@ -20,11 +20,12 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    `factory-status.py` links the legs and can resume them.
 4. **Stage explicit paths.** `git add <path>...` only. Never `add -A`, `add .`, `add :/`,
    `commit -a`.
-5. **Commit, push, PR and merge into protected branches only on request; tags and releases only when
-   authorized.** Commit messages follow Conventional Commits with a lowercase scope (`fix(gateway): ...`).
-   PRs target `develop`, and the repos squash-merge. Inside a delegated task, worker commits and merging
-   worker branches into the task's integration branch are the lead's decision (`parallel-work.md`);
-   merging into protected branches and pushing stay on request. Without explicit release authorization
+5. **Commit, push, PR, merge only on request - except worker commits and task-branch integration inside a
+   task the user asked for (`parallel-work.md`); tags and releases only when authorized.** Commit messages
+   follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target `develop`, and the
+   repos squash-merge. Inside a delegated task, worker commits on their task branches and merging worker
+   branches into the task's integration branch are the lead's decision (`parallel-work.md`); merging into
+   protected branches and pushing stay on request. Without explicit release authorization
    from the user in the current task, an agent creates no tag (`v*`, `sgl-v*`, `core-baseline-*`) and publishes no release in
    any repo: skills stop at "ready to tag" with evidence and the lead tags. When the user explicitly
    authorizes a release in the current task, the agent performs exactly the authorized merge, version,
