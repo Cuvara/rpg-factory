@@ -39,6 +39,14 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | `stall catch-up (render_jumps, position_divergence)` | remote catch-up window | stall start .. the frame after the frame whose dt contains the stall | Lead rule for S13 (T41): the world moved while the process was frozen; Unity's dt reports the previous frame and the binder state of frame N-1 is drawn in frame N (client docs/TESTLAB.md). Stalled client only, remote entities only |
 | `stall catch-up (render_jumps)` | local major corrections allowed per stall | 1 within 5 s | Lead rule for S13 (T41), Netcode D1 contract: one correction after a stall; a second one FAILs. The 5 s window is policy, unvalidated |
 | `graceful_leave` | leave_timeout_s | 5.0 | policy, unvalidated; below the 60 s KCP idle timeout |
+| `malformed_input` | within_s (closes) | 3.0 | policy, unvalidated: see the per-scenario rows |
+| `malformed_input` | min_snapshots (stays_open) | 5 | policy, unvalidated: a third of a second at 15 Hz |
+| `malformed_input` | displacement slack | speed x elapsed + 0.5 | policy, unvalidated: 0.5 units covers the 5 Hz sampling |
+| `server_alive` | max_failed_probes / max_gap_s | 0 / 5.0 | definition / policy, unvalidated |
+| `churn_cycles` | max_join_s | 5.0 | policy, unvalidated |
+| `churn_ghosts` | leave_within_s / drop_gone_within_s | 5.0 / 75.0 | graceful_leave bound / PingInterval 10 + PongTimeout 30 + EntityHoldTTL 30 + 5 s slack |
+| `churn_ghosts` | quiet window | last end + bound .. end, first 2 s skipped | policy, unvalidated: 2 s = 10 samples at 5 Hz |
+| `player_count_baseline` | max_extra | 2 | definition: two churn users |
 | `debug_kill_respawn` | respawn_within_s | 2.0 | one world interval (67 ms) + 1 Hz /status probe + queue; rounded up |
 | `cast_damage_bound` | cooldown / power / reach | content | content/abilities.json at the run's server commit |
 | `cast_damage_bound` | reach_margin | 1.0 | policy, unvalidated |
@@ -198,6 +206,44 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | S14 | `remote_player_divergence` | `position_divergence` | p95 | `0.35` | policy, unvalidated (remote 0.35, local 0.5) |
 | S14 | `remote_player_divergence` | `position_divergence` | max | `1.0` | policy, unvalidated (remote 1.0, local 1.5) |
 | S15 | `combat` | `combat_effect` | min_damaged | `1` | policy, unvalidated |
+| S16 | `server_alive` | `server_alive` | max_failed_probes | `0` | definition: every /status probe of the run is answered |
+| S16 | `server_alive` | `server_alive` | max_gap_s | `5.0` | policy, unvalidated: 5 probe periods of the 1 Hz /status sampler |
+| S16 | `malformed` | `malformed_input` | oversize_length.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | oversize_length.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | length_ffffffff.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | length_ffffffff.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | zero_length.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | zero_length.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | truncated_frame.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | truncated_frame.within_s | `45.0` | Connection.HeartbeatLoopAsync: PingInterval 10 s, closes at the first tick where the last pong is older than PongTimeout 30 s = tick 4 = 40 s after the connection starts (the frame is sent after the join, so <= 40 s after the send), + 5 s slack |
+| S16 | `malformed` | `malformed_input` | unknown_type.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | unknown_type.min_snapshots | `5` | policy, unvalidated: a stays_open offender must keep receiving; 5 snapshots is a third of a second at the 15 Hz world rate |
+| S16 | `malformed` | `malformed_input` | type_out_of_range.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | type_out_of_range.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | garbage_envelope.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | garbage_envelope.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | garbage_payload.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | garbage_payload.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | move_out_of_range.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | move_out_of_range.rejections | `{"invalid_direction": 3}` | move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs inside one drain coalesce and only the last is judged), each above GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: at least one refusal of the reason |
+| S16 | `malformed` | `malformed_input` | move_out_of_range.max_displacement | `true` | definition: a server position never moves faster than the entity's speed (+ 0.5 slack); a teleport is not expressible, positions are server-side |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.rejections | `{"attack_out_of_range": 1}` | move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs inside one drain coalesce and only the last is judged), each above GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: at least one refusal of the reason |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.beyond_attack_range | `true` | definition: target farther than GameConstants.AttackRange (read from source) |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.target_hp_unchanged | `true` | definition: a refused attack does no damage |
+| S16 | `malformed` | `malformed_input` | ability_cooldown.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | ability_cooldown.rejections | `{"ability_on_cooldown": 1}` | move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs inside one drain coalesce and only the last is judged), each above GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: at least one refusal of the reason |
+| S16 | `snapshots` | `snapshot_cadence` | max_gap_ms | `250` | policy, unvalidated |
+| S17 | `server_alive` | `server_alive` | max_failed_probes | `0` | definition: every /status probe of the run is answered |
+| S17 | `server_alive` | `server_alive` | max_gap_s | `5.0` | policy, unvalidated: 5 probe periods of the 1 Hz /status sampler |
+| S17 | `cycles` | `churn_cycles` | cycles | `10` | scenario decision: about 10 cycles (5 drops, 5 graceful leaves) |
+| S17 | `cycles` | `churn_cycles` | max_join_s | `5.0` | policy, unvalidated: a join is one gateway round trip plus the KCP handshake (about 0.03 s on the scratch stack) |
+| S17 | `ghosts` | `churn_ghosts` | leave_within_s | `5.0` | policy, unvalidated: the graceful_leave bound (5 s), far below the 60 s KCP idle timeout |
+| S17 | `ghosts` | `churn_ghosts` | drop_gone_within_s | `75.0` | Connection.HeartbeatLoopAsync: PingInterval 10 s + PongTimeout 30 s to notice a silent peer, + constants.EntityHoldTTL 30 s (map hold), + 5 s slack |
+| S17 | `player_count` | `player_count_baseline` | max_extra | `2` | definition: the two churn users are the only extra players |
+| S17 | `player_count` | `player_count_baseline` | leave_within_s | `5.0` | same instant as churn_ghosts (quiet window start) |
+| S17 | `player_count` | `player_count_baseline` | drop_gone_within_s | `75.0` | same instant as churn_ghosts (quiet window start) |
+| S17 | `snapshots` | `snapshot_cadence` | max_gap_ms | `250` | policy, unvalidated |
 
 ## Scenario timing
 
@@ -220,5 +266,7 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | S13 | 40 | 20 / 5 | - |
 | S14 | 40 | 20 / 5 | debug_kill at 12 s, debug_kill at 27 s |
 | S15 | 35 | 20 / 5 | - |
+| S16 | 125 | 20 / 5 | raw_malformed at 5 s |
+| S17 | 185 | 20 / 5 | raw_churn at 8 s |
 
 Durations, kill and stall instants and the S11 grace window are scenario timing chosen by the author (policy, unvalidated).

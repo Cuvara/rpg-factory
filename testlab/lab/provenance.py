@@ -30,7 +30,7 @@ SCHEMA = "rpg.testlab.provenance.v1"
 # Outputs of an analysis (results.json, report.md, delivery.*) and files the orchestrator keeps
 # writing after the manifest (orchestrator.log, run.json, control.json, logs) are not evidence.
 MANIFEST_DIRS = ("server", "bots")
-MANIFEST_FILES = ("scenario.json", "redis.json", "disruptions.ndjson")
+MANIFEST_FILES = ("scenario.json", "redis.json", "disruptions.ndjson", "rawprobe.ndjson")
 MANIFEST_EXCLUDE = re.compile(r"(^|/)(results\.json|report\.md|delivery\.(json|md)|.*\.tmp)$")
 
 # Files every complete run must have recorded (expected_inventory adds the conditional ones).
@@ -51,6 +51,8 @@ def expected_inventory(scenario: dict) -> list[str]:
         inv += [f"client-{i}/{n}" for n in CLIENT_INVENTORY]
     if scenario.get("disruptions"):
         inv.append("disruptions.ndjson")
+    if any(str(d.get("kind", "")).startswith("raw_") for d in scenario.get("disruptions") or []):
+        inv.append("rawprobe.ndjson")
     if int((scenario.get("bots") or {}).get("players", 0) or 0) > 0:
         inv.append("bots/loadtest.json")
     if scenario.get("snapshot_trace"):

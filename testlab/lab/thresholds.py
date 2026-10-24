@@ -61,6 +61,38 @@ SOURCES = {
     ("tick_adoption", "exclude_s"): "S11: restart grace window",
     ("render_freshness", "exclude_s"): "S11: restart grace window",
     ("players_online", "expected"): "S08G: one client left",
+    # S16 malformed input / S17 churn (rawprobe.ndjson). malformed_input rules are looked up per case
+    # first ("<case>.<param>"), then by parameter.
+    ("server_alive", "max_failed_probes"): "definition: every /status probe of the run is answered",
+    ("server_alive", "max_gap_s"): f"{POLICY}: 5 probe periods of the 1 Hz /status sampler",
+    ("malformed_input", "expect"): "contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body "
+                                   "(the read loop ends and the connection closes); OnMessageReceived ignores an "
+                                   "undefined type; InputHandler refuses what ValidationLogic forbids",
+    ("malformed_input", "within_s"): f"{POLICY}: a close from the read loop is immediate (<= 0.02 s in the first "
+                                     "S16 runs); 3 s is 12 polls of the 4 Hz /status reader",
+    ("malformed_input", "truncated_frame.within_s"): "Connection.HeartbeatLoopAsync: PingInterval 10 s, closes at the "
+                                                     "first tick where the last pong is older than PongTimeout 30 s = "
+                                                     "tick 4 = 40 s after the connection starts (the frame is sent "
+                                                     "after the join, so <= 40 s after the send), + 5 s slack",
+    ("malformed_input", "min_snapshots"): f"{POLICY}: a stays_open offender must keep receiving; 5 snapshots is a third "
+                                          "of a second at the 15 Hz world rate",
+    ("malformed_input", "rejections"): "move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs "
+                                       "inside one drain coalesce and only the last is judged), each above "
+                                       "GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: "
+                                       "at least one refusal of the reason",
+    ("malformed_input", "max_displacement"): "definition: a server position never moves faster than the entity's speed "
+                                             "(+ 0.5 slack); a teleport is not expressible, positions are server-side",
+    ("malformed_input", "beyond_attack_range"): "definition: target farther than GameConstants.AttackRange (read from source)",
+    ("malformed_input", "target_hp_unchanged"): "definition: a refused attack does no damage",
+    ("churn_cycles", "cycles"): "scenario decision: about 10 cycles (5 drops, 5 graceful leaves)",
+    ("churn_cycles", "max_join_s"): f"{POLICY}: a join is one gateway round trip plus the KCP handshake (about 0.03 s on "
+                                    "the scratch stack)",
+    ("churn_ghosts", "leave_within_s"): f"{POLICY}: the graceful_leave bound (5 s), far below the 60 s KCP idle timeout",
+    ("churn_ghosts", "drop_gone_within_s"): "Connection.HeartbeatLoopAsync: PingInterval 10 s + PongTimeout 30 s to notice "
+                                            "a silent peer, + constants.EntityHoldTTL 30 s (map hold), + 5 s slack",
+    ("player_count_baseline", "max_extra"): "definition: the two churn users are the only extra players",
+    ("player_count_baseline", "leave_within_s"): "same instant as churn_ghosts (quiet window start)",
+    ("player_count_baseline", "drop_gone_within_s"): "same instant as churn_ghosts (quiet window start)",
     ("players_online", "mode"): "scenario decision: the end of the run",
 }
 # Parameters that are not limits (identifiers, switches, documentation).
@@ -109,6 +141,15 @@ CHECK_DEFAULTS = [
      "Lead rule for S13 (T41), Netcode D1 contract: one correction after a stall; a second one FAILs. The 5 s "
      f"window is {POLICY}"),
     ("graceful_leave", "leave_timeout_s", 5.0, f"{POLICY}; below the 60 s KCP idle timeout"),
+    ("malformed_input", "within_s (closes)", 3.0, f"{POLICY}: see the per-scenario rows"),
+    ("malformed_input", "min_snapshots (stays_open)", 5, f"{POLICY}: a third of a second at 15 Hz"),
+    ("malformed_input", "displacement slack", "speed x elapsed + 0.5", f"{POLICY}: 0.5 units covers the 5 Hz sampling"),
+    ("server_alive", "max_failed_probes / max_gap_s", "0 / 5.0", "definition / " + POLICY),
+    ("churn_cycles", "max_join_s", 5.0, POLICY),
+    ("churn_ghosts", "leave_within_s / drop_gone_within_s", "5.0 / 75.0",
+     "graceful_leave bound / PingInterval 10 + PongTimeout 30 + EntityHoldTTL 30 + 5 s slack"),
+    ("churn_ghosts", "quiet window", "last end + bound .. end, first 2 s skipped", f"{POLICY}: 2 s = 10 samples at 5 Hz"),
+    ("player_count_baseline", "max_extra", 2, "definition: two churn users"),
     ("debug_kill_respawn", "respawn_within_s", 2.0, "one world interval (67 ms) + 1 Hz /status probe + queue; rounded up"),
     ("cast_damage_bound", "cooldown / power / reach", "content", "content/abilities.json at the run's server commit"),
     ("cast_damage_bound", "reach_margin", 1.0, POLICY),
@@ -131,6 +172,13 @@ def scenario_rows() -> list[tuple]:
         for a in sc["assertions"]:
             for k, v in a.items():
                 if k in ("id", "check", "title") or k in NOT_LIMITS or k.startswith("requires_"):
+                    continue
+                if a["check"] == "malformed_input" and k == "cases":
+                    # one row per case parameter, with a per-case source where the case has its own derivation
+                    for cid, rule in v.items():
+                        for rk, rv in rule.items():
+                            src = SOURCES.get((a["check"], f"{cid}.{rk}")) or SOURCES.get((a["check"], rk), POLICY)
+                            rows.append((sid, a["id"], a["check"], f"{cid}.{rk}", _fmt(rv), src))
                     continue
                 rows.append((sid, a["id"], a["check"], k, _fmt(v), SOURCES.get((a["check"], k), POLICY)))
     return rows

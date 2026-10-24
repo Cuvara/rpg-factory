@@ -1,0 +1,45 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S17",
+  "version": 1,
+  "title": "Churn: ten drop-and-reconnect and graceful-leave-and-rejoin cycles leave no ghost entity, no extra player and no Redis key",
+  "description": "map_01, enemies standing still and harmless. Two rendered clients stay in the world and observe: one walks 4 s out and 4 s back (it stays inside the 50-unit area of interest of the churn users), one stands still. From 8 s a raw-client harness step (lab/rawprobe.py) runs 10 cycles through the real join path (gateway auth, enter world, KCP join): odd cycles use user A and DROP (both sockets closed with no MsgDisconnect, the way a killed process ends) and rejoin 3 s later; even cycles use user B and LEAVE gracefully (MsgDisconnect) and rejoin 6 s later. Each cycle stays connected for 4 s. After the last cycle the step waits 80 s, longer than the server needs to notice a silent peer (PingInterval 10 s + PongTimeout 30 s) plus the 30 s map hold (EntityHoldTTL), then reads Redis again. Redis session, registry and map-member key names are read once before the first cycle and once after the wait. Graded: every cycle joined; no player entity nobody owns; a graceful leaver is gone for the server and for both rendered clients within 5 s; the dropped user is gone by 75 s after its last drop; in the quiet window the server holds exactly the rendered clients' entities and each rendered client draws exactly the rendered clients' players; players_online and connections return to the baseline; no Redis key leaked.",
+  "clients": 2,
+  "map": "map_01",
+  "seed": 17,
+  "duration_s": 185,
+  "join_timeout_s": 120,
+  "screenshots_s": [30, 170],
+  "server_env": {
+    "GAMESERVER_ENEMY_CHASE": "false",
+    "GAMESERVER_ENEMY_ATTACKS": "false"
+  },
+  "repeat_cycle_s": 8,
+  "per_client": [
+    { "steps": [ { "t0": 0, "t1": 4, "mode": "move", "x": 1, "y": 0 }, { "t0": 4, "t1": 8, "mode": "move", "x": -1, "y": 0 } ] },
+    { "steps": [] }
+  ],
+  "disruptions": [
+    { "at_s": 8, "kind": "raw_churn", "cycles": 10, "connected_s": 4.0, "drop_down_s": 3.0, "leave_down_s": 6.0, "settle_s": 80.0 }
+  ],
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world" },
+    { "id": "completed", "check": "clients_completed" },
+    { "id": "logs_clean", "check": "client_log_clean" },
+    { "id": "server_alive", "check": "server_alive", "max_failed_probes": 0, "max_gap_s": 5.0 },
+    { "id": "tick", "check": "server_tick" },
+    { "id": "cycles", "check": "churn_cycles", "cycles": 10, "max_join_s": 5.0,
+      "title": "all ten cycles joined" },
+    { "id": "ghosts", "check": "churn_ghosts", "leave_within_s": 5.0, "drop_gone_within_s": 75.0,
+      "title": "no ghost entity: the leaver and the dropped player disappear for everyone, nobody else appears" },
+    { "id": "player_count", "check": "player_count_baseline", "max_extra": 2, "leave_within_s": 5.0,
+      "drop_gone_within_s": 75.0, "title": "players_online and connections return to the baseline" },
+    { "id": "redis_leak", "check": "redis_leak",
+      "title": "no leaked Redis session, registry entry or map member" },
+    { "id": "entity_lifecycle", "check": "entity_lifecycle",
+      "title": "no removed entity is still drawn, no id drawn twice" },
+    { "id": "client_sessions", "check": "client_sessions", "title": "the rendered clients see no session close" },
+    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250 },
+    { "id": "snapshot_order", "check": "snapshot_order" }
+  ]
+}
