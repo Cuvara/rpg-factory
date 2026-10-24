@@ -4,10 +4,6 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
-### Fixed
-- Windows runner cleanup now treats inaccessible or otherwise unqueryable child processes as unknown and fails closed; TRX parser regression cases explicitly target their fixture checkout and assert the parser's diagnostic.
-- Candidate check targets must be Git work-tree roots, preventing nested plain directories from inheriting a parent repository's SHA.
-
 ### Changed
 
 - `testlab analyze --delivery` now fits server/client clock mapping independently in 10 second windows using one minimum-delay sample per 1 second bin. It reports relative excess above each window's minimum envelope and the empirical p95 fit error bound; absolute one-way delay remains explicitly unavailable, and poor fits yield no delay values or PATH attribution.
@@ -202,6 +198,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 - Run wire parity and Netcode headless checks against the candidate checkout, report tested tree SHAs, and fail closed on unresolved trees or unsuccessful test hosts.
 - Grade Netcode TRX results as successful only with a present Completed/Passed outcome, valid counters, executed tests, and zero failed, error, timeout, or aborted tests.
+- Windows runner cleanup now treats inaccessible or otherwise unqueryable child processes as unknown and fails closed; TRX parser regression cases explicitly target their fixture checkout and assert the parser's diagnostic.
+- Candidate check targets must be Git work-tree roots, preventing nested plain directories from inheriting a parent repository's SHA.
 - Fingerprint dirty and untracked check outputs using a single stat's size, nanosecond mtime and mode (plus symlink target), avoiding reads of large untracked assets; pass Git Bash Windows paths as `C:/...` without requiring `cygpath` on Windows Python's PATH.
 - Isolate each executed validation check's working-tree pollution, terminate its child process tree on timeout, and pass the resolved workspace and checkout through the check environment.
 - **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
