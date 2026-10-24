@@ -13,6 +13,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
+  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
+  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
+  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
+  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
+  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
+  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
+  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
+  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
+  (real scrubbed `ad.trace` fixture).
+
 - **testlab S16 judges the undefined-message-type case** on `gameserver_messages_rejected_total{reason="unknown_type"}`
   (rpg-mmo-server #490, `76aa973`): the `malformed_input` rule gains `rejections_counter` (default `gameserver_inputs_rejected_total`), the
   `unknown_type` case asserts the counter rises by 1 and the session stays open, and a server without the series leaves the case

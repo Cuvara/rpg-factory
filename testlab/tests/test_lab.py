@@ -155,9 +155,9 @@ class AnalysisTests(unittest.TestCase):
         ev = _ev()
         ev["scenario"]["assertions"] = [{"id": "x", "check": "nope"}, {"id": "y", "check": "reconnect", "client": 9}]
         out = analyze.evaluate(ev)
-        # + provenance (no record: INCONCLUSIVE) and host_quiet (INFO), appended to every evaluation
+        # + provenance (no record: INCONCLUSIVE), host_quiet and host_guard (INFO), appended to every evaluation
         self.assertEqual([r["status"] for r in out],
-                         [analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INFO])
+                         [analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INCONCLUSIVE, analyze.INFO, analyze.INFO])
         self.assertEqual(analyze.overall(out), analyze.INCONCLUSIVE)
 
     def test_overall_fail_dominates_and_info_never_decides(self):
@@ -481,7 +481,7 @@ def _all_assertions():
 class MissingEvidenceTests(unittest.TestCase):
     """Absent or empty evidence never grades PASS - for every check the lab has."""
 
-    INFO_ONLY = {"host_quiet", "bots_joined"}  # environment / not-applicable reports, never decide a run
+    INFO_ONLY = {"host_quiet", "host_guard", "bots_joined"}  # environment / not-applicable reports, never decide a run
 
     def _statuses(self, ev):
         ev["scenario"]["assertions"] = _all_assertions()
@@ -695,7 +695,7 @@ class ProvenanceTests(unittest.TestCase):
         ev = _ev()
         ev["scenario"]["assertions"] = [{"id": "c", "check": "bots_joined"}]
         out = analyze.evaluate(ev)
-        self.assertEqual([r["check"] for r in out], ["bots_joined", "provenance", "host_quiet"])
+        self.assertEqual([r["check"] for r in out], ["bots_joined", "provenance", "host_quiet", "host_guard"])
         self.assertEqual(analyze.overall(out), analyze.INCONCLUSIVE)
 
     def test_player_record_reads_the_build_provenance_files(self):
@@ -811,6 +811,20 @@ class CleanupTests(unittest.TestCase):
             stopped.extend(p.index for p in players)
             return ["stopped"]
 
+        class FakeGuard:
+            """No PowerShell in the runner tests: the guard is covered by HostGuardTests."""
+            interval_s, baseline_pids = 5.0, []
+            paths = type("P", (), {"as_dict": staticmethod(lambda: {})})()
+
+            def __init__(self, out_dir):
+                self.out = out_dir
+
+            def start(self):
+                pass
+
+            def stop(self):
+                return {"samples": 0}
+
         patches = [
             mock.patch.object(runner, "_host_load", return_value={"cpu_load_pct": 1.0, "free_mem_mb": 1}),
             mock.patch.object(clients, "clean_orphans", return_value=[]),
@@ -820,6 +834,7 @@ class CleanupTests(unittest.TestCase):
             mock.patch.object(stack, "image_revision", return_value=None),
             mock.patch.object(stack, "check_nakama_module"),
             mock.patch.object(runner, "ServerProbe", FakeProbe),
+            mock.patch.object(runner.hostguard, "HostGuard", FakeGuard),
             mock.patch.object(clients, "launch", side_effect=fake_launch),
             mock.patch.object(clients, "wait_phase", side_effect=wait_phase_effect),
             mock.patch.object(clients, "stop", side_effect=fake_stop),
@@ -2358,6 +2373,9 @@ class BoundedMemoryAnalysisTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             run = synthetic_soak.write(Path(d), 820, 8)
             new_r, old_r = self._results(analyze, run), self._results(old, run)
+            # host_guard is newer than the frozen reference; it has nothing to grade without guard evidence
+            self.assertEqual(set(new_r) - set(old_r), {"host_guard"})
+            self.assertEqual(new_r.pop("host_guard")[0], analyze.INFO)
             self.assertEqual(set(new_r), set(old_r))
             for k in old_r:
                 self.assertEqual(new_r[k], old_r[k], k)
@@ -3392,6 +3410,397 @@ class ChurnTests(unittest.TestCase):
         self.assertIn("rawprobe.ndjson", provenance.expected_inventory(scenarios.load("S17")))
         self.assertNotIn("rawprobe.ndjson", provenance.expected_inventory(scenarios.load("S15")))
         self.assertIn("rawprobe.ndjson", provenance.MANIFEST_FILES)
+
+
+class HostGuardTests(unittest.TestCase):
+    """The host guard (lab/hostguard.py): AnyDesk log parsing, guards G1-G5, the INVALID verdict and the
+    preflight. Pure parts on real log lines (fixtures/ad_trace_sessions.txt, ids scrubbed)."""
+
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ad_trace_sessions.txt"
+
+    @staticmethod
+    def _t(stamp):
+        import datetime as dt
+        return dt.datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp()
+
+    def _events(self):
+        from lab import hostguard
+        return hostguard.parse_ad_trace(self.FIXTURE.read_bytes())
+
+    @staticmethod
+    def _idle(start, end, step=5.0, pid_base=1000, **extra):
+        """Samples of a host with the three AnyDesk residents idle."""
+        out, t = [], start
+        while t <= end:
+            out.append({"epoch": t, "ts": f"t{t:.0f}", "cpu": 15.0, "ad_cpu": 0.03,
+                        "ad": [{"pid": pid_base + i, "role": "resident", "cpu": 0.01} for i in range(3)],
+                        "groups": {"build": 0.2, "av": 0.0, "agents": 0.5, "node": 0.0}, "own_cpu": 0.03, **extra})
+            t += step
+        return out
+
+    def _guard_ev(self, samples, events, window, required=False, preflight=None):
+        ev = _ev()
+        ev["scenario"]["requires_clean_host"] = required
+        ev["meta"] = {"host_guard": {"window_epoch": list(window), "start_wall_epoch": window[0] + 30,
+                                     "required": required}}
+        ev["hostguard"] = {"samples": samples, "events": events, "summary": None, "preflight": preflight}
+        return ev
+
+    # (a) the real excerpt
+    def test_a_real_ad_trace_excerpt_parses_into_the_expected_sessions(self):
+        import re
+        from lab import hostguard
+        data = self.FIXTURE.read_bytes()
+        events, off = hostguard.parse_ad_trace(data)
+        self.assertEqual(off, len(data))                       # every line was complete
+        self.assertEqual(hostguard.parse_ad_trace(data, off), ([], off))
+        sessions = hostguard.sessions_from_events(events)
+        started = [x for x in sessions if x["start"] is not None]
+        orphan = [x for x in sessions if x["start"] is None]
+        self.assertEqual((len(started), len(orphan)), (16, 1))   # 16 Accepts; one session began before the log did
+        self.assertTrue(all(x["end"] is not None for x in sessions))
+        first = started[0]
+        self.assertEqual(first["backend_pid"], 18720)
+        self.assertAlmostEqual(first["start"], self._t("2026-10-23 16:05:43") + 0.440, places=3)
+        self.assertAlmostEqual(first["end"] - first["start"], 59.717, places=3)   # 16:05:43.440 -> 16:06:43.157
+        by_pid = {x["backend_pid"]: x for x in started}
+        self.assertEqual(by_pid[77944]["end_reason"], "net_closed")             # the 05:17Z session ended on a socket close
+        self.assertEqual(by_pid[18720]["end_reason"], "session_closed")
+        # scrubbed: no peer id, address, fingerprint or relay name in the fixture, none copied into an event
+        text = data.decode("utf-8")
+        self.assertIsNone(re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", text))
+        self.assertNotIn("FPR", text)
+        self.assertEqual(set(re.findall(r"\b\d{9,}\b", text)), {"0000000001"})
+        self.assertNotIn("0000000001", json.dumps(events))
+        self.assertTrue(all(set(e) <= {"type", "ts", "epoch", "proc", "pid", "source", "fiber", "backend_pid"} for e in events))
+
+    # (b) residents only
+    def test_b_residents_only_and_idle_cpu_is_info_and_does_not_block_pass(self):
+        from lab import hostguard
+        w = (self._t("2026-10-24 18:00:00"), self._t("2026-10-24 18:30:00"))
+        res = hostguard.evaluate(self._idle(w[0] - 60, w[1] + 5), [], w, baseline_pids=[1000, 1001, 1002])
+        self.assertEqual(res["fired"], [])
+        self.assertLess(res["stats"]["guard_own_cpu_pct"]["max"], 1.0)
+        out = analyze.check_host_guard(self._guard_ev(self._idle(w[0] - 60, w[1] + 5), [], w), {})
+        self.assertEqual(out["status"], analyze.INFO)
+        self.assertEqual(analyze.overall([{"status": analyze.PASS}, out]), analyze.PASS)
+
+    # (c) a session inside the window
+    def test_c_session_in_window_is_invalid_even_when_every_other_check_passes(self):
+        events, _ = self._events()
+        w = (self._t("2026-10-23 16:05:13"), self._t("2026-10-23 16:20:00"))
+        out = analyze.check_host_guard(self._guard_ev(self._idle(w[0], w[1]), events, w), {})
+        self.assertEqual(out["status"], analyze.INVALID)
+        self.assertEqual(out["detail"]["fired"][0]["id"], "G1")
+        self.assertIn("G1", out["measured"]["fired"])
+        results = [{"id": "a", "check": "x", "status": analyze.PASS}, {"id": "b", "check": "y", "status": analyze.PASS}, {**out, "check": "host_guard"}]
+        self.assertEqual(analyze.overall(results), analyze.INVALID)
+        self.assertNotEqual(analyze.overall(results), analyze.PASS)
+
+    # (d) started before the window and still active at its start
+    def test_d_session_active_at_window_start_fires_g1(self):
+        from lab import hostguard
+        events, _ = self._events()
+        cut = self._t("2026-10-23 16:05:50")
+        events = [e for e in events if e["epoch"] <= cut]       # the log shows the session open, nothing after
+        w = (self._t("2026-10-23 16:06:00"), self._t("2026-10-23 16:30:00"))
+        res = hostguard.evaluate(self._idle(w[0], w[1], pid_base=18000), events, w, baseline_pids=[18000, 18001, 18002])
+        g1 = next(f for f in res["fired"] if f["id"] == "G1")
+        self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
+        out = analyze.check_host_guard(self._guard_ev(self._idle(w[0], w[1]), events, w), {})
+        self.assertEqual(out["status"], analyze.INVALID)
+
+    # (e) ended well before the window
+    def test_e_session_that_ended_over_30_s_before_the_window_does_not_fire(self):
+        from lab import hostguard
+        events, _ = self._events()
+        w = (self._t("2026-10-23 16:07:20"), self._t("2026-10-23 16:08:30"))   # session ended 16:06:43; next accept 16:09:24
+        res = hostguard.evaluate(self._idle(w[0], w[1]), events, w, baseline_pids=[1000, 1001, 1002])
+        self.assertEqual(res["fired"], [])
+        self.assertEqual(hostguard.WINDOW_PRE_S, 30.0)
+
+    # (f) a new AnyDesk pid with no readable log
+    def test_f_new_anydesk_pid_fires_g2_without_a_log(self):
+        from lab import hostguard
+        w = (self._t("2026-10-24 18:00:00"), self._t("2026-10-24 18:10:00"))
+        samples = self._idle(w[0] - 30, w[1])
+        for sm in samples:
+            if sm["epoch"] >= w[0] + 100:
+                sm["ad"] = sm["ad"] + [{"pid": 4242, "role": "other", "cpu": 0.0}]
+        res = hostguard.evaluate(samples, [], w, baseline_pids=[1000, 1001, 1002])
+        self.assertEqual([f["id"] for f in res["fired"]], ["G2"])
+        self.assertIn("4242", res["fired"][0]["evidence"][0])
+        # a session backend is both a session (G1) and a new process (G2), log or no log
+        for sm in samples:
+            for q in sm["ad"]:
+                if q["pid"] == 4242:
+                    q["role"] = "backend"
+        self.assertEqual([f["id"] for f in hostguard.evaluate(samples, [], w, baseline_pids=[1000, 1001, 1002])["fired"]], ["G1", "G2"])
+
+    # (g) truncated and rotated logs
+    def test_g_truncated_rotated_and_partial_logs(self):
+        from lab import hostguard
+        data = self.FIXTURE.read_bytes()
+        events_all, _ = hostguard.parse_ad_trace(data)
+        # a last line still being written is left for the next call, and read exactly once afterwards
+        cut = data.index(b"Backend PID: 18720") + 8
+        part, off = hostguard.parse_ad_trace(data[:cut])
+        self.assertTrue(off < cut and data[off - 1:off] == b"\n")
+        rest, off2 = hostguard.parse_ad_trace(data, off)
+        self.assertEqual(len(part) + len(rest), len(events_all))
+        self.assertEqual(off2, len(data))
+        # truncation (rotation): a file shorter than the offset restarts at 0 and says so
+        small, off3 = hostguard.parse_ad_trace(data[:200], len(data))
+        self.assertEqual(small[0]["type"], "log_rotated")
+        self.assertLessEqual(off3, 200)
+        # CRLF and LF read the same
+        lf, _ = hostguard.parse_ad_trace(data.replace(b"\r\n", b"\n"))
+        self.assertEqual([e["type"] for e in lf], [e["type"] for e in events_all])
+        # the tailer, on a real file: prime, append, rotate; never raises
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "ad.trace"
+            log.write_bytes(data)
+            g = hostguard.HostGuard(Path(d) / "host", paths=hostguard.AnyDeskPaths(log, None))
+            g.out.mkdir()
+            state = {"off": None}
+            g._poll_ad(state)
+            n = g.events
+            self.assertGreater(n, 100)
+            log.write_bytes(data[:300])                       # rotated
+            g._poll_ad(state)
+            self.assertIn("log_rotated", [r["type"] for r in util.read_ndjson(g.out / "anydesk-events.ndjson")])
+            self.assertEqual(g.errors, [])
+
+    # (h) a blind guard
+    def test_h_sampler_gap_over_three_intervals_fires_g5(self):
+        from lab import hostguard
+        w = (self._t("2026-10-24 18:00:00"), self._t("2026-10-24 18:10:00"))
+        base = [1000, 1001, 1002]
+        samples = [x for x in self._idle(w[0] - 10, w[1] + 10) if not (w[0] + 100 < x["epoch"] < w[0] + 125)]   # 25 s gap
+        gap = hostguard.evaluate(samples, [], w, baseline_pids=base)
+        self.assertEqual([f["id"] for f in gap["fired"]], ["G5"])
+        ok = [x for x in self._idle(w[0] - 10, w[1] + 10) if not (w[0] + 100 < x["epoch"] < w[0] + 114)]          # 3 missed intervals
+        self.assertEqual(hostguard.evaluate(ok, [], w, baseline_pids=base)["fired"], [])
+        # a guard that died at the start or never produced a sample is blind too
+        self.assertEqual([f["id"] for f in hostguard.evaluate([], [], w)["fired"]], ["G5"])
+        early_end = self._idle(w[0] - 10, w[0] + 60)
+        self.assertEqual([f["id"] for f in hostguard.evaluate(early_end, [], w, baseline_pids=base)["fired"]], ["G5"])
+
+    # (i) the verdict order
+    def test_i_invalid_beats_fail_beats_inconclusive_and_is_never_pass(self):
+        import itertools
+        order = lambda *st: analyze.overall([{"status": x} for x in st])
+        self.assertEqual(order("PASS", "INCONCLUSIVE"), analyze.INCONCLUSIVE)
+        self.assertEqual(order("INCONCLUSIVE", "FAIL"), analyze.FAIL)
+        self.assertEqual(order("FAIL", "INVALID", "INCONCLUSIVE"), analyze.INVALID)
+        self.assertEqual(order("PASS", "INVALID"), analyze.INVALID)
+        # property: PASS needs every status to be PASS or INFO; a harness error is never PASS either
+        for n in (1, 2, 3, 4):
+            for combo in itertools.product(("PASS", "FAIL", "INCONCLUSIVE", "INFO", "INVALID"), repeat=n):
+                got = analyze.overall([{"status": x} for x in combo])
+                if any(x in ("FAIL", "INCONCLUSIVE", "INVALID") for x in combo):
+                    self.assertNotIn(got, (analyze.PASS, analyze.PASS_WITH_WARNINGS), combo)
+                if "INVALID" in combo:
+                    self.assertEqual(got, analyze.INVALID, combo)
+                self.assertNotEqual(analyze.overall([{"status": x} for x in combo], harness_error="boom"), analyze.PASS)
+
+    # (j) preflight refuses
+    def test_j_failed_preflight_refuses_to_start_the_run(self):
+        from unittest import mock
+        from lab import clients, hostguard, runner, stack
+        busy = {"result": {"worktrees": [{"displayName": "other-agent", "path": "/x", "worktreeId": "w1",
+                                           "agents": [{"state": "working"}]},
+                                          {"displayName": "soak-runner", "path": "/y", "worktreeId": "w2",
+                                           "agents": [{"state": "working"}]}]}}
+        backend = [{"pid": 7, "ppid": 1, "cmdline": "AnyDesk.exe --backend", "role": "backend"}]
+        residents = [{"pid": 1, "ppid": 0, "cmdline": '"C:\\x\\AnyDesk.exe"', "role": "resident"},
+                     {"pid": 2, "ppid": 1, "cmdline": "AnyDesk.exe --local-service", "role": "resident"}]
+        quiet_rows = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 14.0, "groups": {"build": 0.0, "av": 0.0}}] + \
+                     [{"epoch": 1.0 + 5 * i, "ad_cpu": 0.03, "cpu": 14.0, "groups": {"build": 0.3, "av": 0.0}} for i in range(1, 25)]
+        none = hostguard.AnyDeskPaths(None, None)
+
+        def pf(procs, ps, announced="18:30Z 90min", rows=quiet_rows, uptime=3600.0, allow=()):
+            return hostguard.preflight(sampler=lambda s: rows, processes=lambda: procs, orca_ps=lambda: ps,
+                                       wsl_uptime=lambda: uptime, announced=announced, paths=none, allow_agents=allow)
+        clean = pf(residents, {"result": {"worktrees": []}})
+        self.assertTrue(clean["ok"], clean["rows"])                      # residents are allowed
+        self.assertEqual([r["id"] for r in clean["rows"]], ["P1", "P2", "P3", "P4", "P5", "P6", "P7"])
+        bad = pf(backend, busy, announced=None, uptime=30.0)
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["failed"], ["P1", "P3", "P6", "P7"])
+        self.assertEqual(pf(residents, busy, allow=("other-agent", "soak-runner"))["failed"], [])
+        self.assertEqual(pf(residents, busy, allow=("soak-runner",))["failed"], ["P3"])
+        self.assertEqual(pf(residents, None)["failed"], ["P3"])           # cannot see the agents: not clean
+        hot = [dict(r, cpu=60.0) for r in quiet_rows]
+        self.assertIn("P5", pf(residents, {"result": {"worktrees": []}}, rows=hot)["failed"])
+        self.assertIn("P2", pf(residents, {"result": {"worktrees": []}}, rows=[dict(r, ad_cpu=0.9) for r in quiet_rows])["failed"])
+        with self.assertRaisesRegex(RuntimeError, "host preflight failed: P1, P3, P6, P7"):
+            hostguard.enforce(bad)
+        # P1 also reads the logs: a session event in the last two minutes fails it
+        import time as _t
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "ad.trace"
+            now = _t.time()
+            stamp = _t.strftime("%Y-%m-%d %H:%M:%S", _t.gmtime(now - 20)) + ".100"
+            log.write_text(f"   info {stamp}       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).\n", encoding="utf-8")
+            r = hostguard.preflight(sampler=lambda s: quiet_rows, processes=lambda: residents, orca_ps=lambda: {"result": {"worktrees": []}},
+                                    wsl_uptime=lambda: 3600.0, announced="x", paths=hostguard.AnyDeskPaths(log, None), now=now)
+            self.assertEqual(r["failed"], ["P1"])
+
+        # the runner: nothing of the stack is touched when the preflight fails
+        t = CleanupTests()
+        with tempfile.TemporaryDirectory() as d:
+            cfg, stopped = t._patched_run(d, None)
+            ensure = stack.ensure
+            with mock.patch.object(runner.hostguard, "preflight", return_value=bad):
+                res = runner.run(cfg, "S09", quiet=True)
+            self.assertEqual(res["outcome"], analyze.INCONCLUSIVE)
+            self.assertIn("host preflight failed: P1, P3, P6, P7", res["harness_error"])
+            ensure.assert_not_called()
+            self.assertEqual(stopped, [])
+            meta = t._run_json(cfg)
+            self.assertEqual(meta["host_guard"]["preflight"]["failed"], ["P1", "P3", "P6", "P7"])
+            self.assertTrue((cfg.runs_root / "runs" / meta["run_id"] / "host" / "preflight.json").exists())
+            t.doCleanups()
+
+    # --- the rest of the rules and plumbing
+    def test_g3_and_g4_need_consecutive_samples(self):
+        from lab import hostguard
+        w = (1000.0, 1300.0)
+        base = [1000, 1001, 1002]
+
+        def mk(patch):
+            rows = self._idle(900, 1400)
+            for r in rows:
+                if w[0] <= r["epoch"] <= w[1]:
+                    patch(r)
+            return hostguard.evaluate(rows, [], w, baseline_pids=base)["fired"]
+        burst = lambda lo, hi: (lambda r: r.update(ad_cpu=0.6) if lo <= r["epoch"] <= hi else None)
+        self.assertEqual([f["id"] for f in mk(burst(1100, 1100))], [])
+        self.assertEqual([f["id"] for f in mk(burst(1100, 1105))], ["G3"])
+        build = lambda lo, hi, key="build", v=6.0: (lambda r: r["groups"].update({key: v}) if lo <= r["epoch"] <= hi else None)
+        self.assertEqual([f["id"] for f in mk(build(1100, 1105))], [])
+        self.assertEqual([f["id"] for f in mk(build(1100, 1110))], ["G4"])
+        self.assertEqual(mk(build(1100, 1110, "av"))[0]["group"], "av")
+        self.assertEqual([f["id"] for f in mk(build(1100, 1110, v=5.0))], [])      # the limit is exclusive
+        # agents and node are recorded, never invalidating
+        self.assertEqual(mk(build(1100, 1200, "agents", 30.0)), [])
+
+    def test_connection_trace_entry_in_the_window_fires_g1_when_the_log_is_unreadable(self):
+        from lab import hostguard
+        text = "Incoming 2026-10-24, 18:12 Token 1673959972\r\nOutgoing 2026-10-24, 09:00 Token 1\r\n".encode("utf-16-le")
+        entries = hostguard.parse_connection_trace(text)
+        self.assertEqual([(e["direction"], e["ts"]) for e in entries],
+                         [("Incoming", "2026-10-24T18:12:00.000Z"), ("Outgoing", "2026-10-24T09:00:00.000Z")])
+        self.assertNotIn("1673959972", json.dumps(entries))
+        w = (self._t("2026-10-24 18:12:40"), self._t("2026-10-24 18:40:00"))    # minute resolution: the entry may overlap
+        res = hostguard.evaluate(self._idle(w[0], w[1]), entries, w, baseline_pids=[1000, 1001, 1002])
+        self.assertEqual([f["id"] for f in res["fired"]], ["G1"])
+        w = (self._t("2026-10-24 18:13:30"), self._t("2026-10-24 18:40:00"))
+        self.assertEqual(hostguard.evaluate(self._idle(w[0], w[1]), entries, w, baseline_pids=[1000, 1001, 1002])["fired"], [])
+
+    def test_command_lines_are_classified_and_paths_discovered(self):
+        from lab import hostguard
+        c = hostguard.classify_cmdline
+        self.assertEqual(c('"C:\\Users\\x\\Downloads\\AnyDesk.exe" --local-service'), "resident")
+        self.assertEqual(c('"C:\\Users\\x\\Downloads\\AnyDesk.exe" --local-control'), "resident")
+        self.assertEqual(c('"C:\\Users\\x\\Downloads\\AnyDesk.exe"'), "resident")
+        self.assertEqual(c('"C:\\Users\\x\\Downloads\\AnyDesk.exe" --backend'), "backend")
+        self.assertEqual(c('"C:\\Users\\x\\Downloads\\AnyDesk.exe" --update'), "other")
+        self.assertEqual(c(None), "other")
+        with tempfile.TemporaryDirectory() as d:
+            ad = Path(d) / "AppData" / "AnyDesk"
+            pd = Path(d) / "ProgramData" / "AnyDesk"
+            _write(pd / "ad_svc.trace", "x")
+            p = hostguard.AnyDeskPaths.discover({"APPDATA": str(Path(d) / "AppData"), "PROGRAMDATA": str(Path(d) / "ProgramData")})
+            self.assertEqual((p.ad_trace, p.connection_trace), (pd / "ad_svc.trace", None))   # only the service log exists
+            _write(ad / "ad.trace", "x")
+            _write(ad / "connection_trace.txt", "x")
+            p = hostguard.AnyDeskPaths.discover({"APPDATA": str(Path(d) / "AppData"), "PROGRAMDATA": str(Path(d) / "ProgramData")})
+            self.assertEqual((p.ad_trace, p.connection_trace), (ad / "ad.trace", ad / "connection_trace.txt"))
+            self.assertEqual(hostguard.AnyDeskPaths.discover({}).ad_trace, None)           # neither is required
+
+    def test_host_guard_check_needs_evidence_only_when_a_clean_host_is_required(self):
+        w = (1000.0, 1300.0)
+        none = self._guard_ev([], [], w)
+        none["meta"] = {}
+        self.assertEqual(analyze.check_host_guard(none, {})["status"], analyze.INFO)
+        self.assertEqual(analyze.check_host_guard(dict(none, scenario=dict(none["scenario"], requires_clean_host=True)), {})["status"],
+                         analyze.INCONCLUSIVE)
+        silent = self._guard_ev([], [], w, required=True)           # guard started but never produced a sample
+        self.assertEqual(analyze.check_host_guard(silent, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_invalid_is_reported_with_its_guards_and_exits_non_zero(self):
+        from lab import report
+        self.assertEqual(report.EXIT_CODES[analyze.INVALID], 2)
+        events, _ = self._events()
+        w = (self._t("2026-10-23 16:05:13"), self._t("2026-10-23 16:20:00"))
+        ev = self._guard_ev(self._idle(w[0], w[1]), events, w)
+        ev["scenario"]["assertions"] = [{"id": "c", "check": "bots_joined"}]
+        results = analyze.evaluate(ev)
+        results.append({"id": "m", "check": "memory_growth", "status": analyze.FAIL, "title": ""})
+        outcome = analyze.overall(results)
+        self.assertEqual(outcome, analyze.INVALID)
+        quals = analyze.qualifications(results, ev["meta"])
+        self.assertTrue(any(q.get("id") == "G1" for q in quals))
+        self.assertTrue(any(q.get("id") == "kept_failures" and "m" in q["text"] for q in quals))
+        with tempfile.TemporaryDirectory() as d:
+            doc = report.write(Path(d), ev, results, outcome, None, out_dir=Path(d) / "out")
+            self.assertEqual((doc["outcome"], doc["exit_code"]), (analyze.INVALID, 2))
+            md = (Path(d) / "out" / "report.md").read_text(encoding="utf-8")
+            self.assertIn("**Outcome: INVALID**", md)
+            self.assertIn("not a verdict on the candidate", md)
+        import testlab as cli
+        self.assertEqual(cli._worst(["INVALID"]), 2)
+        self.assertEqual(cli._worst(["INVALID", "FAIL"]), 1)
+        self.assertEqual(cli._worst(["PASS", "INVALID"]), 2)
+
+    def test_long_single_process_frames_name_the_nearest_guard_event(self):
+        events, _ = self._events()
+        start = self._t("2026-10-23 16:05:00")
+        ev = self._guard_ev([], events, (start - 30, start + 600))
+        ev["meta"]["host_guard"]["start_wall_epoch"] = start
+        ev["clients"][0]["frames"] = [(46.0, 4700.0), (200.0, 1200.0), (10.0, 50.0)]
+        rows = analyze._long_frames_with_guard_events(ev)
+        self.assertEqual([r["st"] for r in rows], [46.0, 200.0])
+        near = rows[0]["nearest_guard_event"]                                      # a session began 16:05:43, capture 16:05:45.8
+        self.assertEqual(near["type"], "session_started")
+        self.assertLess(abs(near["offset_s"]), 1.0)
+        self.assertIsNone(rows[1]["nearest_guard_event"])
+
+    def test_s09_requires_a_clean_host_and_the_thresholds_are_unchanged(self):
+        from lab import provenance
+        sc = scenarios.load("S09")
+        self.assertTrue(sc["requires_clean_host"])
+        self.assertEqual(sc["version"], 5)
+        self.assertIn("host/guard.ndjson", provenance.expected_inventory(sc))
+        self.assertNotIn("host/guard.ndjson", provenance.expected_inventory(scenarios.load("S01")))
+        limits = {a["check"]: {k: v for k, v in a.items() if k not in ("id", "check", "title")} for a in sc["assertions"]}
+        self.assertEqual(limits["memory_growth"]["max_server_mib_per_min"], 2.0)
+        self.assertEqual(limits["entity_stability"], {"skip_first_s": 60, "max_growth_ratio": 0.1})
+
+    @unittest.skipUnless(util.IS_WINDOWS, "the sampler is PowerShell on Windows")
+    def test_live_guard_samples_the_host_read_only_and_its_own_cpu_is_small(self):
+        import time as _t
+        from lab import hostguard
+        with tempfile.TemporaryDirectory() as d:
+            g = hostguard.HostGuard(Path(d) / "host", interval_s=2.0)
+            g.start()
+            deadline = _t.time() + 45                         # PowerShell start-up is slow on a loaded host
+            while g.samples < 3 and _t.time() < deadline:
+                _t.sleep(0.5)
+            summary = g.stop()
+            rows = util.read_ndjson(Path(d) / "host" / "guard.ndjson")
+            self.assertGreaterEqual(len(rows), 3, summary)
+            self.assertTrue(all("epoch" in r and "mono" in r and "groups" in r for r in rows))
+            self.assertTrue(rows[0].get("first"))
+            for r in rows:
+                for q in r.get("ad", []):
+                    self.assertIn(q["role"], ("resident", "backend", "other", "unknown"))
+            self.assertLess(summary["sampler_cpu_pct_of_host"]["mean"], 1.0)        # at 2 s cadence; 5 s is ~0.03 %
+            self.assertLess(summary["python_threads_cpu_pct_of_host"], 1.0)
+            self.assertTrue((Path(d) / "host" / "guard-summary.json").exists())
+            self.assertIsNotNone(g.proc.poll())                                      # the sampler is stopped
 
 
 if __name__ == "__main__":
