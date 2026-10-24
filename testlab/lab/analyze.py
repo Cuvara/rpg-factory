@@ -2912,8 +2912,11 @@ def check_malformed_input(ev, a):
       send (no teleport: positions are never client-supplied, so this is the speed bound).
     - `target_hp_unchanged` / `beyond_attack_range`: an attack at a far enemy cost it nothing and was aimed
       beyond GameConstants.AttackRange.
-    A case that did not run, did not join or has no read is INCONCLUSIVE, never PASS. Every case lists the
-    server counters that moved, so the report shows which counter (if any) saw the bad frame."""
+    A case that did not run, did not join or has no read is INCONCLUSIVE, never PASS. A `stays_open` case
+    without a `rejections` rule is INCONCLUSIVE too (`signal_missing`): the session surviving does not show
+    the server refused or ignored the input, and an undefined message type has no counter or log line at the
+    server (GameServer.OnMessageReceived default arm logs at Debug; the console minimum level is Information).
+    Every case lists the server counters that moved, so the report shows which counter (if any) saw the bad frame."""
     cases = a.get("cases") or {}
     recs = {r["id"]: r for r in _raw_records(ev, "case")}
     end = next(iter(_raw_records(ev, "end")), {})
@@ -2954,6 +2957,12 @@ def check_malformed_input(ev, a):
                 problems.append(f"connections ended at {end_c}, expected {pre_c + 1}")
             if (rec.get("snapshots_after_send") or 0) < int(rule.get("min_snapshots", 5)):
                 problems.append(f"offender received {rec.get('snapshots_after_send')} snapshots after the send")
+            if not rule.get("rejections") and not problems:
+                # The session survived, but nothing on the server says the input was refused or ignored rather
+                # than accepted as a no-op (RV-F8A-1): staying connected is not an observation of a rejection.
+                unjudged.append(cid)
+                row["signal_missing"] = ("no server-side signal that the input was refused or ignored: a stays_open case "
+                                         "needs a `rejections` rule (a counter that rises)")
         rej = {}
         for reason, minimum in (rule.get("rejections") or {}).items():
             dv = _delta_series(rec, "gameserver_inputs_rejected_total", reason)
@@ -3011,7 +3020,7 @@ def check_malformed_input(ev, a):
                 if lost > 0:
                     problems.append(f"{tgt} lost {lost} HP to refused attacks")
         row["problems"] = problems
-        row["result"] = "FAIL" if problems else "ok"
+        row["result"] = "FAIL" if problems else ("not judged" if row.get("signal_missing") else "ok")
         if problems:
             bad.append(cid)
         rows[cid] = row

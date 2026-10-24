@@ -185,7 +185,11 @@ disruption (`raw_malformed` with a `cases` list, `raw_churn` with `cycles`, `con
   and the final read); `max_displacement` (server position never moves faster than speed x elapsed + 0.5: positions are never
   client-supplied, so a "teleport" is only expressible as a movement vector); `beyond_attack_range` and `target_hp_unchanged`
   (an attack at an enemy farther than `GameConstants.AttackRange`, read from the server source, costs it nothing). The report
-  lists, per case, every `gameserver_*` series that moved, so it shows which counter (if any) saw a bad frame.
+  lists, per case, every `gameserver_*` series that moved, so it shows which counter (if any) saw a bad frame. A `stays_open`
+  case without a `rejections` rule is INCONCLUSIVE (`signal_missing`): the session surviving does not show the server refused or
+  ignored the input. The undefined-type case (`unknown_type`, type 99) is that case today: the server has no counter or log line for
+  it (`GameServer.cs` `OnMessageReceived` default arm logs at Debug, `Program.cs` sets the console minimum level to Information), so S16
+  grades INCONCLUSIVE until the server counts it.
 - `server_alive`: every `/status` probe answered, `uptime_seconds` never goes backwards, no gap over `max_gap_s`.
 - `client_sessions`: a rendered client logs no `net_state` change, `disconnected`, `entities_reset` or `reconnected` inside the
   scenario window.

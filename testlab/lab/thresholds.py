@@ -177,6 +177,8 @@ def scenario_rows() -> list[tuple]:
                     # one row per case parameter, with a per-case source where the case has its own derivation
                     for cid, rule in v.items():
                         for rk, rv in rule.items():
+                            if rk == "note":
+                                continue
                             src = SOURCES.get((a["check"], f"{cid}.{rk}")) or SOURCES.get((a["check"], rk), POLICY)
                             rows.append((sid, a["id"], a["check"], f"{cid}.{rk}", _fmt(rv), src))
                     continue

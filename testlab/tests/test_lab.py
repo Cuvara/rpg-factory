@@ -2996,6 +2996,13 @@ def _case(cid, *, closes, closed_after=0.01, pre=2, snaps=0, moved=None, join=Tr
 RJ = 'gameserver_inputs_rejected_total{map_id="map_01",reason="%s"}'
 
 
+def _rejected(rec, reason, n=3.0):
+    """The rejection counter of `reason` rising by n between the read with the offender in and the final read."""
+    rec["post"]["metrics"] = {RJ % reason: float(n)}
+    rec["mid"]["metrics"] = {RJ % reason: 0.0}
+    return rec
+
+
 def _malformed_ev(cases, consts=None):
     ev = _ev(clients=2, duration=100)
     ev["rawprobe"] = list(cases) + [{"record": "end", "constants": consts or {"attack_range": {"value": 3.0}}}]
@@ -3003,13 +3010,42 @@ def _malformed_ev(cases, consts=None):
 
 
 MAL = {"cases": {"zero": {"expect": "closes", "within_s": 3.0}, "unk": {"expect": "stays_open"}}}
+# the same, with the signal a stays_open case needs: a rejection counter that rises
+MALR = {"cases": {"zero": {"expect": "closes", "within_s": 3.0},
+                  "unk": {"expect": "stays_open", "rejections": {"attack_other": 1}}}}
 
 
 class MalformedInputTests(unittest.TestCase):
     def test_a_refused_or_closing_case_passes(self):
+        unk = _case("unk", closes=False, snaps=40)
+        unk["post"]["metrics"] = {RJ % "attack_other": 1.0}
+        unk["mid"]["metrics"] = {RJ % "attack_other": 0.0}
+        ev = _malformed_ev([_case("zero", closes=True), unk])
+        res = analyze.check_malformed_input(ev, MALR)
+        self.assertEqual(res["status"], analyze.PASS, res)
+
+    def test_a_case_that_stays_open_without_a_server_signal_is_inconclusive_never_pass(self):
+        # RV-F8A-1: type 99 has no counter; staying connected is not an observation of a rejection.
         ev = _malformed_ev([_case("zero", closes=True), _case("unk", closes=False, snaps=40)])
         res = analyze.check_malformed_input(ev, MAL)
-        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE, res)
+        self.assertIn("signal_missing", res["measured"]["unk"])
+        self.assertEqual(res["detail"]["not_judged"], ["unk"])
+        # the same case closing the session is a failure, signal or not
+        ev = _malformed_ev([_case("zero", closes=True), _case("unk", closes=True)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.FAIL)
+        # and a counter that rises is the signal
+        up = _case("unk", closes=False, snaps=40)
+        up["post"]["metrics"] = {RJ % "attack_other": 1.0}
+        up["mid"]["metrics"] = {RJ % "attack_other": 0.0}
+        rule = {"cases": {"unk": {"expect": "stays_open", "rejections": {"attack_other": 1}}}}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([up]), rule)["status"], analyze.PASS)
+
+    def test_s16_unknown_type_has_no_signal_rule_so_the_scenario_cannot_pass_by_staying_connected(self):
+        rule = next(a for a in scenarios.load("S16")["assertions"] if a["check"] == "malformed_input")["cases"]["unknown_type"]
+        self.assertEqual(rule["expect"], "stays_open")
+        self.assertNotIn("rejections", rule)
+        self.assertIn("note", rule)
 
     def test_a_session_that_stays_open_or_closes_late_fails(self):
         ev = _malformed_ev([_case("zero", closes=False, snaps=40), _case("unk", closes=False, snaps=40)])
@@ -3063,8 +3099,8 @@ class MalformedInputTests(unittest.TestCase):
         self.assertEqual(analyze.check_malformed_input(_malformed_ev([up]), zero_rule)["status"], analyze.FAIL)
 
     def test_no_teleport_the_server_position_stays_within_speed_times_elapsed(self):
-        rule = {"cases": {"mv": {"expect": "stays_open", "max_displacement": True}}}
-        rec = _case("mv", closes=False, snaps=40, sent_st=20.0, user="raw-mv")
+        rule = {"cases": {"mv": {"expect": "stays_open", "max_displacement": True, "rejections": {"invalid_direction": 3}}}}
+        rec = _rejected(_case("mv", closes=False, snaps=40, sent_st=20.0, user="raw-mv"), "invalid_direction")
         walk = [_row(20.0 + k * 0.2, [["raw-mv", "player", 0.0 + k * 0.2, 0, 100, 100, 0, 5.0]]) for k in range(20)]
         ev = _malformed_ev([rec])
         ev["server"]["entities"] = walk
@@ -3081,9 +3117,11 @@ class MalformedInputTests(unittest.TestCase):
         self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.INCONCLUSIVE)
 
     def test_attack_out_of_range_needs_a_far_target_and_no_hp_loss(self):
-        rule = {"cases": {"atk": {"expect": "stays_open", "beyond_attack_range": True, "target_hp_unchanged": True}}}
-        rec = _case("atk", closes=False, snaps=40, sent_st=20.0,
-                    detail={"sent": "x", "target": "enemy-1", "target_distance": 10.5, "target_hp": 16})
+        rule = {"cases": {"atk": {"expect": "stays_open", "beyond_attack_range": True, "target_hp_unchanged": True,
+                                  "rejections": {"attack_out_of_range": 1}}}}
+        rec = _rejected(_case("atk", closes=False, snaps=40, sent_st=20.0,
+                              detail={"sent": "x", "target": "enemy-1", "target_distance": 10.5, "target_hp": 16}),
+                        "attack_out_of_range")
         hp = lambda v: [_row(20.0 + k * 0.2, [["enemy-1", "mob", 5, 5, v(k), 16, 0, 2.5]]) for k in range(40)]  # noqa: E731
         ev = _malformed_ev([rec])
         ev["server"]["entities"] = hp(lambda k: 16)
@@ -3092,7 +3130,8 @@ class MalformedInputTests(unittest.TestCase):
         ev["server"]["entities"] = hp(lambda k: 16 if k < 10 else 6)
         ev["traj"] = analyze.trajectories(ev["server"]["entities"])
         self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.FAIL)
-        near = _case("atk", closes=False, snaps=40, detail={"sent": "x", "target": "enemy-1", "target_distance": 2.0, "target_hp": 16})
+        near = _rejected(_case("atk", closes=False, snaps=40, detail={"sent": "x", "target": "enemy-1", "target_distance": 2.0,
+                                                                      "target_hp": 16}), "attack_out_of_range")
         ev = _malformed_ev([near])
         ev["server"]["entities"] = hp(lambda k: 16)
         ev["traj"] = analyze.trajectories(ev["server"]["entities"])
