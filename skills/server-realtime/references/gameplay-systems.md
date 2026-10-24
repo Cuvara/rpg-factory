@@ -44,8 +44,8 @@ Adding one is a design decision first (game-ai-workflows), then plumbing here.
 ## Determinism (Shared.GameLogic, ADR-10)
 
 - Allowed float ops: `+ - * /`, comparisons, `MathF.Min/Max/Abs/Sqrt`; transcendentals (`Sin`, `Atan2`, `Pow`) are banned
-  because NativeAOT x64 and IL2CPP ARM64 may disagree (`backend/docs/ARCHITECTURE-DECISIONS.md:1105-1111`);
-  round every intermediate to `float`, because `RyuJIT` and Unity's Mono JIT differ (`:1113-1117`). Server-only code may use them (`Net/FacingCodec.cs`).
+  because NativeAOT x64 and IL2CPP ARM64 may disagree (`backend/docs/ARCHITECTURE-DECISIONS.md`, ADR-10 — Shared simulation: pure logic boundary, ECS on the server only);
+  round every intermediate to `float`, because `RyuJIT` and Unity's Mono JIT differ (ADR-10). Server-only code may use them (`Net/FacingCodec.cs`).
 - Fixed-point integers for stat math (64-bit permille; float only in the final speed scale, cast like `MovementSystem`, `StatusLogic.cs:138-140`).
 - Enforced by the registry check `sgl-determinism` (fast tier), golden vectors on both sides, and review.
 

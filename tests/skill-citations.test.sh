@@ -21,6 +21,8 @@ EOF
 printf 'class Tick {\n  // run\n  void RunAsync() {}\n  int a;\n  int b;\n  void TickOnce() {}\n}\n' > "$SRV/backend/game/Tick.cs"
 printf 'class Shared {}\n' > "$SRV/backend/game/Shared.cs"; printf 'class Shared {}\n' > "$SRV/backend/other/Shared.cs"
 printf 'x\nclass Unique { void Go() {} }\n' > "$SRV/backend/other/Unique.cs"
+printf '# Changelog\n\n## [0.47.0]\n\nKcpTransport\n' > "$SRV/backend/game/CHANGELOG.md"
+printf '# Guide\n\n## Heading\n\nStableSymbol\n' > "$SRV/backend/other/Guide.MD"
 printf 'class Hud {\n  void Bind() {}\n}\n' > "$CLI/Assets/UI/Hud.cs"
 for r in "$SRV" "$CLI"; do git -C "$r" init -q -b develop; gc "$r" add -A; gc "$r" commit -qm init; done
 
@@ -35,6 +37,15 @@ skill '- `Tick.RunAsync` (`game/Tick.cs:3`), then `TickOnce` (`:6`).' \
 out=$(run); rc=$?
 [ $rc -eq 0 ] && grep -q "^OK: 5 line citation(s) checked" <<<"$out" \
   && ok "anchored citations resolve: default root, continuation, basename, client: prefix, repo-name prefix" || no "good citations (rc=$rc)" "$out"
+
+skill '- `KcpTransport` (`game/CHANGELOG.md:5`).'
+out=$(run); [ $? -eq 1 ] && grep -q 'doc line citation: cite `game/CHANGELOG.md` by section, not line (skill-contract)' <<<"$out" \
+  && ok "Markdown line citations fail even when the anchor matches" || no "Markdown line citation" "$out"
+skill '- `StableSymbol` (`other/Guide.MD:5`).'
+out=$(run); [ $? -eq 1 ] && grep -q 'doc line citation: cite `other/Guide.MD` by section, not line (skill-contract)' <<<"$out" \
+  && ok "uppercase extension and nested path are rejected" || no "uppercase Markdown line citation" "$out"
+skill '- See `game/CHANGELOG.md` section `[0.47.0]` for the transport change.'
+out=$(run); [ $? -eq 0 ] && ok "a section citation without a line number passes" || no "section citation" "$out"
 
 skill '- `RunAsync` (`game/Tick.cs:3`) and loop (`:6`).'
 out=$(run); [ $? -eq 1 ] && grep -q 'Tick.cs:6` - unanchored' <<<"$out" && ok "a continuation needs its own anchor" || no "continuation without anchor" "$out"

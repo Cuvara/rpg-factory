@@ -246,6 +246,8 @@ session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope change
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+
+- Enforced section citations for Markdown documentation in skills; line citations now fail the skill citation checker.
 - **Task-scoped routing in the snapshot.** Without `--paths`, uncommitted changes are the user's baseline: the
   snapshot lists them with their modules but prints no Routing, `Next:`, gates or checks for them and says to route
   the task with `--paths <files the task will write>` (commits on a feature branch are still routed; JSON keeps the
