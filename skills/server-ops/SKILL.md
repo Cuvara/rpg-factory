@@ -55,6 +55,11 @@ Order when combined with a code change: code skill first, then this skill for it
 
 ## Transport security switches (contract `transport-security`, this skill drives)
 
+Read `backend/docs/READINESS-GATES.md` for provisional engineering gates and open human decisions.
+For release ordering, exact-head verification, rollback sequence and post-release evidence, use
+`backend/docs/RELEASE-RUNBOOK.md`; neither document authorizes a production change or supplies a
+human-owned gameplay/capacity decision.
+
 Gateway / Nakama TLS and `GAMESERVER_SEALED=require` live in the deploy manifests
 (`k8s/app/40-gateway.yaml` is the contract source; fleets, compose, `k8s/data/nakama.yaml` follow).
 A switch only goes **on** after every capability it needs exists; it goes **off** in reverse:

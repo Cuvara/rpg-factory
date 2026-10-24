@@ -3372,7 +3372,7 @@
     {
       "id": "package-ci-sgl-pin",
       "scope": "netcode,unitydots",
-      "summary": "Netcode and UnityDots CI bootstrap their own com.rpgmmo.shared-gamelogic pin (contract sgl-pin watchers), which can lag the client pin; UnityDots CI also pins a Netcode version. factory-status.py prints the current values. UIToolkit CI has no SGL pin."
+      "summary": "Netcode and UnityDots CI bootstrap their own com.rpgmmo.shared-gamelogic pin (contract sgl-pin watchers), which can lag the client pin; Netcode CI also pins UnityDots and UnityDots CI pins Netcode. factory-status.py derives and prints each current CI ref against the client pin and latest released tags; do not hard-code moving client pin versions here. UIToolkit CI has no SGL pin."
     },
     {
       "id": "unity-netcode-agent-stale",
@@ -3653,7 +3653,7 @@
         "client-integration",
         "measure"
       ],
-      "summary": "How com.cuvara.netcode works on the client: TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning/merge, interpolation clock, movement prediction and reconciliation, reconnect policy, per-packet allocations, headless tests."
+      "summary": "How com.cuvara.netcode works on the client: TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning/merge, interpolation clock, movement prediction and reconciliation, reconnect policy, current per-packet allocation pitfalls, speed presence, subscriber isolation, headless tests."
     }
   },
   "human_gates": [
