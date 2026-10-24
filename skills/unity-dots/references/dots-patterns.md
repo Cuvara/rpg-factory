@@ -57,7 +57,7 @@ shared guess. Cheap per-entity work (one comparison plus an ECB write) barely ga
 
 - Snapshot-driven spawn adds the full component set up front, including the sample buffer, because an
   entity whose archetype changes at snapshot rate moves chunks every snapshot
-  (`AddBuffer<SnapshotSample>`, `Runtime.Netcode/NetworkViewCommandSystem.cs:283-290`).
+  (`AddBuffer<SnapshotSample>`, `Runtime.Netcode/NetworkViewCommandSystem.cs:303-310`).
 - Cost today: `CreateEntity` + 7 unconditional adds + 1 `AddBuffer` + 2 conditional adds
   (`ApplySpawn`, `Runtime.Netcode/NetworkViewCommandSystem.cs:229-321`), i.e. up to 10 chunk moves per spawn. A prebuilt `EntityArchetype`
   (`EntityManager.CreateArchetype` once in `OnCreate`, then `CreateEntity(archetype)` + `SetComponentData`)

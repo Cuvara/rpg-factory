@@ -65,6 +65,15 @@ Needs a Windows player built by `Assets/BuildScripts/Editor/PlayerBuilder.cs` (c
   exit 0 only when every ASSERTED row passed. NOT CHECKED rows are reported, never counted as pass.
   `--kube-context` uses `kubectl exec` (gate); the Nakama key comes from a cluster secret (gate).
 
+## Client: autonomous multi-client runs (`rpg-factory/testlab`)
+
+`python3 testlab/testlab.py run <S..>` (or `suite`, `sweep S07 --levels ...`) supersedes the hand-walked
+parts of `verify-multiclient.sh`. It drives real players through scenarios with no focus or keyboard,
+records client traces plus `/debug/entities`, and grades every assertion with its source, sampling and
+threshold. The run id and results path are `<runs_root>/runs/<run_id>/` (`report.md`, `results.json`). Its
+capacity numbers carry the same ADR-7 caveat: players, bots and server share one host. Docs:
+`testlab/README.md`.
+
 ## Client: device benchmark (`docs/DEVICE-BENCHMARK.md`)
 
 `BenchmarkRecorder` + `Assets/Scenes/DeviceBenchmark.unity`, config `DeviceBenchmarkConfig.asset`
@@ -80,7 +89,7 @@ Use when a load or bench leg shows a regression and the record must say *where* 
 
 - Metrics first, always available: `gameserver.tick.duration`, `gameserver.sim.group.duration`
   (per group), `gameserver.gc.{allocated.bytes,pause.seconds,heap.bytes}`, `gameserver.achieved_tick_hz`
-  (`GameServer/Observability/GameMetrics.cs:67,75,570,587-597`, `/metrics`). Scrape before and after the leg.
+  (`GameServer/Observability/GameMetrics.cs:68,76,577,590,594,599,604`, `/metrics`). Scrape before and after the leg.
 - `dotnet-counters monitor -p <pid> System.Runtime` / `dotnet-trace collect -p <pid>` (dev tool
   `dotnet-diagnostics`, optional): run against a **JIT** Release build started directly, not the AOT image -
   NativeAOT exposes only part of EventPipe. A trace is attribution evidence; the number still comes from

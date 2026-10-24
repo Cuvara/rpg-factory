@@ -82,8 +82,8 @@ Repos `unitydots`, `client`. Owns no module, contract or check.
   41 interleaved pairs, `:8`). New
   job kinds start at `Schedule` until the benchmark (`Tests/Runtime/ParallelSchedulingBenchmark.cs`) gets an arm for them.
 - Spawn with the final component set: every component an entity will need at snapshot rate is added at
-  spawn, sample buffer included (`AddBuffer<SnapshotSample>`, `Runtime.Netcode/NetworkViewCommandSystem.cs:283-290`);
-  add a component lazily only once per entity, never per update (`ApplyPose` adds a missing `EntityPose`, `:401-405`).
+  spawn, sample buffer included (`AddBuffer<SnapshotSample>`, `Runtime.Netcode/NetworkViewCommandSystem.cs:303-310`);
+  add a component lazily only once per entity, never per update (`ApplyPose` adds a missing `EntityPose`, `:447-453`).
 - Write a singleton only when the value changed - a change filter fires on any write; compare with
   `GetSingleton`, then `SetSingleton` (`client:Assets/Scripts/UI/Hud/Ecs/HudStateSystem.cs:28-31,106-110`).
 - `IJobChunk` only when per-chunk optional components matter (`Runtime/Views/MinimapCollectJob.cs:15-19`);
@@ -110,7 +110,7 @@ Repos `unitydots`, `client`. Owns no module, contract or check.
   not on the struct (`Runtime.Physics/PhysicsMovementBridge.cs:32-34`). The physics event jobs `CollectCollisionsJob`/`CollectTriggersJob` have none
   (`Runtime.Physics/PhysicsEventCollectorSystem.cs:58,82`).
 - **Managed allocations in systems:** a method group passed as `Func<>` allocates a delegate per call
-  (`entityManager.Exists` into `EndStep`, `PhysicsEventCollectorSystem.cs:147-148`); `ToString()` per snapshot (`LocalPredictionSystem.cs:185-188`, accepted).
+  (`entityManager.Exists` into `EndStep`, `PhysicsEventCollectorSystem.cs:147-148`); `ToString()` per snapshot (`LocalPredictionSystem.cs:192-195`, accepted).
 - **Exactly one predicted entity, main thread only** - never parallelise prediction: `Reconcile` replays the backlog in order (`LocalPredictionSystem.cs:60-66`).
 - A system added to the parent group instead of its declared subgroup runs in the wrong place silently
   and nothing throws - which is why `SystemOrderVerifier` exists (`Runtime/Modules/SystemOrderVerifier.cs:16-30`):

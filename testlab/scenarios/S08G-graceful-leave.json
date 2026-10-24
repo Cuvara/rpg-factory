@@ -1,0 +1,89 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S08G",
+  "version": 1,
+  "title": "Graceful disconnect: a client leaves through the game's own Disconnect() and is gone for everyone",
+  "description": "S08's world without the kill: client 2 leaves at 15 s with the plan action quit (client hook C6: NetworkClient.Disconnect(), the player's own way out; ReconnectPolicy does not fire) and does not come back. Its run ends with outcome left. The server must drop its player entity, and the other clients must remove it, within 5 s: far below the 60 s KCP idle timeout that cleans up a silent client, so the leave is not mistaken for a crash.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 8,
+  "duration_s": 40,
+  "join_timeout_s": 120,
+  "screenshots_s": [
+    5,
+    20
+  ],
+  "per_client": [
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 38,
+          "mode": "circle",
+          "rate": 0.5
+        }
+      ]
+    },
+    {
+      "steps": []
+    },
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 12,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        }
+      ],
+      "actions": [
+        {
+          "t0": 15,
+          "kind": "quit"
+        }
+      ]
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "graceful_leave",
+      "check": "graceful_leave",
+      "leave_timeout_s": 5.0
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed",
+      "expected_outcomes": {
+        "2": "left"
+      }
+    },
+    {
+      "id": "players_online_end",
+      "check": "players_online",
+      "mode": "last",
+      "expected": 2
+    },
+    {
+      "id": "kcp",
+      "check": "kcp_health",
+      "max_sessions_closed": 1
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order"
+    },
+    {
+      "id": "entity_lifecycle",
+      "check": "entity_lifecycle"
+    }
+  ]
+}

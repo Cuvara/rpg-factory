@@ -7,7 +7,172 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Fixed
 - Windows runner cleanup now treats inaccessible or otherwise unqueryable child processes as unknown and fails closed; TRX parser regression cases explicitly target their fixture checkout and assert the parser's diagnostic.
 
+### Changed
+
+- `testlab analyze --delivery` now fits server/client clock mapping independently in 10 second windows using one minimum-delay sample per 1 second bin. It reports relative excess above each window's minimum envelope and the empirical p95 fit error bound; absolute one-way delay remains explicitly unavailable, and poor fits yield no delay values or PATH attribution.
+
 ### Added
+
+- **`testlab/`: autonomous multiplayer gameplay tests with real, rendered Unity clients.**
+  `python3 testlab/testlab.py run|suite|sweep|analyze|build-client|build-loadtest|stack|clean`.
+  - It starts the isolated scratch stack (`stack.sh --scratch` + `STACK_SCRATCH_EXTRA_ENV`) and
+    launches N players with distinct devices.
+  - It drives them through scenario files (S01-S10: bootstrap, idle stability, movement and
+    collision, combat, crowding, replication, load sweep, reconnect, soak, regression replay)
+    through the client's `IGameplayInputSource` seam. No focus or keyboard is needed.
+  - It records client traces and server-authoritative positions (`/debug/entities`) and grades
+    every assertion PASS / FAIL / INCONCLUSIVE / INFO with source, sampling, threshold and
+    artifacts. Missing evidence is never a PASS.
+  - Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness error.
+  - Design, commands, artifacts and triage: `testlab/README.md`.
+  - `tests/run-all.sh` runs its unit tests (`testlab/tests/test_lab.py`) and loads every scenario.
+  - Crowd checks for rpg-mmo-server#469: `spawn_overlap` (no fresh or respawned player starts
+    within 0.5 units of another), `enemy_pursuit` (an enemy far from every player heads for the
+    nearest one; settled-crowd speed relative to its target). `enemy_crowding` overlap is a failure
+    where the scenario declares separation (S02, S05, S10). Concentration on one player is INFO
+    unless a scenario sets `share_is_failure`, because it follows the nearest-player rule.
+  - `render_jumps` classifies a jump as a server teleport when the client's own received stream
+    shows the same step, and gives host stalls a 1 s tail window, so a respawn the server probe
+    aliased is not counted against interpolation or prediction. A received step counts only when
+    no entity could walk it in the server ticks between the two samples.
+  - `enemy_pursuit` is judged on isolated enemies; crowd steps (separation, queueing) are reported.
+    `inputs_consumed` leaves server respawns out of a move segment. Evidence minimums make sparse
+    pursuit or spawn evidence INCONCLUSIVE.
+  - `--player` accepts a build directory; sweep files are named by scenario id; the atomic JSON
+    write retries while a player holds the file (Windows).
+  - **Run provenance.** `run.json` records factory, server and client commits, the scratch server
+    image id, the embedded Netcode commit (`VERIFY-PROVENANCE.txt`), player exe and managed-code
+    hashes, scenario id, version and file hash, host load at start and end, start and end, and a
+    sha256 manifest of the evidence files. Every evaluation appends a `provenance` assertion: a
+    missing record, a missing field, a run id that is not the directory's, or evidence changed
+    after the run is INCONCLUSIVE. Runs recorded before this change therefore re-grade
+    INCONCLUSIVE instead of PASS. `results.json` names the run it analyses (`analysis` block);
+    `analyze --out DIR` leaves the run directory untouched.
+  - **Missing evidence is never PASS, for every check** (tested per check with absent and empty
+    inputs). Fixed: `client_log_clean` passed with no player log, `snapshot_cadence` with no
+    clients, `render_jumps` with a client's events missing, `players_online` and `redis` with
+    zero clients.
+  - **Cleanup.** `run`, `suite` and `sweep` stop the scratch stack when they finish, also on
+    failure and Ctrl-C (`--keep-stack` keeps it). Ctrl-C stops the players, writes the run record
+    and re-raises. Every docker action refuses a container outside `rpgs-*`, and a misconfigured
+    `container_prefix` cannot widen the container filter to `rpg-*`.
+  - **`leak-check <player>`** reports whether a built player contains TestLab code
+    (`NDC.TestLab*` assembly, `CUVARA_TESTLAB`, TestLab type names) without building or running it.
+  - **`analyze --delivery <run>`** (rpg-mmo-server#473): joins the server snapshot trace (C1,
+    `--snapshot-trace` / `snapshot_trace: true` sets `GAMESERVER_SNAPSHOT_TRACE` and copies the
+    file into `server/`) with the client trace (C2 `delivery.csv`, `render.csv`). It reports per
+    client and 5-minute bucket the send and receive gaps, relative one-way delay, queue, drops,
+    KCP retransmissions and send queue, and classifies every receive gap over 250 ms as
+    SERVER_LATE, QUEUE, CLIENT, KCP, PATH or UNKNOWN and ALL-CLIENTS or SINGLE-CLIENT. It is
+    diagnostic only.
+  - `testlab/docs/COVERAGE.md`: readiness areas mapped to scenarios and checks, with the gaps.
+  - **Factory-only coverage gaps closed (COVERAGE F1-F6).** New checks: `snapshot_order` (no
+    backward or repeated world tick within a session), `enemy_bounds` (enemies inside the map
+    file's bounds at the run's server commit), `enemy_budget` (live enemies within the budget
+    the server reports), `render_freshness` (C2 snapshot age p99 within TargetDelay +
+    MaxExtrapolation, 150 ms), `prediction_bound` (at most 6 hard snaps per client-minute,
+    derived from the 2026-10-22 runs) and `server_config` (the scenario's `SIM_*` rates were in
+    force). Each is INCONCLUSIVE on missing evidence. New scenarios S11 (resync after a
+    game-server restart) and S12 (30/15 Hz tick rate). `snapshot_cadence` and
+    `render_freshness` take `exclude_s` windows; `clients_in_world` takes `reentered_after_s`.
+    S01-S10 gain `snapshot_order`, and `prediction_bound`/`enemy_budget` where they apply
+    (versions bumped).
+  - `build-client` writes a `netcode` block (embedded git HEAD or packages-lock hash) into
+    `testlab-build.json`, so a build-client player's provenance names its Netcode commit.
+  - **Client trace schema v2 and the client coverage hooks C1-C6** (client 299b6c8,
+    `docs/TESTLAB.md`). `render_freshness` now grades the render clock that drew each frame
+    (v2 `render_tick` / `clock_newest_tick`): p99 overrun past the newest consumed tick <=
+    MaxExtrapolation (50 ms); v1 render.csv (empty `render_tick`) is INCONCLUSIVE. New checks
+    `tick_adoption` (C1), `entity_lifecycle` (C3: no ghost after removal, reused ids drawn at
+    their own spawn), `cross_client_convergence` (C4: same entity, same render tick, same place),
+    `stall_recovery` (C2) and `graceful_leave` (C6); each INCONCLUSIVE without its hook's
+    evidence. New scenarios S13 (client stall 500 ms and 2000 ms) and S08G (graceful leave);
+    suite `readiness` (S11 S12 S13 S08G). Plan actions `stall`, `quit`, `reconnect`,
+    `cast_at_point`, `cast_spam` are accepted; `clients_completed` takes `expected_outcomes`.
+  - **`prediction_bound` grades only unexplained snaps.** Every snap is matched by world tick to
+    a server respawn or teleport of the same player (/debug/entities); explained snaps are
+    reported, the rest are graded at 4 per client-minute (fixed builds at most 2.0, pre-fix runs
+    7.5 or more, derived from every stored run). It was 6 total snaps per client-minute, which
+    counted correct respawn snaps as errors.
+  - **Server hooks S1/S2/S4 (rpg-mmo-server #475).** Disruption `debug_kill` (POST /debug/kill,
+    recorded with HTTP status and server tick in `disruptions.ndjson`; `requires_debug_kill`
+    assertions are INCONCLUSIVE unless the kill was confirmed). Checks `debug_kill_respawn`,
+    `input_rejections` (per-reason rejection deltas) and `cast_damage_bound` (refused casts do no
+    damage; no hit beyond the projectile's reach; numbers read from content/abilities.json).
+    `enemy_bounds` reads /status `map_bounds` first. Scenarios S14 (deterministic death and
+    respawn) and S15 (combat negative path) join the `readiness` suite.
+  - **Server image revision.** `--build-server` passes the server HEAD as `STACK_GIT_REVISION`
+    (stack.sh stamps it into `org.opencontainers.image.revision`); provenance records the running
+    image's label and is INCONCLUSIVE when it is missing or differs from the recorded server SHA.
+    Server trees whose stack.sh predates the variable are recorded as `label unsupported`.
+  - **Independent review R3 fixes.** Provenance hashes every evidence file (now including
+    `disruptions.ndjson`) and checks each scenario's expected inventory: an omitted, unrecorded
+    or changed file is INCONCLUSIVE. `analyze --delivery` fits each client's clock rate against
+    the server's (the WSL VM clock runs about 7 % slow) and reports one-way delay as unavailable
+    when the fit is poor. A run whose informational assertion would fail (S07/S07P memory) is
+    PASS_WITH_WARNINGS (exit 4), never PASS; the report shows that and host load under
+    "Qualified by". `testlab/docs/THRESHOLDS.md` (generated, kept current by a test) lists every
+    limit with its source or "policy, unvalidated".
+  - **Soak plan and classifier fixes (T06 findings).** S09 v4 repeats its 300 s movement and combat
+    cycle for the whole `--duration` (`repeat_cycle_s`; earlier 1 h soaks were 5 min active, 55 min
+    idle). `analyze --delivery`: a gap is ALL-CLIENTS when the other clients' gaps overlap in time
+    on the server clock or in touching tick ranges; the KCP class also reads the 4 server rows after
+    the late snapshot. On the 1 h soaks the clock fit stays poor (the WSL clock rate wanders
+    1.073-1.090), so one-way delay is reported unavailable. Preflight fails fast when a server
+    worktree has no `modules/nakama.so` and `--build-server` is not set.
+  - **S08G analysis fixes (T34).** A client that left with `quit` writes `summary.json` after
+    `Disconnect()`, with an empty user id; client user ids now fall back to the `in_world` event and
+    run.json, so `graceful_leave` is judged instead of INCONCLUSIVE. `entity_lifecycle` no longer counts
+    the sample of an entity's re-add frame (AOI re-entry) as a ghost of its earlier removal.
+    `graceful_leave` names a dead_link session close (the polite disconnect frame never arrived).
+  - `cross_client_convergence` skips pairs within 0.5 s of a server-side respawn or teleport of the
+    compared entity (`teleport_window_s`): next to one, one client may already draw the new position.
+    The final soak's maximum (18.56) was such a pair.
+  - **Analysis memory bounded (T41).** A 1 h soak's analysis needed about 13 GB. Samples, events,
+    inputs and server entity rows are now streamed from their files (`util.LazyNdjson`) instead of
+    held as Python objects; trajectories and frames are float arrays; large value sets use
+    `util.Distribution` (exact up to 1 M values, then 1e-6 bins); `cross_client_convergence` forms
+    pairs per 60 s render-tick window; `entity_lifecycle` merges its windows with the sample stream
+    (its quadratic next-event scan is gone). On a synthetic soak the peak drops from about 7x to
+    2x the evidence size; results equal the pre-change analysis (frozen reference test).
+  - **S13 stall catch-up rule (Lead decision).** On a client with a scripted stall, remote render
+    jumps and remote divergence from the stall start through the frame after the frame whose dt
+    contains the stall are not judged (the world moved while the process was frozen; one-frame
+    binder drain lag); one local major correction per stall is allowed within 5 s, a second FAILs.
+    Other clients and later frames are never excluded. COVERAGE.md statuses refreshed (T31 runs,
+    hooks S1-S4 and the delivery trace done, graceful-leave fix upstream).
+  - **Reverse scans stay bounded (review R5-1).** `reversed()` on a `util.LazyNdjson` read the whole
+    file into a list; it now reads the file backwards in 64 KiB blocks (`util.iter_ndjson_reversed`,
+    same rows and skips as the forward reader), so a last-match search (`_user_ids` on events,
+    `_status_map_bounds`) holds one block and stops at the match. Server `status.ndjson` (~30 MB in a
+    1 h soak) is streamed as well instead of held as a list.
+  - **Session-aware delivery classes (T58).** `analyze --delivery` classifies a receive gap that spans
+    a session change as RECONNECT (with the cause from player.log when known): a C1 `conn_id` change
+    between its two snapshots, or a client `net_state` Ended / `reconnected` inside it. Joined by user id
+    alone, the e26z post-reconnect gaps read as SERVER_LATE with retransmission deltas of -700..-1295.
+    Bucket counter deltas (retransmissions, dropped) are summed per connection. entity_lifecycle and
+    cross_client_convergence are unchanged: every e26z failure lies between a client's frame freeze and
+    its reconnect (the backlog frame, and client 0's 31 s on a dead session), none after a session
+    change, and the backlog-frame reuse is a real Netcode view defect (T57, Netcode 4520ccf). A test pins
+    that an id added after `entities_reset` is not judged as a reuse.
+  - **Predictor call trace (T56).** A scenario can turn on the client's Netcode predictor call trace per
+    client (`"predictor_trace": true` in `client_defaults` or a `per_client` entry; plan `predictor_trace`;
+    client d6c8839, Netcode >= 8986908). S13 (version 2) records it on client 0, the stalled client; the
+    expected provenance inventory then requires `client-0/trace.ndjson`. New `testlab.py replay-trace <run>
+    [--client N] [--out DIR]` (`lab/predtrace.py`) validates the trace (header and settings, frame markers in
+    order, each `Reconcile` followed by its `ReconcileResult`, steering begin/end nesting, steering times) and
+    lists the corrections the live predictor recorded per scripted stall. The exact replay stays with Netcode's
+    `PredictorTraceReplayer`; the recipe is in testlab/README.md "Predictor call trace".
+- `scripts/checks/netcode-headless.sh` finds the rpg-mmo-server holding the pinned Shared.GameLogic
+  tag from a Netcode worktree too: `--server DIR`, else the Netcode dir's sibling, else
+  `$RPG_FACTORY_WORKSPACE/rpg-mmo-server`; `--resolve-server` prints the choice
+  (`tests/netcode-headless.test.sh`, in run-all).
+- `netcode-headless.sh` fails when `dotnet test` fails or times out, whatever TRX it left
+  (`NETCODE_HEADLESS_TIMEOUT`, default 900 s).
+  - Paths given to the CLI in Git Bash form (`/c/...`) work with Windows Python. The README states
+    which commands run in Git Bash and which also run in WSL, and that `build-client` regenerates
+    the scene only with `--rebuild-scene`.
+- `skills/measure/references/legs.md`: the testlab as the multi-client verification leg.
 - **Parallel-work policy.** New `skills/factory-core/references/parallel-work.md` is the single policy for
   delegated work: the main session is the lead and integrator; one worktree per implementation task (Orca-managed
   or `isolation: "worktree"`, never a second clone); one Unity writer per client project; shared exclusive

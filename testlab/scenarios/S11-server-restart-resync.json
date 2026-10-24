@@ -1,0 +1,160 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S11",
+  "version": 2,
+  "title": "Resync after a game-server restart: clients come back, ticks restart, rendering converges",
+  "description": "Three clients on dev_arena (enemies on). At 20 s the scratch game server container is restarted (disruption restart_gameserver). 20-40 s is the grace window for the restart, the server's re-registration and the clients' reconnect; nothing is judged inside it. After it every client must be back InWorld, the server must hold all three players, snapshots must flow at the world rate, ticks may restart only in a new session, and what clients render must be back on the server's path. A FAIL here is a valid result (e.g. a client that never rebinds after the reconnect); the scenario is not tuned to pass.",
+  "clients": 3,
+  "map": "dev_arena",
+  "seed": 11,
+  "duration_s": 70,
+  "fresh_server": true,
+  "screenshots_s": [
+    10,
+    22,
+    41,
+    68
+  ],
+  "client_defaults": {
+    "steps": [
+      {
+        "t0": 2,
+        "t1": 68,
+        "mode": "circle",
+        "rate": 1.0
+      }
+    ],
+    "actions": []
+  },
+  "per_client": [
+    {},
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 18,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 41,
+          "t1": 68,
+          "mode": "circle",
+          "rate": 1.5
+        }
+      ]
+    },
+    {
+      "steps": []
+    }
+  ],
+  "disruptions": [
+    {
+      "at_s": 20,
+      "kind": "restart_gameserver"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world",
+      "reentered_after_s": 20,
+      "title": "every client joined and is back InWorld after the restart"
+    },
+    {
+      "id": "players_online_end",
+      "check": "players_online",
+      "mode": "last",
+      "title": "the restarted server holds every client at the end"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "snapshots",
+      "check": "snapshot_cadence",
+      "exclude_s": [
+        [
+          20,
+          40
+        ]
+      ],
+      "title": "snapshot cadence outside the restart grace window"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "ticks never go backwards within a session (a reconnect may restart them)"
+    },
+    {
+      "id": "local_divergence",
+      "check": "position_divergence",
+      "local": true,
+      "types": [
+        "player"
+      ],
+      "p95": 0.5,
+      "max": 1.5,
+      "skip_first_s": 40,
+      "title": "local player on the server path after the grace window"
+    },
+    {
+      "id": "remote_player_divergence",
+      "check": "position_divergence",
+      "types": [
+        "player"
+      ],
+      "p95": 0.35,
+      "max": 1.0,
+      "skip_first_s": 40,
+      "title": "remote players on the server path after the grace window"
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "max_local": 0,
+      "max_remote_per_client_min": 2.0,
+      "skip_first_s": 40,
+      "title": "no rendered discontinuity after the grace window"
+    },
+    {
+      "id": "enemy_bounds",
+      "check": "enemy_bounds",
+      "title": "enemies stay inside dev_arena's bounds"
+    },
+    {
+      "id": "render_freshness",
+      "check": "render_freshness",
+      "exclude_s": [
+        [
+          20,
+          40
+        ]
+      ],
+      "title": "age of the newest snapshot at each frame outside the grace window (C2)"
+    },
+    {
+      "id": "tick_adoption",
+      "check": "tick_adoption",
+      "title": "the predictor steps at the server's advertised tick rate (C1)",
+      "exclude_s": [
+        [
+          20,
+          40
+        ]
+      ]
+    },
+    {
+      "id": "cross_client_convergence",
+      "check": "cross_client_convergence",
+      "title": "clients draw a remote entity in the same place at the same render tick (C4)",
+      "skip_first_s": 40
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S01",
+  "version": 2,
+  "title": "Bootstrap and readiness: three real clients join one world",
+  "description": "Isolated stack, three rendered players with distinct device ids. Proves identity, one shared game server (ADR-2), sessions, and that every client receives snapshots at the world rate.",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 1,
+  "duration_s": 15,
+  "screenshots_s": [2, 13],
+  "client_defaults": { "steps": [], "actions": [] },
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world", "title": "every client reached IN WORLD" },
+    { "id": "spawn_overlap", "check": "spawn_overlap", "min_distance": 0.5, "title": "no player starts on top of another (#469)" },
+    { "id": "identities", "check": "distinct_user_ids", "title": "three distinct Nakama users" },
+    { "id": "one_server", "check": "same_game_server", "title": "all clients assigned the same game server" },
+    { "id": "players_online", "check": "players_online", "title": "server reports every client online" },
+    { "id": "redis", "check": "redis", "title": "one session per user, one server per map" },
+    { "id": "completed", "check": "clients_completed", "title": "every client ran the scenario to the end" },
+    { "id": "logs_clean", "check": "client_log_clean", "title": "no exception in any player log" },
+    { "id": "snapshots", "check": "snapshot_cadence", "title": "snapshots arrive at the world rate", "max_gap_ms": 250 },
+    { "id": "kcp", "check": "kcp_health", "title": "no dropped datagrams or closed sessions" },
+    { "id": "tick", "check": "server_tick", "title": "server holds its tick rate" },
+    { "id": "snapshot_order", "check": "snapshot_order", "title": "received world ticks never go backwards or repeat within a session" }
+  ]
+}

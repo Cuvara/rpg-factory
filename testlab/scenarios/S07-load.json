@@ -1,0 +1,111 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S07",
+  "version": 2,
+  "title": "Sustained load: three rendered clients plus headless bots (sweep the bot count)",
+  "description": "Run through `testlab.py sweep S07 --levels 0,25,50,100,150,200`. Bots are backend/loadtest players joining the same server directly; the rendered clients measure what a player sees under that load. Enemy AI is ON with its defaults, so the enemy cap grows 45 per player: this measures the game as configured. S07P is the same with enemies off (players only). Tick figures are lower bounds: the generator, three players and the server share one host (ADR-7).",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 7,
+  "duration_s": 60,
+  "join_timeout_s": 180,
+  "bots": {
+    "players": 0,
+    "movement": "cluster",
+    "ramp_per_s": 20
+  },
+  "screenshots_s": [
+    30
+  ],
+  "per_client": [
+    {
+      "steps": []
+    },
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 43,
+          "mode": "circle",
+          "rate": 0.8
+        }
+      ]
+    },
+    {
+      "steps": [],
+      "actions": [
+        {
+          "t0": 5,
+          "t1": 43,
+          "kind": "cast_nearest_enemy",
+          "interval_s": 0.8,
+          "range": 12
+        }
+      ]
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "bots",
+      "check": "bots_joined"
+    },
+    {
+      "id": "tick",
+      "check": "server_tick"
+    },
+    {
+      "id": "kcp",
+      "check": "kcp_health"
+    },
+    {
+      "id": "snapshots",
+      "check": "snapshot_cadence",
+      "max_gap_ms": 250
+    },
+    {
+      "id": "replication_gap",
+      "check": "snapshot_update_gap",
+      "max_gap_ms": 200
+    },
+    {
+      "id": "frames",
+      "check": "frame_time",
+      "p95_ms": 33.4,
+      "p99_ms": 50
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "max_local": 0,
+      "max_remote_per_client_min": 2.0
+    },
+    {
+      "id": "memory",
+      "check": "memory_growth",
+      "max_server_mib_per_min": 20,
+      "informational": true
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "enemy_budget",
+      "check": "enemy_budget",
+      "title": "live enemies never exceed the server's hard budget"
+    }
+  ]
+}

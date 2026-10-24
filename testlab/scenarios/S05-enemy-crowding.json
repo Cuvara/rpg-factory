@@ -1,0 +1,157 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S05",
+  "version": 2,
+  "title": "Enemy targeting and crowding: together, spread, retreat, approach, target switch",
+  "description": "Enemies pick the nearest live player every world tick (EnemyMoveSystem). With players together, one pile is expected; once they spread, the crowd must split by geometry. Overlap is reported against the absence of separation in the AI (design gap, INFO).",
+  "clients": 3,
+  "map": "map_01",
+  "seed": 5,
+  "duration_s": 70,
+  "screenshots_s": [
+    10,
+    30,
+    45,
+    60,
+    68
+  ],
+  "per_client": [
+    {
+      "steps": [
+        {
+          "t0": 12,
+          "t1": 30,
+          "mode": "toward_point",
+          "px": -15,
+          "py": 0,
+          "stop_distance": 0.5
+        },
+        {
+          "t0": 50,
+          "t1": 66,
+          "mode": "toward_client",
+          "target_client": 1,
+          "stop_distance": 2
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 12,
+          "t1": 30,
+          "mode": "toward_point",
+          "px": 15,
+          "py": 0,
+          "stop_distance": 0.5
+        },
+        {
+          "t0": 36,
+          "t1": 46,
+          "mode": "away_from_nearest_enemy"
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 12,
+          "t1": 30,
+          "mode": "toward_point",
+          "px": 0,
+          "py": 15,
+          "stop_distance": 0.5
+        },
+        {
+          "t0": 36,
+          "t1": 46,
+          "mode": "toward_nearest_enemy",
+          "stop_distance": 1.5
+        }
+      ]
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "crowding",
+      "check": "enemy_crowding",
+      "max_share_when_spread": 0.9,
+      "spread_distance": 10,
+      "overlap_radius": 0.4,
+      "max_overlap_ratio": 0.1,
+      "overlap_is_failure": true,
+      "skip_first_s": 5,
+      "require_spread": true
+    },
+    {
+      "id": "pursuit",
+      "check": "enemy_pursuit",
+      "min_pursuit_ratio": 0.95
+    },
+    {
+      "id": "spawn_overlap",
+      "check": "spawn_overlap",
+      "min_distance": 0.5
+    },
+    {
+      "id": "enemy_server_speed",
+      "check": "enemy_server_speed",
+      "speed": 2.5
+    },
+    {
+      "id": "enemy_render_speed",
+      "check": "enemy_render_speed",
+      "speed": 2.5
+    },
+    {
+      "id": "remote_mob_divergence",
+      "check": "position_divergence",
+      "types": [
+        "mob"
+      ],
+      "p95": 0.35,
+      "max": 1.0
+    },
+    {
+      "id": "render_jumps",
+      "check": "render_jumps",
+      "max_local": 0,
+      "max_remote_per_client_min": 2.0
+    },
+    {
+      "id": "kcp",
+      "check": "kcp_health"
+    },
+    {
+      "id": "tick",
+      "check": "server_tick"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "prediction_snaps",
+      "check": "prediction_bound",
+      "title": "local prediction hard snaps per client-minute"
+    },
+    {
+      "id": "enemy_budget",
+      "check": "enemy_budget",
+      "title": "live enemies never exceed the server's hard budget"
+    }
+  ]
+}
