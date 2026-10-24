@@ -113,7 +113,7 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `go-backend` | server-services, wire-contract | module wiring without go.work, entry points, storage seams, test doubles, single Go tests, integration-test skips |
 | `unity-client-tech` | client-integration, unity-package, pin-bump | Entities system install and world lifecycle, UniTask and main thread, VContainer, asmdef/test assemblies, domain reload, WebGL, single Unity tests |
 | `unity-dots` | unity-package, client-integration, measure | ECS or classic C#, system group tree and bootstrap install, `SystemOrderVerifier`, the package ECB singleton, measured Schedule vs ScheduleParallel thresholds, archetype-stable spawning, sync points, allocators, ECS tests |
-| `netcode-client` | unity-package, wire-contract, client-integration, measure | TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning and merge, interpolation clock, prediction and reconciliation, reconnect, per-packet allocations, headless tests |
+| `netcode-client` | unity-package, wire-contract, client-integration, measure | TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning and merge, interpolation clock, prediction and reconciliation, reconnect, current per-packet allocation pitfalls, speed presence, subscriber isolation, headless tests |
 
 **Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry
 `dev_tools` it uses (Unity MCP, Go LSP, C# LSP, pg-aiguide, context-mode, codex, dotnet, go, protoc,

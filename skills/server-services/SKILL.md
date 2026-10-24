@@ -43,6 +43,9 @@ Architecture map and cross-process contracts: `references/service-map.md`. Migra
 1. **Read the ADR first** for any boundary (`backend/docs/ARCHITECTURE-DECISIONS.md`): ADR-1 (one
    writer per datum), ADR-2 (one server per `map_id`), ADR-3 (redirect only), ADR-4 (Redis roles),
    ADR-5 (Streams), ADR-6 (<=30 s loss), ADR-20 (kick by jti), ADR-24 (Nakama TLS), ADR-26 (dungeons).
+   Duplicate-login kicks send the reason-bearing `MsgKick` and paired `MsgDisconnect`, then wait for
+   the KCP acknowledgement before closing so the client can drain and display the reason
+   (`backend/gateway/server/server.go:969-977`; `backend/gateway/CHANGELOG.md`, kick drain entry).
 2. **List the other side** of every contract the change touches (`references/service-map.md`
    table). `nakama-rpc`: this skill drives - list the gateway, game-server and client ends and hand the
    client end to `client-integration` as a follow-up. `shared/messages` wire types, `servers:id`,
