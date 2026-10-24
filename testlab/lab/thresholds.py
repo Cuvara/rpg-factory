@@ -30,7 +30,9 @@ SOURCES = {
     ("frame_time", "p95_ms"): f"{POLICY}: 33.4 ms = 30 fps on a shared host",
     ("frame_time", "p99_ms"): POLICY,
     ("kcp_health", "max_sessions_closed"): "S08: 2 = the killed client's session plus its relaunch; S08G: 1 = the "
-                                           "graceful leave",
+                                           "graceful leave; S18: 0, packet loss must not end a session",
+    ("kcp_health", "max_dropped"): "S18: null = inbound datagram drops are reported, not judged (the impairment drops "
+                                   "datagrams on purpose; sessions closed and rejected are still judged)",
     ("memory_growth", "max_server_mib_per_min"): f"{POLICY} (S09 2.0; S07/S07P 20, informational: the bot ramp "
                                                  "allocates by design)",
     ("entity_stability", "max_growth_ratio"): POLICY,
@@ -94,7 +96,55 @@ SOURCES = {
     ("player_count_baseline", "leave_within_s"): "same instant as churn_ghosts (quiet window start)",
     ("player_count_baseline", "drop_gone_within_s"): "same instant as churn_ghosts (quiet window start)",
     ("players_online", "mode"): "scenario decision: the end of the run",
+    # S18 packet impairment (netem.ndjson). The profile itself is in the "Impairment profiles" section.
+    ("netem_cleanup", "max_late_s"): f"{POLICY}: the removal is 3 tc commands plus a verification, 1-2 s each through WSL; "
+                                     "10 s is several times that",
+    ("netem_retransmits", "min_rise"): "derivation: 15 Hz snapshots x 2 clients x 60 s = 1800 server->client segments x 5 % "
+                                       "loss = about 90 resent; 30 is a third of that, and a quiet host adds about 0.2/s "
+                                       "when clean (F8A control run, 22 in 125 s), i.e. 12 per 60 s, so 30 is not reachable "
+                                       "by host noise alone",
+    ("netem_retransmits", "rate_ratio"): f"{POLICY}: the impaired rate must be a multiple of the clean one, so a noisy host "
+                                         "cannot fake the effect",
+    ("netem_retransmits", "baseline_floor_per_s"): f"{POLICY}: a zero-retransmit baseline would make any rate pass the ratio; "
+                                                   "0.1/s is half the clean-run noise seen in F8A",
+    ("netem_retransmits", "recovery_max_ratio"): f"{POLICY}: after the removal the rate must fall to at most half the impaired "
+                                                 "rate (the removal returned and the backlog drained)",
+    ("netem_snapshots", "max_gap_ms"): f"baseline and recovery: the lab-wide snapshot_cadence limit ({POLICY})",
+    ("netem_snapshots", "impaired_max_gap_ms"): "derivation, not a measurement: a lost KCP segment is resent after RTO "
+                                                "(srtt 80 ms + 4 x rttvar about 100 ms = about 180 ms), a second loss of the "
+                                                "same segment after 1.5 x RTO (270 ms), a third after 2.25 x RTO (405 ms): "
+                                                "three consecutive losses = 855 ms + 40 ms one-way + sampling = about 0.9 s, "
+                                                "probability 1.25e-4 per segment; 1000 ms is also the longest freeze "
+                                                "this lab will call recoverable",
+    ("netem_snapshots", "impaired_p99_gap_ms"): "derivation: 5 % loss is above 1 %, so the 99th-percentile gap lies in the "
+                                                "single-loss class: RTO about 180 ms + 40 ms one-way + jitter 20 ms = about "
+                                                "240 ms; 400 ms keeps the double-loss tail (0.25 % of segments) out of it",
+    ("netem_snapshots", "rate_tolerance"): f"same as snapshot_cadence ({POLICY}); CORE-BASELINE-V1.md measured "
+                                           "snapshotsApplied unchanged (14.8/s) at 40 ms +/- 60 ms",
+    ("netem_snapshots", "recovery_settle_s"): f"{POLICY}: the netem queue holds at most delay + jitter = 60 ms and the removal "
+                                              "flushes it; 2 s covers one RTO round of the KCP backlog",
+    ("netem_prediction", "max_snaps_per_min"): "the lab's prediction_bound (4.0): measured fixed builds <= 2.0, pre-fix >= 7.5; "
+                                               "not widened for impairment",
+    ("netem_prediction", "max_correction"): f"{POLICY}: the local position_divergence max of S03/S06/S10 (1.5); the largest "
+                                            "correction seen clean is 0.17 (S16 82bn)",
+    ("netem_prediction", "max_keyframe_ratio"): f"{POLICY}: a resync storm would be many times the periodic keyframe rate; "
+                                                "2x the clean rate of the same run",
+    ("netem_prediction", "recovery_settle_s"): "same as netem_snapshots",
+    ("netem_convergence", "converge_within_s"): f"{POLICY}: expected well under 3 s (interpolation cover 150 ms, KCP backlog a "
+                                                "few RTOs, smoothing); 10 s is three times that",
+    ("netem_convergence", "p95"): f"inherited from remote position_divergence ({POLICY})",
+    ("netem_convergence", "max"): f"inherited from remote position_divergence ({POLICY})",
 }
+NETEM_PROFILE_SOURCE = (
+    "delay 40 ms: the one-way latency CORE-BASELINE-V1.md measured a real Unity client at (section \"The client survives a "
+    "worse link than most players will have\"); jitter +/- 20 ms: inside the +/- 60 ms the client held there (resyncs, "
+    "rejected, dropped and clamped all 0) and the +/- 25 ms where tiered replication still held its cover, so a pass is "
+    "expected, not a stretch; loss 5 %: above the 1-2 % of a typical mobile link and below the 10 % where a reliable "
+    "transport mostly stalls; CORE-BASELINE-V1.md has no loss measurement at all (this is the first), so it is "
+    f"{POLICY}; reorder 1 %: the value of the brief, on top of the reordering that uniform jitter above the 67 ms "
+    "snapshot spacing already causes. Phases: 30 s baseline and 30 s recovery as briefed; 60 s impaired so about 900 "
+    "snapshot segments per client meet 5 % loss (about 45 losses, enough for the loss share to be tested at 3 sigma)")
+
 # Parameters that are not limits (identifiers, switches, documentation).
 NOT_LIMITS = {"local", "types", "client", "axis", "rationale", "expected_outcomes", "expect_positive",
               "expect_zero", "require_removal", "informational"}
@@ -153,6 +203,10 @@ CHECK_DEFAULTS = [
     ("debug_kill_respawn", "respawn_within_s", 2.0, "one world interval (67 ms) + 1 Hz /status probe + queue; rounded up"),
     ("cast_damage_bound", "cooldown / power / reach", "content", "content/abilities.json at the run's server commit"),
     ("cast_damage_bound", "reach_margin", 1.0, POLICY),
+    ("netem_applied", "sigmas / min_packets / rtt_rise_ratio", "3 / 300 / 0.5",
+     "3 binomial standard deviations (0.27 % false alarm per direction); 300 datagrams is 15 expected drops at 5 %; the "
+     "clients' round-trip time must rise by half the delay added to a round trip (a smoothed, sampled estimate)"),
+    ("netem_prediction", "match_window_ticks", 60, "same as prediction_bound"),
     ("delivery (analyze --delivery)", "gap_ms / explain_fraction / bucket_s", "250 / 0.5 / 300", POLICY),
     ("delivery windowed clock fit", "window / bins / rate / empirical error", "10 s / >= 5 minima per 1 s bin / 0.8-1.2 / p95 <= 10 ms", "X13 measured 10 s minima fits: residual p95 2.16-3.85 ms on i9fl/e26z; 10 ms is a conservative rejection ceiling; rate range is defensive policy, unvalidated"),
     ("delivery scope", "time-overlap slack", "50 ms", POLICY),
@@ -210,6 +264,15 @@ def render() -> str:
         sc = scenarios.load(sid)
         dis = ", ".join(f"{d['kind']} at {d['at_s']} s" for d in sc["disruptions"]) or "-"
         lines.append(f"| {sid} | {sc['duration_s']} | {sc['sample_hz']} / {sc['server_sample_hz']} | {dis} |")
+    lines += ["", "## Impairment profiles", "",
+              "| Scenario | Phases (baseline / impaired / recovery s) | Per direction | Source |", "|---|---|---|---|"]
+    for sid in scenarios.list_ids():
+        for d in scenarios.load(sid)["disruptions"]:
+            if d["kind"] == "netem":
+                p = d["profile"]
+                lines.append(f"| {sid} | {d.get('baseline_s')} / {d.get('impaired_s')} / {d.get('recovery_s')} | "
+                             f"loss {p.get('loss_pct')} %, delay {p.get('delay_ms')} ms +/- {p.get('jitter_ms')} ms, "
+                             f"reorder {p.get('reorder_pct')} % ({', '.join(d.get('directions') or [])}) | {NETEM_PROFILE_SOURCE} |")
     lines += ["", "Durations, kill and stall instants and the S11 grace window are scenario timing chosen by the "
               f"author ({POLICY}).", ""]
     return "\n".join(lines)

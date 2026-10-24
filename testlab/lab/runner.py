@@ -14,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import analyze, clients, provenance, rawprobe, report, scenarios, stack, util
+from . import analyze, clients, netem, provenance, rawprobe, report, scenarios, stack, util
 from .config import LabConfig
 from .probe import ServerProbe
 
@@ -135,6 +135,14 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         server_label = {"supported": stack.supports_git_revision(cfg), "revision": stack.image_revision(cfg)}
         mark("stack_ready")
 
+        if any(d.get("kind") == "netem" for d in sc["disruptions"]):
+            # tc/nsenter/sudo reachable and the namespace the container's own, before a player starts.
+            try:
+                meta["netem_preflight"] = netem.Shaper(cfg).preflight()
+            except netem.NetemError as exc:
+                raise RuntimeError(f"netem preflight: {exc}")
+            log(f"netem: preflight ok {meta['netem_preflight']}")
+
         probe = ServerProbe(cfg, run_dir / "server", entity_hz=float(sc["server_sample_hz"]))
         probe.scrape_metrics("start")
         probe.start()
@@ -226,6 +234,9 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         raw_stop.set()
         for t in raw_threads:
             t.join(timeout=10)
+        if any(d.get("kind") == "netem" for d in sc["disruptions"]):
+            # Whatever happened, the scratch game server leaves this run unshaped, and says so.
+            meta["netem_final_cleanup"] = netem.final_cleanup(cfg, run_dir, log)
         if bots_proc is not None:
             try:
                 bots_proc.wait(timeout=40)  # loadtest writes its JSON when its window closes
@@ -334,6 +345,9 @@ def _disrupt(cfg, sc, d, players, pending, probe, log, run_dir=None, raw_threads
     elif kind == "restart_gameserver":
         log("disruption: restarting scratch game server")
         stack.restart_gameserver(cfg)
+    elif kind == "netem":
+        raw_threads.append(netem.start(cfg, sc, d, run_dir, probe, log, raw_stop))
+        log("disruption: started packet-impairment step netem")
     elif kind in rawprobe.STEPS:
         # Runs on its own thread (a truncated-frame case alone waits ~40 s); it writes rawprobe.ndjson.
         raw_threads.append(rawprobe.start(kind, cfg, sc, d, run_dir, probe, log, raw_stop))

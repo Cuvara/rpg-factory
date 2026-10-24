@@ -74,6 +74,8 @@ def load_evidence(run_dir: Path) -> dict:
         "disruptions": util.read_ndjson(run_dir / "disruptions.ndjson"),
         # What the raw-client steps (S16 malformed input, S17 churn) recorded: rawprobe.ndjson.
         "rawprobe": util.read_ndjson(run_dir / "rawprobe.ndjson"),
+        # What the packet-impairment step (S18) recorded: netem.ndjson.
+        "netem": util.read_ndjson(run_dir / "netem.ndjson"),
     }
     ev["traj"] = trajectories(entities)
     return ev
@@ -958,9 +960,11 @@ def check_kcp_health(ev, a):
     rejected = _delta(ev, "gameserver_kcp_sessions_rejected_total")
     if dropped is None or closed is None:
         return _inconclusive("metrics scrape missing", source="/metrics kcp counters")
-    ok = dropped <= float(a.get("max_dropped", 0)) and closed <= float(a.get("max_sessions_closed", 0)) and (rejected or 0) == 0
+    # `"max_dropped": null` leaves inbound drops unjudged (reported): S18 loses datagrams on purpose.
+    max_dropped = a.get("max_dropped", 0)
+    ok = (max_dropped is None or dropped <= float(max_dropped)) and closed <= float(a.get("max_sessions_closed", 0))         and (rejected or 0) == 0
     return _result(PASS if ok else FAIL, {"dropped": dropped, "sessions_closed": closed, "sessions_rejected": rejected},
-                   {"dropped": a.get("max_dropped", 0), "sessions_closed": a.get("max_sessions_closed", 0), "rejected": 0},
+                   {"dropped": max_dropped, "sessions_closed": a.get("max_sessions_closed", 0), "rejected": 0},
                    source="/metrics gameserver_kcp_* counters, delta scenario start -> scenario end (clients still in world)",
                    sampling="2 scrapes", detail={"by_reason": by_reason},
                    rationale="drops and closed sessions inside the scenario window are lost gameplay traffic or "
@@ -2322,11 +2326,12 @@ def check_entity_lifecycle(ev, a):
                            "duplicate_ids": duplicates})
 
 
-def _render_rows(c, skip, stalls):
-    """(render_tick, id, x, y) of remote (not locally predicted) entities, in sample order."""
+def _render_rows(c, skip, stalls, until=None):
+    """(render_tick, id, x, y) of remote (not locally predicted) entities, in sample order, for
+    scenario time in [skip, until]."""
     for smp in c["samples"]:
         rt, st = smp.get("render_tick"), smp.get("st")
-        if rt is None or st is None or st < skip or _in_stall(stalls, st, st, slack=0.5):
+        if rt is None or st is None or st < skip or (until is not None and st > until)                 or _in_stall(stalls, st, st, slack=0.5):
             continue
         for row in smp.get("ents", []):
             if row[2] == 1 or row[1] == "projectile":
@@ -2417,7 +2422,8 @@ def check_cross_client_convergence(ev, a):
         return _inconclusive("server tick rate unknown", source="/status")
     stalls = host_stalls(ev)
     skip = float(a.get("skip_first_s", 2.0))
-    wins = [_TrackWindow(_render_rows(c, skip, stalls)) for c in ev["clients"]]
+    until = a.get("until_s")
+    wins = [_TrackWindow(_render_rows(c, skip, stalls, None if until is None else float(until))) for c in ev["clients"]]
     missing = [c["index"] for c, w in zip(ev["clients"], wins) if w.done]
     if missing:
         return _inconclusive(f"no samples with render_tick for client(s) {missing} (player without hook C4)",
@@ -3252,3 +3258,7 @@ CHECKS.update({
     "player_count_baseline": check_player_count_baseline,
     "redis_leak": check_redis_leak,
 })
+
+
+# S18 packet impairment checks register themselves in CHECKS (they use the helpers above).
+from . import analyze_netem  # noqa: E402,F401

@@ -28,7 +28,7 @@ Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error, `4
 |---|---|---|
 | `run`, `suite`, `sweep`, `stack`, `clean`, `build-client`, `build-loadtest` | yes | no: the players are Windows processes and process control uses `tasklist`/`taskkill` |
 | `analyze`, `analyze --delivery`, `replay-trace`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
-| `python3 -B testlab/tests/test_lab.py` | yes | yes |
+| `python3 -B testlab/tests/test_lab.py`, `python3 -B testlab/tests/test_netem.py` | yes | yes |
 
 In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewrites `/c/...` arguments for Windows programs; the CLI also converts them itself, so they work with `MSYS_NO_PATHCONV=1` too. WSL commands are run from Python through `wsl.exe -d Ubuntu --exec bash -c` with path conversion disabled.
 
