@@ -893,6 +893,7 @@ class CleanupTests(unittest.TestCase):
             with mock.patch.object(clients, "launch", side_effect=launch):
                 runner.run(cfg, "S01", overrides={"duration_s": 1, "finish_grace_s": 30}, quiet=True)
             meta = self._run_json(cfg)
+            self.assertIsNone(meta["harness_error"])
             end = meta["host_guard"]["window_epoch"][1]
             # The players exit at scenario end, 30 s before the window ends: stop() must wait for the guard.
             self.assertEqual([c[0] for c in self.guard_calls], ["hold_until", "stop"])
