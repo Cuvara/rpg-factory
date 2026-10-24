@@ -14,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import analyze, clients, provenance, report, scenarios, stack, util
+from . import analyze, clients, netem, provenance, rawprobe, report, scenarios, stack, util
 from .config import LabConfig
 from .probe import ServerProbe
 
@@ -102,6 +102,8 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
     interrupted = False
     server_image = None
     server_label = None
+    raw_threads: list[threading.Thread] = []   # raw-client steps (lab/rawprobe.py) running beside the players
+    raw_stop = threading.Event()
 
     def mark(event: str, **kw) -> None:
         meta["timeline"].append({"event": event, "mono": util.mono(), **kw})
@@ -132,6 +134,14 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         server_image = provenance.docker_image_id(cfg, cfg.gameserver_container)
         server_label = {"supported": stack.supports_git_revision(cfg), "revision": stack.image_revision(cfg)}
         mark("stack_ready")
+
+        if any(d.get("kind") == "netem" for d in sc["disruptions"]):
+            # tc/nsenter/sudo reachable and the namespace the container's own, before a player starts.
+            try:
+                meta["netem_preflight"] = netem.Shaper(cfg).preflight()
+            except netem.NetemError as exc:
+                raise RuntimeError(f"netem preflight: {exc}")
+            log(f"netem: preflight ok {meta['netem_preflight']}")
 
         probe = ServerProbe(cfg, run_dir / "server", entity_hz=float(sc["server_sample_hz"]))
         probe.scrape_metrics("start")
@@ -188,7 +198,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                 mark("metrics_end")
             while disruptions and now_st >= float(disruptions[0]["at_s"]):
                 d = disruptions.pop(0)
-                _disrupt(cfg, sc, d, players, pending_relaunch, probe, log, run_dir)
+                _disrupt(cfg, sc, d, players, pending_relaunch, probe, log, run_dir, raw_threads, raw_stop)
                 mark("disruption", **d)
             for item in list(pending_relaunch):
                 if util.mono() >= item[0]:
@@ -198,7 +208,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                     clients.register_active(cfg, run_id, [q.pid for q in players], cfg.player_exe)
                     log(f"client {p.index}: relaunched pid {p.pid} (same device {p.device})")
                     mark("relaunch", client=p.index, pid=p.pid)
-            if util.mono() >= end_at and all((p.proc and p.proc.poll() is not None) for p in players) and not pending_relaunch:
+            if util.mono() >= end_at and all((p.proc and p.proc.poll() is not None) for p in players)                     and not pending_relaunch and not any(t.is_alive() for t in raw_threads):
                 break
             time.sleep(0.2)
 
@@ -218,6 +228,15 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         log("HARNESS ERROR: " + harness_error)
         (run_dir / "harness-error.txt").write_text(traceback.format_exc(), encoding="utf-8")
     finally:
+        # Raw-client steps end with the scenario; one still running (or a harness error) is told to stop.
+        for t in raw_threads:
+            t.join(timeout=0 if harness_error else 60)
+        raw_stop.set()
+        for t in raw_threads:
+            t.join(timeout=10)
+        if any(d.get("kind") == "netem" for d in sc["disruptions"]):
+            # Whatever happened, the scratch game server leaves this run unshaped, and says so.
+            meta["netem_final_cleanup"] = netem.final_cleanup(cfg, run_dir, log)
         if bots_proc is not None:
             try:
                 bots_proc.wait(timeout=40)  # loadtest writes its JSON when its window closes
@@ -309,7 +328,7 @@ def _take_redis(cfg, sc, run_dir):
     })
 
 
-def _disrupt(cfg, sc, d, players, pending, probe, log, run_dir=None):
+def _disrupt(cfg, sc, d, players, pending, probe, log, run_dir=None, raw_threads=None, raw_stop=None):
     """Apply one disruption and append what happened to disruptions.ndjson (the evidence the
     checks read: a debug_kill that did not answer 200 makes its dependent assertions INCONCLUSIVE)."""
     kind = d["kind"]
@@ -326,6 +345,13 @@ def _disrupt(cfg, sc, d, players, pending, probe, log, run_dir=None):
     elif kind == "restart_gameserver":
         log("disruption: restarting scratch game server")
         stack.restart_gameserver(cfg)
+    elif kind == "netem":
+        raw_threads.append(netem.start(cfg, sc, d, run_dir, probe, log, raw_stop))
+        log("disruption: started packet-impairment step netem")
+    elif kind in rawprobe.STEPS:
+        # Runs on its own thread (a truncated-frame case alone waits ~40 s); it writes rawprobe.ndjson.
+        raw_threads.append(rawprobe.start(kind, cfg, sc, d, run_dir, probe, log, raw_stop))
+        log(f"disruption: started raw-client step {kind}")
     elif kind == "debug_kill":
         record.update(debug_kill(cfg, players[int(d["client"])]))
         log(f"disruption: debug_kill client {d['client']} -> HTTP {record.get('http_status')} {record.get('response')}")

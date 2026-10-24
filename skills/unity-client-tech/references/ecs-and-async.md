@@ -1,6 +1,6 @@
 # ECS and async worked examples
 
-Verified 2026-10-21 against IndieRPGMMOAdventure origin/develop @ c2cf32c, UnityDots origin/main @ c3be200
+Verified 2026-10-24 against IndieRPGMMOAdventure origin/develop @ 45634b1, UnityDots origin/main @ c3be200
 and UIToolkit origin/main @ ac871bb. Paths
 are client-relative unless a package repo is named.
 
@@ -42,8 +42,8 @@ compares before writing, position quantized to 0.1, `SetSingleton` only on chang
 
 | Where | Type | Why |
 |---|---|---|
-| `MainSessionDriver.RunAsync` | `async UniTaskVoid` + `.Forget()` | entry point, owned CTS cancelled in `Dispose` (`RunAsync`: `MainSessionDriver.cs:103-106`; `Dispose`: `:130-149`) |
-| `MainSessionFlow.IEndpoint`, `RunAsync` | `Task` | `NDC.Scripts.Session` references nothing, not even UniTask; `MainSessionDriver.Endpoint` adapts with `async Task` wrappers (`MainSessionDriver.cs:152-279`) |
+| `MainSessionDriver.RunAsync` | `async UniTaskVoid` + `.Forget()` | entry point, owned CTS cancelled in `Dispose` (`RunAsync`: `MainSessionDriver.cs:144-151`; `Dispose`: `:210-233`) |
+| `MainSessionFlow.IEndpoint`, `RunAsync` | `Task` | `NDC.Scripts.Session` references nothing, not even UniTask; `MainSessionDriver.Endpoint` adapts with `async Task` wrappers (`MainSessionDriver.cs:237-364`) |
 | Nakama services, `AddressableAssetLoader` | UniTask | `Assets/Scripts/Nakama/**`, `Assets/Scripts/UI/AddressableAssetLoader.cs` |
 | `IViewAssetProvider`, `IViewPrefabLoader`, `LeasedViewAssetProvider` | `Task<GameObject>` | package interface `UnityDots/Runtime/Provisioning/IViewAssetProvider.cs:44`; main thread only |
 

@@ -39,9 +39,19 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | `stall catch-up (render_jumps, position_divergence)` | remote catch-up window | stall start .. the frame after the frame whose dt contains the stall | Lead rule for S13 (T41): the world moved while the process was frozen; Unity's dt reports the previous frame and the binder state of frame N-1 is drawn in frame N (client docs/TESTLAB.md). Stalled client only, remote entities only |
 | `stall catch-up (render_jumps)` | local major corrections allowed per stall | 1 within 5 s | Lead rule for S13 (T41), Netcode D1 contract: one correction after a stall; a second one FAILs. The 5 s window is policy, unvalidated |
 | `graceful_leave` | leave_timeout_s | 5.0 | policy, unvalidated; below the 60 s KCP idle timeout |
+| `malformed_input` | within_s (closes) | 3.0 | policy, unvalidated: see the per-scenario rows |
+| `malformed_input` | min_snapshots (stays_open) | 5 | policy, unvalidated: a third of a second at 15 Hz |
+| `malformed_input` | displacement slack | speed x elapsed + 0.5 | policy, unvalidated: 0.5 units covers the 5 Hz sampling |
+| `server_alive` | max_failed_probes / max_gap_s | 0 / 5.0 | definition / policy, unvalidated |
+| `churn_cycles` | max_join_s | 5.0 | policy, unvalidated |
+| `churn_ghosts` | leave_within_s / drop_gone_within_s | 5.0 / 75.0 | graceful_leave bound / PingInterval 10 + PongTimeout 30 + EntityHoldTTL 30 + 5 s slack |
+| `churn_ghosts` | quiet window | last end + bound .. end, first 2 s skipped | policy, unvalidated: 2 s = 10 samples at 5 Hz |
+| `player_count_baseline` | max_extra | 2 | definition: two churn users |
 | `debug_kill_respawn` | respawn_within_s | 2.0 | one world interval (67 ms) + 1 Hz /status probe + queue; rounded up |
 | `cast_damage_bound` | cooldown / power / reach | content | content/abilities.json at the run's server commit |
 | `cast_damage_bound` | reach_margin | 1.0 | policy, unvalidated |
+| `netem_applied` | sigmas / min_packets / rtt_rise_ratio | 3 / 300 / 0.5 | 3 binomial standard deviations (0.27 % false alarm per direction); 300 datagrams is 15 expected drops at 5 %; the clients' round-trip time must rise by half the delay added to a round trip (a smoothed, sampled estimate) |
+| `netem_prediction` | match_window_ticks | 60 | same as prediction_bound |
 | `delivery (analyze --delivery)` | gap_ms / explain_fraction / bucket_s | 250 / 0.5 / 300 | policy, unvalidated |
 | `delivery windowed clock fit` | window / bins / rate / empirical error | 10 s / >= 5 minima per 1 s bin / 0.8-1.2 / p95 <= 10 ms | X13 measured 10 s minima fits: residual p95 2.16-3.85 ms on i9fl/e26z; 10 ms is a conservative rejection ceiling; rate range is defensive policy, unvalidated |
 | `delivery scope` | time-overlap slack | 50 ms | policy, unvalidated |
@@ -128,11 +138,11 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | S07P | `render_jumps` | `render_jumps` | max_remote_per_client_min | `2.0` | policy, unvalidated (2.0); S14: 0, the only teleports are the scripted respawns |
 | S07P | `memory` | `memory_growth` | max_server_mib_per_min | `20` | policy, unvalidated (S09 2.0; S07/S07P 20, informational: the bot ramp allocates by design) |
 | S08 | `players_online_end` | `players_online` | mode | `last` | scenario decision: the end of the run |
-| S08 | `kcp` | `kcp_health` | max_sessions_closed | `2` | S08: 2 = the killed client's session plus its relaunch; S08G: 1 = the graceful leave |
+| S08 | `kcp` | `kcp_health` | max_sessions_closed | `2` | S08: 2 = the killed client's session plus its relaunch; S08G: 1 = the graceful leave; S18: 0, packet loss must not end a session |
 | S08G | `graceful_leave` | `graceful_leave` | leave_timeout_s | `5.0` | policy, unvalidated: far below the 60 s KCP idle timeout (KcpTuning.IdleTimeoutMs) |
 | S08G | `players_online_end` | `players_online` | mode | `last` | scenario decision: the end of the run |
 | S08G | `players_online_end` | `players_online` | expected | `2` | S08G: one client left |
-| S08G | `kcp` | `kcp_health` | max_sessions_closed | `1` | S08: 2 = the killed client's session plus its relaunch; S08G: 1 = the graceful leave |
+| S08G | `kcp` | `kcp_health` | max_sessions_closed | `1` | S08: 2 = the killed client's session plus its relaunch; S08G: 1 = the graceful leave; S18: 0, packet loss must not end a session |
 | S09 | `memory` | `memory_growth` | max_server_mib_per_min | `2.0` | policy, unvalidated (S09 2.0; S07/S07P 20, informational: the bot ramp allocates by design) |
 | S09 | `entities` | `entity_stability` | skip_first_s | `60` | policy, unvalidated: population fill-up |
 | S09 | `entities` | `entity_stability` | max_growth_ratio | `0.1` | policy, unvalidated |
@@ -198,6 +208,66 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | S14 | `remote_player_divergence` | `position_divergence` | p95 | `0.35` | policy, unvalidated (remote 0.35, local 0.5) |
 | S14 | `remote_player_divergence` | `position_divergence` | max | `1.0` | policy, unvalidated (remote 1.0, local 1.5) |
 | S15 | `combat` | `combat_effect` | min_damaged | `1` | policy, unvalidated |
+| S16 | `server_alive` | `server_alive` | max_failed_probes | `0` | definition: every /status probe of the run is answered |
+| S16 | `server_alive` | `server_alive` | max_gap_s | `5.0` | policy, unvalidated: 5 probe periods of the 1 Hz /status sampler |
+| S16 | `malformed` | `malformed_input` | oversize_length.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | oversize_length.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | length_ffffffff.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | length_ffffffff.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | zero_length.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | zero_length.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | truncated_frame.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | truncated_frame.within_s | `45.0` | Connection.HeartbeatLoopAsync: PingInterval 10 s, closes at the first tick where the last pong is older than PongTimeout 30 s = tick 4 = 40 s after the connection starts (the frame is sent after the join, so <= 40 s after the send), + 5 s slack |
+| S16 | `malformed` | `malformed_input` | unknown_type.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | unknown_type.min_snapshots | `5` | policy, unvalidated: a stays_open offender must keep receiving; 5 snapshots is a third of a second at the 15 Hz world rate |
+| S16 | `malformed` | `malformed_input` | unknown_type.rejections | `{"unknown_type": 1}` | rpg-mmo-server #490 (76aa973): gameserver_messages_rejected_total{reason=unknown_type} counts a well-formed message whose type is undefined; the scenario sends one |
+| S16 | `malformed` | `malformed_input` | type_out_of_range.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | type_out_of_range.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | garbage_envelope.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | garbage_envelope.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | garbage_payload.expect | `closes` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | garbage_payload.within_s | `3.0` | policy, unvalidated: a close from the read loop is immediate (<= 0.02 s in the first S16 runs); 3 s is 12 polls of the 4 Hz /status reader |
+| S16 | `malformed` | `malformed_input` | move_out_of_range.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | move_out_of_range.rejections | `{"invalid_direction": 3}` | move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs inside one drain coalesce and only the last is judged), each above GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: at least one refusal of the reason |
+| S16 | `malformed` | `malformed_input` | move_out_of_range.max_displacement | `true` | definition: a server position never moves faster than the entity's speed (+ 0.5 slack); a teleport is not expressible, positions are server-side |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.rejections | `{"attack_out_of_range": 1}` | move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs inside one drain coalesce and only the last is judged), each above GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: at least one refusal of the reason |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.beyond_attack_range | `true` | definition: target farther than GameConstants.AttackRange (read from source) |
+| S16 | `malformed` | `malformed_input` | attack_out_of_range.target_hp_unchanged | `true` | definition: a refused attack does no damage |
+| S16 | `malformed` | `malformed_input` | ability_cooldown.expect | `stays_open` | contract: WireProtocol.DecodeAsync / DecodeBody throw on a bad length or body (the read loop ends and the connection closes); OnMessageReceived ignores an undefined type; InputHandler refuses what ValidationLogic forbids |
+| S16 | `malformed` | `malformed_input` | ability_cooldown.rejections | `{"ability_on_cooldown": 1}` | move_out_of_range: 3 inputs of magnitude 1.6, 50 and 1e6, spaced 0.4 s (inputs inside one drain coalesce and only the last is judged), each above GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: at least one refusal of the reason |
+| S16 | `snapshots` | `snapshot_cadence` | max_gap_ms | `250` | policy, unvalidated |
+| S17 | `server_alive` | `server_alive` | max_failed_probes | `0` | definition: every /status probe of the run is answered |
+| S17 | `server_alive` | `server_alive` | max_gap_s | `5.0` | policy, unvalidated: 5 probe periods of the 1 Hz /status sampler |
+| S17 | `cycles` | `churn_cycles` | cycles | `10` | scenario decision: about 10 cycles (5 drops, 5 graceful leaves) |
+| S17 | `cycles` | `churn_cycles` | max_join_s | `5.0` | policy, unvalidated: a join is one gateway round trip plus the KCP handshake (about 0.03 s on the scratch stack) |
+| S17 | `ghosts` | `churn_ghosts` | leave_within_s | `5.0` | policy, unvalidated: the graceful_leave bound (5 s), far below the 60 s KCP idle timeout |
+| S17 | `ghosts` | `churn_ghosts` | drop_gone_within_s | `75.0` | Connection.HeartbeatLoopAsync: PingInterval 10 s + PongTimeout 30 s to notice a silent peer, + constants.EntityHoldTTL 30 s (map hold), + 5 s slack |
+| S17 | `player_count` | `player_count_baseline` | max_extra | `2` | definition: the two churn users are the only extra players |
+| S17 | `player_count` | `player_count_baseline` | leave_within_s | `5.0` | same instant as churn_ghosts (quiet window start) |
+| S17 | `player_count` | `player_count_baseline` | drop_gone_within_s | `75.0` | same instant as churn_ghosts (quiet window start) |
+| S17 | `snapshots` | `snapshot_cadence` | max_gap_ms | `250` | policy, unvalidated |
+| S18 | `server_alive` | `server_alive` | max_failed_probes | `0` | definition: every /status probe of the run is answered |
+| S18 | `server_alive` | `server_alive` | max_gap_s | `5.0` | policy, unvalidated: 5 probe periods of the 1 Hz /status sampler |
+| S18 | `cleanup` | `netem_cleanup` | max_late_s | `10.0` | policy, unvalidated: the removal is 3 tc commands plus a verification, 1-2 s each through WSL; 10 s is several times that |
+| S18 | `retransmits` | `netem_retransmits` | min_rise | `30` | derivation: 15 Hz snapshots x 2 clients x 60 s = 1800 server->client segments x 5 % loss = about 90 resent; 30 is a third of that, and a quiet host adds about 0.2/s when clean (F8A control run, 22 in 125 s), i.e. 12 per 60 s, so 30 is not reachable by host noise alone |
+| S18 | `retransmits` | `netem_retransmits` | rate_ratio | `5.0` | policy, unvalidated: the impaired rate must be a multiple of the clean one, so a noisy host cannot fake the effect |
+| S18 | `retransmits` | `netem_retransmits` | baseline_floor_per_s | `0.1` | policy, unvalidated: a zero-retransmit baseline would make any rate pass the ratio; 0.1/s is half the clean-run noise seen in F8A |
+| S18 | `retransmits` | `netem_retransmits` | recovery_max_ratio | `0.5` | policy, unvalidated: after the removal the rate must fall to at most half the impaired rate (the removal returned and the backlog drained) |
+| S18 | `kcp` | `kcp_health` | max_dropped | `None` | S18: null = inbound datagram drops are reported, not judged (the impairment drops datagrams on purpose; sessions closed and rejected are still judged) |
+| S18 | `kcp` | `kcp_health` | max_sessions_closed | `0` | S08: 2 = the killed client's session plus its relaunch; S08G: 1 = the graceful leave; S18: 0, packet loss must not end a session |
+| S18 | `snapshots` | `netem_snapshots` | max_gap_ms | `250` | baseline and recovery: the lab-wide snapshot_cadence limit (policy, unvalidated) |
+| S18 | `snapshots` | `netem_snapshots` | impaired_max_gap_ms | `1000` | derivation, not a measurement: a lost KCP segment is resent after RTO (srtt 80 ms + 4 x rttvar about 100 ms = about 180 ms), a second loss of the same segment after 1.5 x RTO (270 ms), a third after 2.25 x RTO (405 ms): three consecutive losses = 855 ms + 40 ms one-way + sampling = about 0.9 s, probability 1.25e-4 per segment; 1000 ms is also the longest freeze this lab will call recoverable |
+| S18 | `snapshots` | `netem_snapshots` | impaired_p99_gap_ms | `400` | derivation: 5 % loss is above 1 %, so the 99th-percentile gap lies in the single-loss class: RTO about 180 ms + 40 ms one-way + jitter 20 ms = about 240 ms; 400 ms keeps the double-loss tail (0.25 % of segments) out of it |
+| S18 | `snapshots` | `netem_snapshots` | rate_tolerance | `0.2` | same as snapshot_cadence (policy, unvalidated); CORE-BASELINE-V1.md measured snapshotsApplied unchanged (14.8/s) at 40 ms +/- 60 ms |
+| S18 | `snapshots` | `netem_snapshots` | recovery_settle_s | `2.0` | policy, unvalidated: the netem queue holds at most delay + jitter = 60 ms and the removal flushes it; 2 s covers one RTO round of the KCP backlog |
+| S18 | `prediction` | `netem_prediction` | max_snaps_per_min | `4.0` | the lab's prediction_bound (4.0): measured fixed builds <= 2.0, pre-fix >= 7.5; not widened for impairment |
+| S18 | `prediction` | `netem_prediction` | max_correction | `1.5` | policy, unvalidated: the local position_divergence max of S03/S06/S10 (1.5); the largest correction seen clean is 0.17 (S16 82bn) |
+| S18 | `prediction` | `netem_prediction` | max_keyframe_ratio | `2.0` | policy, unvalidated: a resync storm would be many times the periodic keyframe rate; 2x the clean rate of the same run |
+| S18 | `prediction` | `netem_prediction` | recovery_settle_s | `2.0` | same as netem_snapshots |
+| S18 | `convergence` | `netem_convergence` | converge_within_s | `10.0` | policy, unvalidated: expected well under 3 s (interpolation cover 150 ms, KCP backlog a few RTOs, smoothing); 10 s is three times that |
+| S18 | `convergence` | `netem_convergence` | p95 | `0.35` | inherited from remote position_divergence (policy, unvalidated) |
+| S18 | `convergence` | `netem_convergence` | max | `1.0` | inherited from remote position_divergence (policy, unvalidated) |
 
 ## Scenario timing
 
@@ -220,5 +290,14 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | S13 | 40 | 20 / 5 | - |
 | S14 | 40 | 20 / 5 | debug_kill at 12 s, debug_kill at 27 s |
 | S15 | 35 | 20 / 5 | - |
+| S16 | 125 | 20 / 5 | raw_malformed at 5 s |
+| S17 | 185 | 20 / 5 | raw_churn at 8 s |
+| S18 | 120 | 20 / 5 | netem at 1 s |
+
+## Impairment profiles
+
+| Scenario | Phases (baseline / impaired / recovery s) | Per direction | Source |
+|---|---|---|---|
+| S18 | 30 / 60 / 30 | loss 5 %, delay 40 ms +/- 20 ms, reorder 1 % (egress, ingress) | delay 40 ms: the one-way latency CORE-BASELINE-V1.md measured a real Unity client at (section "The client survives a worse link than most players will have"); jitter +/- 20 ms: inside the +/- 60 ms the client held there (resyncs, rejected, dropped and clamped all 0) and the +/- 25 ms where tiered replication still held its cover, so a pass is expected, not a stretch; loss 5 %: above the 1-2 % of a typical mobile link and below the 10 % where a reliable transport mostly stalls; CORE-BASELINE-V1.md has no loss measurement at all (this is the first), so it is policy, unvalidated; reorder 1 %: the value of the brief, on top of the reordering that uniform jitter above the 67 ms snapshot spacing already causes. Phases: 30 s baseline and 30 s recovery as briefed; 60 s impaired so about 900 snapshot segments per client meet 5 % loss (about 45 losses, enough for the loss share to be tested at 3 sigma) |
 
 Durations, kill and stall instants and the S11 grace window are scenario timing chosen by the author (policy, unvalidated).
