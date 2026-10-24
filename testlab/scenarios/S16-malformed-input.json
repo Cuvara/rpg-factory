@@ -1,0 +1,72 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S16",
+  "version": 1,
+  "title": "Malformed input: raw clients send frames and inputs a real client never would while two rendered players play",
+  "description": "map_01, enemies standing still and harmless (as S15). Two rendered clients play normally (one walks a circle, one walks back and forth) for the whole run. From 5 s a raw-client harness step (lab/rawprobe.py, lab/rawclient.py: gateway auth, enter world, KCP join, JSON envelopes) runs one case per fresh session: a length prefix over the 1 MiB frame limit (1048577 and 0xFFFFFFFF), a zero length, a truncated frame followed by silence, an envelope of an undefined type (99) and of an out-of-range type (300), a garbage protobuf envelope, a valid Input envelope with a garbage payload, out-of-range movement vectors (magnitudes 1.6, 50 and 1e6; GameConstants.MaxInputMagnitude is 1.5), attacks on an enemy beyond GameConstants.AttackRange, and casts of the first projectile ability at 10 per second (cooldown 45 ticks). Graded: the server process stays up and holds its tick; each case is refused or closes only the offending session (gameserver /status connections, gameserver_inputs_rejected_total{reason}, and every counter that moved are in the report; the undefined-type case has no server-side signal and grades INCONCLUSIVE); the rendered clients see no session change and no snapshot gap over 250 ms.",
+  "clients": 2,
+  "map": "map_01",
+  "seed": 16,
+  "duration_s": 125,
+  "join_timeout_s": 120,
+  "screenshots_s": [30, 100],
+  "server_env": {
+    "GAMESERVER_ENEMY_CHASE": "false",
+    "GAMESERVER_ENEMY_ATTACKS": "false"
+  },
+  "repeat_cycle_s": 20,
+  "per_client": [
+    { "steps": [ { "t0": 2, "t1": 20, "mode": "circle", "rate": 0.5 } ] },
+    { "steps": [ { "t0": 2, "t1": 11, "mode": "move", "x": 1, "y": 0 }, { "t0": 11, "t1": 20, "mode": "move", "x": -1, "y": 0 } ] }
+  ],
+  "disruptions": [
+    {
+      "at_s": 5,
+      "kind": "raw_malformed",
+      "gap_s": 0.5,
+      "cases": [
+        { "id": "oversize_length", "kind": "oversize_length" },
+        { "id": "length_ffffffff", "kind": "length_ffffffff" },
+        { "id": "zero_length", "kind": "zero_length" },
+        { "id": "unknown_type", "kind": "unknown_type" },
+        { "id": "type_out_of_range", "kind": "type_out_of_range" },
+        { "id": "garbage_envelope", "kind": "garbage_envelope" },
+        { "id": "garbage_payload", "kind": "garbage_payload" },
+        { "id": "move_out_of_range", "kind": "move_out_of_range", "window_s": 3 },
+        { "id": "attack_out_of_range", "kind": "attack_out_of_range", "window_s": 3 },
+        { "id": "ability_cooldown", "kind": "ability_cooldown", "window_s": 3 },
+        { "id": "truncated_frame", "kind": "truncated_frame", "window_s": 50 }
+      ]
+    }
+  ],
+  "assertions": [
+    { "id": "in_world", "check": "clients_in_world" },
+    { "id": "completed", "check": "clients_completed" },
+    { "id": "logs_clean", "check": "client_log_clean" },
+    { "id": "server_alive", "check": "server_alive", "max_failed_probes": 0, "max_gap_s": 5.0,
+      "title": "the game server never restarts and always answers /status" },
+    { "id": "tick", "check": "server_tick", "title": "the server holds its tick rate while it is fed garbage" },
+    { "id": "malformed", "check": "malformed_input",
+      "title": "every malformed case is refused or closes only the offending session",
+      "cases": {
+        "oversize_length": { "expect": "closes", "within_s": 3.0 },
+        "length_ffffffff": { "expect": "closes", "within_s": 3.0 },
+        "zero_length": { "expect": "closes", "within_s": 3.0 },
+        "truncated_frame": { "expect": "closes", "within_s": 45.0 },
+        "unknown_type": { "expect": "stays_open", "min_snapshots": 5,
+                          "note": "The server has no counter or log line for an undefined message type (GameServer.cs OnMessageReceived default arm logs at Debug; Program.cs sets the console minimum level to Information), so this case is INCONCLUSIVE until the server counts it: staying connected does not show the input was refused or ignored." },
+        "type_out_of_range": { "expect": "closes", "within_s": 3.0 },
+        "garbage_envelope": { "expect": "closes", "within_s": 3.0 },
+        "garbage_payload": { "expect": "closes", "within_s": 3.0 },
+        "move_out_of_range": { "expect": "stays_open", "rejections": { "invalid_direction": 3 }, "max_displacement": true },
+        "attack_out_of_range": { "expect": "stays_open", "rejections": { "attack_out_of_range": 1 },
+                                  "beyond_attack_range": true, "target_hp_unchanged": true },
+        "ability_cooldown": { "expect": "stays_open", "rejections": { "ability_on_cooldown": 1 } }
+      } },
+    { "id": "client_sessions", "check": "client_sessions",
+      "title": "the rendered clients see no session close" },
+    { "id": "snapshots", "check": "snapshot_cadence", "max_gap_ms": 250,
+      "title": "the rendered clients see no snapshot gap over the S01 threshold" },
+    { "id": "snapshot_order", "check": "snapshot_order" }
+  ]
+}

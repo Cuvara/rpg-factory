@@ -10,6 +10,21 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- **testlab scenarios S16 (malformed input) and S17 (churn)** with a raw-client harness step.
+  - `testlab/lab/rawclient.py` joins the scratch stack like a client (gateway auth, enter world, KCP join, JSON envelopes) and can send
+    frames a real client never would; `testlab/lab/rawprobe.py` runs it from a scenario disruption (`raw_malformed`, `raw_churn`) on its
+    own thread and records `rawprobe.ndjson` (part of the provenance manifest). The step records; the analyzer decides.
+  - S16 sends 11 malformed cases (length prefixes over the 1 MiB limit, zero length, truncated frame, undefined and out-of-range type, garbage
+    protobuf, out-of-range movement, attack out of range, cast inside the cooldown) while two rendered clients play. New checks:
+    `malformed_input` (each case refused or closes only its own session, with the server counters that moved), `server_alive`,
+    `client_sessions`. A `stays_open` case without a `rejections` rule grades INCONCLUSIVE: the undefined-type case
+    has no server-side signal today, so S16 reports INCONCLUSIVE until the server counts it.
+  - S17 runs 10 cycles of silent drop plus rejoin and graceful leave plus rejoin, then waits out the server's longest hold. New checks:
+    `churn_cycles`, `churn_ghosts`, `player_count_baseline`, `redis_leak` (Redis session, registry and map-member key names before and after).
+  - Thresholds and their derivations are in `testlab/docs/THRESHOLDS.md`; a new `robustness` suite runs both.
+  - 43 unit tests in `testlab/tests/test_lab.py` (raw client against a UDP peer, step helpers, every check's pass and failure modes,
+    scenario timelines); `testlab/README.md` and `testlab/docs/COVERAGE.md` document them.
+
 - **`testlab/`: autonomous multiplayer gameplay tests with real, rendered Unity clients.**
   `python3 testlab/testlab.py run|suite|sweep|analyze|build-client|build-loadtest|stack|clean`.
   - It starts the isolated scratch stack (`stack.sh --scratch` + `STACK_SCRATCH_EXTRA_ENV`) and

@@ -19,7 +19,9 @@ _ACTION_KINDS = {"cast_nearest_enemy", "cast_forward", "jump",
                  # Coverage hooks C2/C5/C6 (client docs/TESTLAB.md "Coverage hooks"): one-shot at t0.
                  "cast_at_point", "cast_spam", "stall", "quit", "reconnect"}
 _ONE_SHOT = {"stall", "quit", "reconnect"}
-_DISRUPTIONS = {"kill_client", "restart_gameserver", "debug_kill"}
+_DISRUPTIONS = {"kill_client", "restart_gameserver", "debug_kill",
+                # Raw-client steps (lab/rawprobe.py): S16 malformed input, S17 churn.
+                "raw_malformed", "raw_churn"}
 
 DEFAULTS = {
     "clients": 3,
@@ -109,6 +111,17 @@ def validate(sc: dict) -> None:
             raise ScenarioError(f"{sc['id']}: unknown disruption {d.get('kind')}")
         if d["kind"] in ("kill_client", "debug_kill") and not 0 <= int(d.get("client", -1)) < int(sc["clients"]):
             raise ScenarioError(f"{sc['id']}: disruption {d['kind']} needs a client index: {d}")
+        if d["kind"] == "raw_malformed":
+            from . import rawprobe
+            cases = d.get("cases") or []
+            ids = [c.get("id") for c in cases]
+            if not cases or len(ids) != len(set(ids)) or not all(ids):
+                raise ScenarioError(f"{sc['id']}: raw_malformed needs cases with unique ids")
+            unknown = [c.get("kind") for c in cases if c.get("kind") not in rawprobe.SENDERS]
+            if unknown:
+                raise ScenarioError(f"{sc['id']}: unknown raw_malformed case kind {unknown}")
+        if d["kind"] == "raw_churn" and int(d.get("cycles", 10)) < 2:
+            raise ScenarioError(f"{sc['id']}: raw_churn needs at least 2 cycles (one drop, one leave)")
     if not sc["assertions"]:
         raise ScenarioError(f"{sc['id']}: a scenario without assertions cannot pass or fail")
     ids = [a.get("id") for a in sc["assertions"]]

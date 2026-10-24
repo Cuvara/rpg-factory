@@ -72,6 +72,8 @@ def load_evidence(run_dir: Path) -> dict:
         "bots": util.read_json(run_dir / "bots" / "loadtest.json", default=None),
         # What each scripted disruption did (runner._disrupt): debug_kill HTTP status, outcome, tick.
         "disruptions": util.read_ndjson(run_dir / "disruptions.ndjson"),
+        # What the raw-client steps (S16 malformed input, S17 churn) recorded: rawprobe.ndjson.
+        "rawprobe": util.read_ndjson(run_dir / "rawprobe.ndjson"),
     }
     ev["traj"] = trajectories(entities)
     return ev
@@ -2818,4 +2820,435 @@ CHECKS.update({
     "debug_kill_respawn": check_debug_kill_respawn,
     "input_rejections": check_input_rejections,
     "cast_damage_bound": check_cast_damage_bound,
+})
+
+
+# --------------------------------------------------------------------------- S16 / S17: raw clients
+
+def _raw_records(ev, kind: str) -> list:
+    return [r for r in ev.get("rawprobe", []) if r.get("record") == kind]
+
+
+def _rendered_ids(ev) -> list:
+    return [u for u in _user_ids(ev) if u]
+
+
+def check_server_alive(ev, a):
+    """The game server process stayed up and answered for the whole scenario: every /status probe was
+    answered (max_failed_probes, default 0), /status `uptime_seconds` never went backwards (a restart
+    resets it to 0) and no two consecutive answers were more than max_gap_s apart (default 5 s, 5 probe
+    periods). Tick health is `server_tick`'s job."""
+    rows = [(r["_st"], r.get("uptime_seconds")) for r in ev["server"]["status"] if r.get("_st") is not None]
+    if len(rows) < 5:
+        return _inconclusive("fewer than 5 /status samples", source="server/status.ndjson")
+    rows.sort()
+    restarts = [round(b[0], 1) for a_, b in zip(rows, rows[1:])
+                if a_[1] is not None and b[1] is not None and b[1] < a_[1]]
+    gaps = [b[0] - a_[0] for a_, b in zip(rows, rows[1:])]
+    counts = (ev["meta"].get("probe_counts") or {})
+    failed = counts.get("status_failed")
+    if failed is None:
+        return _inconclusive("run.json has no probe_counts: failed probes cannot be counted", source="run.json probe_counts")
+    max_failed = int(a.get("max_failed_probes", 0))
+    max_gap = float(a.get("max_gap_s", 5.0))
+    ok = not restarts and max(gaps) <= max_gap and failed <= max_failed
+    return _result(PASS if ok else FAIL,
+                   {"status_samples": len(rows), "restarts_at_s": restarts, "max_gap_s": round(max(gaps), 2),
+                    "failed_status_probes": failed},
+                   {"restarts": 0, "max_gap_s": max_gap, "failed_status_probes": max_failed},
+                   source="server/status.ndjson uptime_seconds and sample times, run.json probe_counts",
+                   sampling="1 Hz /status",
+                   rationale="a malformed client must never take the server down; a restart or an unanswering /status "
+                             "is the server not being there",
+                   artifacts=[str(ev["run_dir"] / "server" / "status.ndjson")])
+
+
+def check_client_sessions(ev, a):
+    """No rendered client's network session changed inside the scenario window: after the scenario clock
+    starts a client logs no `net_state` change, `disconnected`, `entities_reset` or `reconnected` event
+    (a session close is any of them)."""
+    if not ev["clients"]:
+        return _inconclusive("no clients in this run", source="client events.ndjson")
+    dur = float(ev["scenario"].get("duration_s", 0))
+    bad = {}
+    never_in_world = [c["index"] for c in ev["clients"] if not any(
+        e.get("event") == "in_world" or (e.get("event") == "net_state" and e.get("state") == "InWorld") for e in c["events"])]
+    if never_in_world:
+        return _inconclusive(f"clients {never_in_world} logged no in_world event: their session was never observed",
+                             source="client events.ndjson")
+    for c in ev["clients"]:
+        seen = [{"event": e.get("event"), "state": e.get("state"), "st": round(e["st"], 2)}
+                for e in c["events"] if e.get("st") is not None and 0 <= e["st"] <= dur
+                and e.get("event") in ("net_state", "disconnected", "entities_reset", "reconnected")]
+        if seen:
+            bad[c["index"]] = seen[:10]
+    return _result(FAIL if bad else PASS, {"clients_with_session_change": sorted(bad), "events": bad},
+                   {"session_changes": 0},
+                   source="client events.ndjson net_state / disconnected / entities_reset / reconnected, st in [0, duration]",
+                   sampling="every event",
+                   rationale="what one bad client sends must not end another player's session",
+                   artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]])
+
+
+def _delta_series(rec, name, reason):
+    key = next((k for k in rec["post"]["metrics"] if k.startswith(name + "{") and f'reason="{reason}"' in k), None)
+    if key is None:
+        return None
+    return rec["post"]["metrics"][key] - rec["mid"]["metrics"].get(key, 0.0)
+
+
+def check_malformed_input(ev, a):
+    """Each case of the raw-client step (rawprobe.ndjson, rawprobe.run_malformed): one fresh session sent one
+    kind of malformed input while the rendered clients played.
+
+    Per case, from the scenario's `cases` map:
+    - expect `closes`: the server's connection count fell below its value with the offender in, within
+      `within_s`, and ended at the value before the offender joined (the rendered clients' sessions are
+      intact); expect `stays_open`: it did not fall, ended one above that value, and the offender kept
+      receiving snapshots (at least `min_snapshots`, default 5).
+    - `rejections`: {reason: minimum} for gameserver_inputs_rejected_total{reason} between the read with the
+      offender in and the final read; a `zero` list of reasons must not rise.
+    - `max_displacement`: the offender's server position never moved more than speed x elapsed + 0.5 after the
+      send (no teleport: positions are never client-supplied, so this is the speed bound).
+    - `target_hp_unchanged` / `beyond_attack_range`: an attack at a far enemy cost it nothing and was aimed
+      beyond GameConstants.AttackRange.
+    A case that did not run, did not join or has no read is INCONCLUSIVE, never PASS. A `stays_open` case
+    without a `rejections` rule is INCONCLUSIVE too (`signal_missing`): the session surviving does not show
+    the server refused or ignored the input, and an undefined message type has no counter or log line at the
+    server (GameServer.OnMessageReceived default arm logs at Debug; the console minimum level is Information).
+    Every case lists the server counters that moved, so the report shows which counter (if any) saw the bad frame."""
+    cases = a.get("cases") or {}
+    recs = {r["id"]: r for r in _raw_records(ev, "case")}
+    end = next(iter(_raw_records(ev, "end")), {})
+    consts = end.get("constants") or {}
+    if not recs:
+        return _inconclusive("no raw-client case record (the step did not run or wrote nothing)", source="rawprobe.ndjson")
+    rows, bad, unjudged = {}, [], []
+    for cid, rule in cases.items():
+        rec = recs.get(cid)
+        if rec is None or rec.get("error") or not (rec.get("join") or {}).get("ok") or not rec.get("post") or not rec.get("mid"):
+            unjudged.append(cid)
+            rows[cid] = {"result": "not judged", "why": (rec or {}).get("error") or (rec or {}).get("join") or "no record"}
+            continue
+        row = {"sent": (rec.get("detail") or {}).get("sent"), "closed_after_s": rec.get("closed_after_s"),
+               "connections": {"before_join": rec["pre"].get("connections"), "with_offender": rec["mid"].get("connections"),
+                               "end": rec["post"].get("connections")},
+               "players_online": {"before_join": rec["pre"].get("players_online"), "end": rec["post"].get("players_online")},
+               "snapshots_after_send": rec.get("snapshots_after_send"), "counters_moved": rec.get("moved")}
+        problems = []
+        pre_c, mid_c, end_c = rec["pre"].get("connections"), rec["mid"].get("connections"), rec["post"].get("connections")
+        if None in (pre_c, mid_c, end_c):
+            unjudged.append(cid)
+            row["result"] = "not judged: no /status connections"
+            rows[cid] = row
+            continue
+        if mid_c != pre_c + 1:
+            problems.append(f"the offender did not show as one connection (before {pre_c}, with it {mid_c})")
+        if rule.get("expect") == "closes":
+            within = float(rule.get("within_s", 3.0))
+            if rec.get("closed_after_s") is None or rec["closed_after_s"] > within:
+                problems.append(f"session not closed within {within} s (closed_after_s={rec.get('closed_after_s')})")
+            if end_c != pre_c:
+                problems.append(f"connections ended at {end_c}, expected {pre_c}: another session was affected or the offender stayed")
+        else:
+            if rec.get("closed_after_s") is not None:
+                problems.append(f"session closed after {rec['closed_after_s']} s but the input should only be refused")
+            if end_c != pre_c + 1:
+                problems.append(f"connections ended at {end_c}, expected {pre_c + 1}")
+            if (rec.get("snapshots_after_send") or 0) < int(rule.get("min_snapshots", 5)):
+                problems.append(f"offender received {rec.get('snapshots_after_send')} snapshots after the send")
+            if not rule.get("rejections") and not problems:
+                # The session survived, but nothing on the server says the input was refused or ignored rather
+                # than accepted as a no-op (RV-F8A-1): staying connected is not an observation of a rejection.
+                unjudged.append(cid)
+                row["signal_missing"] = ("no server-side signal that the input was refused or ignored: a stays_open case "
+                                         "needs a `rejections` rule (a counter that rises)")
+        rej = {}
+        for reason, minimum in (rule.get("rejections") or {}).items():
+            dv = _delta_series(rec, "gameserver_inputs_rejected_total", reason)
+            rej[reason] = dv
+            if dv is None:
+                problems.append(f"no series for rejection reason {reason}")
+            elif dv < float(minimum):
+                problems.append(f"gameserver_inputs_rejected_total{{reason={reason}}} rose {dv}, expected >= {minimum}")
+        for reason in rule.get("zero", []):
+            dv = _delta_series(rec, "gameserver_inputs_rejected_total", reason)
+            rej[reason] = dv
+            if dv:
+                problems.append(f"gameserver_inputs_rejected_total{{reason={reason}}} rose {dv}, expected 0")
+        if rej:
+            row["rejections_delta"] = rej
+        if rule.get("max_displacement"):
+            t = ev["traj"].get(rec["user_id"])
+            st0 = rec.get("sent_st")
+            speed = (rec.get("entity_before") or {}).get("speed")
+            if t is None or st0 is None or not speed:
+                unjudged.append(cid)
+                row["displacement"] = "not judged: no trajectory or speed"
+            else:
+                p0 = _pos_at(t, st0) or (t["x"][0], t["y"][0])
+                later = [(s2, math.hypot(x - p0[0], y - p0[1])) for s2, x, y in zip(t["st"], t["x"], t["y"]) if s2 >= st0]
+                worst = max(later, key=lambda r: r[1] - speed * (r[0] - st0), default=None)
+                if worst is None:
+                    unjudged.append(cid)
+                    row["displacement"] = "not judged: no samples after the send"
+                else:
+                    allowed = speed * (worst[0] - st0) + 0.5
+                    row["displacement"] = {"worst_distance": round(worst[1], 2), "allowed": round(allowed, 2), "speed": speed}
+                    if worst[1] > allowed:
+                        problems.append(f"moved {worst[1]:.2f} in {worst[0] - st0:.2f} s, above speed x elapsed + 0.5 = {allowed:.2f}")
+        if rule.get("beyond_attack_range"):
+            rng = (consts.get("attack_range") or {}).get("value")
+            dist = (rec.get("detail") or {}).get("target_distance")
+            row["attack_range"] = rng
+            row["target_distance"] = dist
+            if rng is None or dist is None:
+                unjudged.append(cid)
+            elif dist <= rng:
+                problems.append(f"target at {dist} is inside the attack range {rng}: the case did not test out-of-range")
+        if rule.get("target_hp_unchanged"):
+            # From the 5 Hz entity trajectory (the enemy may despawn before the final read), over the case.
+            tgt = (rec.get("detail") or {}).get("target")
+            t = ev["traj"].get(tgt) if tgt else None
+            st0 = rec.get("sent_st")
+            if t is None or st0 is None:
+                unjudged.append(cid)
+                row["target_hp"] = "not judged: the target is not in the entity samples"
+            else:
+                lost = _hp_lost(t, st0, st0 + float(rule.get("window_s", 6.0)))
+                row["target_hp"] = {"target": tgt, "hp_lost_in_window": lost}
+                if lost > 0:
+                    problems.append(f"{tgt} lost {lost} HP to refused attacks")
+        row["problems"] = problems
+        row["result"] = "FAIL" if problems else ("not judged" if row.get("signal_missing") else "ok")
+        if problems:
+            bad.append(cid)
+        rows[cid] = row
+    status = FAIL if bad else (INCONCLUSIVE if unjudged else PASS)
+    return _result(status, rows, {"cases": cases},
+                   source="rawprobe.ndjson (raw-client step), gameserver /status connections, /metrics gameserver_* "
+                          "(read with the offender in and 2 s after), /debug/entities",
+                   sampling="/status 4 Hz during the case; /metrics and entities before join, with offender, at the end",
+                   detail={"failed": bad, "not_judged": sorted(set(unjudged)), "constants": consts},
+                   rationale="a client that sends what the protocol forbids must be refused or lose its own session, "
+                             "and nobody else may notice",
+                   artifacts=[str(ev["run_dir"] / "rawprobe.ndjson")])
+
+
+def _churn_view(ev, a):
+    """Cycle records and derived instants of the churn step, or an INCONCLUSIVE result."""
+    cycles = _raw_records(ev, "cycle")
+    start = next(iter(_raw_records(ev, "start")), None)
+    if not cycles or not start:
+        return None, _inconclusive("no churn cycle recorded (the step did not run)", source="rawprobe.ndjson")
+    drops = [c for c in cycles if c["kind"] == "drop" and c.get("end_st") is not None]
+    leaves = [c for c in cycles if c["kind"] == "leave" and c.get("end_st") is not None]
+    gone = float(a.get("drop_gone_within_s", 75.0))
+    last_end = max([c["end_st"] for c in cycles if c.get("end_st") is not None], default=None)
+    last_drop = max([c["end_st"] for c in drops], default=None)
+    quiet0 = None if last_end is None else max(last_end + float(a.get("leave_within_s", 5.0)),
+                                                (last_drop + gone) if last_drop is not None else 0.0)
+    return {"cycles": cycles, "start": start, "drops": drops, "leaves": leaves, "users": start.get("users") or {},
+            "quiet_from": quiet0, "last_drop": last_drop, "gone_within_s": gone}, None
+
+
+def check_churn_cycles(ev, a):
+    """Every churn cycle joined: `cycles` cycles ran (default 10), each join answered ok within
+    max_join_s (default 5 s). A cycle that could not join is a product or harness failure, reported with the
+    join error; a step that recorded fewer cycles is INCONCLUSIVE."""
+    view, bad = _churn_view(ev, a)
+    if bad:
+        return bad
+    want = int(a.get("cycles", 10))
+    cyc = view["cycles"]
+    if len(cyc) < want:
+        return _inconclusive(f"{len(cyc)} of {want} cycles recorded", source="rawprobe.ndjson")
+    max_join = float(a.get("max_join_s", 5.0))
+    rows, failed = [], []
+    for c in cyc:
+        j = c.get("join") or {}
+        ok = bool(j.get("ok")) and (j.get("join_s") or 0) <= max_join and not c.get("error")
+        rows.append({"n": c["n"], "kind": c["kind"], "join_ok": j.get("ok"), "join_s": j.get("join_s"),
+                     "snapshots": c.get("snapshots"), "error": j.get("error") or c.get("error")})
+        if not ok:
+            failed.append(c["n"])
+    return _result(FAIL if failed else PASS, rows, {"cycles": want, "max_join_s": max_join},
+                   source="rawprobe.ndjson cycle records (gateway auth, enter world, KCP join)", sampling="per cycle",
+                   detail={"failed_cycles": failed},
+                   rationale="a player who dropped or left must be able to come back at once, every time",
+                   artifacts=[str(ev["run_dir"] / "rawprobe.ndjson")])
+
+
+def check_churn_ghosts(ev, a):
+    """No ghost entities after churn. From /debug/entities (5 Hz) and the rendered clients:
+    - no player entity other than the rendered clients' and the two churn users' ever exists;
+    - after each graceful leave the leaver's entity is absent from `leave_within_s` (default 5 s, the
+      graceful_leave bound) after the leave until the next join, and every rendered client logged
+      entity_removed for it inside that bound (hook C3);
+    - after the last silent drop the entity is gone by `drop_gone_within_s` (default 75 s = PingInterval 10 s
+      + PongTimeout 30 s, the longest the server needs to notice a silent peer, + the 30 s map hold
+      (constants.EntityHoldTTL), + 5 s sampling slack);
+    - in the quiet window (from that instant to the end, first 2 s skipped) the server holds exactly the
+      rendered clients' player entities and every rendered client draws exactly that many players (itself
+      included: its samples list its own entity)."""
+    view, bad = _churn_view(ev, a)
+    if bad:
+        return bad
+    rendered = _rendered_ids(ev)
+    users = view["users"]
+    allowed = set(rendered) | set(users.values())
+    ents = [(r["st"], {e[0] for e in r["ents"] if e[1] == "player"}) for r in ev["server"]["entities"] if r.get("st") is not None]
+    if not ents or not ev["clients"]:
+        return _inconclusive("no server entity samples or no rendered clients", source="server/entities.ndjson")
+    dur = float(ev["scenario"].get("duration_s", 0))
+    problems, unjudged, detail = [], [], {}
+    unknown = sorted({i for _, ids in ents for i in ids} - allowed)
+    detail["unknown_player_ids"] = unknown
+    if unknown:
+        problems.append(f"player entities nobody owns: {unknown}")
+    leave_w = float(a.get("leave_within_s", 5.0))
+    leave_rows = []
+    by_n = {c["n"]: c for c in view["cycles"]}
+    for c in view["leaves"]:
+        uid = c["user_id"]
+        nj = by_n.get(c["n"] + 1)
+        hi = (nj["join_st"] - 0.4) if nj and nj.get("join_st") is not None else c["end_st"] + leave_w + 2.0
+        lo = c["end_st"] + leave_w
+        window = [ids for st, ids in ents if lo <= st <= hi]
+        row = {"cycle": c["n"], "left_at_s": round(c["end_st"], 1), "judged_window": [round(lo, 1), round(hi, 1)],
+               "samples": len(window)}
+        if not window:
+            row["result"] = "no server sample in the window"
+            unjudged.append(f"leave cycle {c['n']}: no server sample in the window")
+        elif any(uid in ids for ids in window):
+            row["result"] = "FAIL: entity still present"
+            problems.append(f"leave cycle {c['n']}: {uid} still in the world {leave_w} s after the graceful leave")
+        removed, never_shown = {}, []
+        for cl in ev["clients"]:
+            shown = any(e.get("event") == "entity_added" and e.get("id") == uid and e.get("st") is not None
+                        and c["join_st"] - 0.5 <= e["st"] <= c["end_st"] for e in cl["events"])
+            rm = [e["st"] for e in cl["events"] if e.get("event") == "entity_removed" and e.get("id") == uid
+                  and e.get("st") is not None and c["end_st"] <= e["st"] <= c["end_st"] + leave_w]
+            removed[cl["index"]] = round(min(rm) - c["end_st"], 2) if rm else None
+            if not shown:
+                never_shown.append(cl["index"])
+        row["removed_for_clients_after_s"] = removed
+        if never_shown:
+            # out of the area of interest (or no C3 events): there was nothing to remove, so nothing to judge
+            row["never_shown_to_clients"] = never_shown
+            unjudged.append(f"leave cycle {c['n']}: clients {never_shown} were never shown the leaver")
+        late = [k for k, v in removed.items() if v is None and k not in never_shown]
+        if late:
+            problems.append(f"leave cycle {c['n']}: rendered clients {late} did not drop the leaver within {leave_w} s")
+        leave_rows.append(row)
+    detail["leave_cycles"] = leave_rows
+    gone = view["gone_within_s"]
+    if view["last_drop"] is not None:
+        duid = users.get("drop")
+        seen = [st for st, ids in ents if duid in ids and st >= view["last_drop"]]
+        last_seen = max(seen) if seen else None
+        detail["last_drop"] = {"dropped_at_s": round(view["last_drop"], 1), "bound_s": gone,
+                               "last_seen_after_s": None if last_seen is None else round(last_seen - view["last_drop"], 1)}
+        if ents[-1][0] < view["last_drop"] + gone:
+            unjudged.append("scenario ends before the drop bound")
+        elif last_seen is not None and last_seen - view["last_drop"] > gone:
+            problems.append(f"silently dropped {duid} still in the world {last_seen - view['last_drop']:.1f} s after the drop (bound {gone})")
+    q0 = view["quiet_from"]
+    if q0 is None or dur - q0 < 5.0:
+        unjudged.append("quiet window shorter than 5 s")
+    else:
+        q_ents = [ids for st, ids in ents if q0 + 2.0 <= st <= dur]
+        extra = sorted({i for ids in q_ents for i in ids} - set(rendered))
+        detail["quiet_window_s"] = [round(q0, 1), dur]
+        detail["server_players_in_quiet_window"] = sorted({i for ids in q_ents for i in ids})
+        if extra or any(set(ids) != set(rendered) for ids in q_ents):
+            problems.append(f"server player entities in the quiet window differ from the rendered clients': extra {extra}")
+        per_client = {}
+        for cl in ev["clients"]:
+            counts = [sum(1 for e in s.get("ents", []) if e[1] == "player") for s in cl["samples"]
+                      if s.get("st") is not None and q0 + 2.0 <= s["st"] <= dur]
+            per_client[cl["index"]] = {"samples": len(counts), "players_drawn": sorted(set(counts))}
+            if not counts:
+                unjudged.append(f"client {cl['index']} has no sample in the quiet window")
+            elif set(counts) != {len(ev["clients"])}:
+                problems.append(f"client {cl['index']} draws {sorted(set(counts))} players, expected {len(ev['clients'])}")
+        detail["rendered_view"] = per_client
+    status = FAIL if problems else (INCONCLUSIVE if unjudged else PASS)
+    detail["problems"], detail["not_judged"] = problems, unjudged
+    return _result(status, {"unknown_ids": len(unknown), "problems": len(problems)},
+                   {"unknown_ids": 0, "leave_within_s": leave_w, "drop_gone_within_s": gone},
+                   source="server/entities.ndjson (5 Hz), rendered clients' samples.ndjson and entity_removed events, "
+                          "rawprobe.ndjson cycle times",
+                   sampling="5 Hz server, 20 Hz clients", detail=detail,
+                   rationale="a player who left or dropped must stop existing for everyone once the server's own "
+                             "timeouts have run; a second entity for the same player, or one that never goes, is a ghost",
+                   artifacts=[str(ev["run_dir"] / "rawprobe.ndjson"), str(ev["run_dir"] / "server" / "entities.ndjson")])
+
+
+def check_player_count_baseline(ev, a):
+    """The server's own player count follows the churn and returns to the baseline: /status `players_online`
+    and `connections` never exceed baseline + `max_extra` (default 2, the two churn users) during the run,
+    and equal the baseline (the rendered clients) at every sample of the quiet window (from the instant
+    churn_ghosts derives, first 2 s skipped)."""
+    view, bad = _churn_view(ev, a)
+    if bad:
+        return bad
+    base = len(ev["clients"])
+    if not base:
+        return _inconclusive("no rendered clients", source="/status")
+    rows = _status_in_window(ev)
+    if not rows:
+        return _inconclusive("no /status sample", source="/status")
+    extra = int(a.get("max_extra", 2))
+    peak = {"players_online": max(r.get("players_online") or 0 for r in rows),
+            "connections": max(r.get("connections") or 0 for r in rows)}
+    q0 = view["quiet_from"]
+    dur = float(ev["scenario"].get("duration_s", 0))
+    q = [r for r in rows if q0 is not None and q0 + 2.0 <= r["_st"] <= dur]
+    if len(q) < 3:
+        return _inconclusive("fewer than 3 /status samples in the quiet window", source="/status")
+    off = [(round(r["_st"], 1), r.get("players_online"), r.get("connections")) for r in q
+           if r.get("players_online") != base or r.get("connections") != base]
+    ok = not off and peak["players_online"] <= base + extra and peak["connections"] <= base + extra
+    return _result(PASS if ok else FAIL, {"peak": peak, "quiet_window_samples": len(q), "off_baseline": off[:10]},
+                   {"baseline": base, "peak_max": base + extra},
+                   source="gameserver /status players_online and connections", sampling="1 Hz",
+                   rationale="players_online is balanced by join and leave; a double count (two connections for one player) "
+                             "or a count that stays up after everyone is gone is a leaked session",
+                   artifacts=[str(ev["run_dir"] / "server" / "status.ndjson")])
+
+
+def check_redis_leak(ev, a):
+    """Redis holds the same session keys (`session:*`), registry keys (`servers:id:*`) and map members
+    (`servers:map:<map>`) after the churn and its wait as before the first cycle (names compared, not
+    counts). Before is taken with only the rendered clients in the world, so it must hold their sessions:
+    a baseline that does not is INCONCLUSIVE."""
+    pts = {r.get("label"): r for r in _raw_records(ev, "redis")}
+    if "before" not in pts or "after" not in pts:
+        return _inconclusive("no before/after Redis record (the step did not finish)", source="rawprobe.ndjson")
+    b, af = pts["before"], pts["after"]
+    if len(b["session_keys"]) != len(ev["clients"]):
+        return _inconclusive(f"baseline has {len(b['session_keys'])} session keys for {len(ev['clients'])} rendered clients",
+                             source="redis SCAN session:*")
+    diff = {k: {"leaked": sorted(set(af[k]) - set(b[k])), "lost": sorted(set(b[k]) - set(af[k]))}
+            for k in ("session_keys", "registry_keys", "map_members")}
+    bad = any(v["leaked"] or v["lost"] for v in diff.values())
+    return _result(FAIL if bad else PASS,
+                   {k: {"before": len(b[k]), "after": len(af[k])} for k in ("session_keys", "registry_keys", "map_members")},
+                   "identical key sets", source="redis-cli --scan session:* and servers:id:*, SMEMBERS servers:map:<map> "
+                                                "(docker exec rpgs-redis; scratch stack only)",
+                   sampling="before the first cycle, after the wait", detail=diff,
+                   rationale="a gateway session or registry entry that outlives its player is a leak that grows with every "
+                             "join; the scratch stack is the only writer of these keys, so any difference is ours",
+                   artifacts=[str(ev["run_dir"] / "rawprobe.ndjson")])
+
+
+CHECKS.update({
+    "server_alive": check_server_alive,
+    "client_sessions": check_client_sessions,
+    "malformed_input": check_malformed_input,
+    "churn_cycles": check_churn_cycles,
+    "churn_ghosts": check_churn_ghosts,
+    "player_count_baseline": check_player_count_baseline,
+    "redis_leak": check_redis_leak,
 })

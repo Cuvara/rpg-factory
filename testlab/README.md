@@ -45,6 +45,7 @@ In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewr
 | Authoritative positions | rpg-mmo-server | `GAMESERVER_DEBUG_ENTITIES=on` serves `/debug/entities` |
 | Deterministic enemy spawns | rpg-mmo-server | `GAMESERVER_ENEMY_SEED` |
 | Isolated stack | rpg-mmo-server | `backend/deploy/stack.sh --scratch` with `STACK_SCRATCH_EXTRA_ENV` |
+| Raw wire client (S16, S17): gateway auth, enter world, KCP join, hand-built frames | rpg-factory | `testlab/lab/rawclient.py`, steps in `testlab/lab/rawprobe.py` |
 
 ## Prerequisites
 
@@ -138,6 +139,8 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 | S08G | Graceful disconnect: client 2 leaves at 15 s with plan action `quit` (`NetworkClient.Disconnect()`); `graceful_leave`, outcome `left`, 2 players online at the end |
 | S14 | Deterministic death and respawn: client 1 killed at 12 s and 27 s with disruption `debug_kill` (POST /debug/kill); enemy phase on with no population and attacks off. Graded: respawn, spawn placement, client 1 snaps only at its respawns, remote clients without jump or overshoot, no duplicate entity |
 | S15 | Combat authority, negative path: client 0 `cast_spam` every 100 ms (below the ability cooldown) and `cast_at_point` beyond the projectile range; `input_rejections` (`ability_on_cooldown`) and `cast_damage_bound` |
+| S16 | Malformed input: two rendered clients play while a raw-client step sends, one fresh session per case, a length prefix over the 1 MiB limit (two values), a zero length, a truncated frame then silence, an undefined and an out-of-range message type, a garbage protobuf envelope, a valid Input envelope with a garbage payload, out-of-range movement vectors, attacks beyond the attack range and casts inside the cooldown. Graded: `server_alive`, `server_tick`, `malformed_input` (each case refused or closing only its own session, with the server counters that moved), `client_sessions`, `snapshot_cadence` |
+| S17 | Churn: a raw-client step runs 10 cycles of drop (both sockets closed, no `MsgDisconnect`) plus rejoin and graceful leave plus rejoin through the real join path, then waits out the longest server hold. Graded: `churn_cycles`, `churn_ghosts` (no entity nobody owns; leaver gone within 5 s for the server and the rendered clients; dropped player gone by 75 s; quiet-window entity counts), `player_count_baseline`, `redis_leak` (key names before and after), `entity_lifecycle`, `client_sessions` |
 
 ## Readiness checks with derived bounds
 
@@ -162,6 +165,41 @@ Missing evidence is INCONCLUSIVE, never PASS. A check that raises is INCONCLUSIV
 - `cast_damage_bound`: in each `cast_spam` / `cast_at_point` window of the one casting client, enemy HP lost <= (floor(window / cooldown) + 1) x the ability's damage power, and for `cast_at_point` no enemy farther than range + radius + 1 from the caster loses HP. Ability = the content's first projectile ability (what the client casts), read from `content/abilities.json` at the run's server commit. Projectiles have no aim-range check (`AbilityLogic.ValidateCast`), so a beyond-range aim is accepted and must expire at its range.
 - `enemy_bounds` reads `/status` `map_bounds` first (hook S4; source `map_file` or `configured_size`) and falls back to the map file; with neither it is INCONCLUSIVE.
 - `prediction_bound` also takes `max_unexplained` (absolute, per client) and `expected_explained` (`{client: n}`); `entity_lifecycle` takes `require_removal: false` and fails on a sample that draws one id twice.
+
+## Raw-client scenarios (S16 malformed input, S17 churn)
+
+A Unity player cannot send what the protocol forbids, and starting a player takes seconds, so these two scenarios add a Python
+wire client next to the rendered ones (`lab/rawclient.py`). It speaks the real join path: gateway TCP (`MsgAuth` with a gateway
+JWT signed with the lab's `JWT_SECRET`, `MsgEnterWorld`), then KCP over UDP to the game server (`MsgJoinToken`). The KCP layer is
+a minimal sender and receiver of kcp-go's segment format (in-order delivery, ACKs, retransmission with back-off; no congestion
+control, FEC or encryption: the scratch stack sets no `TRANSPORT_KEY` and `GAMESERVER_SEALED=off`). Frames are JSON envelopes,
+which the server sniffs per frame, so a broken protobuf body can follow a JSON join. The step (`lab/rawprobe.py`) is a scenario
+disruption (`raw_malformed` with a `cases` list, `raw_churn` with `cycles`, `connected_s`, `drop_down_s`, `leave_down_s`,
+`settle_s`) that runs on its own thread so the rendered clients and the server probe keep sampling on the scenario clock.
+
+- The step only records (`rawprobe.ndjson`, one JSON object per line, part of the provenance manifest). Every verdict is made by
+  the analyzer from that file and the server probe, with thresholds in the scenario and in `docs/THRESHOLDS.md`.
+- `malformed_input`: per case, `connections` from `/status` before the offender joins, with it, and 2 s after; `closes` (within
+  `within_s`, ends at the value before the join: only the offender went) or `stays_open` (ends one above, still receives
+  snapshots); `rejections` ({reason: minimum} on `gameserver_inputs_rejected_total{reason}` between the read with the offender in
+  and the final read); `max_displacement` (server position never moves faster than speed x elapsed + 0.5: positions are never
+  client-supplied, so a "teleport" is only expressible as a movement vector); `beyond_attack_range` and `target_hp_unchanged`
+  (an attack at an enemy farther than `GameConstants.AttackRange`, read from the server source, costs it nothing). The report
+  lists, per case, every `gameserver_*` series that moved, so it shows which counter (if any) saw a bad frame. A `stays_open`
+  case without a `rejections` rule is INCONCLUSIVE (`signal_missing`): the session surviving does not show the server refused or
+  ignored the input. The undefined-type case (`unknown_type`, type 99) is that case today: the server has no counter or log line for
+  it (`GameServer.cs` `OnMessageReceived` default arm logs at Debug, `Program.cs` sets the console minimum level to Information), so S16
+  grades INCONCLUSIVE until the server counts it.
+- `server_alive`: every `/status` probe answered, `uptime_seconds` never goes backwards, no gap over `max_gap_s`.
+- `client_sessions`: a rendered client logs no `net_state` change, `disconnected`, `entities_reset` or `reconnected` inside the
+  scenario window.
+- `churn_cycles`, `churn_ghosts`, `player_count_baseline`, `redis_leak`: see the S17 row above; the 75 s bound for a silent drop is
+  PingInterval 10 s + PongTimeout 30 s (the longest the heartbeat takes to notice a silent peer) + the 30 s map hold
+  (`EntityHoldTTL`) + 5 s slack. Redis session (`session:*`), registry (`servers:id:*`) and map-member (`servers:map:<map>`) key
+  names are read from the scratch Redis only.
+- Limits: a raw client is not a real client. It does not predict, interpolate or render, it answers heartbeats only while its
+  script says so, and it cannot reach the sealed handshake (JSON clients cannot be sealed). The truncated-frame case takes about
+  40 s (the heartbeat timeout), so S16 runs about 2 minutes; S17 about 3.5 minutes, most of it the wait for the hold to expire.
 
 What each readiness area is covered by, and the gaps (with the client and server hooks they need): [`docs/COVERAGE.md`](docs/COVERAGE.md).
 
@@ -188,6 +226,7 @@ Copy a file in `scenarios/` and change these fields:
 | `run.json` | repos and commits, player fingerprint, stack actions, timeline, client launches, and the `provenance` record (below) |
 | `scenario.json` | the scenario exactly as run (defaults applied) |
 | `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png`; with a C2 recorder also `delivery.csv` and `render.csv`; with `predictor_trace` also `trace.ndjson` |
+| `rawprobe.ndjson` | S16/S17 only: what the raw-client step did and saw (cases with server reads, churn cycles, Redis key names before and after) |
 | `server/` | `entities.ndjson` (authoritative positions), `status.ndjson`, `container.ndjson`, `metrics-{start,end,after}.txt`; with `snapshot_trace` also `snapshot-trace.csv` |
 | `redis.json`, `orchestrator.log`, `stack-up.log`, `harness-error.txt` | |
 
@@ -289,6 +328,7 @@ entry point is a Netcode follow-up). The recipe, from client docs/TESTLAB.md and
 
 ## Limits (stated, not hidden)
 
+- **Raw clients are not clients.** S16 and S17 use a Python wire client (`lab/rawclient.py`) with JSON envelopes and a minimal KCP; they prove what the server does with a session, not what a client does with the server's answer.
 - **No network impairment.** Every run uses the host's loopback path. Latency, loss and reordering (`tc netem` on the scratch UDP port, COVERAGE F7) would change shared WSL networking and need the user's approval, so reconciliation and delivery are not tested under them.
 - **Capacity numbers are host-bound.** Players, bots and the server share one machine (ADR-7). S07 reports the first failing level on this host, not a server ceiling.
 - **Frame times** come from three rendered players on one GPU. Use them for regressions, not as a device budget.
