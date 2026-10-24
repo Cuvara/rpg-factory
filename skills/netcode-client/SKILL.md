@@ -33,7 +33,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 
 - **Two hops.** Gateway: `TcpTransport`, optional TLS with an exact-bytes certificate pin
   (`PinValidator`, `Runtime/Transport/TcpTransport.cs:30-37,286,322-349`). Gameplay: **KCP/UDP only** since
-  0.47.0 (`KcpTransport`, `CHANGELOG.md:375-380`). A join reply naming `tcp` or empty is refused (`TransportKinds.ParseGameplay`, `Runtime/Transport/TransportKinds.cs:29-52`); only KCP passes (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
+  0.47.0 (`KcpTransport`, `CHANGELOG.md` section `[0.47.0]`). A join reply naming `tcp` or empty is refused (`TransportKinds.ParseGameplay`, `Runtime/Transport/TransportKinds.cs:29-52`); only KCP passes (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
   (`Runtime/Transport/KcpTransport.cs:43-44`).
 - **Pump.** `KcpTransport` reads with `UniTask.Delay(1, Realtime, PlayerLoopTiming.Update)`
   (`Runtime/Transport/KcpTransport.cs:248`) and runs the KCP update timer on the PlayerLoop too

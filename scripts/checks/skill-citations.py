@@ -27,11 +27,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(HERE))
 EXT = r"(?:cs|go|py|sh|yml|yaml|json|asmdef|asset|md|proto|sql|csproj|uxml|uss|mod|toml|txt|jq)"
 LINES = r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*"
-FULL = re.compile(r"^(?P<path>(?:[a-z]+:)?[A-Za-z0-9_.~/\-]+\." + EXT + r"):(?P<lines>" + LINES + r")$")
+FULL = re.compile(r"^(?P<path>(?:[a-z]+:)?[A-Za-z0-9_.~/\-]+\." + EXT + r"):(?P<lines>" + LINES + r")$", re.IGNORECASE)
 CONT = re.compile(r"^:(?P<lines>" + LINES + r")$")
-FILE = re.compile(r"^(?P<path>(?:[a-z]+:)?[A-Za-z0-9_.~/\-]+\." + EXT + r")$")
+FILE = re.compile(r"^(?P<path>(?:[a-z]+:)?[A-Za-z0-9_.~/\-]+\." + EXT + r")$", re.IGNORECASE)
 IDENT = re.compile(r"^[\[@]?(?P<id>[A-Za-z_][\w.]*?)(?:<[^`]*>)?(?:\([^`]*\))?[\]]?(?:\s.*)?$")
-BARE_LINE_CITE = re.compile(r"(?<![`\w/])[A-Za-z0-9_.~/\-]+\." + EXT + r":\d+")
+BARE_LINE_CITE = re.compile(r"(?<![`\w/])[A-Za-z0-9_.~/\-]+\." + EXT + r":\d+", re.IGNORECASE)
 SPAN = re.compile(r"`([^`\n]+)`")
 SLACK = 3
 
@@ -217,6 +217,9 @@ def main():
                     problems.append(f"{rel}: `{c}` - line citation outside backticks (write it as `path:N`)")
             for path, spec, anchor, _ in cites:
                 where = f"{rel}: `{path}:{spec}`"
+                if path.lower().endswith(".md"):
+                    problems.append(f"{where} - doc line citation: cite `{path}` by section, not line (skill-contract)")
+                    continue
                 if not anchor:
                     problems.append(f"{where} - unanchored: name the symbol it shows in backticks right before it")
                     continue

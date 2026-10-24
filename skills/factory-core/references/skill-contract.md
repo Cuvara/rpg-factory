@@ -83,7 +83,7 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
   must occur within the cited lines +/- 3 at the repo's integration branch. Paths resolve through
   registry `skills.<s>.cite_roots` (prefix -> `repo:subpath`; repo directory names are prefixes too).
   No anchor, a moved symbol or a line past the end fails `tests/run-all.sh`; `--suggest` prints the fix.
-  Cite a doc by its section name, not a line.
+  Documentation files ending in `.md` (case-insensitive) must be cited by section name, not line; the checker rejects every `.md` line citation.
 - Optional review file: `references/<area>-review.md`, a checklist factory-core step 11 applies when the
   skill is in `routing.tech` (e.g. `unity-dots` `references/ecs-review.md`).
 

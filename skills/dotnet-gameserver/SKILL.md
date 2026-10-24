@@ -57,10 +57,10 @@ knobs, metrics, golden vectors and the AOT warning baseline:
   (`SIM_WORLD_HZ` `:256`, `SIM_BACKGROUND_HZ` `:266`). Snapshots ship at the World rate,
   because the base rate would break the ADR-7 mobile bandwidth budget. `MovementHz` is the value the
   join reply advertises as `tick_rate` - moving movement to another group is a wire change.
-- **ECS world** (`GameServer/World/EcsWorld.cs`). Arch behind one `ReaderWriterLockSlim` (`:202`),
+- **ECS world** (`GameServer/World/EcsWorld.cs`). Arch behind one `ReaderWriterLockSlim` (`:211`),
   because network threads spawn/despawn and enqueue input while the tick runs. API: `ReadAll`
-  (`:1021`), `ReadAllParallel` (`:1168`), `UpdateComponents<TState>` (`:1245`),
-  `UpdateComponentsParallel` (`:1307`, not used by the tick; proves the ADR-12 preconditions).
+  (`:1030`), `ReadAllParallel` (`:1177`), `UpdateComponents<TState>` (`:1254`),
+  `UpdateComponentsParallel` (`:1316`, not used by the tick; proves the ADR-12 preconditions).
   Every write scope applies deferred structural changes on exit. No Arch type reaches SGL.
 - **Shared.GameLogic.** `Shared.GameLogic/Shared.GameLogic.csproj` targets registry fact `sgl-target-frameworks`,
   pins `LangVersion` (fact `sgl-langversion`, Unity 6's C#), disables implicit usings and unsafe code to match the asmdef.
@@ -94,7 +94,7 @@ knobs, metrics, golden vectors and the AOT warning baseline:
 ## Pitfalls
 
 - **Arch's read path writes** (#176). Iterate only queries from `_readQueries`
-  (`EcsWorld.cs:407`); a raw Arch query under the read lock corrupted the enumerator and the heap.
+  (`EcsWorld.cs:416`); a raw Arch query under the read lock corrupted the enumerator and the heap.
 - **Allocations that look harmless:** a capturing lambda, an interpolated rejection string, an
   unguarded debug log on the combat branch (#249, `GameServer.Tests/Bench/TickAllocationBench.cs`).
   The always-on guard covers the snapshot path only, so input/combat changes need the opt-in bench.
