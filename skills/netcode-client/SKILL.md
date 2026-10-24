@@ -89,13 +89,23 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 
 ## Pitfalls
 
-- **Per-packet allocations, no pooling anywhere** (no `ArrayPool` in `Runtime/`):
-  `KcpCrypto.Seal` creates an RNG and a nonce array per datagram (`KcpCrypto.cs:89-90`);
-  fresh arrays filled by `Buffer.BlockCopy` (`KcpClientSession.cs:422-424,465-466,491-492`); `Segment` data and
+- **Remaining per-packet allocations; KcpCrypto's per-datagram allocations were fixed in v0.49.0.**
+  `KcpCrypto` now keeps its RNG, nonce, feedback and scratch buffers per session
+  (`Runtime/Transport/KcpCrypto.cs:40-53,94,133-155`); do not report its former per-datagram RNG/nonce
+  allocations as current. Other paths still allocate: fresh arrays filled by `Buffer.BlockCopy`
+  (`KcpClientSession.cs:422-424,465-466,491-492`); `Segment` data and
   datagrams (`Kcp.cs:248-249,405-407,482,488,639`); frame bodies (`Buffer.BlockCopy`, `FrameBuffer.cs:107`);
   lists, stat arrays and `ToArray` (`SnapshotResolver.cs:85,240,250,267-269`); a new `InputMessage` per
-  send (`client:DI/Dots/DotsWorldBridge.cs:246`).
-  Fixing them is a package change measured before and after (`measure`, GC alloc per frame).
+  send (`client:DI/Dots/DotsWorldBridge.cs:246`). Re-check every allocation claim against the current
+  Netcode release and re-point citations before treating it as a live pitfall. Fixing remaining cases is
+  a package change measured before and after (`measure`, GC alloc per frame).
+- **Subscriber isolation.** `SubscriberInvoker` invokes public event handlers independently; one throwing
+  handler is logged and does not prevent later handlers (`Runtime/Diagnostics/SubscriberInvoker.cs:6-40`).
+- **Snapshot speed presence.** An absent speed decodes as `NaN`; `SetServerSpeed` ignores NaN and negative
+  or infinite values, while a present `0` means immobile (`Runtime/Prediction/LocalMovePredictor.cs:2215-2224`).
+  On field-delta partials, `changed_fields` bit `0x0020` governs speed in both encodings; ignore a present
+  speed if that bit is clear (`DecodeSpeed`, `Runtime/Codec/ProtobufWireCodec.cs:459`; server `backend/gameserver-dotnet/docs/API.md`,
+  "Snapshot speed").
 - **Frame-rate-bound receive** (`UniTask.Delay`, `KcpTransport.cs:248,378`): a client at 20 fps adds up to 50 ms before a
   snapshot is even read. Do not "fix" lag in interpolation/prediction tuning before ruling this out.
 - **Hidden hard dependency:** the Runtime asmdef references `Shared.GameLogic` unconditionally
