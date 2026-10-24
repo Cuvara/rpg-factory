@@ -6,6 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 - Windows runner cleanup now treats inaccessible or otherwise unqueryable child processes as unknown and fails closed; TRX parser regression cases explicitly target their fixture checkout and assert the parser's diagnostic.
+- Candidate check targets must be Git work-tree roots, preventing nested plain directories from inheriting a parent repository's SHA.
 
 ### Changed
 

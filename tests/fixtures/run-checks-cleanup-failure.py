@@ -58,7 +58,7 @@ class AccessDeniedKernel:
     def OpenProcess(self, access, inherit, pid):
         return 0
 
-with patch.object(ctypes, "get_last_error", return_value=5):
+with patch.object(ctypes, "get_last_error", return_value=5, create=True):
     state = runner._windows_pid_state(AccessDeniedKernel(), 4242, ctypes, wintypes)
 assert state == "unknown", state
 cleanup = runner._windows_fallback_cleanup(0, {4242}, lambda pid: state, "simulated fallback")
@@ -85,7 +85,7 @@ class QueryFailureKernel(ExitedKernel):
         return 0
 assert runner._windows_pid_state(QueryFailureKernel(), 4242, ctypes, wintypes) == "unknown"
 
-with patch.object(ctypes, "get_last_error", return_value=87):
+with patch.object(ctypes, "get_last_error", return_value=87, create=True):
     assert runner._windows_pid_state(AccessDeniedKernel(), 4242, ctypes, wintypes) == "gone"
 
 # Exercise Windows path selection and tree-cleanup branches even when this fixture runs on POSIX.

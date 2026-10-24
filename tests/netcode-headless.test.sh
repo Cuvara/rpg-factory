@@ -66,10 +66,29 @@ chk "dotnet test times out with a zero-failure TRX -> 1" 1 "$(run_fake sleep)"
 grep -q "timed out" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  timeout not reported"; cat "$TMP/out.txt"; }
 chk "dotnet test passes but nothing executed -> 1" 1 "$(run_fake empty)"
 
+# Candidate identity must follow a linked worktree's distinct commit for both selectors.
+LINKED="$TMP/linked-netcode"; git -C "$NC" worktree add -qb linked-candidate "$LINKED"
+mkdir -p "$LINKED/Runtime" "$LINKED/Tests"
+echo linked > "$LINKED/Runtime/candidate-marker"
+git -C "$LINKED" add Runtime/candidate-marker
+git -C "$LINKED" -c user.email=t@t -c user.name=t commit -qm candidate
+LINKED_SHA=$(git -C "$LINKED" rev-parse HEAD)
+linked_explicit() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$LINKED" >"$TMP/linked-explicit.log" 2>&1; }
+chk "explicit linked Netcode candidate passes -> 0" 0 "$(linked_explicit; echo $?)"
+grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-explicit.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode source SHA"; }
+grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-explicit.log" && { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode used main fixture SHA"; } || pass=$((pass + 1))
+linked_env() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" RPG_FACTORY_REPO_KEY=netcode RPG_FACTORY_REPO_DIR="$LINKED" bash "$ROOT/scripts/checks/netcode-headless.sh" >"$TMP/linked-env.log" 2>&1; }
+chk "environment linked Netcode candidate passes -> 0" 0 "$(linked_env; echo $?)"
+grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-env.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  environment linked Netcode source SHA"; }
+grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-env.log" && { fail=$((fail + 1)); echo "FAIL  environment linked Netcode used main fixture SHA"; } || pass=$((pass + 1))
+
 NON_GIT="$TMP/non-git-netcode"; mkdir -p "$NON_GIT/Tests~/Headless"; : > "$NON_GIT/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
 echo '{"name":"com.cuvara.netcode"}' > "$NON_GIT/package.json"
 out=$(resolve --netcode "$NON_GIT"); rc=$?
 [[ "$rc" -ne 0 && "$out" != *"server:"* ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  non-git --netcode target must fail closed without a server resolution"; }
+mkdir -p "$NC/plain nested/Tests~/Headless"; : > "$NC/plain nested/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
+out=$(resolve --netcode "$NC/plain nested"); rc=$?
+[[ "$rc" -ne 0 && "$out" == *"ERROR: Netcode target is not a git work-tree root"* && "$out" != *"server:"* ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  nested plain Netcode target rejected in --resolve-server"; }
 
 echo "netcode-headless: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

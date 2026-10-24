@@ -31,7 +31,12 @@ while [ $# -gt 0 ]; do
     --resolve-server) resolve_only=true; shift ;; *) echo "unknown arg $1"; exit 2 ;;
   esac
 done
-[ -n "$src" ] && git -C "$src" rev-parse --show-toplevel >/dev/null 2>&1 || { echo "ERROR: Netcode target is not a git work tree: ${src:-<unresolved>}"; exit 2; }
+is_worktree_root() {
+  local dir="$1"
+  [ -n "$dir" ] && [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] && [ -z "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]
+}
+is_worktree_root "$src" || { echo "ERROR: Netcode target is not a git work-tree root: ${src:-<unresolved>}"; exit 2; }
+[ -z "$server_arg" ] || is_worktree_root "$server_arg" || { echo "ERROR: server target is not a git work-tree root: $server_arg"; exit 2; }
 [ -f "$src/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj" ] || { echo "ERROR: no headless project under $src"; exit 2; }
 
 sgl_tag=$(python3 -B -c "import json,sys; u=json.load(open(sys.argv[1], encoding='utf-8')).get('x-manualDependencies', {}).get('com.rpgmmo.shared-gamelogic', ''); print(u.rsplit('#', 1)[1] if '#' in u else '')" "$src/package.json")
@@ -45,6 +50,7 @@ resolve_server() {
   fi
   local c
   for c in "$(dirname "$src")/rpg-mmo-server" "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server"; do
+    is_worktree_root "$c" || continue
     git -C "$c" rev-parse -q --verify "refs/tags/$1" >/dev/null 2>&1 && { echo "$c"; return 0; }
   done
   return 1

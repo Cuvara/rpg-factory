@@ -36,6 +36,11 @@ missing_target() { expect_fail bash "$root/scripts/checks/wire-parity.sh" --serv
 case_run 'missing target fails closed' missing_target
 mkdir -p "$tmp/not-git"; nongit_target() { expect_fail bash "$root/scripts/checks/wire-parity.sh" --server "$tmp/not-git" --netcode "$net"; }
 case_run 'non-git target fails closed' nongit_target
+mkdir -p "$server/plain nested" "$net/plain nested"
+nested_server() { bash "$root/scripts/checks/wire-parity.sh" --server "$server/plain nested" --netcode "$net" >"$tmp/nested-server.log" 2>&1; rc=$?; [ "$rc" -ne 0 ] && grep -Fq 'ERROR: server target is not a git work-tree root' "$tmp/nested-server.log" && ! grep -q '^OK:' "$tmp/nested-server.log"; }
+case_run 'nested plain server directory fails as non-root' nested_server
+nested_netcode() { bash "$root/scripts/checks/wire-parity.sh" --server "$server" --netcode "$net/plain nested" >"$tmp/nested-netcode.log" 2>&1; rc=$?; [ "$rc" -ne 0 ] && grep -Fq 'ERROR: Netcode target is not a git work-tree root' "$tmp/nested-netcode.log" && ! grep -q '^OK:' "$tmp/nested-netcode.log"; }
+case_run 'nested plain Netcode directory fails as non-root' nested_netcode
 mkdir -p "$tmp/headless/Tests~/Headless" "$tmp/headless/Runtime" "$tmp/headless/Tests"; touch "$tmp/headless/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"; init_repo "$tmp/headless"; git -C "$tmp/headless" add .; git -C "$tmp/headless" commit -qm fixture
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/dotnet" <<'EOF'
@@ -76,5 +81,8 @@ sed 's/executed="397"/executed="0"/' "$root/tests/fixtures/completed-pass.trx" >
 case_run 'headless rejects zero executed' parser_case "$tmp/no-executed.trx" 'FAIL: no tests executed'
 printf '<TestRun><ResultSummary outcome="Completed"><Counters' > "$tmp/malformed.trx"
 case_run 'headless rejects malformed XML' parser_case "$tmp/malformed.trx" 'FAIL: cannot parse trx'
+mkdir -p "$tmp/headless/plain nested"
+nested_headless() { bash "$headless_script" --netcode "$tmp/headless/plain nested" >"$tmp/nested-headless.log" 2>&1; rc=$?; [ "$rc" -ne 0 ] && grep -Fq 'ERROR: Netcode target is not a git work-tree root' "$tmp/nested-headless.log" && ! grep -q '^source:' "$tmp/nested-headless.log"; }
+case_run 'headless rejects nested plain Netcode directory' nested_headless
 echo "checks-candidate: $checks checks, $passed passed, $failed failed"
 [ "$failed" -eq 0 ]

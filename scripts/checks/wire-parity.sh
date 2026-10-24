@@ -33,7 +33,9 @@ fi
 for label in server Netcode; do
   dir="$server"
   [ "$label" = Netcode ] && dir="$netcode"
-  [ -n "$dir" ] && git -C "$dir" rev-parse --show-toplevel >/dev/null 2>&1 || { echo "ERROR: $label target is not a git work tree: ${dir:-<unresolved>}"; exit 2; }
+  is_root=false
+  if [ -n "$dir" ] && [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] && [ -z "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]; then is_root=true; fi
+  $is_root || { echo "ERROR: $label target is not a git work-tree root: ${dir:-<unresolved>}"; exit 2; }
   printf '%s tree: %s @ %s\n' "$label" "$(git -C "$dir" rev-parse --show-toplevel)" "$(git -C "$dir" rev-parse HEAD)"
 done
 
