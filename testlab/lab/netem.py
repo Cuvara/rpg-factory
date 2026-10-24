@@ -29,8 +29,9 @@ packet and drop counters, and a metrics scrape every few seconds. Every verdict 
 (`netem_applied`, `netem_cleanup`, `netem_retransmits`, ... in lab/analyze.py).
 
 Cleanup contract: the qdiscs are removed in a `finally`, again by the runner's own `finally`, and a watchdog
-process started inside WSL at apply time removes them after the planned duration + slack even if the harness
-process is killed. Removal is VERIFIED (no netem/prio/ingress qdisc on the interface, no ifb0 device) and the
+(a detached long-running `wsl.exe` child that sleeps, then deletes) removes them after the planned duration +
+slack even if the harness process is killed. (A process started inside WSL from a short `wsl.exe` call does not
+survive that call, so the watchdog cannot be a background job in WSL.) Removal is VERIFIED (no netem/prio/ingress qdisc on the interface, no ifb0 device) and the
 verdict is recorded; an unverified removal FAILs the run.
 """
 
@@ -255,26 +256,44 @@ class Shaper:
         self.disarm_watchdog()
         return rec
 
-    # ---- watchdog: removes the shaping after the planned time even if this process is killed
+    # ---- watchdog: removes the shaping after the planned time even if this process dies
+    #
+    # A process started inside WSL from a short `wsl.exe` call dies when that call ends (F8B drill: nohup,
+    # setsid and setsid -f all vanish), so the watchdog IS a long-running wsl.exe child, detached from this
+    # console so it survives this process being killed. Killing it (disarm) ends the session and its sleep.
+
+    def _spawn(self, script: str):
+        import os
+        import subprocess
+        env = dict(os.environ)
+        env["MSYS_NO_PATHCONV"] = "1"
+        env["MSYS2_ARG_CONV_EXCL"] = "*"
+        flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == "nt" else 0
+        return subprocess.Popen(["wsl.exe", "-d", self.cfg.wsl_distro, "--exec", "bash", "-c", script],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=env, creationflags=flags)
 
     def arm_watchdog(self, pid: int, ns: str, dev: str, after_s: float) -> dict:
         tag = f"netem-watchdog-{pid}-{int(time.time())}"
         # Acts only if the namespace of that pid is still the one recorded (pid reuse after a container
-        # restart must never send tc into another namespace).
-        guard = f'[ "$(readlink /proc/{pid}/ns/net)" = "{ns}" ]'
+        # restart must never send tc into another namespace). /proc/<pid>/ns is root-only, hence sudo.
+        guard = f'[ "$(sudo -n readlink /proc/{pid}/ns/net)" = "{ns}" ]'
         dels = "; ".join(in_ns(pid, c) + " >/dev/null 2>&1" for c in remove_commands(dev))
         script = f": {tag}; sleep {int(after_s)}; if {guard}; then {dels}; fi"
-        rc, out = self._sh(f"nohup setsid bash -c '{script}' >/dev/null 2>&1 & echo $!")
-        last = out.split()[-1] if out.split() else ""
-        wd = {"tag": tag, "after_s": int(after_s), "pid": int(last) if rc == 0 and last.isdigit() else None}
+        self.disarm_watchdog()
+        self._watchdog_proc = self._spawn(script)
+        wd = {"tag": tag, "after_s": int(after_s), "pid": getattr(self._watchdog_proc, "pid", None)}
         self._watchdog = wd
         return wd
 
     def disarm_watchdog(self) -> None:
-        wd = getattr(self, "_watchdog", None)
-        if wd and wd.get("pid"):
-            # only a process whose command line is our script
-            self._sh(f"grep -q '{wd['tag']}' /proc/{wd['pid']}/cmdline 2>/dev/null && kill {wd['pid']}; true")
+        proc = getattr(self, "_watchdog_proc", None)
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        self._watchdog_proc = None
         self._watchdog = None
 
 

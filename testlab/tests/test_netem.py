@@ -91,6 +91,20 @@ class ParsingTests(unittest.TestCase):
         self.assertIsNone(netem.parse_default_dev(""))
 
 
+class FakeProc:
+    """A stand-in for the detached wsl.exe watchdog process."""
+    pid = 9001
+
+    def __init__(self, script):
+        self.script, self.killed = script, False
+
+    def poll(self):
+        return 0 if self.killed else None
+
+    def kill(self):
+        self.killed = True
+
+
 class FakeShaper(netem.Shaper):
     """The Shaper with the shell replaced: records every command and answers from a small model of a netns."""
 
@@ -99,13 +113,17 @@ class FakeShaper(netem.Shaper):
         self.sh_calls, self.fail_on, self.running = [], fail_on, running
         self.same_netns, self.leave_behind = same_netns, leave_behind
         self.state = {"qdiscs": [], "ifb": False}
+        self.spawned = []
+
+    def _spawn(self, script):
+        proc = FakeProc(script)
+        self.spawned.append(proc)
+        return proc
 
     def _sh(self, cmd, timeout=30):
         self.sh_calls.append(cmd)
         if cmd.startswith("docker inspect"):
             return (0, "true 4242") if self.running else (0, "false 0")
-        if cmd.startswith("nohup setsid"):
-            return 0, "9001"
         if cmd == "sudo -n true":
             return 0, ""
         if "readlink /proc/1/ns/net" in cmd and "sudo" not in cmd:
@@ -166,8 +184,23 @@ class ShaperTests(unittest.TestCase):
         self.assertEqual(sum(c.startswith("tc qdisc add") for c in sh.ran()), 4)
         self.assertEqual(rec["qdiscs"]["ingress"][0]["kind"], "netem")
         # the watchdog script re-checks the namespace before it deletes anything
-        wd = next(c for c in sh.sh_calls if c.startswith("nohup setsid"))
-        self.assertIn('readlink /proc/4242/ns/net)" = "net:[2]"', wd)
+        wd = sh.spawned[0].script
+        self.assertIn('sudo -n readlink /proc/4242/ns/net)" = "net:[2]"', wd)   # /proc/<pid>/ns is root-only (F8B drill)
+
+    def test_the_watchdog_is_a_detached_process_that_disarm_and_clean_stop(self):
+        sh = FakeShaper(_cfg())
+        sh.apply(PROFILE, expect_s=100)
+        proc = sh.spawned[0]
+        self.assertIn(": netem-watchdog-4242-", proc.script)
+        self.assertIn("sleep 145;", proc.script)
+        self.assertEqual(proc.script.count("sudo -n nsenter -t 4242 -n "), 3)   # the three deletions, nothing else
+        self.assertFalse(proc.killed)
+        sh.clean()
+        self.assertTrue(proc.killed)
+        sh.apply(PROFILE, expect_s=100)          # arming again replaces (and stops) a previous watchdog
+        sh.apply(PROFILE, expect_s=100)
+        self.assertTrue(all(p.killed for p in sh.spawned[:-1]))
+        self.assertFalse(sh.spawned[-1].killed)
 
     def test_a_failed_command_stops_the_apply_and_rolls_back(self):
         sh = FakeShaper(_cfg(), fail_on="parent 1:3")
