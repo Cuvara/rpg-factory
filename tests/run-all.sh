@@ -250,7 +250,7 @@ if $use_ws; then
   done
   if command -v dotnet >/dev/null 2>&1 || command -v dotnet.exe >/dev/null 2>&1; then
     out=$(bash scripts/checks/netcode-headless.sh 2>&1); rc=$?
-    [ $rc -eq 0 ] && ok "netcode headless tests: $(grep -oE 'discovered=[0-9]+ executed=[0-9]+ passed=[0-9]+ failed=[0-9]+' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
+    [ $rc -eq 0 ] && ok "netcode headless tests: $(sed -n 's/^headless tests: //p' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
   else skp "netcode headless tests" "no dotnet/dotnet.exe"; fi
 fi
 
