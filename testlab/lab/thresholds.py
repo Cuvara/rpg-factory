@@ -82,6 +82,8 @@ SOURCES = {
                                        "inside one drain coalesce and only the last is judged), each above "
                                        "GameConstants.MaxInputMagnitude 1.5; attack_out_of_range and ability_cooldown: "
                                        "at least one refusal of the reason",
+    ("malformed_input", "unknown_type.rejections"): "rpg-mmo-server #490 (76aa973): gameserver_messages_rejected_total{reason=unknown_type} "
+                                                    "counts a well-formed message whose type is undefined; the scenario sends one",
     ("malformed_input", "max_displacement"): "definition: a server position never moves faster than the entity's speed "
                                              "(+ 0.5 slack); a teleport is not expressible, positions are server-side",
     ("malformed_input", "beyond_attack_range"): "definition: target farther than GameConstants.AttackRange (read from source)",
@@ -231,7 +233,7 @@ def scenario_rows() -> list[tuple]:
                     # one row per case parameter, with a per-case source where the case has its own derivation
                     for cid, rule in v.items():
                         for rk, rv in rule.items():
-                            if rk == "note":
+                            if rk in ("note", "rejections_counter"):
                                 continue
                             src = SOURCES.get((a["check"], f"{cid}.{rk}")) or SOURCES.get((a["check"], rk), POLICY)
                             rows.append((sid, a["id"], a["check"], f"{cid}.{rk}", _fmt(rv), src))

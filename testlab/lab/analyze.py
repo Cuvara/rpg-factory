@@ -2912,16 +2912,18 @@ def check_malformed_input(ev, a):
       `within_s`, and ended at the value before the offender joined (the rendered clients' sessions are
       intact); expect `stays_open`: it did not fall, ended one above that value, and the offender kept
       receiving snapshots (at least `min_snapshots`, default 5).
-    - `rejections`: {reason: minimum} for gameserver_inputs_rejected_total{reason} between the read with the
-      offender in and the final read; a `zero` list of reasons must not rise.
+    - `rejections`: {reason: minimum} for gameserver_inputs_rejected_total{reason} (or the counter named by
+      `rejections_counter`, e.g. gameserver_messages_rejected_total for an undefined message type) between the
+      read with the offender in and the final read; a `zero` list of reasons must not rise. A named counter
+      with no series at all makes the case INCONCLUSIVE (the server predates it).
     - `max_displacement`: the offender's server position never moved more than speed x elapsed + 0.5 after the
       send (no teleport: positions are never client-supplied, so this is the speed bound).
     - `target_hp_unchanged` / `beyond_attack_range`: an attack at a far enemy cost it nothing and was aimed
       beyond GameConstants.AttackRange.
     A case that did not run, did not join or has no read is INCONCLUSIVE, never PASS. A `stays_open` case
     without a `rejections` rule is INCONCLUSIVE too (`signal_missing`): the session surviving does not show
-    the server refused or ignored the input, and an undefined message type has no counter or log line at the
-    server (GameServer.OnMessageReceived default arm logs at Debug; the console minimum level is Information).
+    the server refused or ignored the input. An undefined message type is counted from rpg-mmo-server #490
+    (gameserver_messages_rejected_total{reason="unknown_type"}); before it there was no counter or log line.
     Every case lists the server counters that moved, so the report shows which counter (if any) saw the bad frame."""
     cases = a.get("cases") or {}
     recs = {r["id"]: r for r in _raw_records(ev, "case")}
@@ -2970,13 +2972,19 @@ def check_malformed_input(ev, a):
                 row["signal_missing"] = ("no server-side signal that the input was refused or ignored: a stays_open case "
                                          "needs a `rejections` rule (a counter that rises)")
         rej = {}
+        counter = rule.get("rejections_counter", "gameserver_inputs_rejected_total")
         for reason, minimum in (rule.get("rejections") or {}).items():
-            dv = _delta_series(rec, "gameserver_inputs_rejected_total", reason)
+            dv = _delta_series(rec, counter, reason)
             rej[reason] = dv
-            if dv is None:
+            if dv is None and counter != "gameserver_inputs_rejected_total":
+                # A counter a server may predate (gameserver_messages_rejected_total, rpg-mmo-server #490): no series
+                # at all is "this server cannot tell", not a failure of the case.
+                unjudged.append(cid)
+                row["signal_missing"] = f"no {counter}{{reason={reason}}} series: the server does not export this counter"
+            elif dv is None:
                 problems.append(f"no series for rejection reason {reason}")
             elif dv < float(minimum):
-                problems.append(f"gameserver_inputs_rejected_total{{reason={reason}}} rose {dv}, expected >= {minimum}")
+                problems.append(f"{counter}{{reason={reason}}} rose {dv}, expected >= {minimum}")
         for reason in rule.get("zero", []):
             dv = _delta_series(rec, "gameserver_inputs_rejected_total", reason)
             rej[reason] = dv

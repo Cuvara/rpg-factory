@@ -188,9 +188,10 @@ disruption (`raw_malformed` with a `cases` list, `raw_churn` with `cycles`, `con
   (an attack at an enemy farther than `GameConstants.AttackRange`, read from the server source, costs it nothing). The report
   lists, per case, every `gameserver_*` series that moved, so it shows which counter (if any) saw a bad frame. A `stays_open`
   case without a `rejections` rule is INCONCLUSIVE (`signal_missing`): the session surviving does not show the server refused or
-  ignored the input. The undefined-type case (`unknown_type`, type 99) is that case today: the server has no counter or log line for
-  it (`GameServer.cs` `OnMessageReceived` default arm logs at Debug, `Program.cs` sets the console minimum level to Information), so S16
-  grades INCONCLUSIVE until the server counts it.
+  ignored the input. `rejections_counter` names another counter than the default `gameserver_inputs_rejected_total`. The
+  undefined-type case (`unknown_type`, type 99) uses `gameserver_messages_rejected_total{reason="unknown_type"}` (rpg-mmo-server #490,
+  `76aa973`: the message is ignored and the session stays open); a server without that series leaves the case INCONCLUSIVE, not FAIL.
+  Before #490 the server had no counter or log line for it, and S16 graded INCONCLUSIVE.
 - `server_alive`: every `/status` probe answered, `uptime_seconds` never goes backwards, no gap over `max_gap_s`.
 - `client_sessions`: a rendered client logs no `net_state` change, `disconnected`, `entities_reset` or `reconnected` inside the
   scenario window.
