@@ -51,15 +51,15 @@ back-pressure coalesces to the newest snapshot and one channel per connection ke
 
 ## EcsWorld threading (`GameServer/World/EcsWorld.cs`)
 
-- One `ReaderWriterLockSlim` (`:202`) guards the Arch world, because network threads spawn,
+- One `ReaderWriterLockSlim` (`:211`) guards the Arch world, because network threads spawn,
   despawn and push input while the tick reads. Input is queued under a separate `_inputLock`.
-- Read API: `ReadAll(Action<WorldReader>)` (`:1021`), `ReadAllParallel(int, Action<WorldReader,int>)`
-  (`:1168`). Write API: `UpdateComponents<TState>(state, Action<TState, WorldWriter>)` (`:1245`),
-  the non-generic `UpdateComponents` overload (`:1260`), `UpdateComponentsParallel` (`:1307`). Every write scope ends
-  with `ApplyStructuralChangesLocked` and `ExitWriteScope` (`:583`).
+- Read API: `ReadAll(Action<WorldReader>)` (`:1030`), `ReadAllParallel(int, Action<WorldReader,int>)`
+  (`:1177`). Write API: `UpdateComponents<TState>(state, Action<TState, WorldWriter>)` (`:1254`),
+  the non-generic `UpdateComponents` overload (`:1269`), `UpdateComponentsParallel` (`:1316`). Every write scope ends
+  with `ApplyStructuralChangesLocked` and `ExitWriteScope` (`:592`).
 - **Arch's read path writes** (issue #176): it resolves queries through a shared dictionary and
   rebuilds archetype lists lazily. A read path may only iterate a query from `_readQueries`
-  (`:407`), refreshed by the preceding write scope. Concurrent raw Arch queries corrupted the
+  (`:416`), refreshed by the preceding write scope. Concurrent raw Arch queries corrupted the
   enumerator and twice the heap.
 - `ReadAllParallel`: the owner holds the read lock for the whole region and rebuilds the spatial
   grid before any worker wakes; per-worker scratch is thread-static. The callback must not share
