@@ -119,6 +119,7 @@ run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.t
 run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
+run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
@@ -250,7 +251,7 @@ if $use_ws; then
   done
   if command -v dotnet >/dev/null 2>&1 || command -v dotnet.exe >/dev/null 2>&1; then
     out=$(bash scripts/checks/netcode-headless.sh 2>&1); rc=$?
-    [ $rc -eq 0 ] && ok "netcode headless tests: $(grep -oE 'discovered=[0-9]+ executed=[0-9]+ passed=[0-9]+ failed=[0-9]+' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
+    [ $rc -eq 0 ] && ok "netcode headless tests: $(sed -n 's/^headless tests: //p' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
   else skp "netcode headless tests" "no dotnet/dotnet.exe"; fi
 fi
 

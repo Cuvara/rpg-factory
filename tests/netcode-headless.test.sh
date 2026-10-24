@@ -12,6 +12,8 @@ chk() { if [ "$2" = "$3" ]; then pass=$((pass + 1)); echo "PASS  $1"; else fail=
 netcode() { # dir - a Netcode checkout pinning sgl-v9.9.9
   mkdir -p "$1/Tests~/Headless"; : > "$1/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
   printf '{"name":"com.cuvara.netcode","x-manualDependencies":{"com.rpgmmo.shared-gamelogic":"https://x/rpg-mmo-server.git?path=p#sgl-v9.9.9"}}' > "$1/package.json"
+  git -C "$1" init -q; git -C "$1" add package.json 'Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj'
+  git -C "$1" -c user.email=t@t -c user.name=t commit -qm fixture
 }
 server() { # dir [tag]
   mkdir -p "$1"; git -C "$1" init -q; echo a > "$1/a"; git -C "$1" add a
@@ -46,13 +48,15 @@ cat > "$FAKE/dotnet" <<'SH'
 #!/usr/bin/env bash
 mkdir -p results
 executed=3; [ "${FAKE_DOTNET_MODE:-ok}" = empty ] && executed=0
-printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary><Counters total="3" executed="%s" passed="%s" failed="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$executed" > results/results.trx
+printf '<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><ResultSummary outcome="Completed"><Counters total="3" executed="%s" passed="%s" failed="0" error="0" timeout="0" aborted="0" notExecuted="0"/></ResultSummary></TestRun>' "$executed" "$executed" > results/results.trx
 case "${FAKE_DOTNET_MODE:-ok}" in fail) exit 1 ;; sleep) sleep 10 ;; esac
 exit 0
 SH
 chmod +x "$FAKE/dotnet"
 NC="$TMP/nc-nosgl"; mkdir -p "$NC/Runtime" "$NC/Tests" "$NC/Tests~/Headless"; : > "$NC/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
 echo '{"name":"com.cuvara.netcode"}' > "$NC/package.json"
+git -C "$NC" init -q; git -C "$NC" add package.json Runtime Tests 'Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj'
+git -C "$NC" -c user.email=t@t -c user.name=t commit -qm fixture
 run_fake() { FAKE_DOTNET_MODE="$1" NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" \
   bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$NC" >"$TMP/out.txt" 2>&1; echo $?; }
 chk "dotnet test passes and the TRX has executed tests -> 0" 0 "$(run_fake ok)"
@@ -61,6 +65,30 @@ grep -q "dotnet test exited 1" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$(
 chk "dotnet test times out with a zero-failure TRX -> 1" 1 "$(run_fake sleep)"
 grep -q "timed out" "$TMP/out.txt" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  timeout not reported"; cat "$TMP/out.txt"; }
 chk "dotnet test passes but nothing executed -> 1" 1 "$(run_fake empty)"
+
+# Candidate identity must follow a linked worktree's distinct commit for both selectors.
+LINKED="$TMP/linked-netcode"; git -C "$NC" worktree add -qb linked-candidate "$LINKED"
+mkdir -p "$LINKED/Runtime" "$LINKED/Tests"
+echo linked > "$LINKED/Runtime/candidate-marker"
+git -C "$LINKED" add Runtime/candidate-marker
+git -C "$LINKED" -c user.email=t@t -c user.name=t commit -qm candidate
+LINKED_SHA=$(git -C "$LINKED" rev-parse HEAD)
+linked_explicit() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" bash "$ROOT/scripts/checks/netcode-headless.sh" --netcode "$LINKED" >"$TMP/linked-explicit.log" 2>&1; }
+chk "explicit linked Netcode candidate passes -> 0" 0 "$(linked_explicit; echo $?)"
+grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-explicit.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode source SHA"; }
+grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-explicit.log" && { fail=$((fail + 1)); echo "FAIL  explicit linked Netcode used main fixture SHA"; } || pass=$((pass + 1))
+linked_env() { FAKE_DOTNET_MODE=ok NETCODE_HEADLESS_TIMEOUT=2 TMPDIR="$TMP" PATH="$(path_entry "$FAKE"):$PATH" RPG_FACTORY_REPO_KEY=netcode RPG_FACTORY_REPO_DIR="$LINKED" bash "$ROOT/scripts/checks/netcode-headless.sh" >"$TMP/linked-env.log" 2>&1; }
+chk "environment linked Netcode candidate passes -> 0" 0 "$(linked_env; echo $?)"
+grep -Fq "source: $LINKED @ $LINKED_SHA" "$TMP/linked-env.log" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  environment linked Netcode source SHA"; }
+grep -Fq "source: $LINKED @ $(git -C "$NC" rev-parse HEAD)" "$TMP/linked-env.log" && { fail=$((fail + 1)); echo "FAIL  environment linked Netcode used main fixture SHA"; } || pass=$((pass + 1))
+
+NON_GIT="$TMP/non-git-netcode"; mkdir -p "$NON_GIT/Tests~/Headless"; : > "$NON_GIT/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
+echo '{"name":"com.cuvara.netcode"}' > "$NON_GIT/package.json"
+out=$(resolve --netcode "$NON_GIT"); rc=$?
+[[ "$rc" -ne 0 && "$out" != *"server:"* ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  non-git --netcode target must fail closed without a server resolution"; }
+mkdir -p "$NC/plain nested/Tests~/Headless"; : > "$NC/plain nested/Tests~/Headless/Cuvara.Netcode.Tests.Headless.csproj"
+out=$(resolve --netcode "$NC/plain nested"); rc=$?
+[[ "$rc" -ne 0 && "$out" == *"ERROR: Netcode target is not a git work-tree root"* && "$out" != *"server:"* ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL  nested plain Netcode target rejected in --resolve-server"; }
 
 echo "netcode-headless: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
