@@ -8,7 +8,8 @@ from pathlib import Path
 
 from . import SCHEMA_RESULT, analyze, util
 
-EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2, "PASS_WITH_WARNINGS": 4}
+# INVALID (contaminated host) is not clean: it exits with the INCONCLUSIVE code, never 0.
+EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2, "INVALID": 2, "PASS_WITH_WARNINGS": 4}
 
 
 def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_error: str | None,
@@ -35,7 +36,7 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
         "player": meta.get("player"),
         "stack": meta.get("stack"),
         "probe_counts": meta.get("probe_counts"),
-        "counts": {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "INCONCLUSIVE", "INFO")},
+        "counts": {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "INCONCLUSIVE", "INVALID", "INFO")},
         "assertions": results,
         "clients": [
             {"index": c["index"], "user_id": (c["summary"] or {}).get("user_id"), "outcome": (c["summary"] or {}).get("outcome"),
@@ -77,6 +78,10 @@ def _markdown(doc: dict, ev: dict) -> str:
         f"**Outcome: {doc['outcome']}** (exit {doc['exit_code']}) - scenario `{sc.get('id')}` v{sc.get('version')}: {sc.get('title')}",
         "",
     ]
+    if doc["outcome"] == "INVALID":
+        fired = [q["id"] for q in doc["qualifications"] if q.get("kind") == "invalid" and str(q.get("id", "")).startswith("G")]
+        lines += [f"> **INVALID: the host was not clean while this run was measured** (guards {', '.join(fired) or 'see host_guard'}). "
+                  "This is not a verdict on the candidate: no timing result below can be read as PASS, and a FAIL in the table is kept as evidence.", ""]
     if doc["qualifications"]:
         lines += ["**Qualified by:**", ""] + [f"- {q['kind']}: {q['text']}" for q in doc["qualifications"]] + [""]
     lines += [
@@ -112,7 +117,7 @@ def _markdown(doc: dict, ev: dict) -> str:
                      f"{_fmt(r.get('threshold'))} | {r.get('source')} ({r.get('sampling')}) |")
     lines += ["", "## Details", ""]
     for r in doc["assertions"]:
-        if r["status"] in ("FAIL", "INCONCLUSIVE", "INFO") or r.get("detail", {}).get("layer"):
+        if r["status"] in ("FAIL", "INCONCLUSIVE", "INVALID", "INFO") or r.get("detail", {}).get("layer"):
             lines += [f"### {r['id']} - {r['status']}", "", f"Rationale: {r.get('rationale', '')}", "",
                       "```json", json.dumps(r.get("detail"), indent=2)[:6000], "```", ""]
             if r.get("artifacts"):

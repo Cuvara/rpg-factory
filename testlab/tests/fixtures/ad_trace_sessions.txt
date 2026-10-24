@@ -1,0 +1,161 @@
+# Scrubbed excerpt of %AppData%\AnyDesk\ad.trace (UTC), host duycu, 2026-10-23 15:19Z .. 2026-10-24 ~16:30Z.
+# Only session-related lines and two idle 'Monitors found' lines are kept. Client ids are replaced by 0000000001; no addresses or fingerprints are present.
+   info 2026-10-23 15:19:10.477       back  57812  73452                     base.monitor_info - Monitors found: 1
+   info 2026-10-23 15:19:10.477       back  57812  73452             desk_rt.capture_component - Starting capture.
+   info 2026-10-23 15:19:10.686       back  57812  79712            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-23 15:19:10.744       back  57812  73452                   app.backend_session - Session started (ok).
+   info 2026-10-23 15:21:22.563       lsvc  14696  17760  660                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-23 15:21:22.593       back  57812  73452              capture.fallback_capture - Switching to dead.
+   info 2026-10-23 15:21:22.625       back  57812  73452            capture.dda_stream_capture - Stopped.
+   info 2026-10-23 16:05:43.440       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-23 16:05:44.072       lsvc  14696  17760  670                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-23 16:05:44.891       lsvc  14696  17760  670                      app.session - Backend PID: 18720
+   info 2026-10-23 16:05:45.471       back  18720  30084             desk_rt.capture_component - Starting capture.
+   info 2026-10-23 16:05:45.706       back  18720  76008            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-23 16:05:45.756       back  18720  30084                   app.backend_session - Session started (ok).
+   info 2026-10-23 16:06:43.157       lsvc  14696  17760  670                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-23 16:06:43.187       back  18720  30084              capture.fallback_capture - Switching to dead.
+   info 2026-10-23 16:06:43.212       back  18720  30084            capture.dda_stream_capture - Stopped.
+   info 2026-10-23 16:09:24.828       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-23 16:09:26.021       lsvc  14696  17760  680                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-23 16:09:26.025       lsvc  14696  17760  680                      app.session - Backend PID: 63160
+   info 2026-10-23 16:09:26.570       back  63160  64692             desk_rt.capture_component - Starting capture.
+   info 2026-10-23 16:09:26.611       back  63160  64692                   app.backend_session - Session started (ok).
+   info 2026-10-23 16:09:26.679       back  63160    884            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-23 16:10:16.351       lsvc  14696  17760  680                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-23 16:10:16.373       back  63160  64692              capture.fallback_capture - Switching to dead.
+   info 2026-10-23 16:10:16.403       back  63160  64692            capture.dda_stream_capture - Stopped.
+   info 2026-10-23 18:13:43.198      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-23 21:33:46.169      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 00:53:49.015      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 04:13:51.803      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 04:40:19.575       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 04:40:20.145       lsvc  14696  17760  690                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 04:40:20.977       lsvc  14696  17760  690                      app.session - Backend PID: 77720
+   info 2026-10-24 04:40:21.565       back  77720   7988             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 04:40:21.596       back  77720   7988                   app.backend_session - Session started (ok).
+   info 2026-10-24 04:40:21.680       back  77720  53300            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 04:41:43.140       lsvc  14696  17760  690                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 04:41:43.168       back  77720   7988              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 04:41:43.216       back  77720   7988            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 04:44:02.459       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 04:44:03.086       lsvc  14696  17760  700                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 04:44:03.092       lsvc  14696  17760  700                      app.session - Backend PID: 86936
+   info 2026-10-24 04:44:03.628       back  86936  70456             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 04:44:03.657       back  86936  70456                   app.backend_session - Session started (ok).
+   info 2026-10-24 04:44:03.729       back  86936  67272            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 04:45:32.801       lsvc  14696  17760  700                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 04:45:32.830       back  86936  70456              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 04:45:32.860       back  86936  70456            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 05:17:48.587       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 05:17:49.188       lsvc  14696  17760  710                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 05:17:49.193       lsvc  14696  17760  710                      app.session - Backend PID: 77944
+   info 2026-10-24 05:17:49.741       back  77944  86520             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 05:17:49.768       back  77944  86520                   app.backend_session - Session started (ok).
+   info 2026-10-24 05:17:49.831       back  77944  80676            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 05:22:10.092       lsvc  14696  17760  710                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 05:22:10.117       back  77944  86520              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 05:22:10.137       back  77944  86520            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 05:48:43.407       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 05:48:43.933       lsvc  14696  17760  720                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 05:48:43.963       lsvc  14696  17760  720                      app.session - Backend PID: 32772
+   info 2026-10-24 05:48:44.540       back  32772  48536             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 05:48:44.575       back  32772  48536                   app.backend_session - Session started (ok).
+   info 2026-10-24 05:48:44.650       back  32772  22704            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 05:52:24.137       lsvc  14696  17760  720                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 05:52:24.159       back  32772  48536              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 05:52:24.191       back  32772  48536            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 05:52:38.389       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 05:52:39.059       lsvc  14696  17760  730                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 05:52:39.074       lsvc  14696  17760  730                      app.session - Backend PID: 67880
+   info 2026-10-24 05:52:39.642       back  67880  29804             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 05:52:39.683       back  67880  29804                   app.backend_session - Session started (ok).
+   info 2026-10-24 05:52:39.744       back  67880  52588            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 05:59:48.407       lsvc  14696  17760  730                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 05:59:48.435       back  67880  29804              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 05:59:48.468       back  67880  29804            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 06:43:54.588      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 08:30:18.821       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 08:30:19.616       lsvc  14696  17760  740                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 08:30:19.624       lsvc  14696  17760  740                      app.session - Backend PID: 41780
+   info 2026-10-24 08:30:20.272       back  41780  44340             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 08:30:20.307       back  41780  44340                   app.backend_session - Session started (ok).
+   info 2026-10-24 08:30:20.384       back  41780  52432            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 08:31:06.141       lsvc  14696  17760  740                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 08:31:06.171       back  41780  44340              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 08:31:06.228       back  41780  44340            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 08:32:40.917       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 08:32:41.557       lsvc  14696  17760  750                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 08:32:41.561       lsvc  14696  17760  750                      app.session - Backend PID: 68268
+   info 2026-10-24 08:32:42.104       back  68268  32368             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 08:32:42.137       back  68268  32368                   app.backend_session - Session started (ok).
+   info 2026-10-24 08:32:42.198       back  68268  54096            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 08:33:08.488       lsvc  14696  17760  750                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 08:33:08.509       back  68268  32368              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 08:33:08.535       back  68268  32368            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 09:26:53.503       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 09:26:54.139       lsvc  14696  17760  760                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 09:26:54.146       lsvc  14696  17760  760                      app.session - Backend PID: 66232
+   info 2026-10-24 09:26:54.834       back  66232  67296             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 09:26:55.058       back  66232  32528            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 09:26:55.137       back  66232  67296                   app.backend_session - Session started (ok).
+   info 2026-10-24 09:28:18.497       lsvc  14696  17760  760                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 09:28:18.526       back  66232  67296              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 09:28:18.551       back  66232  67296            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 09:33:57.964      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 10:14:47.615       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 10:14:48.281       lsvc  14696  17760  769                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 10:14:48.334       lsvc  14696  17760  769                      app.session - Backend PID: 54020
+   info 2026-10-24 10:14:48.884       back  54020  58212             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 10:14:48.916       back  54020  58212                   app.backend_session - Session started (ok).
+   info 2026-10-24 10:14:48.986       back  54020  49952            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 10:15:33.838       lsvc  14696  17760  769                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 10:15:33.864       back  54020  58212              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 10:15:33.886       back  54020  58212            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 10:25:29.553       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 10:25:30.135       lsvc  14696  17760  779                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 10:25:30.141       lsvc  14696  17760  779                      app.session - Backend PID: 52200
+   info 2026-10-24 10:25:30.687       back  52200  55724             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 10:25:30.717       back  52200  55724                   app.backend_session - Session started (ok).
+   info 2026-10-24 10:25:30.787       back  52200  77996            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 10:28:44.930       lsvc  14696  17760  779                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 10:28:45.018       back  52200  55724              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 10:28:45.041       back  52200  55724            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 10:32:11.394       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 10:32:11.952       lsvc  14696  17760  789                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 10:32:11.957       lsvc  14696  17760  789                      app.session - Backend PID: 71032
+   info 2026-10-24 10:32:12.509       back  71032   3800             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 10:32:12.541       back  71032   3800                   app.backend_session - Session started (ok).
+   info 2026-10-24 10:32:12.618       back  71032  82504            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 10:38:34.283       lsvc  14696  17760  789                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 10:38:34.376       back  71032   3800              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 10:38:34.409       back  71032   3800            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 12:24:00.982      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 12:28:17.851       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 12:28:18.600       lsvc  14696  17760  799                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 12:28:19.458       lsvc  14696  17760  799                      app.session - Backend PID: 55124
+   info 2026-10-24 12:28:20.096       back  55124  21564             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 12:28:20.115       lsvc  14696  17760  799                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 12:28:20.134       back  55124  21564                   app.backend_session - Session started (ok).
+   info 2026-10-24 12:28:20.204       back  55124  66604            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 12:28:20.847       back  55124  21564              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 12:28:20.894       back  55124  21564            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 12:28:21.499       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 12:28:22.119       lsvc  14696  17760  809                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 12:28:22.123       lsvc  14696  17760  809                      app.session - Backend PID: 13732
+   info 2026-10-24 12:28:22.661       back  13732  68640             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 12:28:22.689       back  13732  68640                   app.backend_session - Session started (ok).
+   info 2026-10-24 12:28:22.752       back  13732  84800            capture.dda_stream_capture - Starting capture on .
+   info 2026-10-24 12:30:52.436       lsvc  14696  17760  809                      app.session - Session closed by remote side: desk_rt_ipc_error.
+   info 2026-10-24 12:30:52.465       back  13732  68640              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 12:30:52.484       back  13732  68640            capture.dda_stream_capture - Stopped.
+   info 2026-10-24 15:24:04.277      lctrl  15536  17748    1                base.monitor_info - Monitors found: 1
+   info 2026-10-24 16:22:33.285       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).
+   auth 2026-10-24 16:22:33.903       lsvc  14696  17760  817                      app.session - 3: Authenticated with permanent token.
+   info 2026-10-24 16:22:34.729       lsvc  14696  17760  817                      app.session - Backend PID: 68360
+   info 2026-10-24 16:22:35.395       back  68360  33724             desk_rt.capture_component - Starting capture.
+   info 2026-10-24 16:22:35.427       back  68360  33724                   app.backend_session - Session started (ok).
+   info 2026-10-24 16:22:35.499       back  68360  68732            capture.dda_stream_capture - Starting capture on .
+  error 2026-10-24 16:28:20.314       lsvc  14696  17760  817                      app.session - Net socket closed: anynet_unknown.
+   info 2026-10-24 16:28:20.340       back  68360  33724              capture.fallback_capture - Switching to dead.
+   info 2026-10-24 16:28:20.387       back  68360  33724            capture.dda_stream_capture - Stopped.

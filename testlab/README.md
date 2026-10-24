@@ -16,7 +16,7 @@ python3 testlab/testlab.py sweep S07 --levels 0,25,50,100,150,200   # load sweep
 python3 testlab/testlab.py run S09 --duration 3600                  # 1-hour soak
 ```
 
-Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error, `4` PASS_WITH_WARNINGS.
+Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE or INVALID, `3` harness or usage error, `4` PASS_WITH_WARNINGS.
 
 **PASS_WITH_WARNINGS** is the outcome when every assertion passed but an `informational` one would have failed (today the S07/S07P memory slope, informational because the bot ramp allocates by design). It is never a clean PASS. The report lists it, and host load, under **Qualified by** next to the verdict: host-wide stalls seen in the run, or CPU load of 50 % or more at start or end. Host qualifications do not change the outcome (the timing checks a stall explains are already INCONCLUSIVE); they say the timing came from a busy host.
 
@@ -284,6 +284,7 @@ Copy a file in `scenarios/` and change these fields:
 | `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png`; with a C2 recorder also `delivery.csv` and `render.csv`; with `predictor_trace` also `trace.ndjson` |
 | `rawprobe.ndjson` | S16/S17 only: what the raw-client step did and saw (cases with server reads, churn cycles, Redis key names before and after) |
 | `server/` | `entities.ndjson` (authoritative positions), `status.ndjson`, `container.ndjson`, `metrics-{start,end,after}.txt`; with `snapshot_trace` also `snapshot-trace.csv` |
+| `host/` | the host guard: `guard.ndjson` (one row per 5 s: AnyDesk processes with CPU and role, host CPU/DPC/interrupt, foreign load by group, the guard's own CPU), `anydesk-events.ndjson` (session events from AnyDesk's own log), `guard-summary.json` (the guard's cost), and with a clean-host scenario `preflight.json` |
 | `redis.json`, `orchestrator.log`, `stack-up.log`, `harness-error.txt` | |
 
 `python3 testlab/testlab.py analyze <run_dir>` re-grades stored evidence. Use it after a check changes, or to review a run without re-running it. It writes `results.json` and `report.md` into the run directory; `--out DIR` writes them elsewhere and leaves the run directory untouched (use it on runs other people rely on).
@@ -302,6 +303,40 @@ When a run ends, `run.json` gets a `provenance` record (`lab/provenance.py`):
 Every evaluation appends the `provenance` assertion. It is PASS only when every field is present, the run id is the directory's own, the scenario and every evidence file still hash as recorded, and every client summary names this run. Anything else is INCONCLUSIVE, so a run copied under another id, re-used evidence, or a run without a record (runs before this change) cannot grade PASS. `results.json` carries an `analysis` block (run id, run directory, time, factory commit, provenance status).
 
 The manifest covers every evidence file: `scenario.json`, `redis.json`, `disruptions.ndjson` and everything under `client-*/`, `server/` and `bots/`. Each scenario has an expected inventory (`provenance.expected_inventory`: the server probe files, each client's recorder outputs, plus `disruptions.ndjson`, `bots/loadtest.json` or `server/snapshot-trace.csv` when the scenario produces them, and `client-N/trace.ndjson` for each client whose plan has `predictor_trace`). An inventory file missing from the manifest, an evidence file not in it, or a hash mismatch makes `provenance` INCONCLUSIVE.
+
+## Clean-host soak (S09, host guard)
+
+A freeze in a rendered player is evidence about the game only if nothing else on the host caused it. An AnyDesk session start does: in the F19 study, 2 of the 4 session starts that fell inside soaks with a process sampler froze the players for about 5 s (`20261023T040945Z-S09-e26z`, `20261023T071851Z-S09-i9fl`), and the other 2 did not. So the rule is about sessions, not about the program being installed. **AnyDesk stays running; the harness never stops, kills or starts anything on the host.** Every read is passive and read-only, with no elevation.
+
+**The rule.** No `AnyDesk.exe --backend` process (that process is the session) and no AnyDesk session event from 2 min before the first scheduled client until the run ends. The three resident AnyDesk processes (`AnyDesk.exe`, `--local-service`, `--local-control`) are allowed. This replaces the older "no `AnyDesk.exe` process" wording, which cannot be met while remote access is kept.
+
+**Preflight** (`python3 testlab/testlab.py preflight-soak [--window-min 90] [--window-announced "18:30Z 90min"] [--allow-agent NAME] [--json]`): a 2 min passive sample plus the AnyDesk, Orca and WSL state, one PASS/FAIL row each, exit 0 only when all pass.
+
+| Row | Needs |
+|---|---|
+| P1 | no `--backend` process, no session event or connection entry in the last 2 min (residents allowed) |
+| P2 | AnyDesk residents idle: mean CPU under 0.5 % of the host |
+| P3 | no other agent in the `working` state in `orca worktree ps` (`--allow-agent` names the soak runner and the Lead) |
+| P4 | no sustained build tools (mean 2 % or less) or Defender scan (`MsMpEng` under 5 %) |
+| P5 | host CPU mean 50 % or less; above 30 % it is flagged shared-host |
+| P6 | the WSL distro is running with uptime of 10 min or more (the probe never starts it) |
+| P7 | the user has named the window (`--window-announced`); a runbook step, not measured |
+
+A scenario with `requires_clean_host` (S09) runs P1-P6 automatically before anything starts and refuses to start on a FAIL (`harness_error`: `host preflight failed: P3`). `--require-clean-host` does the same for any scenario. The result is `host/preflight.json`.
+
+**In-run guard.** `lab/hostguard.ps1` (a PowerShell child, started before the clients, stopped after them) samples every 5 s; `lab/hostguard.py` tails AnyDesk's `ad.trace` (and `connection_trace.txt`) for session events. The guard writes its own CPU cost to `host/guard-summary.json`. Guards are evaluated inside the window from `start_scheduled` minus 30 s to the scenario end plus `finish_grace_s`:
+
+| Guard | Fires on |
+|---|---|
+| G1 | an AnyDesk session event or `--backend` process in the window, or a session still active at its start |
+| G2 | an AnyDesk process that was not in the preflight / pre-window set (also catches a log that cannot be read) |
+| G3 | AnyDesk CPU of 0.5 % of the host or more for 2 consecutive samples |
+| G4 | build tools or `MsMpEng` above 5 % of the host for 3 consecutive samples |
+| G5 | the guard was blind: more than 3 consecutive intervals without a sample |
+
+A fired guard makes the `host_guard` assertion, and so the run, **INVALID**. INVALID is checked before FAIL and is never PASS: it cannot turn a FAIL or INCONCLUSIVE into a PASS, it is not a verdict on the candidate, and a FAIL in the table is kept as evidence (and named under **Qualified by**). It exits with code 2. No threshold or pass rule of any scenario changed. `host_quiet` additionally names the nearest guard event within 10 s of every single-process frame of 1 s or more. Other agents' shell and WSL bursts are recorded (`newproc`) but do not invalidate. Every limit above is **policy, unvalidated** (`docs/THRESHOLDS.md`), calibrated on one 16 min baseline.
+
+The guard cannot see which part of a session start freezes a player, and an idle resident AnyDesk cannot be cleared by it; both stay open (F19 section 3.5). A run with no guard evidence (older runs) shows `host_guard` INFO; a clean-host scenario without it is INCONCLUSIVE.
 
 ## Snapshot delivery path (`analyze --delivery`, rpg-mmo-server#473)
 

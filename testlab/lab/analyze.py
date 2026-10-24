@@ -15,9 +15,13 @@ import re
 from bisect import bisect_left, bisect_right
 from pathlib import Path
 
-from . import provenance, util
+from . import hostguard, provenance, util
 
 PASS, FAIL, INCONCLUSIVE, INFO = "PASS", "FAIL", "INCONCLUSIVE", "INFO"
+# The host was not clean while the run was measured (an AnyDesk session, a foreign build, a blind
+# guard; lab/hostguard.py). Run outcome and `host_guard` status only. It ranks above FAIL so a
+# contaminated run is neither PASS nor a verdict on the candidate, and it is never PASS.
+INVALID = "INVALID"
 # Run outcome only: every assertion passed, but an informational one would have failed (e.g. the
 # S07/S07P memory slope). Never a clean PASS; exit code 4.
 PASS_WITH_WARNINGS = "PASS_WITH_WARNINGS"
@@ -76,6 +80,11 @@ def load_evidence(run_dir: Path) -> dict:
         "rawprobe": util.read_ndjson(run_dir / "rawprobe.ndjson"),
         # What the packet-impairment step (S18) recorded: netem.ndjson.
         "netem": util.read_ndjson(run_dir / "netem.ndjson"),
+        # What the host guard recorded (host/, lab/hostguard.py): samples, AnyDesk events, preflight.
+        "hostguard": {"samples": util.read_ndjson(run_dir / "host" / "guard.ndjson"),
+                      "events": util.read_ndjson(run_dir / "host" / "anydesk-events.ndjson"),
+                      "summary": util.read_json(run_dir / "host" / "guard-summary.json", default=None),
+                      "preflight": util.read_json(run_dir / "host" / "preflight.json", default=None)},
     }
     ev["traj"] = trajectories(entities)
     return ev
@@ -1533,12 +1542,75 @@ def check_host_quiet(ev, a):
                           "load_end": quiet.get("load_end")},
                    None,
                    source="client frames.csv, frames >= 250 ms ending within 250 ms in >= 2 processes",
-                   sampling="every frame", detail={"stalls": [(round(a, 2), round(b, 2), c) for a, b, c in stalls[:20]]},
+                   sampling="every frame", detail={"stalls": [(round(a, 2), round(b, 2), c) for a, b, c in stalls[:20]],
+                                                   **_long_frames_detail(ev)},
                    rationale="a stall shared by separate processes is the host, not the game; checks it explains are "
                              "INCONCLUSIVE, and the run should be repeated on a quiet host")
 
 
 CHECKS["host_quiet"] = check_host_quiet
+
+
+def _long_frames_detail(ev) -> dict:
+    """host_quiet detail key: only when the host guard recorded the run (older runs keep their detail)."""
+    rows = _long_frames_with_guard_events(ev)
+    return {"long_single_frames": rows} if rows else {}
+
+
+def _long_frames_with_guard_events(ev, min_ms: float = 1000.0, within_s: float = 10.0, cap: int = 20) -> list:
+    """Every single-process frame >= min_ms with the nearest host-guard event within +-within_s (the
+    scenario time is mapped to wall time through the scheduled start, accurate to about 5 s), so an
+    AnyDesk-style attribution is automatic. Empty without guard evidence."""
+    start = (ev["meta"].get("host_guard") or {}).get("start_wall_epoch")
+    events = (ev.get("hostguard") or {}).get("events") or []
+    if start is None:
+        return []
+    out = []
+    for c in ev["clients"]:
+        for st, dtm in c.get("frames", []):
+            if dtm >= min_ms:
+                out.append({"client": c["index"], "st": round(st, 2), "dt_ms": round(dtm, 1),
+                            "nearest_guard_event": hostguard.nearest_event(events, start + st, within_s)})
+    out.sort(key=lambda r: r["st"])
+    return out[:cap]
+
+
+def check_host_guard(ev, a):
+    """INVALID when the host guard (lab/hostguard.py) fired inside the measurement window: an AnyDesk
+    session start or active session (G1), a new AnyDesk process (G2), an AnyDesk CPU burst (G3), a
+    foreign build or antivirus load (G4), or a blind guard (G5). Otherwise INFO with the baseline
+    numbers; INCONCLUSIVE when the scenario requires a clean host and no guard evidence exists.
+    Never PASS, so it cannot turn a FAIL or INCONCLUSIVE into one; all other checks are untouched."""
+    hg = ev.get("hostguard") or {}
+    meta = (ev["meta"].get("host_guard") or {})
+    required = bool(ev["scenario"].get("requires_clean_host") or meta.get("required"))
+    samples = hg.get("samples") or []
+    window = meta.get("window_epoch")
+    src = "host/guard.ndjson + host/anydesk-events.ndjson (lab/hostguard.py)"
+    if not samples or not window:
+        why = meta.get("error") or ("no window recorded (the run ended before the scenario was scheduled)" if samples
+                                    else "no host guard evidence recorded")
+        if required:
+            return _inconclusive(f"clean host required: {why}", source=src)
+        return _result(INFO, {"recorded": False}, None, source=src, sampling="n/a", detail={"why": why},
+                       rationale="runs before the host guard, or runs that did not start it, have nothing to grade")
+    res = hostguard.evaluate(list(samples), list(hg.get("events") or []), (float(window[0]), float(window[1])),
+                             baseline_pids=meta.get("baseline_pids") or (),
+                             preflight_pids=((hg.get("preflight") or {}).get("anydesk_pids") or ()),
+                             interval_s=float(meta.get("interval_s") or hostguard.INTERVAL_S))
+    detail = {"fired": res["fired"], "window_utc": res["window"], "stats": res["stats"],
+              "guard_cost": hg.get("summary"), "preflight_failed": (hg.get("preflight") or {}).get("failed")}
+    rationale = ("a contaminated window cannot show that the game, not the host, caused or avoided a freeze; "
+                 "policy limits in testlab/docs/THRESHOLDS.md")
+    if res["fired"]:
+        return _result(INVALID, {"fired": [f["id"] for f in res["fired"]]}, "no guard fires inside the window",
+                       source=src, sampling=f"{res['stats']['samples_in_window']} samples in window", detail=detail,
+                       rationale=rationale, artifacts=[str(ev["run_dir"] / "host" / "guard.ndjson")])
+    return _result(INFO, {"fired": [], **res["stats"]}, "no guard fires inside the window", source=src,
+                   sampling=f"{res['stats']['samples_in_window']} samples in window", detail=detail, rationale=rationale)
+
+
+CHECKS["host_guard"] = check_host_guard
 
 
 def check_provenance(ev, a):
@@ -1570,7 +1642,8 @@ CHECKS["provenance"] = check_provenance
 
 # Appended to every evaluation when the scenario does not list them.
 ALWAYS = (("provenance", "run provenance (commits, image, player, scenario, evidence hashes)"),
-          ("host_quiet", "host-wide stalls (environment)"))
+          ("host_quiet", "host-wide stalls (environment)"),
+          ("host_guard", "host guard (AnyDesk session, foreign load, guard blind)"))
 
 
 def evaluate(ev: dict) -> list[dict]:
@@ -1607,6 +1680,10 @@ def overall(results: list[dict], harness_error: str | None = None) -> str:
     if harness_error:
         return INCONCLUSIVE
     statuses = [r["status"] for r in results]
+    if INVALID in statuses:
+        # Before FAIL: a contaminated run is not a verdict on the candidate. The FAIL evidence stays
+        # in the per-check table; INVALID is never PASS.
+        return INVALID
     if FAIL in statuses:
         return FAIL
     if INCONCLUSIVE in statuses or not statuses:
@@ -1630,6 +1707,15 @@ def qualifications(results: list[dict], meta: dict | None = None) -> list[dict]:
     out = [{"kind": "informational_breach", "id": r.get("id"),
             "text": f"`{r.get('id')}` would be FAIL (informational): measured {r.get('measured')}, "
                     f"threshold {r.get('threshold')}"} for r in informational_breaches(results)]
+    guard = next((r for r in results if r.get("check") == "host_guard"), None)
+    if guard and guard.get("status") == INVALID:
+        for f in (guard.get("detail") or {}).get("fired") or []:
+            out.append({"kind": "invalid", "id": f["id"],
+                        "text": f"guard {f['id']} fired ({f['rule']}): {'; '.join(f.get('evidence') or [])[:300]}"})
+        failed = [r.get("id") for r in results if r.get("status") == FAIL]
+        if failed:
+            out.append({"kind": "invalid", "id": "kept_failures",
+                        "text": "checks that are FAIL in the table are kept as evidence, not as a verdict: " + ", ".join(map(str, failed))})
     host = next((r for r in results if r.get("check") == "host_quiet"), None)
     m = (host or {}).get("measured") or {}
     if m.get("host_stalls"):

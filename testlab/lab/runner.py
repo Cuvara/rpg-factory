@@ -14,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import analyze, clients, netem, provenance, rawprobe, report, scenarios, stack, util
+from . import analyze, clients, hostguard, netem, provenance, rawprobe, report, scenarios, stack, util
 from .config import LabConfig
 from .probe import ServerProbe
 
@@ -55,7 +55,8 @@ def _player_fingerprint(cfg: LabConfig) -> dict:
 
 
 def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, build_server: bool = False,
-        keep_clients: bool = False, run_id: str | None = None, quiet: bool = False) -> dict:
+        keep_clients: bool = False, run_id: str | None = None, quiet: bool = False,
+        require_clean_host: bool = False, allow_agents=()) -> dict:
     sc = scenarios.load(scenario_name, overrides)
     run_id = run_id or util.new_run_id(sc["id"])
     run_dir = cfg.runs_root / "runs" / run_id
@@ -97,6 +98,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
     util.write_json(run_dir / "scenario.json", sc)
     players: list[clients.Player] = []
     probe: ServerProbe | None = None
+    guard: hostguard.HostGuard | None = None
     bots_proc = None
     harness_error = None
     interrupted = False
@@ -113,6 +115,19 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         if not meta["player"]["testlab_assembly"]:
             raise RuntimeError(f"{cfg.player_exe} has no NDC.TestLab.dll: build with testlab.py build-client "
                                "(PlayerBuilder -extraDefines CUVARA_TESTLAB)")
+        # A soak that needs a clean host refuses to start on a failed host preflight (P1-P6, lab/hostguard.py);
+        # P7, the announced window, is the Lead's runbook step.
+        required = bool(sc.get("requires_clean_host") or require_clean_host)
+        meta["host_guard"] = {"required": required}
+        if required:
+            log("host preflight: sampling the host (P1-P6)")
+            pf = hostguard.preflight(window_min=float(sc["duration_s"]) / 60.0 + 30.0, allow_agents=allow_agents,
+                                     include_p7=False)
+            util.write_json(run_dir / "host" / "preflight.json", pf)
+            meta["host_guard"]["preflight"] = {"ok": pf["ok"], "failed": pf["failed"]}
+            for row in pf["rows"]:
+                log(f"host preflight {row['id']} {row['status']}: {row['detail']}")
+            hostguard.enforce(pf)
         for note in clients.clean_orphans(cfg):
             log(note)
         pre = stack.preflight(cfg)
@@ -120,6 +135,17 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         if pre["conflicts"]:
             raise RuntimeError("port conflict: " + "; ".join(pre["conflicts"]))
 
+        guard = hostguard.HostGuard(run_dir / "host")
+        try:
+            guard.start()
+            meta["host_guard"].update(interval_s=guard.interval_s, baseline_pids=guard.baseline_pids,
+                                      paths=guard.paths.as_dict())
+            mark("guard_started")
+        except Exception as exc:     # a run that does not need a clean host still runs, with the gap on record
+            meta["host_guard"]["error"] = f"host guard did not start: {type(exc).__name__}: {exc}"
+            log("host guard: " + meta["host_guard"]["error"])
+            if required:
+                raise RuntimeError(meta["host_guard"]["error"])
         stack.check_nakama_module(cfg, build_server)
         env = stack.env_for(sc, cfg)
         if sc.get("snapshot_trace") and not stack.compose_forwards(cfg, "GAMESERVER_SNAPSHOT_TRACE"):
@@ -173,7 +199,11 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         probe.start_mono = util.mono() + (start_ms - util.unix_ms()) / 1000.0
         clients.write_control(control_path, start_ms, user_ids)
         log(f"scenario clock starts in {sc['start_delay_s']}s; duration {sc['duration_s']}s")
-        mark("start_scheduled", start_mono=probe.start_mono)
+        start_wall = start_ms / 1000.0
+        window = [start_wall - hostguard.WINDOW_PRE_S, start_wall + float(sc["duration_s"]) + float(sc.get("finish_grace_s", 20))]
+        meta["host_guard"].update(start_wall_epoch=start_wall, window_epoch=window,
+                                  window_utc=[hostguard.iso_utc(window[0]), hostguard.iso_utc(window[1])])
+        mark("start_scheduled", start_mono=probe.start_mono, start_wall_utc=hostguard.iso_utc(start_wall))
 
         if sc.get("bots") and int(sc["bots"].get("players", 0)) > 0:
             bots_proc = _start_bots(cfg, sc, run_dir, log)
@@ -261,6 +291,9 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                 log(note)
         if not keep_clients:
             clients.unregister_active(cfg, run_id)
+        if guard is not None:
+            # After the players are gone and before the evidence manifest hashes host/.
+            meta["host_guard"]["summary"] = guard.stop()
         for p in players:
             meta["clients"].setdefault(str(p.index), {})["history"] = p.history
         if sc.get("snapshot_trace") and meta.get("stack"):

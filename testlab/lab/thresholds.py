@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from . import scenarios
+from . import hostguard, scenarios
 
 POLICY = "policy, unvalidated"
 
@@ -212,6 +212,28 @@ CHECK_DEFAULTS = [
     ("delivery (analyze --delivery)", "gap_ms / explain_fraction / bucket_s", "250 / 0.5 / 300", POLICY),
     ("delivery windowed clock fit", "window / bins / rate / empirical error", "10 s / >= 5 minima per 1 s bin / 0.8-1.2 / p95 <= 10 ms", "X13 measured 10 s minima fits: residual p95 2.16-3.85 ms on i9fl/e26z; 10 ms is a conservative rejection ceiling; rate range is defensive policy, unvalidated"),
     ("delivery scope", "time-overlap slack", "50 ms", POLICY),
+    ("host_guard (INVALID verdict)", "window", f"start_scheduled - {hostguard.WINDOW_PRE_S:.0f} s .. scenario end + finish_grace_s",
+     f"{POLICY}: a session that began just before t0 and is still running counts (F19 section 4.3)"),
+    ("host_guard G1", "AnyDesk session", "any session event, `--backend` process or session active at window start, in the window",
+     f"{POLICY}: 2 of 4 session starts in soaks with a sampler froze the players (e26z, i9fl), so none can be excused; "
+     "residents (`AnyDesk.exe`, `--local-service`, `--local-control`) are allowed"),
+    ("host_guard G2", "new AnyDesk process", "pid not in the preflight / pre-window set", f"{POLICY}: catches a missing or rotated log"),
+    ("host_guard G3", "AnyDesk CPU, consecutive samples",
+     f">= {hostguard.ANYDESK_IDLE_MAX_PCT} % of host for {hostguard.G3_CONSECUTIVE}",
+     f"{POLICY}: 4x the idle maximum 0.13 % and half the lightest session ~1 % (F19 baseline 16:27-16:43Z, 185 samples)"),
+    ("host_guard G4", "foreign load, consecutive samples",
+     f"build tools > {hostguard.G4_BUILD_PCT} %, MsMpEng > {hostguard.G4_AV_PCT} % of host for {hostguard.G4_CONSECUTIVE}",
+     f"{POLICY}: provisional; T62 pre-soak load was 51 %, MsMpEng 105 CPU-s per 30 s"),
+    ("host_guard G5", "blind guard", f"> {hostguard.G5_MISSED_INTERVALS} missed intervals of {hostguard.INTERVAL_S:.0f} s (+1 s)", POLICY),
+    ("preflight P1", "no session now", f"no `--backend`, no session event or connection entry in the last {hostguard.PRE_QUIET_S:.0f} s", POLICY),
+    ("preflight P2", "AnyDesk residents idle", f"mean CPU < {hostguard.ANYDESK_IDLE_MAX_PCT} % of host over a {hostguard.PRE_SAMPLE_S:.0f} s sample",
+     f"{POLICY}: observed idle mean 0.03 %, max 0.13 %"),
+    ("preflight P3", "no other agent working", "0 `working` agents in `orca worktree ps` except the allowed ones", POLICY),
+    ("preflight P4", "no heavy foreign process", f"build-tool mean <= {hostguard.P4_FOREIGN_PCT} %, MsMpEng mean < {hostguard.G4_AV_PCT} %", POLICY),
+    ("preflight P5", "host CPU", f"refuse above {hostguard.P5_REFUSE_PCT} % mean, flag shared-host above {hostguard.P5_SHARED_PCT} %",
+     f"{POLICY}: idle baseline mean 15.8 %, p95 33 %"),
+    ("preflight P6", "WSL warm", f"uptime >= {hostguard.P6_WSL_UPTIME_S:.0f} s", f"{POLICY}: FINAL-SOAK-PREFLIGHT found WSL cold at 15 s"),
+    ("preflight P7", "window announced", "the user named start time and length (`--window-announced`)", f"{POLICY}: runbook step, out of band"),
     ("delivery KCP class", "after_rows", 4, f"{POLICY}: rows after tick b where a retransmission burst lands "
                                             "(T06 sfj5 s 738: 3 -> 40 in the next rows)"),
 ]

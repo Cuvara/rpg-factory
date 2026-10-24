@@ -13,12 +13,13 @@
     python testlab/testlab.py build-loadtest [--server-repo PATH]
     python testlab/testlab.py stack up|down|status
     python testlab/testlab.py clean                      # kill orphaned players of interrupted runs
+    python testlab/testlab.py preflight-soak [--window-min 90] [--window-announced "18:30Z 90min"] [--json]
 
 run, suite and sweep stop the scratch stack when they finish (also on failure and Ctrl-C) unless
 --keep-stack is given.
 
-Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE, 3 harness/usage error, 4 PASS_WITH_WARNINGS (an
-informational assertion would have failed). Docs: testlab/README.md.
+Exit codes: 0 PASS, 1 FAIL, 2 INCONCLUSIVE or INVALID (the host guard fired: not a verdict on the
+candidate), 3 harness/usage error, 4 PASS_WITH_WARNINGS (an informational assertion would have failed). Docs: testlab/README.md.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, delivery, leakcheck, predtrace, report, runner, scenarios, stack, thresholds, util  # noqa: E402
+from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, scenarios, stack, thresholds, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
 THRESHOLDS_DOC = Path(__file__).resolve().parent / "docs" / "THRESHOLDS.md"
@@ -57,10 +58,10 @@ def _cfg(args) -> config.LabConfig:
 
 
 def _worst(outcomes: list[str]) -> int:
-    """FAIL 1 > INCONCLUSIVE 2 > PASS_WITH_WARNINGS 4 > PASS 0."""
+    """FAIL 1 > INCONCLUSIVE / INVALID 2 > PASS_WITH_WARNINGS 4 > PASS 0."""
     if "FAIL" in outcomes:
         return 1
-    if "INCONCLUSIVE" in outcomes or not outcomes:
+    if "INCONCLUSIVE" in outcomes or "INVALID" in outcomes or not outcomes:
         return 2
     if "PASS_WITH_WARNINGS" in outcomes:
         return 4
@@ -108,11 +109,32 @@ def cmd_run(args) -> int:
         outcomes = []
         for name in args.scenarios:
             res = runner.run(cfg, name, overrides=_overrides(args), build_server=args.build_server,
-                             keep_clients=args.keep_clients)
+                             keep_clients=args.keep_clients,
+                             require_clean_host=getattr(args, "require_clean_host", False),
+                             allow_agents=tuple(getattr(args, "allow_agent", None) or ()))
             outcomes.append(res["outcome"])
             args.build_server = False  # build once per invocation
         return _worst(outcomes)
     return _with_stack_teardown(cfg, args, body)
+
+
+def cmd_preflight_soak(args) -> int:
+    """Host preflight P1-P7 for a clean-host soak (lab/hostguard.py): a 2 min passive sample plus the
+    AnyDesk, Orca and WSL state. Read-only; prints one PASS/FAIL row each and writes nothing unless
+    --out is given. Exit 0 when every row passes, 2 otherwise."""
+    result = hostguard.preflight(window_min=args.window_min, announced=args.window_announced,
+                                 sample_s=args.sample_s, allow_agents=tuple(args.allow_agent or ()))
+    if args.out:
+        util.write_json(_path(args.out), result)
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        for row in result["rows"]:
+            note = f" [{row['note']}]" if row.get("note") else ""
+            print(f"{row['id']} {row['status']}: {row['detail']}{note}")
+        print(f"preflight-soak: {'OK' if result['ok'] else 'FAILED ' + ', '.join(result['failed'])} "
+              f"({result['samples']} samples over {result['sample_s']:.0f} s)")
+    return 0 if result["ok"] else 2
 
 
 def cmd_suite(args) -> int:
@@ -373,6 +395,11 @@ def main(argv=None) -> int:
                         help="record the server snapshot trace (GAMESERVER_SNAPSHOT_TRACE) into server/")
     for sp in (r, s):
         sp.add_argument("--keep-clients", action="store_true")
+        sp.add_argument("--require-clean-host", action="store_true",
+                        help="run the host preflight (P1-P6) and refuse to start on a FAIL; always on for scenarios "
+                             "flagged requires_clean_host (S09)")
+        sp.add_argument("--allow-agent", action="append",
+                        help="Orca worktree name or path whose working agent P3 may ignore (the soak runner, the Lead)")
     r.set_defaults(fn=cmd_run)
     s.set_defaults(fn=cmd_suite)
     w.set_defaults(fn=cmd_sweep)
@@ -403,6 +430,14 @@ def main(argv=None) -> int:
                    help="regenerate MultiplayerCombatTest.unity from MainScene first (dirties the tree)")
     b.set_defaults(fn=cmd_build_client)
     sub.add_parser("build-loadtest").set_defaults(fn=cmd_build_loadtest)
+    pf = sub.add_parser("preflight-soak", help="host preflight P1-P7 for a clean-host soak (read-only)")
+    pf.add_argument("--window-min", type=float, default=90.0)
+    pf.add_argument("--window-announced", help='the window the user named, e.g. "18:30Z 90min" (P7)')
+    pf.add_argument("--sample-s", type=float, default=hostguard.PRE_SAMPLE_S, help="passive sample length (default 120)")
+    pf.add_argument("--allow-agent", action="append", help="Orca worktree name or path P3 may ignore")
+    pf.add_argument("--out", help="also write the result JSON here")
+    pf.add_argument("--json", action="store_true")
+    pf.set_defaults(fn=cmd_preflight_soak)
     st = sub.add_parser("stack")
     st.add_argument("action", choices=["up", "down", "status"])
     st.add_argument("--build-server", action="store_true")

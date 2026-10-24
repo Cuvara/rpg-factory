@@ -55,6 +55,19 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | `delivery (analyze --delivery)` | gap_ms / explain_fraction / bucket_s | 250 / 0.5 / 300 | policy, unvalidated |
 | `delivery windowed clock fit` | window / bins / rate / empirical error | 10 s / >= 5 minima per 1 s bin / 0.8-1.2 / p95 <= 10 ms | X13 measured 10 s minima fits: residual p95 2.16-3.85 ms on i9fl/e26z; 10 ms is a conservative rejection ceiling; rate range is defensive policy, unvalidated |
 | `delivery scope` | time-overlap slack | 50 ms | policy, unvalidated |
+| `host_guard (INVALID verdict)` | window | start_scheduled - 30 s .. scenario end + finish_grace_s | policy, unvalidated: a session that began just before t0 and is still running counts (F19 section 4.3) |
+| `host_guard G1` | AnyDesk session | any session event, `--backend` process or session active at window start, in the window | policy, unvalidated: 2 of 4 session starts in soaks with a sampler froze the players (e26z, i9fl), so none can be excused; residents (`AnyDesk.exe`, `--local-service`, `--local-control`) are allowed |
+| `host_guard G2` | new AnyDesk process | pid not in the preflight / pre-window set | policy, unvalidated: catches a missing or rotated log |
+| `host_guard G3` | AnyDesk CPU, consecutive samples | >= 0.5 % of host for 2 | policy, unvalidated: 4x the idle maximum 0.13 % and half the lightest session ~1 % (F19 baseline 16:27-16:43Z, 185 samples) |
+| `host_guard G4` | foreign load, consecutive samples | build tools > 5.0 %, MsMpEng > 5.0 % of host for 3 | policy, unvalidated: provisional; T62 pre-soak load was 51 %, MsMpEng 105 CPU-s per 30 s |
+| `host_guard G5` | blind guard | > 3 missed intervals of 5 s (+1 s) | policy, unvalidated |
+| `preflight P1` | no session now | no `--backend`, no session event or connection entry in the last 120 s | policy, unvalidated |
+| `preflight P2` | AnyDesk residents idle | mean CPU < 0.5 % of host over a 120 s sample | policy, unvalidated: observed idle mean 0.03 %, max 0.13 % |
+| `preflight P3` | no other agent working | 0 `working` agents in `orca worktree ps` except the allowed ones | policy, unvalidated |
+| `preflight P4` | no heavy foreign process | build-tool mean <= 2.0 %, MsMpEng mean < 5.0 % | policy, unvalidated |
+| `preflight P5` | host CPU | refuse above 50.0 % mean, flag shared-host above 30.0 % | policy, unvalidated: idle baseline mean 15.8 %, p95 33 % |
+| `preflight P6` | WSL warm | uptime >= 600 s | policy, unvalidated: FINAL-SOAK-PREFLIGHT found WSL cold at 15 s |
+| `preflight P7` | window announced | the user named start time and length (`--window-announced`) | policy, unvalidated: runbook step, out of band |
 | `delivery KCP class` | after_rows | 4 | policy, unvalidated: rows after tick b where a retransmission burst lands (T06 sfj5 s 738: 3 -> 40 in the next rows) |
 
 ## Per scenario
