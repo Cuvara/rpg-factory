@@ -3571,6 +3571,49 @@ class HostGuardTests(unittest.TestCase):
             self.assertIn("log_rotated", [r["type"] for r in util.read_ndjson(g.out / "anydesk-events.ndjson")])
             self.assertEqual(g.errors, [])
 
+    def test_ad_trace_replacement_at_or_above_offset_replays_prefix(self):
+        from lab import hostguard
+        session = (b"info 2026-10-24 18:01:02.123 lsvc 14696 17760 12 anynet.any_socket - "
+                   b"Session started\n")
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "ad.trace"
+            old = b"old-prefix-" + b"o" * (2 << 20) + b"\n"
+            log.write_bytes(old)
+            g = hostguard.HostGuard(Path(d) / "host", paths=hostguard.AnyDeskPaths(log, None))
+            g.out.mkdir()
+            state = {"off": None}
+            g._poll_ad(state)
+            old_offset = state["off"]
+            self.assertGreater(old_offset, len(session))
+
+            for target_size in (len(old), len(old) + 1000):
+                prefix = b"new-prefix-" + str(target_size).encode() + b"\n" + session
+                replacement = prefix + b"n" * (target_size - len(prefix))
+                log.write_bytes(replacement)
+                before = g.events
+                g._poll_ad(state)
+                rows = util.read_ndjson(g.out / "anydesk-events.ndjson")
+                self.assertGreater(g.events, before)
+                self.assertTrue(any(r["type"] == "session_started" for r in rows), target_size)
+                self.assertEqual(g.errors, [])
+
+    def test_unavailable_ad_file_identity_emits_blind_evidence_for_g5(self):
+        from unittest import mock
+        from lab import hostguard
+        w = (self._t("2026-10-24 18:00:00"), self._t("2026-10-24 18:10:00"))
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "ad.trace"
+            log.write_bytes(b"log\n")
+            g = hostguard.HostGuard(Path(d) / "host", paths=hostguard.AnyDeskPaths(log, None))
+            g.out.mkdir()
+            with mock.patch.object(hostguard, "_ad_file_identity", return_value=None), \
+                 mock.patch.object(hostguard.time, "time", return_value=w[0] + 1):
+                g._poll_ad({"off": None})
+            events = util.read_ndjson(g.out / "anydesk-events.ndjson")
+            result = hostguard.evaluate(self._idle(w[0], w[1]), events, w)
+            self.assertIn("G5", [f["id"] for f in result["fired"]])
+            self.assertTrue(any("identity unavailable" in x for f in result["fired"] for x in f["evidence"]))
+
     # (h) a blind guard
     def test_h_sampler_gap_over_three_intervals_fires_g5(self):
         from lab import hostguard

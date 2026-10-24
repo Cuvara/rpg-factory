@@ -6,6 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Changed
 
+- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
 - Refreshed Netcode client guidance for v0.49.0: KcpCrypto reuses per-session crypto state, subscribers are isolated, and snapshot speed distinguishes absent (`NaN`) from present zero; documented the server unknown-type counter, kick-reason drain, and readiness/release runbooks.
 - Clarified that `factory-status` derives client and package-CI pin versions from repository state instead of storing moving pin versions in registry prose.
 - Updated drifted client, server, and Netcode skill citations to match their integration branches, including client `origin/develop` at `45634b1`.

@@ -24,6 +24,7 @@ A fired rule makes the `host_guard` check INVALID; it can never turn a FAIL or I
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -62,6 +63,25 @@ RULES = {
     "G4": f"build tools > {G4_BUILD_PCT} % or MsMpEng > {G4_AV_PCT} % of the host for {G4_CONSECUTIVE} consecutive samples",
     "G5": f"guard blind: more than {G5_MISSED_INTERVALS} consecutive intervals without a sample",
 }
+
+_AD_IDENTITY_PREFIX_BYTES = 256
+
+
+def _ad_file_identity(path: Path) -> tuple | None:
+    """Return a stable-enough file identity, or None when continuity cannot be proven."""
+    try:
+        st = path.stat()
+        ino = getattr(st, "st_ino", 0)
+        if not ino:
+            return None
+        with open(path, "rb") as fh:
+            prefix = fh.read(_AD_IDENTITY_PREFIX_BYTES)
+        # Windows exposes ctime as creation time; on POSIX it changes on writes, so inode is
+        # the identity there. The prefix catches replacement on filesystems without useful ids.
+        created = getattr(st, "st_ctime_ns", None) if os.name == "nt" else None
+        return (getattr(st, "st_dev", None), ino, created, hashlib.sha256(prefix).digest())
+    except (OSError, PermissionError):
+        return None
 
 
 # ----------------------------------------------------------------------------- AnyDesk: processes and logs
@@ -323,6 +343,10 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
             gaps.append(f"no sample between {iso_utc(a)} and {iso_utc(b)} ({b - a:.0f} s)")
     if gaps:
         fired.append({"id": "G5", "rule": RULES["G5"], "count": len(gaps), "evidence": gaps[:12]})
+    blind_logs = [e for e in events if e.get("type") == "log_blind" and _in(e.get("epoch"), window)]
+    if blind_logs:
+        fired.append({"id": "G5", "rule": RULES["G5"], "count": len(blind_logs),
+                      "evidence": [f"AnyDesk log identity unavailable at {e['ts']}" for e in blind_logs[:12]]})
 
     ad_cpu = [float(s.get("ad_cpu") or 0.0) for s in inside]
     own = [float(s["own_cpu"]) for s in rows if s.get("own_cpu") is not None and not s.get("first")]
@@ -434,24 +458,39 @@ class HostGuard:
 
     def _poll_ad(self, holder: dict) -> None:
         p = self.paths.ad_trace
-        if p is None or not p.is_file():
+        identity = _ad_file_identity(p) if p is not None else None
+        if identity is None:
+            now = time.time()
+            self._emit([{"type": "log_blind", "source": "ad_trace", "ts": iso_utc(now), "epoch": now}])
+            holder["identity"] = None
+            holder["off"] = None
             return
-        size = p.stat().st_size
-        off = holder["off"]
-        if off is None:                       # first look: prime with the last MiB so an open session is known
-            off = max(0, size - (1 << 20))
-        if size < off:                        # truncated or rotated: start again and say so
-            off = 0
-            self._emit([{"type": "log_rotated", "source": "ad_trace"}])
-        with open(p, "rb") as fh:
-            fh.seek(off)
-            chunk = fh.read(size - off)
-        if off > 0 and holder["off"] is None:  # primed mid-file: drop the partial first line
-            nl = chunk.find(b"\n")
-            chunk, off = (chunk[nl + 1:], off + nl + 1) if nl >= 0 else (b"", off)
-        events, used = parse_ad_trace(chunk, 0)
-        holder["off"] = off + used
-        self._emit(events)
+        try:
+            size = p.stat().st_size
+            off = holder["off"]
+            if holder.get("identity") is not None and identity != holder["identity"]:
+                off = 0
+                self._emit([{"type": "log_rotated", "source": "ad_trace"}])
+            if off is None:                   # first look: prime with the last MiB so an open session is known
+                off = max(0, size - (1 << 20))
+            if size < off:                    # truncated: start again and say so
+                off = 0
+                self._emit([{"type": "log_rotated", "source": "ad_trace"}])
+            with open(p, "rb") as fh:
+                fh.seek(off)
+                chunk = fh.read(size - off)
+            if off > 0 and holder["off"] is None:  # primed mid-file: drop the partial first line
+                nl = chunk.find(b"\n")
+                chunk, off = (chunk[nl + 1:], off + nl + 1) if nl >= 0 else (b"", off)
+            events, used = parse_ad_trace(chunk, 0)
+            holder["off"] = off + used
+            holder["identity"] = identity
+            self._emit(events)
+        except OSError:
+            now = time.time()
+            holder["identity"] = None
+            holder["off"] = None
+            self._emit([{"type": "log_blind", "source": "ad_trace", "ts": iso_utc(now), "epoch": now}])
 
     def _poll_conn(self, seen: Counter, stamp) -> tuple | None:
         p = self.paths.connection_trace
