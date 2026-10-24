@@ -11,6 +11,25 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- **testlab S16 judges the undefined-message-type case** on `gameserver_messages_rejected_total{reason="unknown_type"}`
+  (rpg-mmo-server #490, `76aa973`): the `malformed_input` rule gains `rejections_counter` (default `gameserver_inputs_rejected_total`), the
+  `unknown_type` case asserts the counter rises by 1 and the session stays open, and a server without the series leaves the case
+  INCONCLUSIVE (not FAIL). S16 version 2; S16 can now PASS (two live runs against server `7c412e4`, see `testlab/docs/COVERAGE.md`).
+
+- **testlab scenario S18 (packet impairment)**: loss, delay, jitter and reordering on the game server's UDP path, with two rendered clients
+  moving, a 30 s clean baseline, a 60 s impaired phase and a 30 s recovery.
+  - `testlab/lab/netem.py` shapes with `nsenter` + `tc netem` inside the scratch game server container's own network namespace (UDP port 9000
+    only, both directions: `prio` + netem on `eth0` egress, `ingress` redirect to a per-container `ifb0` carrying the same netem). No compose
+    override, no capability added to the server, no host-wide qdisc, `/status` and every TCP connection unshaped. Removal is guaranteed and verified:
+    `finally` in the step, the runner's own `finally`, a detached watchdog process that deletes the qdiscs after the planned time + 45 s, and a leftover sweep
+    in the preflight. Needs passwordless `sudo` for `nsenter`/`tc` in WSL (the preflight says so before any player starts).
+  - New checks in `testlab/lab/analyze_netem.py`: `netem_applied` (tc loss counters within 3 sigma of the configured loss, clients' round-trip
+    time up), `netem_cleanup`, `netem_retransmits` (server KCP resends rise only while impaired), `netem_snapshots` (per-phase gap and rate limits),
+    `netem_prediction` (hard snaps, corrections, keyframes per phase) and `netem_convergence` (clients draw the same positions again within 10 s of the removal).
+  - `kcp_health` accepts `"max_dropped": null` (inbound drops reported, not judged); `cross_client_convergence` accepts `until_s`.
+  - Thresholds, each with its derivation or marked "policy, unvalidated", and the impairment profile with its source (CORE-BASELINE-V1.md) are in
+    `testlab/docs/THRESHOLDS.md`; the `robustness` suite includes S18; 63 unit tests in `testlab/tests/test_netem.py` (run by `tests/run-all.sh`).
+
 - **testlab scenarios S16 (malformed input) and S17 (churn)** with a raw-client harness step.
   - `testlab/lab/rawclient.py` joins the scratch stack like a client (gateway auth, enter world, KCP join, JSON envelopes) and can send
     frames a real client never would; `testlab/lab/rawprobe.py` runs it from a scenario disruption (`raw_malformed`, `raw_churn`) on its
@@ -18,8 +37,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - S16 sends 11 malformed cases (length prefixes over the 1 MiB limit, zero length, truncated frame, undefined and out-of-range type, garbage
     protobuf, out-of-range movement, attack out of range, cast inside the cooldown) while two rendered clients play. New checks:
     `malformed_input` (each case refused or closes only its own session, with the server counters that moved), `server_alive`,
-    `client_sessions`. A `stays_open` case without a `rejections` rule grades INCONCLUSIVE: the undefined-type case
-    has no server-side signal today, so S16 reports INCONCLUSIVE until the server counts it.
+    `client_sessions`. A `stays_open` case without a `rejections` rule grades INCONCLUSIVE (the session surviving does not show the
+    input was refused). The undefined-type case was that case until rpg-mmo-server #490 added the counter (see the S16 entry below).
   - S17 runs 10 cycles of silent drop plus rejoin and graceful leave plus rejoin, then waits out the server's longest hold. New checks:
     `churn_cycles`, `churn_ghosts`, `player_count_baseline`, `redis_leak` (Redis session, registry and map-member key names before and after).
   - Thresholds and their derivations are in `testlab/docs/THRESHOLDS.md`; a new `robustness` suite runs both.

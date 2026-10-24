@@ -100,6 +100,7 @@ rm -rf "$HT"
 
 # ---- testlab (pure parts: scenarios, plan expansion, analysis checks; no stack, no Unity)
 run "testlab: unit tests" python3 -B testlab/tests/test_lab.py
+run "testlab: packet impairment (S18) unit tests" python3 -B testlab/tests/test_netem.py
 run "testlab: scenarios load" python3 -B testlab/testlab.py list
 find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 

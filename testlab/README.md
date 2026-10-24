@@ -28,7 +28,7 @@ Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE, `3` harness or usage error, `4
 |---|---|---|
 | `run`, `suite`, `sweep`, `stack`, `clean`, `build-client`, `build-loadtest` | yes | no: the players are Windows processes and process control uses `tasklist`/`taskkill` |
 | `analyze`, `analyze --delivery`, `replay-trace`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
-| `python3 -B testlab/tests/test_lab.py` | yes | yes |
+| `python3 -B testlab/tests/test_lab.py`, `python3 -B testlab/tests/test_netem.py` | yes | yes |
 
 In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewrites `/c/...` arguments for Windows programs; the CLI also converts them itself, so they work with `MSYS_NO_PATHCONV=1` too. WSL commands are run from Python through `wsl.exe -d Ubuntu --exec bash -c` with path conversion disabled.
 
@@ -46,11 +46,12 @@ In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewr
 | Deterministic enemy spawns | rpg-mmo-server | `GAMESERVER_ENEMY_SEED` |
 | Isolated stack | rpg-mmo-server | `backend/deploy/stack.sh --scratch` with `STACK_SCRATCH_EXTRA_ENV` |
 | Raw wire client (S16, S17): gateway auth, enter world, KCP join, hand-built frames | rpg-factory | `testlab/lab/rawclient.py`, steps in `testlab/lab/rawprobe.py` |
+| Packet impairment (S18): tc netem in the scratch game server container's network namespace | rpg-factory | `testlab/lab/netem.py`, checks in `testlab/lab/analyze_netem.py` |
 
 ## Prerequisites
 
 - Windows host (the players are Windows processes) and Python 3.10 or newer. The orchestrator uses only the standard library.
-- WSL Ubuntu with a native `dockerd`. The lab never starts Docker Desktop.
+- WSL Ubuntu with a native `dockerd`. The lab never starts Docker Desktop. S18 (packet impairment) also needs passwordless `sudo` for `nsenter` and `tc` in WSL, and the kernel modules `sch_netem`, `ifb` and `act_mirred` (the WSL2 kernel ships them); its preflight says which is missing before any player starts.
 - Unity **6000.3.9f1**, to build the player (`build-client`).
 - Go, to build the load generator (`build-loadtest`; only S07 needs it).
 - An `rpg-mmo-server` checkout whose `stack.sh` has `STACK_SCRATCH_EXTRA_ENV`, and whose compose file forwards `GAMESERVER_DEBUG_ENTITIES`, `GAMESERVER_ENEMY_SEED` and `GATEWAY_CONN_RATE_PER_MIN`. The preflight refuses an older one by name.
@@ -187,9 +188,10 @@ disruption (`raw_malformed` with a `cases` list, `raw_churn` with `cycles`, `con
   (an attack at an enemy farther than `GameConstants.AttackRange`, read from the server source, costs it nothing). The report
   lists, per case, every `gameserver_*` series that moved, so it shows which counter (if any) saw a bad frame. A `stays_open`
   case without a `rejections` rule is INCONCLUSIVE (`signal_missing`): the session surviving does not show the server refused or
-  ignored the input. The undefined-type case (`unknown_type`, type 99) is that case today: the server has no counter or log line for
-  it (`GameServer.cs` `OnMessageReceived` default arm logs at Debug, `Program.cs` sets the console minimum level to Information), so S16
-  grades INCONCLUSIVE until the server counts it.
+  ignored the input. `rejections_counter` names another counter than the default `gameserver_inputs_rejected_total`. The
+  undefined-type case (`unknown_type`, type 99) uses `gameserver_messages_rejected_total{reason="unknown_type"}` (rpg-mmo-server #490,
+  `76aa973`: the message is ignored and the session stays open); a server without that series leaves the case INCONCLUSIVE, not FAIL.
+  Before #490 the server had no counter or log line for it, and S16 graded INCONCLUSIVE.
 - `server_alive`: every `/status` probe answered, `uptime_seconds` never goes backwards, no gap over `max_gap_s`.
 - `client_sessions`: a rendered client logs no `net_state` change, `disconnected`, `entities_reset` or `reconnected` inside the
   scenario window.
@@ -200,6 +202,60 @@ disruption (`raw_malformed` with a `cases` list, `raw_churn` with `cycles`, `con
 - Limits: a raw client is not a real client. It does not predict, interpolate or render, it answers heartbeats only while its
   script says so, and it cannot reach the sealed handshake (JSON clients cannot be sealed). The truncated-frame case takes about
   40 s (the heartbeat timeout), so S16 runs about 2 minutes; S17 about 3.5 minutes, most of it the wait for the hold to expire.
+
+## Packet impairment (S18)
+
+S18 puts loss, delay, jitter and reordering on the game server's UDP path for 60 s between a 30 s clean baseline and a 30 s recovery,
+with two rendered clients moving the whole time, and grades what the transport and the netcode do about it.
+
+**Mechanism and why** (`lab/netem.py` docstring has the long form). `nsenter -t <pid of rpgs-gameserver> -n tc ...` from WSL, inside the
+scratch game server container's own network namespace. Nothing else changes: no compose override, no extra capability on the game server,
+no image change, no process on the data path, no host-wide qdisc. The qdiscs vanish with the container if the harness dies. Rejected:
+a scratch-only compose override with `NET_ADMIN` (a different container for one scenario, and a capability the production server does not
+have) and a UDP proxy in the harness (the address clients dial is what the server registers in Redis and the gateway hands out, so a proxy
+means changing what the stack advertises, and its own jitter would be measured). The cost: it needs passwordless `sudo` in WSL.
+
+**What is shaped.** UDP port 9000 (the game port inside the container) and nothing else; `/status`, `/metrics` and every TCP connection of the
+container are untouched. Server to client: `prio` root on `eth0` with the netem in band 3 and a u32 filter on UDP source port 9000. Client to
+server: an `ingress` qdisc on `eth0` whose u32 filter on UDP destination port 9000 redirects to a per-container `ifb0` carrying the same netem.
+The profile applies per direction (a round trip sees twice the delay and about twice the loss).
+
+**Profile** (scenario disruption `netem`: `profile` {`loss_pct`, `delay_ms`, `jitter_ms`, `reorder_pct`}, `baseline_s`, `impaired_s`,
+`recovery_s`, `directions`): 5 % loss, 40 ms +/- 20 ms (uniform) and 1 % reorder. The values and their sources are in
+[`docs/THRESHOLDS.md`](docs/THRESHOLDS.md) "Impairment profiles": 40 ms is the one-way latency `CORE-BASELINE-V1.md` measured a real client
+at, +/- 20 ms is inside the +/- 60 ms that client held (so a pass is expected), 5 % loss has no baseline measurement at all (policy, unvalidated).
+
+**Cleanup contract.** The step removes the qdiscs and the `ifb0` device in a `finally`; the runner calls `netem.final_cleanup` in its own
+`finally` (even when the step never ran); a watchdog (a detached long-running `wsl.exe` child that sleeps, then deletes; a process started inside WSL from a
+short call does not survive the call) removes them after the planned time + 45 s, only if the namespace of that pid is still the recorded one; the preflight removes the leftover of a dead run before the players start. Every removal is
+verified (`tc -j qdisc show`: no `netem`, `prio` or `ingress` qdisc; `ip link show ifb0`: absent) and the verdict is recorded; `netem_cleanup`
+FAILs on an unverified one.
+
+**Checks** (thresholds and derivations in `docs/THRESHOLDS.md`; phases from `netem.ndjson`, in scenario time: baseline up to the scrape before
+the first tc command, impaired from the instant the last tc command returned to the scrape before the removal, recovery from the instant the
+verified removal returned; the seconds the tc commands take are in no judged window):
+
+- `netem_applied`: the impairment was on the path, three independent ways: every tc command returned 0; the kernel's own netem counters (packets
+  passed and dropped, per direction) show a loss share within 3 binomial standard deviations of the configured loss over at least 300 datagrams;
+  the clients' round-trip time rose by at least half the delay added to a round trip.
+- `netem_cleanup`: the planned removal and the runner's final cleanup were both verified, the first at most 10 s after the impaired phase was due to end.
+- `netem_retransmits`: `gameserver_kcp_segments_retransmitted_total` rose by at least 30 during the impairment, at at least 5 times the baseline rate
+  (floored at 0.1/s), and fell to at most half the impaired rate afterwards. Scraped at each phase boundary, and every 5 s in between (`netem.ndjson`).
+- `kcp_health` (`max_dropped: null`, `max_sessions_closed: 0`) and `client_sessions`: no KCP session closed or rejected, no rendered client saw a
+  session change. Inbound datagram drops are reported, not judged (the impairment drops datagrams on purpose).
+- `netem_snapshots`: per client and phase, the largest gap between two snapshots, the impaired p99 gap and the receive rate (clean limit 250 ms before and
+  after, impaired limit 1000 ms and p99 400 ms; derivation: KCP is reliable and ordered, so loss costs time, not snapshots).
+- `netem_prediction`: per client and phase, unexplained hard snaps of the local player (`pred.snaps`) per minute against the lab's `prediction_bound`
+  (4.0), the largest per-sample correction (`pred.corr`) against 1.5, and, impaired only, keyframes (full snapshots) per minute against twice the
+  baseline rate. **The lab player records no separate "hard resync" counter**: a hard snap and a resent keyframe are the observable resyncs; a
+  session reset would show as a `client_sessions` failure.
+- `netem_convergence`: `cross_client_convergence` over [removal + 10 s, end of scenario] (p95 0.35, max 1.0); the baseline and impaired phases are
+  measured the same way and reported in the detail, not judged.
+
+Limits: one profile at one severity, UDP port 9000 on IPv4 only; the netem queue is the default 1000 packets; loss is random and uncorrelated (a
+burst-loss profile is a different test); the client's own kernel and the Windows to WSL localhost forwarding are not shaped; the server's
+`gameserver_kcp_segments_retransmitted_total` counts only the server's resends (the clients' resends of inputs are not exported); it takes
+about 2.7 minutes per run, and runs on the scratch stack only.
 
 What each readiness area is covered by, and the gaps (with the client and server hooks they need): [`docs/COVERAGE.md`](docs/COVERAGE.md).
 

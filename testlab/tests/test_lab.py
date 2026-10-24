@@ -3041,11 +3041,36 @@ class MalformedInputTests(unittest.TestCase):
         rule = {"cases": {"unk": {"expect": "stays_open", "rejections": {"attack_other": 1}}}}
         self.assertEqual(analyze.check_malformed_input(_malformed_ev([up]), rule)["status"], analyze.PASS)
 
-    def test_s16_unknown_type_has_no_signal_rule_so_the_scenario_cannot_pass_by_staying_connected(self):
+    def test_s16_unknown_type_is_judged_on_the_messages_rejected_counter(self):
+        # rpg-mmo-server #490: gameserver_messages_rejected_total{reason="unknown_type"} counts an undefined type
         rule = next(a for a in scenarios.load("S16")["assertions"] if a["check"] == "malformed_input")["cases"]["unknown_type"]
         self.assertEqual(rule["expect"], "stays_open")
-        self.assertNotIn("rejections", rule)
-        self.assertIn("note", rule)
+        self.assertEqual(rule["rejections_counter"], "gameserver_messages_rejected_total")
+        self.assertEqual(rule["rejections"], {"unknown_type": 1})
+
+    def test_a_named_counter_that_rises_passes_one_that_does_not_fails_and_a_missing_series_is_inconclusive(self):
+        MR = 'gameserver_messages_rejected_total{map_id="map_01",reason="unknown_type"}'
+        rule = {"cases": {"unk": {"expect": "stays_open", "rejections_counter": "gameserver_messages_rejected_total",
+                                  "rejections": {"unknown_type": 1}}}}
+
+        def case(post, mid=0.0):
+            c = _case("unk", closes=False, snaps=40)
+            c["post"]["metrics"] = {MR: post} if post is not None else {}
+            c["mid"]["metrics"] = {MR: mid} if post is not None else {}
+            return c
+
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([case(1.0)]), rule)["status"], analyze.PASS)
+        res = analyze.check_malformed_input(_malformed_ev([case(0.0)]), rule)
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertIn("gameserver_messages_rejected_total", " ".join(res["measured"]["unk"]["problems"]))
+        # the counter's reason series is not the inputs counter's: a rising inputs counter does not count
+        wrong = _case("unk", closes=False, snaps=40)
+        wrong["post"]["metrics"], wrong["mid"]["metrics"] = {RJ % "unknown_type": 1.0}, {RJ % "unknown_type": 0.0}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([wrong]), rule)["status"], analyze.INCONCLUSIVE)
+        # a server without the counter (no series at all) cannot tell: INCONCLUSIVE, not FAIL
+        res = analyze.check_malformed_input(_malformed_ev([case(None)]), rule)
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+        self.assertIn("does not export", res["measured"]["unk"]["signal_missing"])
 
     def test_a_session_that_stays_open_or_closes_late_fails(self):
         ev = _malformed_ev([_case("zero", closes=False, snaps=40), _case("unk", closes=False, snaps=40)])
