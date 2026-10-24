@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-24
+
+Feature release. Adds `testlab/`, autonomous multiplayer gameplay tests with real rendered Unity clients (scenarios
+S01-S18 on an isolated scratch stack, delivery analysis, malformed input, churn and packet impairment), and one
+parallel-work policy (`skills/factory-core/references/parallel-work.md`: the main session is Lead/Integrator, one
+worktree per task, QA and review on stable candidate commits, Orca as the preferred coordinator). The check runner
+now fails closed: pollution is attributed per check, a timeout kills the check's whole process tree and FAILs when
+that cannot be confirmed, wire-parity and Netcode headless test the candidate checkout and print its SHA, TRX results
+need a Completed/Passed outcome with executed tests and no failures, and checks receive the workspace and checkout
+as Git Bash or WSL paths. The snapshot routes only the files a task writes (`--paths`); uncommitted changes are
+shown as the user's baseline. Also: truthful evidence scope, skill `allowed-tools` lint, guards for linked worktrees
+outside the workspace, a Windows lock retry budget for state files and refreshed skill citations. Update the plugin
+(`claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`) and start a new
+session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope changed`).
+
 ### Changed
 
 - Refreshed Netcode client guidance for v0.49.0: KcpCrypto reuses per-session crypto state, subscribers are isolated, and snapshot speed distinguishes absent (`NaN`) from present zero; documented the server unknown-type counter, kick-reason drain, and readiness/release runbooks.
@@ -231,6 +246,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+- **Task-scoped routing in the snapshot.** Without `--paths`, uncommitted changes are the user's baseline: the
+  snapshot lists them with their modules but prints no Routing, `Next:`, gates or checks for them and says to route
+  the task with `--paths <files the task will write>` (commits on a feature branch are still routed; JSON keeps the
+  full resolution and adds `task_scope`). A module without skills prints an explicit `**Routing** no specialised
+  lead - factory-core only; follow <CLAUDE.md>` line. An absolute `--paths` entry in a linked worktree of the repo
+  maps to its repo-relative path; one in another repo or outside every repo gets a warning and is not routed as
+  `<repo>.root` (exit 2 when no path is left). `--mode=plan`, `--lead=x` (any `--flag`) after `--paths` end the
+  path list instead of being read as paths. `tests/routing.test.sh` covers each case on a throwaway workspace.
 - **Runner timeout isolation.** Checks run in a Windows Job Object or process group with bounded cleanup verification; taskkill fallback verifies the captured process tree, and Git Bash is preferred on Windows while WSL bash receives validated workspace and repository environment values.
 
 - Run wire parity and Netcode headless checks against the candidate checkout, report tested tree SHAs, and fail closed on unresolved trees or unsuccessful test hosts.
@@ -296,14 +319,6 @@ workspace key). No command-line or registry changes for users.
   "agents never tag" wording returns or a policy file drops the authorization rule.
 
 ### Fixed
-- **Task-scoped routing in the snapshot.** Without `--paths`, uncommitted changes are the user's baseline: the
-  snapshot lists them with their modules but prints no Routing, `Next:`, gates or checks for them and says to route
-  the task with `--paths <files the task will write>` (commits on a feature branch are still routed; JSON keeps the
-  full resolution and adds `task_scope`). A module without skills prints an explicit `**Routing** no specialised
-  lead - factory-core only; follow <CLAUDE.md>` line. An absolute `--paths` entry in a linked worktree of the repo
-  maps to its repo-relative path; one in another repo or outside every repo gets a warning and is not routed as
-  `<repo>.root` (exit 2 when no path is left). `--mode=plan`, `--lead=x` (any `--flag`) after `--paths` end the
-  path list instead of being read as paths. `tests/routing.test.sh` covers each case on a throwaway workspace.
 - **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
   commands were missed or misread and now get the advisory they should:
   - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan

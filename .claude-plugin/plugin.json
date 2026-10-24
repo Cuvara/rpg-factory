@@ -1,6 +1,6 @@
 {
   "name": "rpg-factory",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 8 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
   "author": {
     "name": "Cuvara",
