@@ -10,6 +10,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- **testlab scenario S18 (packet impairment)**: loss, delay, jitter and reordering on the game server's UDP path, with two rendered clients
+  moving, a 30 s clean baseline, a 60 s impaired phase and a 30 s recovery.
+  - `testlab/lab/netem.py` shapes with `nsenter` + `tc netem` inside the scratch game server container's own network namespace (UDP port 9000
+    only, both directions: `prio` + netem on `eth0` egress, `ingress` redirect to a per-container `ifb0` carrying the same netem). No compose
+    override, no capability added to the server, no host-wide qdisc, `/status` and every TCP connection unshaped. Removal is guaranteed and verified:
+    `finally` in the step, the runner's own `finally`, a detached watchdog process that deletes the qdiscs after the planned time + 45 s, and a leftover sweep
+    in the preflight. Needs passwordless `sudo` for `nsenter`/`tc` in WSL (the preflight says so before any player starts).
+  - New checks in `testlab/lab/analyze_netem.py`: `netem_applied` (tc loss counters within 3 sigma of the configured loss, clients' round-trip
+    time up), `netem_cleanup`, `netem_retransmits` (server KCP resends rise only while impaired), `netem_snapshots` (per-phase gap and rate limits),
+    `netem_prediction` (hard snaps, corrections, keyframes per phase) and `netem_convergence` (clients draw the same positions again within 10 s of the removal).
+  - `kcp_health` accepts `"max_dropped": null` (inbound drops reported, not judged); `cross_client_convergence` accepts `until_s`.
+  - Thresholds, each with its derivation or marked "policy, unvalidated", and the impairment profile with its source (CORE-BASELINE-V1.md) are in
+    `testlab/docs/THRESHOLDS.md`; the `robustness` suite includes S18; 63 unit tests in `testlab/tests/test_netem.py` (run by `tests/run-all.sh`).
+
 - **testlab scenarios S16 (malformed input) and S17 (churn)** with a raw-client harness step.
   - `testlab/lab/rawclient.py` joins the scratch stack like a client (gateway auth, enter world, KCP join, JSON envelopes) and can send
     frames a real client never would; `testlab/lab/rawprobe.py` runs it from a scenario disruption (`raw_malformed`, `raw_churn`) on its
