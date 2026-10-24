@@ -816,14 +816,23 @@ class CleanupTests(unittest.TestCase):
             interval_s, baseline_pids = 5.0, []
             paths = type("P", (), {"as_dict": staticmethod(lambda: {})})()
 
+            calls = []
+
             def __init__(self, out_dir):
                 self.out = out_dir
 
             def start(self):
                 pass
 
+            def hold_until(self, epoch):
+                FakeGuard.calls.append(("hold_until", epoch))
+                return True
+
             def stop(self):
+                FakeGuard.calls.append(("stop", None))
                 return {"samples": 0}
+
+        self.guard_calls = FakeGuard.calls = []
 
         patches = [
             mock.patch.object(runner, "_host_load", return_value={"cpu_load_pct": 1.0, "free_mem_mb": 1}),
@@ -861,6 +870,35 @@ class CleanupTests(unittest.TestCase):
             self.assertIn("KeyboardInterrupt", meta["harness_error"])
             self.assertEqual(meta["provenance"]["run_id"], meta["run_id"])
             self.assertEqual(json.loads((cfg.runs_root / "active-pids.json").read_text()), {})
+
+    def test_the_guard_samples_to_the_window_end_before_it_stops(self):
+        from unittest import mock
+        from lab import clients, runner
+        with tempfile.TemporaryDirectory() as d:
+            cfg, stopped = self._patched_run(d, None)
+
+            class Done:
+                pid = 4242
+
+                def poll(self):
+                    return 0
+
+                def wait(self, timeout=None):
+                    return 0
+
+            def launch(cfg_, sc, p, plan, control):
+                p.proc, p.pid = Done(), 4242
+                p.history.append({"event": "launch", "pid": 4242})
+
+            with mock.patch.object(clients, "launch", side_effect=launch), \
+                    mock.patch.object(runner, "_take_redis"):
+                runner.run(cfg, "S01", overrides={"duration_s": 1, "finish_grace_s": 30}, quiet=True)
+            meta = self._run_json(cfg)
+            self.assertIsNone(meta["harness_error"])
+            end = meta["host_guard"]["window_epoch"][1]
+            # The players exit at scenario end, 30 s before the window ends: stop() must wait for the guard.
+            self.assertEqual([c[0] for c in self.guard_calls], ["hold_until", "stop"])
+            self.assertEqual(self.guard_calls[0][1], end)
 
     def test_a_join_timeout_stops_players_and_is_never_pass(self):
         from lab import clients, runner
@@ -3628,6 +3666,37 @@ class HostGuardTests(unittest.TestCase):
         self.assertEqual([f["id"] for f in hostguard.evaluate([], [], w)["fired"]], ["G5"])
         early_end = self._idle(w[0] - 10, w[0] + 60)
         self.assertEqual([f["id"] for f in hostguard.evaluate(early_end, [], w, baseline_pids=base)["fired"]], ["G5"])
+
+    def test_h2_hold_until_waits_for_a_sample_past_the_window_end(self):
+        from unittest import mock
+        from lab import hostguard
+        with tempfile.TemporaryDirectory() as d:
+            g = hostguard.HostGuard(Path(d) / "host", interval_s=5.0, paths=hostguard.AnyDeskPaths(None, None))
+            g.proc = mock.Mock()
+            g.proc.poll.return_value = None
+            now = [1000.0]
+            sleeps, produce = [], [True]
+
+            def sleep(s):
+                sleeps.append(s)
+                now[0] += s
+                if produce and now[0] >= 1012.0:           # the sampler's next row, 2 s after the window end
+                    g.last_epoch = now[0]
+
+            with mock.patch.object(hostguard.time, "time", side_effect=lambda: now[0]),                     mock.patch.object(hostguard.time, "sleep", side_effect=sleep):
+                g.last_epoch = 995.0                       # the last row is 15 s before the window end
+                self.assertTrue(g.hold_until(1010.0))
+                self.assertGreaterEqual(now[0], 1012.0)
+                # a sampler that never answers: gives up after one interval + slack, never claims a sample
+                g.last_epoch, now[0] = 995.0, 1000.0
+                produce.clear()
+                self.assertFalse(g.hold_until(1010.0))
+                self.assertLess(now[0], 1010.0 + 5.0 + hostguard.HOLD_SLACK_S + 1.0)
+                # a dead sampler returns at once
+                g.proc.poll.return_value = 1
+                now[0] = 1000.0
+                self.assertFalse(g.hold_until(1010.0))
+                self.assertEqual(now[0], 1000.0)
 
     # (i) the verdict order
     def test_i_invalid_beats_fail_beats_inconclusive_and_is_never_pass(self):

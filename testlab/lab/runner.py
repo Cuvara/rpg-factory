@@ -292,6 +292,15 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         if not keep_clients:
             clients.unregister_active(cfg, run_id)
         if guard is not None:
+            # The window ends at scenario end + finish_grace_s, but the loop above stops as soon as the players
+            # exit. Keep the guard sampling until a sample past the window end exists (G5 grades the edge).
+            end_epoch = (meta["host_guard"].get("window_epoch") or [None, None])[1]
+            if end_epoch is not None and not harness_error:
+                wait_s = end_epoch - time.time()
+                if wait_s > 0:
+                    log(f"host guard: sampling {wait_s:.0f} s more, to the window end")
+                if not guard.hold_until(end_epoch):
+                    log("host guard: no sample at the window end (G5 will report the gap)")
             # After the players are gone and before the evidence manifest hashes host/.
             meta["host_guard"]["summary"] = guard.stop()
         for p in players:

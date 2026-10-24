@@ -48,6 +48,7 @@ G4_BUILD_PCT = 5.0               # any build-tool group, % of the whole host
 G4_AV_PCT = 5.0                  # MsMpEng
 G4_CONSECUTIVE = 3
 G5_MISSED_INTERVALS = 3
+HOLD_SLACK_S = 5.0          # extra time hold_until() waits for the sample that closes the window
 PRE_QUIET_S = 120.0              # P1: no session event or connection entry this long before the start
 PRE_SAMPLE_S = 120.0             # preflight sample length (P2, P4, P5)
 P4_FOREIGN_PCT = 2.0             # sustained foreign load over the preflight sample
@@ -391,6 +392,7 @@ class HostGuard:
         self.errors: list[str] = []
         self.py_cpu_s = 0.0
         self.started_epoch: float | None = None
+        self.last_epoch: float | None = None     # epoch of the newest sample the reader appended
         self.baseline_pids: list[int] = []
 
     def start(self) -> None:
@@ -429,6 +431,8 @@ class HostGuard:
                     first = False
                 self.samples += 1
                 self._append("guard.ndjson", row)
+                if isinstance(row.get("epoch"), (int, float)):
+                    self.last_epoch = float(row["epoch"])
         except Exception as exc:              # the guard must never take the run down
             self.errors.append(f"samples: {type(exc).__name__}: {exc}")
         finally:
@@ -511,6 +515,19 @@ class HostGuard:
                 new.append(e)
         self._emit(new)
         return cur
+
+    def hold_until(self, epoch: float, *, slack_s: float | None = None) -> bool:
+        """Keep sampling until a sample at or after `epoch` (the end of the measurement window) is on disk.
+        Returns False when it gave up: the sampler died, or no such sample arrived within one interval plus
+        `slack_s` after `epoch`. A missing sample then stays visible to G5; this never fabricates one."""
+        limit = epoch + self.interval_s + (HOLD_SLACK_S if slack_s is None else slack_s)
+        while True:
+            if self.last_epoch is not None and self.last_epoch >= epoch:
+                return True
+            now = time.time()
+            if now >= limit or self.proc is None or self.proc.poll() is not None:
+                return False
+            time.sleep(min(0.5, max(0.05, limit - now)))
 
     def stop(self) -> dict:
         """Stop the sampler, join the readers and write guard-summary.json. Returns the summary."""

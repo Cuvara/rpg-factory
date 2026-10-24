@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- testlab: the host guard kept sampling only until the players exited, not until the measurement window end
+  (scenario end + `finish_grace_s`), so every full-length soak ended with a 20 s blind gap and G5 INVALID. The runner
+  now holds the guard until a sample at or after the window end exists (`HostGuard.hold_until`); a sampler that does
+  not deliver is still reported by G5, and the window is unchanged.
+
 ## [1.1.0] - 2026-10-24
 
 Feature release. Adds `testlab/`, autonomous multiplayer gameplay tests with real rendered Unity clients (scenarios
