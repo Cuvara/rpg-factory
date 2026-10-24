@@ -229,6 +229,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/parallel-policy.test.sh` proves it fails on a mutated copy.
 
 ### Fixed
+- The `unity-client-tech` `MainSessionDriver.Endpoint` citation now spans the whole adapter class (`MainSessionDriver.cs:237-364`); the old range began in `RunFlowAsync` and ended inside the class.
 - **Windows lock retry budget for state files.** `fstate.read_json` and `write_text` retry a Windows sharing
   violation (`PermissionError`) for up to 2 s (backoff capped at 50 ms) instead of a fixed 8 / 5 attempts
   (~0.36 s / ~0.3 s), so a record held open under machine load no longer reads as missing (NOT_RUN) and a

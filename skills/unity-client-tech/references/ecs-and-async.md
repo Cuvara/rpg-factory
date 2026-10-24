@@ -43,7 +43,7 @@ compares before writing, position quantized to 0.1, `SetSingleton` only on chang
 | Where | Type | Why |
 |---|---|---|
 | `MainSessionDriver.RunAsync` | `async UniTaskVoid` + `.Forget()` | entry point, owned CTS cancelled in `Dispose` (`RunAsync`: `MainSessionDriver.cs:144-151`; `Dispose`: `:210-233`) |
-| `MainSessionFlow.IEndpoint`, `RunAsync` | `Task` | `NDC.Scripts.Session` references nothing, not even UniTask; `MainSessionDriver.Endpoint` adapts with `async Task` wrappers (`MainSessionDriver.cs:152-279`) |
+| `MainSessionFlow.IEndpoint`, `RunAsync` | `Task` | `NDC.Scripts.Session` references nothing, not even UniTask; `MainSessionDriver.Endpoint` adapts with `async Task` wrappers (`MainSessionDriver.cs:237-364`) |
 | Nakama services, `AddressableAssetLoader` | UniTask | `Assets/Scripts/Nakama/**`, `Assets/Scripts/UI/AddressableAssetLoader.cs` |
 | `IViewAssetProvider`, `IViewPrefabLoader`, `LeasedViewAssetProvider` | `Task<GameObject>` | package interface `UnityDots/Runtime/Provisioning/IViewAssetProvider.cs:44`; main thread only |
 
