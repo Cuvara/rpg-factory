@@ -890,7 +890,8 @@ class CleanupTests(unittest.TestCase):
                 p.proc, p.pid = Done(), 4242
                 p.history.append({"event": "launch", "pid": 4242})
 
-            with mock.patch.object(clients, "launch", side_effect=launch):
+            with mock.patch.object(clients, "launch", side_effect=launch), \
+                    mock.patch.object(runner, "_take_redis"):
                 runner.run(cfg, "S01", overrides={"duration_s": 1, "finish_grace_s": 30}, quiet=True)
             meta = self._run_json(cfg)
             self.assertIsNone(meta["harness_error"])
