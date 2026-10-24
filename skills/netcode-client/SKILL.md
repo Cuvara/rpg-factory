@@ -33,11 +33,11 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 
 - **Two hops.** Gateway: `TcpTransport`, optional TLS with an exact-bytes certificate pin
   (`PinValidator`, `Runtime/Transport/TcpTransport.cs:30-37,286,322-349`). Gameplay: **KCP/UDP only** since
-  0.47.0 (`KcpTransport`, `CHANGELOG.md:353-356`). A join reply naming `tcp` or empty is refused (`TransportKinds.ParseGameplay`, `Runtime/Transport/TransportKinds.cs:29-52`); only KCP passes (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
+  0.47.0 (`KcpTransport`, `CHANGELOG.md:375-380`). A join reply naming `tcp` or empty is refused (`TransportKinds.ParseGameplay`, `Runtime/Transport/TransportKinds.cs:29-52`); only KCP passes (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
   (`Runtime/Transport/KcpTransport.cs:43-44`).
 - **Pump.** `KcpTransport` reads with `UniTask.Delay(1, Realtime, PlayerLoopTiming.Update)`
   (`Runtime/Transport/KcpTransport.cs:248`) and runs the KCP update timer on the PlayerLoop too
-  (`KcpClientSession.TuningInterval`, `:378`): frame rate bounds receive latency and ARQ timing.
+  (`KcpClientSession.TuningInterval`, `:388`): frame rate bounds receive latency and ARQ timing.
   `KcpClientSession` is Unity-free and takes one lock per public member (`KcpClientSession.cs:16-32`);
   its tuning must equal the server's `KcpTuning` (`:34-42`). `Kcp` is a byte-compatible port of kcp-go
   (`Runtime/Transport/Kcp.cs:6-22`).
@@ -90,7 +90,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
 ## Pitfalls
 
 - **Per-packet allocations, no pooling anywhere** (no `ArrayPool` in `Runtime/`):
-  `KcpCrypto.Seal` creates an RNG and a nonce array per datagram (`KcpCrypto.cs:84-85`);
+  `KcpCrypto.Seal` creates an RNG and a nonce array per datagram (`KcpCrypto.cs:89-90`);
   fresh arrays filled by `Buffer.BlockCopy` (`KcpClientSession.cs:422-424,465-466,491-492`); `Segment` data and
   datagrams (`Kcp.cs:248-249,405-407,482,488,639`); frame bodies (`Buffer.BlockCopy`, `FrameBuffer.cs:107`);
   lists, stat arrays and `ToArray` (`SnapshotResolver.cs:85,240,250,267-269`); a new `InputMessage` per
