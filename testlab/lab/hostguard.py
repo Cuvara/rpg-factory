@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import statistics
 import subprocess
 import threading
 import time
@@ -48,6 +49,9 @@ G4_BUILD_PCT = 5.0               # any build-tool group, % of the whole host
 G4_AV_PCT = 5.0                  # MsMpEng
 G4_CONSECUTIVE = 3
 G5_MISSED_INTERVALS = 3
+G6_RATE_DEVIATION_PCT = 5.0
+G6_SUSTAINED_S = 2.0
+G6_ACHIEVED_TICK_MIN_RATIO = 0.98
 HOLD_SLACK_S = 5.0          # extra time hold_until() waits for the sample that closes the window
 PRE_QUIET_S = 120.0              # P1: no session event or connection entry this long before the start
 PRE_SAMPLE_S = 120.0             # preflight sample length (P2, P4, P5)
@@ -63,6 +67,9 @@ RULES = {
     "G3": f"AnyDesk CPU >= {ANYDESK_IDLE_MAX_PCT} % of the host for {G3_CONSECUTIVE} consecutive samples",
     "G4": f"build tools > {G4_BUILD_PCT} % or MsMpEng > {G4_AV_PCT} % of the host for {G4_CONSECUTIVE} consecutive samples",
     "G5": f"guard blind: more than {G5_MISSED_INTERVALS} consecutive intervals without a sample",
+    "G6": (f"server clock-rate step: current_tick per harness second differs by more than "
+          f"{G6_RATE_DEVIATION_PCT:.1f}% from the run median for more than {G6_SUSTAINED_S:.0f} s "
+          f"while achieved_tick_hz stays within {100 * (1 - G6_ACHIEVED_TICK_MIN_RATIO):.0f}% of target"),
 }
 
 _AD_IDENTITY_PREFIX_BYTES = 256
@@ -358,6 +365,79 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
              "guard_own_cpu_pct": {"mean": round(sum(own) / len(own), 4) if own else None, "max": max(own) if own else None},
              "new_processes_per_interval_max": max([s.get("newproc") or 0 for s in inside[1:]] or [0])}
     return {"fired": fired, "window": [iso_utc(window[0]), iso_utc(window[1])], "stats": stats}
+
+
+def evaluate_clock_rate(status_rows: list[dict]) -> dict:
+    """Detect G6 from 1 Hz server status samples without treating a server stall as a host clock step.
+
+    current_tick gives a high-resolution server-clock measure; _mono is the harness monotonic clock.
+    Intervals with achieved_tick_hz below 98% of sim_critical_hz are excluded, since those are server
+    tick-rate failures and remain graded by the normal server_tick/render checks.
+    """
+    intervals = []
+    rows = [r for r in status_rows if isinstance(r.get("_mono"), (int, float))]
+    rows.sort(key=lambda r: r["_mono"])
+    for before, after in zip(rows, rows[1:]):
+        start, end = float(before["_mono"]), float(after["_mono"])
+        elapsed = end - start
+        if elapsed <= 0.0 or elapsed > 2.0:
+            continue
+        target = min(float(before.get("sim_critical_hz") or before.get("tick_rate") or 0.0),
+                     float(after.get("sim_critical_hz") or after.get("tick_rate") or 0.0))
+        achieved = min(float(before.get("achieved_tick_hz") or 0.0),
+                       float(after.get("achieved_tick_hz") or 0.0))
+        if target <= 0.0 or achieved < target * G6_ACHIEVED_TICK_MIN_RATIO:
+            continue
+        try:
+            ticks = float(after["current_tick"]) - float(before["current_tick"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ticks <= 0.0:
+            continue
+        intervals.append({"start": start, "end": end, "scenario_st": after.get("_st"), "rate": ticks / elapsed,
+                          "achieved": achieved, "target": target})
+
+    rates = [x["rate"] for x in intervals]
+    median = statistics.median(rates) if rates else None
+    fired = []
+    if median and median > 0:
+        max_deviation = 0.0
+        runs = []
+        current = []
+        for interval in intervals:
+            deviation = abs(interval["rate"] / median - 1.0) * 100.0
+            max_deviation = max(max_deviation, deviation)
+            if deviation > G6_RATE_DEVIATION_PCT:
+                if current and interval["start"] - current[-1]["end"] > 0.25:
+                    runs.append(current)
+                    current = []
+                current.append(interval)
+            elif current:
+                runs.append(current)
+                current = []
+        if current:
+            runs.append(current)
+        sustained = [run for run in runs if run[-1]["end"] - run[0]["start"] > G6_SUSTAINED_S]
+        episode_evidence = []
+        for run in sustained:
+            mean_rate = sum(x["rate"] for x in run) / len(run)
+            deviation = abs(mean_rate / median - 1.0) * 100.0
+            start_st, end_st = run[0].get("scenario_st"), run[-1].get("scenario_st")
+            scenario_window = (f"scenario st {float(start_st):.1f}..{float(end_st):.1f} s; "
+                               if isinstance(start_st, (int, float)) and isinstance(end_st, (int, float)) else "")
+            episode_evidence.append(f"{scenario_window}harness mono {run[0]['start']:.3f}..{run[-1]['end']:.3f}: "
+                                    f"{mean_rate:.2f} ticks/s vs {median:.2f} median "
+                                    f"({deviation:.1f}% deviation, "
+                                    f"achieved_tick_hz >= {G6_ACHIEVED_TICK_MIN_RATIO:.2f} x target)")
+        if episode_evidence:
+            fired.append({"id": "G6", "rule": RULES["G6"], "count": sum(len(run) for run in sustained),
+                          "episodes": len(sustained), "evidence": episode_evidence[:12]})
+    stats = {"source": "server/status.ndjson current_tick / harness _mono",
+             "valid_intervals": len(intervals), "median_ticks_per_harness_s": round(median, 3) if median else None,
+             "max_deviation_pct": round(max_deviation, 2) if median else None,
+             "rate_deviation_limit_pct": G6_RATE_DEVIATION_PCT, "sustained_limit_s": G6_SUSTAINED_S,
+             "achieved_tick_min_ratio": G6_ACHIEVED_TICK_MIN_RATIO}
+    return {"fired": fired, "stats": stats}
 
 
 def nearest_event(events: list[dict], epoch: float, within_s: float = 10.0) -> dict | None:

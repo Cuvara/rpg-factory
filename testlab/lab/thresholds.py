@@ -225,6 +225,11 @@ CHECK_DEFAULTS = [
      f"build tools > {hostguard.G4_BUILD_PCT} %, MsMpEng > {hostguard.G4_AV_PCT} % of host for {hostguard.G4_CONSECUTIVE}",
      f"{POLICY}: provisional; T62 pre-soak load was 51 %, MsMpEng 105 CPU-s per 30 s"),
     ("host_guard G5", "blind guard", f"> {hostguard.G5_MISSED_INTERVALS} missed intervals of {hostguard.INTERVAL_S:.0f} s (+1 s)", POLICY),
+    ("host_guard G6", "server clock-rate step",
+     f"> {hostguard.G6_RATE_DEVIATION_PCT:.0f}% from run-median current_tick / harness-second for > {hostguard.G6_SUSTAINED_S:.0f} s; "
+     f"achieved_tick_hz >= {hostguard.G6_ACHIEVED_TICK_MIN_RATIO:.2f} x target",
+     f"{POLICY}: F23 9mre had two ~6 s episodes at 65 vs 55 ticks/harness-second while achieved_tick_hz stayed ~60; "
+     "flat i9fl/e26z series are the comparison evidence"),
     ("preflight P1", "no session now", f"no `--backend`, no session event or connection entry in the last {hostguard.PRE_QUIET_S:.0f} s", POLICY),
     ("preflight P2", "AnyDesk residents idle", f"mean CPU < {hostguard.ANYDESK_IDLE_MAX_PCT} % of host over a {hostguard.PRE_SAMPLE_S:.0f} s sample",
      f"{POLICY}: observed idle mean 0.03 %, max 0.13 %"),

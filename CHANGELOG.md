@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
+  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
+  cite the F23 9mre soak evidence.
+
 ### Fixed
 
 - testlab: the host guard kept sampling only until the players exited, not until the measurement window end

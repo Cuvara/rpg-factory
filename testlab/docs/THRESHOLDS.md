@@ -61,6 +61,7 @@ choice nobody has measured against. Treat the policy limits as policy, not as va
 | `host_guard G3` | AnyDesk CPU, consecutive samples | >= 0.5 % of host for 2 | policy, unvalidated: 4x the idle maximum 0.13 % and half the lightest session ~1 % (F19 baseline 16:27-16:43Z, 185 samples) |
 | `host_guard G4` | foreign load, consecutive samples | build tools > 5.0 %, MsMpEng > 5.0 % of host for 3 | policy, unvalidated: provisional; T62 pre-soak load was 51 %, MsMpEng 105 CPU-s per 30 s |
 | `host_guard G5` | blind guard | > 3 missed intervals of 5 s (+1 s) | policy, unvalidated |
+| `host_guard G6` | server clock-rate step | > 5% from run-median current_tick / harness-second for > 2 s; achieved_tick_hz >= 0.98 x target | policy, unvalidated: F23 9mre had two ~6 s episodes at 65 vs 55 ticks/harness-second while achieved_tick_hz stayed ~60; flat i9fl/e26z series are the comparison evidence |
 | `preflight P1` | no session now | no `--backend`, no session event or connection entry in the last 120 s | policy, unvalidated |
 | `preflight P2` | AnyDesk residents idle | mean CPU < 0.5 % of host over a 120 s sample | policy, unvalidated: observed idle mean 0.03 %, max 0.13 % |
 | `preflight P3` | no other agent working | 0 `working` agents in `orca worktree ps` except the allowed ones | policy, unvalidated |

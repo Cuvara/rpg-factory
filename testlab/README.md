@@ -333,8 +333,11 @@ A scenario with `requires_clean_host` (S09) runs P1-P6 automatically before anyt
 | G3 | AnyDesk CPU of 0.5 % of the host or more for 2 consecutive samples |
 | G4 | build tools or `MsMpEng` above 5 % of the host for 3 consecutive samples |
 | G5 | the guard was blind: more than 3 consecutive intervals without a sample |
+| G6 | `current_tick` per harness second steps more than 5 % from its run median for more than 2 s while `achieved_tick_hz` remains within its normal 98 % bound |
 
 A fired guard makes the `host_guard` assertion, and so the run, **INVALID**. INVALID is checked before FAIL and is never PASS: it cannot turn a FAIL or INCONCLUSIVE into a PASS, it is not a verdict on the candidate, and a FAIL in the table is kept as evidence (and named under **Qualified by**). It exits with code 2. No threshold or pass rule of any scenario changed. `host_quiet` additionally names the nearest guard event within 10 s of every single-process frame of 1 s or more. Other agents' shell and WSL bursts are recorded (`newproc`) but do not invalidate. Every limit above is **policy, unvalidated** (`docs/THRESHOLDS.md`), calibrated on one 16 min baseline.
+
+G6 compares the server tick counter with the harness monotonic clock using adjacent 1 Hz `/status` samples. It fires only while the server's own `achieved_tick_hz` stays above 98 % of its configured critical rate, so a server stall or slowdown remains graded by the existing tick, snapshot and render checks as FAIL. The provisional 5 % / 2 s limits are tied to F23's `9mre` evidence: two ~6 s clock-rate episodes advanced about 65 instead of 55 ticks per harness second while the server reported ~60 achieved ticks/s.
 
 The guard cannot see which part of a session start freezes a player, and an idle resident AnyDesk cannot be cleared by it; both stay open (F19 section 3.5). A run with no guard evidence (older runs) shows `host_guard` INFO; a clean-host scenario without it is INCONCLUSIVE.
 

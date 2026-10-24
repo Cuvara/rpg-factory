@@ -1578,7 +1578,7 @@ def _long_frames_with_guard_events(ev, min_ms: float = 1000.0, within_s: float =
 def check_host_guard(ev, a):
     """INVALID when the host guard (lab/hostguard.py) fired inside the measurement window: an AnyDesk
     session start or active session (G1), a new AnyDesk process (G2), an AnyDesk CPU burst (G3), a
-    foreign build or antivirus load (G4), or a blind guard (G5). Otherwise INFO with the baseline
+    foreign build or antivirus load (G4), a blind guard (G5), or a host clock-rate step (G6). Otherwise INFO with the baseline
     numbers; INCONCLUSIVE when the scenario requires a clean host and no guard evidence exists.
     Never PASS, so it cannot turn a FAIL or INCONCLUSIVE into one; all other checks are untouched."""
     hg = ev.get("hostguard") or {}
@@ -1586,10 +1586,18 @@ def check_host_guard(ev, a):
     required = bool(ev["scenario"].get("requires_clean_host") or meta.get("required"))
     samples = hg.get("samples") or []
     window = meta.get("window_epoch")
-    src = "host/guard.ndjson + host/anydesk-events.ndjson (lab/hostguard.py)"
+    clock = hostguard.evaluate_clock_rate(_status_in_window(ev))
+    src = ("host/guard.ndjson + host/anydesk-events.ndjson and server/status.ndjson current_tick / _mono "
+           "(lab/hostguard.py)")
     if not samples or not window:
         why = meta.get("error") or ("no window recorded (the run ended before the scenario was scheduled)" if samples
                                     else "no host guard evidence recorded")
+        if clock["fired"]:
+            return _result(INVALID, {"fired": [f["id"] for f in clock["fired"]]}, "no guard fires inside the window",
+                           source=src, sampling="server status 1 Hz", detail={"fired": clock["fired"],
+                           "clock_rate": clock["stats"], "host_guard_why": why},
+                           rationale="a host clock correction makes timing evidence environmental, not a verdict on the candidate",
+                           artifacts=[str(ev["run_dir"] / "server" / "status.ndjson")])
         if required:
             return _inconclusive(f"clean host required: {why}", source=src)
         return _result(INFO, {"recorded": False}, None, source=src, sampling="n/a", detail={"why": why},
@@ -1598,8 +1606,10 @@ def check_host_guard(ev, a):
                              baseline_pids=meta.get("baseline_pids") or (),
                              preflight_pids=((hg.get("preflight") or {}).get("anydesk_pids") or ()),
                              interval_s=float(meta.get("interval_s") or hostguard.INTERVAL_S))
+    res["fired"].extend(clock["fired"])
     detail = {"fired": res["fired"], "window_utc": res["window"], "stats": res["stats"],
-              "guard_cost": hg.get("summary"), "preflight_failed": (hg.get("preflight") or {}).get("failed")}
+              "clock_rate": clock["stats"], "guard_cost": hg.get("summary"),
+              "preflight_failed": (hg.get("preflight") or {}).get("failed")}
     rationale = ("a contaminated window cannot show that the game, not the host, caused or avoided a freeze; "
                  "policy limits in testlab/docs/THRESHOLDS.md")
     if res["fired"]:
@@ -1643,7 +1653,7 @@ CHECKS["provenance"] = check_provenance
 # Appended to every evaluation when the scenario does not list them.
 ALWAYS = (("provenance", "run provenance (commits, image, player, scenario, evidence hashes)"),
           ("host_quiet", "host-wide stalls (environment)"),
-          ("host_guard", "host guard (AnyDesk session, foreign load, guard blind)"))
+          ("host_guard", "host guard (AnyDesk session, foreign load, guard blind, clock-rate step)"))
 
 
 def evaluate(ev: dict) -> list[dict]:
