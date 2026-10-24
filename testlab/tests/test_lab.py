@@ -2747,5 +2747,652 @@ class PredictorTraceTests(unittest.TestCase):
                 self.assertEqual(cli.main(["replay-trace", str(empty)]), 2)
                 self.assertEqual(cli.main(["replay-trace", str(Path(d) / "none")]), 3)
 
+# =========================================================================== S16 malformed input / S17 churn
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import socket  # noqa: E402
+import struct  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from lab import provenance, rawclient, rawprobe  # noqa: E402
+
+
+class FakeLink:
+    """A link whose incoming bytes the test feeds, for the framed reader."""
+
+    def __init__(self):
+        self.inbox, self.sent, self.closed = [], [], False
+        self._cv = threading.Condition()
+
+    def feed(self, data: bytes):
+        with self._cv:
+            self.inbox.append(data)
+            self._cv.notify_all()
+
+    def write(self, data):
+        self.sent.append(bytes(data))
+
+    def read_some(self, timeout):
+        with self._cv:
+            if not self.inbox and not self.closed:
+                self._cv.wait(min(timeout, 0.05))
+            if self.inbox:
+                return self.inbox.pop(0)
+            return None if self.closed else b""
+
+    def close(self):
+        self.closed = True
+        with self._cv:
+            self._cv.notify_all()
+
+
+class RawClientTests(unittest.TestCase):
+    def test_jwt_is_hs256_with_the_claims_the_services_read(self):
+        tok = rawclient.sign_jwt("u1", "secret", server_id="gs-1", ttl_s=30)
+        head, body, sig = tok.split(".")
+        pad = lambda s: s + "=" * (-len(s) % 4)  # noqa: E731
+        import base64
+        claims = json.loads(base64.urlsafe_b64decode(pad(body)))
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(pad(head))), {"alg": "HS256", "typ": "JWT"})
+        self.assertEqual((claims["sub"], claims["sid"]), ("u1", "gs-1"))
+        self.assertEqual(claims["exp"] - claims["iat"], 30)
+        self.assertTrue(claims["jti"])
+        want = hmac.new(b"secret", f"{head}.{body}".encode(), hashlib.sha256).digest()
+        self.assertEqual(base64.urlsafe_b64decode(pad(sig)), want)
+        plain = rawclient.sign_jwt("u1", "secret")
+        self.assertNotIn("sid", json.loads(base64.urlsafe_b64decode(pad(plain.split(".")[1]))))
+
+    def test_frames_are_length_prefixed_json_envelopes_and_noise_is_reproducible(self):
+        body = rawclient.json_body(7, {"tick": 1})
+        self.assertEqual(json.loads(body), {"type": 7, "payload": {"tick": 1}})
+        f = rawclient.frame(body)
+        self.assertEqual(struct.unpack(">I", f[:4])[0], len(body))
+        self.assertEqual(rawclient.random_bytes(16, 3), rawclient.random_bytes(16, 3))
+        self.assertNotEqual(rawclient.random_bytes(16, 3), rawclient.random_bytes(16, 4))
+
+    def test_the_reader_reassembles_split_frames_and_answers_pings(self):
+        link = FakeLink()
+        w = rawclient.Wire(link, "t")
+        try:
+            snap = rawclient.frame(rawclient.json_body(rawclient.MSG_SNAPSHOT, {"tick": 1, "entities": []}))
+            link.feed(snap[:5])
+            link.feed(snap[5:])
+            ping = rawclient.frame(rawclient.json_body(rawclient.MSG_PING, {"timestamp": 1234}))
+            link.feed(ping)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not (w.snapshot_times and link.sent):
+                time.sleep(0.02)
+            self.assertEqual(len(w.snapshot_times), 1)
+            pong = json.loads(link.sent[0][4:])
+            self.assertEqual((pong["type"], pong["payload"]["timestamp"]), (rawclient.MSG_PONG, 1234))
+        finally:
+            w.stop()
+
+    def test_a_silent_peer_does_not_answer_pings_and_a_bad_length_is_recorded(self):
+        link = FakeLink()
+        w = rawclient.Wire(link, "t", answer_pings=False)
+        try:
+            link.feed(rawclient.frame(rawclient.json_body(rawclient.MSG_PING, {"timestamp": 1})))
+            link.feed(struct.pack(">I", rawclient.MAX_FRAME + 1))
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and w.bad_frame is None:
+                time.sleep(0.02)
+            self.assertEqual(link.sent, [])
+            self.assertIn("length", w.bad_frame)
+        finally:
+            w.stop()
+
+    def test_kcp_link_acks_what_it_receives_delivers_the_stream_and_retransmits_until_acked(self):
+        hdr = rawclient._KCP_HDR
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.settimeout(3)
+        link = rawclient.KcpLink("127.0.0.1", srv.getsockname()[1], conv=77)
+        try:
+            link.write(b"hello")
+            data, peer = srv.recvfrom(2048)
+            conv, cmd, frg, _wnd, _ts, sn, una, ln = hdr.unpack_from(data)
+            self.assertEqual((conv, cmd, frg, sn, ln), (77, 81, 0, 0, 5))
+            self.assertEqual(data[hdr.size:hdr.size + 5], b"hello")
+            again, _ = srv.recvfrom(2048)  # not acked: sent again
+            self.assertEqual(hdr.unpack_from(again)[5], 0)
+            srv.sendto(hdr.pack(77, 82, 0, 128, 0, 0, 1, 0), peer)  # ACK sn 0
+            srv.sendto(hdr.pack(77, 81, 0, 128, 5, 0, 0, 3) + b"abc", peer)  # PUSH sn 0 from the server
+            got = b""
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and not got:
+                got = link.read_some(0.2) or b""
+            self.assertEqual(got, b"abc")
+            seen_ack = False
+            srv.settimeout(1)
+            for _ in range(20):
+                try:
+                    d2, _ = srv.recvfrom(2048)
+                except socket.timeout:
+                    break
+                if hdr.unpack_from(d2)[1] == 82:
+                    seen_ack = True
+                    break
+            self.assertTrue(seen_ack, "the PUSH from the server was never acknowledged")
+        finally:
+            link.close()
+            srv.close()
+
+    def test_close_sends_nothing(self):
+        srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.settimeout(0.5)
+        link = rawclient.KcpLink("127.0.0.1", srv.getsockname()[1])
+        link.close()
+        with self.assertRaises(socket.timeout):
+            srv.recvfrom(2048)
+        srv.close()
+        with self.assertRaises(rawclient.RawClientError):
+            link.write(b"x")
+
+
+class RawProbeHelperTests(unittest.TestCase):
+    def test_metrics_parse_and_the_moved_filter(self):
+        text = ('# TYPE x\ngameserver_connections{map_id="m"} 3\n'
+                'gameserver_inputs_rejected_total{map_id="m",reason="invalid_direction"} 2\n'
+                'gameserver_achieved_tick_hz{map_id="m"} 59.9\nother_metric 1\n')
+        m = rawprobe.parse_metrics(text)
+        self.assertEqual(len(m), 3)
+        after = dict(m)
+        after['gameserver_connections{map_id="m"}'] = 2
+        after['gameserver_inputs_rejected_total{map_id="m",reason="invalid_direction"}'] = 5
+        after['gameserver_achieved_tick_hz{map_id="m"}'] = 60.1
+        moved = rawprobe.moved(m, after)
+        self.assertEqual(moved, {'gameserver_connections{map_id="m"}': -1.0,
+                                 'gameserver_inputs_rejected_total{map_id="m",reason="invalid_direction"}': 3.0})
+
+    def test_evidence_lines_are_appended_and_a_failing_step_is_recorded(self):
+        with tempfile.TemporaryDirectory() as d:
+            ev = rawprobe.Evidence(Path(d))
+            ev.write({"record": "a", "n": 1})
+            ev.write({"record": "b"})
+            lines = (Path(d) / rawprobe.EVIDENCE).read_text(encoding="utf-8").splitlines()
+            self.assertEqual([json.loads(x)["record"] for x in lines], ["a", "b"])
+            old = rawprobe.STEPS.get("raw_churn")
+            def boom(*a, **k):
+                raise RuntimeError("step broke")
+            rawprobe.STEPS["raw_churn"] = boom
+            try:
+                t = rawprobe.start("raw_churn", None, {}, {}, Path(d), None, print, threading.Event())
+                t.join(5)
+            finally:
+                rawprobe.STEPS["raw_churn"] = old
+            last = json.loads((Path(d) / rawprobe.EVIDENCE).read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(last["record"], "error")
+            self.assertIn("step broke", last["error"])
+
+    def test_every_sender_kind_is_known_and_the_scenario_validates_them(self):
+        for kind in ("oversize_length", "length_ffffffff", "zero_length", "truncated_frame", "unknown_type",
+                     "type_out_of_range", "garbage_envelope", "garbage_payload", "move_out_of_range",
+                     "attack_out_of_range", "ability_cooldown"):
+            self.assertIn(kind, rawprobe.SENDERS)
+        bad = _scenario(disruptions=[{"at_s": 1, "kind": "raw_malformed", "cases": [{"id": "x", "kind": "nope"}]}])
+        with self.assertRaises(scenarios.ScenarioError):
+            scenarios.validate(bad)
+        dup = _scenario(disruptions=[{"at_s": 1, "kind": "raw_malformed", "cases": [
+            {"id": "x", "kind": "zero_length"}, {"id": "x", "kind": "zero_length"}]}])
+        with self.assertRaises(scenarios.ScenarioError):
+            scenarios.validate(dup)
+        with self.assertRaises(scenarios.ScenarioError):
+            scenarios.validate(_scenario(disruptions=[{"at_s": 1, "kind": "raw_churn", "cycles": 1}]))
+        scenarios.validate(_scenario(disruptions=[{"at_s": 1, "kind": "raw_churn", "cycles": 10}]))
+
+    def test_garbage_senders_write_what_they_say(self):
+        class Game:
+            def __init__(self):
+                self.sent, self.answer_pings = [], True
+
+            def send(self, data):
+                self.sent.append(data)
+
+            def send_msg(self, t, p=None):
+                self.sent.append(rawclient.frame(rawclient.json_body(t, p)))
+
+        class P:
+            user_id = "u"
+            game = Game()
+        ctx = {"seed": 5}
+        rawprobe._send_oversize(P, ctx)
+        rawprobe._send_length_ffffffff(P, ctx)
+        rawprobe._send_zero_length(P, ctx)
+        rawprobe._send_truncated(P, ctx)
+        rawprobe._send_garbage_envelope(P, ctx)
+        rawprobe._send_garbage_payload(P, ctx)
+        s = P.game.sent
+        self.assertEqual(struct.unpack(">I", s[0])[0], rawclient.MAX_FRAME + 1)
+        self.assertEqual(s[1], b"\xff\xff\xff\xff")
+        self.assertEqual(s[2], b"\x00\x00\x00\x00")
+        self.assertEqual(struct.unpack(">I", s[3][:4])[0], 64)
+        self.assertEqual(len(s[3]) - 4, 10)          # shorter than its length prefix
+        self.assertFalse(P.game.answer_pings)         # the truncated peer goes silent
+        self.assertEqual(s[4][4:5], b"\x0a")
+        self.assertEqual(s[5][4:8], b"\x08\x07\x12\x10")
+        self.assertEqual(s[4], rawprobe._send_garbage_envelope(P, ctx) and P.game.sent[-1])  # reproducible
+
+
+def _case(cid, *, closes, closed_after=0.01, pre=2, snaps=0, moved=None, join=True, detail=None, sent_st=20.0,
+          target_after=None, user=None, mid=None, post=None):
+    mid = pre + 1 if mid is None else mid
+    post = (pre if closes else pre + 1) if post is None else post
+    base = lambda c: {"connections": c, "players_online": c, "metrics": {}, "entities": {}}  # noqa: E731
+    p = base(post)
+    p["metrics"] = {k: v for k, v in (moved or {}).items()}
+    m = base(mid)
+    m["metrics"] = {k: 0.0 for k in (moved or {})}
+    return {"record": "case", "id": cid, "kind": cid, "user_id": user or f"raw-{cid}", "join": {"ok": join},
+            "pre": base(pre), "mid": m, "post": p, "sent_st": sent_st,
+            "closed_after_s": closed_after if closes else None, "snapshots_after_send": snaps,
+            "detail": detail or {"sent": "x"}, "entity_before": {"x": 0, "y": 0, "speed": 5.0},
+            "moved": {}}
+
+
+RJ = 'gameserver_inputs_rejected_total{map_id="map_01",reason="%s"}'
+
+
+def _rejected(rec, reason, n=3.0):
+    """The rejection counter of `reason` rising by n between the read with the offender in and the final read."""
+    rec["post"]["metrics"] = {RJ % reason: float(n)}
+    rec["mid"]["metrics"] = {RJ % reason: 0.0}
+    return rec
+
+
+def _malformed_ev(cases, consts=None):
+    ev = _ev(clients=2, duration=100)
+    ev["rawprobe"] = list(cases) + [{"record": "end", "constants": consts or {"attack_range": {"value": 3.0}}}]
+    return ev
+
+
+MAL = {"cases": {"zero": {"expect": "closes", "within_s": 3.0}, "unk": {"expect": "stays_open"}}}
+# the same, with the signal a stays_open case needs: a rejection counter that rises
+MALR = {"cases": {"zero": {"expect": "closes", "within_s": 3.0},
+                  "unk": {"expect": "stays_open", "rejections": {"attack_other": 1}}}}
+
+
+class MalformedInputTests(unittest.TestCase):
+    def test_a_refused_or_closing_case_passes(self):
+        unk = _case("unk", closes=False, snaps=40)
+        unk["post"]["metrics"] = {RJ % "attack_other": 1.0}
+        unk["mid"]["metrics"] = {RJ % "attack_other": 0.0}
+        ev = _malformed_ev([_case("zero", closes=True), unk])
+        res = analyze.check_malformed_input(ev, MALR)
+        self.assertEqual(res["status"], analyze.PASS, res)
+
+    def test_a_case_that_stays_open_without_a_server_signal_is_inconclusive_never_pass(self):
+        # RV-F8A-1: type 99 has no counter; staying connected is not an observation of a rejection.
+        ev = _malformed_ev([_case("zero", closes=True), _case("unk", closes=False, snaps=40)])
+        res = analyze.check_malformed_input(ev, MAL)
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE, res)
+        self.assertIn("signal_missing", res["measured"]["unk"])
+        self.assertEqual(res["detail"]["not_judged"], ["unk"])
+        # the same case closing the session is a failure, signal or not
+        ev = _malformed_ev([_case("zero", closes=True), _case("unk", closes=True)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.FAIL)
+        # and a counter that rises is the signal
+        up = _case("unk", closes=False, snaps=40)
+        up["post"]["metrics"] = {RJ % "attack_other": 1.0}
+        up["mid"]["metrics"] = {RJ % "attack_other": 0.0}
+        rule = {"cases": {"unk": {"expect": "stays_open", "rejections": {"attack_other": 1}}}}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([up]), rule)["status"], analyze.PASS)
+
+    def test_s16_unknown_type_is_judged_on_the_messages_rejected_counter(self):
+        # rpg-mmo-server #490: gameserver_messages_rejected_total{reason="unknown_type"} counts an undefined type
+        rule = next(a for a in scenarios.load("S16")["assertions"] if a["check"] == "malformed_input")["cases"]["unknown_type"]
+        self.assertEqual(rule["expect"], "stays_open")
+        self.assertEqual(rule["rejections_counter"], "gameserver_messages_rejected_total")
+        self.assertEqual(rule["rejections"], {"unknown_type": 1})
+
+    def test_a_named_counter_that_rises_passes_one_that_does_not_fails_and_a_missing_series_is_inconclusive(self):
+        MR = 'gameserver_messages_rejected_total{map_id="map_01",reason="unknown_type"}'
+        rule = {"cases": {"unk": {"expect": "stays_open", "rejections_counter": "gameserver_messages_rejected_total",
+                                  "rejections": {"unknown_type": 1}}}}
+
+        def case(post, mid=0.0):
+            c = _case("unk", closes=False, snaps=40)
+            c["post"]["metrics"] = {MR: post} if post is not None else {}
+            c["mid"]["metrics"] = {MR: mid} if post is not None else {}
+            return c
+
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([case(1.0)]), rule)["status"], analyze.PASS)
+        res = analyze.check_malformed_input(_malformed_ev([case(0.0)]), rule)
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertIn("gameserver_messages_rejected_total", " ".join(res["measured"]["unk"]["problems"]))
+        # the counter's reason series is not the inputs counter's: a rising inputs counter does not count
+        wrong = _case("unk", closes=False, snaps=40)
+        wrong["post"]["metrics"], wrong["mid"]["metrics"] = {RJ % "unknown_type": 1.0}, {RJ % "unknown_type": 0.0}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([wrong]), rule)["status"], analyze.INCONCLUSIVE)
+        # a server without the counter (no series at all) cannot tell: INCONCLUSIVE, not FAIL
+        res = analyze.check_malformed_input(_malformed_ev([case(None)]), rule)
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+        self.assertIn("does not export", res["measured"]["unk"]["signal_missing"])
+
+    def test_a_session_that_stays_open_or_closes_late_fails(self):
+        ev = _malformed_ev([_case("zero", closes=False, snaps=40), _case("unk", closes=False, snaps=40)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.FAIL)
+        ev = _malformed_ev([_case("zero", closes=True, closed_after=9.0), _case("unk", closes=False, snaps=40)])
+        res = analyze.check_malformed_input(ev, MAL)
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertIn("zero", res["detail"]["failed"])
+
+    def test_another_session_lost_is_a_failure(self):
+        # connections ended at 1 although two rendered clients were in: the bad frame took a neighbour with it
+        ev = _malformed_ev([_case("zero", closes=True, post=1), _case("unk", closes=False, snaps=40)])
+        res = analyze.check_malformed_input(ev, MAL)
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertIn("another session", " ".join(res["measured"]["zero"]["problems"]))
+
+    def test_an_input_that_should_only_be_refused_must_not_close_and_must_keep_snapshots(self):
+        ev = _malformed_ev([_case("zero", closes=True), _case("unk", closes=True)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.FAIL)
+        ev = _malformed_ev([_case("zero", closes=True), _case("unk", closes=False, snaps=1)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.FAIL)
+
+    def test_missing_failed_or_unjoined_cases_are_inconclusive_never_pass(self):
+        self.assertEqual(analyze.check_malformed_input(_ev(clients=2), MAL)["status"], analyze.INCONCLUSIVE)
+        ev = _malformed_ev([_case("zero", closes=True)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.INCONCLUSIVE)
+        ev = _malformed_ev([_case("zero", closes=True, join=False), _case("unk", closes=False, snaps=40)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.INCONCLUSIVE)
+        broken = _case("zero", closes=True)
+        broken["error"] = "boom"
+        ev = _malformed_ev([broken, _case("unk", closes=False, snaps=40)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.INCONCLUSIVE)
+
+    def test_a_failure_wins_over_a_case_that_could_not_be_judged(self):
+        ev = _malformed_ev([_case("zero", closes=False, snaps=40)])
+        self.assertEqual(analyze.check_malformed_input(ev, MAL)["status"], analyze.FAIL)
+
+    def test_rejection_counters_must_rise_and_zero_ones_must_not(self):
+        rule = {"cases": {"mv": {"expect": "stays_open", "rejections": {"invalid_direction": 3}}}}
+        up = _case("mv", closes=False, snaps=40, moved={RJ % "invalid_direction": 3.0})
+        up["post"]["metrics"] = {RJ % "invalid_direction": 3.0}
+        up["mid"]["metrics"] = {RJ % "invalid_direction": 0.0}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([up]), rule)["status"], analyze.PASS)
+        low = _case("mv", closes=False, snaps=40)
+        low["post"]["metrics"] = {RJ % "invalid_direction": 1.0}
+        low["mid"]["metrics"] = {RJ % "invalid_direction": 0.0}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([low]), rule)["status"], analyze.FAIL)
+        none = _case("mv", closes=False, snaps=40)
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([none]), rule)["status"], analyze.FAIL)
+        zero_rule = {"cases": {"mv": {"expect": "stays_open", "zero": ["invalid_direction"]}}}
+        self.assertEqual(analyze.check_malformed_input(_malformed_ev([up]), zero_rule)["status"], analyze.FAIL)
+
+    def test_no_teleport_the_server_position_stays_within_speed_times_elapsed(self):
+        rule = {"cases": {"mv": {"expect": "stays_open", "max_displacement": True, "rejections": {"invalid_direction": 3}}}}
+        rec = _rejected(_case("mv", closes=False, snaps=40, sent_st=20.0, user="raw-mv"), "invalid_direction")
+        walk = [_row(20.0 + k * 0.2, [["raw-mv", "player", 0.0 + k * 0.2, 0, 100, 100, 0, 5.0]]) for k in range(20)]
+        ev = _malformed_ev([rec])
+        ev["server"]["entities"] = walk
+        ev["traj"] = analyze.trajectories(walk)
+        self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.PASS)
+        jump = walk[:5] + [_row(21.0, [["raw-mv", "player", 400.0, 0, 100, 100, 0, 5.0]])] + walk[6:]
+        ev = _malformed_ev([rec])
+        ev["server"]["entities"] = jump
+        ev["traj"] = analyze.trajectories(jump)
+        res = analyze.check_malformed_input(ev, rule)
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertIn("moved", " ".join(res["measured"]["mv"]["problems"]))
+        ev["traj"] = {}
+        self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.INCONCLUSIVE)
+
+    def test_attack_out_of_range_needs_a_far_target_and_no_hp_loss(self):
+        rule = {"cases": {"atk": {"expect": "stays_open", "beyond_attack_range": True, "target_hp_unchanged": True,
+                                  "rejections": {"attack_out_of_range": 1}}}}
+        rec = _rejected(_case("atk", closes=False, snaps=40, sent_st=20.0,
+                              detail={"sent": "x", "target": "enemy-1", "target_distance": 10.5, "target_hp": 16}),
+                        "attack_out_of_range")
+        hp = lambda v: [_row(20.0 + k * 0.2, [["enemy-1", "mob", 5, 5, v(k), 16, 0, 2.5]]) for k in range(40)]  # noqa: E731
+        ev = _malformed_ev([rec])
+        ev["server"]["entities"] = hp(lambda k: 16)
+        ev["traj"] = analyze.trajectories(ev["server"]["entities"])
+        self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.PASS)
+        ev["server"]["entities"] = hp(lambda k: 16 if k < 10 else 6)
+        ev["traj"] = analyze.trajectories(ev["server"]["entities"])
+        self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.FAIL)
+        near = _rejected(_case("atk", closes=False, snaps=40, detail={"sent": "x", "target": "enemy-1", "target_distance": 2.0,
+                                                                      "target_hp": 16}), "attack_out_of_range")
+        ev = _malformed_ev([near])
+        ev["server"]["entities"] = hp(lambda k: 16)
+        ev["traj"] = analyze.trajectories(ev["server"]["entities"])
+        self.assertEqual(analyze.check_malformed_input(ev, rule)["status"], analyze.FAIL)
+
+    def test_s16_asserts_every_case_it_runs_and_the_truncated_bound_is_the_heartbeat_derivation(self):
+        sc = scenarios.load("S16")
+        run = {c["id"] for d in sc["disruptions"] for c in d["cases"]}
+        judged = next(a for a in sc["assertions"] if a["check"] == "malformed_input")["cases"]
+        self.assertEqual(run, set(judged))
+        # PingInterval 10 s, PongTimeout 30 s: the close lands on the 4th tick, 40 s after the connection starts.
+        self.assertGreaterEqual(judged["truncated_frame"]["within_s"], 40.0)
+        window = next(c for d in sc["disruptions"] for c in d["cases"] if c["id"] == "truncated_frame")["window_s"]
+        self.assertGreater(window, judged["truncated_frame"]["within_s"])
+        self.assertEqual(sc["clients"], 2)
+        checks = {a["check"] for a in sc["assertions"]}
+        self.assertTrue({"server_alive", "server_tick", "client_sessions", "snapshot_cadence"} <= checks)
+        self.assertEqual(next(a for a in sc["assertions"] if a["check"] == "snapshot_cadence")["max_gap_ms"], 250)
+
+
+class ServerAliveTests(unittest.TestCase):
+    def _ev(self, uptimes, failed=0, step=1.0):
+        st = [{"_st": i * step, "uptime_seconds": u} for i, u in enumerate(uptimes)]
+        ev = _ev(clients=1, status=st)
+        ev["meta"] = {"probe_counts": {"status_failed": failed}}
+        return ev
+
+    def test_a_steady_server_passes(self):
+        self.assertEqual(analyze.check_server_alive(self._ev(list(range(30))), {})["status"], analyze.PASS)
+
+    def test_a_restart_a_gap_or_a_failed_probe_fails(self):
+        self.assertEqual(analyze.check_server_alive(self._ev([1, 2, 3, 4, 5, 1, 2, 3]), {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_server_alive(self._ev(list(range(30)), failed=1), {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_server_alive(self._ev(list(range(30)), step=9.0), {})["status"], analyze.FAIL)
+
+    def test_too_little_evidence_is_inconclusive(self):
+        self.assertEqual(analyze.check_server_alive(self._ev([1, 2]), {})["status"], analyze.INCONCLUSIVE)
+        ev = self._ev(list(range(30)))
+        ev["meta"] = {}
+        self.assertEqual(analyze.check_server_alive(ev, {})["status"], analyze.INCONCLUSIVE)
+
+
+class ClientSessionsTests(unittest.TestCase):
+    def _ev(self, extra=None):
+        ev = _ev(clients=2, duration=60)
+        for c in ev["clients"]:
+            c["events"] = [{"event": "net_state", "state": "InWorld", "st": -1}, {"event": "in_world", "st": -1}]
+        if extra:
+            ev["clients"][1]["events"].append(extra)
+        return ev
+
+    def test_no_change_after_the_start_passes(self):
+        self.assertEqual(analyze.check_client_sessions(self._ev(), {})["status"], analyze.PASS)
+
+    def test_a_state_change_or_a_disconnect_inside_the_window_fails(self):
+        for extra in ({"event": "net_state", "state": "Reconnecting", "st": 30.0},
+                      {"event": "disconnected", "st": 31.0}, {"event": "entities_reset", "st": 12.0}):
+            self.assertEqual(analyze.check_client_sessions(self._ev(extra), {})["status"], analyze.FAIL, extra)
+
+    def test_changes_outside_the_window_or_a_client_never_seen_in_world(self):
+        late = {"event": "net_state", "state": "Ended", "st": 61.0}
+        self.assertEqual(analyze.check_client_sessions(self._ev(late), {})["status"], analyze.PASS)
+        ev = self._ev()
+        ev["clients"][0]["events"] = []
+        self.assertEqual(analyze.check_client_sessions(ev, {})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_client_sessions(_ev(clients=0), {})["status"], analyze.INCONCLUSIVE)
+
+
+# ---- churn
+
+DROP_U, LEAVE_U = "churn-d", "churn-l"
+
+
+def _cycles(n=10, t0=8.0, connected=4.0, drop_down=3.0, leave_down=6.0, join_ok=True, join_s=0.03):
+    out, t = [], t0
+    for k in range(n):
+        kind = "drop" if k % 2 == 0 else "leave"
+        out.append({"record": "cycle", "n": k + 1, "kind": kind, "user_id": DROP_U if kind == "drop" else LEAVE_U,
+                    "join_st": t, "join": {"ok": join_ok, "join_s": join_s, "error": None if join_ok else "refused"},
+                    "snapshots": 50, "end_st": t + connected})
+        t += connected + (drop_down if kind == "drop" else leave_down)
+    return out
+
+
+def _churn_ev(*, cycles=None, duration=185.0, drop_gone_after=60.0, leave_gone_after=0.5, ghost=None, rendered_extra=None,
+              redis_after=None, players_online=2, rendered_draw=2, removed_events=True, lingering_leaver=False,
+              shown=True):
+    """Two rendered clients (a, b) and the churn step; server samples at 5 Hz, clients at 20 Hz."""
+    cyc = cycles if cycles is not None else _cycles()
+    ev = _ev(clients=2, duration=duration)
+    for i, c in enumerate(ev["clients"]):
+        c["summary"] = {"user_id": "ab"[i], "outcome": "completed"}
+        c["events"] = []
+        c["samples"] = []
+    present = lambda uid, t: any(c["kind"] == ("drop" if uid == DROP_U else "leave") and c["user_id"] == uid  # noqa: E731
+                                 for c in cyc if c["join_st"] <= t)
+    last_drop_end = max(c["end_st"] for c in cyc if c["kind"] == "drop")
+    rows = []
+    for k in range(int(duration * 5)):
+        t = k * 0.2
+        ents = [["a", "player", 0, 0, 100, 100, 0, 5], ["b", "player", 1, 0, 100, 100, 0, 5]]
+        for c in cyc:
+            if c["kind"] == "leave" and c["join_st"] <= t < c["end_st"] + (duration if lingering_leaver else leave_gone_after):
+                ents.append([LEAVE_U, "player", 3, 0, 100, 100, 0, 5])
+            if c["kind"] == "drop" and c["join_st"] <= t:
+                # a dropped player is held until the server notices and the hold runs out
+                if t < last_drop_end + drop_gone_after:
+                    ents.append([DROP_U, "player", 2, 0, 100, 100, 0, 5])
+        if ghost and ghost[0] <= t <= ghost[1]:
+            ents.append(["ghost-1", "player", 9, 9, 100, 100, 0, 5])
+        rows.append(_row(t, list({e[0]: e for e in ents}.values())))
+    ev["server"]["entities"] = rows
+    ev["traj"] = analyze.trajectories(rows)
+    status = []
+    for k in range(int(duration)):
+        n = 2 + (1 if any(c["join_st"] <= k < c["end_st"] for c in cyc) else 0)
+        status.append({"_st": float(k), "players_online": n if k < last_drop_end + 5 else players_online,
+                       "connections": n if k < last_drop_end + 5 else players_online})
+    ev["server"]["status"] = status
+    for c in ev["clients"]:
+        c["samples"] = [{"st": k * 0.05, "ents": [["x%d" % j, "player", 0, 0, 0, 0, 0] for j in range(rendered_draw)]}
+                        for k in range(int(duration * 20))]
+        for cy in cyc:
+            if cy["kind"] == "leave":
+                if shown:
+                    c["events"].append({"event": "entity_added", "id": LEAVE_U, "st": cy["join_st"] + 0.1})
+                if removed_events:
+                    c["events"].append({"event": "entity_removed", "id": LEAVE_U, "st": cy["end_st"] + 0.3})
+    ev["rawprobe"] = [{"record": "start", "step": "raw_churn", "users": {"drop": DROP_U, "leave": LEAVE_U}}] + cyc + [
+        {"record": "redis", "label": "before", "session_keys": ["session:a", "session:b"], "registry_keys": ["servers:id:gs"],
+         "map_members": ["gs"]},
+        {"record": "redis", "label": "after", **(redis_after or {"session_keys": ["session:a", "session:b"],
+                                                               "registry_keys": ["servers:id:gs"], "map_members": ["gs"]})}]
+    return ev
+
+
+class ChurnTests(unittest.TestCase):
+    def test_cycles_all_joined(self):
+        ev = _churn_ev()
+        res = analyze.check_churn_cycles(ev, {"cycles": 10})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual([r["kind"] for r in res["measured"][:3]], ["drop", "leave", "drop"])
+
+    def test_a_refused_or_slow_join_fails_and_a_short_run_is_inconclusive(self):
+        self.assertEqual(analyze.check_churn_cycles(_churn_ev(cycles=_cycles(join_ok=False)), {"cycles": 10})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_churn_cycles(_churn_ev(cycles=_cycles(join_s=9.0)), {"cycles": 10})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_churn_cycles(_churn_ev(cycles=_cycles(n=4)), {"cycles": 10})["status"], analyze.INCONCLUSIVE)
+        self.assertEqual(analyze.check_churn_cycles(_ev(clients=2), {"cycles": 10})["status"], analyze.INCONCLUSIVE)
+
+    def test_no_ghosts_when_everyone_is_gone_in_time(self):
+        res = analyze.check_churn_ghosts(_churn_ev(), {})
+        self.assertEqual(res["status"], analyze.PASS, res["detail"])
+        self.assertEqual(res["detail"]["unknown_player_ids"], [])
+
+    def test_an_entity_nobody_owns_is_a_ghost(self):
+        res = analyze.check_churn_ghosts(_churn_ev(ghost=(50.0, 60.0)), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["detail"]["unknown_player_ids"], ["ghost-1"])
+
+    def test_a_leaver_that_lingers_fails(self):
+        res = analyze.check_churn_ghosts(_churn_ev(lingering_leaver=True), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertTrue(any("graceful leave" in p for p in res["detail"]["problems"]))
+
+    def test_a_dropped_player_that_never_expires_fails(self):
+        res = analyze.check_churn_ghosts(_churn_ev(drop_gone_after=120.0), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertTrue(any("silently dropped" in p for p in res["detail"]["problems"]))
+
+    def test_rendered_clients_that_keep_drawing_a_removed_player_fail(self):
+        self.assertEqual(analyze.check_churn_ghosts(_churn_ev(rendered_draw=3), {})["status"], analyze.FAIL)
+        res = analyze.check_churn_ghosts(_churn_ev(removed_events=False), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+
+    def test_a_removal_is_not_judged_for_a_client_that_was_never_shown_the_leaver(self):
+        # S17 v1 lesson: a rendered client that walked out of the area of interest has no entity_added and no
+        # entity_removed; judging it would blame the server for what the client never saw.
+        res = analyze.check_churn_ghosts(_churn_ev(shown=False, removed_events=False), {})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+        self.assertFalse(any("did not drop" in p for p in res["detail"]["problems"]))
+
+    def test_a_scenario_that_ends_before_the_bound_is_inconclusive(self):
+        res = analyze.check_churn_ghosts(_churn_ev(duration=100.0), {})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+
+    def test_player_count_returns_to_the_baseline(self):
+        self.assertEqual(analyze.check_player_count_baseline(_churn_ev(), {})["status"], analyze.PASS)
+        res = analyze.check_player_count_baseline(_churn_ev(players_online=3), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertTrue(res["measured"]["off_baseline"])
+
+    def test_player_count_peak_above_the_two_churn_users_fails(self):
+        ev = _churn_ev()
+        ev["server"]["status"][20]["players_online"] = 6
+        self.assertEqual(analyze.check_player_count_baseline(ev, {"max_extra": 2})["status"], analyze.FAIL)
+
+    def test_redis_keys_are_compared_by_name(self):
+        self.assertEqual(analyze.check_redis_leak(_churn_ev(), {})["status"], analyze.PASS)
+        leak = {"session_keys": ["session:a", "session:b", "session:churn-d"], "registry_keys": ["servers:id:gs"], "map_members": ["gs"]}
+        res = analyze.check_redis_leak(_churn_ev(redis_after=leak), {})
+        self.assertEqual(res["status"], analyze.FAIL)
+        self.assertEqual(res["detail"]["session_keys"]["leaked"], ["session:churn-d"])
+        swapped = {"session_keys": ["session:a", "session:c"], "registry_keys": ["servers:id:gs"], "map_members": ["gs"]}
+        self.assertEqual(analyze.check_redis_leak(_churn_ev(redis_after=swapped), {})["status"], analyze.FAIL)
+
+    def test_redis_baseline_without_the_rendered_sessions_or_a_missing_point_is_inconclusive(self):
+        ev = _churn_ev()
+        ev["rawprobe"] = [r for r in ev["rawprobe"] if r.get("label") != "after"]
+        self.assertEqual(analyze.check_redis_leak(ev, {})["status"], analyze.INCONCLUSIVE)
+        ev = _churn_ev()
+        next(r for r in ev["rawprobe"] if r.get("label") == "before")["session_keys"] = []
+        self.assertEqual(analyze.check_redis_leak(ev, {})["status"], analyze.INCONCLUSIVE)
+
+    def test_s17_fits_its_own_timeline_and_asserts_the_whole_list(self):
+        sc = scenarios.load("S17")
+        d = next(x for x in sc["disruptions"] if x["kind"] == "raw_churn")
+        cyc = d["cycles"]
+        drops, leaves = (cyc + 1) // 2, cyc // 2
+        busy = cyc * d["connected_s"] + drops * d["drop_down_s"] + leaves * d["leave_down_s"]
+        ghosts = next(a for a in sc["assertions"] if a["check"] == "churn_ghosts")
+        # the wait outlasts the longest server hold, and the run leaves a quiet window after it
+        self.assertGreaterEqual(d["settle_s"], ghosts["drop_gone_within_s"] - 10.0)
+        self.assertGreaterEqual(sc["duration_s"], d["at_s"] + busy + ghosts["drop_gone_within_s"] + 5.0)
+        # 30 s EntityHoldTTL + 10 s ping + 30 s pong timeout + 5 s slack
+        self.assertGreaterEqual(ghosts["drop_gone_within_s"], 75.0)
+        checks = {a["check"] for a in sc["assertions"]}
+        self.assertTrue({"churn_cycles", "churn_ghosts", "player_count_baseline", "redis_leak", "entity_lifecycle",
+                         "client_sessions", "snapshot_cadence", "server_alive"} <= checks)
+        self.assertEqual(sc["clients"], 2)
+
+    def test_provenance_requires_the_raw_probe_file_only_for_raw_scenarios(self):
+        self.assertIn("rawprobe.ndjson", provenance.expected_inventory(scenarios.load("S16")))
+        self.assertIn("rawprobe.ndjson", provenance.expected_inventory(scenarios.load("S17")))
+        self.assertNotIn("rawprobe.ndjson", provenance.expected_inventory(scenarios.load("S15")))
+        self.assertIn("rawprobe.ndjson", provenance.MANIFEST_FILES)
+
+
 if __name__ == "__main__":
     unittest.main()

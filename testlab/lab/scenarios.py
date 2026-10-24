@@ -19,7 +19,11 @@ _ACTION_KINDS = {"cast_nearest_enemy", "cast_forward", "jump",
                  # Coverage hooks C2/C5/C6 (client docs/TESTLAB.md "Coverage hooks"): one-shot at t0.
                  "cast_at_point", "cast_spam", "stall", "quit", "reconnect"}
 _ONE_SHOT = {"stall", "quit", "reconnect"}
-_DISRUPTIONS = {"kill_client", "restart_gameserver", "debug_kill"}
+_DISRUPTIONS = {"kill_client", "restart_gameserver", "debug_kill",
+                # Raw-client steps (lab/rawprobe.py): S16 malformed input, S17 churn.
+                "raw_malformed", "raw_churn",
+                # Packet impairment (lab/netem.py): S18.
+                "netem"}
 
 DEFAULTS = {
     "clients": 3,
@@ -109,6 +113,32 @@ def validate(sc: dict) -> None:
             raise ScenarioError(f"{sc['id']}: unknown disruption {d.get('kind')}")
         if d["kind"] in ("kill_client", "debug_kill") and not 0 <= int(d.get("client", -1)) < int(sc["clients"]):
             raise ScenarioError(f"{sc['id']}: disruption {d['kind']} needs a client index: {d}")
+        if d["kind"] == "raw_malformed":
+            from . import rawprobe
+            cases = d.get("cases") or []
+            ids = [c.get("id") for c in cases]
+            if not cases or len(ids) != len(set(ids)) or not all(ids):
+                raise ScenarioError(f"{sc['id']}: raw_malformed needs cases with unique ids")
+            unknown = [c.get("kind") for c in cases if c.get("kind") not in rawprobe.SENDERS]
+            if unknown:
+                raise ScenarioError(f"{sc['id']}: unknown raw_malformed case kind {unknown}")
+        if d["kind"] == "raw_churn" and int(d.get("cycles", 10)) < 2:
+            raise ScenarioError(f"{sc['id']}: raw_churn needs at least 2 cycles (one drop, one leave)")
+        if d["kind"] == "netem":
+            from . import netem
+            prof = d.get("profile") or {}
+            try:
+                netem.netem_clause(prof)
+            except netem.NetemError as exc:
+                raise ScenarioError(f"{sc['id']}: netem profile: {exc}")
+            bad = [k for k in prof if k not in ("loss_pct", "delay_ms", "jitter_ms", "reorder_pct")]
+            if bad or not 0 <= float(prof.get("loss_pct", 0)) <= 50:
+                raise ScenarioError(f"{sc['id']}: netem profile has unknown keys {bad} or loss outside 0..50 %")
+            base, imp, rec = netem.default_phases(d)
+            if min(base, imp, rec) <= 0 or base + imp + rec > float(sc["duration_s"]):
+                raise ScenarioError(f"{sc['id']}: netem phases {base}+{imp}+{rec} s must be positive and fit duration_s")
+            if set(d.get("directions") or ("egress", "ingress")) - {"egress", "ingress"}:
+                raise ScenarioError(f"{sc['id']}: netem directions are egress and ingress")
     if not sc["assertions"]:
         raise ScenarioError(f"{sc['id']}: a scenario without assertions cannot pass or fail")
     ids = [a.get("id") for a in sc["assertions"]]

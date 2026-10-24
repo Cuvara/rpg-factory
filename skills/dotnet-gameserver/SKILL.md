@@ -59,8 +59,8 @@ knobs, metrics, golden vectors and the AOT warning baseline:
   join reply advertises as `tick_rate` - moving movement to another group is a wire change.
 - **ECS world** (`GameServer/World/EcsWorld.cs`). Arch behind one `ReaderWriterLockSlim` (`:202`),
   because network threads spawn/despawn and enqueue input while the tick runs. API: `ReadAll`
-  (`:1011`), `ReadAllParallel` (`:1158`), `UpdateComponents<TState>` (`:1235`),
-  `UpdateComponentsParallel` (`:1297`, not used by the tick; proves the ADR-12 preconditions).
+  (`:1021`), `ReadAllParallel` (`:1168`), `UpdateComponents<TState>` (`:1245`),
+  `UpdateComponentsParallel` (`:1307`, not used by the tick; proves the ADR-12 preconditions).
   Every write scope applies deferred structural changes on exit. No Arch type reaches SGL.
 - **Shared.GameLogic.** `Shared.GameLogic/Shared.GameLogic.csproj` targets registry fact `sgl-target-frameworks`,
   pins `LangVersion` (fact `sgl-langversion`, Unity 6's C#), disables implicit usings and unsafe code to match the asmdef.

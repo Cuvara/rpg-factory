@@ -53,9 +53,9 @@ back-pressure coalesces to the newest snapshot and one channel per connection ke
 
 - One `ReaderWriterLockSlim` (`:202`) guards the Arch world, because network threads spawn,
   despawn and push input while the tick reads. Input is queued under a separate `_inputLock`.
-- Read API: `ReadAll(Action<WorldReader>)` (`:1011`), `ReadAllParallel(int, Action<WorldReader,int>)`
-  (`:1158`). Write API: `UpdateComponents<TState>(state, Action<TState, WorldWriter>)` (`:1235`),
-  the non-generic `UpdateComponents` overload (`:1250`), `UpdateComponentsParallel` (`:1297`). Every write scope ends
+- Read API: `ReadAll(Action<WorldReader>)` (`:1021`), `ReadAllParallel(int, Action<WorldReader,int>)`
+  (`:1168`). Write API: `UpdateComponents<TState>(state, Action<TState, WorldWriter>)` (`:1245`),
+  the non-generic `UpdateComponents` overload (`:1260`), `UpdateComponentsParallel` (`:1307`). Every write scope ends
   with `ApplyStructuralChangesLocked` and `ExitWriteScope` (`:583`).
 - **Arch's read path writes** (issue #176): it resolves queries through a shared dictionary and
   rebuilds archetype lists lazily. A read path may only iterate a query from `_readQueries`

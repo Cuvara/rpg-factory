@@ -1,0 +1,282 @@
+{
+  "schema": "rpg.testlab.scenario.v1",
+  "id": "S18",
+  "version": 1,
+  "title": "Packet impairment: 5 % loss, 40 ms +/- 20 ms jitter and 1 % reorder on the game UDP path for 60 s, then recovery",
+  "description": "map_01, enemies standing still and harmless; two rendered clients move continuously (one circles, one walks back and forth) so prediction, reconciliation and interpolation are exercised. A harness step (lab/netem.py) records a 30 s clean baseline, then applies tc netem inside the scratch game server container's network namespace (nsenter; nothing else in the stack changes) to UDP port 9000 only, in both directions (server to client on eth0 egress, client to server through an ifb0 redirect of eth0 ingress): 5 % loss, 40 ms delay with +/- 20 ms jitter and 1 % reorder per direction, for 60 s; it then removes the qdiscs, VERIFIES the removal, and records 30 s of recovery. /status, /metrics and every TCP connection of the container are not shaped. The step scrapes the server's KCP retransmit counter at each phase boundary and the tc packet and drop counters at the end of the impairment. Graded: the impairment was on the path (qdisc loss share within 3 sigma of 5 %, clients' round-trip time up by at least half the added delay); KCP retransmits rise only while it is on; no session closed; snapshot gaps within the impaired limit and back to the clean limit after; prediction hard snaps, corrections and keyframes bounded; the two clients draw the same positions again within 10 s of the removal; the qdisc is gone afterwards.",
+  "clients": 2,
+  "map": "map_01",
+  "seed": 18,
+  "duration_s": 120,
+  "join_timeout_s": 120,
+  "screenshots_s": [
+    20,
+    60,
+    110
+  ],
+  "server_env": {
+    "GAMESERVER_ENEMY_CHASE": "false",
+    "GAMESERVER_ENEMY_ATTACKS": "false"
+  },
+  "per_client": [
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 118,
+          "mode": "circle",
+          "rate": 1.0
+        }
+      ]
+    },
+    {
+      "steps": [
+        {
+          "t0": 2,
+          "t1": 8,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 8,
+          "t1": 14,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 14,
+          "t1": 20,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 20,
+          "t1": 26,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 26,
+          "t1": 32,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 32,
+          "t1": 38,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 38,
+          "t1": 44,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 44,
+          "t1": 50,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 50,
+          "t1": 56,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 56,
+          "t1": 62,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 62,
+          "t1": 68,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 68,
+          "t1": 74,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 74,
+          "t1": 80,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 80,
+          "t1": 86,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 86,
+          "t1": 92,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 92,
+          "t1": 98,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 98,
+          "t1": 104,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        },
+        {
+          "t0": 104,
+          "t1": 110,
+          "mode": "move",
+          "x": -1,
+          "y": 0
+        },
+        {
+          "t0": 110,
+          "t1": 116,
+          "mode": "move",
+          "x": 1,
+          "y": 0
+        }
+      ]
+    }
+  ],
+  "disruptions": [
+    {
+      "at_s": 1,
+      "kind": "netem",
+      "baseline_s": 30,
+      "impaired_s": 60,
+      "recovery_s": 30,
+      "profile": {
+        "loss_pct": 5,
+        "delay_ms": 40,
+        "jitter_ms": 20,
+        "reorder_pct": 1
+      },
+      "directions": [
+        "egress",
+        "ingress"
+      ]
+    }
+  ],
+  "assertions": [
+    {
+      "id": "in_world",
+      "check": "clients_in_world"
+    },
+    {
+      "id": "completed",
+      "check": "clients_completed"
+    },
+    {
+      "id": "logs_clean",
+      "check": "client_log_clean"
+    },
+    {
+      "id": "server_alive",
+      "check": "server_alive",
+      "max_failed_probes": 0,
+      "max_gap_s": 5.0
+    },
+    {
+      "id": "tick",
+      "check": "server_tick"
+    },
+    {
+      "id": "applied",
+      "check": "netem_applied",
+      "title": "the impairment was on the game path (qdisc loss share, client round-trip time)"
+    },
+    {
+      "id": "cleanup",
+      "check": "netem_cleanup",
+      "max_late_s": 10.0,
+      "title": "the qdisc and the ifb device are gone, verified twice"
+    },
+    {
+      "id": "retransmits",
+      "check": "netem_retransmits",
+      "min_rise": 30,
+      "rate_ratio": 5.0,
+      "baseline_floor_per_s": 0.1,
+      "recovery_max_ratio": 0.5,
+      "title": "KCP retransmits rise during the impairment and fall back after it"
+    },
+    {
+      "id": "client_sessions",
+      "check": "client_sessions",
+      "title": "no rendered client sees a session close"
+    },
+    {
+      "id": "kcp",
+      "check": "kcp_health",
+      "max_dropped": null,
+      "max_sessions_closed": 0,
+      "title": "no KCP session closed or rejected (inbound drops are reported, not judged)"
+    },
+    {
+      "id": "snapshots",
+      "check": "netem_snapshots",
+      "max_gap_ms": 250,
+      "impaired_max_gap_ms": 1000,
+      "impaired_p99_gap_ms": 400,
+      "rate_tolerance": 0.2,
+      "recovery_settle_s": 2.0,
+      "title": "snapshot gaps within the impaired limit, clean limit before and after"
+    },
+    {
+      "id": "snapshot_order",
+      "check": "snapshot_order",
+      "title": "received world ticks never go backwards or repeat within a session"
+    },
+    {
+      "id": "prediction",
+      "check": "netem_prediction",
+      "max_snaps_per_min": 4.0,
+      "max_correction": 1.5,
+      "max_keyframe_ratio": 2.0,
+      "recovery_settle_s": 2.0,
+      "title": "prediction hard snaps, corrections and keyframes bounded"
+    },
+    {
+      "id": "convergence",
+      "check": "netem_convergence",
+      "converge_within_s": 10.0,
+      "p95": 0.35,
+      "max": 1.0,
+      "title": "the clients draw the same positions again within 10 s of the removal"
+    },
+    {
+      "id": "entity_lifecycle",
+      "check": "entity_lifecycle",
+      "title": "no removed entity is still drawn, no id drawn twice"
+    }
+  ]
+}
