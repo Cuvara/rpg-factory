@@ -8,7 +8,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 - testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
   the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
-  cite the F23 9mre soak evidence.
+  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
+  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
+  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
+  episodes are documented: two attributed, one start-up, two unexplained.
 
 ### Fixed
 
