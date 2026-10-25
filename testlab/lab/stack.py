@@ -260,6 +260,17 @@ def health_backing(cfg: LabConfig) -> bool:
     return nakama_code == 200 and _port_open(cfg.gateway_port) and bool(redis_cli(cfg, "ping"))
 
 
+def nakama_plugin_version(services: dict) -> str:
+    """The Nakama version the running service will have: the tag of the resolved scratch compose image
+    (stack.sh sources .env.scratch, so a NAKAMA_VERSION there decides it). The plugin ABI must match it."""
+    image = (services.get("nakama") or {}).get("image") or ""
+    tag = image.rsplit(":", 1)[1] if ":" in image.rsplit("/", 1)[-1] else ""
+    if not tag:
+        raise StackError(f"cannot read the Nakama version from the scratch compose image {image!r}: "
+                         "the plugin would be built against a version that may not match the running Nakama")
+    return tag
+
+
 def build_backing_images(cfg: LabConfig, env: dict, log_path: Path) -> None:
     """Build what native mode needs (the Nakama plugin and the gateway image) without `stack.sh up`.
 
@@ -268,9 +279,9 @@ def build_backing_images(cfg: LabConfig, env: dict, log_path: Path) -> None:
     docker/Dockerfile.gateway). The game server image is not built: the game server is native."""
     from . import native
     deploy = f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && "
-    gateway_image = ((native.compose_config(cfg).get("services") or {}).get("gateway") or {}).get("image") \
-        or "rpg-mmo/gateway:dev"
-    nakama_version = env.get("NAKAMA_VERSION") or "3.40.0"
+    services = native.compose_config(cfg).get("services") or {}
+    gateway_image = (services.get("gateway") or {}).get("image") or "rpg-mmo/gateway:dev"
+    nakama_version = nakama_plugin_version(services)
     # A running nakama holds the plugin file open on Windows-backed mounts: stop it first (as stack.sh does).
     util.wsl(cfg.wsl_distro, native.compose_cmd(cfg, "stop nakama") + " >/dev/null 2>&1 || true", timeout=300)
     steps = [
@@ -518,10 +529,18 @@ def down(cfg: LabConfig) -> str:
     for name in (cfg.gameserver_container, cfg.redis_container):
         assert_scratch_name(cfg, name)
     from . import native
-    note = native.stop(cfg)
+    # The backing stack is brought down even when the native server cannot be stopped; the failure is raised after.
+    note = stop_error = None
+    try:
+        note = native.stop(cfg)
+    except Exception as exc:
+        stop_error = f"{type(exc).__name__}: {exc}"
     res = util.wsl(cfg.wsl_distro, f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && ./stack.sh --scratch down", timeout=600)
     # The state file says which settings the running stack has; a stopped stack has none.
     state = cfg.runs_root / "stack" / "state.json"
     if res.returncode == 0 and state.exists():
         state.unlink()
-    return f"stack.sh --scratch down exit={res.returncode}" + (f"; {note}" if note else "")
+    summary = f"stack.sh --scratch down exit={res.returncode}" + (f"; {note}" if note else "")
+    if stop_error:
+        raise StackError(f"{summary}; the native game server was NOT stopped: {stop_error}")
+    return summary

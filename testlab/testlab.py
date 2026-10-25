@@ -93,15 +93,23 @@ def _overrides(args) -> dict:
 
 def _with_stack_teardown(cfg: config.LabConfig, args, body):
     """Run `body()` and stop the scratch stack afterwards - on success, failure, harness error and
-    Ctrl-C - unless --keep-stack. Only the scratch project is stopped (stack.down)."""
+    Ctrl-C - unless --keep-stack. Only the scratch project is stopped (stack.down). A teardown that fails
+    (a native game server that cannot be stopped) never hides the run's own outcome, but a run that
+    would exit 0 or 4 exits 3 instead and the failure is kept in <runs>/stack/teardown-failure.json."""
+    failure = None
     try:
-        return body()
+        code = body()
     finally:
         if not getattr(args, "keep_stack", False):
             try:
                 print(f"testlab: {stack.down(cfg)}", flush=True)
-            except Exception as exc:  # never mask the run's own outcome or interrupt
-                util.eprint(f"testlab: stopping the scratch stack failed: {type(exc).__name__}: {exc}")
+            except Exception as exc:  # never mask the run's own exception or interrupt
+                failure = f"{type(exc).__name__}: {exc}"
+                util.eprint(f"testlab: stopping the scratch stack failed: {failure}")
+                util.write_json(cfg.runs_root / "stack" / "teardown-failure.json", {"error": failure})
+    if failure and code in (0, 4):
+        return 3
+    return code
 
 
 def cmd_run(args) -> int:

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab: a native game server that cannot be stopped at teardown no longer leaves a green exit and a running
+  stack: `stack.down` still brings the scratch backing stack down, then raises, and `_with_stack_teardown` turns an
+  exit of 0 or 4 into 3 (a run's own 1 or 2 is kept) and keeps the error in `<runs>/stack/teardown-failure.json`.
+- testlab: native `--build-server` builds the Nakama plugin for the version of the resolved scratch compose Nakama
+  image (what `.env.scratch` decides) and not for the scenario env or a fixed 3.40.0, so the plugin ABI matches the
+  running Nakama; an unreadable image fails the build instead of guessing.
 - testlab: native mode with `--build-server` no longer runs `stack.sh --scratch up` (its `up` ends in `dc up -d`
   for the whole project and started the container `gameserver-dotnet` before the native server replaced it).
   The Nakama plugin and the gateway image are built directly (the two builds of `stack.sh do_up`; the game server

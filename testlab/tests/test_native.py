@@ -26,7 +26,8 @@ from lab import analyze, config, native, probe, provenance, report, stack, util 
 
 # What `docker compose config --format json` reports for the scratch gameserver-dotnet service.
 COMPOSE = {"services": {
-    "redis": {}, "postgres": {}, "postgres-game": {}, "nakama": {}, "gateway": {},
+    "redis": {}, "postgres": {}, "postgres-game": {}, "gateway": {},
+    "nakama": {"image": "heroiclabs/nakama:3.40.0"},
     "gameserver-dotnet": {"environment": {
         "JWT_SECRET": "testlab-jwt", "JOIN_TOKEN_SECRET": "testlab-join", "GAMESERVER_ADDR": ":9000",
         "GAMESERVER_MAP_ID": "map_01", "GAMESERVER_ID": "gs-dotnet-map_01", "GAMESERVER_ENEMY_SEED": "9",
@@ -432,6 +433,66 @@ class NativeNeverRunsTheFullStackUpTests(unittest.TestCase):
             with self.assertRaises(stack.StackError):
                 self._ensure(d, failing, build=True)
         self.assertEqual([c for c in shell.cmds if " up -d" in c], [])
+
+
+class NakamaPluginVersionTests(unittest.TestCase):
+    """RV-P1B2-2: the plugin ABI must match the Nakama the scratch compose project starts."""
+
+    def test_the_plugin_is_built_for_the_resolved_compose_image_not_the_scenario_env(self):
+        compose = json.loads(json.dumps(COMPOSE))
+        compose["services"]["nakama"]["image"] = "heroiclabs/nakama:3.99.1"   # .env.scratch NAKAMA_VERSION
+        shell = FakeShell(compose=compose)
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(d)
+            with mock.patch.object(stack.util, "wsl", shell):
+                stack.build_backing_images(cfg, {"NAKAMA_VERSION": "3.40.0"}, Path(d) / "b.log")
+        plugin = [c for c in shell.cmds if "nakama-plugin.Dockerfile" in c]
+        self.assertEqual(len(plugin), 1, shell.cmds)
+        self.assertIn("NAKAMA_VERSION=3.99.1", plugin[0])
+        self.assertNotIn("3.40.0", plugin[0])
+
+    def test_an_unreadable_image_fails_instead_of_guessing_a_version(self):
+        for services in ({}, {"nakama": {}}, {"nakama": {"image": "registry:5000/nakama"}}):
+            with self.subTest(services=services), self.assertRaises(stack.StackError):
+                stack.nakama_plugin_version(services)
+        self.assertEqual(stack.nakama_plugin_version({"nakama": {"image": "registry:5000/n/nakama:3.1.0"}}), "3.1.0")
+
+
+class TeardownFailureTests(unittest.TestCase):
+    """RV-P1B2-1: a native server that cannot be stopped must not leave a green exit and a running stack."""
+
+    def test_down_still_brings_the_backing_stack_down_then_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(d)
+            done = subprocess.CompletedProcess([], 0, "", "")
+            with mock.patch.object(native, "stop", side_effect=native.NativeError("pid 9 still running")),                     mock.patch.object(stack.util, "wsl", return_value=done) as wsl:
+                with self.assertRaises(stack.StackError) as cm:
+                    stack.down(cfg)
+            self.assertIn("pid 9 still running", str(cm.exception))
+            self.assertTrue(any("stack.sh --scratch down" in c.args[1] for c in wsl.call_args_list))
+
+    def _teardown(self, d, body_rc, stop_fails):
+        import testlab as cli
+        cfg = _cfg(d)
+        args = mock.Mock(keep_stack=False)
+        err = stack.StackError("native game server was NOT stopped") if stop_fails else None
+        with mock.patch.object(stack, "down", side_effect=err, return_value="down ok"):
+            rc = cli._with_stack_teardown(cfg, args, lambda: body_rc)
+        return rc, cfg.runs_root / "stack" / "teardown-failure.json"
+
+    def test_a_passing_run_with_a_failing_stop_exits_nonzero_and_keeps_the_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, failure = self._teardown(d, 0, True)
+            self.assertEqual(rc, 3)
+            self.assertIn("NOT stopped", failure.read_text(encoding="utf-8"))
+
+    def test_the_runs_own_failure_code_is_kept_and_a_clean_teardown_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._teardown(d, 1, True)[0], 1)
+            self.assertEqual(self._teardown(d, 2, True)[0], 2)
+            rc, failure = self._teardown(d + "/ok", 0, False)
+            self.assertEqual(rc, 0)
+            self.assertFalse(failure.exists())
 
 
 class StopTests(unittest.TestCase):
