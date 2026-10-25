@@ -4,8 +4,35 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- testlab: a native game server that cannot be stopped at teardown no longer leaves a green exit and a running
+  stack: `stack.down` still brings the scratch backing stack down, then raises, and `_with_stack_teardown` turns an
+  exit of 0 or 4 into 3 (a run's own 1 or 2 is kept) and keeps the error in `<runs>/stack/teardown-failure.json`.
+- testlab: native `--build-server` builds the Nakama plugin for the version of the resolved scratch compose Nakama
+  image (what `.env.scratch` decides) and not for the scenario env or a fixed 3.40.0, so the plugin ABI matches the
+  running Nakama; an unreadable image fails the build instead of guessing.
+- testlab: native mode with `--build-server` no longer runs `stack.sh --scratch up` (its `up` ends in `dc up -d`
+  for the whole project and started the container `gameserver-dotnet` before the native server replaced it).
+  The Nakama plugin and the gateway image are built directly (the two builds of `stack.sh do_up`; the game server
+  image is not built), then only the backing services are started. Regression tests prove no native path, with
+  `build` true or false, runs the full-stack `up`. A native server that is still alive after `kill_tree` and the
+  15 s wait now keeps its state and fails the stop with an error (the next run is refused until the process is
+  gone) instead of dropping its pid record.
+
 ### Added
 
+- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
+  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
+  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
+  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
+  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
+  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
+  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
+  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
+  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
+  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
+  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
 - testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
   the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
   cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three

@@ -86,6 +86,10 @@ def preflight(cfg: LabConfig) -> dict:
     running = [n for n, s in containers.items() if s.startswith("Up")]
     report["scratch_running"] = running
     owned = bool(running)
+    if cfg.native:
+        from . import native
+        report["native_server_pid"] = native.running(cfg)
+        owned = owned or report["native_server_pid"] is not None
     for port, what in ((cfg.gateway_port, "gateway"), (cfg.nakama_port, "nakama"), (cfg.status_port, "gameserver status")):
         if _port_open(port) and not owned:
             report["conflicts"].append(f"port {port} ({what}) is in use and no {cfg.container_prefix}* container is running")
@@ -157,7 +161,10 @@ def compose_forwards(cfg: LabConfig, var: str) -> bool:
 
 
 def fetch_snapshot_trace(cfg: LabConfig, dest: Path) -> dict:
-    """Copy the server's snapshot trace out of the scratch game server container into the run dir."""
+    """Copy the server's snapshot trace out of the scratch game server container (or, native, its file) into the run dir."""
+    if cfg.native:
+        from . import native
+        return native.fetch_snapshot_trace(cfg, dest)
     assert_scratch_name(cfg, cfg.gameserver_container)
     dest.parent.mkdir(parents=True, exist_ok=True)
     res = util.wsl(cfg.wsl_distro, f"docker cp {cfg.gameserver_container}:{SNAPSHOT_TRACE_PATH} "
@@ -174,6 +181,10 @@ def _env_hash(env: dict) -> str:
 
 def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_restart_gameserver: bool) -> dict:
     """Bring the scratch stack to `env`. Returns a record of what was done (for stack.json)."""
+    if cfg.native:
+        return ensure_native(cfg, env, build=build, log_path=log_path, force_restart_gameserver=force_restart_gameserver)
+    from . import native
+    switched = native.stop(cfg)      # a native server of an earlier run would hold the status and game ports
     state_dir = cfg.runs_root / "stack"
     state_dir.mkdir(parents=True, exist_ok=True)
     env_file = state_dir / "extra.env"
@@ -181,7 +192,11 @@ def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_rest
     wanted = _env_hash(env)
     state = util.read_json(state_path, default={}) or {}
     shown = {k: ("<lab secret>" if "SECRET" in k else v) for k, v in env.items()}
-    record = {"env": shown, "env_hash": wanted, "actions": [], "server_repo": str(cfg.server_repo)}
+    record = {"env": shown, "env_hash": wanted, "actions": [], "server_repo": str(cfg.server_repo),
+              "server_runtime": "docker"}
+    if switched:
+        record["actions"].append(switched + " (switching to the container game server)")
+        state = {}      # the backing services were started without a container game server: recreate the stack
 
     healthy = health(cfg)["ok"]
     same = state.get("env_hash") == wanted and state.get("server_repo") == str(cfg.server_repo)
@@ -219,6 +234,154 @@ def ensure(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_rest
 
     wait_ready(cfg, env.get("GAMESERVER_MAP_ID", "map_01"), timeout=120)
     record["health"] = health(cfg)
+    return record
+
+
+def wait_port_free(port: int, timeout: float) -> None:
+    """The status port is released: a container removed a moment ago still holds its published port in the
+    Windows forwarder for a few seconds, and the server's metrics endpoint does not retry its bind."""
+    deadline = util.mono() + timeout
+    while _port_open(port, "localhost") or _port_open(port):
+        if util.mono() > deadline:
+            raise StackError(f"port {port} is still in use after {timeout:.0f}s (the status port the native game server needs)")
+        time.sleep(0.5)
+
+
+def check_scenario_supported(cfg: LabConfig, sc: dict) -> None:
+    """A native server has no container network namespace: packet impairment (tc netem) cannot shape it."""
+    if cfg.native and any(d.get("kind") == "netem" for d in sc.get("disruptions") or []):
+        raise StackError("netem shapes the game server container's network namespace; it cannot shape a native "
+                         "Windows process. Run packet-impairment scenarios with --server-mode docker.")
+
+
+def health_backing(cfg: LabConfig) -> bool:
+    """Nakama, the gateway port and Redis answer (the game server is not part of this)."""
+    nakama_code, _ = util.http_get(f"http://127.0.0.1:{cfg.nakama_port}/healthcheck", timeout=2)
+    return nakama_code == 200 and _port_open(cfg.gateway_port) and bool(redis_cli(cfg, "ping"))
+
+
+def nakama_plugin_version(services: dict) -> str:
+    """The Nakama version the running service will have: the tag of the resolved scratch compose image
+    (stack.sh sources .env.scratch, so a NAKAMA_VERSION there decides it). The plugin ABI must match it."""
+    image = (services.get("nakama") or {}).get("image") or ""
+    tag = image.rsplit(":", 1)[1] if ":" in image.rsplit("/", 1)[-1] else ""
+    if not tag:
+        raise StackError(f"cannot read the Nakama version from the scratch compose image {image!r}: "
+                         "the plugin would be built against a version that may not match the running Nakama")
+    return tag
+
+
+def build_backing_images(cfg: LabConfig, env: dict, log_path: Path) -> None:
+    """Build what native mode needs (the Nakama plugin and the gateway image) without `stack.sh up`.
+
+    stack.sh has no build-only subcommand and its `up` also starts the container game server, so the two
+    builds of its do_up are repeated here (backend/deploy/stack.sh: the nakama-plugin.Dockerfile export and
+    docker/Dockerfile.gateway). The game server image is not built: the game server is native."""
+    from . import native
+    deploy = f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && "
+    services = native.compose_config(cfg).get("services") or {}
+    gateway_image = (services.get("gateway") or {}).get("image") or "rpg-mmo/gateway:dev"
+    nakama_version = nakama_plugin_version(services)
+    # A running nakama holds the plugin file open on Windows-backed mounts: stop it first (as stack.sh does).
+    util.wsl(cfg.wsl_distro, native.compose_cmd(cfg, "stop nakama") + " >/dev/null 2>&1 || true", timeout=300)
+    steps = [
+        ("nakama plugin", f"{deploy}mkdir -p modules && DOCKER_BUILDKIT=1 docker build -f nakama-plugin.Dockerfile "
+                          f"--build-arg 'NAKAMA_VERSION={nakama_version}' --target export --output type=local,dest=modules .."),
+        ("gateway image", f"{deploy}docker build -f docker/Dockerfile.gateway -t '{gateway_image}' .."),
+    ]
+    for name, cmd in steps:
+        res = util.wsl(cfg.wsl_distro, cmd, timeout=3600)
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"\n--- build {name} ---\n" + res.stdout + "\n" + res.stderr)
+        if res.returncode != 0:
+            raise StackError(f"building the {name} failed (exit {res.returncode}); log: {log_path}")
+
+
+def ensure_native(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_restart_gameserver: bool) -> dict:
+    """The scratch stack WITHOUT its game server, plus the game server as a native Windows process.
+
+    stack.sh `up` always starts every service and waits for the container game server, so it is never run
+    in this mode: `build` builds the plugin and gateway image directly, and the services are (re)started with
+    the scratch compose project, minus `gameserver-dotnet`. A scratch game server container left by a docker-mode run is
+    removed and its registry entry deleted, so the gateway can only hand out the native server."""
+    from . import native
+    state_dir = cfg.runs_root / "stack"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    env_file = state_dir / "extra.env"
+    state_path = state_dir / "state.json"
+    wanted = _env_hash({**env, "__server_runtime": native.RUNTIME})
+    state = util.read_json(state_path, default={}) or {}
+    shown = {k: ("<lab secret>" if "SECRET" in k else v) for k, v in env.items()}
+    record = {"env": shown, "env_hash": wanted, "actions": [], "server_repo": str(cfg.server_repo),
+              "server_runtime": native.RUNTIME}
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    build_rec = native.build(cfg, log_path.with_name("native-build.log"))
+    record["native_build"] = {k: build_rec[k] for k in ("kind", "dotnet_sdk", "dotnet_runtime", "source_sha",
+                                                       "source_dirty", "exe_sha256", "dll_sha256", "build_seconds")}
+    record["actions"].append(f"native game server built ({build_rec['kind']}, sdk {build_rec['dotnet_sdk']}, "
+                             f"{build_rec['build_seconds']}s, exe {build_rec['exe_sha256'][:12]})")
+
+    same = state.get("env_hash") == wanted and state.get("server_repo") == str(cfg.server_repo)
+    if health_backing(cfg) and same and not build:
+        record["actions"].append("reused healthy scratch backing services (settings unchanged)")
+    else:
+        with open(env_file, "w", encoding="utf-8", newline="\n") as fh:
+            for k, v in sorted(env.items()):
+                fh.write(f"{k}={v}\n")
+        extra = f"STACK_SCRATCH_EXTRA_ENV='{util.to_wsl_path(env_file)}' "
+        deploy = f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && "
+        started = util.mono()
+        # `ps` writes .env.scratch (with the extra env) and starts nothing. `stack.sh up` is never used here:
+        # it ends in `dc up -d` for the WHOLE project, which would start the container game server.
+        res = util.wsl(cfg.wsl_distro, f"{deploy}{extra}./stack.sh --scratch --no-build ps", timeout=300)
+        log_path.write_text(res.stdout + "\n--- stderr ---\n" + res.stderr, encoding="utf-8")
+        if res.returncode != 0:
+            raise StackError(f"stack.sh --scratch failed (exit {res.returncode}); log: {log_path}")
+        if build:
+            build_backing_images(cfg, env, log_path)
+            record["actions"].append(f"built the Nakama plugin and gateway image (no full-stack up) "
+                                     f"in {util.mono() - started:.1f}s")
+        services = [n for n in (native.compose_config(cfg).get("services") or {}) if n != native.SERVICE]
+        res = util.wsl(cfg.wsl_distro, native.compose_cmd(cfg, "up -d " + " ".join(services)), timeout=900)
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write("\n--- compose up (no game server) ---\n" + res.stdout + "\n" + res.stderr)
+        if res.returncode != 0:
+            raise StackError(f"compose up of the scratch backing services failed (exit {res.returncode}); log: {log_path}")
+        record["actions"].append(f"compose up -d {' '.join(services)} (no {native.SERVICE}) exit={res.returncode} "
+                                 f"in {util.mono() - started:.1f}s "
+                                 f"({'build requested' if build else 'settings changed' if not same else 'stack unhealthy'})")
+        util.write_json(state_path, {"env_hash": wanted, "server_repo": str(cfg.server_repo), "env": shown})
+        force_restart_gameserver = True      # settings changed or the stack was recreated: a fresh server
+
+    native_env = native.native_env(cfg, native.compose_config(cfg), env)
+    record["native_env"] = native.redact(native_env)
+    map_id = native_env.get("GAMESERVER_MAP_ID", "map_01")
+    server_id = native_env.get("GAMESERVER_ID") or f"gs-dotnet-{map_id}"
+    old = native.read_state(cfg)
+    pid = native.running(cfg)
+    if (pid is not None and not force_restart_gameserver and old.get("env") == record["native_env"]
+            and (old.get("build") or {}).get("exe_sha256") == build_rec["exe_sha256"]):
+        record["actions"].append(f"reused native game server pid {pid}")
+    else:
+        stopped = native.stop(cfg)
+        if stopped:
+            record["actions"].append(stopped)
+        # No container game server may serve this stack, or hold the ports of the native one.
+        assert_scratch_name(cfg, cfg.gameserver_container)
+        if cfg.gameserver_container in scratch_containers(cfg):
+            util.wsl(cfg.wsl_distro, f"docker rm -f {cfg.gameserver_container}", timeout=120)
+            record["actions"].append(f"removed scratch container {cfg.gameserver_container}")
+        wait_port_free(cfg.status_port, timeout=60)
+        redis_cli(cfg, f"del servers:id:{server_id}")
+        redis_cli(cfg, f"srem servers:map:{map_id} {server_id}")
+        pid = native.start(cfg, native_env, build_rec)
+        record["actions"].append(f"native game server started pid {pid} (fresh world for this scenario)")
+
+    wait_ready(cfg, map_id, timeout=120)
+    record["registry_addr"] = advertised_game_addr(cfg, map_id)
+    record["health"] = health(cfg)
+    record["native"] = native.provenance(cfg)
     return record
 
 
@@ -270,6 +433,10 @@ def image_revision(cfg: LabConfig) -> str | None:
 
 
 def restart_gameserver(cfg: LabConfig) -> None:
+    if cfg.native:
+        from . import native
+        native.restart(cfg)
+        return
     assert_scratch_name(cfg, cfg.gameserver_container)
     res = util.wsl(cfg.wsl_distro, f"docker restart {cfg.gameserver_container}", timeout=120)
     if res.returncode != 0:
@@ -290,6 +457,13 @@ def wait_ready(cfg: LabConfig, map_id: str, timeout: float) -> None:
     while util.mono() < deadline:
         if health(cfg)["ok"] and redis_map_members(cfg, map_id):
             return
+        if cfg.native:
+            from . import native
+            if native.running(cfg) is None:
+                raise StackError("the native game server is not running (it exited): " + native.log_tail(cfg))
+            failure = native.startup_failure(cfg)
+            if failure:
+                raise StackError("the native game server started without its status endpoint: " + failure)
         time.sleep(1)
     raise StackError(f"scratch stack not ready within {timeout:.0f}s: {health(cfg)}; "
                      f"servers:map:{map_id}={redis_map_members(cfg, map_id)}")
@@ -311,6 +485,14 @@ def redis_map_members(cfg: LabConfig, map_id: str) -> list[str]:
 
 def redis_session_keys(cfg: LabConfig) -> list[str]:
     return redis_cli(cfg, '--scan --pattern "session:*"')
+
+
+def server_stats(cfg: LabConfig) -> dict | None:
+    """CPU% and memory of the game server: its container, or the native process."""
+    if cfg.native:
+        from . import native
+        return native.process_stats(native.running(cfg))
+    return docker_stats(cfg)
 
 
 def docker_stats(cfg: LabConfig) -> dict | None:
@@ -346,9 +528,19 @@ def down(cfg: LabConfig) -> str:
     """Stop the scratch stack (`stack.sh --scratch down`: compose project rpg-mmo-scratch only)."""
     for name in (cfg.gameserver_container, cfg.redis_container):
         assert_scratch_name(cfg, name)
+    from . import native
+    # The backing stack is brought down even when the native server cannot be stopped; the failure is raised after.
+    note = stop_error = None
+    try:
+        note = native.stop(cfg)
+    except Exception as exc:
+        stop_error = f"{type(exc).__name__}: {exc}"
     res = util.wsl(cfg.wsl_distro, f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && ./stack.sh --scratch down", timeout=600)
     # The state file says which settings the running stack has; a stopped stack has none.
     state = cfg.runs_root / "stack" / "state.json"
     if res.returncode == 0 and state.exists():
         state.unlink()
-    return f"stack.sh --scratch down exit={res.returncode}"
+    summary = f"stack.sh --scratch down exit={res.returncode}" + (f"; {note}" if note else "")
+    if stop_error:
+        raise StackError(f"{summary}; the native game server was NOT stopped: {stop_error}")
+    return summary

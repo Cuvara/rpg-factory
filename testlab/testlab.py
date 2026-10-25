@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, scenarios, stack, thresholds, util  # noqa: E402
+from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, native, scenarios, stack, thresholds, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
 THRESHOLDS_DOC = Path(__file__).resolve().parent / "docs" / "THRESHOLDS.md"
@@ -54,6 +54,8 @@ def _cfg(args) -> config.LabConfig:
         ("player_exe", getattr(args, "player", None)),
         ("client_project", getattr(args, "project", None)),
         ("runs_root", getattr(args, "runs_root", None)))}
+    for key in ("server_mode", "native_build"):
+        overrides[key] = getattr(args, key, None)      # plain strings, not paths
     return config.load(_path(args.config) if getattr(args, "config", None) else None, overrides)
 
 
@@ -91,15 +93,23 @@ def _overrides(args) -> dict:
 
 def _with_stack_teardown(cfg: config.LabConfig, args, body):
     """Run `body()` and stop the scratch stack afterwards - on success, failure, harness error and
-    Ctrl-C - unless --keep-stack. Only the scratch project is stopped (stack.down)."""
+    Ctrl-C - unless --keep-stack. Only the scratch project is stopped (stack.down). A teardown that fails
+    (a native game server that cannot be stopped) never hides the run's own outcome, but a run that
+    would exit 0 or 4 exits 3 instead and the failure is kept in <runs>/stack/teardown-failure.json."""
+    failure = None
     try:
-        return body()
+        code = body()
     finally:
         if not getattr(args, "keep_stack", False):
             try:
                 print(f"testlab: {stack.down(cfg)}", flush=True)
-            except Exception as exc:  # never mask the run's own outcome or interrupt
-                util.eprint(f"testlab: stopping the scratch stack failed: {type(exc).__name__}: {exc}")
+            except Exception as exc:  # never mask the run's own exception or interrupt
+                failure = f"{type(exc).__name__}: {exc}"
+                util.eprint(f"testlab: stopping the scratch stack failed: {failure}")
+                util.write_json(cfg.runs_root / "stack" / "teardown-failure.json", {"error": failure})
+    if failure and code in (0, 4):
+        return 3
+    return code
 
 
 def cmd_run(args) -> int:
@@ -369,6 +379,14 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def _server_mode_args(sp) -> None:
+    sp.add_argument("--server-mode", choices=config.SERVER_MODES, dest="server_mode",
+                    help="where the game server runs: docker (the scratch container, default) or native (a Windows "
+                         "process built with the Windows dotnet, so its clock is the players' QPC; lab/native.py)")
+    sp.add_argument("--native-build", choices=("auto", "aot", "r2r"), dest="native_build",
+                    help="native server build: auto (AOT if the MSVC linker exists, else ReadyToRun JIT), aot, r2r")
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config")
@@ -391,6 +409,7 @@ def main(argv=None) -> int:
         sp.add_argument("--duration", type=float)
         sp.add_argument("--clients", type=int)
         sp.add_argument("--keep-stack", action="store_true", help="leave the scratch stack running afterwards")
+        _server_mode_args(sp)
         sp.add_argument("--snapshot-trace", action="store_true",
                         help="record the server snapshot trace (GAMESERVER_SNAPSHOT_TRACE) into server/")
     for sp in (r, s):
@@ -441,12 +460,13 @@ def main(argv=None) -> int:
     st = sub.add_parser("stack")
     st.add_argument("action", choices=["up", "down", "status"])
     st.add_argument("--build-server", action="store_true")
+    _server_mode_args(st)
     st.set_defaults(fn=cmd_stack)
     sub.add_parser("clean").set_defaults(fn=cmd_clean)
     args = p.parse_args(argv)
     try:
         return args.fn(args)
-    except (scenarios.ScenarioError, stack.StackError, clients.ClientError, ValueError) as exc:
+    except (scenarios.ScenarioError, stack.StackError, native.NativeError, clients.ClientError, ValueError) as exc:
         util.eprint(f"testlab: {exc}")
         return 3
 

@@ -223,7 +223,17 @@ def verify(run_dir: Path, meta: dict, scenario: dict, clients: list[dict]) -> li
         problems.append("provenance.netcode.sha missing: the player embeds com.cuvara.netcode but its build has no "
                         "VERIFY-PROVENANCE.txt naming the commit")
     srv = prov.get("server") or {}
-    if srv.get("label_supported"):
+    if srv.get("runtime") == "windows-native":
+        nat = srv.get("native") or {}
+        for field in ("exe_sha256", "kind", "dotnet_sdk", "source_sha"):
+            if not nat.get(field):
+                problems.append(f"provenance.server.native.{field} missing (a native server run records the binary it ran)")
+        if nat.get("source_sha") and srv.get("sha") and nat["source_sha"] != srv["sha"]:
+            problems.append(f"native server binary was built from {nat['source_sha'][:12]} but the recorded server "
+                            f"sha is {srv['sha'][:12]}: the server checkout moved during the run")
+        if srv.get("image_id") != f"native:{nat.get('exe_sha256')}":
+            problems.append("provenance.server.image_id is not the hash of the native binary that ran")
+    elif srv.get("label_supported"):
         rev, sha = srv.get("image_revision"), srv.get("sha")
         if not rev:
             problems.append("server image has no revision label although stack.sh supports STACK_GIT_REVISION "
