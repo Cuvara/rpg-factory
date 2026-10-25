@@ -6,6 +6,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
+  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
+  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
+  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
+  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
+  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
+  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
+  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
+  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
+  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
+  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
 - testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
   the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
   cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three

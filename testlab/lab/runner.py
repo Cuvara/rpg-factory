@@ -14,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import analyze, clients, hostguard, netem, provenance, rawprobe, report, scenarios, stack, util
+from . import analyze, clients, hostguard, native, netem, provenance, rawprobe, report, scenarios, stack, util
 from .config import LabConfig
 from .probe import ServerProbe
 
@@ -104,6 +104,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
     interrupted = False
     server_image = None
     server_label = None
+    native_log_offset = native.log_offset(cfg) if cfg.native else 0
     raw_threads: list[threading.Thread] = []   # raw-client steps (lab/rawprobe.py) running beside the players
     raw_stop = threading.Event()
 
@@ -148,7 +149,9 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                 raise RuntimeError(meta["host_guard"]["error"])
         stack.check_nakama_module(cfg, build_server)
         env = stack.env_for(sc, cfg)
-        if sc.get("snapshot_trace") and not stack.compose_forwards(cfg, "GAMESERVER_SNAPSHOT_TRACE"):
+        stack.check_scenario_supported(cfg, sc)
+        if (sc.get("snapshot_trace") and not cfg.native
+                and not stack.compose_forwards(cfg, "GAMESERVER_SNAPSHOT_TRACE")):
             raise stack.StackError(f"{cfg.deploy_dir / 'docker-compose.yml'} does not forward GAMESERVER_SNAPSHOT_TRACE "
                                    "to the game server; the snapshot trace (snapshot_trace: true) cannot be recorded")
         log(f"stack: ensuring scratch stack ({len(env)} settings, build={build_server})")
@@ -157,8 +160,18 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                                      force_restart_gameserver=bool(sc["fresh_server"] or sc.get("snapshot_trace")))
         for action in meta["stack"]["actions"]:
             log("stack: " + action)
-        server_image = provenance.docker_image_id(cfg, cfg.gameserver_container)
-        server_label = {"supported": stack.supports_git_revision(cfg), "revision": stack.image_revision(cfg)}
+        if cfg.native:
+            # The "image" of a native server is its binary: the hash of the exe that ran, and the commit it was
+            # built from (stamped by lab/native.py from the checkout, the analogue of the image revision label).
+            nat = native.provenance(cfg)
+            meta["server_runtime"] = nat
+            server_image = f"native:{nat['exe_sha256']}" if nat.get("exe_sha256") else None
+            server_label = {"supported": True, "revision": nat.get("source_sha")}
+            log(f"server runtime: {native.RUNTIME}, {nat.get('kind')} build, exe {str(nat.get('exe_sha256'))[:12]}, "
+                f"pid {nat.get('pid')}")
+        else:
+            server_image = provenance.docker_image_id(cfg, cfg.gameserver_container)
+            server_label = {"supported": stack.supports_git_revision(cfg), "revision": stack.image_revision(cfg)}
         mark("stack_ready")
 
         if any(d.get("kind") == "netem" for d in sc["disruptions"]):
@@ -305,6 +318,11 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
             meta["host_guard"]["summary"] = guard.stop()
         for p in players:
             meta["clients"].setdefault(str(p.index), {})["history"] = p.history
+        if cfg.native:
+            try:
+                meta["native_server_log"] = native.copy_log(cfg, native_log_offset, run_dir / "server" / "gameserver.log")
+            except Exception as exc:  # the record must still be written
+                meta["native_server_log"] = {"copied": False, "error": f"{type(exc).__name__}: {exc}"}
         if sc.get("snapshot_trace") and meta.get("stack"):
             try:
                 meta["snapshot_trace"] = stack.fetch_snapshot_trace(cfg, run_dir / "server" / "snapshot-trace.csv")
@@ -342,6 +360,8 @@ def _provenance(cfg: LabConfig, meta: dict, run_dir: Path, server_image: str | N
         "run_id": meta["run_id"],
         "factory": {"sha": (repos.get("factory") or {}).get("head"), "dirty": (repos.get("factory") or {}).get("dirty")},
         "server": {"sha": (repos.get("server") or {}).get("head"), "dirty": (repos.get("server") or {}).get("dirty"),
+                   "runtime": (meta.get("server_runtime") or {}).get("runtime", "docker"),
+                   "native": meta.get("server_runtime"),
                    "image_id": server_image, "container": cfg.gameserver_container,
                    # org.opencontainers.image.revision of that image; label_supported false when the
                    # server's stack.sh predates STACK_GIT_REVISION (recorded as 'label unsupported').

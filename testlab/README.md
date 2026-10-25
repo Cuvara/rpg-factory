@@ -28,7 +28,7 @@ Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE or INVALID, `3` harness or usag
 |---|---|---|
 | `run`, `suite`, `sweep`, `stack`, `clean`, `build-client`, `build-loadtest` | yes | no: the players are Windows processes and process control uses `tasklist`/`taskkill` |
 | `analyze`, `analyze --delivery`, `replay-trace`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
-| `python3 -B testlab/tests/test_lab.py`, `python3 -B testlab/tests/test_netem.py` | yes | yes |
+| `python3 -B testlab/tests/test_lab.py`, `test_netem.py`, `test_native.py` | yes | yes (`test_native.py` skips its Windows-only case) |
 
 In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewrites `/c/...` arguments for Windows programs; the CLI also converts them itself, so they work with `MSYS_NO_PATHCONV=1` too. WSL commands are run from Python through `wsl.exe -d Ubuntu --exec bash -c` with path conversion disabled.
 
@@ -47,6 +47,7 @@ In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewr
 | Isolated stack | rpg-mmo-server | `backend/deploy/stack.sh --scratch` with `STACK_SCRATCH_EXTRA_ENV` |
 | Raw wire client (S16, S17): gateway auth, enter world, KCP join, hand-built frames | rpg-factory | `testlab/lab/rawclient.py`, steps in `testlab/lab/rawprobe.py` |
 | Packet impairment (S18): tc netem in the scratch game server container's network namespace | rpg-factory | `testlab/lab/netem.py`, checks in `testlab/lab/analyze_netem.py` |
+| Native Windows game server (`--server-mode native`): build, compose-derived environment, child process, sampler | rpg-factory | `testlab/lab/native.py`, bring-up in `testlab/lab/stack.py` |
 
 ## Prerequisites
 
@@ -303,6 +304,41 @@ When a run ends, `run.json` gets a `provenance` record (`lab/provenance.py`):
 Every evaluation appends the `provenance` assertion. It is PASS only when every field is present, the run id is the directory's own, the scenario and every evidence file still hash as recorded, and every client summary names this run. Anything else is INCONCLUSIVE, so a run copied under another id, re-used evidence, or a run without a record (runs before this change) cannot grade PASS. `results.json` carries an `analysis` block (run id, run directory, time, factory commit, provenance status).
 
 The manifest covers every evidence file: `scenario.json`, `redis.json`, `disruptions.ndjson` and everything under `client-*/`, `server/` and `bots/`. Each scenario has an expected inventory (`provenance.expected_inventory`: the server probe files, each client's recorder outputs, plus `disruptions.ndjson`, `bots/loadtest.json` or `server/snapshot-trace.csv` when the scenario produces them, and `client-N/trace.ndjson` for each client whose plan has `predictor_trace`). An inventory file missing from the manifest, an evidence file not in it, or a hash mismatch makes `provenance` INCONCLUSIVE.
+
+## Native game server (`--server-mode native`)
+
+The scratch game server normally runs in a container inside the WSL2 VM. That VM's monotonic clock steps in rate against the Windows clock the players render with (F23 finding B, F24B; the `3ng5` soak): the same host measured `current_tick` per harness second at 55.2 in docker mode and 60.1 in native mode. `--server-mode native` (a flag of `run`, `suite`, `sweep` and `stack`; config key `server_mode`) runs the game server as a Windows process of the host instead, so its `Stopwatch` is the same QueryPerformanceCounter the players use. Redis, Postgres, Nakama and the gateway stay in the scratch compose project: none is tick-time critical, and the gateway never dials the game server (it hands the players the address in the registry).
+
+```
+python3 testlab/testlab.py run S01 --server-mode native            # build, start, run, stop
+python3 testlab/testlab.py run S09 --duration 600 --server-mode native --native-build auto
+```
+
+What the lab does, and nothing else (`lab/native.py`, `lab/stack.py::ensure_native`):
+
+| Step | How |
+|---|---|
+| Build | `dotnet publish` of `backend/gameserver-dotnet/GameServer` from the configured `server_repo`, `win-x64`, Release, self-contained, into `<runs_root>/native/build/<sha12>-<kind>/` with `--artifacts-path` under `<runs_root>/native/` (the checkout gets no `bin/obj`; no build node outlives the build, because guard G4 counts `dotnet`). Every run rebuilds (incremental, 2 s when nothing changed), so the binary is always the checkout's. |
+| Build kind | `aot` is what the image runs (NativeAOT). It needs the MSVC linker (Visual Studio "Desktop development with C++"); `--native-build auto` (default) uses it when `vswhere` finds it and otherwise builds `r2r`: self-contained ReadyToRun with the JIT (`PublishAot=false`, Server GC as in the csproj). On this host there is no linker, so native runs are **r2r**; the report and provenance say which. |
+| Settings | The environment the compose `gameserver-dotnet` service would get: `docker compose config --format json` on the generated `.env.scratch` (scenario settings, lab secrets, every `GAMESERVER_*` default). Only container-network values are rewritten: listen and advertised address `127.0.0.1:<published game port>`, `METRICS_ADDR` `:<status port>`, `REDIS_ADDR`/`GAME_DB_URL`/`NAKAMA_URL` to the published host ports (7379, 6433, 8350), `CONTENT_DIR` to the checkout's `backend/content`. A TLS Nakama hop is refused. |
+| Stack | The scratch compose project is started **without** `gameserver-dotnet` (`up -d` with the other services). A leftover `rpgs-gameserver` container is removed and its `servers:id:` / `servers:map:` entry deleted before the native server starts, so the gateway can only hand out the native one. Switching back to docker mode stops the native process first. |
+| Registry and gateway | The server registers itself in the scratch Redis as in docker mode; `servers:id:gs-dotnet-<map>` `addr` is `127.0.0.1:9300`, which is what the players and the load generator dial (the players are on this host). No `host.docker.internal` is needed in this direction: the server dials out to published ports on localhost, the gateway only reads Redis. |
+| Endpoints | `/status`, `/metrics`, `/debug/entities`, `/debug/kill` on the same status port. A Windows `HttpListener` without an URL ACL (admin) answers only the `localhost` prefix (400 to `Host: 127.0.0.1`, measured), so the lab addresses them as `localhost` in native mode (`LabConfig.status_host`). Every analyzer check reads the same files. |
+| Samples | `server/container.ndjson` holds the process's CPU % (of one core, as `docker stats`) and working set. The snapshot trace is a file under `<runs_root>/native/`, copied to `server/snapshot-trace.csv`. The server's console output since the run's start is `server/gameserver.log`. |
+| Provenance | `server.runtime = windows-native`, `server.image_id = native:<sha256 of GameServer.exe>`, `server.native` (build kind, SDK, runtime, source sha, exe and dll hashes). `image_revision` is the commit the binary was built from; the `provenance` assertion is INCONCLUSIVE if it differs from the recorded server sha. The report header and `results.json` (`server_runtime`) state the runtime. |
+| Lifetime | The pid is recorded in `<runs_root>/native/server.json`; `stack down` (and the end of an invocation without `--keep-stack`) stops it, only while the pid still runs that executable. |
+
+**Not supported in native mode:** S18 (`netem` shapes the container's network namespace; the runner refuses it with a message). Thresholds and checks are unchanged. P6 (WSL uptime) still applies because the rest of the stack runs in WSL.
+
+**What a native run is not.** It is not the NativeAOT image: an `r2r` build starts precompiled but tiered JIT recompiles hot methods, so allocation and warm-up differ from the image. The Windows timer granularity differs from Linux's (the tick loop sleeps `WaitOne(delay - 1)` then spins). Compare native runs with native runs and docker runs with docker runs; the report says which. A native run on a shared host competes with the other processes for cores, which the VM did not (shared-host numbers are labelled so).
+
+### Host requirements (native mode)
+
+- Windows 10/11 x64 with the .NET 10 SDK (`dotnet --version` 10.x, the version the server's csproj targets) on `PATH`; the first build needs NuGet access (runtime pack and crossgen2 for `r2r`).
+- For `aot` only: Visual Studio Build Tools with "Desktop development with C++" (the MSVC linker), as for any NativeAOT publish on Windows.
+- The same scratch prerequisites as docker mode (WSL Ubuntu with `dockerd`; the images tagged `:scratch` built once with `--build-server`: the gateway image and the Nakama plugin are still needed, the game server image is not used).
+- TCP ports 7379 (Redis), 6433 (Postgres game DB) and 8350 (Nakama) published by the scratch stack and reachable on `127.0.0.1` from Windows (WSL2 localhost forwarding, TCP). UDP 9300 and TCP 9501 must be free on the host: the server binds `127.0.0.1:9300` (KCP) and the status port, so there is no firewall prompt and nothing is exposed.
+- No admin rights and no change to the WSL clock configuration. Only the process the lab started is ever stopped.
 
 ## Clean-host soak (S09, host guard)
 

@@ -54,6 +54,8 @@ def _cfg(args) -> config.LabConfig:
         ("player_exe", getattr(args, "player", None)),
         ("client_project", getattr(args, "project", None)),
         ("runs_root", getattr(args, "runs_root", None)))}
+    for key in ("server_mode", "native_build"):
+        overrides[key] = getattr(args, key, None)      # plain strings, not paths
     return config.load(_path(args.config) if getattr(args, "config", None) else None, overrides)
 
 
@@ -369,6 +371,14 @@ def cmd_clean(args) -> int:
     return 0
 
 
+def _server_mode_args(sp) -> None:
+    sp.add_argument("--server-mode", choices=config.SERVER_MODES, dest="server_mode",
+                    help="where the game server runs: docker (the scratch container, default) or native (a Windows "
+                         "process built with the Windows dotnet, so its clock is the players' QPC; lab/native.py)")
+    sp.add_argument("--native-build", choices=("auto", "aot", "r2r"), dest="native_build",
+                    help="native server build: auto (AOT if the MSVC linker exists, else ReadyToRun JIT), aot, r2r")
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config")
@@ -391,6 +401,7 @@ def main(argv=None) -> int:
         sp.add_argument("--duration", type=float)
         sp.add_argument("--clients", type=int)
         sp.add_argument("--keep-stack", action="store_true", help="leave the scratch stack running afterwards")
+        _server_mode_args(sp)
         sp.add_argument("--snapshot-trace", action="store_true",
                         help="record the server snapshot trace (GAMESERVER_SNAPSHOT_TRACE) into server/")
     for sp in (r, s):
@@ -441,6 +452,7 @@ def main(argv=None) -> int:
     st = sub.add_parser("stack")
     st.add_argument("action", choices=["up", "down", "status"])
     st.add_argument("--build-server", action="store_true")
+    _server_mode_args(st)
     st.set_defaults(fn=cmd_stack)
     sub.add_parser("clean").set_defaults(fn=cmd_clean)
     args = p.parse_args(argv)

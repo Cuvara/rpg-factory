@@ -35,6 +35,9 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
         "repos": meta.get("repos"),
         "player": meta.get("player"),
         "stack": meta.get("stack"),
+        # Where the game server ran: "docker" (scratch container) or "windows-native" (lab/native.py), with the
+        # binary it ran. The runtime decides how its clock reads against the players' (F23, F24B).
+        "server_runtime": _server_runtime(meta),
         "probe_counts": meta.get("probe_counts"),
         "counts": {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "INCONCLUSIVE", "INVALID", "INFO")},
         "assertions": results,
@@ -52,6 +55,15 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
     with open(out_dir / "report.md", "w", encoding="utf-8", newline="\n") as fh:
         fh.write(_markdown(doc, ev))
     return doc
+
+
+def _server_runtime(meta: dict) -> dict:
+    srv = ((meta.get("provenance") or {}).get("server")) or {}
+    nat = srv.get("native") or meta.get("server_runtime") or {}
+    return {"runtime": srv.get("runtime") or nat.get("runtime") or "docker",
+            "build_kind": nat.get("kind"), "dotnet_sdk": nat.get("dotnet_sdk"),
+            "dotnet_runtime": nat.get("dotnet_runtime"), "exe_sha256": nat.get("exe_sha256"),
+            "source_sha": nat.get("source_sha"), "image_id": srv.get("image_id")}
 
 
 def _factory_sha() -> str | None:
@@ -82,6 +94,15 @@ def _markdown(doc: dict, ev: dict) -> str:
         fired = [q["id"] for q in doc["qualifications"] if q.get("kind") == "invalid" and str(q.get("id", "")).startswith("G")]
         lines += [f"> **INVALID: the host was not clean while this run was measured** (guards {', '.join(fired) or 'see host_guard'}). "
                   "This is not a verdict on the candidate: no timing result below can be read as PASS, and a FAIL in the table is kept as evidence.", ""]
+    rt = doc.get("server_runtime") or {}
+    if rt.get("runtime") == "windows-native":
+        lines += [f"**Server runtime: windows-native** - the game server ran as a Windows process "
+                  f"({rt.get('build_kind')} build, {rt.get('dotnet_runtime')}, binary `{str(rt.get('exe_sha256'))[:12]}`), "
+                  "so its Stopwatch is the Windows QPC the players use; Redis, Postgres, Nakama and the gateway ran in the "
+                  "scratch stack. A native JIT/ReadyToRun build is not the NativeAOT image: compare with docker-mode "
+                  "runs per runtime, not across them.", ""]
+    else:
+        lines += ["Server runtime: docker (scratch container; its clock is the WSL VM's).", ""]
     if doc["qualifications"]:
         lines += ["**Qualified by:**", ""] + [f"- {q['kind']}: {q['text']}" for q in doc["qualifications"]] + [""]
     lines += [
@@ -93,6 +114,9 @@ def _markdown(doc: dict, ev: dict) -> str:
         lines += [f"> Harness error: `{doc['harness_error']}` - see harness-error.txt. The result cannot be PASS.", ""]
     repos = doc.get("repos") or {}
     lines += ["## Build and environment", "", "| Item | Value |", "|---|---|"]
+    lines.append(f"| server runtime | {rt.get('runtime') or 'docker'}" + (
+        f" ({rt.get('build_kind')} build, {rt.get('dotnet_sdk')}, binary `{str(rt.get('exe_sha256'))[:12]}`)"
+        if rt.get("runtime") == "windows-native" else "") + " |")
     for key in ("server", "client", "factory"):
         r = repos.get(key) or {}
         lines.append(f"| {key} | `{r.get('branch') or ''}` @ `{(r.get('head') or '')[:10]}`{' (dirty)' if r.get('dirty') else ''} - {r.get('path')} |")

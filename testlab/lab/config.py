@@ -27,6 +27,9 @@ def _default_workspace() -> Path:
     return Path("C:/Workspaces/UnityIndie")
 
 
+SERVER_MODES = ("docker", "native")
+
+
 @dataclass
 class LabConfig:
     workspace: Path = field(default_factory=_default_workspace)
@@ -52,11 +55,25 @@ class LabConfig:
     gameserver_container: str = "rpgs-gameserver"
     container_prefix: str = "rpgs-"
 
+    # Where the game server runs. "docker": the scratch compose service (default, unchanged). "native": a
+    # child process of the lab built with the Windows dotnet (lab/native.py), so its Stopwatch is the Windows
+    # QPC the players use; Redis, Postgres, Nakama and the gateway stay in the scratch stack.
+    server_mode: str = "docker"
+    # "auto" (AOT when the platform linker exists, else ReadyToRun JIT), "aot" or "r2r" (lab/native.py).
+    native_build: str = "auto"
+    # Host ports the scratch compose publishes for the services a native server dials (stack.sh --scratch).
+    redis_port: int = 7379
+    postgres_game_port: int = 6433
+
     window_width: int = 800
     window_height: int = 600
     loadtest_exe: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.server_mode not in SERVER_MODES:
+            raise ValueError(f"server_mode '{self.server_mode}' unknown (want {' or '.join(SERVER_MODES)})")
+        if self.native_build not in ("auto", "aot", "r2r"):
+            raise ValueError(f"native_build '{self.native_build}' unknown (want auto, aot or r2r)")
         self.workspace = Path(self.workspace)
         if self.server_repo is None:
             self.server_repo = self.workspace / "rpg-mmo-server"
@@ -84,20 +101,31 @@ class LabConfig:
         return self.server_repo / "backend" / "deploy"
 
     @property
+    def native(self) -> bool:
+        return self.server_mode == "native"
+
+    @property
+    def status_host(self) -> str:
+        """Host name of the server's HTTP endpoint. A Windows server binds it with HttpListener, which
+        without an URL ACL (admin) listens on the `localhost` prefix only and answers 400 to a Host header
+        of 127.0.0.1; the container's Linux listener accepts both."""
+        return "localhost" if self.native else "127.0.0.1"
+
+    @property
     def status_url(self) -> str:
-        return f"http://127.0.0.1:{self.status_port}/status"
+        return f"http://{self.status_host}:{self.status_port}/status"
 
     @property
     def metrics_url(self) -> str:
-        return f"http://127.0.0.1:{self.status_port}/metrics"
+        return f"http://{self.status_host}:{self.status_port}/metrics"
 
     @property
     def debug_kill_url(self) -> str:
-        return f"http://127.0.0.1:{self.status_port}/debug/kill"
+        return f"http://{self.status_host}:{self.status_port}/debug/kill"
 
     @property
     def debug_entities_url(self) -> str:
-        return f"http://127.0.0.1:{self.status_port}/debug/entities"
+        return f"http://{self.status_host}:{self.status_port}/debug/entities"
 
     def apply(self, overrides: dict) -> "LabConfig":
         names = {f.name for f in fields(self)}

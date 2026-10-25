@@ -86,7 +86,7 @@ class ServerProbe:
     def _run_stats(self) -> None:
         with open(self.out / "container.ndjson", "w", encoding="utf-8", newline="\n") as fh:
             while not self._stop.is_set():
-                s = stack.docker_stats(self.cfg)
+                s = stack.server_stats(self.cfg)
                 if s is not None:
                     self.counts["stats"] += 1
                     t = util.mono()
