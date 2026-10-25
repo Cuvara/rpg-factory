@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab host guard: G1 no longer reports false historical sessions ("active at window start") after the AnyDesk
+  log rotates. The tailer re-read the file from 0 and re-emitted its Accepts; each duplicate queued a phantom
+  session that a later close ended, shifting every pairing (run 9tgw: sessions 'ended' 13:16:14Z hours late). Events
+  are now de-duplicated in the tailer and in `sessions_from_events`, and an open-ended session counts as active at
+  the start only with a live backend process (or a start under 120 s before it). A real session in the window still
+  fires G1, G2 and G3.
 - testlab: a native game server that cannot be stopped at teardown no longer leaves a green exit and a running
   stack: `stack.down` still brings the scratch backing stack down, then raises, and `_with_stack_teardown` turns an
   exit of 0 or 4 into 3 (a run's own 1 or 2 is kept) and keeps the error in `<runs>/stack/teardown-failure.json`.

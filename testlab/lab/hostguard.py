@@ -221,12 +221,31 @@ def parse_ad_trace(data: bytes | str, since_offset: int = 0) -> tuple[list[dict]
     return events, end
 
 
+def _event_key(e: dict) -> tuple:
+    return (e["type"], e.get("epoch"), e.get("proc"), e.get("pid"), e.get("fiber"), e.get("backend_pid"))
+
+
+def _distinct_events(rows: list[dict]) -> list[dict]:
+    """Drop repeats of the same log line. A rotation (new file identity) makes the tailer read the file
+    again from 0, so one Accept arrives twice; each copy would queue a phantom session that a later,
+    unrelated close then ends, which shifted every pairing after it."""
+    seen: set = set()
+    out = []
+    for e in rows:
+        k = _event_key(e)
+        if k not in seen:
+            seen.add(k)
+            out.append(e)
+    return out
+
+
 def sessions_from_events(events: list[dict]) -> list[dict]:
     """Sessions from log events: {start, end, backend_pid, end_reason}. `start` is None for a session
     that was already running when the log begins. An Accept binds to the next session fiber that
     shows up; later events of that fiber (and of the backend pid) belong to the same session."""
     rows = sorted((e for e in events if e.get("epoch") is not None and e["type"] in SESSION_TYPES),
                   key=lambda e: e["epoch"])
+    rows = _distinct_events(rows)
     sessions: list[dict] = []
     pending: list[dict] = []
     by_fiber: dict[int, dict] = {}
@@ -302,8 +321,13 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
 
     # G1: session events, a session active at the start, a backend process, a connection entry.
     g1: list[str] = []
+    backends_after = [p for r in rows if r["epoch"] >= window[0] for p in (r.get("ad") or []) if p.get("role") == "backend"]
     for s in sessions_from_events(events):
         if s["start"] is not None and s["start"] < window[0] and (s["end"] is None or s["end"] >= window[0]):
+            if s["end"] is None:      # open-ended: needs a live backend, or a start so recent the end may not be logged yet
+                alive = any(p.get("pid") == s["backend_pid"] for p in backends_after) if s["backend_pid"] is not None                     else bool(backends_after)
+                if not alive and window[0] - s["start"] > PRE_QUIET_S:
+                    continue
             g1.append(f"session active at window start (began {iso_utc(s['start'])}, ended {iso_utc(s['end']) if s['end'] else 'not seen'})")
     for e in events:
         if e["type"] in SESSION_TYPES and _in(e.get("epoch"), window):
@@ -590,13 +614,14 @@ class HostGuard:
         try:
             size = p.stat().st_size
             off = holder["off"]
+            rotated = False
             if holder.get("identity") is not None and identity != holder["identity"]:
-                off = 0
+                off, rotated = 0, True
                 self._emit([{"type": "log_rotated", "source": "ad_trace"}])
             if off is None:                   # first look: prime with the last MiB so an open session is known
                 off = max(0, size - (1 << 20))
             if size < off:                    # truncated: start again and say so
-                off = 0
+                off, rotated = 0, True
                 self._emit([{"type": "log_rotated", "source": "ad_trace"}])
             with open(p, "rb") as fh:
                 fh.seek(off)
@@ -607,6 +632,10 @@ class HostGuard:
             events, used = parse_ad_trace(chunk, 0)
             holder["off"] = off + used
             holder["identity"] = identity
+            if rotated:                       # the re-read starts at 0: drop what this run already wrote
+                seen = holder.setdefault("keys", set())
+                events = [e for e in events if _event_key(e) not in seen]
+            holder.setdefault("keys", set()).update(_event_key(e) for e in events)
             self._emit(events)
         except OSError:
             now = time.time()
