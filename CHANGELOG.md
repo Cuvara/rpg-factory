@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- testlab: native mode with `--build-server` no longer runs `stack.sh --scratch up` (its `up` ends in `dc up -d`
+  for the whole project and started the container `gameserver-dotnet` before the native server replaced it).
+  The Nakama plugin and the gateway image are built directly (the two builds of `stack.sh do_up`; the game server
+  image is not built), then only the backing services are started. Regression tests prove no native path, with
+  `build` true or false, runs the full-stack `up`. A native server that is still alive after `kill_tree` and the
+  15 s wait now keeps its state and fails the stop with an error (the next run is refused until the process is
+  gone) instead of dropping its pid record.
+
 ### Added
 
 - testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its

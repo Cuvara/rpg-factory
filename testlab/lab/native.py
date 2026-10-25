@@ -259,6 +259,11 @@ def stop(cfg: LabConfig) -> str | None:
     deadline = util.mono() + 15
     while util.mono() < deadline and util.process_alive(pid):
         time.sleep(0.2)
+    if util.process_alive(pid):
+        # Keep the state: the pid is still tracked, so the next run retries the stop and is refused until
+        # the process is gone (it holds the status and game ports).
+        raise NativeError(f"native game server pid {pid} is still running after kill_tree and a 15s wait; "
+                          f"kill it by hand (taskkill /PID {pid} /T /F), then run again")
     if state_path.exists():
         state_path.unlink()
     return f"stopped native game server pid {pid}"

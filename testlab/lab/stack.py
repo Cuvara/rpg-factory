@@ -260,12 +260,38 @@ def health_backing(cfg: LabConfig) -> bool:
     return nakama_code == 200 and _port_open(cfg.gateway_port) and bool(redis_cli(cfg, "ping"))
 
 
+def build_backing_images(cfg: LabConfig, env: dict, log_path: Path) -> None:
+    """Build what native mode needs (the Nakama plugin and the gateway image) without `stack.sh up`.
+
+    stack.sh has no build-only subcommand and its `up` also starts the container game server, so the two
+    builds of its do_up are repeated here (backend/deploy/stack.sh: the nakama-plugin.Dockerfile export and
+    docker/Dockerfile.gateway). The game server image is not built: the game server is native."""
+    from . import native
+    deploy = f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && "
+    gateway_image = ((native.compose_config(cfg).get("services") or {}).get("gateway") or {}).get("image") \
+        or "rpg-mmo/gateway:dev"
+    nakama_version = env.get("NAKAMA_VERSION") or "3.40.0"
+    # A running nakama holds the plugin file open on Windows-backed mounts: stop it first (as stack.sh does).
+    util.wsl(cfg.wsl_distro, native.compose_cmd(cfg, "stop nakama") + " >/dev/null 2>&1 || true", timeout=300)
+    steps = [
+        ("nakama plugin", f"{deploy}mkdir -p modules && DOCKER_BUILDKIT=1 docker build -f nakama-plugin.Dockerfile "
+                          f"--build-arg 'NAKAMA_VERSION={nakama_version}' --target export --output type=local,dest=modules .."),
+        ("gateway image", f"{deploy}docker build -f docker/Dockerfile.gateway -t '{gateway_image}' .."),
+    ]
+    for name, cmd in steps:
+        res = util.wsl(cfg.wsl_distro, cmd, timeout=3600)
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"\n--- build {name} ---\n" + res.stdout + "\n" + res.stderr)
+        if res.returncode != 0:
+            raise StackError(f"building the {name} failed (exit {res.returncode}); log: {log_path}")
+
+
 def ensure_native(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, force_restart_gameserver: bool) -> dict:
     """The scratch stack WITHOUT its game server, plus the game server as a native Windows process.
 
-    stack.sh `up` always starts every service and waits for the container game server, so it is used
-    only to build the images (`build`); the services are then (re)started directly with the scratch
-    compose project, minus `gameserver-dotnet`. A scratch game server container left by a docker-mode run is
+    stack.sh `up` always starts every service and waits for the container game server, so it is never run
+    in this mode: `build` builds the plugin and gateway image directly, and the services are (re)started with
+    the scratch compose project, minus `gameserver-dotnet`. A scratch game server container left by a docker-mode run is
     removed and its registry entry deleted, so the gateway can only hand out the native server."""
     from . import native
     state_dir = cfg.runs_root / "stack"
@@ -295,18 +321,16 @@ def ensure_native(cfg: LabConfig, env: dict, *, build: bool, log_path: Path, for
         extra = f"STACK_SCRATCH_EXTRA_ENV='{util.to_wsl_path(env_file)}' "
         deploy = f"cd '{util.to_wsl_path(cfg.deploy_dir)}' && "
         started = util.mono()
-        if build:
-            sha = server_head(cfg) if supports_git_revision(cfg) else None
-            revision = f"STACK_GIT_REVISION='{sha}' " if sha else ""
-            res = util.wsl(cfg.wsl_distro, f"{deploy}{revision}{extra}./stack.sh --scratch up", timeout=3600)
-            record["actions"].append(f"stack.sh --scratch up (images and Nakama plugin) exit={res.returncode} "
-                                     f"in {util.mono() - started:.1f}s")
-        else:
-            # `ps` writes .env.scratch (with the extra env) and starts nothing.
-            res = util.wsl(cfg.wsl_distro, f"{deploy}{extra}./stack.sh --scratch --no-build ps", timeout=300)
+        # `ps` writes .env.scratch (with the extra env) and starts nothing. `stack.sh up` is never used here:
+        # it ends in `dc up -d` for the WHOLE project, which would start the container game server.
+        res = util.wsl(cfg.wsl_distro, f"{deploy}{extra}./stack.sh --scratch --no-build ps", timeout=300)
         log_path.write_text(res.stdout + "\n--- stderr ---\n" + res.stderr, encoding="utf-8")
         if res.returncode != 0:
             raise StackError(f"stack.sh --scratch failed (exit {res.returncode}); log: {log_path}")
+        if build:
+            build_backing_images(cfg, env, log_path)
+            record["actions"].append(f"built the Nakama plugin and gateway image (no full-stack up) "
+                                     f"in {util.mono() - started:.1f}s")
         services = [n for n in (native.compose_config(cfg).get("services") or {}) if n != native.SERVICE]
         res = util.wsl(cfg.wsl_distro, native.compose_cmd(cfg, "up -d " + " ".join(services)), timeout=900)
         with open(log_path, "a", encoding="utf-8") as fh:

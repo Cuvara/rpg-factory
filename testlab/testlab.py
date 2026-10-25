@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, scenarios, stack, thresholds, util  # noqa: E402
+from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, native, scenarios, stack, thresholds, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
 THRESHOLDS_DOC = Path(__file__).resolve().parent / "docs" / "THRESHOLDS.md"
@@ -458,7 +458,7 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     try:
         return args.fn(args)
-    except (scenarios.ScenarioError, stack.StackError, clients.ClientError, ValueError) as exc:
+    except (scenarios.ScenarioError, stack.StackError, native.NativeError, clients.ClientError, ValueError) as exc:
         util.eprint(f"testlab: {exc}")
         return 3
 

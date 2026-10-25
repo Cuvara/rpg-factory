@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -386,6 +387,83 @@ class DispatchTests(unittest.TestCase):
                 stack.ensure(docker, {"GAMESERVER_MAP_ID": "map_01"}, build=False, log_path=Path(d) / "l.log",
                              force_restart_gameserver=False)
                 stop.assert_called_once()
+
+
+class NativeNeverRunsTheFullStackUpTests(unittest.TestCase):
+    """RV-P1B-1: `stack.sh up` ends in `dc up -d` for the whole project, which starts gameserver-dotnet."""
+
+    BUILD = BringUpTests.BUILD
+    _ensure = BringUpTests._ensure
+
+    def _run(self, build):
+        with tempfile.TemporaryDirectory() as d:
+            shell = FakeShell()
+            self._ensure(d, shell, build=build)
+            return shell.cmds
+
+    def test_no_native_path_runs_the_full_stack_up(self):
+        for build in (True, False):
+            with self.subTest(build=build):
+                cmds = self._run(build)
+                self.assertEqual([c for c in cmds if re.search(r"stack\.sh.*\bup\b", c)], [], cmds)
+                ups = [c for c in cmds if " up -d" in c]
+                self.assertEqual(len(ups), 1, cmds)
+                self.assertTrue(ups[0].rstrip().split(" up -d")[1].strip(), "up -d must name its services")
+                self.assertNotIn("gameserver-dotnet", ups[0].split(" up -d")[1])
+
+    def test_build_makes_the_plugin_and_gateway_image_and_not_the_game_server_image(self):
+        cmds = self._run(True)
+        self.assertEqual(len([c for c in cmds if "nakama-plugin.Dockerfile" in c]), 1, cmds)
+        self.assertEqual(len([c for c in cmds if "docker/Dockerfile.gateway" in c]), 1, cmds)
+        self.assertEqual([c for c in cmds if "Dockerfile.gameserver" in c], [])
+        first_up = next(i for i, c in enumerate(cmds) if " up -d" in c)
+        self.assertTrue(all(i < first_up for i, c in enumerate(cmds) if "Dockerfile" in c))
+
+    def test_without_build_nothing_is_built(self):
+        self.assertEqual([c for c in self._run(False) if "docker build" in c], [])
+
+    def test_a_failed_image_build_stops_before_any_service_starts(self):
+        shell = FakeShell()
+
+        def failing(distro, command, timeout=600, check=False):
+            res = shell(distro, command, timeout, check)
+            return subprocess.CompletedProcess([], 1, "", "boom") if "Dockerfile.gateway" in command else res
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(stack.StackError):
+                self._ensure(d, failing, build=True)
+        self.assertEqual([c for c in shell.cmds if " up -d" in c], [])
+
+
+class StopTests(unittest.TestCase):
+    def _state(self, d):
+        cfg = _cfg(d)
+        state_path = native._paths(cfg)["state"]
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text("{}", encoding="utf-8")
+        return cfg, state_path
+
+    def test_a_server_that_survives_the_kill_keeps_its_state_and_fails_the_stop(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg, state_path = self._state(d)
+            clock = iter(range(0, 1000, 5))
+            with mock.patch.object(native, "running", return_value=77), \
+                    mock.patch.object(native.util, "kill_tree", return_value=True), \
+                    mock.patch.object(native.util, "process_alive", return_value=True), \
+                    mock.patch.object(native.util, "mono", side_effect=lambda: next(clock)), \
+                    mock.patch.object(native.time, "sleep"):
+                with self.assertRaises(native.NativeError) as ctx:
+                    native.stop(cfg)
+            self.assertIn("pid 77", str(ctx.exception))
+            self.assertTrue(state_path.exists())
+
+    def test_a_server_that_exits_after_the_kill_clears_its_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg, state_path = self._state(d)
+            with mock.patch.object(native, "running", return_value=77), \
+                    mock.patch.object(native.util, "kill_tree", return_value=True), \
+                    mock.patch.object(native.util, "process_alive", return_value=False):
+                self.assertIn("stopped native game server pid 77", native.stop(cfg))
+            self.assertFalse(state_path.exists())
 
 
 class ProcessTests(unittest.TestCase):
