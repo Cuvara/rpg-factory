@@ -3544,10 +3544,13 @@ class HostGuardTests(unittest.TestCase):
         cut = self._t("2026-10-23 16:05:50")
         events = [e for e in events if e["epoch"] <= cut]       # the log shows the session open, nothing after
         w = (self._t("2026-10-23 16:06:00"), self._t("2026-10-23 16:30:00"))
-        res = hostguard.evaluate(self._idle(w[0], w[1], pid_base=18000), events, w, baseline_pids=[18000, 18001, 18002])
+        samples = self._idle(w[0], w[1], pid_base=18000)
+        for sample in samples:
+            sample["ad"] = sample["ad"] + [{"pid": 18720, "role": "backend", "cpu": 0.2}]
+        res = hostguard.evaluate(samples, events, w, baseline_pids=[18000, 18001, 18002])
         g1 = next(f for f in res["fired"] if f["id"] == "G1")
         self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
-        out = analyze.check_host_guard(self._guard_ev(self._idle(w[0], w[1]), events, w), {})
+        out = analyze.check_host_guard(self._guard_ev(samples, events, w), {})
         self.assertEqual(out["status"], analyze.INVALID)
 
     # (e) ended well before the window
@@ -3558,6 +3561,85 @@ class HostGuardTests(unittest.TestCase):
         res = hostguard.evaluate(self._idle(w[0], w[1]), events, w, baseline_pids=[1000, 1001, 1002])
         self.assertEqual(res["fired"], [])
         self.assertEqual(hostguard.WINDOW_PRE_S, 30.0)
+
+
+    # (e2) a log re-read after rotation must not shift the session pairing (run 9tgw)
+    ROTATED_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ad_events_rotated_reread.ndjson.gz"
+
+    def _rotated_events(self):
+        with gzip.open(self.ROTATED_FIXTURE, "rt", encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    def _rotated_samples(self, w):
+        """Idle residents; the real session's backend (pid 111932) lives 13:14:49-13:16:14 at 5.9 % of host."""
+        samples = self._idle(w[0], w[1], pid_base=18000)
+        lo, hi = self._t("2026-10-25 13:14:49"), self._t("2026-10-25 13:16:14")
+        for s in samples:
+            if lo <= s["epoch"] <= hi:
+                s["ad"] = s["ad"] + [{"pid": 111932, "role": "backend", "cpu": 5.9}]
+                s["ad_cpu"] = 5.9
+        return samples
+
+    def test_e2_rotation_reread_does_not_create_a_false_historical_g1(self):
+        from lab import hostguard
+        events = self._rotated_events()
+        self.assertEqual(sum(1 for e in events if e["type"] == "log_rotated"), 1)
+        self.assertGreater(sum(1 for e in events if e["type"] == "accept"), len({e["epoch"] for e in events if e["type"] == "accept"}))
+        sessions = hostguard.sessions_from_events(events)
+        self.assertEqual([x for x in sessions if x["start"] is not None and x["end"] is None], [])
+        real = [x for x in sessions if x["backend_pid"] == 111932]
+        self.assertEqual(len(real), 1)
+        self.assertAlmostEqual(real[0]["start"], self._t("2026-10-25 13:14:43") + 0.649, places=3)
+        self.assertAlmostEqual(real[0]["end"], self._t("2026-10-25 13:16:14") + 0.190, places=3)
+        for x in sessions:                      # every session ends after it starts and within an hour
+            if x["start"] is not None and x["end"] is not None:
+                self.assertTrue(0 <= x["end"] - x["start"] < 3600, x)
+        w = (self._t("2026-10-25 13:07:13"), self._t("2026-10-25 14:08:03"))
+        res = hostguard.evaluate(self._rotated_samples(w), events, w, baseline_pids=[18000, 18001, 18002])
+        ids = [f["id"] for f in res["fired"]]
+        self.assertEqual(ids, ["G1", "G2", "G3"])
+        g1 = next(f for f in res["fired"] if f["id"] == "G1")
+        self.assertFalse(any("active at window start" in x for x in g1["evidence"]), g1)
+        self.assertTrue(any("2026-10-25T13:14:4" in x for x in g1["evidence"]), g1)
+        self.assertTrue(any("--backend pid 111932" in x for x in g1["evidence"]), g1)
+        self.assertFalse(any("2026-10-25T02:38:15" in x or "03:24:59" in x for x in g1["evidence"]), g1)
+
+    def test_e3_open_ended_old_session_needs_a_live_backend(self):
+        from lab import hostguard
+        events = [e for e in self._rotated_events() if e.get("epoch", 0) <= self._t("2026-10-25 03:25:10")]
+        w = (self._t("2026-10-25 13:07:13"), self._t("2026-10-25 13:30:00"))
+        idle = hostguard.evaluate(self._idle(w[0], w[1], pid_base=18000), events, w, baseline_pids=[18000, 18001, 18002])
+        self.assertEqual(idle["fired"], [])               # an accept with no end seen hours ago, nothing alive
+        samples = self._idle(w[0], w[1], pid_base=18000)
+        for s in samples:
+            s["ad"] = s["ad"] + [{"pid": 60100, "role": "backend", "cpu": 0.2}]
+        live = hostguard.evaluate(samples, events, w, baseline_pids=[18000, 18001, 18002])
+        g1 = next(f for f in live["fired"] if f["id"] == "G1")
+        self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
+
+    def test_e3a_recent_open_session_needs_a_live_backend(self):
+        from lab import hostguard
+        window_start = self._t("2026-10-25 13:07:13")
+        accept = window_start - 90.0
+        events = [{"type": "accept", "epoch": accept, "ts": hostguard.iso_utc(accept), "proc": "ad",
+                   "pid": 50000, "source": "ad_trace"}]
+        w = (window_start, self._t("2026-10-25 13:30:00"))
+        idle = self._idle(w[0], w[1], pid_base=18000)
+
+        no_backend = hostguard.evaluate(idle, events, w, baseline_pids=[18000, 18001, 18002])
+        self.assertEqual(no_backend["fired"], [])
+
+        samples = self._idle(w[0], w[1], pid_base=18000)
+        for sample in samples:
+            sample["ad"] = sample["ad"] + [{"pid": 60100, "role": "backend", "cpu": 0.2}]
+        live_backend = hostguard.evaluate(samples, events, w, baseline_pids=[18000, 18001, 18002])
+        g1 = next(f for f in live_backend["fired"] if f["id"] == "G1")
+        self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
+
+    def test_e4_replayed_events_are_dropped_once(self):
+        from lab import hostguard
+        events, _ = self._events()
+        self.assertEqual(hostguard.sessions_from_events(events + events), hostguard.sessions_from_events(events))
 
     # (f) a new AnyDesk pid with no readable log
     def test_f_new_anydesk_pid_fires_g2_without_a_log(self):
