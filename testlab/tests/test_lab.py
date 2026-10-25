@@ -7,6 +7,7 @@ every analysis check against synthetic evidence. No stack, no Unity, no network.
 from __future__ import annotations
 
 import copy
+import gzip
 import json
 import math
 import os
@@ -3455,6 +3456,7 @@ class HostGuardTests(unittest.TestCase):
     preflight. Pure parts on real log lines (fixtures/ad_trace_sessions.txt, ids scrubbed)."""
 
     FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ad_trace_sessions.txt"
+    CLOCK_RATE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "clock-rate-status.json.gz"
 
     @staticmethod
     def _t(stamp):
@@ -3697,6 +3699,113 @@ class HostGuardTests(unittest.TestCase):
                 now[0] = 1000.0
                 self.assertFalse(g.hold_until(1010.0))
                 self.assertEqual(now[0], 1000.0)
+
+    def test_g6_9mre_status_series_fires_and_flat_i9fl_e26z_do_not(self):
+        from lab import hostguard
+        with gzip.open(self.CLOCK_RATE_FIXTURE, "rt", encoding="utf-8") as fh:
+            series = json.load(fh)["series"]
+        nine = hostguard.evaluate_clock_rate(series["20261024T194653Z-S09-9mre"])
+        g6 = next((f for f in nine["fired"] if f["id"] == "G6"), None)
+        self.assertIsNotNone(g6)
+        # F4: two episodes are F23 Finding B (564, 2990); 2 is start-up; 2288 and 2431 are unexplained (60 ticks/s regime)
+        self.assertEqual(g6["episodes"], 5)
+        starts = [float(e.split("scenario st ")[1].split("..")[0]) for e in g6["evidence"]]
+        self.assertEqual([round(x) for x in starts], [2, 564, 2288, 2431, 2990])
+        self.assertGreater(nine["stats"]["valid_intervals"], 3000)
+        self.assertAlmostEqual(nine["stats"]["median_ticks_per_harness_s"], 55.0, delta=1.0)
+        for run_id in ("20261023T071851Z-S09-i9fl", "20261023T040945Z-S09-e26z"):
+            with self.subTest(run_id=run_id):
+                self.assertEqual(hostguard.evaluate_clock_rate(series[run_id])["fired"], [])
+
+    def test_g6_does_not_fire_for_a_server_tick_slowdown(self):
+        from lab import hostguard
+        rows = []
+        tick = 0
+        for second in range(12):
+            if second:
+                tick += 25 if 4 <= second <= 7 else 55
+            healthy = not 4 <= second <= 7
+            rows.append({"_mono": 1000.0 + second, "_st": float(second), "current_tick": tick,
+                         "sim_critical_hz": 60, "achieved_tick_hz": 60 if healthy else 30})
+        self.assertEqual(hostguard.evaluate_clock_rate(rows)["fired"], [])
+        tick_check = analyze.check_server_tick(_ev(duration=12, status=rows), {})
+        self.assertEqual(tick_check["status"], analyze.FAIL)
+
+    @staticmethod
+    def _g6_series(seconds, tick_at, achieved_at, mono_error=None):
+        rows = []
+        for s in range(seconds + 1):
+            err = mono_error(s) if mono_error else 0.0
+            # the poll loop runs slightly slower than 1 Hz
+            rows.append({"_mono": 1000.0 + s * 1.001 + err, "_st": float(s), "current_tick": round(tick_at(float(s))),
+                         "sim_critical_hz": 60, "achieved_tick_hz": achieved_at(float(s))})
+        return rows
+
+    def test_g6_never_fires_on_a_stall_seen_through_the_lagging_meter(self):
+        from lab import hostguard
+
+        def run(stall_start, rate, phase):
+            def tick_at(t):                              # 55 ticks/s skew, `rate` ticks/s inside the 15 s stall
+                end = stall_start + 15.0
+                inside = max(0.0, min(t, end) - stall_start)
+                return 55.0 * (t - inside) + rate * inside
+
+            def achieved_at(t):                          # last completed 2 s window, published at its end
+                window_end = ((t - phase) // 2.0) * 2.0 + phase
+                rate_in_window = (tick_at(window_end) - tick_at(window_end - 2.0)) / 2.0
+                return rate_in_window * (60.0 / 55.0)
+            return self._g6_series(40, tick_at, achieved_at)
+
+        for rate in (45.0, 30.0, 10.0, 1.0, 0.0):
+            for start in range(0, 20, 2):                 # stall start phase x meter window phase
+                for phase in range(0, 20, 2):
+                    with self.subTest(rate=rate, start=start, phase=phase):
+                        rows = run(11.0 + start * 0.05, rate, phase * 0.1)
+                        self.assertEqual(hostguard.evaluate_clock_rate(rows)["fired"], [])
+
+    def test_g6_ignores_polling_jitter_and_a_single_latency_spike(self):
+        from lab import hostguard
+        flat = lambda t: 55.0 * t
+        healthy = lambda t: 60
+        # +70 ms on every other poll for 40 s: the true rate never moved
+        alternating = self._g6_series(40, flat, healthy, lambda s: 0.07 if s % 2 else 0.0)
+        self.assertEqual(hostguard.evaluate_clock_rate(alternating)["fired"], [])
+        # seeded random +-70 ms
+        import random
+        rng = random.Random(7)
+        noise = [rng.uniform(-0.07, 0.07) for _ in range(41)]
+        self.assertEqual(hostguard.evaluate_clock_rate(self._g6_series(40, flat, healthy, lambda s: noise[s]))["fired"], [])
+        # one poll answered 0.4 s late
+        spike = self._g6_series(40, flat, healthy, lambda s: 0.4 if s == 20 else 0.0)
+        self.assertEqual(hostguard.evaluate_clock_rate(spike)["fired"], [])
+
+    def test_g6_fires_for_a_sustained_clock_step_and_not_for_a_one_second_blip(self):
+        from lab import hostguard
+        step = lambda t0, t1: (lambda t: 55.0 * t + 10.0 * max(0.0, min(t, t1) - t0))   # 65 ticks/s between t0 and t1
+        healthy = lambda t: 60
+        six = hostguard.evaluate_clock_rate(self._g6_series(40, step(15.0, 21.0), healthy))
+        self.assertEqual([f["id"] for f in six["fired"]], ["G6"])
+        self.assertEqual(six["fired"][0]["episodes"], 1)
+        self.assertEqual(hostguard.evaluate_clock_rate(self._g6_series(40, step(15.0, 16.0), healthy))["fired"], [])
+        # a 20 % step is still a clock step, not a stall
+        down = lambda t: 55.0 * t - 11.0 * max(0.0, min(t, 21.0) - 15.0)
+        self.assertEqual([f["id"] for f in hostguard.evaluate_clock_rate(self._g6_series(40, down, healthy))["fired"]], ["G6"])
+
+    def test_g6_makes_host_guard_invalid_and_keeps_server_fail_evidence(self):
+        from lab import hostguard
+        with gzip.open(self.CLOCK_RATE_FIXTURE, "rt", encoding="utf-8") as fh:
+            rows = json.load(fh)["series"]["20261024T194653Z-S09-9mre"]
+        w = (self._t("2026-10-24 18:00:00"), self._t("2026-10-24 19:00:00"))
+        ev = self._guard_ev(self._idle(w[0] - 5, w[1] + 5), [], w)
+        ev["scenario"]["duration_s"] = 3600
+        ev["server"]["status"] = rows
+        out = analyze.check_host_guard(ev, {})
+        self.assertEqual(out["status"], analyze.INVALID)
+        self.assertIn("G6", out["measured"]["fired"])
+        self.assertEqual(analyze.overall([{"status": analyze.FAIL, "id": "server_tick"},
+                                          {**out, "check": "host_guard"}]), analyze.INVALID)
+        self.assertEqual(analyze.qualifications([{"status": analyze.FAIL, "id": "server_tick"},
+                                                 {**out, "check": "host_guard"}])[-1]["id"], "kept_failures")
 
     # (i) the verdict order
     def test_i_invalid_beats_fail_beats_inconclusive_and_is_never_pass(self):

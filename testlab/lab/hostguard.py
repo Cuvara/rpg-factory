@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import statistics
 import subprocess
 import threading
 import time
@@ -48,6 +49,13 @@ G4_BUILD_PCT = 5.0               # any build-tool group, % of the whole host
 G4_AV_PCT = 5.0                  # MsMpEng
 G4_CONSECUTIVE = 3
 G5_MISSED_INTERVALS = 3
+G6_RATE_DEVIATION_PCT = 5.0
+G6_SUSTAINED_S = 2.0
+G6_ACHIEVED_TICK_MIN_RATIO = 0.98
+G6_METER_WINDOW_S = 2.0          # AchievedRateMeter publishes the rate of the last completed 2 s window (it lags a stall)
+G6_SAMPLE_S = 1.0                # one /status sample period
+G6_STALL_DEVIATION_PCT = 35.0    # a host clock step is about +-20 %; an interval this far off is a stall, not a correction
+G6_MIN_WINDOWS = 3               # consecutive same-sign sliding windows that must all exceed the limit
 HOLD_SLACK_S = 5.0          # extra time hold_until() waits for the sample that closes the window
 PRE_QUIET_S = 120.0              # P1: no session event or connection entry this long before the start
 PRE_SAMPLE_S = 120.0             # preflight sample length (P2, P4, P5)
@@ -63,6 +71,10 @@ RULES = {
     "G3": f"AnyDesk CPU >= {ANYDESK_IDLE_MAX_PCT} % of the host for {G3_CONSECUTIVE} consecutive samples",
     "G4": f"build tools > {G4_BUILD_PCT} % or MsMpEng > {G4_AV_PCT} % of the host for {G4_CONSECUTIVE} consecutive samples",
     "G5": f"guard blind: more than {G5_MISSED_INTERVALS} consecutive intervals without a sample",
+    "G6": (f"server clock-rate step: current_tick per harness second, over sliding windows of at least "
+          f"{G6_SUSTAINED_S:.0f} s, differs by more than {G6_RATE_DEVIATION_PCT:.1f}% from the run median "
+          f"in {G6_MIN_WINDOWS} consecutive windows of the same sign, "
+          f"while achieved_tick_hz stays within {100 * (1 - G6_ACHIEVED_TICK_MIN_RATIO):.0f}% of target"),
 }
 
 _AD_IDENTITY_PREFIX_BYTES = 256
@@ -358,6 +370,112 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
              "guard_own_cpu_pct": {"mean": round(sum(own) / len(own), 4) if own else None, "max": max(own) if own else None},
              "new_processes_per_interval_max": max([s.get("newproc") or 0 for s in inside[1:]] or [0])}
     return {"fired": fired, "window": [iso_utc(window[0]), iso_utc(window[1])], "stats": stats}
+
+
+def evaluate_clock_rate(status_rows: list[dict]) -> dict:
+    """Detect G6 from 1 Hz server status samples without treating a server stall as a host clock step.
+
+    current_tick gives a high-resolution server-clock measure; _mono is the harness monotonic clock.
+    Stalls are excluded and the exclusion is dilated, because achieved_tick_hz lags a real stall:
+      - an interval with achieved_tick_hz below 98% of sim_critical_hz, with no tick progress, or with a
+        deviation above G6_STALL_DEVIATION_PCT from the median is a stall;
+      - every interval within G6_METER_WINDOW_S + G6_SAMPLE_S (3 s) before or after a stall is dropped too.
+    The rate is the net tick delta over the harness monotonic delta of a sliding window of at least
+    G6_SUSTAINED_S (whole intervals), so one late poll cannot move it by more than its lateness / 2 s. An
+    episode needs G6_MIN_WINDOWS consecutive windows of the same sign over the limit, and the net rate over
+    their union must exceed the limit too. Server stalls remain graded by the server_tick/render checks.
+    """
+    raw = []
+    rows = [r for r in status_rows if isinstance(r.get("_mono"), (int, float))]
+    rows.sort(key=lambda r: r["_mono"])
+    for before, after in zip(rows, rows[1:]):
+        start, end = float(before["_mono"]), float(after["_mono"])
+        elapsed = end - start
+        if elapsed <= 0.0 or elapsed > 2.0:
+            continue
+        target = min(float(before.get("sim_critical_hz") or before.get("tick_rate") or 0.0),
+                     float(after.get("sim_critical_hz") or after.get("tick_rate") or 0.0))
+        achieved = min(float(before.get("achieved_tick_hz") or 0.0),
+                       float(after.get("achieved_tick_hz") or 0.0))
+        if target <= 0.0:
+            continue
+        try:
+            ticks = float(after["current_tick"]) - float(before["current_tick"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        raw.append({"start": start, "end": end, "scenario_st": after.get("_st"), "ticks": ticks,
+                    "rate": ticks / elapsed, "achieved": achieved, "target": target,
+                    "stall": ticks <= 0.0 or achieved < target * G6_ACHIEVED_TICK_MIN_RATIO})
+
+    pool = [x["rate"] for x in raw if not x["stall"]]
+    median = statistics.median(pool) if pool else None
+    if median and median > 0:
+        for x in raw:
+            if abs(x["rate"] / median - 1.0) * 100.0 > G6_STALL_DEVIATION_PCT:
+                x["stall"] = True
+    pad = G6_METER_WINDOW_S + G6_SAMPLE_S
+    stalls = [(x["start"] - pad, x["end"] + pad) for x in raw if x["stall"]]
+    intervals = [x for x in raw if not any(x["end"] > lo and x["start"] < hi for lo, hi in stalls)]
+    rates = [x["rate"] for x in intervals]
+    median = statistics.median(rates) if rates else None
+
+    fired = []
+    max_deviation = 0.0
+    if median and median > 0:
+        segments, current = [], []
+        for x in intervals:
+            if current and x["start"] - current[-1]["end"] > 0.25:
+                segments.append(current)
+                current = []
+            current.append(x)
+        if current:
+            segments.append(current)
+        episodes = []
+        for seg in segments:
+            flagged = []                                    # (first index, last index, sign) per sliding window
+            for i in range(len(seg)):
+                j = i
+                while j < len(seg) and seg[j]["end"] - seg[i]["start"] < G6_SUSTAINED_S - 1e-6:
+                    j += 1
+                if j == len(seg):
+                    break
+                span = seg[j]["end"] - seg[i]["start"]
+                deviation = (sum(x["ticks"] for x in seg[i:j + 1]) / span / median - 1.0) * 100.0
+                max_deviation = max(max_deviation, abs(deviation))
+                if abs(deviation) > G6_RATE_DEVIATION_PCT:
+                    flagged.append((i, j, 1 if deviation > 0 else -1))
+            group = []
+            for w in flagged + [None]:
+                if w is not None and group and w[2] == group[-1][2] and w[0] == group[-1][0] + 1:
+                    group.append(w)
+                    continue
+                if len(group) >= G6_MIN_WINDOWS:
+                    run = seg[group[0][0]:group[-1][1] + 1]
+                    mean_rate = sum(x["ticks"] for x in run) / (run[-1]["end"] - run[0]["start"])
+                    if abs(mean_rate / median - 1.0) * 100.0 > G6_RATE_DEVIATION_PCT:
+                        episodes.append((run, mean_rate))
+                group = [w] if w is not None else []
+        episode_evidence = []
+        for run, mean_rate in episodes:
+            deviation = abs(mean_rate / median - 1.0) * 100.0
+            start_st, end_st = run[0].get("scenario_st"), run[-1].get("scenario_st")
+            scenario_window = (f"scenario st {float(start_st):.1f}..{float(end_st):.1f} s; "
+                               if isinstance(start_st, (int, float)) and isinstance(end_st, (int, float)) else "")
+            episode_evidence.append(f"{scenario_window}harness mono {run[0]['start']:.3f}..{run[-1]['end']:.3f}: "
+                                    f"{mean_rate:.2f} ticks/s vs {median:.2f} median "
+                                    f"({deviation:.1f}% deviation, "
+                                    f"achieved_tick_hz >= {G6_ACHIEVED_TICK_MIN_RATIO:.2f} x target)")
+        if episode_evidence:
+            fired.append({"id": "G6", "rule": RULES["G6"], "count": sum(len(run) for run, _ in episodes),
+                          "episodes": len(episodes), "evidence": episode_evidence[:12]})
+    stats = {"source": "server/status.ndjson current_tick / harness _mono",
+             "valid_intervals": len(intervals), "excluded_intervals": len(raw) - len(intervals),
+             "median_ticks_per_harness_s": round(median, 3) if median else None,
+             "max_window_deviation_pct": round(max_deviation, 2) if median else None,
+             "rate_deviation_limit_pct": G6_RATE_DEVIATION_PCT, "sustained_limit_s": G6_SUSTAINED_S,
+             "achieved_tick_min_ratio": G6_ACHIEVED_TICK_MIN_RATIO,
+             "stall_exclusion_pad_s": pad, "stall_deviation_pct": G6_STALL_DEVIATION_PCT}
+    return {"fired": fired, "stats": stats}
 
 
 def nearest_event(events: list[dict], epoch: float, within_s: float = 10.0) -> dict | None:

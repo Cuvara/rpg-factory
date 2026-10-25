@@ -333,8 +333,15 @@ A scenario with `requires_clean_host` (S09) runs P1-P6 automatically before anyt
 | G3 | AnyDesk CPU of 0.5 % of the host or more for 2 consecutive samples |
 | G4 | build tools or `MsMpEng` above 5 % of the host for 3 consecutive samples |
 | G5 | the guard was blind: more than 3 consecutive intervals without a sample |
+| G6 | `current_tick` per harness second steps more than 5 % from its run median for more than 2 s while `achieved_tick_hz` remains within its normal 98 % bound |
 
 A fired guard makes the `host_guard` assertion, and so the run, **INVALID**. INVALID is checked before FAIL and is never PASS: it cannot turn a FAIL or INCONCLUSIVE into a PASS, it is not a verdict on the candidate, and a FAIL in the table is kept as evidence (and named under **Qualified by**). It exits with code 2. No threshold or pass rule of any scenario changed. `host_quiet` additionally names the nearest guard event within 10 s of every single-process frame of 1 s or more. Other agents' shell and WSL bursts are recorded (`newproc`) but do not invalidate. Every limit above is **policy, unvalidated** (`docs/THRESHOLDS.md`), calibrated on one 16 min baseline.
+
+G6 compares the server tick counter with the harness monotonic clock using 1 Hz `/status` samples. The rate is the net `current_tick` delta over the monotonic delta of a sliding window of at least 2 s (the fewest whole 1 s intervals spanning 2 s), so one late poll moves it by at most its lateness divided by 2 s and alternating jitter cancels. G6 fires on 3 consecutive windows of the same sign more than 5 % from the run median (a union span of at least 4 s) whose own net rate also exceeds 5 %. The "2 s" is therefore the window length, not a duration the step has to exceed.
+
+A server stall or slowdown remains graded by the existing tick, snapshot and render checks as FAIL. Because `achieved_tick_hz` is the rate of the last completed 2 s window and lags a stall, G6 drops every interval with `achieved_tick_hz` below 98 % of the critical rate, with no tick progress, or more than 35 % off the median (a host clock step is about 20 %), and also every interval within 3 s (the 2 s meter window plus one sample) before or after one.
+
+The provisional limits are tied to F23's `9mre` evidence. The detector reports five episodes there, not two: 564 s and 2990 s (about 65 instead of 55 ticks per harness second while the server reported ~60 achieved ticks/s) are F23 Finding B, the only ones attributed to a host clock correction; one at 2 s is start-up (58.8 ticks/s, 6.6 %); 2288 s (50 s) and 2431 s (42 s) run at 60 ticks/s with no 55 skew and are unexplained. The reference is the run median, so a run that spends more than half of its time in the other regime would flag the normal one; this is a policy limitation, not validated.
 
 The guard cannot see which part of a session start freezes a player, and an idle resident AnyDesk cannot be cleared by it; both stay open (F19 section 3.5). A run with no guard evidence (older runs) shows `host_guard` INFO; a clean-host scenario without it is INCONCLUSIVE.
 
