@@ -324,9 +324,9 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
     backends_after = [p for r in rows if r["epoch"] >= window[0] for p in (r.get("ad") or []) if p.get("role") == "backend"]
     for s in sessions_from_events(events):
         if s["start"] is not None and s["start"] < window[0] and (s["end"] is None or s["end"] >= window[0]):
-            if s["end"] is None:      # open-ended: needs a live backend, or a start so recent the end may not be logged yet
+            if s["end"] is None:      # P1 still refuses a start within PRE_QUIET_S (120 s) of any session event, so a session must be absent before start.
                 alive = any(p.get("pid") == s["backend_pid"] for p in backends_after) if s["backend_pid"] is not None                     else bool(backends_after)
-                if not alive and window[0] - s["start"] > PRE_QUIET_S:
+                if not alive:
                     continue
             g1.append(f"session active at window start (began {iso_utc(s['start'])}, ended {iso_utc(s['end']) if s['end'] else 'not seen'})")
     for e in events:

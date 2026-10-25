@@ -3544,10 +3544,13 @@ class HostGuardTests(unittest.TestCase):
         cut = self._t("2026-10-23 16:05:50")
         events = [e for e in events if e["epoch"] <= cut]       # the log shows the session open, nothing after
         w = (self._t("2026-10-23 16:06:00"), self._t("2026-10-23 16:30:00"))
-        res = hostguard.evaluate(self._idle(w[0], w[1], pid_base=18000), events, w, baseline_pids=[18000, 18001, 18002])
+        samples = self._idle(w[0], w[1], pid_base=18000)
+        for sample in samples:
+            sample["ad"] = sample["ad"] + [{"pid": 18720, "role": "backend", "cpu": 0.2}]
+        res = hostguard.evaluate(samples, events, w, baseline_pids=[18000, 18001, 18002])
         g1 = next(f for f in res["fired"] if f["id"] == "G1")
         self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
-        out = analyze.check_host_guard(self._guard_ev(self._idle(w[0], w[1]), events, w), {})
+        out = analyze.check_host_guard(self._guard_ev(samples, events, w), {})
         self.assertEqual(out["status"], analyze.INVALID)
 
     # (e) ended well before the window
@@ -3612,6 +3615,25 @@ class HostGuardTests(unittest.TestCase):
             s["ad"] = s["ad"] + [{"pid": 60100, "role": "backend", "cpu": 0.2}]
         live = hostguard.evaluate(samples, events, w, baseline_pids=[18000, 18001, 18002])
         g1 = next(f for f in live["fired"] if f["id"] == "G1")
+        self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
+
+    def test_e3a_recent_open_session_needs_a_live_backend(self):
+        from lab import hostguard
+        window_start = self._t("2026-10-25 13:07:13")
+        accept = window_start - 90.0
+        events = [{"type": "accept", "epoch": accept, "ts": hostguard.iso_utc(accept), "proc": "ad",
+                   "pid": 50000, "source": "ad_trace"}]
+        w = (window_start, self._t("2026-10-25 13:30:00"))
+        idle = self._idle(w[0], w[1], pid_base=18000)
+
+        no_backend = hostguard.evaluate(idle, events, w, baseline_pids=[18000, 18001, 18002])
+        self.assertEqual(no_backend["fired"], [])
+
+        samples = self._idle(w[0], w[1], pid_base=18000)
+        for sample in samples:
+            sample["ad"] = sample["ad"] + [{"pid": 60100, "role": "backend", "cpu": 0.2}]
+        live_backend = hostguard.evaluate(samples, events, w, baseline_pids=[18000, 18001, 18002])
+        g1 = next(f for f in live_backend["fired"] if f["id"] == "G1")
         self.assertTrue(any("active at window start" in x for x in g1["evidence"]), g1)
 
     def test_e4_replayed_events_are_dropped_once(self):
