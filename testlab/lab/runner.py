@@ -160,6 +160,15 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                                      force_restart_gameserver=bool(sc["fresh_server"] or sc.get("snapshot_trace")))
         for action in meta["stack"]["actions"]:
             log("stack: " + action)
+        keep = stack.KEEPALIVE
+        meta["wsl_keepalive"] = {"held": bool(keep and keep.held), "error": keep.error if keep else "not started"}
+        if not meta["wsl_keepalive"]["held"]:
+            log("stack: WSL keep-alive is NOT held; the distro (and the scratch stack) can stop mid-run")
+        # A fresh world has no sessions: the scratch Redis outlives runs, and the sessions of a gateway that was
+        # stopped under a client stay for SessionTTL (1 h). Without this the S01 `redis` count includes them.
+        meta["stale_session_keys_cleared"] = stack.clear_session_keys(cfg)
+        if meta["stale_session_keys_cleared"]:
+            log(f"stack: removed {meta['stale_session_keys_cleared']} stale session key(s) of earlier runs from the scratch Redis")
         if cfg.native:
             # The "image" of a native server is its binary: the hash of the exe that ran, and the commit it was
             # built from (stamped by lab/native.py from the checkout, the analogue of the image revision label).
@@ -259,6 +268,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         log(f"client exit codes: {codes}")
         if not redis_taken:
             _take_redis(cfg, sc, run_dir)
+            mark("redis_late")
     except KeyboardInterrupt:
         # Ctrl-C: the cleanup below still stops the players; the run is recorded as interrupted
         # and the interrupt is raised again once the record is written.
@@ -290,7 +300,9 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
             log("bots: killed loadtest (still running at end)")
         if probe is not None:
             if not (probe.out / "metrics-end.txt").exists():
+                # The loop ended (clients gone) before its end scrape: the counters include teardown, not the window.
                 probe.scrape_metrics("end")
+                mark("metrics_end_late")
             probe.scrape_metrics("after")
             probe.stop()
             meta["probe_counts"] = probe.counts

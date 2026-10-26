@@ -476,9 +476,39 @@ class TeardownFailureTests(unittest.TestCase):
         cfg = _cfg(d)
         args = mock.Mock(keep_stack=False)
         err = stack.StackError("native game server was NOT stopped") if stop_fails else None
-        with mock.patch.object(stack, "down", side_effect=err, return_value="down ok"):
+        with mock.patch.object(stack, "down", side_effect=err, return_value="down ok"),                 mock.patch.object(stack, "WslKeepAlive"):
             rc = cli._with_stack_teardown(cfg, args, lambda: body_rc)
         return rc, cfg.runs_root / "stack" / "teardown-failure.json"
+
+    def test_the_wsl_keepalive_is_held_for_the_body_and_released_after_the_stack_is_down(self):
+        import testlab as cli
+        order, seen = [], {}
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(d)
+            keep = mock.Mock()
+            keep.start.return_value = keep
+            keep.stop.side_effect = lambda: order.append("keepalive stop")
+            with mock.patch.object(stack, "WslKeepAlive", return_value=keep) as cls,                     mock.patch.object(stack, "down", side_effect=lambda c: order.append("down") or "ok"):
+                def body():
+                    seen["held"] = stack.KEEPALIVE
+                    order.append("body")
+                    return 0
+                self.assertEqual(cli._with_stack_teardown(cfg, mock.Mock(keep_stack=False), body), 0)
+            cls.assert_called_once_with(cfg.wsl_distro)
+        self.assertIs(seen["held"], keep)
+        self.assertEqual(order, ["body", "down", "keepalive stop"])
+        self.assertIsNone(stack.KEEPALIVE)
+
+    def test_the_wsl_keepalive_is_released_when_the_body_raises(self):
+        import testlab as cli
+        with tempfile.TemporaryDirectory() as d:
+            keep = mock.Mock()
+            keep.start.return_value = keep
+            with mock.patch.object(stack, "WslKeepAlive", return_value=keep),                     mock.patch.object(stack, "down", return_value="ok"):
+                with self.assertRaises(KeyError):
+                    cli._with_stack_teardown(_cfg(d), mock.Mock(keep_stack=False), lambda: {}["x"])
+            keep.stop.assert_called_once()
+        self.assertIsNone(stack.KEEPALIVE)
 
     def test_a_passing_run_with_a_failing_stop_exits_nonzero_and_keeps_the_failure(self):
         with tempfile.TemporaryDirectory() as d:
