@@ -52,7 +52,7 @@ In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewr
 ## Prerequisites
 
 - Windows host (the players are Windows processes) and Python 3.10 or newer. The orchestrator uses only the standard library.
-- WSL Ubuntu with a native `dockerd`. The lab never starts Docker Desktop. S18 (packet impairment) also needs passwordless `sudo` for `nsenter` and `tc` in WSL, and the kernel modules `sch_netem`, `ifb` and `act_mirred` (the WSL2 kernel ships them); its preflight says which is missing before any player starts.
+- WSL Ubuntu with a native `dockerd`. The lab never starts Docker Desktop. WSL stops a distro that has no open `wsl.exe` session (dockerd and the scratch stack go with it), so `run`, `suite` and `sweep` hold a keep-alive `wsl.exe` session for the whole invocation (`run.json` `wsl_keepalive`); without it a run can lose its gateway and Redis mid-scenario. A fresh world also starts with no `session:*` keys in the scratch Redis. S18 (packet impairment) also needs passwordless `sudo` for `nsenter` and `tc` in WSL, and the kernel modules `sch_netem`, `ifb` and `act_mirred` (the WSL2 kernel ships them); its preflight says which is missing before any player starts.
 - Unity **6000.3.9f1**, to build the player (`build-client`).
 - Go, to build the load generator (`build-loadtest`; only S07 needs it).
 - An `rpg-mmo-server` checkout whose `stack.sh` has `STACK_SCRATCH_EXTRA_ENV`, and whose compose file forwards `GAMESERVER_DEBUG_ENTITIES`, `GAMESERVER_ENEMY_SEED` and `GATEWAY_CONN_RATE_PER_MIN`. The preflight refuses an older one by name.

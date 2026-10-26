@@ -175,6 +175,24 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(res["status"], analyze.FAIL)
         self.assertEqual(res["detail"]["by_reason"], {"no_session": 4.0})
 
+    def test_kcp_and_redis_are_inconclusive_when_their_evidence_was_taken_after_the_window(self):
+        # Run 20261026T143656Z-S01-ii3h: the loop stalled in a slow WSL call past the scenario end, the clients had
+        # quit, and metrics-end (scraped in the cleanup) counted the 3 dead_link closes of the teardown.
+        start = {'gameserver_kcp_datagrams_dropped_total{reason="no_session"}': 0.0,
+                 'gameserver_kcp_sessions_closed_total{reason="dead_link"}': 0.0}
+        end = {'gameserver_kcp_datagrams_dropped_total{reason="no_session"}': 0.0,
+               'gameserver_kcp_sessions_closed_total{reason="dead_link"}': 3.0}
+        ev = _ev(metrics_start=start, metrics_end=end)
+        self.assertEqual(analyze.check_kcp_health(ev, {})["status"], analyze.FAIL)      # on time: a real close fails
+        ev["meta"]["timeline"] = [{"event": "metrics_end_late", "mono": 1.0}]
+        res = analyze.check_kcp_health(ev, {})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE)
+        self.assertIn("after the clients quit", str(res))
+        ev["redis"] = {"session_keys": 6, "map_members": ["gs"]}
+        self.assertEqual(analyze.check_redis(ev, {})["status"], analyze.FAIL)           # on time: stale keys still fail
+        ev["meta"]["timeline"] = [{"event": "redis_late", "mono": 1.0}]
+        self.assertEqual(analyze.check_redis(ev, {})["status"], analyze.INCONCLUSIVE)
+
     def test_position_divergence_allows_the_interpolation_window_and_attributes_the_layer(self):
         # Server: entity m walks +x at 2.5 u/s, sampled at 5 Hz.
         ents = [_row(i * 0.2, [["m", "mob", 2.5 * i * 0.2, 0.0, 16, 16, 0, 2.5]]) for i in range(60)]
@@ -761,6 +779,53 @@ class ScratchIsolationTests(unittest.TestCase):
                 with self.assertRaises(stack.StackError):
                     fn(cfg)
             wsl.assert_not_called()
+
+    def test_clear_session_keys_deletes_only_session_keys_of_the_scratch_redis(self):
+        from unittest import mock
+        from lab import stack
+        calls = []
+
+        def fake(cfg, args):
+            calls.append(args)
+            if "--scan" in args:
+                return ["session:aaaa-1", "session:bbbb-2", "session:x; rm -rf /", "servers:id:gs", "session:"]
+            return []
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack, "redis_cli", side_effect=fake):
+            self.assertEqual(stack.clear_session_keys(self._cfg(d)), 2)
+        self.assertEqual(calls[1], "del session:aaaa-1 session:bbbb-2")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack.util, "wsl") as wsl:
+            cfg = self._cfg(d, redis_container="rpg-redis")
+            with self.assertRaises(stack.StackError):
+                stack.clear_session_keys(cfg)          # the normal backend's Redis is never touched
+            wsl.assert_not_called()
+
+    def test_wsl_keepalive_holds_a_wsl_session_and_ends_it(self):
+        from unittest import mock
+        from lab import stack
+        proc = mock.Mock(pid=4242, returncode=None)
+        proc.poll.return_value = None
+        with mock.patch("subprocess.Popen", return_value=proc) as popen, mock.patch.object(stack.time, "sleep"),                 mock.patch.object(stack.util, "kill_tree") as kill:
+            keep = stack.WslKeepAlive("Ubuntu").start()
+            self.assertTrue(keep.held)
+            self.assertEqual(popen.call_args.args[0], ["wsl.exe", "-d", "Ubuntu", "--exec", "sleep", "infinity"])
+            keep.stop()
+            kill.assert_called_once_with(4242)
+            self.assertFalse(keep.held)
+
+    def test_wsl_keepalive_that_cannot_start_is_recorded_and_never_raises(self):
+        from unittest import mock
+        from lab import stack
+        with mock.patch("subprocess.Popen", side_effect=FileNotFoundError("wsl.exe")), mock.patch.object(stack.util, "eprint"):
+            keep = stack.WslKeepAlive("Ubuntu").start()
+        self.assertFalse(keep.held)
+        self.assertIn("FileNotFoundError", keep.error)
+        keep.stop()
+        dead = mock.Mock(returncode=1)
+        dead.poll.return_value = 1
+        with mock.patch("subprocess.Popen", return_value=dead), mock.patch.object(stack.time, "sleep"),                 mock.patch.object(stack.util, "eprint"):
+            keep = stack.WslKeepAlive("Ubuntu").start()
+        self.assertFalse(keep.held)
+        self.assertIn("exited at once", keep.error)
 
     def test_snapshot_trace_sets_the_server_env_and_needs_the_compose_passthrough(self):
         from lab import stack

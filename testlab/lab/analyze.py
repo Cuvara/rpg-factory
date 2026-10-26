@@ -380,12 +380,22 @@ def check_players_online(ev, a):
                    artifacts=[str(ev["run_dir"] / "server" / "status.ndjson")])
 
 
+def _late_scrape(ev, event: str):
+    """The run's timeline says the `event` evidence was taken after the window (the run loop stalled past the
+    scenario end, the clients had quit): it does not describe the window, so the check cannot grade it."""
+    return any(e.get("event") == event for e in (ev.get("meta") or {}).get("timeline") or [])
+
+
 def check_redis(ev, a):
     r = ev["redis"]
     if not r or r.get("session_keys") is None:
         return _inconclusive("redis.json missing or without a session count", source="redis (docker exec rpgs-redis)")
     if not ev["clients"] and "sessions" not in a:
         return _inconclusive("no clients in this run", source="redis (docker exec rpgs-redis)")
+    if _late_scrape(ev, "redis_late"):
+        return _inconclusive("the Redis snapshot was taken after the clients quit (the run loop stalled past the "
+                             "scenario end), so it does not show sessions while clients were in the world",
+                             source="redis (docker exec rpgs-redis)", artifacts=[str(ev["run_dir"] / "redis.json")])
     sessions = r.get("session_keys")
     members = r.get("map_members") or []
     exp_sessions = int(a.get("sessions", len(ev["clients"])))
@@ -969,6 +979,10 @@ def check_kcp_health(ev, a):
     rejected = _delta(ev, "gameserver_kcp_sessions_rejected_total")
     if dropped is None or closed is None:
         return _inconclusive("metrics scrape missing", source="/metrics kcp counters")
+    if _late_scrape(ev, "metrics_end_late"):
+        return _inconclusive("metrics-end was scraped after the clients quit (the run loop stalled past the scenario "
+                             "end): its session closes include teardown, not only the window",
+                             source="/metrics gameserver_kcp_* counters", artifacts=[str(ev["run_dir"] / "server")])
     # `"max_dropped": null` leaves inbound drops unjudged (reported): S18 loses datagrams on purpose.
     max_dropped = a.get("max_dropped", 0)
     ok = (max_dropped is None or dropped <= float(max_dropped)) and closed <= float(a.get("max_sessions_closed", 0))         and (rejected or 0) == 0

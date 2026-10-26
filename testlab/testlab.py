@@ -97,16 +97,22 @@ def _with_stack_teardown(cfg: config.LabConfig, args, body):
     (a native game server that cannot be stopped) never hides the run's own outcome, but a run that
     would exit 0 or 4 exits 3 instead and the failure is kept in <runs>/stack/teardown-failure.json."""
     failure = None
+    # The WSL distro (dockerd and the scratch stack) stops when no wsl.exe session is open: hold one for the invocation.
+    stack.KEEPALIVE = stack.WslKeepAlive(cfg.wsl_distro).start()
     try:
         code = body()
     finally:
-        if not getattr(args, "keep_stack", False):
-            try:
-                print(f"testlab: {stack.down(cfg)}", flush=True)
-            except Exception as exc:  # never mask the run's own exception or interrupt
-                failure = f"{type(exc).__name__}: {exc}"
-                util.eprint(f"testlab: stopping the scratch stack failed: {failure}")
-                util.write_json(cfg.runs_root / "stack" / "teardown-failure.json", {"error": failure})
+        try:
+            if not getattr(args, "keep_stack", False):
+                try:
+                    print(f"testlab: {stack.down(cfg)}", flush=True)
+                except Exception as exc:  # never mask the run's own exception or interrupt
+                    failure = f"{type(exc).__name__}: {exc}"
+                    util.eprint(f"testlab: stopping the scratch stack failed: {failure}")
+                    util.write_json(cfg.runs_root / "stack" / "teardown-failure.json", {"error": failure})
+        finally:
+            stack.KEEPALIVE.stop()
+            stack.KEEPALIVE = None
     if failure and code in (0, 4):
         return 3
     return code

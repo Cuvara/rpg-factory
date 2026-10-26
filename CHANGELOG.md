@@ -6,6 +6,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab: S01 no longer FAILs `kcp` (3 `dead_link` closes) and `redis` (6-9 session keys for 3 users) because the WSL
+  distro stopped under the run (runs 6qgq, ii3h, jmag, hj3f, imed; native and docker alike). WSL terminates a distro with no
+  open `wsl.exe` session; dockerd and the scratch stack died with it mid-run (gateway "shutting down gateway", Redis
+  reloading its AOF) and every harness call into WSL stalled for the reboot. The run loop then overran the scenario end:
+  `metrics-end` was scraped after the clients quit (their teardown `dead_link` closes counted inside the window), and
+  the sessions of the killed gateway stayed in Redis for SessionTTL (1 h). No product bug: the server, Netcode and client
+  behaved the same in the passing runs. `run`/`suite`/`sweep` now hold one `wsl.exe` keep-alive session from the first
+  stack action to after the teardown (`stack.WslKeepAlive`, recorded in run.json as `wsl_keepalive`); a fresh world starts
+  with no `session:*` keys in the scratch Redis (`stack.clear_session_keys`, count in `stale_session_keys_cleared`); and
+  a `kcp` or `redis` check whose evidence was taken after the window (timeline `metrics_end_late` / `redis_late`) is
+  INCONCLUSIVE, not a FAIL or a false PASS. No threshold or assertion was changed.
 - testlab host guard: G1 no longer reports false historical sessions ("active at window start") after the AnyDesk
   log rotates. The tailer re-read the file from 0 and re-emitted its Accepts; each duplicate queued a phantom
   session that a later close ended, shifting every pairing (run 9tgw: sessions 'ended' 13:16:14Z hours late). Events

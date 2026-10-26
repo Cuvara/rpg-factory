@@ -487,6 +487,73 @@ def redis_session_keys(cfg: LabConfig) -> list[str]:
     return redis_cli(cfg, '--scan --pattern "session:*"')
 
 
+_SESSION_KEY = re.compile(r"^session:[0-9A-Za-z-]+$")
+
+
+def clear_session_keys(cfg: LabConfig) -> int:
+    """Delete the `session:*` keys of the scratch Redis; returns how many were removed.
+
+    Redis keeps its data (AOF + volume) between runs and a session lives SessionTTL (1 h) unless its gateway
+    connection closes cleanly. A gateway stopped mid-run (a WSL restart, a `stack down`) leaves its sessions
+    behind, and the S01 `redis` assertion (one session per user) would count them. A fresh world starts with
+    none; the scratch stack is the lab's alone (the name is checked in `redis_cli`)."""
+    keys = [k for k in redis_session_keys(cfg) if _SESSION_KEY.match(k)]
+    for i in range(0, len(keys), 50):
+        redis_cli(cfg, "del " + " ".join(keys[i:i + 50]))
+    return len(keys)
+
+
+class WslKeepAlive:
+    """Holds one `wsl.exe` session open so the WSL distro is not terminated while a run is in progress.
+
+    WSL terminates a distro that has no running `wsl.exe` session after a few seconds, whatever systemd
+    services run in it. The scratch stack (dockerd and its containers) dies with it and the next harness call
+    boots it again: the gateway stops mid-run ("shutting down gateway"), Redis reloads its AOF, and every
+    harness call that touches WSL (`redis_cli`, `docker stats`) stalls for the boot. The stall delayed the run
+    loop past the scenario end (metrics-end scraped after the clients quit: KCP `dead_link` closes counted
+    inside the window) and left the dead gateway's sessions in Redis. Held from the first stack action until the
+    stack is down; a failure to start it is recorded and the run goes on (the evidence says so)."""
+
+    def __init__(self, distro: str):
+        self.distro = distro
+        self.proc = None
+        self.error: str | None = None
+
+    def start(self) -> "WslKeepAlive":
+        import subprocess
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            self.proc = subprocess.Popen(["wsl.exe", "-d", self.distro, "--exec", "sleep", "infinity"],
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, creationflags=flags)
+            time.sleep(1.0)
+            if self.proc.poll() is not None:
+                self.error = f"wsl.exe keep-alive exited at once (code {self.proc.returncode})"
+                self.proc = None
+        except OSError as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            self.proc = None
+        if self.error:
+            util.eprint(f"testlab: WSL keep-alive not held ({self.error}); the distro may stop mid-run")
+        return self
+
+    @property
+    def held(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def stop(self) -> None:
+        proc, self.proc = self.proc, None
+        if proc is not None and proc.poll() is None:
+            util.kill_tree(proc.pid)
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+
+
+KEEPALIVE: WslKeepAlive | None = None      # the one held by this invocation (testlab.py), read by the runner
+
+
 def server_stats(cfg: LabConfig) -> dict | None:
     """CPU% and memory of the game server: its container, or the native process."""
     if cfg.native:
