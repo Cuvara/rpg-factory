@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
+  the Windows high-resolution timer path accurately.
+
 ### Fixed
 
 - testlab host guard: G1 no longer reports false historical sessions ("active at window start") after the AnyDesk
