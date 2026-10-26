@@ -905,6 +905,7 @@ class CleanupTests(unittest.TestCase):
             mock.patch.object(clients, "clean_orphans", return_value=[]),
             mock.patch.object(stack, "preflight", return_value={"conflicts": []}),
             mock.patch.object(stack, "ensure", return_value={"actions": []}),
+            mock.patch.object(stack, "clear_session_keys", return_value=0),
             mock.patch.object(provenance, "docker_image_id", return_value="sha256:" + "0" * 64),
             mock.patch.object(stack, "image_revision", return_value=None),
             mock.patch.object(stack, "check_nakama_module"),
