@@ -99,6 +99,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
     players: list[clients.Player] = []
     probe: ServerProbe | None = None
     guard: hostguard.HostGuard | None = None
+    procs_sampler: hostguard.ProcSampler | None = None
     bots_proc = None
     harness_error = None
     interrupted = False
@@ -147,6 +148,17 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
             log("host guard: " + meta["host_guard"]["error"])
             if required:
                 raise RuntimeError(meta["host_guard"]["error"])
+        # F29: S09-class runs (clean host required) also record the top processes once a second. Evidence
+        # only (host_procs, INFO); `proc_sampler: false` in a scenario turns it off.
+        if required and sc.get("proc_sampler", True) and guard is not None:
+            procs_sampler = hostguard.ProcSampler(run_dir / "host")
+            try:
+                procs_sampler.start()
+                meta["host_guard"]["proc_sampler"] = {"interval_s": procs_sampler.interval_s, "top_n": procs_sampler.top_n}
+            except Exception as exc:     # evidence only: a run goes on without it, with the gap on record
+                meta["host_guard"]["proc_sampler"] = {"error": f"{type(exc).__name__}: {exc}"}
+                log(f"host process sampler: {exc}")
+                procs_sampler = None
         stack.check_nakama_module(cfg, build_server)
         env = stack.env_for(sc, cfg)
         stack.check_scenario_supported(cfg, sc)
@@ -328,6 +340,8 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                     log("host guard: no sample at the window end (G5 will report the gap)")
             # After the players are gone and before the evidence manifest hashes host/.
             meta["host_guard"]["summary"] = guard.stop()
+            if procs_sampler is not None:
+                meta["host_guard"].setdefault("proc_sampler", {})["summary"] = procs_sampler.stop()
         for p in players:
             meta["clients"].setdefault(str(p.index), {})["history"] = p.history
         if cfg.native:
