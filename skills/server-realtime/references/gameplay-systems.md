@@ -52,7 +52,7 @@ Adding one is a design decision first (game-ai-workflows), then plumbing here.
 ## Known structural debt (do not copy, do not "fix" in passing)
 
 - Player input, movement, combat and statuses run inline in the tick body, not as declared `IEcsSystem`s
-  (`Server/TickLoop.cs:525-532`): they get the critical-group timing but no per-system metric or
+  (`Server/TickLoop.cs:569-576`): they get the critical-group timing but no per-system metric or
   `ComponentAccess`. Moving them is an architecture change (ADR-12/13 note) with a measure leg.
 - Enemy targeting scans all players linearly per enemy (`TryNearest`, `Scaffolding/PlayerTargetBuffer.cs:108-135`),
   chosen deliberately because a grid query allocated per enemy per tick. At thousands of enemies it is a

@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
+  the Windows high-resolution timer path accurately.
+
 ### Fixed
 
 - testlab: S01 no longer FAILs `kcp` (3 `dead_link` closes) and `redis` (6-9 session keys for 3 users) because the WSL
