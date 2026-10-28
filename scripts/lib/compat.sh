@@ -6,6 +6,13 @@ case "$(uname -s 2>/dev/null)" in
   *) RPGF_WINDOWS= ;;
 esac
 
+# Git state variables a calling git process exports (`git rebase --exec`, `git bisect run`, hooks, `git filter-branch`
+# set GIT_DIR, sometimes GIT_WORK_TREE and GIT_INDEX_FILE). A test that then runs `git init <dir>` re-initialises the
+# CALLER's repository instead of <dir>, and from a linked worktree that rewrites the SHARED config of the main checkout
+# (core.worktree = the worktree path, or core.bare = true), which breaks every git command run from the main checkout.
+# Every test sources this file, so the fixtures start from a clean git environment.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_PREFIX GIT_OBJECT_DIRECTORY       GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
+
 # jq on Windows writes CRLF; `$(jq -r ...)` word splitting keeps the \r (`skills/foo\r/SKILL.md` does not exist).
 if [ -n "$RPGF_WINDOWS" ]; then jq() { command jq "$@" | tr -d '\r'; }; fi
 
