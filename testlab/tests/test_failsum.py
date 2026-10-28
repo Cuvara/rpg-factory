@@ -14,12 +14,13 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, failsum  # noqa: E402
+from lab import analyze, failsum, report  # noqa: E402
 from test_lab import _ev  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / "fixtures" / "failsum"
@@ -179,6 +180,18 @@ class RuleTests(unittest.TestCase):
             doc = json.loads(Path(td, failsum.FILE_NAME).read_text(encoding="utf-8"))
             self.assertEqual(doc["verdict"], "FAIL")
             self.assertIn("error", doc)
+
+    def test_non_oserror_summary_write_failures_keep_verdict_and_exit_code(self):
+        results = [{"id": "bad", "check": "kcp_health", "status": "FAIL", "detail": {}}]
+        for error_type in (ValueError, TypeError):
+            with self.subTest(error_type=error_type.__name__), tempfile.TemporaryDirectory() as td:
+                with mock.patch.object(failsum.util, "write_json", side_effect=error_type("serializer failed")):
+                    path = failsum.write(".", _ev(), results, analyze.FAIL, None, td)
+                self.assertIsNotNone(path)
+                doc = json.loads(Path(td, failsum.FILE_NAME).read_text(encoding="utf-8"))
+                self.assertEqual((doc["verdict"], doc["exit_code"]),
+                                 (analyze.FAIL, report.EXIT_CODES[analyze.FAIL]))
+                self.assertEqual(doc["error"], f"{error_type.__name__}: serializer failed")
 
 
 if __name__ == "__main__":

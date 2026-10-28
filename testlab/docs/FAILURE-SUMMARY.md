@@ -6,8 +6,10 @@ writes `failure-summary.json` next to `report.md` at the end of `analyze` (`lab/
 (and removes a stale one of an earlier analysis in the same directory). Nobody has to watch the run: open the file.
 
 **Derived output only.** It reads the evidence and the check results `analyze` already decided. It never changes the
-verdict, a check status or `results.json`; a failure while building it is recorded in the file (`error`) and never
-raises. The rules below are code (`lab/failsum.py`) and are pinned by `testlab/tests/test_failsum.py`; change both
+verdict, a check status or `results.json`; any failure while building, cleaning up, or writing it is caught so
+analysis continues. The writer makes a best-effort attempt to replace a failed summary with a minimal document
+containing the unchanged verdict and exit code plus an `error` field with the exception type and message. The rules
+below are code (`lab/failsum.py`) and are pinned by `testlab/tests/test_failsum.py`; change both
 and bump `RULES_VERSION`.
 
 ## Content

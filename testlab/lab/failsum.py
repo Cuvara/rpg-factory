@@ -537,5 +537,19 @@ def write(run_dir, ev, results, outcome, harness_error, out_dir) -> Path | None:
         out_dir.mkdir(parents=True, exist_ok=True)
         util.write_json(path, doc)
         return path
-    except OSError:
-        return None
+    except Exception as exc:  # every failure-summary operation is best-effort; analysis already has its verdict
+        try:
+            try:
+                message = str(exc)
+            except Exception:
+                message = "<exception message unavailable>"
+            error_doc = {"schema": SCHEMA, "rules_version": RULES_VERSION, "derived_only": True,
+                         "verdict": outcome, "exit_code": {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2,
+                         "INVALID": 2, "PASS_WITH_WARNINGS": 4}.get(outcome, 2),
+                         "error": f"{type(exc).__name__}: {message}", "failures": []}
+            out_dir.mkdir(parents=True, exist_ok=True)
+            # Bypass the failing summary serializer and make one minimal, standard-library-only attempt.
+            path.write_text(json.dumps(error_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            return path
+        except Exception:
+            return None

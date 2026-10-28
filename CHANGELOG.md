@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- testlab `analyze` now isolates the full failure-summary build/write step: non-`OSError` exceptions no longer escape,
+  and a minimal summary records the exception type/message and preserves the original verdict and exit code when possible.
+
 ### Added
 
 - testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
