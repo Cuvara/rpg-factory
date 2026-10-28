@@ -22,7 +22,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - H2: `cross_client_convergence` leaves out the samples of a client that is not a valid observer: a net_state other
     than InWorld (`RECONNECT`), a 1 s gap in its sample stream or a frame of 1 s or more (`CLIENT`), from 0.5 s before to 2 s
     after. `detail.skipped_client_gaps` lists the spans and `measured.skipped_client_gap_samples` counts the samples. A
-    divergence outside those spans still FAILs. (k4n5: the 15 worst pairs were a client catching up after a 5 s freeze.)
+    divergence outside those spans still FAILs. (k4n5: the freeze and the reconnect of the affected clients are skipped; the 4.6 s in between,
+    where client 0 drew an entity up to 8 u off before it noticed the dead link, is NOT excluded and still FAILs - no causal link between a
+    freeze and a later reconnect is assumed.)
   - H3: `host_quiet` INFO tiers, never graded and never PRODUCT: host-wide stalls of >= 30 ms ending within 50 ms in
     >= 2 client processes (`host_stalls_info_30ms`, `detail.info_stalls_30ms`) and single-process freezes of >= 1 s
     outside a graded stall (`single_process_freezes_1s`, `detail.single_process_freezes`). The 250 ms rule is unchanged.
