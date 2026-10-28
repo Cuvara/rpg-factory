@@ -1,0 +1,11 @@
+{"type":"accept","ts":"2026-10-25T13:14:43.649Z","epoch":1792934083.649,"proc":"lsvc","pid":14696,"source":"ad_trace","fiber":12,"mono":387874.8727016}
+{"type":"accept","ts":"2026-10-25T13:14:43.649Z","epoch":1792934083.649,"proc":"lsvc","pid":14696,"source":"ad_trace","fiber":12,"mono":387879.9899762}
+{"type":"auth","ts":"2026-10-25T13:14:45.398Z","epoch":1792934085.398,"proc":"lsvc","pid":14696,"source":"ad_trace","fiber":925,"mono":387879.9906073}
+{"type":"backend_pid","ts":"2026-10-25T13:14:45.406Z","epoch":1792934085.406,"proc":"lsvc","pid":14696,"source":"ad_trace","fiber":925,"backend_pid":111932,"mono":387879.9910337}
+{"type":"capture_start","ts":"2026-10-25T13:14:46.256Z","epoch":1792934086.256,"proc":"back","pid":111932,"source":"ad_trace","mono":387879.9915412}
+{"type":"session_started","ts":"2026-10-25T13:14:46.317Z","epoch":1792934086.317,"proc":"back","pid":111932,"source":"ad_trace","mono":387879.991968}
+{"type":"capture_start","ts":"2026-10-25T13:14:46.439Z","epoch":1792934086.439,"proc":"back","pid":111932,"source":"ad_trace","mono":387879.9923137}
+{"type":"connection_entry","ts":"2026-10-25T13:14:00.000Z","epoch":1792934040.0,"direction":"Incoming","auth":"Token","source":"connection_trace","mono":387880.0072515}
+{"type":"net_closed","ts":"2026-10-25T13:16:14.190Z","epoch":1792934174.19,"proc":"lsvc","pid":14696,"source":"ad_trace","fiber":925,"mono":387965.2220053}
+{"type":"capture_stopped","ts":"2026-10-25T13:16:14.247Z","epoch":1792934174.247,"proc":"back","pid":111932,"source":"ad_trace","mono":387965.2226307}
+{"type":"capture_stopped","ts":"2026-10-25T13:16:14.247Z","epoch":1792934174.247,"proc":"back","pid":111932,"source":"ad_trace","mono":387965.2231108}

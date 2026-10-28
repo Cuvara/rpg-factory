@@ -1,0 +1,18 @@
+{
+ "events": [
+  {
+   "client": 0,
+   "class": "local_major",
+   "st": 3039.4900521,
+   "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+   "type": "player",
+   "local": true,
+   "step": 1.13625693,
+   "allowed": 0.320007384,
+   "dt_ms": 3.8892999291419983
+  }
+ ],
+ "breaching": [
+  "local_major"
+ ]
+}

@@ -6,7 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_RESULT, analyze, util
+from . import SCHEMA_RESULT, analyze, failsum, util
 
 # INVALID (contaminated host) is not clean: it exits with the INCONCLUSIVE code, never 0.
 EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2, "INVALID": 2, "PASS_WITH_WARNINGS": 4}
@@ -54,6 +54,8 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
     util.write_json(out_dir / "results.json", doc)
     with open(out_dir / "report.md", "w", encoding="utf-8", newline="\n") as fh:
         fh.write(_markdown(doc, ev))
+    # Derived triage of a run that is not a clean PASS; written last, reads results, never changes them.
+    failsum.write(run_dir, ev, results, outcome, harness_error, out_dir)
     return doc
 
 

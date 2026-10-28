@@ -1,0 +1,14 @@
+{"t":4.0584261023242627,"tick":357,"ack":0,"full":true,"n":13,"removed":0}
+{"t":4.1241093023242623,"tick":361,"ack":1,"full":false,"n":13,"removed":0}
+{"t":4.1405925023242629,"tick":365,"ack":2,"full":false,"n":12,"removed":0}
+{"t":4.2071542023242623,"tick":369,"ack":3,"full":false,"n":12,"removed":0}
+{"t":4.2735051023242629,"tick":373,"ack":4,"full":false,"n":12,"removed":0}
+{"t":1230.3557119023244,"tick":73937,"ack":15942,"full":false,"n":19,"removed":0}
+{"t":1230.4121260023244,"tick":73941,"ack":15943,"full":true,"n":177,"removed":0}
+{"t":1230.4942129023243,"tick":73945,"ack":15944,"full":false,"n":101,"removed":0}
+{"t":1235.6743296023244,"tick":73949,"ack":15945,"full":false,"n":26,"removed":0}
+{"t":1235.6824769023244,"tick":73953,"ack":15945,"full":false,"n":30,"removed":0}
+{"t":1235.6825466023242,"tick":73957,"ack":15945,"full":false,"n":30,"removed":0}
+{"t":1235.6883773023244,"tick":74141,"ack":15945,"full":false,"n":32,"removed":2}
+{"t":1235.6884137023244,"tick":74145,"ack":15945,"full":false,"n":29,"removed":0}
+{"t":1239.9389049023243,"tick":74513,"ack":15997,"full":true,"n":179,"removed":0}

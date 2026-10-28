@@ -1,0 +1,644 @@
+{
+ "outcome": "INVALID",
+ "harness_error": null,
+ "assertions": [
+  {
+   "id": "kcp",
+   "check": "kcp_health",
+   "title": "",
+   "status": "FAIL",
+   "measured": {
+    "dropped": 1702.0,
+    "sessions_closed": 2.0,
+    "sessions_rejected": 0.0
+   },
+   "threshold": {
+    "dropped": 0,
+    "sessions_closed": 0,
+    "rejected": 0
+   },
+   "detail": {
+    "by_reason": {
+     "no_session": 1702.0,
+     "dead_link": 2.0
+    }
+   },
+   "artifacts": [
+    ".\\server"
+   ]
+  },
+  {
+   "id": "snapshots",
+   "check": "snapshot_cadence",
+   "title": "",
+   "status": "FAIL",
+   "measured": {
+    "0": {
+     "rate_hz": 14.97,
+     "p99_gap_ms": 70.9,
+     "max_gap_ms": 5180.1,
+     "ok": false
+    },
+    "1": {
+     "rate_hz": 15.0,
+     "p99_gap_ms": 71.7,
+     "max_gap_ms": 103.6,
+     "ok": true
+    },
+    "2": {
+     "rate_hz": 14.98,
+     "p99_gap_ms": 71.7,
+     "max_gap_ms": 4758.7,
+     "ok": false
+    }
+   },
+   "threshold": {
+    "rate_hz": 15.0,
+    "rate_tolerance": 0.2,
+    "max_gap_ms": 250
+   },
+   "detail": {},
+   "artifacts": [
+    ".\\client-0\\snapshots.ndjson",
+    ".\\client-1\\snapshots.ndjson",
+    ".\\client-2\\snapshots.ndjson"
+   ]
+  },
+  {
+   "id": "entity_lifecycle",
+   "check": "entity_lifecycle",
+   "title": "removed entities leave the screen; reused ids start at their spawn (C3)",
+   "status": "FAIL",
+   "measured": {
+    "removed": 451010,
+    "lingering": 0,
+    "reused_ids_checked": 427771,
+    "reused_drawn_elsewhere": 39,
+    "samples_with_duplicate_ids": 0
+   },
+   "threshold": {
+    "despawn_grace_s": 0.2,
+    "reuse_tolerance": 1.1,
+    "reuse_tolerance_by_type": {
+     "projectile": 3.2
+    }
+   },
+   "detail": {
+    "lingering": [],
+    "reuse_drawn_elsewhere": [
+     {
+      "client": 2,
+      "id": "enemy-2708",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2706",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2628",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.167,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2725",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 3.536,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2722",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2718",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2710",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2468",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.489,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2681",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.278,
+      "from_previous_entity": 0.125
+     },
+     {
+      "client": 2,
+      "id": "enemy-2152",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.333,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2278",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2626",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 1.167,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2583",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.002,
+      "from_previous_entity": 0.063
+     },
+     {
+      "client": 2,
+      "id": "enemy-2717",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.5,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2554",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 3.47,
+      "from_previous_entity": 0.0
+     },
+     {
+      "client": 2,
+      "id": "enemy-2711",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 1.925,
+      "from_previous_entity": 0.0
+     },
+     {
+      "client": 2,
+      "id": "enemy-2550",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.506,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2685",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.511,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2678",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.333,
+      "from_previous_entity": 0.25
+     },
+     {
+      "client": 2,
+      "id": "enemy-2608",
+      "t": 1227.682,
+      "type": "mob",
+      "first_drawn_from_spawn": 4.008,
+      "from_previous_entity": 0.083
+     }
+    ],
+    "duplicate_ids": [],
+    "projectile_speed": 20.0,
+    "projectile_speed_source": "content backend/content/abilities.json at server ea66094308",
+    "stale_eps": 0.25
+   },
+   "artifacts": []
+  },
+  {
+   "id": "cross_client_convergence",
+   "check": "cross_client_convergence",
+   "title": "clients draw a remote entity in the same place at the same render tick (C4)",
+   "status": "FAIL",
+   "measured": {
+    "pairs": 102520011,
+    "p50": 0.0,
+    "p95": 0.0036,
+    "max": 11.6394,
+    "skipped_near_server_teleport": 29523,
+    "skipped_ticks_backwards": 0
+   },
+   "threshold": {
+    "p95": 0.35,
+    "max": 1.0,
+    "teleport_window_s": 0.5
+   },
+   "detail": {
+    "worst": [
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74250.63528872417,
+      "dist": 3.961
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74253.23319077428,
+      "dist": 3.961
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74255.92425910952,
+      "dist": 3.979
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74258.60105263273,
+      "dist": 4.038
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74261.30282836956,
+      "dist": 4.076
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74263.95571507241,
+      "dist": 4.113
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74266.68251955434,
+      "dist": 4.202
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74269.42804001582,
+      "dist": 4.312
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74272.04865457935,
+      "dist": 4.408
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74274.75731696951,
+      "dist": 4.462
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74277.36570410438,
+      "dist": 4.465
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74280.08770550754,
+      "dist": 4.468
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74282.6895368794,
+      "dist": 4.468
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74285.38955993195,
+      "dist": 4.539
+     },
+     {
+      "a": 0,
+      "b": 1,
+      "id": "enemy-2554",
+      "render_tick": 74288.04111273354,
+      "dist": 4.58
+     }
+    ]
+   },
+   "artifacts": []
+  },
+  {
+   "id": "host_guard",
+   "check": "host_guard",
+   "title": "host guard (AnyDesk session, foreign load, guard blind, clock-rate step)",
+   "status": "INVALID",
+   "measured": {
+    "fired": [
+     "G1",
+     "G2",
+     "G3"
+    ]
+   },
+   "threshold": "no guard fires inside the window",
+   "detail": {
+    "fired": [
+     {
+      "id": "G1",
+      "rule": "AnyDesk session started in the window, or still active at its start",
+      "count": 570,
+      "evidence": [
+       "accept at 2026-10-28T07:35:22.016Z",
+       "auth at 2026-10-28T07:35:22.584Z",
+       "backend_pid at 2026-10-28T07:35:22.590Z",
+       "capture_start at 2026-10-28T07:35:23.491Z",
+       "session_started at 2026-10-28T07:35:23.540Z",
+       "capture_start at 2026-10-28T07:35:23.645Z",
+       "connection entry Incoming 2026-10-28T07:35:00.000Z (minute resolution)",
+       "session_closed at 2026-10-28T07:50:23.090Z",
+       "capture_stopped at 2026-10-28T07:50:23.169Z",
+       "capture_stopped at 2026-10-28T07:50:23.170Z",
+       "accept at 2026-10-28T07:53:14.239Z",
+       "auth at 2026-10-28T07:53:14.737Z"
+      ]
+     },
+     {
+      "id": "G2",
+      "rule": "AnyDesk process not in the baseline set",
+      "count": 3,
+      "evidence": [
+       "pid 10360 (backend) first seen 2026-10-28T07:35:23.4316788Z",
+       "pid 6404 (backend) first seen 2026-10-28T07:53:15.8007504Z",
+       "pid 23396 (backend) first seen 2026-10-28T08:15:03.5079580Z"
+      ]
+     },
+     {
+      "id": "G3",
+      "rule": "AnyDesk CPU above min(1.0 %, max(0.5 %, preflight resident max x 2 + 0.3 %)) of the host for 2 consecutive samples (policy, unvalidated: F19 0.03 % idle, F28 0.18 % mean / 1.98 % max idle front process)",
+      "count": 537,
+      "threshold_pct": 0.5,
+      "evidence": [
+       "2026-10-28T07:35:28.4355838Z AnyDesk 5.339 % of host (limit 0.500 %)",
+       "2026-10-28T07:35:33.4472586Z AnyDesk 6.469 % of host (limit 0.500 %)",
+       "2026-10-28T07:35:38.4585450Z AnyDesk 5.846 % of host (limit 0.500 %)",
+       "2026-10-28T07:35:43.4727672Z AnyDesk 6.996 % of host (limit 0.500 %)",
+       "2026-10-28T07:35:48.4894935Z AnyDesk 5.778 % of host (limit 0.500 %)",
+       "2026-10-28T07:35:53.4952174Z AnyDesk 4.292 % of host (limit 0.500 %)",
+       "2026-10-28T07:35:58.5083085Z AnyDesk 2.634 % of host (limit 0.500 %)",
+       "2026-10-28T07:36:03.5235948Z AnyDesk 0.795 % of host (limit 0.500 %)",
+       "2026-10-28T07:36:08.5339790Z AnyDesk 1.17 % of host (limit 0.500 %)",
+       "2026-10-28T07:36:13.5536830Z AnyDesk 0.903 % of host (limit 0.500 %)",
+       "2026-10-28T07:36:18.5617304Z AnyDesk 0.983 % of host (limit 0.500 %)",
+       "2026-10-28T07:36:23.5726345Z AnyDesk 0.905 % of host (limit 0.500 %)"
+      ]
+     }
+    ],
+    "window_utc": [
+     "2026-10-28T07:33:07.798Z",
+     "2026-10-28T08:33:57.798Z"
+    ],
+    "stats": {
+     "samples": 728,
+     "samples_in_window": 727,
+     "anydesk_cpu_pct": {
+      "mean": 8.315,
+      "max": 21.658
+     },
+     "g3": {
+      "threshold_pct": 0.5,
+      "baseline": {
+       "mean_pct": 0.027,
+       "max_pct": 0.078,
+       "samples": 24,
+       "sample_s": 120.0,
+       "g3_threshold_pct": 0.5,
+       "label": "policy, unvalidated"
+      },
+      "label": "policy, unvalidated"
+     },
+     "host_cpu_pct": {
+      "mean": 55.86,
+      "max": 71.34
+     },
+     "guard_own_cpu_pct": {
+      "mean": 0.0553,
+      "max": 0.2026
+     },
+     "new_processes_per_interval_max": 6
+    },
+    "clock_rate": {
+     "source": "server/status.ndjson current_tick / harness _mono",
+     "valid_intervals": 3565,
+     "excluded_intervals": 0,
+     "median_ticks_per_harness_s": 60.087,
+     "max_window_deviation_pct": 0.96,
+     "rate_deviation_limit_pct": 5.0,
+     "sustained_limit_s": 2.0,
+     "achieved_tick_min_ratio": 0.98,
+     "stall_exclusion_pad_s": 3.0,
+     "stall_deviation_pct": 35.0
+    },
+    "guard_cost": {
+     "schema": "rpg.testlab.hostguard.v1",
+     "interval_s": 5.0,
+     "samples": 728,
+     "events": 141,
+     "errors": [],
+     "paths": {
+      "ad_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\ad.trace",
+      "connection_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\connection_trace.txt"
+     },
+     "baseline_pids": [
+      14748,
+      15552,
+      15560
+     ],
+     "sampler_cpu_pct_of_host": {
+      "mean": 0.0553,
+      "max": 0.2026
+     },
+     "python_threads_cpu_pct_of_host": 0.0017,
+     "note": "the sampler's CPU is its own process; the WMI provider that answers the AnyDesk command-line query runs in a system process and is not included"
+    },
+    "preflight_failed": [],
+    "proc_sampler": {
+     "samples": 3609,
+     "processes": [
+      {
+       "name": "AnyDesk",
+       "samples_in_top": 3851,
+       "mean_pct": 7.72,
+       "max_pct": 24.92,
+       "seconds_above_5_pct": 1792
+      },
+      {
+       "name": "IndieRPGMMOAdventure",
+       "samples_in_top": 10706,
+       "mean_pct": 11.402,
+       "max_pct": 20.82,
+       "seconds_above_5_pct": 10692
+      },
+      {
+       "name": "jetbrains-toolbox",
+       "samples_in_top": 261,
+       "mean_pct": 0.498,
+       "max_pct": 18.38,
+       "seconds_above_5_pct": 3
+      },
+      {
+       "name": "RiotClientServices",
+       "samples_in_top": 32,
+       "mean_pct": 3.11,
+       "max_pct": 6.59,
+       "seconds_above_5_pct": 12
+      },
+      {
+       "name": "Orca",
+       "samples_in_top": 8045,
+       "mean_pct": 0.585,
+       "max_pct": 5.18,
+       "seconds_above_5_pct": 1
+      },
+      {
+       "name": "JONSBO PC Monitor",
+       "samples_in_top": 3607,
+       "mean_pct": 1.442,
+       "max_pct": 5.0,
+       "seconds_above_5_pct": 0
+      },
+      {
+       "name": "dotnet",
+       "samples_in_top": 1,
+       "mean_pct": 4.85,
+       "max_pct": 4.85,
+       "seconds_above_5_pct": 0
+      },
+      {
+       "name": "powershell",
+       "samples_in_top": 2403,
+       "mean_pct": 0.261,
+       "max_pct": 4.14,
+       "seconds_above_5_pct": 0
+      }
+     ],
+     "hottest_seconds": [
+      {
+       "epoch": 1793174707.818,
+       "name": "AnyDesk",
+       "cpu_pct": 24.92
+      },
+      {
+       "epoch": 1793174842.119,
+       "name": "AnyDesk",
+       "cpu_pct": 24.34
+      },
+      {
+       "epoch": 1793174691.676,
+       "name": "AnyDesk",
+       "cpu_pct": 23.78
+      },
+      {
+       "epoch": 1793174873.462,
+       "name": "AnyDesk",
+       "cpu_pct": 22.95
+      },
+      {
+       "epoch": 1793174407.988,
+       "name": "AnyDesk",
+       "cpu_pct": 22.87
+      },
+      {
+       "epoch": 1793174884.595,
+       "name": "AnyDesk",
+       "cpu_pct": 22.72
+      },
+      {
+       "epoch": 1793174588.717,
+       "name": "AnyDesk",
+       "cpu_pct": 22.61
+      },
+      {
+       "epoch": 1793174268.672,
+       "name": "AnyDesk",
+       "cpu_pct": 22.54
+      }
+     ],
+     "cost": {
+      "schema": "rpg.testlab.hostguard.v1",
+      "interval_s": 1.0,
+      "top_n": 10,
+      "samples": 3609,
+      "errors": [],
+      "sampler_cpu_pct_of_host": {
+       "mean": 0.2335,
+       "max": 1.0838
+      },
+      "sweep_ms": {
+       "mean": 50.9,
+       "max": 247.6
+      },
+      "note": "evidence only (INFO); cost is the sampler process, not the WMI provider or the Python reader"
+     }
+    }
+   },
+   "artifacts": [
+    ".\\host\\guard.ndjson"
+   ]
+  }
+ ]
+}

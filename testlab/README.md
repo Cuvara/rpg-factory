@@ -28,7 +28,7 @@ Exit codes: `0` PASS, `1` FAIL, `2` INCONCLUSIVE or INVALID, `3` harness or usag
 |---|---|---|
 | `run`, `suite`, `sweep`, `stack`, `clean`, `build-client`, `build-loadtest` | yes | no: the players are Windows processes and process control uses `tasklist`/`taskkill` |
 | `analyze`, `analyze --delivery`, `replay-trace`, `leak-check`, `list` | yes | yes (give `/mnt/c/...` paths) |
-| `python3 -B testlab/tests/test_lab.py`, `test_netem.py`, `test_native.py` | yes | yes (`test_native.py` skips its Windows-only case) |
+| `python3 -B testlab/tests/test_lab.py`, `test_netem.py`, `test_native.py`, `test_failsum.py` | yes | yes (`test_native.py` skips its Windows-only case) |
 
 In Git Bash, `python3` must be the Windows Python (`python3.exe`). Git Bash rewrites `/c/...` arguments for Windows programs; the CLI also converts them itself, so they work with `MSYS_NO_PATHCONV=1` too. WSL commands are run from Python through `wsl.exe -d Ubuntu --exec bash -c` with path conversion disabled.
 
@@ -280,6 +280,7 @@ Copy a file in `scenarios/` and change these fields:
 | File | Contents |
 |---|---|
 | `report.md`, `results.json` | outcome, per-assertion measurement, threshold, source, artifacts; build provenance |
+| `failure-summary.json` | only when the run is not a clean PASS: earliest event, per failing check evidence pointers, suspected layer, confidence, guard events within 10 s, next action ([`docs/FAILURE-SUMMARY.md`](docs/FAILURE-SUMMARY.md)); derived, never changes the verdict |
 | `run.json` | repos and commits, player fingerprint, stack actions, timeline, client launches, and the `provenance` record (below) |
 | `scenario.json` | the scenario exactly as run (defaults applied) |
 | `client-N/` | `plan.json`, `status.json`, `summary.json`, `events.ndjson` (incl. `render_jump`), `inputs.ndjson`, `snapshots.ndjson`, `samples.ndjson`, `frames.csv`, `player.log`, `shots/*.png`; with a C2 recorder also `delivery.csv` and `render.csv`; with `predictor_trace` also `trace.ndjson` |

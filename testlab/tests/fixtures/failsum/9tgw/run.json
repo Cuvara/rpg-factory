@@ -1,0 +1,14 @@
+{
+ "run_id": "20261025T130508Z-S09-9tgw",
+ "host_guard": {
+  "start_wall_epoch": 1792933663.06
+ },
+ "timeline": [
+  {
+   "event": "start_scheduled",
+   "mono": 387450.7794144,
+   "start_mono": 387453.776278,
+   "start_wall_utc": "2026-10-25T13:07:43.060Z"
+  }
+ ]
+}

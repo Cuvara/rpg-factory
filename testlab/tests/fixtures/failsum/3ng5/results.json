@@ -1,0 +1,313 @@
+{
+ "outcome": "FAIL",
+ "harness_error": null,
+ "assertions": [
+  {
+   "id": "render_jumps",
+   "check": "render_jumps",
+   "title": "",
+   "status": "FAIL",
+   "measured": {
+    "local_major": 1,
+    "local_minor": 1,
+    "remote_major": 0,
+    "remote_minor": 18,
+    "server_teleport": 4050,
+    "host_stall": 0,
+    "per_client_min": {
+     "local_major": 0.006,
+     "local_minor": 0.006,
+     "remote_major": 0.0,
+     "remote_minor": 0.1
+    },
+    "by_type": {
+     "player": 20
+    }
+   },
+   "threshold": {
+    "local_major": 0,
+    "remote_major_per_client_min": 2.0,
+    "local_minor_per_client_min": 30.0,
+    "remote_minor_per_client_min": 30.0,
+    "major_step": 1.0
+   },
+   "detail": {
+    "per_client": {
+     "0": 770,
+     "1": 1450,
+     "2": 1850
+    },
+    "largest": [
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 24.455,
+      "st": 970.7458047000001,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 23.9734764,
+      "allowed": 0.334153563,
+      "dt_ms": 4.675198346376419,
+      "server_step_0p3s": 24.724
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 23.68,
+      "st": 2158.0456758,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 23.6973,
+      "allowed": 0.31283623,
+      "dt_ms": 3.490901319310069,
+      "server_step_0p3s": 22.741
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 18.789,
+      "st": 1582.2385296999998,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 18.2536583,
+      "allowed": 0.3345514,
+      "dt_ms": 4.697300028055906,
+      "server_step_0p3s": 6.894
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 17.666,
+      "st": 1048.709461,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 17.8160248,
+      "allowed": 0.320849866,
+      "dt_ms": 3.9361040107905865,
+      "server_step_0p3s": 9.32
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 17.395,
+      "st": 1979.0367964999998,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 17.5119438,
+      "allowed": 0.315059185,
+      "dt_ms": 3.614399116486311,
+      "server_step_0p3s": 16.907
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.999,
+      "st": 2254.0447683,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 17.2069569,
+      "allowed": 0.319082141,
+      "dt_ms": 3.8378967437893152,
+      "server_step_0p3s": 11.076
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.961,
+      "st": 3230.6491266,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 16.3779564,
+      "allowed": 0.324307531,
+      "dt_ms": 4.128195811063051,
+      "server_step_0p3s": 12.595
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.707,
+      "st": 2026.1629827,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 16.2904816,
+      "allowed": 0.370853841,
+      "dt_ms": 6.714101415127516,
+      "server_step_0p3s": 7.251
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 16.189,
+      "st": 201.57272590000002,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 16.2724533,
+      "allowed": 0.313404977,
+      "dt_ms": 3.522498533129692,
+      "server_step_0p3s": 16.031
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 16.206,
+      "st": 2548.4362011,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 16.2060356,
+      "allowed": 0.32642436,
+      "dt_ms": 4.2457981035113335,
+      "server_step_0p3s": 16.07
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.457,
+      "st": 1379.1739613,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 16.1234169,
+      "allowed": 0.32024312,
+      "dt_ms": 3.902395023033023,
+      "server_step_0p3s": 7.232
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.616,
+      "st": 221.3589411,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 16.1162281,
+      "allowed": 0.315025,
+      "dt_ms": 3.6124999169260263,
+      "server_step_0p3s": 5.282
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 15.736,
+      "st": 2553.6825781000002,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 15.8601856,
+      "allowed": 0.3161861,
+      "dt_ms": 3.6770054139196873,
+      "server_step_0p3s": 15.636
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.822,
+      "st": 2525.746958,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 15.8216877,
+      "allowed": 0.320711225,
+      "dt_ms": 3.928401507437229,
+      "server_step_0p3s": 15.231
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 15.707,
+      "st": 2026.1647518999998,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": false,
+      "step": 15.8092241,
+      "allowed": 0.348928064,
+      "dt_ms": 5.496003199368715,
+      "server_step_0p3s": 7.387
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.802,
+      "st": 2273.8215715,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 15.802043,
+      "allowed": 0.310982138,
+      "dt_ms": 3.3878968097269535,
+      "server_step_0p3s": 15.762
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.795,
+      "st": 606.5182235999999,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 15.79494,
+      "allowed": 0.32440114,
+      "dt_ms": 4.133397247642279,
+      "server_step_0p3s": 15.795
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.228,
+      "st": 1456.5643412999998,
+      "id": "0a5f2831-e083-cd2e-66da-3b7ad49eb083",
+      "type": "player",
+      "local": true,
+      "step": 15.7889767,
+      "allowed": 0.317887127,
+      "dt_ms": 3.7715064827352762,
+      "server_step_0p3s": 15.564
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.782,
+      "st": 1986.5933907,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 15.782073,
+      "allowed": 0.320756137,
+      "dt_ms": 3.9308955892920494,
+      "server_step_0p3s": 15.738
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.734,
+      "st": 2406.4752181,
+      "id": "4fa41ff8-46d0-b7bf-83ca-976ea6242afd",
+      "type": "player",
+      "local": true,
+      "step": 15.73378,
+      "allowed": 0.342581123,
+      "dt_ms": 5.143395625054836,
+      "server_step_0p3s": 15.551
+     }
+    ]
+   },
+   "artifacts": [
+    ".\\client-0\\events.ndjson",
+    ".\\client-1\\events.ndjson",
+    ".\\client-2\\events.ndjson",
+    ".\\client-0\\shots",
+    ".\\client-1\\shots",
+    ".\\client-2\\shots"
+   ]
+  }
+ ]
+}
