@@ -6,9 +6,13 @@ Collects live git state per repo (worktree-aware), resolves it through scripts/l
 renders a compact markdown snapshot or full JSON.
 
 Usage (via factory-context.sh):
-  [--repo <key>|all] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--explain]
+  [--repo <key>|all] [--repo-path <dir>] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--explain]
   [--full] [--toolchain] [--submodules] [--mode analyze|plan|implement|validate|review|resume]
   --repo      default: the repo (or worktree) containing the cwd, else all registered repos
+  --repo-path explicit checkout or linked worktree to target (must belong to the registered repo). Without it the
+              target is the git toplevel of the cwd when the cwd lies inside a checkout or linked worktree of the
+              repo; only a cwd outside every worktree of that repo falls back to the registry canonical path, and
+              the output says so (JSON: repos[].resolution)
   --paths     resolve only these paths (requires a single repo); the list ends at the next --flag.
               Repo-relative, repo-prefixed, absolute (C:\\, C:/, /c/, /mnt/c/; also inside a linked
               worktree of the repo) and glob forms are accepted. An absolute path outside the repo and
@@ -63,7 +67,7 @@ def git(cwd, *args, timeout=60):
 
 
 def parse_args(argv):
-    a = {"repo": None, "paths": [], "base": None, "json": False, "lead": None, "explain": False,
+    a = {"repo": None, "repo_path": None, "paths": [], "base": None, "json": False, "lead": None, "explain": False,
          "full": False, "toolchain": False, "submodules": False, "mode": None}
     i = 0
     while i < len(argv):
@@ -75,13 +79,13 @@ def parse_args(argv):
                 j += 1
             i = j
             continue
-        if x.split("=", 1)[0] in ("--repo", "--base", "--lead", "--mode") and "=" in x:
+        if x.split("=", 1)[0] in ("--repo", "--repo-path", "--base", "--lead", "--mode") and "=" in x:
             x, val = x.split("=", 1)
             argv = argv[:i] + [x, val] + argv[i + 1:]
-        if x in ("--repo", "--base", "--lead", "--mode"):
+        if x in ("--repo", "--repo-path", "--base", "--lead", "--mode"):
             if i + 1 >= len(argv):
                 die(f"{x} needs a value")
-            a[x[2:]] = argv[i + 1]
+            a[x[2:].replace("-", "_")] = argv[i + 1]
             i += 2
             continue
         flag = {"--json": "json", "--explain": "explain", "--full": "full", "--toolchain": "toolchain",
@@ -118,14 +122,21 @@ def main_checkout(top):
     return os.path.dirname(common) if os.path.basename(common) == ".git" else top
 
 
-def cwd_repo(reg, ws):
-    """(key, directory) of the repo or worktree containing the cwd, if it is a registered repo."""
-    top = (git(os.getcwd(), "rev-parse", "--show-toplevel") or "").strip()
+def same_path(a, b):
+    """True when a and b name the same directory (case, slash style and symlinks on Windows/WSL do not matter)."""
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def cwd_repo(reg, ws, start=None):
+    """(key, directory) of the repo or worktree containing `start` (default: the cwd), if it is a registered repo.
+    The directory is the git toplevel of `start`, so a linked worktree resolves to itself, not to its main checkout."""
+    top = (git(start or os.getcwd(), "rev-parse", "--show-toplevel") or "").strip()
     if not top:
         return None, None
     main = os.path.abspath(main_checkout(top))
     for key, r in reg["repos"].items():
-        if os.path.abspath(os.path.join(ws, r["path"])) in (os.path.abspath(top), main):
+        canon = os.path.join(ws, r["path"])
+        if same_path(canon, top) or same_path(canon, main):
             return key, os.path.abspath(top)
     return None, None
 
@@ -399,6 +410,8 @@ def render(snap, reg, args, views):
             add(f"## {r['repo']}: ERROR {r['error']}")
             continue
         wt = f" worktree of {code(r['main_checkout'])}" if r.get("worktree") else ""
+        if (r.get("resolution") or {}).get("note"):
+            add(f"> **{r['repo']}: canonical checkout used.** {r['resolution']['note']}")
         up = r.get("upstream")
         upt = f", {up['ref']} +{up['ahead']}/-{up['behind']} (last fetch)" if up else ""
         prot = " **PROTECTED** (branch before committing)" if r["protected"] else ""
@@ -516,6 +529,16 @@ def main():
     if not ws:
         die("not inside the RPG MMO workspace (markers not found; set RPG_FACTORY_WORKSPACE)", 4)
     here_key, here_dir = cwd_repo(reg, ws)
+    explicit = False
+    if args["repo_path"]:
+        if not os.path.isdir(args["repo_path"]):
+            die(f"--repo-path {args['repo_path']} is not a directory")
+        here_key, here_dir = cwd_repo(reg, ws, args["repo_path"])
+        explicit = True
+        if not here_key:
+            die(f"--repo-path {args['repo_path']} is not inside a checkout or linked worktree of a registered repo")
+        if args["repo"] not in (None, "auto", here_key):
+            die(f"--repo-path {args['repo_path']} belongs to repo '{here_key}', not '{args['repo']}'")
     clone = cwd_clone(reg, ws) if not here_key else None
     if args["repo"] and args["repo"] not in ("all", "auto") and args["repo"] not in reg["repos"]:
         die(f"unknown repo '{args['repo']}'; known: {', '.join(reg['repos'])}")
@@ -544,8 +567,17 @@ def main():
     needed = set()
     for key in keys:
         rep = reg["repos"][key]
-        d = here_dir if key == here_key and here_dir else os.path.join(ws, rep["path"])
+        canonical = os.path.join(ws, rep["path"])
+        d = here_dir if key == here_key and here_dir else canonical
+        if d is canonical:
+            resolution = {"source": "canonical-fallback", "canonical": canonical, "note":
+                          f"cwd {os.getcwd()} is outside every checkout and worktree of {key}: using the registry canonical checkout "
+                          f"{canonical}; run from inside a worktree of {key} or pass --repo-path <worktree> to target it"}
+        else:
+            resolution = {"source": "repo-path" if explicit else ("cwd-checkout" if same_path(d, canonical) else "cwd-worktree"),
+                          "canonical": canonical, "note": None}
         st = repo_state(key, d, rep, args, reg, ws)
+        st["resolution"] = resolution
         if not st.get("error"):
             if args["paths"] and not st["files"]:
                 die("no path left to route: " + "; ".join(f"{x['path']} ({x['reason']})" for x in st["rejected_paths"]))

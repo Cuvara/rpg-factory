@@ -2,10 +2,12 @@
 # factory-context.sh — live Factory snapshot of the RPG MMO workspace (read-only, persists nothing).
 # Thin entry point; the engine is scripts/lib/context.py and the routing is scripts/lib/resolve.jq.
 #
-# Usage: factory-context.sh [--repo <key>|all] [--paths <path>...] [--base <ref>] [--json]
+# Usage: factory-context.sh [--repo <key>|all] [--repo-path <dir>] [--paths <path>...] [--base <ref>] [--json]
 #                           [--lead <skill>] [--explain] [--full] [--toolchain] [--submodules]
 #                           [--mode analyze|plan|implement|validate|review|resume]
 #   --repo       default: the repo/worktree containing the cwd, else every registered repo
+#   --repo-path  explicit checkout or linked worktree to target; default: the git toplevel of the cwd when it is inside
+#                a checkout/worktree of the repo, the registry canonical path (announced in the output) otherwise
 #   --paths      resolve ONLY these paths (single repo); everything after --paths is a path. Repo-relative,
 #                repo-prefixed, absolute (C:\ , C:/ , /c/ , /mnt/c/) and glob forms are accepted
 #   --mode       declare the Factory execution mode for this session (also --mode=<m>); the hooks then add

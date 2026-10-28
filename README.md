@@ -174,7 +174,10 @@ compares them with the client pin and the latest tag.
 ## Validation
 
 `scripts/run-checks.py --repo <key> --paths <files>` resolves the registry checks for the touched
-modules and their dependents, runs them, and grades each one:
+modules and their dependents, runs them, and grades each one. It runs in the worktree it is invoked from (git
+toplevel of the cwd, or `--repo-path <dir>`; the canonical checkout only when the cwd is outside every worktree of the
+repo, announced in the output), writes no `.pyc` (`PYTHONDONTWRITEBYTECODE=1`, `PYTHONPYCACHEPREFIX`), and adds a
+`canonical-checkout-guard` FAIL row if anything changed in the canonical checkout during the run:
 
 | State | Meaning |
 |---|---|

@@ -124,6 +124,7 @@ run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.t
 run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
+run "run-checks targets the invoking worktree, writes no pyc, guards the canonical checkout" tests/worktree-target.test.sh
 run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
@@ -180,7 +181,7 @@ expect "DOTS Sample beats Assets/Samples" '.files[0].module == "client.dots-samp
 expect "untracked sample dir -> samples-imported" '.files[1].module == "client.samples-imported"' "$r"
 expect "submodule pointer -> gdk-submodules" '.files[2].module == "client.gdk-submodules"' "$r"
 expect "unknown path -> repo-level (client.root), not unmapped" '.unmapped == [] and .repo_level == ["weird/file.txt"]' "$r"
-expect "{plugin_root} substituted in package-pins" 'any(.checks[]; .run == "python3 /p/scripts/checks/unity-package-pins.py .")' "$r"
+expect "{plugin_root} substituted in package-pins" 'any(.checks[]; .run == "python3 -B /p/scripts/checks/unity-package-pins.py .")' "$r"
 r=$(resolve server '[]')
 expect "no files -> no checks" '.checks == [] and .touched == []' "$r"
 

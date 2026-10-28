@@ -6,6 +6,19 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- run-checks: checks no longer write into the user's protected main checkout when invoked from an agent's linked
+  worktree (incidents 2026-10-25 and 2026-10-29: `.github/scripts/__pycache__/*.pyc` appeared in the canonical
+  `rpg-mmo-server`). Root causes: `python3 -m py_compile` (registry `server.*` check) writes `.pyc` even with
+  `PYTHONDONTWRITEBYTECODE=1`, and nothing verified which checkout a run touched. Now: (1) `run-checks.py` and
+  `factory-context.sh` take `--repo-path <dir>` and otherwise resolve the target from the cwd's git toplevel (path
+  comparison is case/slash/symlink-insensitive via `same_path`); the registry canonical path is used only when the cwd is
+  outside every worktree of the repo, and the output (`Target checkout:` line, `NOTE:`, JSON `resolution`) says so;
+  (2) every check runs with `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=<scratch>/pycache` (forwarded through
+  `WSLENV`), and the registry's `python3` check commands use `-B`; (3) when a run targets a worktree, the canonical
+  checkout's `git status --ignored` is snapshotted (with size/mtime) before and after, and any difference adds a FAIL
+  row `runner/canonical-checkout-guard` (exit 1). `tests/worktree-target.test.sh` covers all three and fails on the
+  previous runner (a `.pyc` appeared in the checkout, no guard row).
+
 - tests: no test can rewrite the shared git config of the repository it runs in. Root cause (reproduced): a git
   process that runs a command (`git rebase --exec tests/run-all.sh`, `git bisect run`, a hook) exports `GIT_DIR`; the
   fixtures' `git init <tmpdir>` then re-initialised the CALLER's repository, and from a linked worktree that wrote
