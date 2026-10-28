@@ -4180,24 +4180,40 @@ class F29LocalRespawnTests(unittest.TestCase):
     DEATH = [(6, 0), (3, 0), (3, 0), (0, 1), (100, 0), (100, 0)]
     TIMES = [910.47, 910.68, 910.87, 911.075, 911.306, 911.48]
 
-    def _ev(self, hps, other=None, received_dx=0.8407):
-        """Server probe at 5 Hz around st 911 for the local player (hp, dead flag per row); the client
-        received the entity 0.8407 units apart in two snapshots 4 ticks apart (below 0.8 x the rendered
-        step 1.0882, so the old rule did not explain it); the rendered local step was 1.0882."""
+    def _ev(self, hps, other=None, received_dx=0.8407, snap_tick=55365, extra=(), pid=None):
+        """Server probe at 5 Hz around st 911 for the local player (hp, dead flag per row; the probe
+        ticks are 55327..55388 as in ibz3); the client received the entity moving by (-0.38, 0.75) =
+        0.84 units (direction of the rendered snap) in the sample at world tick `snap_tick`; the
+        rendered local step was 1.0882. `extra` is more (st, world_tick, rx, ry, dx, dy) samples."""
+        pid = pid or self.PID
         ents = []
-        for t, (hp, dead) in zip(self.TIMES, hps):
-            row = [[self.PID, "player", 0.0, 0.0, hp, 100, dead, 5]]
+        ticks = [55327, 55339, 55351, 55363, 55376, 55388]
+        for t, tk, (hp, dead) in zip(self.TIMES, ticks, hps):
+            row = [[pid, "player", 0.0, 0.0, hp, 100, dead, 5]]
             if other is not None:
                 ohp, odead = other[t]
                 row.append(["q", "player", 3.0, 3.0, ohp, 100, odead, 5])
-            ents.append(_row(t, row))
+            ents.append({"st": t, "tick": tk, "ents": row})
         ev = _ev(entities=ents, duration=1200)
         c = ev["clients"][0]
         c["summary"] = {"outcome": "completed"}
-        c["samples"] = [{"st": 911.06, "world_tick": 55363, "ents": [[self.PID, "player", 1, 0.0, 0.0, 0.0, 0.0]]},
-                        {"st": 911.11, "world_tick": 55367, "ents": [[self.PID, "player", 1, 0.0, 0.0, received_dx, 0.0]]}]
-        c["events"] = [{"event": "render_jump", "st": 911.107, "id": self.PID, "type": "player", "local": True,
+        k = received_dx / 0.8407
+
+        def smp(st, wt, rx, ry, dx, dy):
+            return {"st": st, "world_tick": wt, "ents": [[pid, "player", 1, rx, ry, dx, dy]]}
+        c["samples"] = [smp(911.06, 55361, 0.55, -2.01, 0.0, 0.0),
+                        smp(911.11, snap_tick, 0.16, -1.24, -0.38 * k, 0.75 * k)] + [smp(*x) for x in extra]
+        c["events"] = [{"event": "render_jump", "st": 911.107, "id": pid, "type": "player", "local": True,
                         "step": 1.0882, "allowed": 0.331}]
+        return ev
+
+    def _second_snap(self, ev, st=911.36, tick=55379, dx=0.6):
+        """A second local snap event with its own received step, as the F29B repro of RV-F29 B1."""
+        c = ev["clients"][0]
+        c["samples"] += [{"st": st - 0.05, "world_tick": tick - 4, "ents": [[self.PID, "player", 1, 0.5, -1.0, 0.0, 0.0]]},
+                         {"st": st, "world_tick": tick, "ents": [[self.PID, "player", 1, 1.1, -1.0, -dx * 0.5, dx * 0.8]]}]
+        c["events"].append({"event": "render_jump", "st": st, "id": self.PID, "type": "player", "local": True,
+                            "step": 1.088, "allowed": 0.331})
         return ev
 
     def test_the_ibz3_respawn_snap_is_explained_by_the_respawn(self):
@@ -4228,6 +4244,35 @@ class F29LocalRespawnTests(unittest.TestCase):
         ev["clients"][0]["events"][0]["local"] = False
         res = analyze.check_render_jumps(ev, {"max_local": 0})
         self.assertEqual(res["measured"]["remote_major"], 1)
+
+    def test_a_later_unrelated_snap_after_the_respawn_fails(self):
+        # RV-F29 B1: the respawn is real but the snap is 0.25 s later (world tick 55400, after the max-HP
+        # probe at 55376 + slack); HP 0 -> max is in the +-window, an authoritative step is there, yet it is not this snap.
+        ev = self._ev(self.DEATH, snap_tick=55400)
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+        self.assertIsNone(res["measured"].get("local_respawn"))
+
+    def test_a_snap_before_the_respawn_probe_window_fails(self):
+        res = analyze.check_render_jumps(self._ev(self.DEATH, snap_tick=55340), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+    def test_a_second_snap_in_the_window_fails_one_respawn_explains_one_snap(self):
+        ev = self._second_snap(self._ev(self.DEATH), tick=55374)       # inside the tick window, same respawn
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"], res["measured"]["local_respawn"]),
+                         (analyze.FAIL, 1, 1), res)
+
+    def test_a_snap_pointing_the_other_way_is_not_the_respawn(self):
+        ev = self._ev(self.DEATH)
+        ev["clients"][0]["samples"][1]["ents"][0][3:5] = [0.55 + 0.38, -2.01 - 0.75]     # rendered went the opposite way
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+    def test_another_players_respawn_does_not_excuse_the_snap_even_with_a_perfect_snap(self):
+        died = dict(zip(self.TIMES, self.DEATH))
+        res = analyze.check_render_jumps(self._ev([(100, 0)] * 6, other=died), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
 
 
 class F29ProjectileReuseTests(unittest.TestCase):
@@ -4322,6 +4367,31 @@ class F29G3BaselineTests(unittest.TestCase):
         self.assertEqual(self._fired(burst, self.BASE), ["G3"])
         one = lambda t: 1.6 if t == 1100 else 0.2
         self.assertEqual(self._fired(one, self.BASE), [])           # still two consecutive samples
+
+    def test_threshold_is_capped_so_a_noisy_preflight_cannot_hide_a_session_burst(self):
+        from lab import hostguard
+        self.assertEqual(hostguard.G3_THRESHOLD_CAP_PCT, 1.0)
+        self.assertEqual(hostguard.g3_threshold(1.0), 1.0)           # uncapped: 2.3 %
+        self.assertEqual(hostguard.g3_threshold(5.0), 1.0)
+        self.assertAlmostEqual(hostguard.g3_threshold(0.328), 0.956, places=3)   # below the cap: unchanged
+        noisy = {"mean_pct": 0.3, "max_pct": 0.95}                   # passes P2; uncapped limit would be 2.2 %
+        burst = lambda t: 1.4 if 1100 <= t <= 1105 else 0.2          # F28 saw >= 1.36 % in a session
+        self.assertEqual(self._fired(burst, noisy), ["G3"])
+
+    def test_p2_fails_when_the_baseline_max_reaches_the_cap(self):
+        from lab import hostguard
+        none = hostguard.AnyDeskPaths(None, None)
+
+        def p2(spike):
+            rows = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 14.0, "groups": {"build": 0.0, "av": 0.0}}] +                    [{"epoch": 1.0 + 5 * i, "ad_cpu": spike if i == 7 else 0.1, "cpu": 14.0, "groups": {"build": 0.3, "av": 0.0}}
+                    for i in range(1, 25)]
+            pf = hostguard.preflight(sampler=lambda s: rows, processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
+                                     wsl_uptime=lambda: 3600.0, announced="x", paths=none)
+            return pf, next(r for r in pf["rows"] if r["id"] == "P2")
+        pf, row = p2(0.9)
+        self.assertEqual(row["status"], "PASS", row)
+        pf, row = p2(1.2)                                            # mean ~0.15 % passes the old P2; the max does not
+        self.assertEqual((row["status"], "P2" in pf["failed"], pf["ok"]), ("FAIL", True, False), row)
 
     def test_the_g3_stats_record_the_baseline_and_the_label(self):
         from lab import hostguard

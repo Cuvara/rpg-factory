@@ -163,12 +163,15 @@ CHECK_DEFAULTS = [
     ("position_divergence", "min_samples", 50, POLICY),
     ("render_jumps", "major_step", 1.0, POLICY),
     ("render_jumps", "max_local_minor / remote_minor per client-min", 30.0, POLICY),
-    ("render_jumps", "local snap explained by a respawn (F29)",
-     f"HP of the same entity reaches 0 (or dead), then max, within [st - 0.4 s, st + 0.3 s], and the authoritative step "
-     f"(server probe or received stream) is >= {analyze.RESPAWN_JUMP_MIN_FRACTION} x the rendered step",
-     f"{POLICY}. F28 3.1 (run ibz3, st 911.107): a real respawn 0.84 u from the death point, rendered step 1.088 (prediction "
-     "lead on top), missed the old 0.8 x rule by 3.4 % (received 0.8407 < 0.8 x 1.088). Evidence is per entity: another "
-     "entity's respawn, and a local major without HP-0-to-max, still FAIL. The 0.5 fraction is policy"),
+    ("render_jumps", "local snap explained by a respawn (F29B)",
+     f"the SAME entity's probe shows HP 0 (or dead) then max; the received snapshot step this client saw has a world tick in "
+     f"[HP 0 probe tick, max-HP probe tick + {analyze.RESPAWN_SNAP_SLACK_TICKS}], is >= "
+     f"{analyze.RESPAWN_JUMP_MIN_FRACTION} x the rendered step, and points within cos >= {analyze.RESPAWN_SNAP_MIN_COS} of the "
+     "rendered snap; one respawn explains at most one snap",
+     f"{POLICY}. F28 3.1 (run ibz3, st 911.107): a real respawn, received step 0.84 at tick 55365 inside the probe window "
+     "55363..55376, rendered step 1.088 (prediction lead on top), missed the old 0.8 x rule by 3.4 %. RV-F29 B1: a later "
+     "unrelated snap, a second snap in the window, and another entity's respawn must still FAIL. The fraction, the cosine "
+     "and the 2-tick slack (33 ms at 60 Hz) are policy"),
     ("render jump detector", "max_speed / factor / slack", "6.0 / 3.0 / 0.25",
      "max_speed above the player speed 5 u/s (client DotsWorldBridge); factor and slack " + POLICY),
     ("host_stalls", "frame / window", "250 ms / 250 ms in >= 2 processes", POLICY),
@@ -235,15 +238,17 @@ CHECK_DEFAULTS = [
      "residents (`AnyDesk.exe`, `--local-service`, `--local-control`) are allowed"),
     ("host_guard G2", "new AnyDesk process", "pid not in the preflight / pre-window set", f"{POLICY}: catches a missing or rotated log"),
     ("host_guard G3", "AnyDesk CPU, consecutive samples",
-     f">= max({hostguard.ANYDESK_IDLE_MAX_PCT} %, preflight resident max x {hostguard.G3_BASELINE_FACTOR:g} + "
-     f"{hostguard.G3_BASELINE_MARGIN_PCT} %) of host for {hostguard.G3_CONSECUTIVE} (F29, changed)",
+     f">= min({hostguard.G3_THRESHOLD_CAP_PCT} %, max({hostguard.ANYDESK_IDLE_MAX_PCT} %, preflight resident max x "
+     f"{hostguard.G3_BASELINE_FACTOR:g} + {hostguard.G3_BASELINE_MARGIN_PCT} %)) of host for {hostguard.G3_CONSECUTIVE} (F29B, changed)",
      f"{POLICY}. Was a fixed {hostguard.ANYDESK_IDLE_MAX_PCT} %: 4x the F19 idle maximum 0.13 % and half the lightest "
      "session ~1 % (F19 baseline 16:27-16:43Z, 185 samples). After the reboot the resident `front` process idles at "
      "0.18 % mean, 0.33 % max in the preflight (F28 run ibz3, 24 samples; 0.4-0.76 % in the first 10 minutes, bursts "
      "to 1.98 %) against 0.03 % in F19, so the fixed limit fired on an idle GUI. The limit is relative to the 2-minute "
      "preflight baseline (P2 mean and max, recorded in host/preflight.json `anydesk_baseline` and in the guard stats "
-     "`g3`); no baseline gives the old floor. ibz3: 0.328 x 2 + 0.3 = 0.956 %. A session-like burst (1.5 %+) still "
-     "fires; G1 and G2 stay the primary session detection"),
+     "`g3`); no baseline gives the old floor. ibz3: 0.328 x 2 + 0.3 = 0.956 %. The threshold is capped at "
+     f"{hostguard.G3_THRESHOLD_CAP_PCT} % of the host (RV-F29 B2): the lightest session is ~1 % and F28 saw bursts of 1.36 % and "
+     "more, so a session-like burst always fires however noisy the preflight was; a preflight resident max at or above the cap "
+     "fails P2 and the run does not start. G1 and G2 stay the primary session detection"),
     ("host procs sampler", "per-process CPU, top N",
      f"{hostguard.PROC_SAMPLE_INTERVAL_S:g} s, top {hostguard.PROC_SAMPLE_TOP_N}; evidence only (F29, new)",
      f"{POLICY}: not a guard and not a verdict. S09-class (`requires_clean_host`) runs only; `proc_sampler: false` in a "
@@ -264,7 +269,7 @@ CHECK_DEFAULTS = [
      "2 is start-up, 2288 and 2431 are unexplained (60 ticks/s regime). The run median is the baseline, so a run mostly in the other regime flags the normal one. "
      "Flat i9fl/e26z series are the comparison evidence"),
     ("preflight P1", "no session now", f"no `--backend`, no session event or connection entry in the last {hostguard.PRE_QUIET_S:.0f} s", POLICY),
-    ("preflight P2", "AnyDesk residents idle", f"mean CPU < {hostguard.ANYDESK_IDLE_MAX_PCT} % of host over a {hostguard.PRE_SAMPLE_S:.0f} s sample",
+    ("preflight P2", "AnyDesk residents idle", f"mean CPU < {hostguard.ANYDESK_IDLE_MAX_PCT} % and max < {hostguard.G3_THRESHOLD_CAP_PCT} % (the G3 cap) of host over a {hostguard.PRE_SAMPLE_S:.0f} s sample",
      f"{POLICY}: observed idle mean 0.03 %, max 0.13 %"),
     ("preflight P3", "no other agent working", "0 `working` agents in `orca worktree ps` except the allowed ones", POLICY),
     ("preflight P4", "no heavy foreign process", f"build-tool mean <= {hostguard.P4_FOREIGN_PCT} %, MsMpEng mean < {hostguard.G4_AV_PCT} %", POLICY),

@@ -14,7 +14,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Changed
 
 - testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
-  max(0.5 %, baseline max x 2 + 0.3 %) for 2 consecutive samples (policy, unvalidated). After the reboot the idle resident
+  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
+  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
+  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
   `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
   in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
   ibz3 stays INVALID on G1 (three real outgoing sessions).
@@ -24,10 +26,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
-- testlab `render_jumps`: a LOCAL snap at a server-confirmed respawn of the same player (HP to 0, then to max, and an
-  authoritative position jump of at least half the rendered step in the window) is explained by the respawn, counted as
-  `local_respawn`. Run ibz3 st 911.107 (rendered 1.088, received 0.8407, 3.4 % short of the old 0.8 x rule) failed a
-  real respawn. A local major without that evidence, and the respawn of another entity, still FAIL.
+- testlab `render_jumps`: a LOCAL snap at a server-confirmed respawn of the same player is explained by the respawn and
+  counted as `local_respawn`, bound tightly (RV-F29 B1): the snapshot carrying the new position has a world tick inside
+  [HP 0 probe tick, max-HP probe tick + 2], the received step is >= half the rendered step and points where the rendered
+  snap went (cos >= 0.7), and one respawn explains one snap. Run ibz3 st 911.107 (rendered 1.088, received 0.8407, 3.4 %
+  short of the old 0.8 x rule) failed a real respawn. A later unrelated snap, a second snap, another player's respawn
+  and a local major without that evidence still FAIL.
 - testlab `entity_lifecycle`: the id-reuse tolerance is per entity type. A projectile uses its content (or measured)
   speed x 0.15 s + 0.2 instead of the player `max_speed`, so a first draw one snapshot ahead after a client stall no longer
   fails (ibz3 proj-17, 1.33 u from spawn vs 1.1). The stale-buffer detection is kept: a first draw at or near the previous

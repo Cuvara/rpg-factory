@@ -351,7 +351,7 @@ A freeze in a rendered player is evidence about the game only if nothing else on
 | Row | Needs |
 |---|---|
 | P1 | no `--backend` process, no session event or connection entry in the last 2 min (residents allowed) |
-| P2 | AnyDesk residents idle: mean CPU under 0.5 % of the host |
+| P2 | AnyDesk residents idle: mean CPU under 0.5 % and max under 1.0 % (the G3 cap) of the host |
 | P3 | no other agent in the `working` state in `orca worktree ps` (`--allow-agent` names the soak runner and the Lead) |
 | P4 | no sustained build tools (mean 2 % or less) or Defender scan (`MsMpEng` under 5 %) |
 | P5 | host CPU mean 50 % or less; above 30 % it is flagged shared-host |
@@ -366,7 +366,7 @@ A scenario with `requires_clean_host` (S09) runs P1-P6 automatically before anyt
 |---|---|
 | G1 | an AnyDesk session event or `--backend` process in the window, or a session still active at its start |
 | G2 | an AnyDesk process that was not in the preflight / pre-window set (also catches a log that cannot be read) |
-| G3 | AnyDesk CPU of max(0.5 %, resident max x 2 + 0.3 %) of the host or more for 2 consecutive samples; the resident max is the preflight's 2-minute P2 maximum (`host/preflight.json` `anydesk_baseline`), 0.5 % without one. Policy, unvalidated (F19 0.03 % idle, F28 0.18 % mean / 1.98 % max idle front process) |
+| G3 | AnyDesk CPU of min(1.0 %, max(0.5 %, resident max x 2 + 0.3 %)) of the host or more for 2 consecutive samples; the resident max is the preflight's 2-minute P2 maximum (`host/preflight.json` `anydesk_baseline`), 0.5 % without one. Policy, unvalidated (F19 0.03 % idle, F28 0.18 % mean / 1.98 % max idle front process) |
 | G4 | build tools or `MsMpEng` above 5 % of the host for 3 consecutive samples |
 | G5 | the guard was blind: more than 3 consecutive intervals without a sample |
 | G6 | `current_tick` per harness second steps more than 5 % from its run median for more than 2 s while `achieved_tick_hz` remains within its normal 98 % bound |

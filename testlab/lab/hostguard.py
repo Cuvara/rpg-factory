@@ -15,7 +15,7 @@ Rules (policy, unvalidated; limits in testlab/docs/THRESHOLDS.md), evaluated ins
 window [start_scheduled - 30 s, scenario end + finish_grace_s]:
   G1 AnyDesk session start, event or `--backend` process, or one still active at window start
   G2 an AnyDesk process that was not in the baseline set
-  G3 AnyDesk CPU above max(0.5 %, 2 x the preflight resident max + 0.3 %) of the host for 2 consecutive samples
+  G3 AnyDesk CPU above min(1.0 %, max(0.5 %, 2 x the preflight resident max + 0.3 %)) of the host for 2 consecutive samples
   G4 a build tool or MsMpEng group above its CPU limit for >= 3 consecutive samples
   G5 the guard was blind (more than 3 consecutive intervals without a sample)
 A fired rule makes the `host_guard` check INVALID; it can never turn a FAIL or INCONCLUSIVE into PASS.
@@ -47,6 +47,8 @@ WINDOW_PRE_S = 30.0              # window starts this long before start_schedule
 ANYDESK_IDLE_MAX_PCT = 0.5       # G3 floor / P2: 4x the F19 idle maximum (0.13 %), half the lightest session (~1 %)
 G3_BASELINE_FACTOR = 2.0         # F29: G3 fires above baseline_max x 2 + 0.3 %, never below the 0.5 % floor
 G3_BASELINE_MARGIN_PCT = 0.3     # (F19 idle 0.03 % mean; F28 idle front process 0.18 % mean, 0.33 % max, bursts to 1.98 %)
+G3_THRESHOLD_CAP_PCT = 1.0       # F29B: G3 never fires above this, so a session burst (>= 1.36 % seen in F28) always can;
+#                                  a preflight resident max at or above the cap fails P2 (the run does not start)
 G3_CONSECUTIVE = 2
 PROC_SAMPLE_INTERVAL_S = 1.0     # F29: optional per-process sampler, S09-class runs only (evidence, never a guard)
 PROC_SAMPLE_TOP_N = 10
@@ -73,8 +75,8 @@ SESSION_TYPES = ("accept", "auth", "backend_pid", "session_started", "capture_st
 RULES = {
     "G1": "AnyDesk session started in the window, or still active at its start",
     "G2": "AnyDesk process not in the baseline set",
-    "G3": (f"AnyDesk CPU above max({ANYDESK_IDLE_MAX_PCT} %, preflight resident max x {G3_BASELINE_FACTOR:g} + "
-           f"{G3_BASELINE_MARGIN_PCT} %) of the host for {G3_CONSECUTIVE} consecutive samples "
+    "G3": (f"AnyDesk CPU above min({G3_THRESHOLD_CAP_PCT} %, max({ANYDESK_IDLE_MAX_PCT} %, preflight resident max x "
+           f"{G3_BASELINE_FACTOR:g} + {G3_BASELINE_MARGIN_PCT} %)) of the host for {G3_CONSECUTIVE} consecutive samples "
            "(policy, unvalidated: F19 0.03 % idle, F28 0.18 % mean / 1.98 % max idle front process)"),
     "G4": f"build tools > {G4_BUILD_PCT} % or MsMpEng > {G4_AV_PCT} % of the host for {G4_CONSECUTIVE} consecutive samples",
     "G5": f"guard blind: more than {G5_MISSED_INTERVALS} consecutive intervals without a sample",
@@ -316,10 +318,11 @@ def _consecutive(flags: list[bool], n: int) -> int | None:
 
 def g3_threshold(baseline_max_pct: float | None) -> float:
     """AnyDesk CPU (% of host) above which G3 counts a sample. Relative to the resident baseline measured
-    by the preflight (P2), with the original 0.5 % as the floor; no baseline gives the floor."""
+    by the preflight (P2), with the original 0.5 % as the floor and G3_THRESHOLD_CAP_PCT as the ceiling; no baseline gives the floor."""
     if baseline_max_pct is None:
         return ANYDESK_IDLE_MAX_PCT
-    return max(ANYDESK_IDLE_MAX_PCT, float(baseline_max_pct) * G3_BASELINE_FACTOR + G3_BASELINE_MARGIN_PCT)
+    return min(G3_THRESHOLD_CAP_PCT,
+               max(ANYDESK_IDLE_MAX_PCT, float(baseline_max_pct) * G3_BASELINE_FACTOR + G3_BASELINE_MARGIN_PCT))
 
 
 def g3_baseline(preflight: dict | None) -> dict | None:
@@ -951,9 +954,11 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
     ad_base = None if not ad else {"mean_pct": round(ad_mean, 3), "max_pct": max(ad), "samples": len(ad),
                                    "sample_s": sample_s, "g3_threshold_pct": round(g3_threshold(max(ad)), 3),
                                    "label": "policy, unvalidated"}
-    rows.append(_row("P2", ad_mean is not None and ad_mean < ANYDESK_IDLE_MAX_PCT,
-                     f"AnyDesk mean CPU < {ANYDESK_IDLE_MAX_PCT} % of host over {len(body)} samples" if ad_mean is not None
-                     else "no sample (sampler unavailable)", {"mean_pct": None if ad_mean is None else round(ad_mean, 3),
+    ad_max = max(ad) if ad else None
+    p2_ok = ad_mean is not None and ad_mean < ANYDESK_IDLE_MAX_PCT and ad_max < G3_THRESHOLD_CAP_PCT
+    rows.append(_row("P2", p2_ok,
+                     f"AnyDesk mean CPU < {ANYDESK_IDLE_MAX_PCT} % and max < {G3_THRESHOLD_CAP_PCT} % (the G3 cap) of host "
+                     f"over {len(body)} samples" if ad_mean is not None else "no sample (sampler unavailable)", {"mean_pct": None if ad_mean is None else round(ad_mean, 3),
                                                               "max_pct": max(ad) if ad else None}))
 
     # P3: no other agent working.

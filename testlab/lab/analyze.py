@@ -193,12 +193,14 @@ def trajectories(entities) -> dict:
             t = traj.get(eid)
             if t is None:
                 t = traj[eid] = {"type": etype, "st": array("d"), "x": array("d"), "y": array("d"), "hp": [],
-                                 "dead": [], "max_hp": max_hp, "speed": speed}
+                                 "dead": [], "tick": array("d"), "max_hp": max_hp, "speed": speed}
             t["st"].append(st)
             t["x"].append(x)
             t["y"].append(y)
             t["hp"].append(hp)
             t["dead"].append(dead)
+            tick = row.get("tick")
+            t["tick"].append(float("nan") if tick is None else float(tick))
     return traj
 
 
@@ -637,7 +639,8 @@ def check_render_jumps(ev, a):
         allowance = [1] * len(windows)
         stalls = host_stalls(ev)
         stall_events = all_stall_events
-        for e in js:
+        used_respawns = set()
+        for e in sorted(js, key=lambda x: (x.get("st") is None, x.get("st") or 0.0)):
             if e.get("type") in set(a.get("ignore_types", ["projectile"])):
                 counts["ignored_type"] = counts.get("ignored_type", 0) + 1
                 continue
@@ -672,11 +675,13 @@ def check_render_jumps(ev, a):
             # The client's own received stream (20 Hz) resolves a teleport the 5 Hz server
             # probe aliases: the server put the entity elsewhere in ONE snapshot.
             received_teleport = received_step is not None and received_step >= 0.8 * (e.get("step") or 0)
-            # F29: the LOCAL player's own snap at a server-confirmed respawn (HP to 0, then to max, and an
-            # authoritative position jump in the window) is the game moving the player, even when the
-            # rendered step also carries the prediction lead and is a few percent larger than the server's
-            # own step. Evidence is per entity: another entity's respawn explains nothing here.
-            local_respawn = bool(e.get("local")) and _server_respawn_jump(ev, near, e.get("id"), e.get("st"), e.get("step") or 0)
+            # F29: the LOCAL player's own snap at a server-confirmed respawn of THIS player. The snapshot
+            # that carries the new position must fall inside that respawn's tick window (last HP 0 probe
+            # to first max-HP probe, plus RESPAWN_SNAP_SLACK_TICKS), match the rendered snap in direction
+            # and size, and each respawn explains at most one snap (`used_respawns`).
+            local_respawn = (bool(e.get("local")) and not received_teleport and not explained
+                             and _server_respawn_jump(ev, near, e.get("id"), e.get("st"), e.get("step") or 0,
+                                                      used_respawns))
             if received_teleport or local_respawn or (explained and (respawned or server_step > walkable)):
                 counts["server_teleport"] = counts.get("server_teleport", 0) + 1
                 if local_respawn and not (received_teleport or explained):
@@ -849,36 +854,86 @@ def _server_respawned(ev, eid, st, before=0.4, after=0.3) -> bool:
     return False
 
 
-RESPAWN_JUMP_MIN_FRACTION = 0.5   # policy, unvalidated (F29): the authoritative jump must be >= half the rendered step
+# Policy, unvalidated (F29B; calibrated on one event, ibz3 st 911.107: received snap 0.84 for a rendered
+# step of 1.088, tick 55365 inside the probe window 55363..55376).
+RESPAWN_JUMP_MIN_FRACTION = 0.5   # the received snap must be >= half the rendered step (>= 0.8 is the older teleport rule)
+RESPAWN_SNAP_MIN_COS = 0.7        # received delta and rendered delta within ~45 degrees
+RESPAWN_SNAP_SLACK_TICKS = 2      # the carrying snapshot's world tick may trail the max-HP probe tick by this much
 
 
-def _server_respawn_jump(ev, near, eid, st, step, before=0.4, after=0.3) -> bool:
-    """The server confirms a respawn of THIS entity around st: its HP reached 0 (or it was flagged dead),
-    then went to max, and its authoritative position moved by at least RESPAWN_JUMP_MIN_FRACTION of the
-    rendered step - between consecutive server probe samples, or between consecutive samples this client
-    received (`near`: its samples around the jump). The two bounds are needed because the 5 Hz server probe can alias a respawn that the
-    20 Hz received stream resolves. False without all three pieces of evidence."""
+def _respawn_windows(t) -> list:
+    """[(HP 0 tick, max-HP tick, HP 0 probe st, max-HP probe st)] for one entity trajectory: the last HP 0 /
+    dead probe row and the first max-HP row after it. Each is one server-confirmed respawn; the probe is
+    5 Hz, so the respawn happened inside that interval."""
+    max_hp = t.get("max_hp") or 0
+    ticks = t.get("tick")
+    if max_hp <= 0 or ticks is None:
+        return []
+    out = []
+    died = None
+    for hp, dead, tick, pst in zip(t["hp"], t.get("dead") or [None] * len(t["hp"]), ticks, t["st"]):
+        if hp is None or tick != tick:
+            continue
+        if hp <= 0 or dead:
+            died = (tick, pst)
+        elif died is not None and hp >= max_hp:
+            out.append((died[0], tick, died[1], pst))
+            died = None
+    return out
+
+
+def _received_snap(near, eid, st, before=0.25, after=0.15):
+    """The largest consecutive displacement of the position this client received for the entity in
+    [st-before, st+after]: (size, world tick of the later sample, received delta, rendered delta over the
+    same pair), or None."""
+    prev = None
+    best = None
+    for s in near.get("samples", []):
+        t = s.get("st")
+        if t is None or t < st - before:
+            continue
+        if t > st + after:
+            break
+        row = next((r for r in s.get("ents", []) if r[0] == eid and len(r) >= 7), None)
+        if row is None:
+            continue
+        wt = s.get("world_tick")
+        if prev is not None and wt is not None:
+            d = (row[5] - prev[0], row[6] - prev[1])
+            size = math.hypot(*d)
+            if best is None or size > best[0]:
+                best = (size, wt, d, (row[3] - prev[2], row[4] - prev[3]))
+        prev = (row[5], row[6], row[3], row[4])
+    return best
+
+
+def _server_respawn_jump(ev, near, eid, st, step, used, before=0.4, after=0.3) -> bool:
+    """The server confirms a respawn of THIS entity that explains this snap: its HP reached 0 (or it was
+    flagged dead) and then max within [st-before, st+after]; the snapshot carrying the biggest position
+    step this client received (`near`) has a world tick inside [HP 0 probe tick, max-HP probe tick +
+    RESPAWN_SNAP_SLACK_TICKS]; that step is >= 0.5x the rendered step and points the way the rendered
+    snap went. `used` holds the (entity, HP 0 tick) respawns that already explained a snap: one respawn
+    explains one snap, so a second or later snap in the window fails."""
     t = ev["traj"].get(eid)
     if not t or st is None or step <= 0:
         return False
-    max_hp = t.get("max_hp") or 0
-    if max_hp <= 0:
+    snap = _received_snap(near, eid, st)
+    if snap is None:
         return False
-    rows = [(hp, bool(d)) for s2, hp, d in zip(t["st"], t["hp"], t.get("dead") or [None] * len(t["st"]))
-            if st - before <= s2 <= st + after and hp is not None]
-    died = False
-    respawned = False
-    for hp, dead in rows:
-        if hp <= 0 or dead:
-            died = True
-        elif died and hp >= max_hp:
-            respawned = True
-    if not respawned:
+    size, wtick, d, r = snap
+    if size < RESPAWN_JUMP_MIN_FRACTION * step:
         return False
-    need = RESPAWN_JUMP_MIN_FRACTION * step
-    server_step = _server_displacement(ev, eid, st, before=before, after=after)
-    received = _received_step(near, eid, st, any_step=True)
-    return max(server_step or 0.0, received or 0.0) >= need
+    rn = math.hypot(*r)
+    if rn <= 1e-9 or (d[0] * r[0] + d[1] * r[1]) / (size * rn) < RESPAWN_SNAP_MIN_COS:
+        return False
+    for died, back, died_st, back_st in _respawn_windows(t):
+        key = (eid, died)
+        if key in used or not (st - before <= back_st and died_st <= st + after):
+            continue
+        if died <= wtick <= back + RESPAWN_SNAP_SLACK_TICKS:
+            used.add(key)
+            return True
+    return False
 
 
 def _server_displacement(ev, eid, st, before=0.4, after=0.2):
