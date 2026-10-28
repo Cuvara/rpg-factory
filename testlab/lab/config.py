@@ -70,6 +70,9 @@ class LabConfig:
     loadtest_exe: Path | None = None
 
     def __post_init__(self) -> None:
+        if not hasattr(self, "explicit"):
+            # H6: config keys the caller named (command line or config file) rather than took from the defaults.
+            self.explicit: set = set()
         if self.server_mode not in SERVER_MODES:
             raise ValueError(f"server_mode '{self.server_mode}' unknown (want {' or '.join(SERVER_MODES)})")
         if self.native_build not in ("auto", "aot", "r2r"):
@@ -133,6 +136,7 @@ class LabConfig:
             if key not in names:
                 raise ValueError(f"unknown config key '{key}' (known: {', '.join(sorted(names))})")
             setattr(self, key, value)
+            self.explicit.add(key)
         self.__post_init__()
         return self
 

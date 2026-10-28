@@ -175,6 +175,17 @@ CHECK_DEFAULTS = [
     ("render jump detector", "max_speed / factor / slack", "6.0 / 3.0 / 0.25",
      "max_speed above the player speed 5 u/s (client DotsWorldBridge); factor and slack " + POLICY),
     ("host_stalls", "frame / window", "250 ms / 250 ms in >= 2 processes", POLICY),
+    ("host_quiet INFO tier (H3)", "frame / window", f"{analyze.INFO_STALL_MIN_MS:g} ms / {analyze.INFO_STALL_WINDOW_S * 1000:g} ms in >= 2 processes",
+     f"{POLICY}. INFO only, never graded and never PRODUCT: ibz3 st 927.3 was a 42-78 ms stall in three clients that the 250 ms rule counts as nothing"),
+    ("host_quiet INFO class (H3)", "single-process freeze", f"one frame >= {analyze.INFO_FREEZE_MIN_MS:g} ms outside a graded host stall",
+     f"{POLICY}. INFO only: k4n5 had 5 s freezes that nothing classified"),
+    ("cross_client_convergence gap (H2)", "gap / pad before / settle after",
+     f"{analyze.CLIENT_GAP_S:g} s without a sample, a net_state other than InWorld, or a frame >= {analyze.INFO_FREEZE_MIN_MS:g} ms / "
+     f"{analyze.CLIENT_GAP_PAD_BEFORE_S:g} s / {analyze.CLIENT_GAP_SETTLE_S:g} s",
+     f"{POLICY}. A client that is frozen or reconnecting is not an observer; its samples are left out and reported. k4n5: the 15 worst "
+     "pairs were c0 catching up within 0.8 s after a 5 s freeze. The p95 / max limits are unchanged"),
+    ("render_jumps hop sizes (H5)", "boundary window", f"{analyze.HOP_BOUNDARY_WINDOW_S:g} s of a scripted step boundary",
+     f"{POLICY}. Reported only; the verdict still counts crossings"),
     ("qualifications", "HOST_LOAD_WARN_PCT", 50.0, POLICY),
     ("snapshot_order", "max_backward / max_duplicates", "0 / 0", "definition: the world tick only grows"),
     ("snapshot_order", "min_snapshots", 10, POLICY),

@@ -9,9 +9,11 @@
 #   --no-claude     skip `claude plugin validate`
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
+gitcfg_snapshot "$ROOT"      # M4/P0: no test may rewrite the shared git config of the repo this runs in (checked at the end)
 use_ws=true; use_claude=true; release=false
 for a in "$@"; do
   case "$a" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;; esac
@@ -103,6 +105,7 @@ run "testlab: unit tests" python3 -B testlab/tests/test_lab.py
 run "testlab: packet impairment (S18) unit tests" python3 -B testlab/tests/test_netem.py
 run "testlab: native game server mode unit tests" python3 -B testlab/tests/test_native.py
 run "testlab: failure-summary unit tests" python3 -B testlab/tests/test_failsum.py
+run "testlab: harness defects H1-H7 (M4) unit tests" python3 -B testlab/tests/test_m4_harness.py
 run "testlab: scenarios load" python3 -B testlab/testlab.py list
 find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
@@ -133,6 +136,7 @@ run "skill citation checker (fixture repos)" env -u TMPDIR tests/skill-citations
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+run "git environment isolation + shared-config guard (throwaway repos)" env -u TMPDIR tests/git-env-isolation.test.sh
 if ! $use_ws; then skp "orca commands cited in parallel-work.md" "--no-workspace"
 elif ! command -v orca >/dev/null 2>&1; then skp "orca commands cited in parallel-work.md" "orca not on PATH"
 else run "orca commands cited in parallel-work.md exist in orca --help" tests/orca-commands.test.sh; fi
@@ -298,6 +302,11 @@ if $use_claude && command -v claude >/dev/null 2>&1; then
 else
   skp "claude plugin validate" "claude CLI unavailable or --no-claude"
 fi
+
+# ---- the shared git config (common dir) must be byte-identical to what it was when the run started
+if [ -n "${GITCFG_FILE:-}" ]; then
+  if out=$(gitcfg_verify); then ok "shared git config unchanged during the run"; else bad "shared git config changed during the run" "$out"; fi
+else skp "shared git config unchanged during the run" "not inside a git repository"; fi
 
 total=$((pass + fail + skip))
 echo "----"

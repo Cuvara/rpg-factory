@@ -14,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import analyze, clients, hostguard, native, netem, provenance, rawprobe, report, scenarios, stack, util
+from . import analyze, clients, hostguard, native, netem, provenance, rawprobe, report, scenarios, soakinputs, stack, util
 from .config import LabConfig
 from .probe import ServerProbe
 
@@ -56,8 +56,11 @@ def _player_fingerprint(cfg: LabConfig) -> dict:
 
 def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, build_server: bool = False,
         keep_clients: bool = False, run_id: str | None = None, quiet: bool = False,
-        require_clean_host: bool = False, allow_agents=()) -> dict:
+        require_clean_host: bool = False, allow_agents=(), expect_player_sha: str | None = None,
+        expect_server_sha: str | None = None) -> dict:
     sc = scenarios.load(scenario_name, overrides)
+    # H6: a soak-class run never starts on a default player or server checkout; raises before a run directory exists.
+    soak_inputs = soakinputs.check(cfg, sc, expect_player_sha=expect_player_sha, expect_server_sha=expect_server_sha)
     run_id = run_id or util.new_run_id(sc["id"])
     run_dir = cfg.runs_root / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -86,6 +89,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
                        "dirty": bool(_git(cfg.client_project, "status", "--porcelain"))},
         },
         "player": _player_fingerprint(cfg),
+        "soak_inputs": soak_inputs,
         "host_load_at_start": _host_load(),
         # What the player under test was BUILT from (testlab-build.json written by build-client);
         # repos.client above is only the configured project checkout, which may have moved on.

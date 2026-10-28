@@ -2461,14 +2461,22 @@ class BoundedMemoryAnalysisTests(unittest.TestCase):
     value sets kept in util.Distribution, convergence pairs formed per render-tick window and
     entity_lifecycle merged with the sample stream. Results must equal the pre-T41 analysis."""
 
+    # Reporting added after the frozen reference (M4: H2 skipped client gaps, H3 INFO tiers, H5 hop sizes). Additive and never
+    # graded; every other field, verdicts included, must still equal the reference.
+    ADDED_MEASURED = {"skipped_ticks_backwards", "skipped_client_gap_samples", "host_stalls_info_30ms", "single_process_freezes_1s"}
+    ADDED_DETAIL = {"skipped_client_gaps", "info_stalls_30ms", "single_process_freezes", "hop_sizes_by_boundary"}
+
     def _results(self, mod, run):
         ev = mod.load_evidence(run)
         out = {}
         for r in mod.evaluate(ev):
             m = r.get("measured")
             if isinstance(m, dict):
-                m = {k: v for k, v in m.items() if k != "skipped_ticks_backwards"}
-            out[r["id"]] = (r["status"], m, r.get("threshold"), r.get("detail"))
+                m = {k: v for k, v in m.items() if k not in self.ADDED_MEASURED}
+            d = r.get("detail")
+            if isinstance(d, dict):
+                d = {k: v for k, v in d.items() if k not in self.ADDED_DETAIL}
+            out[r["id"]] = (r["status"], m, r.get("threshold"), d)
         return out
 
     def test_results_equal_the_pre_streaming_analysis(self):
@@ -4020,6 +4028,7 @@ class HostGuardTests(unittest.TestCase):
         t = CleanupTests()
         with tempfile.TemporaryDirectory() as d:
             cfg, stopped = t._patched_run(d, None)
+            cfg.explicit |= {"player_exe", "server_repo"}      # H6: a soak names its player and server checkout
             ensure = stack.ensure
             with mock.patch.object(runner.hostguard, "preflight", return_value=bad):
                 res = runner.run(cfg, "S09", quiet=True)

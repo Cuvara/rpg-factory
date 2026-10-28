@@ -6,6 +6,42 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- tests: no test can rewrite the shared git config of the repository it runs in. Root cause (reproduced): a git
+  process that runs a command (`git rebase --exec tests/run-all.sh`, `git bisect run`, a hook) exports `GIT_DIR`; the
+  fixtures' `git init <tmpdir>` then re-initialised the CALLER's repository, and from a linked worktree that wrote
+  `core.worktree = <worktree path>` (or `core.bare = true`) into the main checkout's `.git/config`, so every git command
+  in the main checkout failed (`Invalid path '/mnt/c/Users'`; seen on `rpg-factory` pointing at `f27-cite`).
+  `scripts/lib/compat.sh`, which every test sources, now unsets the `GIT_*` state variables. `tests/run-all.sh` hashes
+  the shared config before and after the run and fails with `shared git config changed during the run` (diff and a
+  copy of the old file in the message); `tests/git-env-isolation.test.sh` fails without the fix.
+- testlab H1-H7 (M1 failure matrix, section 7c; no recorded verdict changed, no threshold weakened):
+  - H1: viewer (outgoing, `front` process) AnyDesk sessions now have an end and a duration, from the
+    `ad_app.control - Session count: (total, incoming)` lines (new event type `session_count`, not a guard input). The
+    `host_guard` detail lists them under `anydesk_outgoing_sessions` with the share of the window; a session with no end
+    line is reported open with an unknown duration. (F28 assumed 20 s sessions; they were 15:00 each.)
+  - H2: `cross_client_convergence` leaves out the samples of a client that is not a valid observer: a net_state other
+    than InWorld (`RECONNECT`), a 1 s gap in its sample stream or a frame of 1 s or more (`CLIENT`), from 0.5 s before to 2 s
+    after. `detail.skipped_client_gaps` lists the spans and `measured.skipped_client_gap_samples` counts the samples. A
+    divergence outside those spans still FAILs. (k4n5: the freeze and the reconnect of the affected clients are skipped; the 4.6 s in between,
+    where client 0 drew an entity up to 8 u off before it noticed the dead link, is NOT excluded and still FAILs - no causal link between a
+    freeze and a later reconnect is assumed.)
+  - H3: `host_quiet` INFO tiers, never graded and never PRODUCT: host-wide stalls of >= 30 ms ending within 50 ms in
+    >= 2 client processes (`host_stalls_info_30ms`, `detail.info_stalls_30ms`) and single-process freezes of >= 1 s
+    outside a graded stall (`single_process_freezes_1s`, `detail.single_process_freezes`). The 250 ms rule is unchanged.
+  - H5: `render_jumps` reports `detail.hop_sizes_by_boundary`: counted jump sizes per scripted step boundary (time modulo
+    `repeat_cycle_s`, within 3 s). Reported only; grading is unchanged. A size-based rule is proposed in
+    `M4-HARNESS-H1H7.md`, not implemented.
+  - H6: a `requires_clean_host` scenario refuses to start (exit 3, before a run directory or the stack exists) unless
+    `--player` and `--server-repo` are named, and, with `--expect-player-sha` / `--expect-server-sha`, unless the player
+    (`testlab-build.json` `client_head`) and the server checkout are those commits. `run.json` records `soak_inputs`. Other
+    scenarios keep their defaults. (`lab/soakinputs.py`.)
+  - H7: at guard stop the session-relevant `ad.trace` lines (from one hour before the guard started; peer text of
+    accept/authenticate lines redacted) are copied to `host/ad-trace-excerpt.txt`; `guard-summary.json` records the outcome.
+  - Tests: `testlab/tests/test_m4_harness.py` (30 tests, 28 fail on the previous harness). The frozen-reference comparison in
+    `test_lab.py` ignores exactly the additive reporting keys above; verdicts and every other field still have to equal it.
+
+### Fixed
+
 - testlab `analyze` now isolates the full failure-summary build/write step: non-`OSError` exceptions no longer escape,
   and a minimal summary records the exception type/message and preserves the original verdict and exit code when possible.
 

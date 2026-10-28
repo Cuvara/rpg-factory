@@ -63,7 +63,8 @@ G6_METER_WINDOW_S = 2.0          # AchievedRateMeter publishes the rate of the l
 G6_SAMPLE_S = 1.0                # one /status sample period
 G6_STALL_DEVIATION_PCT = 35.0    # a host clock step is about +-20 %; an interval this far off is a stall, not a correction
 G6_MIN_WINDOWS = 3               # consecutive same-sign sliding windows that must all exceed the limit
-HOLD_SLACK_S = 5.0          # extra time hold_until() waits for the sample that closes the window
+EXCERPT_LEAD_S = 3600.0     # H7: the ad.trace excerpt starts this long before the guard, so a session already open is in it
+HOLD_SLACK_S = 5.0         # extra time hold_until() waits for the sample that closes the window
 PRE_QUIET_S = 120.0              # P1: no session event or connection entry this long before the start
 PRE_SAMPLE_S = 120.0             # preflight sample length (P2, P4, P5)
 P4_FOREIGN_PCT = 2.0             # sustained foreign load over the preflight sample
@@ -167,6 +168,12 @@ class AnyDeskPaths:
                 "connection_trace": str(self.connection_trace) if self.connection_trace else None}
 
 
+# `ad_app.control - Session count: (total, incoming)` is logged by the resident whenever the number of sessions changes.
+# total - incoming is the number of outgoing (viewer, `front` process) sessions: (1, 0) while this host views a peer,
+# (1, 1) while a peer controls this host, (0, 0) when none is left. It is the only line that records the END of a
+# viewer session (H1); it is not in SESSION_TYPES, so no guard counts it.
+_SESSION_COUNT = re.compile(r"Session count: \((\d+), (\d+)\)")
+
 _LINE = re.compile(r"^\s*(?P<level>\w+)\s+(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+(?P<proc>\w+)\s+(?P<pid>\d+)\s+"
                    r"(?P<tid>\d+)\s+(?:(?P<fiber>\d+)\s+)?(?P<module>[\w.]+)\s+-\s+(?P<text>.*?)\s*$")
 
@@ -196,6 +203,8 @@ def _classify_text(module: str, text: str) -> str | None:
         return "net_closed"
     if text.startswith("Stopped") and "capture" in module:
         return "capture_stopped"
+    if module.endswith("ad_app.control") and _SESSION_COUNT.search(text):
+        return "session_count"
     return None
 
 
@@ -226,12 +235,16 @@ def parse_ad_trace(data: bytes | str, since_offset: int = 0) -> tuple[list[dict]
             ev["fiber"] = int(m["fiber"])
         if kind == "backend_pid":
             ev["backend_pid"] = int(re.search(r"\d+", m["text"])[0])
+        if kind == "session_count":
+            c = _SESSION_COUNT.search(m["text"])
+            ev["count"] = [int(c[1]), int(c[2])]
         events.append(ev)
     return events, end
 
 
 def _event_key(e: dict) -> tuple:
-    return (e["type"], e.get("epoch"), e.get("proc"), e.get("pid"), e.get("fiber"), e.get("backend_pid"))
+    return (e["type"], e.get("epoch"), e.get("proc"), e.get("pid"), e.get("fiber"), e.get("backend_pid"),
+            tuple(e["count"]) if e.get("count") else None)
 
 
 def _distinct_events(rows: list[dict]) -> list[dict]:
@@ -284,6 +297,79 @@ def sessions_from_events(events: list[dict]) -> list[dict]:
             if s is not None and s["end"] is None:
                 s["end"], s["end_reason"] = e["epoch"], t
     return sessions
+
+
+def outgoing_sessions(events: list[dict], window: tuple[float, float] | None = None) -> dict:
+    """Viewer (outgoing, `front` process) AnyDesk sessions with their ends (H1). A `session_started` by the
+    `front` process opens one; the end is the first later `Session count: (total, incoming)` line whose outgoing
+    count (total - incoming) is below the number of open viewer sessions. Without such a line the session stays
+    open (`end` None, `end_reason` "not_seen") and its duration is unknown; inside `window` it is counted up to the
+    window end and flagged `open_at_window_end`. Returns {"sessions": [...], "count_events": n, "active_s_in_window",
+    "active_fraction_of_window"}. Pure; no grade reads it."""
+    rows = _distinct_events(sorted((e for e in events if e.get("epoch") is not None
+                                    and (e["type"] == "session_count" or (e["type"] == "session_started" and e.get("proc") == "front"))),
+                                   key=lambda e: e["epoch"]))      # the same line can arrive from the guard and from an excerpt
+    sessions: list[dict] = []
+    open_: list[dict] = []
+    counts = 0
+    for e in rows:
+        if e["type"] == "session_started":
+            s = {"start": e["epoch"], "end": None, "end_reason": "not_seen", "pid": e.get("pid")}
+            sessions.append(s)
+            open_.append(s)
+            continue
+        counts += 1
+        total, incoming = e["count"]
+        outgoing = max(0, total - incoming)
+        while len(open_) > outgoing and e["epoch"] >= open_[0]["start"]:
+            s = open_.pop(0)
+            s["end"], s["end_reason"] = e["epoch"], "session_count"
+    out = []
+    active = 0.0
+    for s in sessions:
+        row = {"start": iso_utc(s["start"]), "start_epoch": s["start"], "pid": s["pid"], "end_reason": s["end_reason"],
+               "end": iso_utc(s["end"]) if s["end"] is not None else None, "end_epoch": s["end"],
+               "duration_s": round(s["end"] - s["start"], 1) if s["end"] is not None else None}
+        if window is not None:
+            hi = s["end"] if s["end"] is not None else window[1]
+            overlap = max(0.0, min(hi, window[1]) - max(s["start"], window[0]))
+            row["overlap_with_window_s"] = round(overlap, 1)
+            if s["end"] is None and s["start"] <= window[1]:
+                row["open_at_window_end"] = True
+            active += overlap
+        out.append(row)
+    res = {"sessions": out, "count_events": counts}
+    if window is not None and window[1] > window[0]:
+        res["active_s_in_window"] = round(active, 1)
+        res["active_fraction_of_window"] = round(active / (window[1] - window[0]), 4)
+    return res
+
+
+# The text after these prefixes names the peer; it is replaced in the excerpt. Nothing else in the copied lines does.
+_EXCERPT_REDACT = ("Accept request from", "Authenticated with")
+
+
+def ad_trace_excerpt(data: bytes | str, since_epoch: float) -> list[str]:
+    """Session-relevant lines of an ad.trace (accept/auth, backend pid and process start, session start/close,
+    capture start/stop, `Session count`) at or after `since_epoch`, verbatim except for the peer text of
+    accept/authenticate lines. ad.trace rolls over (H7): the lines of an earlier run are gone from it within days."""
+    raw = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    out: list[str] = []
+    for line in raw.splitlines():
+        m = _LINE.match(line)
+        if not m or _ts_epoch(m["ts"]) < since_epoch:
+            continue
+        text = m["text"]
+        if _classify_text(m["module"], text) is None and not text.startswith("Process start:") and "Switching to dda" not in text:
+            continue
+        line = line.rstrip()
+        for prefix in _EXCERPT_REDACT:
+            i = line.find(prefix)
+            if i >= 0:
+                line = line[:i + len(prefix)] + " <redacted>"
+                break
+        out.append(line)
+    return out
 
 
 def parse_connection_trace(data: bytes | str) -> list[dict]:
@@ -733,11 +819,30 @@ class HostGuard:
             except OSError:
                 pass
         summary = self.summary()
+        summary["ad_trace_excerpt"] = self.write_excerpt()
         try:
             util.write_json(self.out / "guard-summary.json", summary)
         except OSError as exc:
             summary["write_error"] = str(exc)
         return summary
+
+    def write_excerpt(self) -> dict:
+        """H7: copy the session-relevant ad.trace lines from EXCERPT_LEAD_S before the guard started into
+        `<out>/ad-trace-excerpt.txt`, so the end of every session (`Session count` lines) stays with the run after
+        the rolling file has moved on. Never raises: the outcome, a failure included, is returned for guard-summary.json."""
+        p = self.paths.ad_trace
+        if p is None:
+            return {"written": False, "why": "no ad.trace found"}
+        try:
+            since = (self.started_epoch or time.time()) - EXCERPT_LEAD_S
+            lines = ad_trace_excerpt(p.read_bytes(), since)
+            header = [f"# rpg-factory testlab: session-relevant lines of {p.name}, {iso_utc(since)} to {iso_utc(time.time())} (UTC)",
+                      "# peer text of accept/authenticate lines is redacted; the source file rolls over, this copy does not"]
+            (self.out / "ad-trace-excerpt.txt").write_text("\n".join(header + lines) + "\n", encoding="utf-8", newline="\n")
+            return {"written": True, "lines": len(lines), "since": iso_utc(since), "source": p.name}
+        except OSError as exc:
+            self.errors.append(f"excerpt: {type(exc).__name__}: {exc}")
+            return {"written": False, "why": f"{type(exc).__name__}: {exc}"}
 
     def summary(self) -> dict:
         rows = util.read_ndjson(self.out / "guard.ndjson") if (self.out / "guard.ndjson").exists() else []
