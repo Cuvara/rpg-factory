@@ -105,6 +105,7 @@ run "testlab: unit tests" python3 -B testlab/tests/test_lab.py
 run "testlab: packet impairment (S18) unit tests" python3 -B testlab/tests/test_netem.py
 run "testlab: native game server mode unit tests" python3 -B testlab/tests/test_native.py
 run "testlab: failure-summary unit tests" python3 -B testlab/tests/test_failsum.py
+run "testlab: harness defects H1-H7 (M4) unit tests" python3 -B testlab/tests/test_m4_harness.py
 run "testlab: scenarios load" python3 -B testlab/testlab.py list
 find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 

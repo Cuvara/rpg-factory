@@ -153,6 +153,45 @@ def host_stalls(ev: dict, min_ms: float = 250.0, window_s: float = 0.25) -> list
     return stalls
 
 
+INFO_STALL_MIN_MS = 30.0       # H3 INFO tier: a frame this long ...
+INFO_STALL_WINDOW_S = 0.05     # ... ending within this of another process's, in >= 2 processes
+INFO_FREEZE_MIN_MS = 1000.0    # H3 INFO tier: one process frozen this long
+
+
+def host_stall_tier_info(ev: dict, min_ms: float = INFO_STALL_MIN_MS, window_s: float = INFO_STALL_WINDOW_S) -> list:
+    """INFO tier of `host_stalls` (H3): frames of >= min_ms that END within window_s of each other in at least two
+    client processes, merged into clusters. Much finer than the graded 250 ms rule (ibz3 had a 42-78 ms host-wide
+    stall in three clients that rule counts as nothing). Never graded: it explains, it does not decide, and nothing
+    that uses `host_stalls()` reads it. Returns [{start_st, end_st, clients, frames, max_ms}] by start."""
+    frames = sorted((st, dt, c["index"]) for c in ev["clients"] for st, dt in c.get("frames", []) if dt >= min_ms)
+    ends = [f[0] for f in frames]
+    clusters: list[dict] = []
+    for i, (st, dt, idx) in enumerate(frames):
+        peers = {frames[j][2] for j in range(bisect_left(ends, st - window_s), bisect_right(ends, st + window_s))}
+        if len(peers) < 2:
+            continue
+        if clusters and st - clusters[-1]["end_st"] <= window_s:
+            c = clusters[-1]
+            c["end_st"] = max(c["end_st"], st)
+            c["start_st"] = min(c["start_st"], st - dt / 1000.0)
+            c["clients"] |= peers
+            c["frames"] += 1
+            c["max_ms"] = max(c["max_ms"], dt)
+        else:
+            clusters.append({"start_st": st - dt / 1000.0, "end_st": st, "clients": set(peers), "frames": 1, "max_ms": dt})
+    return clusters
+
+
+def single_process_freezes(ev: dict, min_ms: float = INFO_FREEZE_MIN_MS) -> list:
+    """INFO class (H3): a frame of >= min_ms in one client process that is not part of a graded host-wide stall (the
+    250 ms rule). k4n5 had 5 s freezes that nothing classified. Returns [{client, st, dt_ms}] by time. Never graded."""
+    stalls = host_stalls(ev)
+    out = [{"client": c["index"], "st": round(st, 2), "dt_ms": round(dt, 1)}
+           for c in ev["clients"] for st, dt in c.get("frames", [])
+           if dt >= min_ms and not _in_stall(stalls, st - dt / 1000.0, st, slack=0.0)]
+    return sorted(out, key=lambda r: r["st"])
+
+
 def _in_stall(stalls, t0: float, t1: float, slack: float = 0.3, after: float | None = None) -> bool:
     """Overlap with a host-wide stall, widened by `slack` before it and `after` (default `slack`)
     after it. A stall's consequences land after it ends: inputs that could not be sent past the
@@ -620,6 +659,53 @@ def check_position_divergence(ev, a):
                              [str(ev["run_dir"] / "server" / "entities.ndjson")])
 
 
+HOP_BOUNDARY_WINDOW_S = 3.0     # H5: a counted jump within this of a scripted step boundary belongs to that boundary
+
+
+def scripted_boundaries(scenario: dict) -> dict:
+    """{boundary time within the cycle (s): [client indexes whose script has a step starting or ending there]}."""
+    out: dict = {}
+    for k, pc in enumerate(scenario.get("per_client") or []):
+        for step in (pc or {}).get("steps") or []:
+            for key in ("t0", "t1"):
+                if step.get(key) is not None:
+                    out.setdefault(float(step[key]), []).append(k)
+    return out
+
+
+def hop_size_distribution(scenario: dict, events: list) -> dict:
+    """H5: the sizes of the counted render jumps per scripted boundary, REPORTED ONLY (grading counts crossings of a
+    threshold that grows with the frame time, so the same hop is counted or not depending on the frame rate: 0 in
+    u41r, 4 in ibz3, 18 in 3ng5, 32 in 9tgw). `events` are the counted jumps ({st, step, allowed, local, ...}). A
+    jump is attributed to the nearest boundary of the scenario's per-client scripts within HOP_BOUNDARY_WINDOW_S
+    (time taken modulo `repeat_cycle_s`), else to "none". Per boundary: count, size min/p50/p95/max, the mean `allowed`
+    (the dt-dependent threshold the crossing exceeded), and the sizes of the largest few."""
+    bounds = scripted_boundaries(scenario)
+    cycle = float(scenario.get("repeat_cycle_s") or 0.0) or None
+    rows: dict = {}
+    for e in events:
+        st, step = e.get("st"), e.get("step")
+        if st is None or step is None:
+            continue
+        phase = st % cycle if cycle else st
+        near = min(bounds, key=lambda b: abs(b - phase), default=None)
+        if near is not None and abs(near - phase) <= HOP_BOUNDARY_WINDOW_S:
+            key = f"t={near:g}s (clients {','.join(map(str, sorted(set(bounds[near]))))})"
+        else:
+            key = "none"
+        rows.setdefault(key, []).append((float(step), float(e.get("allowed") or 0.0), bool(e.get("local"))))
+    out = {}
+    for key, vals in sorted(rows.items()):
+        sizes = sorted(v[0] for v in vals)
+        out[key] = {"count": len(vals), "local": sum(1 for v in vals if v[2]),
+                    "size_min": round(sizes[0], 3), "size_p50": round(util.percentile(sizes, 50), 3),
+                    "size_p95": round(util.percentile(sizes, 95), 3), "size_max": round(sizes[-1], 3),
+                    "allowed_mean": round(sum(v[1] for v in vals) / len(vals), 3),
+                    "largest": [round(x, 3) for x in sizes[-5:][::-1]]}
+    return {"window_s": HOP_BOUNDARY_WINDOW_S, "cycle_s": cycle, "boundaries": out,
+            "note": "reported only; the verdict counts threshold crossings, not sizes"}
+
+
 def check_render_jumps(ev, a):
     """Rendered discontinuities, split by size: a MAJOR jump (>= major_step units in one frame) is a
     teleport/rubber-band any player sees; a MINOR one is a correction applied in a single frame
@@ -744,7 +830,8 @@ def check_render_jumps(ev, a):
                    sampling="every rendered frame, every replicated entity",
                    rationale="a rendered step larger than any legitimate speed is a discontinuity the player sees; "
                              ">= major_step is a teleport/rubber-band, smaller is a one-frame correction hitch",
-                   detail={"per_client": per_client, "largest": attributed},
+                   detail={"per_client": per_client, "largest": attributed,
+                           "hop_sizes_by_boundary": hop_size_distribution(ev["scenario"], [e for e in events if e.get("class") != "server_teleport"])},
                    artifacts=[str(c["dir"] / "events.ndjson") for c in ev["clients"]] +
                              [str(c["dir"] / "shots") for c in ev["clients"]])
 
@@ -1659,13 +1746,28 @@ def check_host_quiet(ev, a):
     """INFO: host-wide stalls seen during the run (several client processes stalling at once)."""
     stalls = host_stalls(ev)
     quiet = (ev["meta"].get("provenance") or {}).get("host_quiet") or {}
+    # H3 INFO tiers (never graded, never PRODUCT): the 250 ms rule above is unchanged.
+    fine = host_stall_tier_info(ev)
+    freezes = single_process_freezes(ev)
+    top = sorted(fine, key=lambda c: -c["max_ms"])[:20]
     return _result(INFO, {"host_stalls": len(stalls),
+                          "host_stalls_info_30ms": len(fine),
+                          "single_process_freezes_1s": len(freezes),
                           "clients_with_frames": sum(1 for c in ev["clients"] if c.get("frames")),
                           "load_start": quiet.get("load_start") or ev["meta"].get("host_load_at_start"),
                           "load_end": quiet.get("load_end")},
                    None,
-                   source="client frames.csv, frames >= 250 ms ending within 250 ms in >= 2 processes",
+                   source="client frames.csv, frames >= 250 ms ending within 250 ms in >= 2 processes "
+                          "(graded count); INFO tiers: >= 30 ms within 50 ms in >= 2 processes, single-process >= 1 s",
                    sampling="every frame", detail={"stalls": [(round(a, 2), round(b, 2), c) for a, b, c in stalls[:20]],
+                                                   "info_stalls_30ms": {
+                                                       "rule": f">= {INFO_STALL_MIN_MS:g} ms frames ending within {INFO_STALL_WINDOW_S * 1000:g} ms in >= 2 client processes; INFO",
+                                                       "largest": [{"start_st": round(c["start_st"], 3), "end_st": round(c["end_st"], 3),
+                                                                    "clients": sorted(c["clients"]), "frames": c["frames"],
+                                                                    "max_ms": round(c["max_ms"], 1)} for c in top]},
+                                                   "single_process_freezes": {
+                                                       "rule": f"one client frame >= {INFO_FREEZE_MIN_MS:g} ms outside a graded host-wide stall; INFO, never PRODUCT",
+                                                       "events": freezes[:20]},
                                                    **_long_frames_detail(ev)},
                    rationale="a stall shared by separate processes is the host, not the game; checks it explains are "
                              "INCONCLUSIVE, and the run should be repeated on a quiet host")
@@ -1696,6 +1798,34 @@ def _long_frames_with_guard_events(ev, min_ms: float = 1000.0, within_s: float =
                             "nearest_guard_event": hostguard.nearest_event(events, start + st, within_s)})
     out.sort(key=lambda r: r["st"])
     return out[:cap]
+
+
+def _outgoing_sessions_report(ev, window) -> dict:
+    """H1: viewer (outgoing) AnyDesk sessions with start, end and duration, INFO only. The end comes from the
+    `Session count` lines: the run's own `host/ad-trace-excerpt.txt` (H7), else the events the guard recorded, else (runs
+    recorded before H7) the ad.trace on this host as it is NOW, which is labelled as such because the rolling file may no
+    longer reach back to the run."""
+    events = list((ev.get("hostguard") or {}).get("events") or [])
+    source = "host/anydesk-events.ndjson"
+    excerpt = ev["run_dir"] / "host" / "ad-trace-excerpt.txt"
+    if excerpt.is_file():
+        extra, _ = hostguard.parse_ad_trace(excerpt.read_bytes(), 0)
+        source = "host/ad-trace-excerpt.txt + host/anydesk-events.ndjson"
+    elif not any(e.get("type") == "session_count" for e in events):
+        live = ((ev["meta"].get("host_guard") or {}).get("paths") or {}).get("ad_trace")
+        extra = []
+        if live and Path(live).is_file():
+            extra, _ = hostguard.parse_ad_trace(Path(live).read_bytes(), 0)
+            source = "host/anydesk-events.ndjson + ad.trace read at analysis time (the rolling file may not reach the run)"
+    else:
+        extra = []
+    lo, hi = window[0] - 6 * 3600.0, window[1] + 3600.0
+    near = [e for e in events + extra if e.get("epoch") is not None and lo <= e["epoch"] <= hi]    # 6 h before to 1 h after the window
+    rep = hostguard.outgoing_sessions(near, window)
+    rep["source"] = source
+    if not rep["count_events"]:
+        rep["note"] = "no `Session count` line found: viewer session ends are unknown"
+    return rep
 
 
 def check_host_guard(ev, a):
@@ -1733,7 +1863,8 @@ def check_host_guard(ev, a):
     res["fired"].extend(clock["fired"])
     detail = {"fired": res["fired"], "window_utc": res["window"], "stats": res["stats"],
               "clock_rate": clock["stats"], "guard_cost": hg.get("summary"),
-              "preflight_failed": (hg.get("preflight") or {}).get("failed")}
+              "preflight_failed": (hg.get("preflight") or {}).get("failed"),
+              "anydesk_outgoing_sessions": _outgoing_sessions_report(ev, (float(window[0]), float(window[1])))}
     if hg.get("procs"):
         # Evidence only (INFO): which processes were busy in the seconds a 5 s guard sample cannot resolve.
         detail["proc_sampler"] = {**hostguard.procs_report(list(hg["procs"])), "cost": hg.get("procs_summary")}
@@ -2583,12 +2714,59 @@ def _projectile_speed(ev, a):
     return None, None
 
 
-def _render_rows(c, skip, stalls, until=None):
+CLIENT_GAP_S = 1.0            # H2: a client that records no sample for this long was frozen or reconnecting
+CLIENT_GAP_PAD_BEFORE_S = 0.5
+CLIENT_GAP_SETTLE_S = 2.0     # H2: after a gap the client catches up to the server tick and re-fills its interpolation buffer
+
+
+def client_gap_spans(c: dict, until_s: float = float("inf")) -> list:
+    """Scenario-time spans in which client `c` is not a valid observer (H2), from what the harness records:
+    net_state events (any state but InWorld after the client was in the world: Ended, Reconnecting, Authenticating,
+    Assigning, Joining, up to the next InWorld; open-ended when it never came back) and single frames of
+    >= INFO_FREEZE_MIN_MS (the client froze). Gaps in the sample stream are found on the fly by `_render_rows`.
+    Returns [(st0, st1, reason)] widened by CLIENT_GAP_PAD_BEFORE_S / CLIENT_GAP_SETTLE_S."""
+    spans = []
+    down_since = None
+    for e in c["events"]:
+        if e.get("event") != "net_state" or e.get("st") is None or e["st"] < 0:
+            continue
+        if e.get("state") == "InWorld":
+            if down_since is not None:
+                spans.append((down_since, e["st"], "RECONNECT"))
+                down_since = None
+        elif down_since is None:
+            down_since = e["st"]
+    if down_since is not None:
+        spans.append((down_since, until_s, "RECONNECT"))
+    for st, dt in c.get("frames", []):
+        if dt >= INFO_FREEZE_MIN_MS:
+            spans.append((st - dt / 1000.0, st, "CLIENT"))
+    return [(a - CLIENT_GAP_PAD_BEFORE_S, b + CLIENT_GAP_SETTLE_S, why) for a, b, why in sorted(spans)]
+
+
+def _render_rows(c, skip, stalls, until=None, gaps=None, skipped=None):
     """(render_tick, id, x, y) of remote (not locally predicted) entities, in sample order, for
-    scenario time in [skip, until]."""
+    scenario time in [skip, until]. `gaps` (client_gap_spans) and sample-stream gaps of >= CLIENT_GAP_S are
+    skipped, and counted per span in `skipped` ({(st0, st1, reason): samples})."""
+    gaps = gaps or []
+    prev_st, sample_gap_end = None, None
     for smp in c["samples"]:
         rt, st = smp.get("render_tick"), smp.get("st")
         if rt is None or st is None or st < skip or (until is not None and st > until)                 or _in_stall(stalls, st, st, slack=0.5):
+            continue
+        if prev_st is not None and st - prev_st >= CLIENT_GAP_S:
+            sample_gap_end = (prev_st - CLIENT_GAP_PAD_BEFORE_S, st + CLIENT_GAP_SETTLE_S, "CLIENT")
+            if skipped is not None:
+                skipped.setdefault(sample_gap_end, 0)
+        prev_st = st
+        why = None
+        if sample_gap_end is not None and st <= sample_gap_end[1]:
+            why = sample_gap_end
+        else:
+            why = next((g for g in gaps if g[0] <= st <= g[1]), None)
+        if why is not None:
+            if skipped is not None:
+                skipped[why] = skipped.get(why, 0) + 1
             continue
         for row in smp.get("ents", []):
             if row[2] == 1 or row[1] == "projectile":
@@ -2680,7 +2858,11 @@ def check_cross_client_convergence(ev, a):
     stalls = host_stalls(ev)
     skip = float(a.get("skip_first_s", 2.0))
     until = a.get("until_s")
-    wins = [_TrackWindow(_render_rows(c, skip, stalls, None if until is None else float(until))) for c in ev["clients"]]
+    skipped_gaps = [dict() for _ in ev["clients"]]     # H2: per client, samples left out inside a not-InWorld / frozen span
+    run_end = float(ev["scenario"].get("duration_s") or float("inf"))
+    wins = [_TrackWindow(_render_rows(c, skip, stalls, None if until is None else float(until),
+                                      client_gap_spans(c, run_end), skipped_gaps[i]))
+            for i, c in enumerate(ev["clients"])]
     missing = [c["index"] for c, w in zip(ev["clients"], wins) if w.done]
     if missing:
         return _inconclusive(f"no samples with render_tick for client(s) {missing} (player without hook C4)",
@@ -2742,14 +2924,17 @@ def check_cross_client_convergence(ev, a):
     return _result(PASS if ok else FAIL, {"pairs": len(dists), "p50": round(dists.percentile(50), 4),
                                           "p95": round(p95, 4), "max": round(mx, 4),
                                           "skipped_near_server_teleport": near_teleport,
-                                          "skipped_ticks_backwards": sum(w.backwards for w in wins)},
+                                          "skipped_ticks_backwards": sum(w.backwards for w in wins),
+                                          "skipped_client_gap_samples": sum(sum(g.values()) for g in skipped_gaps)},
                    {"p95": a.get("p95", 0.35), "max": a.get("max", 1.0),
                     "teleport_window_s": a.get("teleport_window_s", 0.5)},
                    source="samples.ndjson rendered remote positions keyed by render_tick (C4), client pairs",
                    sampling=f"client {ev['scenario'].get('sample_hz')} Hz",
                    rationale="clients interpolate the same server stream; at the same render tick they must draw an "
                              "entity in the same place, or players see each other's world differently",
-                   detail={"worst": worst})
+                   detail={"worst": worst, "skipped_client_gaps": [
+                       {"client": i, "from_st": round(a0, 2), "to_st": round(a1, 2), "class": why, "samples_skipped": n}
+                       for i, g in enumerate(skipped_gaps) for (a0, a1, why), n in sorted(g.items())]})
 
 
 def check_stall_recovery(ev, a):

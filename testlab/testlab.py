@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, native, scenarios, stack, thresholds, util  # noqa: E402
+from lab import analyze, clients, config, delivery, hostguard, leakcheck, predtrace, report, runner, native, scenarios, soakinputs, stack, thresholds, util  # noqa: E402
 
 SUITES_FILE = Path(__file__).resolve().parent / "suites.json"
 THRESHOLDS_DOC = Path(__file__).resolve().parent / "docs" / "THRESHOLDS.md"
@@ -118,8 +118,25 @@ def _with_stack_teardown(cfg: config.LabConfig, args, body):
     return code
 
 
+def _refuse_stale_soak_inputs(cfg, names, args) -> int | None:
+    """H6: exit code 3 (nothing started, no stack touched) when a requires_clean_host scenario would run on a default
+    player or server checkout, or on a build other than the expected one; None when every scenario may start."""
+    for name in names:
+        try:
+            soakinputs.check(cfg, scenarios.load(name, _overrides(args)),
+                             expect_player_sha=getattr(args, "expect_player_sha", None),
+                             expect_server_sha=getattr(args, "expect_server_sha", None))
+        except soakinputs.SoakInputsError as exc:
+            util.eprint(f"testlab: {exc}")
+            return 3
+    return None
+
+
 def cmd_run(args) -> int:
     cfg = _cfg(args)
+    refused = _refuse_stale_soak_inputs(cfg, args.scenarios, args)
+    if refused is not None:
+        return refused
 
     def body():
         outcomes = []
@@ -127,7 +144,9 @@ def cmd_run(args) -> int:
             res = runner.run(cfg, name, overrides=_overrides(args), build_server=args.build_server,
                              keep_clients=args.keep_clients,
                              require_clean_host=getattr(args, "require_clean_host", False),
-                             allow_agents=tuple(getattr(args, "allow_agent", None) or ()))
+                             allow_agents=tuple(getattr(args, "allow_agent", None) or ()),
+                             expect_player_sha=getattr(args, "expect_player_sha", None),
+                             expect_server_sha=getattr(args, "expect_server_sha", None))
             outcomes.append(res["outcome"])
             args.build_server = False  # build once per invocation
         return _worst(outcomes)
@@ -165,6 +184,9 @@ def cmd_suite(args) -> int:
 def cmd_sweep(args) -> int:
     """Increasing bot levels on one scenario; stops at the first FAIL when asked."""
     cfg = _cfg(args)
+    refused = _refuse_stale_soak_inputs(cfg, [args.scenario], args)
+    if refused is not None:
+        return refused
     return _with_stack_teardown(cfg, args, lambda: _sweep(cfg, args))
 
 
@@ -423,6 +445,9 @@ def main(argv=None) -> int:
         sp.add_argument("--require-clean-host", action="store_true",
                         help="run the host preflight (P1-P6) and refuse to start on a FAIL; always on for scenarios "
                              "flagged requires_clean_host (S09)")
+        sp.add_argument("--expect-player-sha", help="soak-class scenarios: refuse to start unless the player was built from this "
+                                                    "client commit (7+ hex digits; testlab-build.json)")
+        sp.add_argument("--expect-server-sha", help="soak-class scenarios: refuse to start unless --server-repo is at this commit")
         sp.add_argument("--allow-agent", action="append",
                         help="Orca worktree name or path whose working agent P3 may ignore (the soak runner, the Lead)")
     r.set_defaults(fn=cmd_run)
