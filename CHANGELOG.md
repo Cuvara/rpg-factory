@@ -4,13 +4,38 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
+  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
+  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
+  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
+
 ### Changed
+
+- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
+  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
+  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
+  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
+  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
+  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
+  ibz3 stays INVALID on G1 (three real outgoing sessions).
 
 - skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
   the Windows high-resolution timer path accurately.
 
 ### Fixed
 
+- testlab `render_jumps`: a LOCAL snap at a server-confirmed respawn of the same player is explained by the respawn and
+  counted as `local_respawn`, bound tightly (RV-F29 B1): the snapshot carrying the new position has a world tick inside
+  [HP 0 probe tick, max-HP probe tick + 2], the received step is >= half the rendered step and points where the rendered
+  snap went (cos >= 0.7), and one respawn explains one snap. Run ibz3 st 911.107 (rendered 1.088, received 0.8407, 3.4 %
+  short of the old 0.8 x rule) failed a real respawn. A later unrelated snap, a second snap, another player's respawn
+  and a local major without that evidence still FAIL.
+- testlab `entity_lifecycle`: the id-reuse tolerance is per entity type. A projectile uses its content (or measured)
+  speed x 0.15 s + 0.2 instead of the player `max_speed`, so a first draw one snapshot ahead after a client stall no longer
+  fails (ibz3 proj-17, 1.33 u from spawn vs 1.1). The stale-buffer detection is kept: a first draw at or near the previous
+  incarnation's last position still FAILs.
 - testlab: S01 no longer FAILs `kcp` (3 `dead_link` closes) and `redis` (6-9 session keys for 3 users) because the WSL
   distro stopped under the run (runs 6qgq, ii3h, jmag, hj3f, imed; native and docker alike). WSL terminates a distro with no
   open `wsl.exe` session; dockerd and the scratch stack died with it mid-run (gateway "shutting down gateway", Redis

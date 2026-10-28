@@ -15,7 +15,7 @@ Rules (policy, unvalidated; limits in testlab/docs/THRESHOLDS.md), evaluated ins
 window [start_scheduled - 30 s, scenario end + finish_grace_s]:
   G1 AnyDesk session start, event or `--backend` process, or one still active at window start
   G2 an AnyDesk process that was not in the baseline set
-  G3 AnyDesk CPU >= 0.5 % of the host for 2 consecutive samples
+  G3 AnyDesk CPU above min(1.0 %, max(0.5 %, 2 x the preflight resident max + 0.3 %)) of the host for 2 consecutive samples
   G4 a build tool or MsMpEng group above its CPU limit for >= 3 consecutive samples
   G5 the guard was blind (more than 3 consecutive intervals without a sample)
 A fired rule makes the `host_guard` check INVALID; it can never turn a FAIL or INCONCLUSIVE into PASS.
@@ -39,12 +39,19 @@ from . import util
 
 SCHEMA = "rpg.testlab.hostguard.v1"
 PS1 = Path(__file__).with_name("hostguard.ps1")
+PROCS_PS1 = Path(__file__).with_name("hostprocs.ps1")
 
 # --- policy, unvalidated (calibrated on one 16 min baseline, F19 section 3.6) -------------------------
 INTERVAL_S = 5.0                 # in-run sampling cadence
 WINDOW_PRE_S = 30.0              # window starts this long before start_scheduled
-ANYDESK_IDLE_MAX_PCT = 0.5       # G3 / P2: 4x the observed idle maximum (0.13 %), half the lightest session (~1 %)
+ANYDESK_IDLE_MAX_PCT = 0.5       # G3 floor / P2: 4x the F19 idle maximum (0.13 %), half the lightest session (~1 %)
+G3_BASELINE_FACTOR = 2.0         # F29: G3 fires above baseline_max x 2 + 0.3 %, never below the 0.5 % floor
+G3_BASELINE_MARGIN_PCT = 0.3     # (F19 idle 0.03 % mean; F28 idle front process 0.18 % mean, 0.33 % max, bursts to 1.98 %)
+G3_THRESHOLD_CAP_PCT = 1.0       # F29B: G3 never fires above this, so a session burst (>= 1.36 % seen in F28) always can;
+#                                  a preflight resident max at or above the cap fails P2 (the run does not start)
 G3_CONSECUTIVE = 2
+PROC_SAMPLE_INTERVAL_S = 1.0     # F29: optional per-process sampler, S09-class runs only (evidence, never a guard)
+PROC_SAMPLE_TOP_N = 10
 G4_BUILD_PCT = 5.0               # any build-tool group, % of the whole host
 G4_AV_PCT = 5.0                  # MsMpEng
 G4_CONSECUTIVE = 3
@@ -68,7 +75,9 @@ SESSION_TYPES = ("accept", "auth", "backend_pid", "session_started", "capture_st
 RULES = {
     "G1": "AnyDesk session started in the window, or still active at its start",
     "G2": "AnyDesk process not in the baseline set",
-    "G3": f"AnyDesk CPU >= {ANYDESK_IDLE_MAX_PCT} % of the host for {G3_CONSECUTIVE} consecutive samples",
+    "G3": (f"AnyDesk CPU above min({G3_THRESHOLD_CAP_PCT} %, max({ANYDESK_IDLE_MAX_PCT} %, preflight resident max x "
+           f"{G3_BASELINE_FACTOR:g} + {G3_BASELINE_MARGIN_PCT} %)) of the host for {G3_CONSECUTIVE} consecutive samples "
+           "(policy, unvalidated: F19 0.03 % idle, F28 0.18 % mean / 1.98 % max idle front process)"),
     "G4": f"build tools > {G4_BUILD_PCT} % or MsMpEng > {G4_AV_PCT} % of the host for {G4_CONSECUTIVE} consecutive samples",
     "G5": f"guard blind: more than {G5_MISSED_INTERVALS} consecutive intervals without a sample",
     "G6": (f"server clock-rate step: current_tick per harness second, over sliding windows of at least "
@@ -307,8 +316,33 @@ def _consecutive(flags: list[bool], n: int) -> int | None:
     return None
 
 
+def g3_threshold(baseline_max_pct: float | None) -> float:
+    """AnyDesk CPU (% of host) above which G3 counts a sample. Relative to the resident baseline measured
+    by the preflight (P2), with the original 0.5 % as the floor and G3_THRESHOLD_CAP_PCT as the ceiling; no baseline gives the floor."""
+    if baseline_max_pct is None:
+        return ANYDESK_IDLE_MAX_PCT
+    return min(G3_THRESHOLD_CAP_PCT,
+               max(ANYDESK_IDLE_MAX_PCT, float(baseline_max_pct) * G3_BASELINE_FACTOR + G3_BASELINE_MARGIN_PCT))
+
+
+def g3_baseline(preflight: dict | None) -> dict | None:
+    """The resident AnyDesk baseline a preflight recorded: {"mean_pct", "max_pct", ...}. Reads the
+    `anydesk_baseline` block, or the P2 row's measured values of a preflight written before F29."""
+    if not preflight:
+        return None
+    b = preflight.get("anydesk_baseline")
+    if isinstance(b, dict) and b.get("max_pct") is not None:
+        return b
+    for r in preflight.get("rows") or []:
+        m = r.get("measured") or {}
+        if r.get("id") == "P2" and m.get("max_pct") is not None:
+            return {"mean_pct": m.get("mean_pct"), "max_pct": m.get("max_pct"), "source": "P2 row"}
+    return None
+
+
 def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float] | None, *,
-             baseline_pids=(), interval_s: float = INTERVAL_S, preflight_pids=()) -> dict:
+             baseline_pids=(), interval_s: float = INTERVAL_S, preflight_pids=(),
+             ad_baseline: dict | None = None) -> dict:
     """Guards G1-G5 against the window. `samples` are the guard's rows (epoch, ad[], ad_cpu, groups),
     `events` the AnyDesk log events and connection entries. Returns {"fired": [...], "stats": {...}}.
     Pure: no I/O. `baseline_pids` / `preflight_pids` are AnyDesk pids that existed before the run."""
@@ -357,11 +391,13 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
         fired.append({"id": "G2", "rule": RULES["G2"], "count": len(g2), "evidence": [x[1] for x in g2[:12]]})
 
     # G3: AnyDesk CPU burst.
-    flags = [float(s.get("ad_cpu") or 0.0) >= ANYDESK_IDLE_MAX_PCT for s in inside]
+    g3_limit = g3_threshold((ad_baseline or {}).get("max_pct"))
+    flags = [float(s.get("ad_cpu") or 0.0) >= g3_limit for s in inside]
     at = _consecutive(flags, G3_CONSECUTIVE)
     if at is not None:
-        fired.append({"id": "G3", "rule": RULES["G3"], "count": sum(flags),
-                      "evidence": [f"{s.get('ts')} AnyDesk {s.get('ad_cpu')} % of host" for s, f in zip(inside, flags) if f][:12]})
+        fired.append({"id": "G3", "rule": RULES["G3"], "count": sum(flags), "threshold_pct": round(g3_limit, 3),
+                      "evidence": [f"{s.get('ts')} AnyDesk {s.get('ad_cpu')} % of host (limit {g3_limit:.3f} %)"
+                                   for s, f in zip(inside, flags) if f][:12]})
 
     # G4: foreign build or antivirus load.
     for grp, limit, label in (("build", G4_BUILD_PCT, "build tools"), ("av", G4_AV_PCT, "MsMpEng")):
@@ -390,6 +426,7 @@ def evaluate(samples: list[dict], events: list[dict], window: tuple[float, float
     cpu = [float(s["cpu"]) for s in inside if s.get("cpu") is not None]
     stats = {"samples": len(rows), "samples_in_window": len(inside),
              "anydesk_cpu_pct": {"mean": round(sum(ad_cpu) / len(ad_cpu), 3) if ad_cpu else None, "max": max(ad_cpu) if ad_cpu else None},
+             "g3": {"threshold_pct": round(g3_limit, 3), "baseline": ad_baseline, "label": "policy, unvalidated"},
              "host_cpu_pct": {"mean": round(sum(cpu) / len(cpu), 2) if cpu else None, "max": max(cpu) if cpu else None},
              "guard_own_cpu_pct": {"mean": round(sum(own) / len(own), 4) if own else None, "max": max(own) if own else None},
              "new_processes_per_interval_max": max([s.get("newproc") or 0 for s in inside[1:]] or [0])}
@@ -716,6 +753,115 @@ class HostGuard:
                         "query runs in a system process and is not included"}
 
 
+class ProcSampler:
+    """Optional 1 s sampler of the top PROC_SAMPLE_TOP_N processes by CPU (hostprocs.ps1), for S09-class
+    runs only. Writes `<out>/procs.ndjson`; `stop()` writes `procs-summary.json` with its own measured
+    cost. EVIDENCE ONLY (analyze `host_procs`, INFO): no guard and no verdict reads it. It exists so a
+    40-140 ms client stall that the 5 s guard cannot attribute (F28) can be matched to a process. It
+    never raises into the run."""
+
+    def __init__(self, out_dir: Path, *, interval_s: float = PROC_SAMPLE_INTERVAL_S, top_n: int = PROC_SAMPLE_TOP_N):
+        self.out = Path(out_dir)
+        self.interval_s = interval_s
+        self.top_n = top_n
+        self.proc: subprocess.Popen | None = None
+        self._thread: threading.Thread | None = None
+        self.samples = 0
+        self.errors: list[str] = []
+        self.py_cpu_s = 0.0
+        self.started_epoch: float | None = None
+
+    def start(self) -> None:
+        if not util.IS_WINDOWS:
+            raise RuntimeError("process sampler needs Windows (hostprocs.ps1)")
+        self.out.mkdir(parents=True, exist_ok=True)
+        self.started_epoch = time.time()
+        self.proc = subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(PROCS_PS1),
+             "-IntervalS", str(self.interval_s), "-TopN", str(self.top_n), "-ParentPid", str(os.getpid())],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", bufsize=1)
+        self._thread = threading.Thread(target=self._read, name="hostprocs", daemon=True)
+        self._thread.start()
+
+    def _read(self) -> None:
+        cpu0 = time.thread_time()
+        try:
+            with open(self.out / "procs.ndjson", "a", encoding="utf-8", newline="\n") as fh:
+                for line in self.proc.stdout:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    row["mono"] = util.mono()
+                    fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+                    fh.flush()
+                    self.samples += 1
+        except Exception as exc:
+            self.errors.append(f"procs: {type(exc).__name__}: {exc}")
+        finally:
+            self.py_cpu_s += time.thread_time() - cpu0
+
+    def stop(self) -> dict:
+        if self.proc is not None and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+                self.proc.wait(timeout=10)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+        if self.proc is not None and self.proc.stdout is not None:
+            try:
+                self.proc.stdout.close()
+            except OSError:
+                pass
+        summary = self.summary()
+        try:
+            util.write_json(self.out / "procs-summary.json", summary)
+        except OSError as exc:
+            summary["write_error"] = str(exc)
+        return summary
+
+    def summary(self) -> dict:
+        path = self.out / "procs.ndjson"
+        rows = util.read_ndjson(path) if path.exists() else []
+        own = [float(r["own_cpu"]) for r in rows[2:] if r.get("own_cpu") is not None]
+        sweep = [float(r["sweep_ms"]) for r in rows[2:] if r.get("sweep_ms") is not None]
+        return {"schema": SCHEMA, "interval_s": self.interval_s, "top_n": self.top_n, "samples": self.samples,
+                "errors": self.errors[:10],
+                "sampler_cpu_pct_of_host": {"mean": round(sum(own) / len(own), 4) if own else None, "max": max(own) if own else None},
+                "sweep_ms": {"mean": round(sum(sweep) / len(sweep), 1) if sweep else None, "max": max(sweep) if sweep else None},
+                "note": "evidence only (INFO); cost is the sampler process, not the WMI provider or the Python reader"}
+
+
+def procs_report(rows: list[dict], *, hot_pct: float = 5.0, top: int = 8) -> dict:
+    """Pure summary of procs.ndjson rows for the INFO check: per process name the mean and max of the
+    sampled CPU (% of host, only the seconds in which it was in the top N), the seconds above `hot_pct`,
+    and the hottest seconds. Names, not pids, so a restarted process stays one line."""
+    by: dict[str, dict] = {}
+    seconds = []
+    for r in rows:
+        peak = None
+        for p in r.get("top") or []:
+            d = by.setdefault(str(p.get("name")), {"n": 0, "sum": 0.0, "max": 0.0, "hot_s": 0})
+            c = float(p.get("cpu") or 0.0)
+            d["n"] += 1
+            d["sum"] += c
+            d["max"] = max(d["max"], c)
+            if c > hot_pct:
+                d["hot_s"] += 1
+            if peak is None or c > peak[1]:
+                peak = (str(p.get("name")), c)
+        if peak is not None and r.get("epoch") is not None:
+            seconds.append({"epoch": r["epoch"], "name": peak[0], "cpu_pct": peak[1]})
+    procs = sorted(({"name": k, "samples_in_top": v["n"], "mean_pct": round(v["sum"] / v["n"], 3), "max_pct": round(v["max"], 2),
+                     f"seconds_above_{hot_pct:g}_pct": v["hot_s"]} for k, v in by.items()), key=lambda x: -x["max_pct"])
+    return {"samples": len(rows), "processes": procs[:top], "hottest_seconds": sorted(seconds, key=lambda x: -x["cpu_pct"])[:top]}
+
+
 # ----------------------------------------------------------------------------- preflight
 
 def _row(pid: str, ok: bool, detail: str, measured=None, note: str | None = None) -> dict:
@@ -805,9 +951,14 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
     body = [s for s in samples if not s.get("first")] or samples
     ad = [float(s.get("ad_cpu") or 0.0) for s in body]
     ad_mean = sum(ad) / len(ad) if ad else None
-    rows.append(_row("P2", ad_mean is not None and ad_mean < ANYDESK_IDLE_MAX_PCT,
-                     f"AnyDesk mean CPU < {ANYDESK_IDLE_MAX_PCT} % of host over {len(body)} samples" if ad_mean is not None
-                     else "no sample (sampler unavailable)", {"mean_pct": None if ad_mean is None else round(ad_mean, 3),
+    ad_base = None if not ad else {"mean_pct": round(ad_mean, 3), "max_pct": max(ad), "samples": len(ad),
+                                   "sample_s": sample_s, "g3_threshold_pct": round(g3_threshold(max(ad)), 3),
+                                   "label": "policy, unvalidated"}
+    ad_max = max(ad) if ad else None
+    p2_ok = ad_mean is not None and ad_mean < ANYDESK_IDLE_MAX_PCT and ad_max < G3_THRESHOLD_CAP_PCT
+    rows.append(_row("P2", p2_ok,
+                     f"AnyDesk mean CPU < {ANYDESK_IDLE_MAX_PCT} % and max < {G3_THRESHOLD_CAP_PCT} % (the G3 cap) of host "
+                     f"over {len(body)} samples" if ad_mean is not None else "no sample (sampler unavailable)", {"mean_pct": None if ad_mean is None else round(ad_mean, 3),
                                                               "max_pct": max(ad) if ad else None}))
 
     # P3: no other agent working.
@@ -848,6 +999,7 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
     failed = [r["id"] for r in rows if r["status"] != "PASS"]
     return {"schema": SCHEMA, "ok": not failed, "failed": failed, "rows": rows, "window_min": window_min,
             "sample_s": sample_s, "samples": len(samples), "anydesk_pids": [p["pid"] for p in procs if p["pid"]],
+            "anydesk_baseline": ad_base,
             "paths": paths.as_dict(), "checked_epoch": now}
 
 

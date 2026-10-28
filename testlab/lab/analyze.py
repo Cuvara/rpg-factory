@@ -84,7 +84,10 @@ def load_evidence(run_dir: Path) -> dict:
         "hostguard": {"samples": util.read_ndjson(run_dir / "host" / "guard.ndjson"),
                       "events": util.read_ndjson(run_dir / "host" / "anydesk-events.ndjson"),
                       "summary": util.read_json(run_dir / "host" / "guard-summary.json", default=None),
-                      "preflight": util.read_json(run_dir / "host" / "preflight.json", default=None)},
+                      "preflight": util.read_json(run_dir / "host" / "preflight.json", default=None),
+                      # F29: optional 1 s top-process sampler (S09-class runs); evidence only.
+                      "procs": util.read_ndjson(run_dir / "host" / "procs.ndjson"),
+                      "procs_summary": util.read_json(run_dir / "host" / "procs-summary.json", default=None)},
     }
     ev["traj"] = trajectories(entities)
     return ev
@@ -190,12 +193,14 @@ def trajectories(entities) -> dict:
             t = traj.get(eid)
             if t is None:
                 t = traj[eid] = {"type": etype, "st": array("d"), "x": array("d"), "y": array("d"), "hp": [],
-                                 "dead": [], "max_hp": max_hp, "speed": speed}
+                                 "dead": [], "tick": array("d"), "max_hp": max_hp, "speed": speed}
             t["st"].append(st)
             t["x"].append(x)
             t["y"].append(y)
             t["hp"].append(hp)
             t["dead"].append(dead)
+            tick = row.get("tick")
+            t["tick"].append(float("nan") if tick is None else float(tick))
     return traj
 
 
@@ -634,7 +639,8 @@ def check_render_jumps(ev, a):
         allowance = [1] * len(windows)
         stalls = host_stalls(ev)
         stall_events = all_stall_events
-        for e in js:
+        used_respawns = set()
+        for e in sorted(js, key=lambda x: (x.get("st") is None, x.get("st") or 0.0)):
             if e.get("type") in set(a.get("ignore_types", ["projectile"])):
                 counts["ignored_type"] = counts.get("ignored_type", 0) + 1
                 continue
@@ -669,9 +675,19 @@ def check_render_jumps(ev, a):
             # The client's own received stream (20 Hz) resolves a teleport the 5 Hz server
             # probe aliases: the server put the entity elsewhere in ONE snapshot.
             received_teleport = received_step is not None and received_step >= 0.8 * (e.get("step") or 0)
-            if received_teleport or (explained and (respawned or server_step > walkable)):
+            # F29: the LOCAL player's own snap at a server-confirmed respawn of THIS player. The snapshot
+            # that carries the new position must fall inside that respawn's tick window (last HP 0 probe
+            # to first max-HP probe, plus RESPAWN_SNAP_SLACK_TICKS), match the rendered snap in direction
+            # and size, and each respawn explains at most one snap (`used_respawns`).
+            local_respawn = (bool(e.get("local")) and not received_teleport and not explained
+                             and _server_respawn_jump(ev, near, e.get("id"), e.get("st"), e.get("step") or 0,
+                                                      used_respawns))
+            if received_teleport or local_respawn or (explained and (respawned or server_step > walkable)):
                 counts["server_teleport"] = counts.get("server_teleport", 0) + 1
-                events.append({"client": c["index"], "class": "server_teleport", "server_step": round(server_step, 3),
+                if local_respawn and not (received_teleport or explained):
+                    counts["local_respawn"] = counts.get("local_respawn", 0) + 1
+                events.append({"client": c["index"], "class": "server_teleport",
+                               "server_step": None if server_step is None else round(server_step, 3),
                                **{k: e.get(k) for k in ("st", "id", "type", "local", "step", "allowed", "dt_ms")}})
                 continue
             key = ("local" if e.get("local") else "remote") + ("_major" if (e.get("step") or 0) >= major_step else "_minor")
@@ -686,7 +702,8 @@ def check_render_jumps(ev, a):
     minutes = max(1e-6, float(ev["scenario"].get("duration_s", 60)) / 60.0)
     n = max(1, len(ev["clients"]))
     rate = {k: round(v / minutes / n, 3) for k, v in counts.items()
-            if k not in ("server_teleport", "host_stall", "ignored_type", "stall_catchup", "stall_local_correction")}
+            if k not in ("server_teleport", "host_stall", "ignored_type", "stall_catchup", "stall_local_correction",
+                         "local_respawn")}
     def passes(c):
         r = {k: c[k] / minutes / n for k in ("remote_major", "local_minor", "remote_minor")}
         return (c["local_major"] <= int(a.get("max_local", 0)) and
@@ -788,14 +805,16 @@ def _samples_near(c: dict, times, before: float, after: float) -> list:
     return out
 
 
-def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15, max_speed=6.0, tick_hz=60.0):
+def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15, max_speed=6.0, tick_hz=60.0,
+                   any_step=False):
     """Largest jump in the position this client RECEIVED for the entity (the snapshot stream,
     sampled at the plan's sample_hz) between consecutive samples in [st-before, st+after] that no
     entity could have WALKED in the server time between them (the samples' world_tick delta,
     at 1.5x max_speed plus 0.2 units). Unlike the 5 Hz server probe this sees a teleport the
     server made between two of its samples; the server-tick bound keeps a late snapshot burst
     (a long but legitimate step after a delivery gap) from passing as one. None when no
-    consecutive pair exceeded the bound."""
+    consecutive pair exceeded the bound. `any_step` drops the walk bound and returns the largest
+    consecutive displacement (used only where other evidence already shows the server moved the entity)."""
     prev = None
     best = None
     for s in client.get("samples", []):
@@ -813,7 +832,7 @@ def _received_step(client: dict, eid: str, st: float, before=0.25, after=0.15, m
             dticks = (wt - prev[2]) if (wt is not None and prev[2] is not None) else None
             if dticks is not None and dticks >= 0:
                 walk = max_speed * 1.5 * max(dticks, 1) / tick_hz + 0.2
-                if d > walk and (best is None or d > best):
+                if (any_step or d > walk) and (best is None or d > best):
                     best = d
         prev = (row[5], row[6], wt)
     return best
@@ -831,6 +850,88 @@ def _server_respawned(ev, eid, st, before=0.4, after=0.3) -> bool:
     window = [hp for s2, hp in zip(t["st"], t["hp"]) if st - before <= s2 <= st + after and hp is not None]
     for i in range(1, len(window)):
         if window[i - 1] < 0.5 * max_hp and window[i] >= max_hp:
+            return True
+    return False
+
+
+# Policy, unvalidated (F29B; calibrated on one event, ibz3 st 911.107: received snap 0.84 for a rendered
+# step of 1.088, tick 55365 inside the probe window 55363..55376).
+RESPAWN_JUMP_MIN_FRACTION = 0.5   # the received snap must be >= half the rendered step (>= 0.8 is the older teleport rule)
+RESPAWN_SNAP_MIN_COS = 0.7        # received delta and rendered delta within ~45 degrees
+RESPAWN_SNAP_SLACK_TICKS = 2      # the carrying snapshot's world tick may trail the max-HP probe tick by this much
+
+
+def _respawn_windows(t) -> list:
+    """[(HP 0 tick, max-HP tick, HP 0 probe st, max-HP probe st)] for one entity trajectory: the last HP 0 /
+    dead probe row and the first max-HP row after it. Each is one server-confirmed respawn; the probe is
+    5 Hz, so the respawn happened inside that interval."""
+    max_hp = t.get("max_hp") or 0
+    ticks = t.get("tick")
+    if max_hp <= 0 or ticks is None:
+        return []
+    out = []
+    died = None
+    for hp, dead, tick, pst in zip(t["hp"], t.get("dead") or [None] * len(t["hp"]), ticks, t["st"]):
+        if hp is None or tick != tick:
+            continue
+        if hp <= 0 or dead:
+            died = (tick, pst)
+        elif died is not None and hp >= max_hp:
+            out.append((died[0], tick, died[1], pst))
+            died = None
+    return out
+
+
+def _received_snap(near, eid, st, before=0.25, after=0.15):
+    """The largest consecutive displacement of the position this client received for the entity in
+    [st-before, st+after]: (size, world tick of the later sample, received delta, rendered delta over the
+    same pair), or None."""
+    prev = None
+    best = None
+    for s in near.get("samples", []):
+        t = s.get("st")
+        if t is None or t < st - before:
+            continue
+        if t > st + after:
+            break
+        row = next((r for r in s.get("ents", []) if r[0] == eid and len(r) >= 7), None)
+        if row is None:
+            continue
+        wt = s.get("world_tick")
+        if prev is not None and wt is not None:
+            d = (row[5] - prev[0], row[6] - prev[1])
+            size = math.hypot(*d)
+            if best is None or size > best[0]:
+                best = (size, wt, d, (row[3] - prev[2], row[4] - prev[3]))
+        prev = (row[5], row[6], row[3], row[4])
+    return best
+
+
+def _server_respawn_jump(ev, near, eid, st, step, used, before=0.4, after=0.3) -> bool:
+    """The server confirms a respawn of THIS entity that explains this snap: its HP reached 0 (or it was
+    flagged dead) and then max within [st-before, st+after]; the snapshot carrying the biggest position
+    step this client received (`near`) has a world tick inside [HP 0 probe tick, max-HP probe tick +
+    RESPAWN_SNAP_SLACK_TICKS]; that step is >= 0.5x the rendered step and points the way the rendered
+    snap went. `used` holds the (entity, HP 0 tick) respawns that already explained a snap: one respawn
+    explains one snap, so a second or later snap in the window fails."""
+    t = ev["traj"].get(eid)
+    if not t or st is None or step <= 0:
+        return False
+    snap = _received_snap(near, eid, st)
+    if snap is None:
+        return False
+    size, wtick, d, r = snap
+    if size < RESPAWN_JUMP_MIN_FRACTION * step:
+        return False
+    rn = math.hypot(*r)
+    if rn <= 1e-9 or (d[0] * r[0] + d[1] * r[1]) / (size * rn) < RESPAWN_SNAP_MIN_COS:
+        return False
+    for died, back, died_st, back_st in _respawn_windows(t):
+        key = (eid, died)
+        if key in used or not (st - before <= back_st and died_st <= st + after):
+            continue
+        if died <= wtick <= back + RESPAWN_SNAP_SLACK_TICKS:
+            used.add(key)
             return True
     return False
 
@@ -1619,11 +1720,15 @@ def check_host_guard(ev, a):
     res = hostguard.evaluate(list(samples), list(hg.get("events") or []), (float(window[0]), float(window[1])),
                              baseline_pids=meta.get("baseline_pids") or (),
                              preflight_pids=((hg.get("preflight") or {}).get("anydesk_pids") or ()),
+                             ad_baseline=hostguard.g3_baseline(hg.get("preflight")),
                              interval_s=float(meta.get("interval_s") or hostguard.INTERVAL_S))
     res["fired"].extend(clock["fired"])
     detail = {"fired": res["fired"], "window_utc": res["window"], "stats": res["stats"],
               "clock_rate": clock["stats"], "guard_cost": hg.get("summary"),
               "preflight_failed": (hg.get("preflight") or {}).get("failed")}
+    if hg.get("procs"):
+        # Evidence only (INFO): which processes were busy in the seconds a 5 s guard sample cannot resolve.
+        detail["proc_sampler"] = {**hostguard.procs_report(list(hg["procs"])), "cost": hg.get("procs_summary")}
     rationale = ("a contaminated window cannot show that the game, not the host, caused or avoided a freeze; "
                  "policy limits in testlab/docs/THRESHOLDS.md")
     if res["fired"]:
@@ -2333,11 +2438,17 @@ def check_entity_lifecycle(ev, a):
     sample_dt = 1.0 / max(1.0, float(ev["scenario"].get("sample_hz", 20)))
     max_speed = float(ev["scenario"].get("jump", {}).get("max_speed", 6.0))
     tol = max_speed * grace + 0.2
+    # F29: the tolerance is per entity type. A projectile covers its own (content) speed times the same
+    # window, not the player's max_speed; every other type keeps the player tolerance.
+    proj_speed, proj_src = _projectile_speed(ev, a)
+    type_tol = {"projectile": proj_speed * grace + 0.2} if proj_speed and proj_speed > max_speed else {}
+    stale_eps = float(a.get("stale_eps", 0.25))
     lingering, reuse_bad, reuse_ok = [], [], 0
     removed_total, missing, duplicates = 0, [], []
     for c in ev["clients"]:
         # Compact, time-ordered entity events: (t, kind, id, frame, x, y, rx, ry).
-        evs = sorted(((e["t"], e["event"], e.get("id"), e.get("frame"), e.get("x"), e.get("y"), e.get("rx"), e.get("ry"))
+        evs = sorted(((e["t"], e["event"], e.get("id"), e.get("frame"), e.get("x"), e.get("y"), e.get("rx"), e.get("ry"),
+                       e.get("type"))
                       for e in c["events"] if e.get("event") in ("entity_added", "entity_removed", "entities_reset")
                       and e.get("t") is not None), key=lambda e: e[0])
         if not any(e[1] in ("entity_added", "entity_removed") for e in evs) or not c["samples"]:
@@ -2360,7 +2471,7 @@ def check_entity_lifecycle(ev, a):
         windows = {}      # id -> [lo, hi, re_frame, removal event index, resolved]
         queries = []      # (removal t, id, add event index): last drawn position before a reused id's removal
         removed_at = {}
-        for i, (t, kind, eid, frame, x, y, rx, ry) in enumerate(evs):
+        for i, (t, kind, eid, frame, x, y, rx, ry, _ty) in enumerate(evs):
             if kind == "entities_reset":
                 removed_at.clear()
                 continue
@@ -2410,12 +2521,18 @@ def check_entity_lifecycle(ev, a):
             lingering.append({"client": c["index"], "id": evs[i][2], "removed_t": round(evs[i][0], 3),
                               "still_drawn_t": round(t_hit, 3), "frame": fr})
         for rt, eid, i in sorted(queries, key=lambda q: q[2]):
-            t, _, _, _, x, y, rx, ry = evs[i]
+            t, _, _, _, x, y, rx, ry, etype = evs[i]
             prev = prev_at.get(i)
             d = math.hypot(rx - x, ry - y)
-            row = {"client": c["index"], "id": eid, "t": round(t, 3), "first_drawn_from_spawn": round(d, 3),
-                   "from_previous_entity": None if prev is None else round(math.hypot(rx - prev[3], ry - prev[4]), 3)}
-            if d > tol:
+            from_prev = None if prev is None else math.hypot(rx - prev[3], ry - prev[4])
+            row = {"client": c["index"], "id": eid, "t": round(t, 3), "type": etype, "first_drawn_from_spawn": round(d, 3),
+                   "from_previous_entity": None if from_prev is None else round(from_prev, 3)}
+            type_limit = type_tol.get(etype, tol)
+            # Beyond the player tolerance only a type that legitimately moves faster is excused, and only
+            # when the first draw is clearly NOT where the previous incarnation ended (a stale buffer
+            # draws at or near the previous position, so it stays a failure).
+            stale = from_prev is not None and (from_prev <= stale_eps or from_prev <= d)
+            if d > type_limit or (d > tol and stale):
                 reuse_bad.append(row)
             else:
                 reuse_ok += 1
@@ -2427,13 +2544,35 @@ def check_entity_lifecycle(ev, a):
     return _result(FAIL if lingering or reuse_bad or duplicates else PASS,
                    {"removed": removed_total, "lingering": len(lingering), "reused_ids_checked": reuse_ok + len(reuse_bad),
                     "reused_drawn_elsewhere": len(reuse_bad), "samples_with_duplicate_ids": len(duplicates)},
-                   {"despawn_grace_s": round(grace + sample_dt, 3), "reuse_tolerance": round(tol, 3)},
+                   {"despawn_grace_s": round(grace + sample_dt, 3), "reuse_tolerance": round(tol, 3),
+                    **({"reuse_tolerance_by_type": {k: round(v, 3) for k, v in type_tol.items()}} if type_tol else {})},
                    source="client events.ndjson entity_added/entity_removed (C3) vs samples.ndjson rendered entities",
                    sampling=f"rendered samples at {ev['scenario'].get('sample_hz')} Hz",
                    rationale="a removed entity left on screen is a ghost; a reused id drawn where the previous entity "
                              "was is a stale view entry interpolating between two different entities",
                    detail={"lingering": lingering[:20], "reuse_drawn_elsewhere": reuse_bad[:20],
-                           "duplicate_ids": duplicates})
+                           "duplicate_ids": duplicates,
+                           **({"projectile_speed": proj_speed, "projectile_speed_source": proj_src, "stale_eps": stale_eps}
+                              if type_tol else {})})
+
+
+def _projectile_speed(ev, a):
+    """(speed in units/s, source) of a projectile for per-type tolerances: the scenario/assertion override,
+    else the content ability at the run's server commit, else the median measured server speed of the
+    projectiles in the entity probe; (None, None) when none is known, which keeps the player tolerance."""
+    if a.get("projectile_speed"):
+        return float(a["projectile_speed"]), "assertion"
+    try:
+        ab = _content_projectile_ability(ev, a)
+    except Exception:
+        ab = None
+    if ab and ab.get("speed"):
+        return float(ab["speed"]), f"content {ab.get('source')}"
+    speeds = sorted(float(t["speed"]) for t in ev["traj"].values()
+                    if t.get("type") == "projectile" and t.get("speed"))
+    if speeds:
+        return speeds[len(speeds) // 2], "measured median server speed (entities probe)"
+    return None, None
 
 
 def _render_rows(c, skip, stalls, until=None):

@@ -4172,5 +4172,292 @@ class HostGuardTests(unittest.TestCase):
             self.assertIsNotNone(g.proc.poll())                                      # the sampler is stopped
 
 
+class F29LocalRespawnTests(unittest.TestCase):
+    """render_jumps: a local snap at a server-confirmed respawn of the SAME player (F28 section 3.1,
+    run 20261027T150400Z-S09-ibz3, st 911.107)."""
+
+    PID = "ac61"
+    DEATH = [(6, 0), (3, 0), (3, 0), (0, 1), (100, 0), (100, 0)]
+    TIMES = [910.47, 910.68, 910.87, 911.075, 911.306, 911.48]
+
+    def _ev(self, hps, other=None, received_dx=0.8407, snap_tick=55365, extra=(), pid=None):
+        """Server probe at 5 Hz around st 911 for the local player (hp, dead flag per row; the probe
+        ticks are 55327..55388 as in ibz3); the client received the entity moving by (-0.38, 0.75) =
+        0.84 units (direction of the rendered snap) in the sample at world tick `snap_tick`; the
+        rendered local step was 1.0882. `extra` is more (st, world_tick, rx, ry, dx, dy) samples."""
+        pid = pid or self.PID
+        ents = []
+        ticks = [55327, 55339, 55351, 55363, 55376, 55388]
+        for t, tk, (hp, dead) in zip(self.TIMES, ticks, hps):
+            row = [[pid, "player", 0.0, 0.0, hp, 100, dead, 5]]
+            if other is not None:
+                ohp, odead = other[t]
+                row.append(["q", "player", 3.0, 3.0, ohp, 100, odead, 5])
+            ents.append({"st": t, "tick": tk, "ents": row})
+        ev = _ev(entities=ents, duration=1200)
+        c = ev["clients"][0]
+        c["summary"] = {"outcome": "completed"}
+        k = received_dx / 0.8407
+
+        def smp(st, wt, rx, ry, dx, dy):
+            return {"st": st, "world_tick": wt, "ents": [[pid, "player", 1, rx, ry, dx, dy]]}
+        c["samples"] = [smp(911.06, 55361, 0.55, -2.01, 0.0, 0.0),
+                        smp(911.11, snap_tick, 0.16, -1.24, -0.38 * k, 0.75 * k)] + [smp(*x) for x in extra]
+        c["events"] = [{"event": "render_jump", "st": 911.107, "id": pid, "type": "player", "local": True,
+                        "step": 1.0882, "allowed": 0.331}]
+        return ev
+
+    def _second_snap(self, ev, st=911.36, tick=55379, dx=0.6):
+        """A second local snap event with its own received step, as the F29B repro of RV-F29 B1."""
+        c = ev["clients"][0]
+        c["samples"] += [{"st": st - 0.05, "world_tick": tick - 4, "ents": [[self.PID, "player", 1, 0.5, -1.0, 0.0, 0.0]]},
+                         {"st": st, "world_tick": tick, "ents": [[self.PID, "player", 1, 1.1, -1.0, -dx * 0.5, dx * 0.8]]}]
+        c["events"].append({"event": "render_jump", "st": st, "id": self.PID, "type": "player", "local": True,
+                            "step": 1.088, "allowed": 0.331})
+        return ev
+
+    def test_the_ibz3_respawn_snap_is_explained_by_the_respawn(self):
+        res = analyze.check_render_jumps(self._ev(self.DEATH), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"], res["measured"]["server_teleport"]),
+                         (analyze.PASS, 0, 1), res)
+        self.assertEqual(res["measured"].get("local_respawn"), 1)
+
+    def test_a_local_major_without_respawn_evidence_still_fails(self):
+        alive = [(100, 0)] * 6
+        res = analyze.check_render_jumps(self._ev(alive), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+        low = [(6, 0), (3, 0), (3, 0), (3, 0), (100, 0), (100, 0)]     # HP never reached 0: not a death
+        self.assertEqual(analyze.check_render_jumps(self._ev(low), {"max_local": 0})["status"], analyze.FAIL)
+
+    def test_the_respawn_of_another_entity_explains_nothing(self):
+        alive = [(100, 0)] * 6
+        died = dict(zip(self.TIMES, self.DEATH))
+        res = analyze.check_render_jumps(self._ev(alive, other=died), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+    def test_a_respawn_without_an_authoritative_position_jump_does_not_explain_the_snap(self):
+        res = analyze.check_render_jumps(self._ev(self.DEATH, received_dx=0.05), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+    def test_a_remote_snap_is_not_helped_by_the_new_rule(self):
+        ev = self._ev(self.DEATH)
+        ev["clients"][0]["events"][0]["local"] = False
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual(res["measured"]["remote_major"], 1)
+
+    def test_a_later_unrelated_snap_after_the_respawn_fails(self):
+        # RV-F29 B1: the respawn is real but the snap is 0.25 s later (world tick 55400, after the max-HP
+        # probe at 55376 + slack); HP 0 -> max is in the +-window, an authoritative step is there, yet it is not this snap.
+        ev = self._ev(self.DEATH, snap_tick=55400)
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+        self.assertIsNone(res["measured"].get("local_respawn"))
+
+    def test_a_snap_before_the_respawn_probe_window_fails(self):
+        res = analyze.check_render_jumps(self._ev(self.DEATH, snap_tick=55340), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+    def test_a_second_snap_in_the_window_fails_one_respawn_explains_one_snap(self):
+        ev = self._second_snap(self._ev(self.DEATH), tick=55374)       # inside the tick window, same respawn
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"], res["measured"]["local_respawn"]),
+                         (analyze.FAIL, 1, 1), res)
+
+    def test_a_snap_pointing_the_other_way_is_not_the_respawn(self):
+        ev = self._ev(self.DEATH)
+        ev["clients"][0]["samples"][1]["ents"][0][3:5] = [0.55 + 0.38, -2.01 - 0.75]     # rendered went the opposite way
+        res = analyze.check_render_jumps(ev, {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+    def test_another_players_respawn_does_not_excuse_the_snap_even_with_a_perfect_snap(self):
+        died = dict(zip(self.TIMES, self.DEATH))
+        res = analyze.check_render_jumps(self._ev([(100, 0)] * 6, other=died), {"max_local": 0})
+        self.assertEqual((res["status"], res["measured"]["local_major"]), (analyze.FAIL, 1), res)
+
+
+class F29ProjectileReuseTests(unittest.TestCase):
+    """entity_lifecycle: per-type reuse tolerance (F28 section 3.3, proj-17 in the same run)."""
+
+    def _ev(self, etype, spawn, drawn, prev_end, speed_rows=True):
+        """Entity 'e' drawn at prev_end until t=104, removed, re-added at t=106 and first drawn at `drawn`."""
+        ents = []
+        if speed_rows:
+            ents = [_row(float(i), [["e", etype, spawn[0], spawn[1], 1, 1, 0, 19.8 if etype == "projectile" else 5]])
+                    for i in range(3)]
+        ev = _ev(clients=1, duration=20, entities=ents)
+        c = ev["clients"][0]
+        samples = []
+        for k in range(200):
+            t = 100.0 + k * 0.05
+            ents_ = []
+            if t < 104.1:
+                ents_.append(["e", etype, 0, prev_end[0], prev_end[1], prev_end[0], prev_end[1]])
+            elif t >= 106.0:
+                ents_.append(["e", etype, 0, drawn[0], drawn[1], drawn[0], drawn[1]])
+            samples.append(_sample(t, ents_))
+        add = {"event": "entity_added", "t": 100.0, "id": "e", "type": etype, "tick": 10, "x": 0.0, "y": 0.0,
+               "rx": 0.0, "ry": 0.0}
+        removed = {"event": "entity_removed", "t": 104.0, "id": "e"}
+        readd = {"event": "entity_added", "t": 106.0, "id": "e", "type": etype, "tick": 500, "x": spawn[0], "y": spawn[1],
+                 "rx": drawn[0], "ry": drawn[1]}
+        c["samples"], c["events"] = samples, [add, removed, readd]
+        return ev
+
+    def test_a_projectile_one_snapshot_ahead_of_its_spawn_passes(self):
+        # ibz3 proj-17: first drawn 1.333 from the snapshot position it was added at and 2.696 from where
+        # the previous incarnation ended; the player tolerance (1.1) failed it, the projectile's (3.17) does not.
+        ev = self._ev("projectile", (-10.336, -9.412), (-11.402, -8.612), (-9.0, -7.0))
+        res = analyze.check_entity_lifecycle(ev, {})
+        self.assertEqual((res["status"], res["measured"]["reused_drawn_elsewhere"]), (analyze.PASS, 0), res)
+        self.assertAlmostEqual(res["threshold"]["reuse_tolerance_by_type"]["projectile"], 19.8 * 0.15 + 0.2, delta=0.5)
+
+    def test_the_same_distance_fails_for_a_player_sized_entity(self):
+        ev = self._ev("mob", (-10.336, -9.412), (-11.402, -8.612), (-9.0, -7.0))
+        res = analyze.check_entity_lifecycle(ev, {})
+        self.assertEqual((res["status"], res["measured"]["reused_drawn_elsewhere"]), (analyze.FAIL, 1), res)
+
+    def test_a_projectile_first_drawn_where_the_previous_one_ended_still_fails(self):
+        # stale buffer: 1.33 from the spawn (inside the projectile tolerance) but 0.1 from the previous end
+        ev = self._ev("projectile", (-10.336, -9.412), (-11.402, -8.612), (-11.45, -8.65))
+        res = analyze.check_entity_lifecycle(ev, {})
+        self.assertEqual((res["status"], res["measured"]["reused_drawn_elsewhere"]), (analyze.FAIL, 1), res)
+
+    def test_a_projectile_beyond_its_own_tolerance_fails(self):
+        ev = self._ev("projectile", (0.0, 0.0), (6.0, 0.0), (20.0, 20.0))
+        self.assertEqual(analyze.check_entity_lifecycle(ev, {})["status"], analyze.FAIL)
+
+    def test_without_a_known_projectile_speed_the_player_tolerance_applies(self):
+        ev = self._ev("projectile", (-10.336, -9.412), (-11.402, -8.612), (-9.0, -7.0), speed_rows=False)
+        self.assertEqual(analyze.check_entity_lifecycle(ev, {})["status"], analyze.FAIL)
+        self.assertEqual(analyze.check_entity_lifecycle(ev, {"projectile_speed": 19.8})["status"], analyze.PASS)
+
+
+class F29G3BaselineTests(unittest.TestCase):
+    """G3 relative to the preflight-measured resident baseline (F28 section 4)."""
+
+    W = (1000.0, 1300.0)
+    BASE = {"mean_pct": 0.179, "max_pct": 0.328}     # ibz3 host/preflight.json P2
+
+    def _samples(self, front):
+        """Three idle residents; `front(epoch)` is the AnyDesk total in % of the host."""
+        out, t = [], 900.0
+        while t <= 1400.0:
+            out.append({"epoch": t, "ts": f"t{t:.0f}", "cpu": 15.0, "ad_cpu": front(t),
+                        "ad": [{"pid": 1 + i, "role": "resident", "cpu": 0.0} for i in range(3)],
+                        "groups": {"build": 0.2, "av": 0.0}, "own_cpu": 0.03})
+            t += 5.0
+        return out
+
+    def _fired(self, front, base):
+        from lab import hostguard
+        return [f["id"] for f in hostguard.evaluate(self._samples(front), [], self.W, baseline_pids=[1, 2, 3],
+                                                    ad_baseline=base)["fired"]]
+
+    def test_threshold_is_relative_to_the_baseline_with_the_old_floor(self):
+        from lab import hostguard
+        self.assertEqual(hostguard.g3_threshold(None), 0.5)
+        self.assertEqual(hostguard.g3_threshold(0.05), 0.5)                      # F19 baseline: the floor wins
+        self.assertAlmostEqual(hostguard.g3_threshold(0.328), 0.956, places=3)   # ibz3 baseline
+
+    def test_ibz3_idle_front_process_samples_do_not_fire_but_a_session_burst_does(self):
+        idle = lambda t: 0.76 if 1100 <= t <= 1150 else 0.4        # F28: idle front process 0.4-0.76 %
+        self.assertEqual(self._fired(idle, None), ["G3"])           # the fixed 0.5 % limit fired on idle
+        self.assertEqual(self._fired(idle, self.BASE), [])
+        burst = lambda t: 1.6 if 1100 <= t <= 1105 else 0.2
+        self.assertEqual(self._fired(burst, self.BASE), ["G3"])
+        one = lambda t: 1.6 if t == 1100 else 0.2
+        self.assertEqual(self._fired(one, self.BASE), [])           # still two consecutive samples
+
+    def test_threshold_is_capped_so_a_noisy_preflight_cannot_hide_a_session_burst(self):
+        from lab import hostguard
+        self.assertEqual(hostguard.G3_THRESHOLD_CAP_PCT, 1.0)
+        self.assertEqual(hostguard.g3_threshold(1.0), 1.0)           # uncapped: 2.3 %
+        self.assertEqual(hostguard.g3_threshold(5.0), 1.0)
+        self.assertAlmostEqual(hostguard.g3_threshold(0.328), 0.956, places=3)   # below the cap: unchanged
+        noisy = {"mean_pct": 0.3, "max_pct": 0.95}                   # passes P2; uncapped limit would be 2.2 %
+        burst = lambda t: 1.4 if 1100 <= t <= 1105 else 0.2          # F28 saw >= 1.36 % in a session
+        self.assertEqual(self._fired(burst, noisy), ["G3"])
+
+    def test_p2_fails_when_the_baseline_max_reaches_the_cap(self):
+        from lab import hostguard
+        none = hostguard.AnyDeskPaths(None, None)
+
+        def p2(spike):
+            rows = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 14.0, "groups": {"build": 0.0, "av": 0.0}}] +                    [{"epoch": 1.0 + 5 * i, "ad_cpu": spike if i == 7 else 0.1, "cpu": 14.0, "groups": {"build": 0.3, "av": 0.0}}
+                    for i in range(1, 25)]
+            pf = hostguard.preflight(sampler=lambda s: rows, processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
+                                     wsl_uptime=lambda: 3600.0, announced="x", paths=none)
+            return pf, next(r for r in pf["rows"] if r["id"] == "P2")
+        pf, row = p2(0.9)
+        self.assertEqual(row["status"], "PASS", row)
+        pf, row = p2(1.2)                                            # mean ~0.15 % passes the old P2; the max does not
+        self.assertEqual((row["status"], "P2" in pf["failed"], pf["ok"]), ("FAIL", True, False), row)
+
+    def test_the_g3_stats_record_the_baseline_and_the_label(self):
+        from lab import hostguard
+        res = hostguard.evaluate(self._samples(lambda t: 0.2), [], self.W, baseline_pids=[1, 2, 3], ad_baseline=self.BASE)
+        self.assertEqual(res["stats"]["g3"]["baseline"], self.BASE)
+        self.assertEqual(res["stats"]["g3"]["label"], "policy, unvalidated")
+        self.assertIn("policy, unvalidated", hostguard.RULES["G3"])
+
+    def test_preflight_records_the_baseline_and_the_guard_check_reads_it(self):
+        from lab import hostguard
+        none = hostguard.AnyDeskPaths(None, None)
+        rows = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 14.0, "groups": {"build": 0.0, "av": 0.0}}] + \
+               [{"epoch": 1.0 + 5 * i, "ad_cpu": 0.3 if i == 7 else 0.15, "cpu": 14.0, "groups": {"build": 0.3, "av": 0.0}}
+                for i in range(1, 25)]
+        pf = hostguard.preflight(sampler=lambda s: rows, processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
+                                 wsl_uptime=lambda: 3600.0, announced="x", paths=none)
+        b = pf["anydesk_baseline"]
+        self.assertEqual((b["max_pct"], b["samples"], b["label"]), (0.3, 24, "policy, unvalidated"))
+        self.assertAlmostEqual(b["g3_threshold_pct"], 0.9, places=3)
+        self.assertEqual(hostguard.g3_baseline(pf)["max_pct"], 0.3)
+        legacy = {"rows": [{"id": "P2", "measured": {"mean_pct": 0.179, "max_pct": 0.328}}]}   # written before F29
+        self.assertEqual(hostguard.g3_baseline(legacy)["max_pct"], 0.328)
+        self.assertIsNone(hostguard.g3_baseline({"rows": []}))
+        ev = HostGuardTests()._guard_ev(self._samples(lambda t: 0.76), [], self.W, preflight=pf)
+        ev["meta"]["host_guard"]["baseline_pids"] = [1, 2, 3]
+        out = analyze.check_host_guard(ev, {})
+        self.assertEqual(out["status"], analyze.INFO, out["measured"])
+        self.assertAlmostEqual(out["detail"]["stats"]["g3"]["threshold_pct"], 0.9, places=3)
+
+
+class F29ProcSamplerTests(unittest.TestCase):
+    """The optional 1 s process sampler is evidence only."""
+
+    ROWS = [{"epoch": 100.0 + i, "top": [{"pid": 7, "name": "python", "cpu": 12.0 if i == 3 else 1.0},
+                                           {"pid": 8, "name": "claude", "cpu": 0.5}], "sweep_ms": 40.0, "own_cpu": 0.2}
+            for i in range(6)]
+
+    def test_report_ranks_processes_and_names_the_hottest_seconds(self):
+        from lab import hostguard
+        rep = hostguard.procs_report(self.ROWS)
+        self.assertEqual(rep["samples"], 6)
+        self.assertEqual(rep["processes"][0]["name"], "python")
+        self.assertEqual(rep["processes"][0]["max_pct"], 12.0)
+        self.assertEqual(rep["processes"][0]["seconds_above_5_pct"], 1)
+        self.assertEqual(rep["hottest_seconds"][0], {"epoch": 103.0, "name": "python", "cpu_pct": 12.0})
+
+    def test_it_is_info_detail_and_never_a_guard(self):
+        w = (1000.0, 1300.0)
+        ev = HostGuardTests()._guard_ev(HostGuardTests._idle(900, 1400, pid_base=1), [], w)
+        ev["meta"]["host_guard"]["baseline_pids"] = [1, 2, 3]
+        ev["hostguard"]["procs"] = list(self.ROWS)
+        ev["hostguard"]["procs_summary"] = {"sampler_cpu_pct_of_host": {"mean": 0.2, "max": 0.46}}
+        out = analyze.check_host_guard(ev, {})
+        self.assertEqual(out["status"], analyze.INFO)
+        self.assertEqual(out["detail"]["proc_sampler"]["processes"][0]["name"], "python")
+        self.assertEqual(out["detail"]["proc_sampler"]["cost"]["sampler_cpu_pct_of_host"]["max"], 0.46)
+        ev["hostguard"]["procs"] = []
+        self.assertNotIn("proc_sampler", analyze.check_host_guard(ev, {})["detail"])
+
+    def test_the_sampler_script_is_read_only(self):
+        from lab import hostguard
+        text = hostguard.PROCS_PS1.read_text(encoding="utf-8")
+        for verb in ("Stop-Process", "Start-Process", "Set-", "Remove-", "New-Item", "Out-File", "Add-Content"):
+            self.assertNotIn(verb, text)
+        self.assertIn("Get-Process", text)
+
+
 if __name__ == "__main__":
     unittest.main()

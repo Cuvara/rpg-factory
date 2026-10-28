@@ -351,7 +351,7 @@ A freeze in a rendered player is evidence about the game only if nothing else on
 | Row | Needs |
 |---|---|
 | P1 | no `--backend` process, no session event or connection entry in the last 2 min (residents allowed) |
-| P2 | AnyDesk residents idle: mean CPU under 0.5 % of the host |
+| P2 | AnyDesk residents idle: mean CPU under 0.5 % and max under 1.0 % (the G3 cap) of the host |
 | P3 | no other agent in the `working` state in `orca worktree ps` (`--allow-agent` names the soak runner and the Lead) |
 | P4 | no sustained build tools (mean 2 % or less) or Defender scan (`MsMpEng` under 5 %) |
 | P5 | host CPU mean 50 % or less; above 30 % it is flagged shared-host |
@@ -366,7 +366,7 @@ A scenario with `requires_clean_host` (S09) runs P1-P6 automatically before anyt
 |---|---|
 | G1 | an AnyDesk session event or `--backend` process in the window, or a session still active at its start |
 | G2 | an AnyDesk process that was not in the preflight / pre-window set (also catches a log that cannot be read) |
-| G3 | AnyDesk CPU of 0.5 % of the host or more for 2 consecutive samples |
+| G3 | AnyDesk CPU of min(1.0 %, max(0.5 %, resident max x 2 + 0.3 %)) of the host or more for 2 consecutive samples; the resident max is the preflight's 2-minute P2 maximum (`host/preflight.json` `anydesk_baseline`), 0.5 % without one. Policy, unvalidated (F19 0.03 % idle, F28 0.18 % mean / 1.98 % max idle front process) |
 | G4 | build tools or `MsMpEng` above 5 % of the host for 3 consecutive samples |
 | G5 | the guard was blind: more than 3 consecutive intervals without a sample |
 | G6 | `current_tick` per harness second steps more than 5 % from its run median for more than 2 s while `achieved_tick_hz` remains within its normal 98 % bound |
@@ -378,6 +378,8 @@ G6 compares the server tick counter with the harness monotonic clock using 1 Hz 
 A server stall or slowdown remains graded by the existing tick, snapshot and render checks as FAIL. Because `achieved_tick_hz` is the rate of the last completed 2 s window and lags a stall, G6 drops every interval with `achieved_tick_hz` below 98 % of the critical rate, with no tick progress, or more than 35 % off the median (a host clock step is about 20 %), and also every interval within 3 s (the 2 s meter window plus one sample) before or after one.
 
 The provisional limits are tied to F23's `9mre` evidence. The detector reports five episodes there, not two: 564 s and 2990 s (about 65 instead of 55 ticks per harness second while the server reported ~60 achieved ticks/s) are F23 Finding B, the only ones attributed to a host clock correction; one at 2 s is start-up (58.8 ticks/s, 6.6 %); 2288 s (50 s) and 2431 s (42 s) run at 60 ticks/s with no 55 skew and are unexplained. The reference is the run median, so a run that spends more than half of its time in the other regime would flag the normal one; this is a policy limitation, not validated.
+
+S09-class runs (`requires_clean_host`) also run `hostprocs.ps1`, a 1 s sampler of the top 10 processes by CPU (`host/procs.ndjson`, cost in `host/procs-summary.json`: about 0.2 % of the host, one 50 ms sweep a second on one core). It is evidence only: the `host_guard` detail carries a `proc_sampler` summary (INFO) and no guard reads it. It exists to match a 40-140 ms client stall to a process, which the 5 s guard cannot do.
 
 The guard cannot see which part of a session start freezes a player, and an idle resident AnyDesk cannot be cleared by it; both stay open (F19 section 3.5). A run with no guard evidence (older runs) shows `host_guard` INFO; a clean-host scenario without it is INCONCLUSIVE.
 
