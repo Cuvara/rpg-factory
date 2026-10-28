@@ -21,13 +21,19 @@ Every executed check is stored with the identity of the tree it ran on (lib/evid
 full log; the table shows a summary only. `--status` grades the declared checks against the
 current tree WITHOUT running anything - a PASS from before an edit shows as STALE.
 
-Usage: run-checks.py --repo <key> [--paths <p>...] [--tier fast|extended|external|all]
+Usage: run-checks.py --repo <key> [--repo-path <dir>] [--paths <p>...] [--tier fast|extended|external|all]
                      [--approve <check-id>...] [--only <module/check-id>...] [--timeout SEC]
                      [--dry-run] [--json] [--status]
+  --repo-path  checkout or linked worktree to run in. Default: the git toplevel of the cwd when the cwd is inside a
+               checkout or linked worktree of the repo; only a cwd outside every worktree of the repo falls back to the
+               registry's canonical checkout, and the output says so
   --paths      the files the task changed (default: the repo's working tree + branch diff); a path
                outside the repo checkout and its linked worktrees is a usage error
   --tier       default "fast"; extended/external are listed as HUMAN_REQUIRED unless approved
   --only       names must match a check declared for these paths (usage error otherwise)
+Canonical-checkout guard: when the run targets a worktree, the canonical checkout's status (tracked, untracked
+and ignored) is snapshotted before and after; any difference adds a FAIL row (runner/canonical-checkout-guard).
+Every check runs with PYTHONDONTWRITEBYTECODE=1 and PYTHONPYCACHEPREFIX=<state tmp> so no .pyc lands in a checkout.
 Evidence: <state root>/evidence/<workspace>/<repo>/ (lib/fstate.py; never inside a repo).
 Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among required checks; 2 usage
       (unknown --repo/--tier/--only name, bad --timeout, path outside the repo).
@@ -50,20 +56,21 @@ REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import evidence  # noqa: E402
 import fstate  # noqa: E402
+import context as ctxlib  # noqa: E402
 from context import native_abs  # noqa: E402
 
 
 def parse_args(argv):
-    a = {"repo": None, "paths": [], "tier": "fast", "approve": [], "only": [], "timeout": 1800, "dry": False, "json": False,
+    a = {"repo": None, "paths": [], "tier": "fast", "approve": [], "only": [], "timeout": 1800, "repo_path": None, "dry": False, "json": False,
          "status": False}
     i, cur = 0, None
-    flags = {"--repo", "--paths", "--tier", "--approve", "--only", "--timeout", "--dry-run", "--json", "--status"}
+    flags = {"--repo", "--repo-path", "--paths", "--tier", "--approve", "--only", "--timeout", "--dry-run", "--json", "--status"}
     while i < len(argv):
         x = argv[i]
         if x in ("--paths", "--approve", "--only"):
             cur = x[2:]
-        elif x in ("--repo", "--tier", "--timeout"):
-            a[x[2:]] = argv[i + 1] if i + 1 < len(argv) else None
+        elif x in ("--repo", "--repo-path", "--tier", "--timeout"):
+            a[x[2:].replace("-", "_")] = argv[i + 1] if i + 1 < len(argv) else None
             i += 1
             cur = None
         elif x == "--dry-run":
@@ -193,7 +200,7 @@ def bash_env_path(path, bash, flavor=None):
 
 def wsl_environment(env):
     """Bridge already-translated contract values into WSL without path conversion."""
-    names = ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE")
+    names = ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX")
     entries = [x for x in env.get("WSLENV", "").split(":") if x]
     env["WSLENV"] = ":".join(dict.fromkeys(entries + list(names)))
     return env
@@ -529,6 +536,8 @@ def outside_paths(a, repo):
 
 def context(a, paths):
     ctx_cmd = ["bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
+    if a["repo_path"]:
+        ctx_cmd += ["--repo-path", a["repo_path"]]
     if paths:
         ctx_cmd += ["--paths", *paths]
     r = subprocess.run(ctx_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, "CLAUDE_PLUGIN_ROOT": PLUGIN_ROOT})
@@ -541,6 +550,35 @@ def context(a, paths):
     if repo.get("error"):
         usage_error(repo["error"])
     return repo
+
+
+def canonical_snapshot(d):
+    """Fingerprint of everything git can see in checkout d - tracked changes, untracked and ignored files -
+    with size/mtime, so a stray .pyc (usually gitignored) or an edit to an already-dirty file shows up.
+    Ignored directories are collapsed by git; adding a file inside one changes the directory's mtime."""
+    entries = git(d, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional",
+                  "--ignore-submodules=all").split("\0")
+    snap = {}
+    for e in entries:
+        if len(e) < 4:
+            continue
+        path = e[3:]
+        try:
+            st = os.stat(os.path.join(d, path), follow_symlinks=False)
+            snap[path] = f"{e[:2]}:size={st.st_size}:mtime_ns={st.st_mtime_ns}"
+        except OSError as err:
+            snap[path] = f"{e[:2]}:unreadable:{err}"
+    return snap
+
+
+def canonical_checkouts(rdir, ws, repo_key):
+    """Checkouts of the repo the run must never touch: the git main checkout and the registry canonical path,
+    except the one the run targets."""
+    found = []
+    for c in (ctxlib.main_checkout(rdir), os.path.join(ws, REG["repos"][repo_key]["path"])):
+        if os.path.isdir(c) and not any(ctxlib.same_path(c, x) for x in found + [rdir]):
+            found.append(os.path.abspath(c))
+    return found
 
 
 def main():
@@ -566,6 +604,9 @@ def main():
     if a["status"]:
         return status(a, ws, repo, rdir, meta, commit)
     results, state_of = [], {}  # (module, check id) -> state in THIS run
+    resolution = repo.get("resolution") or {}
+    guards = [] if a["dry"] else canonical_checkouts(rdir, ws, a["repo"])
+    guard_before = {g: canonical_snapshot(g) for g in guards}
 
     def need_state(module, n):
         """State of prerequisite `n` in this run: the same module's check, else that id in any module (a
@@ -635,6 +676,7 @@ def main():
             try:
                 check_env = {
                     **os.environ, "PYTHONDONTWRITEBYTECODE": "1", "RPG_FACTORY_WORKSPACE": ws_path,
+                    "PYTHONPYCACHEPREFIX": bash_env_path(os.path.join(fstate.scratch(), "pycache"), bash, bash_flavor) or "",
                     "RPG_FACTORY_REPO_DIR": repo_path, "RPG_FACTORY_REPO_KEY": a["repo"], "RPG_FACTORY_HEAD": head,
                 }
                 if bash_flavor == "wsl":
@@ -664,8 +706,18 @@ def main():
         state_of[key] = res["state"]
         results.append(res)
 
+    for g in guards:
+        after = canonical_snapshot(g)
+        changed = sorted(p for p in set(guard_before[g]) | set(after) if guard_before[g].get(p) != after.get(p))
+        results.append({"module": "runner", "check": "canonical-checkout-guard", "tier": "fast", "command": f"git status snapshot of {g}",
+                        "cwd": ".", "repo": a["repo"], "branch": repo["branch"], "commit": commit,
+                        "state": "FAIL" if changed else "PASS", "exit": None, "duration_s": None, "counts": {},
+                        "reason": (f"{len(changed)} file(s) appeared or changed in the canonical checkout {g} during the run: "
+                                   + ", ".join(changed[:5]) + "; remove them and run from inside your worktree (--repo-path)") if changed
+                                  else f"canonical checkout {g} unchanged",
+                        "output_tail": None, "evidence_expected": "canonical checkout status identical before and after"})
     record = {"repo": a["repo"], "path": rdir, "branch": repo["branch"], "commit": commit, "timestamp": stamp,
-              "paths": a["paths"] or [f["path"] for f in repo["files"]], "routing": repo["routing"], "results": results}
+              "resolution": resolution, "paths": a["paths"] or [f["path"] for f in repo["files"]], "routing": repo["routing"], "results": results}
     if a["dry"]:
         rf = None  # --dry-run records nothing: no run record, no evidence
     else:
@@ -676,6 +728,9 @@ def main():
         print(json.dumps(record, indent=2))
     else:
         print(f"Checks for {a['repo']} @ {repo['branch']} {commit[:7]} (evidence: {rf or 'none, --dry-run'})")
+        print(f"Target checkout: {rdir} ({resolution.get('source', 'unknown')})")
+        if resolution.get("note"):
+            print(f"NOTE: {resolution['note']}")
         if not results:
             print(NONE_REGISTERED)
         print("| Tier | Module | Check | State | Evidence / reason | Time |")

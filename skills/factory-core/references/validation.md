@@ -15,6 +15,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py" --repo server --paths ... 
 
 - Use `--paths` with the files *you* changed. Without it the runner resolves the whole working
   tree, which includes the user's pre-existing changes.
+- Run it from inside your worktree: the runner targets the git toplevel of the cwd (or `--repo-path <worktree>`), so
+  checks and their evidence describe your tree. Only a cwd outside every worktree of the repo falls back to the
+  registry's canonical checkout, and the output then prints a `NOTE:` saying so. When a run targets a worktree, a
+  `runner/canonical-checkout-guard` row compares the canonical checkout's status (tracked, untracked, ignored) before
+  and after; a FAIL there means a check wrote into the user's protected checkout - remove the files and fix the check.
+  Checks run with `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=<scratch>`, so no `.pyc` is written in a checkout.
 - The list covers touched modules and their dependents; identical commands run once; the second check
   is graded on the shared output with its own definition (reason "output shared").
 - `--tier fast` (default) runs fast checks and reports extended/external ones as HUMAN_REQUIRED.
