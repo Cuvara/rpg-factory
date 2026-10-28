@@ -161,7 +161,7 @@ class ConvergenceGapTests(unittest.TestCase):
     """Two clients draw one mob walking +x at 2 u/s as a function of the render tick. Client 0 freezes for 5 s at
     st 10-15 (no samples); when it resumes it draws the entity 1.5 u off for 0.7 s while it catches up (k4n5)."""
 
-    def _ev(self, bad_at=None, reconnect=False):
+    def _ev(self, bad_at=None, reconnect=False, stale_until=None):
         ev = _ev(clients=2, status=[{"_st": 1, "tick_rate": 60}], duration=40.0)
         for c in ev["clients"]:
             samples = []
@@ -176,7 +176,8 @@ class ConvergenceGapTests(unittest.TestCase):
                     continue                                     # the freeze: no sample
                 tick = 1000 + st * 60
                 x = st * 2.0
-                if c["index"] == 0 and (15.0 <= st < 15.7 or (bad_at is not None and bad_at <= st < bad_at + 0.7)):
+                if c["index"] == 0 and (15.0 <= st < 15.7 or (bad_at is not None and bad_at <= st < bad_at + 0.7)
+                                        or (stale_until is not None and 15.0 <= st < stale_until)):
                     x += 1.5
                 samples.append(_sample(st + 100.0, [["e", "mob", 0, x, 0.0, x, 0.0]], tick))
             c["samples"] = samples
@@ -185,6 +186,10 @@ class ConvergenceGapTests(unittest.TestCase):
             ev["clients"][0]["events"] = [{"st": 15.0, "event": "net_state", "state": "Ended"},
                                           {"st": 15.05, "event": "net_state", "state": "Reconnecting"},
                                           {"st": 15.4, "event": "net_state", "state": "InWorld"}]
+        if stale_until is not None:       # k4n5: the connection died during the freeze; Ended is only noticed 4.5 s after it
+            ev["clients"][0]["events"] = [{"st": 19.5, "event": "net_state", "state": "Ended"},
+                                          {"st": 19.55, "event": "net_state", "state": "Reconnecting"},
+                                          {"st": 19.9, "event": "net_state", "state": "InWorld"}]
         return ev
 
     def test_a_frozen_client_catching_up_is_not_a_convergence_failure(self):
@@ -205,6 +210,25 @@ class ConvergenceGapTests(unittest.TestCase):
         ev = self._ev(reconnect=True)
         spans = analyze.client_gap_spans(ev["clients"][0], 40.0)
         self.assertEqual([(round(a, 2), round(b, 2), why) for a, b, why in spans], [(14.5, 17.4, "RECONNECT")])
+
+    def test_stale_drawing_between_a_freeze_and_its_reconnect_is_not_excluded_and_fails(self):
+        # Lead decision (RV-M4B): no exclusion beyond the classified spans. Client 0 draws 1.5 u off from the end of its freeze
+        # until the reconnect (k4n5 did so for 4.6 s); only the sample gap (+2 s) and the net_state span (+2 s) are skipped, the
+        # divergence in between is reported as the FAIL it is.
+        res = analyze.check_cross_client_convergence(self._ev(stale_until=19.9), {})
+        self.assertEqual(res["status"], analyze.FAIL, res["measured"])
+        self.assertGreaterEqual(res["measured"]["max"], 1.5)
+        self.assertEqual([g["class"] for g in res["detail"]["skipped_client_gaps"]], ["CLIENT", "RECONNECT"])
+
+    def test_the_same_stale_drawing_without_any_reconnect_fails_too(self):
+        ev = self._ev(stale_until=19.9)
+        ev["clients"][0]["events"] = []
+        self.assertEqual(analyze.check_cross_client_convergence(ev, {})["status"], analyze.FAIL)
+
+    def test_a_freeze_and_a_reconnect_stay_separate_spans(self):
+        c = {"events": [{"st": 12.0, "event": "net_state", "state": "Ended"}, {"st": 12.5, "event": "net_state", "state": "InWorld"}],
+             "frames": [(10.0, 3000.0)], "samples": []}
+        self.assertEqual([why for _, _, why in analyze.client_gap_spans(c, 60.0)], ["CLIENT", "RECONNECT"])
 
     def test_a_client_that_never_comes_back_is_skipped_to_the_end(self):
         c = {"events": [{"st": 20.0, "event": "net_state", "state": "Ended"}], "frames": []}
