@@ -161,7 +161,7 @@ class ConvergenceGapTests(unittest.TestCase):
     """Two clients draw one mob walking +x at 2 u/s as a function of the render tick. Client 0 freezes for 5 s at
     st 10-15 (no samples); when it resumes it draws the entity 1.5 u off for 0.7 s while it catches up (k4n5)."""
 
-    def _ev(self, bad_at=None, reconnect=False, stale_until=None):
+    def _ev(self, bad_at=None, reconnect=False):
         ev = _ev(clients=2, status=[{"_st": 1, "tick_rate": 60}], duration=40.0)
         for c in ev["clients"]:
             samples = []
@@ -176,8 +176,7 @@ class ConvergenceGapTests(unittest.TestCase):
                     continue                                     # the freeze: no sample
                 tick = 1000 + st * 60
                 x = st * 2.0
-                if c["index"] == 0 and (15.0 <= st < 15.7 or (bad_at is not None and bad_at <= st < bad_at + 0.7)
-                                        or (stale_until is not None and 15.0 <= st < stale_until)):
+                if c["index"] == 0 and (15.0 <= st < 15.7 or (bad_at is not None and bad_at <= st < bad_at + 0.7)):
                     x += 1.5
                 samples.append(_sample(st + 100.0, [["e", "mob", 0, x, 0.0, x, 0.0]], tick))
             c["samples"] = samples
@@ -186,10 +185,6 @@ class ConvergenceGapTests(unittest.TestCase):
             ev["clients"][0]["events"] = [{"st": 15.0, "event": "net_state", "state": "Ended"},
                                           {"st": 15.05, "event": "net_state", "state": "Reconnecting"},
                                           {"st": 15.4, "event": "net_state", "state": "InWorld"}]
-        if stale_until is not None:       # k4n5: the connection died during the freeze; Ended is only noticed 4.5 s after it
-            ev["clients"][0]["events"] = [{"st": 19.5, "event": "net_state", "state": "Ended"},
-                                          {"st": 19.55, "event": "net_state", "state": "Reconnecting"},
-                                          {"st": 19.9, "event": "net_state", "state": "InWorld"}]
         return ev
 
     def test_a_frozen_client_catching_up_is_not_a_convergence_failure(self):
@@ -209,35 +204,14 @@ class ConvergenceGapTests(unittest.TestCase):
     def test_net_state_spans_are_skipped_and_reported_as_reconnect(self):
         ev = self._ev(reconnect=True)
         spans = analyze.client_gap_spans(ev["clients"][0], 40.0)
-        # the 10-15 s sample gap and the 15.0-15.4 reconnect are one outage
-        self.assertEqual([(round(a, 2), round(b, 2), why) for a, b, why in spans], [(9.5, 17.4, "RECONNECT")])
-
-    def test_a_freeze_followed_by_a_reconnect_is_one_outage_and_the_stale_drawing_until_it_is_skipped(self):
-        ev = self._ev(stale_until=19.9)
-        res = analyze.check_cross_client_convergence(ev, {})
-        self.assertEqual(res["status"], analyze.PASS, res["measured"])
-        gap = res["detail"]["skipped_client_gaps"][0]
-        self.assertEqual((gap["client"], gap["class"]), (0, "RECONNECT"))
-        self.assertLess(gap["from_st"], 10.0)
-        self.assertGreater(gap["to_st"], 21.8)
-
-    def test_the_same_stale_drawing_without_a_reconnect_only_gets_the_settle_allowance(self):
-        ev = self._ev(stale_until=19.9)
-        ev["clients"][0]["events"] = []
-        res = analyze.check_cross_client_convergence(ev, {})
-        self.assertEqual(res["status"], analyze.FAIL, res["measured"])
-
-    def test_a_reconnect_long_after_a_freeze_is_not_merged_with_it(self):
-        c = {"events": [{"st": 40.0, "event": "net_state", "state": "Ended"}, {"st": 40.5, "event": "net_state", "state": "InWorld"}],
-             "frames": [(10.0, 3000.0)], "samples": []}
-        self.assertEqual([why for _, _, why in analyze.client_gap_spans(c, 60.0)], ["CLIENT", "RECONNECT"])
+        self.assertEqual([(round(a, 2), round(b, 2), why) for a, b, why in spans], [(14.5, 17.4, "RECONNECT")])
 
     def test_a_client_that_never_comes_back_is_skipped_to_the_end(self):
-        c = {"events": [{"st": 20.0, "event": "net_state", "state": "Ended"}], "frames": [], "samples": []}
+        c = {"events": [{"st": 20.0, "event": "net_state", "state": "Ended"}], "frames": []}
         self.assertEqual(analyze.client_gap_spans(c, 40.0), [(19.5, 42.0, "RECONNECT")])
 
     def test_a_long_client_frame_is_a_client_gap(self):
-        c = {"events": [], "frames": [(30.0, 5000.0), (31.0, 16.0)], "samples": []}
+        c = {"events": [], "frames": [(30.0, 5000.0), (31.0, 16.0)]}
         self.assertEqual(analyze.client_gap_spans(c, 40.0), [(24.5, 32.0, "CLIENT")])
 
 

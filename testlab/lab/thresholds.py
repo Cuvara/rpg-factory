@@ -181,7 +181,7 @@ CHECK_DEFAULTS = [
      f"{POLICY}. INFO only: k4n5 had 5 s freezes that nothing classified"),
     ("cross_client_convergence gap (H2)", "gap / pad before / settle after",
      f"{analyze.CLIENT_GAP_S:g} s without a sample, a net_state other than InWorld, or a frame >= {analyze.INFO_FREEZE_MIN_MS:g} ms / "
-     f"{analyze.CLIENT_GAP_PAD_BEFORE_S:g} s / {analyze.CLIENT_GAP_SETTLE_S:g} s; a freeze and a reconnect within {analyze.CLIENT_GAP_LINK_S:g} s are one outage",
+     f"{analyze.CLIENT_GAP_PAD_BEFORE_S:g} s / {analyze.CLIENT_GAP_SETTLE_S:g} s",
      f"{POLICY}. A client that is frozen or reconnecting is not an observer; its samples are left out and reported. k4n5: the 15 worst "
      "pairs were c0 catching up within 0.8 s after a 5 s freeze. The p95 / max limits are unchanged"),
     ("render_jumps hop sizes (H5)", "boundary window", f"{analyze.HOP_BOUNDARY_WINDOW_S:g} s of a scripted step boundary",

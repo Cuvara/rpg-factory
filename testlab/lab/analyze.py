@@ -2717,64 +2717,53 @@ def _projectile_speed(ev, a):
 CLIENT_GAP_S = 1.0            # H2: a client that records no sample for this long was frozen or reconnecting
 CLIENT_GAP_PAD_BEFORE_S = 0.5
 CLIENT_GAP_SETTLE_S = 2.0     # H2: after a gap the client catches up to the server tick and re-fills its interpolation buffer
-CLIENT_GAP_LINK_S = 10.0      # H2: a freeze followed this soon by a reconnect is one outage (see client_gap_spans)
 
 
 def client_gap_spans(c: dict, until_s: float = float("inf")) -> list:
     """Scenario-time spans in which client `c` is not a valid observer (H2), from what the harness records:
-    - net_state events: any state but InWorld after the client was in the world (Ended, Reconnecting, Authenticating,
-      Assigning, Joining), up to the next InWorld; open-ended when it never came back (class RECONNECT);
-    - single frames of >= INFO_FREEZE_MIN_MS and gaps of >= CLIENT_GAP_S in the sample stream: the client froze (CLIENT).
-    A freeze that is followed within CLIENT_GAP_LINK_S by a reconnect is ONE outage and is merged with it (class
-    RECONNECT): the server closes a connection that stops acknowledging (about 3.1 s) while the frozen client still
-    believes it is InWorld, so the client draws stale state from the end of the freeze until its Ended event (k4n5, client 0:
-    freeze 1220.9-1226.0, Ended 1229.9, InWorld 1230.3; the entity it drew 8 u off converged only at the reconnect).
+    net_state events (any state but InWorld after the client was in the world: Ended, Reconnecting, Authenticating,
+    Assigning, Joining, up to the next InWorld; open-ended when it never came back) and single frames of
+    >= INFO_FREEZE_MIN_MS (the client froze). Gaps in the sample stream are found on the fly by `_render_rows`.
     Returns [(st0, st1, reason)] widened by CLIENT_GAP_PAD_BEFORE_S / CLIENT_GAP_SETTLE_S."""
-    raw = []
+    spans = []
     down_since = None
     for e in c["events"]:
         if e.get("event") != "net_state" or e.get("st") is None or e["st"] < 0:
             continue
         if e.get("state") == "InWorld":
             if down_since is not None:
-                raw.append((down_since, e["st"], "RECONNECT"))
+                spans.append((down_since, e["st"], "RECONNECT"))
                 down_since = None
         elif down_since is None:
             down_since = e["st"]
     if down_since is not None:
-        raw.append((down_since, until_s, "RECONNECT"))
+        spans.append((down_since, until_s, "RECONNECT"))
     for st, dt in c.get("frames", []):
         if dt >= INFO_FREEZE_MIN_MS:
-            raw.append((st - dt / 1000.0, st, "CLIENT"))
-    prev = None
-    for smp in c["samples"]:
-        st = smp.get("st")
-        if st is None or st < 0:
-            continue
-        if prev is not None and st - prev >= CLIENT_GAP_S:
-            raw.append((prev, st, "CLIENT"))
-        prev = st
-    merged: list = []
-    for a, b, why in sorted(raw):
-        if merged:
-            ma, mb, mwhy = merged[-1]
-            if a <= mb or (a - mb <= CLIENT_GAP_LINK_S and "RECONNECT" in (why, mwhy)):
-                merged[-1] = (ma, max(mb, b), "RECONNECT" if "RECONNECT" in (why, mwhy) else mwhy)
-                continue
-        merged.append((a, b, why))
-    return [(a - CLIENT_GAP_PAD_BEFORE_S, b + CLIENT_GAP_SETTLE_S, why) for a, b, why in merged]
+            spans.append((st - dt / 1000.0, st, "CLIENT"))
+    return [(a - CLIENT_GAP_PAD_BEFORE_S, b + CLIENT_GAP_SETTLE_S, why) for a, b, why in sorted(spans)]
 
 
 def _render_rows(c, skip, stalls, until=None, gaps=None, skipped=None):
     """(render_tick, id, x, y) of remote (not locally predicted) entities, in sample order, for
-    scenario time in [skip, until]. Samples inside `gaps` (client_gap_spans) are skipped and counted per span in
-    `skipped` ({(st0, st1, reason): samples})."""
+    scenario time in [skip, until]. `gaps` (client_gap_spans) and sample-stream gaps of >= CLIENT_GAP_S are
+    skipped, and counted per span in `skipped` ({(st0, st1, reason): samples})."""
     gaps = gaps or []
+    prev_st, sample_gap_end = None, None
     for smp in c["samples"]:
         rt, st = smp.get("render_tick"), smp.get("st")
         if rt is None or st is None or st < skip or (until is not None and st > until)                 or _in_stall(stalls, st, st, slack=0.5):
             continue
-        why = next((g for g in gaps if g[0] <= st <= g[1]), None)
+        if prev_st is not None and st - prev_st >= CLIENT_GAP_S:
+            sample_gap_end = (prev_st - CLIENT_GAP_PAD_BEFORE_S, st + CLIENT_GAP_SETTLE_S, "CLIENT")
+            if skipped is not None:
+                skipped.setdefault(sample_gap_end, 0)
+        prev_st = st
+        why = None
+        if sample_gap_end is not None and st <= sample_gap_end[1]:
+            why = sample_gap_end
+        else:
+            why = next((g for g in gaps if g[0] <= st <= g[1]), None)
         if why is not None:
             if skipped is not None:
                 skipped[why] = skipped.get(why, 0) + 1

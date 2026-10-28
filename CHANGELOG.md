@@ -21,10 +21,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     line is reported open with an unknown duration. (F28 assumed 20 s sessions; they were 15:00 each.)
   - H2: `cross_client_convergence` leaves out the samples of a client that is not a valid observer: a net_state other
     than InWorld (`RECONNECT`), a 1 s gap in its sample stream or a frame of 1 s or more (`CLIENT`), from 0.5 s before to 2 s
-    after; a freeze followed within 10 s by a reconnect is one outage and the span runs to the end of the reconnect
-    (the dead-link close happens while the frozen client still believes it is InWorld). `detail.skipped_client_gaps`
-    lists the spans and `measured.skipped_client_gap_samples` counts the samples. A divergence outside those spans still
-    FAILs. (k4n5: the 15 worst pairs were client 0 drawing stale state during and after a 5 s freeze that ended in a reconnect.)
+    after. `detail.skipped_client_gaps` lists the spans and `measured.skipped_client_gap_samples` counts the samples. A
+    divergence outside those spans still FAILs. (k4n5: the 15 worst pairs were a client catching up after a 5 s freeze.)
   - H3: `host_quiet` INFO tiers, never graded and never PRODUCT: host-wide stalls of >= 30 ms ending within 50 ms in
     >= 2 client processes (`host_stalls_info_30ms`, `detail.info_stalls_30ms`) and single-process freezes of >= 1 s
     outside a graded stall (`single_process_freezes_1s`, `detail.single_process_freezes`). The 250 ms rule is unchanged.
