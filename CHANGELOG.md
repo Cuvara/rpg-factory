@@ -4,8 +4,21 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- testlab `analyze` now isolates the full failure-summary build/write step: non-`OSError` exceptions no longer escape,
+  and a minimal summary records the exception type/message and preserves the original verdict and exit code when possible.
+
 ### Added
 
+- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
+  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
+  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
+  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
+  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
+  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
+  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
+  `testlab/tests/test_failsum.py`.
 - testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
   `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
   the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with

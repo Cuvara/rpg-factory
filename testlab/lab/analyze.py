@@ -727,6 +727,14 @@ def check_render_jumps(ev, a):
         p0, p1 = _pos_at(t, e["st"] - 0.25), _pos_at(t, e["st"] + 0.05)
         server_step = None if p0 is None or p1 is None else round(math.hypot(p1[0] - p0[0], p1[1] - p0[1]), 3)
         attributed.append({**e, "server_step_0p3s": server_step})
+    # Side channel for lab/failsum.py (derived output, not part of the result): the events that were counted and
+    # the classes whose limit they breach, so the failure summary can name the earliest counted jump.
+    ev.setdefault("_failsum", {})["render_jumps"] = {
+        "events": [e for e in events if e.get("class") != "server_teleport"],
+        "breaching": [k for k, limit in (("local_major", None), ("remote_major", a.get("max_remote_per_client_min", 2.0)),
+                                         ("local_minor", a.get("max_local_minor_per_client_min", 30.0)),
+                                         ("remote_minor", a.get("max_remote_minor_per_client_min", 30.0)))
+                      if (counts[k] > int(a.get("max_local", 0)) if limit is None else counts[k] / minutes / n > float(limit))]}
     return _result(FAIL if not ok else (INCONCLUSIVE if hidden_by_stall else PASS),
                    {**counts, "per_client_min": rate, "by_type": by_type},
                    {"local_major": a.get("max_local", 0), "remote_major_per_client_min": a.get("max_remote_per_client_min", 2.0),

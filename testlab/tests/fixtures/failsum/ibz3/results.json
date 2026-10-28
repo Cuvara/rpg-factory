@@ -1,0 +1,453 @@
+{
+ "outcome": "INVALID",
+ "harness_error": null,
+ "assertions": [
+  {
+   "id": "render_jumps",
+   "check": "render_jumps",
+   "title": "",
+   "status": "FAIL",
+   "measured": {
+    "local_major": 1,
+    "local_minor": 0,
+    "remote_major": 0,
+    "remote_minor": 4,
+    "server_teleport": 3857,
+    "host_stall": 0,
+    "ignored_type": 3,
+    "per_client_min": {
+     "local_major": 0.006,
+     "local_minor": 0.0,
+     "remote_major": 0.0,
+     "remote_minor": 0.022
+    },
+    "by_type": {
+     "player": 5
+    }
+   },
+   "threshold": {
+    "local_major": 0,
+    "remote_major_per_client_min": 2.0,
+    "local_minor_per_client_min": 30.0,
+    "remote_minor_per_client_min": 30.0,
+    "major_step": 1.0
+   },
+   "detail": {
+    "per_client": {
+     "0": 716,
+     "1": 1401,
+     "2": 1748
+    },
+    "largest": [
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 22.271,
+      "st": 3305.2322603,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 22.889576,
+      "allowed": 0.35607934,
+      "dt_ms": 5.89329656213522,
+      "server_step_0p3s": 6.112
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 19.431,
+      "st": 475.9033501,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 19.5898037,
+      "allowed": 0.3096125,
+      "dt_ms": 3.311805659905076,
+      "server_step_0p3s": 17.088
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 19.067,
+      "st": 3474.3003463,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 19.0058746,
+      "allowed": 0.417347848,
+      "dt_ms": 9.297101758420467,
+      "server_step_0p3s": 10.531
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 18.462,
+      "st": 663.1046170000001,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 17.6212,
+      "allowed": 0.316252559,
+      "dt_ms": 3.680697176605463,
+      "server_step_0p3s": 11.547
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.612,
+      "st": 2112.7029666,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 17.5776176,
+      "allowed": 0.33283776,
+      "dt_ms": 4.602097440510988,
+      "server_step_0p3s": 16.195
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 17.748,
+      "st": 1074.8412783,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 17.5193348,
+      "allowed": 0.381637633,
+      "dt_ms": 7.313201669603586,
+      "server_step_0p3s": 12.767
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.883,
+      "st": 1499.8996635,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 16.8826714,
+      "allowed": 0.309983164,
+      "dt_ms": 3.332397900521755,
+      "server_step_0p3s": 3.954
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.623,
+      "st": 2006.5759295,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": true,
+      "step": 16.5391769,
+      "allowed": 0.3066945,
+      "dt_ms": 3.1496952287852764,
+      "server_step_0p3s": 5.362
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 16.456,
+      "st": 2924.9729611,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": true,
+      "step": 16.5391769,
+      "allowed": 0.315640569,
+      "dt_ms": 3.646697849035263,
+      "server_step_0p3s": 14.457
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 16.363,
+      "st": 1434.8461344,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": true,
+      "step": 16.36332,
+      "allowed": 0.327050745,
+      "dt_ms": 4.280597902834415,
+      "server_step_0p3s": 16.305
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.591,
+      "st": 1896.167179,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 16.2578869,
+      "allowed": 0.321595,
+      "dt_ms": 3.9775012992322445,
+      "server_step_0p3s": 9.049
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 16.084,
+      "st": 1416.7119329,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": true,
+      "step": 16.25056,
+      "allowed": 0.331727177,
+      "dt_ms": 4.540398251265287,
+      "server_step_0p3s": 15.128
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.583,
+      "st": 2242.8407783,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": true,
+      "step": 16.2493954,
+      "allowed": 0.31334734,
+      "dt_ms": 3.5192957147955894,
+      "server_step_0p3s": 5.982
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 15.707,
+      "st": 2082.8330326,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 16.2258873,
+      "allowed": 0.314909816,
+      "dt_ms": 3.6061012651771307,
+      "server_step_0p3s": 10.78
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.367,
+      "st": 2537.2301095,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 16.1182022,
+      "allowed": 0.324277043,
+      "dt_ms": 4.126502200961113,
+      "server_step_0p3s": 7.716
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 15.623,
+      "st": 2006.5654536,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": false,
+      "step": 15.99608,
+      "allowed": 0.311297178,
+      "dt_ms": 3.4053996205329895,
+      "server_step_0p3s": 4.57
+     },
+     {
+      "client": 1,
+      "class": "server_teleport",
+      "server_step": 15.584,
+      "st": 2888.7059780999994,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": true,
+      "step": 15.9171047,
+      "allowed": 0.3294681,
+      "dt_ms": 4.414895083755255,
+      "server_step_0p3s": 12.279
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 16.084,
+      "st": 1416.7015803000002,
+      "id": "004649ab-748a-a892-8a86-092e70816d52",
+      "type": "player",
+      "local": false,
+      "step": 15.8414869,
+      "allowed": 0.3278393,
+      "dt_ms": 4.324404988437891,
+      "server_step_0p3s": 14.312
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 15.986,
+      "st": 2289.2293237,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 15.8004675,
+      "allowed": 0.305981755,
+      "dt_ms": 3.110097721219063,
+      "server_step_0p3s": 16.077
+     },
+     {
+      "client": 0,
+      "class": "server_teleport",
+      "server_step": 15.398,
+      "st": 3571.8927986,
+      "id": "6cf465b6-18e2-5c55-0b21-b8c032587470",
+      "type": "player",
+      "local": true,
+      "step": 15.7857246,
+      "allowed": 0.31996417,
+      "dt_ms": 3.8868975825607777,
+      "server_step_0p3s": 14.324
+     }
+    ]
+   },
+   "artifacts": [
+    ".\\client-0\\events.ndjson",
+    ".\\client-1\\events.ndjson",
+    ".\\client-2\\events.ndjson",
+    ".\\client-0\\shots",
+    ".\\client-1\\shots",
+    ".\\client-2\\shots"
+   ]
+  },
+  {
+   "id": "entity_lifecycle",
+   "check": "entity_lifecycle",
+   "title": "removed entities leave the screen; reused ids start at their spawn (C3)",
+   "status": "FAIL",
+   "measured": {
+    "removed": 463482,
+    "lingering": 0,
+    "reused_ids_checked": 440313,
+    "reused_drawn_elsewhere": 1,
+    "samples_with_duplicate_ids": 0
+   },
+   "threshold": {
+    "despawn_grace_s": 0.2,
+    "reuse_tolerance": 1.1
+   },
+   "detail": {
+    "lingering": [],
+    "reuse_drawn_elsewhere": [
+     {
+      "client": 1,
+      "id": "proj-17",
+      "t": 1072.046,
+      "first_drawn_from_spawn": 1.333,
+      "from_previous_entity": 2.696
+     }
+    ],
+    "duplicate_ids": []
+   },
+   "artifacts": []
+  },
+  {
+   "id": "host_guard",
+   "check": "host_guard",
+   "title": "host guard (AnyDesk session, foreign load, guard blind, clock-rate step)",
+   "status": "INVALID",
+   "measured": {
+    "fired": [
+     "G1",
+     "G3"
+    ]
+   },
+   "threshold": "no guard fires inside the window",
+   "detail": {
+    "fired": [
+     {
+      "id": "G1",
+      "rule": "AnyDesk session started in the window, or still active at its start",
+      "count": 6,
+      "evidence": [
+       "session_started at 2026-10-27T15:31:26.622Z",
+       "connection entry Outgoing 2026-10-27T15:31:00.000Z (minute resolution)",
+       "session_started at 2026-10-27T15:46:29.787Z",
+       "connection entry Outgoing 2026-10-27T15:46:00.000Z (minute resolution)",
+       "session_started at 2026-10-27T16:05:32.673Z",
+       "connection entry Outgoing 2026-10-27T16:05:00.000Z (minute resolution)"
+      ]
+     },
+     {
+      "id": "G3",
+      "rule": "AnyDesk CPU >= 0.5 % of the host for 2 consecutive samples",
+      "count": 88,
+      "evidence": [
+       "2026-10-27T15:07:31.1606011Z AnyDesk 0.763 % of host",
+       "2026-10-27T15:07:41.1822122Z AnyDesk 0.562 % of host",
+       "2026-10-27T15:07:51.2002680Z AnyDesk 0.594 % of host",
+       "2026-10-27T15:07:56.2144811Z AnyDesk 0.577 % of host",
+       "2026-10-27T15:08:06.2296307Z AnyDesk 0.546 % of host",
+       "2026-10-27T15:09:01.3175502Z AnyDesk 0.514 % of host",
+       "2026-10-27T15:09:06.3290094Z AnyDesk 0.545 % of host",
+       "2026-10-27T15:09:11.3323938Z AnyDesk 0.5 % of host",
+       "2026-10-27T15:10:06.4477366Z AnyDesk 0.531 % of host",
+       "2026-10-27T15:10:11.4545705Z AnyDesk 0.577 % of host",
+       "2026-10-27T15:10:16.4744869Z AnyDesk 0.545 % of host",
+       "2026-10-27T15:10:21.4888764Z AnyDesk 0.529 % of host"
+      ]
+     }
+    ],
+    "window_utc": [
+     "2026-10-27T15:06:08.750Z",
+     "2026-10-27T16:06:58.750Z"
+    ],
+    "stats": {
+     "samples": 729,
+     "samples_in_window": 728,
+     "anydesk_cpu_pct": {
+      "mean": 0.199,
+      "max": 1.984
+     },
+     "host_cpu_pct": {
+      "mean": 58.47,
+      "max": 79.67
+     },
+     "guard_own_cpu_pct": {
+      "mean": 0.079,
+      "max": 0.2703
+     },
+     "new_processes_per_interval_max": 6
+    },
+    "clock_rate": {
+     "source": "server/status.ndjson current_tick / harness _mono",
+     "valid_intervals": 3576,
+     "excluded_intervals": 0,
+     "median_ticks_per_harness_s": 59.937,
+     "max_window_deviation_pct": 0.92,
+     "rate_deviation_limit_pct": 5.0,
+     "sustained_limit_s": 2.0,
+     "achieved_tick_min_ratio": 0.98,
+     "stall_exclusion_pad_s": 3.0,
+     "stall_deviation_pct": 35.0
+    },
+    "guard_cost": {
+     "schema": "rpg.testlab.hostguard.v1",
+     "interval_s": 5.0,
+     "samples": 729,
+     "events": 139,
+     "errors": [],
+     "paths": {
+      "ad_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\ad.trace",
+      "connection_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\connection_trace.txt"
+     },
+     "baseline_pids": [
+      16644,
+      16988,
+      16996
+     ],
+     "sampler_cpu_pct_of_host": {
+      "mean": 0.079,
+      "max": 0.2703
+     },
+     "python_threads_cpu_pct_of_host": 0.0012,
+     "note": "the sampler's CPU is its own process; the WMI provider that answers the AnyDesk command-line query runs in a system process and is not included"
+    },
+    "preflight_failed": []
+   },
+   "artifacts": [
+    ".\\host\\guard.ndjson"
+   ]
+  }
+ ]
+}

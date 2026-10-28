@@ -1,0 +1,129 @@
+{
+ "outcome": "INVALID",
+ "harness_error": null,
+ "assertions": [
+  {
+   "id": "host_guard",
+   "check": "host_guard",
+   "title": "host guard (AnyDesk session, foreign load, guard blind, clock-rate step)",
+   "status": "INVALID",
+   "measured": {
+    "fired": [
+     "G1",
+     "G2",
+     "G3"
+    ]
+   },
+   "threshold": "no guard fires inside the window",
+   "detail": {
+    "fired": [
+     {
+      "id": "G1",
+      "rule": "AnyDesk session started in the window, or still active at its start",
+      "count": 44,
+      "evidence": [
+       "session active at window start (began 2026-10-25T02:38:15.206Z, ended 2026-10-25T13:16:14.190Z)",
+       "session active at window start (began 2026-10-25T03:24:59.560Z, ended not seen)",
+       "session active at window start (began 2026-10-25T03:24:59.560Z, ended not seen)",
+       "session active at window start (began 2026-10-25T04:55:54.878Z, ended not seen)",
+       "session active at window start (began 2026-10-25T04:55:54.878Z, ended not seen)",
+       "session active at window start (began 2026-10-25T07:36:38.818Z, ended not seen)",
+       "session active at window start (began 2026-10-25T07:36:38.818Z, ended not seen)",
+       "session active at window start (began 2026-10-25T07:53:10.178Z, ended not seen)",
+       "session active at window start (began 2026-10-25T07:53:10.178Z, ended not seen)",
+       "session active at window start (began 2026-10-25T08:24:11.663Z, ended not seen)",
+       "session active at window start (began 2026-10-25T08:24:11.663Z, ended not seen)",
+       "session active at window start (began 2026-10-25T08:31:02.789Z, ended not seen)"
+      ]
+     },
+     {
+      "id": "G2",
+      "rule": "AnyDesk process not in the baseline set",
+      "count": 1,
+      "evidence": [
+       "pid 111932 (backend) first seen 2026-10-25T13:14:49.1754898Z"
+      ]
+     },
+     {
+      "id": "G3",
+      "rule": "AnyDesk CPU >= 0.5 % of the host for 2 consecutive samples",
+      "count": 17,
+      "evidence": [
+       "2026-10-25T13:14:54.1857644Z AnyDesk 5.941 % of host",
+       "2026-10-25T13:14:59.2005344Z AnyDesk 5.499 % of host",
+       "2026-10-25T13:15:04.2109928Z AnyDesk 4.74 % of host",
+       "2026-10-25T13:15:09.2195583Z AnyDesk 2.574 % of host",
+       "2026-10-25T13:15:14.2353826Z AnyDesk 2.695 % of host",
+       "2026-10-25T13:15:19.2462051Z AnyDesk 1.013 % of host",
+       "2026-10-25T13:15:24.2712459Z AnyDesk 1.368 % of host",
+       "2026-10-25T13:15:29.2832039Z AnyDesk 1.325 % of host",
+       "2026-10-25T13:15:34.2836175Z AnyDesk 1.359 % of host",
+       "2026-10-25T13:15:39.2979088Z AnyDesk 1.34 % of host",
+       "2026-10-25T13:15:44.3135916Z AnyDesk 1.06 % of host",
+       "2026-10-25T13:15:49.3351417Z AnyDesk 1.323 % of host"
+      ]
+     }
+    ],
+    "window_utc": [
+     "2026-10-25T13:07:13.060Z",
+     "2026-10-25T14:08:03.060Z"
+    ],
+    "stats": {
+     "samples": 728,
+     "samples_in_window": 727,
+     "anydesk_cpu_pct": {
+      "mean": 0.09,
+      "max": 5.941
+     },
+     "host_cpu_pct": {
+      "mean": 49.61,
+      "max": 61.78
+     },
+     "guard_own_cpu_pct": {
+      "mean": 0.0865,
+      "max": 0.3421
+     },
+     "new_processes_per_interval_max": 8
+    },
+    "clock_rate": {
+     "source": "server/status.ndjson current_tick / harness _mono",
+     "valid_intervals": 3564,
+     "excluded_intervals": 0,
+     "median_ticks_per_harness_s": 60.072,
+     "max_window_deviation_pct": 0.92,
+     "rate_deviation_limit_pct": 5.0,
+     "sustained_limit_s": 2.0,
+     "achieved_tick_min_ratio": 0.98,
+     "stall_exclusion_pad_s": 3.0,
+     "stall_deviation_pct": 35.0
+    },
+    "guard_cost": {
+     "schema": "rpg.testlab.hostguard.v1",
+     "interval_s": 5.0,
+     "samples": 728,
+     "events": 312,
+     "errors": [],
+     "paths": {
+      "ad_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\ad.trace",
+      "connection_trace": "C:\\Users\\duycu\\AppData\\Roaming\\AnyDesk\\connection_trace.txt"
+     },
+     "baseline_pids": [
+      17808,
+      14696,
+      15536
+     ],
+     "sampler_cpu_pct_of_host": {
+      "mean": 0.0865,
+      "max": 0.3421
+     },
+     "python_threads_cpu_pct_of_host": 0.0015,
+     "note": "the sampler's CPU is its own process; the WMI provider that answers the AnyDesk command-line query runs in a system process and is not included"
+    },
+    "preflight_failed": []
+   },
+   "artifacts": [
+    ".\\host\\guard.ndjson"
+   ]
+  }
+ ]
+}

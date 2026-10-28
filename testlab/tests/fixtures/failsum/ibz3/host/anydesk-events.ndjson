@@ -1,0 +1,6 @@
+{"type":"session_started","ts":"2026-10-27T15:31:26.622Z","epoch":1793115086.622,"proc":"front","pid":16644,"source":"ad_trace","mono":3095.2943911}
+{"type":"connection_entry","ts":"2026-10-27T15:31:00.000Z","epoch":1793115060.0,"direction":"Outgoing","auth":"Token","source":"connection_trace","mono":3095.3062569}
+{"type":"session_started","ts":"2026-10-27T15:46:29.787Z","epoch":1793115989.787,"proc":"front","pid":16644,"source":"ad_trace","mono":4000.5529489}
+{"type":"connection_entry","ts":"2026-10-27T15:46:00.000Z","epoch":1793115960.0,"direction":"Outgoing","auth":"Token","source":"connection_trace","mono":4000.5657943}
+{"type":"session_started","ts":"2026-10-27T16:05:32.673Z","epoch":1793117132.673,"proc":"front","pid":16644,"source":"ad_trace","mono":5140.9749946}
+{"type":"connection_entry","ts":"2026-10-27T16:05:00.000Z","epoch":1793117100.0,"direction":"Outgoing","auth":"Token","source":"connection_trace","mono":5140.9903481}
