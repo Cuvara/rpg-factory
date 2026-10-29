@@ -3586,6 +3586,29 @@ class ChurnTests(unittest.TestCase):
 
 
 class HostGuardTests(unittest.TestCase):
+    def test_orca_worker_list_reads_all_pages_or_fails_closed(self):
+        from lab import hostguard
+        from unittest import mock
+        from types import SimpleNamespace
+        first = {"ok": True, "result": {"workers": [{"dispatchId": "one"}],
+                  "page": {"total": 2, "hasMore": True, "nextCursor": "cursor-2"}}}
+        second = {"ok": True, "result": {"workers": [{"dispatchId": "two"}],
+                   "page": {"total": 2, "hasMore": False, "nextCursor": None}}}
+        with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
+                mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
+                mock.patch.object(hostguard.subprocess, "run", side_effect=[
+                    SimpleNamespace(stdout=json.dumps(first)), SimpleNamespace(stdout=json.dumps(second))]) as run:
+            data = hostguard._orca_workers()
+        self.assertEqual([row["dispatchId"] for row in data["result"]["workers"]], ["one", "two"])
+        self.assertIn("--cursor", run.call_args_list[1].args[0])
+        broken = {"ok": True, "result": {"workers": [{"dispatchId": "one"}],
+                   "page": {"hasMore": True, "nextCursor": "same"}}}
+        with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
+                mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
+                mock.patch.object(hostguard.subprocess, "run", side_effect=[
+                    SimpleNamespace(stdout=json.dumps(broken)), SimpleNamespace(stdout=json.dumps(broken))]):
+            self.assertIsNone(hostguard._orca_workers())
+
     def test_p3_identity_classification_allowlist_and_supervised_workers(self):
         from lab import hostguard
         from unittest import mock
@@ -3598,13 +3621,14 @@ class HostGuardTests(unittest.TestCase):
         self.assertIn("ambiguous displayName", refusal["errors"][0])
         fixture_result = hostguard.preflight(sampler=lambda _: [{"first": True, "ad_cpu": 0.0, "cpu": 10.0,
                             "groups": {"build": 0.0, "av": 0.0}}], processes=lambda: [], orca_ps=lambda: fixture,
-                            orca_workers=lambda: None, wsl_uptime=lambda: 3600.0,
+                            orca_workers=lambda: {"result": {"workers": []}}, wsl_uptime=lambda: 3600.0,
                             paths=hostguard.AnyDeskPaths(None, None), announced="test", include_p7=False,
                             allow_agents=("main",))
         fixture_p3 = next(r for r in fixture_result["rows"] if r["id"] == "P3")
         self.assertEqual(fixture_p3["status"], "FAIL")
         self.assertIn(f"repo-1:main ({hostguard._normal_path('C:/fixture/repo-1')})", fixture_p3["detail"])
         self.assertIn("ambiguous displayName", fixture_p3["detail"])
+        self.assertIn("originalPath=", fixture_p3["detail"])
 
         row = {"repo": "repo", "displayName": "agent", "path": "C:/Agent/Tree/", "worktreeId": "id-1",
                "liveTerminalCount": 1, "terminalVerdict": "live", "agents": [{"state": "working", "agentType": "codex", "prompt": "p" * 100}]}
@@ -3620,7 +3644,7 @@ class HostGuardTests(unittest.TestCase):
                             "groups": {"build": 0.0, "av": 0.0}}], processes=lambda: [],
                             orca_ps=lambda: {"result": {"worktrees": [{**row, "liveTerminalCount": 0,
                                                         "terminalVerdict": "dead"}]}},
-                            orca_workers=lambda: None, wsl_uptime=lambda: 3600.0,
+                            orca_workers=lambda: {"result": {"workers": []}}, wsl_uptime=lambda: 3600.0,
                             paths=hostguard.AnyDeskPaths(None, None), announced="test", include_p7=False)
         self.assertEqual(next(r for r in stale_result["rows"] if r["id"] == "P3")["status"], "PASS")
 
@@ -3630,6 +3654,11 @@ class HostGuardTests(unittest.TestCase):
         self.assertEqual(hostguard._allow_matches([row], ("missing",))[1][0], "allow entry 'missing' matched no worktree")
         missing, _ = hostguard.working_agents({"result": {"worktrees": [{"agents": [{"state": "working"}]}]}})
         self.assertEqual(missing[0]["activity"], "ACTIVE")
+        for invalid_count in ("1", 1.0, None, True, []):
+            malformed, _ = hostguard.working_agents({"result": {"worktrees": [{**row,
+                "liveTerminalCount": invalid_count}]}})
+            self.assertEqual(malformed[0]["activity"], "ACTIVE")
+            self.assertIn("liveTerminalCount", malformed[0]["reason"])
 
         worker = {"terminalState": "active", "dispatchId": "ctx-fixture", "taskId": "task-fixture",
                   "resource": {"worktreeId": "wid::C:/outside/worker"},
@@ -3638,6 +3667,18 @@ class HostGuardTests(unittest.TestCase):
         supervised = hostguard._live_supervised_workers({"result": {"workers": [worker]}}, {}, {"result": {"worktrees": []}})
         self.assertEqual(supervised[0]["activity"], "ACTIVE")
         self.assertEqual(supervised[0]["path"], hostguard._normal_path("C:/outside/worker"))
+        for state in ("retained", "reclaimable", "release_pending", "release_unknown", "active", None):
+            uncertain = {**worker, "terminalState": state}
+            self.assertEqual(len(hostguard._live_supervised_workers({"result": {"workers": [uncertain]}}, {}, None)), 1)
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [
+            {**worker, "terminalState": "released"}]}}, {}, None), [])
+        missing_projection = {k: v for k, v in worker.items() if k != "projection"}
+        self.assertEqual(len(hostguard._live_supervised_workers(
+            {"result": {"workers": [missing_projection]}}, {}, None)), 1)
+        worker_allow = hostguard._live_supervised_workers({"result": {"workers": [worker]}}, {}, None,
+                                                          ("C:/outside/worker",))
+        self.assertEqual(len(worker_allow), 1)
+        self.assertTrue(worker_allow[0]["allowed"])
 
         quiet = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 10.0, "groups": {"build": 0.0, "av": 0.0}}]
         empty_processes = lambda: []
@@ -3649,6 +3690,36 @@ class HostGuardTests(unittest.TestCase):
         p3 = next(r for r in blocked["rows"] if r["id"] == "P3")
         self.assertEqual(p3["status"], "FAIL")
         self.assertIn("ctx-fixture", p3["detail"])
+        retained_worker = {**worker, "terminalState": "retained"}
+        retained_result = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [retained_worker]}}, **common)
+        retained_p3 = next(r for r in retained_result["rows"] if r["id"] == "P3")
+        self.assertEqual(retained_p3["status"], "FAIL")
+        self.assertIn("ctx-fixture:retained", retained_p3["detail"])
+        duplicate_ps = {"result": {"worktrees": [{"repo": "outside", "displayName": "worker",
+            "path": "C:/outside/worker", "worktreeId": "wid", "liveTerminalCount": 1,
+            "terminalVerdict": "live", "agents": [{"state": "working", "agentType": "claude"}]}]}}
+        deduped = hostguard.preflight(orca_ps=lambda: duplicate_ps,
+                    orca_workers=lambda: {"result": {"workers": [worker]}}, **common)
+        deduped_entries = next(r for r in deduped["rows"] if r["id"] == "P3")["measured"]["agents"]
+        self.assertEqual(len(deduped_entries), 1)
+        self.assertIn("working agent with live supervised worker", deduped_entries[0]["reason"])
+        worker_only_allow = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker]}}, allow_agents=("C:/outside/worker",), **common)
+        worker_only_p3 = next(r for r in worker_only_allow["rows"] if r["id"] == "P3")
+        self.assertEqual(worker_only_p3["status"], "PASS")
+        worker_only_record = worker_only_p3["measured"]["allow_list"]["entries"][0]
+        self.assertEqual(worker_only_record["error"], None)
+        self.assertEqual(worker_only_record["matched"][0]["path"], hostguard._normal_path("C:/outside/worker"))
+        worker_missing = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+                    orca_workers=lambda: None, **common)
+        worker_missing_p3 = next(r for r in worker_missing["rows"] if r["id"] == "P3")
+        self.assertEqual(worker_missing_p3["status"], "FAIL")
+        self.assertIn("worker-list unavailable", worker_missing_p3["detail"])
+        for malformed_ps in ({"result": "wrong type"}, {"result": {"worktrees": "wrong type"}}):
+            malformed_result = hostguard.preflight(orca_ps=lambda: malformed_ps,
+                orca_workers=lambda: {"result": {"workers": []}}, **common)
+            self.assertIn("P3", malformed_result["failed"])
         ps_missing = hostguard.preflight(orca_ps=lambda: None, orca_workers=lambda: None, **common)
         self.assertIn("P3", ps_missing["failed"])
         ps_missing_with_worker = hostguard.preflight(orca_ps=lambda: None,
@@ -3677,8 +3748,10 @@ class HostGuardTests(unittest.TestCase):
                   "projection": {"liveness": {"verdict": "live"}, "workspace": {"id": "host::C:/allowed/runner"}}}
         with mock.patch.object(hostguard.util, "IS_WINDOWS", True):
             allowed, _ = hostguard._allow_matches([row], ("C:\\ALLOWED\\RUNNER/",))
-            self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [worker]}}, allowed,
-                             {"result": {"worktrees": [row]}}), [])
+            allowed_workers = hostguard._live_supervised_workers({"result": {"workers": [worker]}}, allowed,
+                             {"result": {"worktrees": [row]}})
+            self.assertEqual(len(allowed_workers), 1)
+            self.assertTrue(allowed_workers[0]["allowed"])
         with mock.patch.dict(os.environ, {"ORCA_CLI_COMMAND": ""}), mock.patch.object(hostguard.shutil, "which", return_value=None):
             self.assertIsNone(hostguard._orca_command())
         with mock.patch.dict(os.environ, {"ORCA_CLI_COMMAND": r"C:\Program Files\Orca\orca.cmd"}), \
@@ -4157,7 +4230,7 @@ class HostGuardTests(unittest.TestCase):
 
         def pf(procs, ps, announced="18:30Z 90min", rows=quiet_rows, uptime=3600.0, allow=()):
             return hostguard.preflight(sampler=lambda s: rows, processes=lambda: procs, orca_ps=lambda: ps,
-                                       orca_workers=lambda: None, wsl_uptime=lambda: uptime, announced=announced, paths=none, allow_agents=allow)
+                                       orca_workers=lambda: {"result": {"workers": []}}, wsl_uptime=lambda: uptime, announced=announced, paths=none, allow_agents=allow)
         clean = pf(residents, {"result": {"worktrees": []}})
         self.assertTrue(clean["ok"], clean["rows"])                      # residents are allowed
         self.assertEqual([r["id"] for r in clean["rows"]], ["P1", "P2", "P3", "P4", "P5", "P6", "P7"])
@@ -4180,7 +4253,7 @@ class HostGuardTests(unittest.TestCase):
             stamp = _t.strftime("%Y-%m-%d %H:%M:%S", _t.gmtime(now - 20)) + ".100"
             log.write_text(f"   info {stamp}       lsvc  14696  17760   12                anynet.any_socket - Accept request from 0000000001 (via relay).\n", encoding="utf-8")
             r = hostguard.preflight(sampler=lambda s: quiet_rows, processes=lambda: residents, orca_ps=lambda: {"result": {"worktrees": []}},
-                                    orca_workers=lambda: None,
+                                    orca_workers=lambda: {"result": {"workers": []}},
                                     wsl_uptime=lambda: 3600.0, announced="x", paths=hostguard.AnyDeskPaths(log, None), now=now)
             self.assertEqual(r["failed"], ["P1"])
 
@@ -4189,11 +4262,15 @@ class HostGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg, stopped = t._patched_run(d, None)
             cfg.explicit |= {"player_exe", "server_repo"}      # H6: a soak names its player and server checkout
+            allow_record = {"entries": [{"entry": "C:/allowed/tree", "matched": [{"worktreeId": "w1"}],
+                                         "error": None}], "errors": []}
+            next(row for row in bad["rows"] if row["id"] == "P3")["measured"]["allow_list"] = allow_record
             ensure = stack.ensure
             with mock.patch.object(runner.hostguard, "preflight", return_value=bad):
                 res = runner.run(cfg, "S09", quiet=True)
             self.assertEqual(res["outcome"], analyze.INCONCLUSIVE)
             self.assertIn("host preflight failed: P1, P3, P6, P7", res["harness_error"])
+            self.assertEqual(t._run_json(cfg)["host_guard"]["preflight"]["allow_list"], allow_record)
             ensure.assert_not_called()
             self.assertEqual(stopped, [])
             meta = t._run_json(cfg)
@@ -4555,7 +4632,7 @@ class F29G3BaselineTests(unittest.TestCase):
             rows = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 14.0, "groups": {"build": 0.0, "av": 0.0}}] +                    [{"epoch": 1.0 + 5 * i, "ad_cpu": spike if i == 7 else 0.1, "cpu": 14.0, "groups": {"build": 0.3, "av": 0.0}}
                     for i in range(1, 25)]
             pf = hostguard.preflight(sampler=lambda s: rows, processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
-                                     orca_workers=lambda: None,
+                                     orca_workers=lambda: {"result": {"workers": []}},
                                      wsl_uptime=lambda: 3600.0, announced="x", paths=none)
             return pf, next(r for r in pf["rows"] if r["id"] == "P2")
         pf, row = p2(0.9)
@@ -4577,7 +4654,7 @@ class F29G3BaselineTests(unittest.TestCase):
                [{"epoch": 1.0 + 5 * i, "ad_cpu": 0.3 if i == 7 else 0.15, "cpu": 14.0, "groups": {"build": 0.3, "av": 0.0}}
                 for i in range(1, 25)]
         pf = hostguard.preflight(sampler=lambda s: rows, processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
-                                 orca_workers=lambda: None,
+                                 orca_workers=lambda: {"result": {"workers": []}},
                                  wsl_uptime=lambda: 3600.0, announced="x", paths=none)
         b = pf["anydesk_baseline"]
         self.assertEqual((b["max_pct"], b["samples"], b["label"]), (0.3, 24, "policy, unvalidated"))

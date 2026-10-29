@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
-- testlab soak preflight P3 now reports exact agent identities and terminal evidence, distinguishes stale agents from active work, detects live supervised Orca workers missing from worktree ps, and validates allow-list entries by normalized path, exact worktree id, or unique display name.
+- testlab soak preflight P3 now reads every worker-list page and fails closed for supervised workers unless their terminal state is `released`, reports malformed terminal counts as ACTIVE, fails when worker-list is unavailable, deduplicates worktree/worker evidence, and stores allow-list resolution in run.json. P3 also prints original paths alongside normalized paths.
 
 ### Fixed
 

@@ -130,7 +130,9 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
             pf = hostguard.preflight(window_min=float(sc["duration_s"]) / 60.0 + 30.0, allow_agents=allow_agents,
                                      include_p7=False)
             util.write_json(run_dir / "host" / "preflight.json", pf)
-            meta["host_guard"]["preflight"] = {"ok": pf["ok"], "failed": pf["failed"]}
+            p3 = next((row for row in pf.get("rows", []) if row.get("id") == "P3"), {})
+            meta["host_guard"]["preflight"] = {"ok": pf["ok"], "failed": pf["failed"],
+                                                "allow_list": (p3.get("measured") or {}).get("allow_list")}
             for row in pf["rows"]:
                 log(f"host preflight {row['id']} {row['status']}: {row['detail']}")
             hostguard.enforce(pf)
