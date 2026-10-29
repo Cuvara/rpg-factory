@@ -276,7 +276,7 @@ title: Crafting
 upstream:   [{id: GDD-core-001, rev: <git blob sha>}]
 acceptance: [{id: AC1, text: "...", verify: test}]      # test | review | measure
 trace:      [{repo: server, ref: <commit sha>, kind: impl, ac: [AC1]}]   # impl | test | release
-approvals:  [{gate: gameplay-rules, by: <name>, date: <iso>, rev: <git blob sha>}]
+# approvals are not in front matter: one immutable file each, see 7.3
 ```
 
 Asset manifest entries add:
@@ -303,35 +303,39 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
 
 ### 7.3 Outputs that tests can't prove
 
-- A review or approval is an `approvals[]` record bound to the artifact's blob SHA. Editing the artifact makes
-  the approval stale.
+- A review or approval is one immutable **approval file** in the authoring repo:
+  `approvals/<artifact-id>/<gate>-<artifact blob sha>.json`, holding `{artifact, gate, rev, by, date}`. It is
+  bound to the artifact's blob SHA, so editing the artifact makes it stale (no approval file for the new
+  revision).
 - A missing or stale approval is an external-tier check that grades **HUMAN_REQUIRED**. That state already
   means "a human or an external system has to act" (`run-checks.py:489`).
 - No new result state is introduced. A visual review (for example a screenshot against a frame) is recorded
   the same way, with its evidence path.
-- **Approval trust.** An `approvals[]` entry is text in the artifact, and git author names, emails and
-  trailers are self-asserted. None of them proves who approved. Agents never write approval records.
+- **Approval trust.** Git author names, emails and trailers are self-asserted, so none of them proves who
+  approved. Agents never write approval files.
   The trust root is an **SSH commit signature** checked only against keys held in rpg-factory's registry
   (`domains.<id>.approvers`: principal name plus SSH public key). That list changes only through a reviewed
   rpg-factory pull request. GPG signing is out of scope.
 
-  `artifact-trace.py` validates each record in five steps:
-  1. **Find the commit.** Locate the commit that introduced the record with `git log -L` on its lines. It
-     must be exactly one non-merge commit.
+  `artifact-trace.py` validates each approval file in five steps:
+  1. **Find the commit.** Because approval files are immutable, the introducing commit is unambiguous:
+     `git log --diff-filter=A --format=%H -- <file>` must return exactly one commit, and
+     `git log --diff-filter=MRD --format=%H -- <file>` must return none.
   2. **Build the signers file.** Write a temporary allowed-signers file containing only the registry keys,
      one line per approver: `<principal> namespaces="git" <key>`.
-  3. **Verify.** Run `git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=<temp file> verify-commit <sha>`.
-     The user's own git signing configuration is never consulted.
-  4. **Match the signer.** The signer principal git reports (`git log -1 --format=%GS <sha>` with the same `-c` settings as step 3, and status
-     `%G?` = `G`) must equal the record's `by`.
-  5. **Fail closed.** In any of these cases the record grades **HUMAN_REQUIRED** with the reason, and is never
-     accepted:
-     - an unsigned commit;
-     - a signature that fails to verify;
-     - a key that is not on the list;
-     - a principal mismatch;
-     - no introducing commit, or more than one (for example after a history rewrite or a merge-only change);
-     - a shallow clone.
+  3. **Verify.** Run `git -c gpg.format=ssh -c "gpg.ssh.allowedSignersFile=$SIGNERS" verify-commit "$SHA"`.
+     The quoted `$SIGNERS` path may contain spaces. The user's own git signing configuration is never
+     consulted.
+  4. **Match the signer.** With the same `-c` settings, `git log -1 --format='%G? %GS' "$SHA"` must report
+     status `G` and a principal equal to the file's `by`. The file's `rev` must equal the artifact's current
+     blob SHA.
+  5. **Fail closed.** In any of these cases the approval grades **HUMAN_REQUIRED** with the reason, and is
+     never accepted:
+     - zero or several adding commits;
+     - any later modification, rename or deletion;
+     - an unsigned commit, a failed verification, an unknown key or a principal mismatch;
+     - a shallow clone;
+     - a stale `rev`.
 
   A reviewed pull request on the authoring repo's protected branch is optional extra evidence. It is an
   external-tier check that reads the review through `gh`, and grades HUMAN_REQUIRED when the review can't be
@@ -351,7 +355,8 @@ Feature-spec transition rules:
 - **`approved`** needs a `gameplay-rules` approval on the current revision.
 - **`verified`** needs every acceptance criterion traced (impl + test for `verify: test`).
 - **`released`** needs a release trace entry: a tag in the product repo.
-- **Going backwards** is allowed only to `draft`, and clears approvals.
+- **Going backwards** is allowed only to `draft`. Earlier approval files stay in history but no longer match the
+  current revision.
 
 ### 8.2 Gameplay rules and approvals
 
