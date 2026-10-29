@@ -491,6 +491,132 @@ session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope change
   run it from that worktree), and prints `none registered` when no check is declared for the paths.
   `validation.md`, factory-core `SKILL.md` and the README describe the new `BLOCKED` meaning.
 
+## [1.0.5] - 2026-10-22
+
+Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay
+advisory-only and never block; nothing asks for approval. Fixes: tag/push/destructive commands the guard missed
+(git-bash `/c/` paths, shell blocks and functions, heredocs read by a shell, `gh --repo`), a missing or failing hook
+script can no longer return Claude Code's blocking exit code, atomic and lossless session state and evidence under
+concurrency, absolute `--paths` routing on Windows, stale-install detection, workspace worktrees in file-guard, and a
+pre-tag `scripts/release-check.py`. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin
+update rpg-factory@rpg-factory`) and start a new session. Evidence stored by 1.0.4 shows as NOT_RUN once (new
+workspace key). No command-line or registry changes for users.
+
+### Changed
+- **Release policy wording matches practice.** The docs, skills, registry rule `no-tags`, snapshot header and guard
+  advisories said agents never tag, while 1.0.4 was tagged and released by an agent on the user's explicit
+  authorization. They now say: without explicit release authorization from the user in the current task, stop at
+  READY_TO_TAG and the lead tags; with it, perform exactly the authorized merge, version, tag and release steps after
+  the release checks pass on the tagged commit (never move, delete or reuse a tag). No behaviour change: the guard
+  flags the same commands at the same advisory level, nothing blocks or asks. `run-all.sh` fails if the absolute
+  "agents never tag" wording returns or a policy file drops the authorization rule.
+
+### Fixed
+- **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
+  commands were missed or misread and now get the advisory they should:
+  - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan
+    resolved to `C:\c\...` (no workspace, no advisory); they are mapped to drive paths first (`native_path`).
+  - Shell reserved words hid git: `{ git tag v1; }`, `! git tag`, `if/then/else/elif`, `for/while/until ... do`,
+    `f() { ...; }`, `function f { ... }`, PowerShell `if (...) { git tag v1 }` / `foreach (...) { ... }` (braces end
+    a PowerShell command).
+  - A heredoc read by a shell (`bash <<EOF`, `bash -s <<EOF`, `cat <<EOF | sh`) is analysed as commands; read by an
+    interpreter (`python3 - <<PY`) and mentioning git/gh it is warn (opaque). Other heredocs (commit messages,
+    `cat > file <<EOF`) stay data.
+  - `gh --repo/-R/--hostname <x>` before the group or verb hid `release create`, `pr merge` and the `publish` gate.
+  - Interpreter one-liners invoking `gh` (`python3 -c "...gh release create..."`, `node -e`) are warn like git.
+  - Non-object JSON payloads (`[]`, `null`, `42`) crashed with a traceback (exit 1); stdin is read as UTF-8, so a
+    non-ASCII cwd no longer breaks the workspace match on Windows.
+  - `git tag --merged`, `--no-merged <c>`, `--no-contains <c>` and `--sort <full key>` / `--format '%(...)'` as
+    separate words are listings (allow); a name after them, and the abbreviated `--sort -v:refname`, stay high.
+  - Speed: read-only git subcommands (status, log, diff, ...) skip the per-repo git calls and the others are
+    memoised per directory (30 x `git -C backend status`: ~1.36 s -> ~0.18 s on Windows); commands over 200 KB
+    get one warn ("command too large to check") instead of minutes of parsing.
+  - `factory-context.sh --mode <m>` run outside the workspace now records the mode (a stale read-only mode stayed),
+    and the mode is only recorded when the script is actually run - `grep factory-context.sh --mode review` or
+    `echo ... --mode plan` no longer switch it.
+  - Wording: the module and `classify_gh` docstrings describe advisory levels high/warn, not deny/ask decisions.
+- **Session state and evidence robustness.** Hooks stay advisory-only and never block; tests in
+  `session-state.test.sh`, `run-checks.test.sh` and `factory-status.test.sh` cover each fix.
+  - Evidence records and run records are written atomically (`fstate.write_json`, readers retry the Windows
+    replace window); log and run-record names carry a pid + random suffix, so parallel or same-second runs never
+    share or truncate a file. Only the newest 20 logs per check are kept (never the one the latest record names).
+  - Valid JSON of the wrong shape in the evidence dir (`{"identity":"x"}`, `[1]`, no `state`) is treated as no
+    evidence (NOT_RUN) instead of crashing `run-checks.py --status` and `factory-status.py`.
+  - `run-checks.py --dry-run` writes nothing (no run record).
+  - The auto-correction of an early tech skill to factory-core happens once per session even under parallel Skill
+    calls (claimed by an exclusive `CORRECTED` file; the other calls get the lead-missing advisory).
+  - The Skill hook's logs are one file per event (`SKILLS.d/`, `ADVISORIES.d/`): parallel appends lost lines on
+    Windows. Legacy `SKILLS` / `ADVISORIES` files are still read. Read them with
+    `factory_session.py --skills <session-id>` / `--advisories <session-id>` (used by git-guard.test.sh and dogfood.sh).
+  - `MODE` is replaced atomically (no torn reads). A mode is recorded only when the command really runs
+    `factory-context.sh` / `context.py` (`grep factory-context.sh --mode review` or `echo ...` no longer set it), and
+    "do not implement" alone in Skill arguments is no longer a plan-mode declaration.
+  - The hook prints its advisory / correction before logging; an unwritable log loses nothing the session sees,
+    and with no usable session dir it advises without correcting.
+  - Session ids go through one helper, `fstate.session_key()`: plain ids are unchanged, anything else (`..`, `.`,
+    over 100 characters, characters a substitution would collide) becomes `s-<sha1>`.
+  - A bare registry skill name (`go-backend` without `rpg-factory:`) is recorded and gated like the prefixed name.
+  - `fstate.scratch()` skips a candidate whose `rpg-factory/` cannot be created; `persistent()` falls back to the
+    platform temp dir (absolute on Windows too).
+  - The evidence workspace key is the case-folded real path, and `run-checks.py` and `factory-status.py` resolve
+    `RPG_FACTORY_WORKSPACE` the same way. Evidence stored under the old key shows as NOT_RUN once; rerun the checks.
+- **Routing, install and docs.**
+  - `factory-context.sh --paths` with an absolute (`C:\`, `C:/`, git-bash `/c/`, WSL `/mnt/c/`) or glob path
+    routed nowhere on Windows (`relpath` returned backslashes, lead null). Paths are normalised to repo-relative
+    forward slashes; another drive no longer raises. New routing scenarios (absolute forms, glob).
+  - A missing hook script made python exit 2, Claude Code's blocking code. Every `hooks.json` command now ends
+    with `; exit 0` (bash and PowerShell); stdout still passes through. run-all checks the wiring and runs each
+    command against a missing and an exit-2 script.
+  - `install-status.py` reported CURRENT for an old cache copy on Windows (backslash `CLAUDE_PLUGIN_ROOT` missed
+    the `/.claude/plugins/cache/` test) and whenever the runtime version differed from the source; both are now
+    RESTART_REQUIRED. `--session` never tracebacks on malformed `installed_plugins.json` /
+    `known_marketplaces.json` and always exits 0. New informational note (doctor, `--json` `notes`) when the
+    source HEAD is not the commit of tag `v<VERSION>` (`source 1.0.4 + N commits past v1.0.4`); no state change.
+  - `file-guard.py`: linked worktrees of a workspace repo (`.wt-client-cleanup/`) get that repo's rules (via the
+    git common dir); paths outside the workspace get no advisory even with `RPG_FACTORY_WORKSPACE` set; the mode
+    advisory command is quoted with forward slashes; secret names match case-insensitively (`.ENV`).
+  - `tests/dogfood.sh` looks for the session's `ADVISORIES` / `MODE` under both `fstate.scratch()` and
+    `persistent()/tmp` (headless hooks on Windows Python 3.14 fall back to the latter).
+  - Agent-facing wording said the hooks enforce or deny (snapshot mode line, `tag (deny)` in Human gates, pin-bump
+    "denied by the guard", `.claude/CLAUDE.md`); it now says advisory (`tag (high)`), pin-bump names the explicit
+    release authorization, README marks the pre-1.0.3 "denied" note historical and states the Windows scratch
+    root, and the `--mode` / path forms are documented in the usage headers. run-all fails if
+    `denied by the guard`, `hooks enforce` or `(deny)` returns in agent-facing text.
+  - New `scripts/release-check.py` (read-only) gates a release before the tag (versions agree, CHANGELOG section,
+    empty `[Unreleased]`, tag absent locally and on origin, HEAD == origin/main, clean tree; `--notes` prints the
+    release notes) and verifies it afterwards (`--verify-tag`: annotated, `rpg-factory X.Y.Z`, at HEAD, VERSION).
+    `tests/release-check.test.sh` (throwaway repo, local bare origin) runs in run-all; the order is in
+    `.claude/CLAUDE.md` "Releases".
+
+## [1.0.4] - 2026-10-22
+
+Fix: tech skills stay behind their lead skills under the advisory-only hooks of 1.0.3, still without blocking or
+asking. A tech skill requested before factory-core loads factory-core instead (auto-corrected); one requested
+before its lead runs with an advisory. Update the plugin (`claude plugin marketplace update rpg-factory && claude
+plugin update rpg-factory@rpg-factory`) and start a new session. No command-line or registry changes.
+
+### Fixed
+- **Skill order under advisory-only hooks (1.0.3 dogfood regression, `tech-go` and `tech-dots`).** With the
+  Skill hook advisory-only, a model could load a tech skill before its lead; dogfood reported it as a failure
+  and nothing showed whether the session corrected itself. The hook still never blocks or asks:
+  - a tech skill requested **before factory-core** is auto-corrected: the call loads `rpg-factory:factory-core`
+    instead (`updatedInput`; Claude Code honours it for the Skill tool - verified in a headless session, not
+    documented for Skill), with an advisory naming the route command and the leads. Once per session (factory-core
+    is then recorded), so it cannot repeat or loop. If a Claude Code version ignores `updatedInput`, the tech skill
+    loads and the advisory still applies;
+  - requested **after factory-core but before its lead**, it runs with an actionable advisory ("this call
+    continues", the route command, the leads). No auto-correction there: two to four leads use each tech skill and
+    only routing knows which applies.
+  - every advisory is logged to the session's `ADVISORIES` file, and `SKILLS` records what actually loaded.
+  - `tests/dogfood.sh` now grades what loaded (the "Launching skill" results, so an auto-corrected call counts as
+    factory-core) and passes a tech-first session only with evidence: the hook's advisory for it, one of its leads
+    loading afterwards, and a finished session. New scenario `tech-first` forces the auto-correction. The mode check
+    reads the real session state path (`fstate.scratch()`, not `/tmp/rpg-factory`).
+  - regression cases in `git-guard.test.sh` (early go-backend, early unity-dots, normal order, no second
+    auto-correction, never a permission decision, the hook always exits 0) and `session-state.test.sh`.
+- The README "Version" line still said 1.0.0 through 1.0.1-1.0.3; `run-all.sh`'s version check now covers it
+  (VERSION == plugin.json == marketplace == CHANGELOG section == README).
+
 ## [1.0.3] - 2026-10-22
 
 Hotfix: the hooks never ask for confirmation and never block; every former ask/deny rule reaches the agent
