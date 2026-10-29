@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 export TMPDIR="$tmp" RPG_FACTORY_STATE_DIR="$tmp/state"
@@ -45,6 +46,8 @@ mkdir -p "$tmp/headless/Tests~/Headless" "$tmp/headless/Runtime" "$tmp/headless/
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/dotnet" <<'EOF'
 #!/usr/bin/env bash
+workdir="$PWD"; command -v cygpath >/dev/null 2>&1 && workdir=$(cygpath -m "$workdir")
+[ -z "${DOTNET_WORKDIR_RECORD:-}" ] || printf '%s\n' "$workdir" > "$DOTNET_WORKDIR_RECORD"
 case "${DOTNET_MODE:-crash}" in
   crash) exit 139 ;;
   nonzero) exit 1 ;;
@@ -55,17 +58,21 @@ TRX
   fixture) mkdir -p results; cp "$TRX_FILE" results/results.trx; exit 0 ;;
 esac
 EOF
-chmod +x "$tmp/bin/dotnet"; export PATH="$tmp/bin:$PATH" RPG_FACTORY_REPO_DIR="$tmp/headless" RPG_FACTORY_WORKSPACE="$tmp/ws"
+chmod +x "$tmp/bin/dotnet"; export PATH="$(path_entry "$tmp/bin"):$PATH" RPG_FACTORY_REPO_DIR="$tmp/headless" RPG_FACTORY_WORKSPACE="$tmp/ws"
 for mode in crash nonzero failed; do
   headless_fail() { DOTNET_MODE="$mode" bash "$headless_script" >"$tmp/$mode.log" 2>&1; }
   case_run "headless rejects $mode" expect_fail headless_fail
 done
 headless_cwd_fallback() { (cd "$tmp/headless" && env -u RPG_FACTORY_REPO_DIR -u RPG_FACTORY_REPO_KEY RPG_FACTORY_WORKSPACE="$tmp/ws" DOTNET_MODE=crash bash "$headless_script") >"$tmp/cwd-fallback.log" 2>&1; rc=$?; grep -F "source: $(git -C "$tmp/headless" rev-parse --show-toplevel) @" "$tmp/cwd-fallback.log"; [ "$rc" -ne 0 ]; }
 case_run 'headless standalone cwd fallback resolves Netcode checkout' headless_cwd_fallback
-headless_fixture() { TRX_FILE="$1" DOTNET_MODE=fixture bash "$headless_script" --netcode "$tmp/headless" >"$tmp/fixture.log" 2>&1; }
+headless_fixture() { TRX_FILE="$1" DOTNET_MODE=fixture DOTNET_WORKDIR_RECORD="$tmp/dotnet-workdir" TMPDIR="${HEADLESS_TEST_TMPDIR:-$tmp}" bash "$headless_script" --netcode "$tmp/headless" >"$tmp/fixture.log" 2>&1; }
 parser_case() {
   trx="$1" expected="$2" want_success="${3:-false}"
   headless_fixture "$trx"; rc=$?
+  workdir="$(cat "$tmp/dotnet-workdir" 2>/dev/null)"
+  expected_tmp="${HEADLESS_TEST_TMPDIR:-$tmp}"
+  command -v cygpath >/dev/null 2>&1 && expected_tmp=$(cygpath -m "$expected_tmp")
+  case "$(fwd "$workdir")" in "$(fwd "$expected_tmp")"/*) ;; *) return 1 ;; esac
   grep -Fq "$expected" "$tmp/fixture.log" || return 1
   if [ "$want_success" = true ]; then [ "$rc" -eq 0 ]; else [ "$rc" -ne 0 ]; fi
 }
@@ -81,6 +88,22 @@ sed 's/executed="397"/executed="0"/' "$root/tests/fixtures/completed-pass.trx" >
 case_run 'headless rejects zero executed' parser_case "$tmp/no-executed.trx" 'FAIL: no tests executed'
 printf '<TestRun><ResultSummary outcome="Completed"><Counters' > "$tmp/malformed.trx"
 case_run 'headless rejects malformed XML' parser_case "$tmp/malformed.trx" 'FAIL: cannot parse trx'
+if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then
+  mkdir -p "$tmp/windows-tmpdir"
+  HEADLESS_TEST_TMPDIR="$(cygpath -m "$tmp/windows-tmpdir")"
+  case_run 'Windows TMPDIR accepts real-shape Completed zero-failure TRX' parser_case "$root/tests/fixtures/completed-pass.trx" 'headless tests: total=' true
+  case_run 'Windows TMPDIR rejects real Failed TRX sample' parser_case "$root/tests/fixtures/failed.trx" 'FAIL: trx outcome is Failed'
+  case_run 'Windows TMPDIR rejects missing outcome' parser_case "$tmp/missing-outcome.trx" 'FAIL: trx ResultSummary has no outcome'
+  for counter in failed error aborted; do
+    case_run "Windows TMPDIR rejects nonzero $counter" parser_case "$tmp/$counter.trx" 'FAIL: nonzero TRX counters'
+  done
+  case_run 'Windows TMPDIR rejects zero executed' parser_case "$tmp/no-executed.trx" 'FAIL: no tests executed'
+  case_run 'Windows TMPDIR rejects malformed XML' parser_case "$tmp/malformed.trx" 'FAIL: cannot parse trx'
+  HEADLESS_TEST_TMPDIR="$(cygpath -w "$tmp/windows-tmpdir")"
+  case_run 'Windows backslash TMPDIR accepts Completed zero-failure TRX' parser_case "$root/tests/fixtures/completed-pass.trx" 'headless tests: total=' true
+else
+  echo 'SKIP: Windows-form TMPDIR parser pass requires Windows Git Bash and cygpath'
+fi
 mkdir -p "$tmp/headless/plain nested"
 nested_headless() { bash "$headless_script" --netcode "$tmp/headless/plain nested" >"$tmp/nested-headless.log" 2>&1; rc=$?; [ "$rc" -ne 0 ] && grep -Fq 'ERROR: Netcode target is not a git work-tree root' "$tmp/nested-headless.log" && ! grep -q '^source:' "$tmp/nested-headless.log"; }
 case_run 'headless rejects nested plain Netcode directory' nested_headless

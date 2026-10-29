@@ -4,8 +4,78 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-29
+
+Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state, accepts a Windows-form TMPDIR in netcode-headless and refreshes citations. No breaking changes or user action beyond the usual update command.
+
+### Added
+
+- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
+  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
+  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
+  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
+  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
+  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
+  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
+  `testlab/tests/test_failsum.py`.
+
+- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
+  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
+  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
+  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
+
+- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
+  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
+  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
+  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
+  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
+  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
+  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
+  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
+  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
+  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
+  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
+
+- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
+  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
+  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
+  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
+  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
+  episodes are documented: two attributed, one start-up, two unexplained.
+
+- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
+  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
+  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
+  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
+  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
+  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
+  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
+  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
+  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
+  (real scrubbed `ad.trace` fixture).
+
+
+### Changed
+
+- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
+  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
+  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
+  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
+  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
+  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
+  ibz3 stays INVALID on G1 (three real outgoing sessions).
+
+- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
+  the Windows high-resolution timer path accurately.
+
+- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
+
+
 ### Fixed
 
+- `netcode-headless.sh` now recognizes usable `C:/...` and `C:\\...` `TMPDIR` paths on Windows Git Bash,
+  keeping temporary build and TRX data outside the Netcode source tree; candidate checks repeat every TRX
+  parser case with a Windows-form temporary directory.
 - testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
   evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event
   for the leaver before the quit is an add is judged: it must receive the removal within the bound or the check
@@ -13,6 +83,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   lifecycle event, or there is no other client), the result is INCONCLUSIVE. This supersedes the sentence below
   that said an already-dropped viewer alone is INCONCLUSIVE beside judged ones: a judged viewer that got the
   removal now gives PASS and lists the others as `not_in_view_at_quit` / `no_lifecycle_events`.
+
 - testlab S08G (P5-S08G-LEAVE): the graceful-leave scenario failed on `rpg-mmo-server` `00ef906` (runs ccle, 4lz1)
   with `others_removed_after_s[1]=null` although the server and client 0 removed the leaver in 0.03/0.05 s. Root
   cause was scenario geometry, not a missed removal: the leaver walked 10 s to x~49.6 while the stationary viewer
@@ -22,6 +93,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `graceful_leave` now reports a viewer that had dropped the leaver before it quit as `not_in_view_at_quit` and
   leaves the check INCONCLUSIVE instead of FAIL; a viewer that held the leaver and never saw it removed still
   FAILs, and the thresholds are unchanged.
+
 - run-checks: checks no longer write into the user's protected main checkout when invoked from an agent's linked
   worktree (incidents 2026-10-25 and 2026-10-29: `.github/scripts/__pycache__/*.pyc` appeared in the canonical
   `rpg-mmo-server`). Root causes: `python3 -m py_compile` (registry `server.*` check) writes `.pyc` even with
@@ -43,6 +115,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `scripts/lib/compat.sh`, which every test sources, now unsets the `GIT_*` state variables. `tests/run-all.sh` hashes
   the shared config before and after the run and fails with `shared git config changed during the run` (diff and a
   copy of the old file in the message); `tests/git-env-isolation.test.sh` fails without the fix.
+
 - testlab H1-H7 (M1 failure matrix, section 7c; no recorded verdict changed, no threshold weakened):
   - H1: viewer (outgoing, `front` process) AnyDesk sessions now have an end and a duration, from the
     `ad_app.control - Session count: (total, incoming)` lines (new event type `session_count`, not a guard input). The
@@ -69,40 +142,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - Tests: `testlab/tests/test_m4_harness.py` (30 tests, 28 fail on the previous harness). The frozen-reference comparison in
     `test_lab.py` ignores exactly the additive reporting keys above; verdicts and every other field still have to equal it.
 
-### Fixed
-
 - testlab `analyze` now isolates the full failure-summary build/write step: non-`OSError` exceptions no longer escape,
   and a minimal summary records the exception type/message and preserves the original verdict and exit code when possible.
-
-### Added
-
-- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
-  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
-  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
-  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
-  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
-  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
-  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
-  `testlab/tests/test_failsum.py`.
-- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
-  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
-  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
-  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
-
-### Changed
-
-- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
-  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
-  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
-  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
-  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
-  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
-  ibz3 stays INVALID on G1 (three real outgoing sessions).
-
-- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
-  the Windows high-resolution timer path accurately.
-
-### Fixed
 
 - testlab `render_jumps`: a LOCAL snap at a server-confirmed respawn of the same player is explained by the respawn and
   counted as `local_respawn`, bound tightly (RV-F29 B1): the snapshot carrying the new position has a world tick inside
@@ -110,10 +151,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   snap went (cos >= 0.7), and one respawn explains one snap. Run ibz3 st 911.107 (rendered 1.088, received 0.8407, 3.4 %
   short of the old 0.8 x rule) failed a real respawn. A later unrelated snap, a second snap, another player's respawn
   and a local major without that evidence still FAIL.
+
 - testlab `entity_lifecycle`: the id-reuse tolerance is per entity type. A projectile uses its content (or measured)
   speed x 0.15 s + 0.2 instead of the player `max_speed`, so a first draw one snapshot ahead after a client stall no longer
   fails (ibz3 proj-17, 1.33 u from spawn vs 1.1). The stale-buffer detection is kept: a first draw at or near the previous
   incarnation's last position still FAILs.
+
 - testlab: S01 no longer FAILs `kcp` (3 `dead_link` closes) and `redis` (6-9 session keys for 3 users) because the WSL
   distro stopped under the run (runs 6qgq, ii3h, jmag, hj3f, imed; native and docker alike). WSL terminates a distro with no
   open `wsl.exe` session; dockerd and the scratch stack died with it mid-run (gateway "shutting down gateway", Redis
@@ -125,18 +168,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   with no `session:*` keys in the scratch Redis (`stack.clear_session_keys`, count in `stale_session_keys_cleared`); and
   a `kcp` or `redis` check whose evidence was taken after the window (timeline `metrics_end_late` / `redis_late`) is
   INCONCLUSIVE, not a FAIL or a false PASS. No threshold or assertion was changed.
+
 - testlab host guard: G1 no longer reports false historical sessions ("active at window start") after the AnyDesk
   log rotates. The tailer re-read the file from 0 and re-emitted its Accepts; each duplicate queued a phantom
   session that a later close ended, shifting every pairing (run 9tgw: sessions 'ended' 13:16:14Z hours late). Events
   are now de-duplicated in the tailer and in `sessions_from_events`, and every open-ended session counts as active at
   the start only with a live backend process sample at or after the window start (matching PID when known). A real
   session in the window still fires G1, G2 and G3.
+
 - testlab: a native game server that cannot be stopped at teardown no longer leaves a green exit and a running
   stack: `stack.down` still brings the scratch backing stack down, then raises, and `_with_stack_teardown` turns an
   exit of 0 or 4 into 3 (a run's own 1 or 2 is kept) and keeps the error in `<runs>/stack/teardown-failure.json`.
+
 - testlab: native `--build-server` builds the Nakama plugin for the version of the resolved scratch compose Nakama
   image (what `.env.scratch` decides) and not for the scenario env or a fixed 3.40.0, so the plugin ABI matches the
   running Nakama; an unreadable image fails the build instead of guessing.
+
 - testlab: native mode with `--build-server` no longer runs `stack.sh --scratch up` (its `up` ends in `dc up -d`
   for the whole project and started the container `gameserver-dotnet` before the native server replaced it).
   The Nakama plugin and the gateway image are built directly (the two builds of `stack.sh do_up`; the game server
@@ -144,28 +191,6 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `build` true or false, runs the full-stack `up`. A native server that is still alive after `kill_tree` and the
   15 s wait now keeps its state and fails the stop with an error (the next run is refused until the process is
   gone) instead of dropping its pid record.
-
-### Added
-
-- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
-  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
-  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
-  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
-  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
-  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
-  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
-  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
-  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
-  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
-  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
-- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
-  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
-  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
-  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
-  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
-  episodes are documented: two attributed, one start-up, two unexplained.
-
-### Fixed
 
 - testlab: the host guard kept sampling only until the players exited, not until the measurement window end
   (scenario end + `finish_grace_s`), so every full-length soak ended with a 20 s blind gap and G5 INVALID. The runner
@@ -192,24 +217,12 @@ session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope change
 
 ### Changed
 
-- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
 - Refreshed Netcode client guidance for v0.49.0: KcpCrypto reuses per-session crypto state, subscribers are isolated, and snapshot speed distinguishes absent (`NaN`) from present zero; documented the server unknown-type counter, kick-reason drain, and readiness/release runbooks.
 - Clarified that `factory-status` derives client and package-CI pin versions from repository state instead of storing moving pin versions in registry prose.
 - Updated drifted client, server, and Netcode skill citations to match their integration branches, including client `origin/develop` at `45634b1`.
 - `testlab analyze --delivery` now fits server/client clock mapping independently in 10 second windows using one minimum-delay sample per 1 second bin. It reports relative excess above each window's minimum envelope and the empirical p95 fit error bound; absolute one-way delay remains explicitly unavailable, and poor fits yield no delay values or PATH attribution.
 
 ### Added
-
-- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
-  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
-  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
-  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
-  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
-  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
-  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
-  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
-  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
-  (real scrubbed `ad.trace` fixture).
 
 - **testlab S16 judges the undefined-message-type case** on `gameserver_messages_rejected_total{reason="unknown_type"}`
   (rpg-mmo-server #490, `76aa973`): the `malformed_input` rule gains `rejections_counter` (default `gameserver_inputs_rejected_total`), the
