@@ -4296,5 +4296,21 @@
       "may_own_feature_state": false,
       "approvers": []
     }
+  },
+  "artifact_lifecycles": {
+    "default": {
+      "states": ["draft", "review", "approved", "in-implementation", "verified", "released", "deprecated"],
+      "transitions": {
+        "draft": ["review"], "review": ["approved"], "approved": ["in-implementation"],
+        "in-implementation": ["verified"], "verified": ["released"], "released": ["deprecated"],
+        "deprecated": ["draft"]
+      },
+      "requirements": {
+        "approved": {"needs_approval": ["review"]},
+        "in-implementation": {"needs_approval": ["review"], "needs_trace": ["impl"]},
+        "verified": {"needs_approval": ["review"], "needs_trace": ["impl", "test"]},
+        "released": {"needs_approval": ["review"], "needs_trace": ["impl", "test", "release"]}
+      }
+    }
   }
 }

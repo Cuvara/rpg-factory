@@ -1,5 +1,8 @@
 # rpg-factory
 
+Shared artifact metadata, lifecycle transitions, trace requirements and signed approval rules are documented in
+[docs/architecture/artifacts.md](docs/architecture/artifacts.md).
+
 `rpg-factory` is a Claude Code plugin that organises development work across the UnityIndie RPG MMO workspace. The workspace holds five repos:
 
 | Repo key | Directory | Contents |

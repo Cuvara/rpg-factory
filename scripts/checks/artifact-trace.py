@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Check artifact revisions, trace coverage and immutable SSH-signed approvals."""
+import argparse, datetime, json, os, re, subprocess, sys, tempfile
+
+def run(cwd, *args):
+    return subprocess.run(["git", "-C", cwd, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+def front(path):
+    raw=open(path,encoding="utf-8").read()
+    if path.endswith(".json"): return json.loads(raw)
+    m=re.match(r"\A---json\s*\n(.*?)\n---(?:\s*\n|\Z)",raw,re.S)
+    return json.loads(m.group(1)) if m else None
+def git_blob(root, path):
+    r=run(root,"rev-parse",f"HEAD:{path}"); return r.stdout.strip() if r.returncode==0 else ""
+def approval(root, artifact_path, obj, gate, reg):
+    aid=obj["id"]; rev=git_blob(root,artifact_path); path=f"approvals/{aid}/{gate}-{rev}.json"
+    if run(root,"rev-parse","--is-shallow-repository").stdout.strip()=="true": return "shallow clone"
+    full=os.path.join(root,path)
+    if not os.path.isfile(full): return "missing approval"
+    try: data=json.load(open(full,encoding="utf-8"))
+    except Exception: return "invalid approval JSON"
+    if data.get("artifact")!=aid or data.get("gate")!=gate or data.get("scope")!=obj.get("domain") or data.get("rev")!=rev or os.path.dirname(path).split("/")[-1]!=data.get("artifact") or os.path.basename(path)!=f"{data.get('gate')}-{data.get('rev')}.json": return "approval path/content/rev mismatch"
+    try: datetime.datetime.fromisoformat(data.get("date","").replace("Z","+00:00"))
+    except Exception: return "invalid approval date"
+    adds=run(root,"log","--no-renames","--diff-filter=A","--format=%H","--",path).stdout.splitlines()
+    mods=run(root,"log","--no-renames","--diff-filter=MD","--format=%H","--",path).stdout.splitlines()
+    dels=run(root,"log","--no-renames","--diff-filter=D","--format=%H","--","approvals/").stdout.splitlines()
+    if len(adds)!=1 or mods or dels: return "approval is not immutable"
+    domain=reg.get("domains",{}).get(obj.get("domain"),{}); gates=domain.get("human_gates",[])
+    if gate not in gates: return "gate not registered"
+    keys=[]; revoked=set(domain.get("revoked_keys",[]))
+    for person in domain.get("approvers",[]):
+        key=person.get("ssh_public_key","")
+        if person.get("revoked") is True or not key: continue
+        with tempfile.NamedTemporaryFile("w",encoding="utf-8",delete=False) as keyfile:
+            keyfile.write(key.strip()+"\n"); keypath=keyfile.name
+        try:
+            fp=subprocess.run(["ssh-keygen","-lf",keypath],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            fingerprint=fp.stdout.split()[1] if fp.returncode==0 and len(fp.stdout.split())>1 else ""
+        finally: os.unlink(keypath)
+        if fingerprint in revoked or key.split()[-1] in revoked: continue
+        keys.append((person.get("principal", ""), key))
+    if not keys: return "no trusted approver keys"
+    with tempfile.TemporaryDirectory(prefix="artifact-signers-") as td:
+        signers=os.path.join(td,"allowed signers")
+        with open(signers,"w",encoding="utf-8") as f:
+            for principal,key in keys: f.write(f'{principal} namespaces="git" {key.strip()}\n')
+        opts=["-c","gpg.format=ssh","-c",f"gpg.ssh.allowedSignersFile={signers}"]
+        vr=run(root,*opts,"verify-commit",adds[0])
+        if vr.returncode: return "approval signature untrusted or invalid"
+        info=run(root,*opts,"log","-1","--format=%G? %GS",adds[0]).stdout.strip().split(maxsplit=1)
+        if len(info)!=2 or info[0]!="G" or info[1]!=data.get("by"): return "approval principal mismatch"
+        if not any(info[1]==pr for pr,_ in keys): return "approval principal untrusted"
+    msg=run(root,"show","-s","--format=%B",adds[0]).stdout
+    if re.search(r"^Co-Authored-By:.*\b(?:AI|Codex|Claude|agent)\b",msg,re.I|re.M): return "agent co-author rejected"
+    return None
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument("repo_dir");p.add_argument("--registry",required=True);p.add_argument("--repos",nargs="+",default=[]);a=p.parse_args()
+    root=os.path.abspath(a.repo_dir);reg=json.load(open(a.registry,encoding="utf-8"));repos={}
+    for x in a.repos:
+        if "=" in x:
+            k,v=x.split("=",1);repos[k]=os.path.abspath(v)
+    fails=0; humans=0
+    for base,dirs,names in os.walk(root):
+        dirs[:]=[d for d in dirs if d not in (".git","approvals")]
+        for name in sorted(names):
+            if not (name.endswith(".md") or name.endswith(".artifact.json")): continue
+            path=os.path.join(base,name); rel=os.path.relpath(path,root).replace(os.sep,"/")
+            try: obj=front(path)
+            except Exception: obj=None
+            if not isinstance(obj,dict) or "id" not in obj: continue
+            aid=obj["id"]; reason=None
+            for up in obj.get("upstream",[]):
+                candidates=[]
+                for b,d,ns in os.walk(root):
+                    d[:]=[x for x in d if x not in (".git","approvals")]
+                    for n in ns:
+                        q=os.path.join(b,n)
+                        try:
+                            if front(q).get("id")==up["id"]: candidates.append(os.path.relpath(q,root).replace(os.sep,"/"))
+                        except Exception: pass
+                if not candidates or up.get("rev")!=git_blob(root,candidates[0]): reason=f"upstream-changed {up.get('id')}";break
+            if reason is None:
+                for t in obj.get("trace",[]):
+                    repo=repos.get(t.get("repo"))
+                    if not repo or run(repo,"cat-file","-e",t.get("ref","")+"^{commit}").returncode: reason="unknown trace SHA";break
+            life=reg.get("artifact_lifecycles",{}).get(obj.get("kind"),reg.get("artifact_lifecycles",{}).get("default",{})); req=life.get("requirements",{}).get(obj.get("status"),{})
+            if reason is None:
+                required=set(req.get("needs_trace",[]))
+                if obj.get("status")=="released": required.add("release")
+                coverage={(t.get("kind"),ac) for t in obj.get("trace",[]) for ac in t.get("ac",[])}
+                for ac in obj.get("acceptance",[]):
+                    kinds=set(required)
+                    if ac.get("verify")=="test": kinds.update(("impl","test"))
+                    if any((k,ac.get("id")) not in coverage for k in kinds): reason="missing AC coverage";break
+            if reason is None:
+                gates=list(req.get("needs_approval",[]))
+                if obj.get("binding_values") is True:
+                    gates=list(dict.fromkeys(gates+reg.get("domains",{}).get(obj.get("domain"),{}).get("human_gates",[])))
+                for gate in gates:
+                    reason=approval(root,rel,obj,gate,reg)
+                    if reason: break
+            human_reason = reason is not None and reason not in ("missing AC coverage", "unknown trace SHA") and not reason.startswith("upstream-changed ")
+            state="PASS" if not reason else ("HUMAN_REQUIRED" if human_reason else "FAIL")
+            if human_reason: humans+=1
+            if reason and state=="FAIL": fails+=1
+            print(f"{state} {aid} {reason or 'trace and approvals verified'}")
+    return 1 if fails else 0
+if __name__=="__main__":sys.exit(main())

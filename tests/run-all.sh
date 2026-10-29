@@ -127,6 +127,7 @@ run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.t
 run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
+run "artifact contract, lifecycle, trace and approval fixtures" tests/artifacts.test.sh
 run "run-checks targets the invoking worktree, writes no pyc, guards the canonical checkout" tests/worktree-target.test.sh
 run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
