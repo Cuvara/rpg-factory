@@ -40,6 +40,9 @@ from typing import Any
 
 from . import util
 
+SETTLED_WORKER_STATES = frozenset({"succeeded", "failed", "cancelled", "stopped", "abandoned"})
+SETTLED_DISPATCH_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
 SCHEMA = "rpg.testlab.hostguard.v1"
 PS1 = Path(__file__).with_name("hostguard.ps1")
 PROCS_PS1 = Path(__file__).with_name("hostprocs.ps1")
@@ -1169,17 +1172,19 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
         dispatch_status = worker.get("dispatchStatus")
         # `stopped` and `abandoned` are also terminal worker outcomes in live
         # worker-list data; their paired failed dispatch status is settled.
-        settled_worker_states = {"succeeded", "failed", "cancelled", "stopped", "abandoned"}
-        settled_dispatch_statuses = {"completed", "failed", "cancelled"}
-        is_settled = worker_state in settled_worker_states and dispatch_status in settled_dispatch_statuses
+        is_settled = (isinstance(worker_state, str) and worker_state in SETTLED_WORKER_STATES and
+                      isinstance(dispatch_status, str) and dispatch_status in SETTLED_DISPATCH_STATUSES)
         resource = worker.get("resource")
         resource = resource if isinstance(resource, dict) else {}
         workspace = projection.get("workspace")
         workspace = workspace if isinstance(workspace, dict) else {}
         provider = projection.get("provider")
         provider = provider if isinstance(provider, dict) else {}
-        wid = resource.get("worktreeId") or ""
-        workspace_id = workspace.get("id") or wid
+        raw_wid, raw_workspace_id = resource.get("worktreeId"), workspace.get("id")
+        invalid_workspace_identity = ((raw_wid is not None and not isinstance(raw_wid, str)) or
+                                      (raw_workspace_id is not None and not isinstance(raw_workspace_id, str)))
+        wid = raw_wid if isinstance(raw_wid, str) else ""
+        workspace_id = raw_workspace_id if isinstance(raw_workspace_id, str) else wid
         path = workspace_id.split("::", 1)[-1] if "::" in workspace_id else workspace_id
         original_path = path
         normalized = _normal_path(path)
@@ -1196,6 +1201,20 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                 allowed, allow_entry = True, path_match or id_match
         else:
             allowed, allow_entry = False, None
+        liveness = projection.get("liveness") if isinstance(projection.get("liveness"), dict) else {}
+        liveness_verdict = liveness.get("verdict")
+        workspace_covered = any(
+            _normal_path(w.get("path")) == normalized and
+            isinstance(w.get("agents"), list) and
+            any(isinstance(agent, dict) and agent.get("state") == "working" for agent in w["agents"]) and
+            type(w.get("liveTerminalCount")) is int and w.get("liveTerminalCount") > 0 and
+            w.get("terminalVerdict") == "live"
+            for w in worktrees)
+        unverified_live = is_settled and not workspace_covered and not invalid_workspace_identity and (
+            liveness_verdict == "live" or
+            (isinstance(worker_state, str) and worker_state == "abandoned" and liveness_verdict != "exited"))
+        if invalid_workspace_identity:
+            is_settled = False
         path_parts = [p for p in normalized.split("/") if p]
         inferred_repo = path_parts[-2] if len(path_parts) > 1 else "unknown-repo"
         out.append({"repo": inferred_repo, "displayName": path_parts[-1] if path_parts else "unknown-name",
@@ -1203,12 +1222,16 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                     "originalPath": original_path,
                     "agentType": provider.get("id"), "terminalVerdict": "live",
                     "liveTerminalCount": 1, "prompt": "", "state": worker_state,
-                    "activity": "SETTLED" if is_settled else "ACTIVE",
-                    "reason": (f"settled workerState={worker_state}; dispatchStatus={dispatch_status}"
-                               if is_settled else "worker state missing, unknown, or not settled; fail closed"), "allowed": allowed,
+                    "activity": "ACTIVE-UNVERIFIED" if unverified_live else "SETTLED" if is_settled else "ACTIVE",
+                    "reason": ("invalid workspace identity type; fail closed" if invalid_workspace_identity else
+                               "settled worker has live or unverifiable liveness outside worktree ps" if unverified_live else
+                               f"settled workerState={worker_state}; dispatchStatus={dispatch_status}" if is_settled else
+                               "worker state missing, unknown, or not settled; fail closed"), "allowed": allowed,
                     "allowEntry": allow_entry,
                     "dispatchId": worker.get("dispatchId"), "taskId": worker.get("taskId"),
+                    "ownerRunId": worker.get("runId") if isinstance(worker.get("runId"), str) else projection.get("runId"),
                     "supervisedWorkers": [{"dispatchId": worker.get("dispatchId"), "taskId": worker.get("taskId"),
+                                            "ownerRunId": worker.get("runId") if isinstance(worker.get("runId"), str) else projection.get("runId"),
                                             "workerState": worker_state, "dispatchStatus": dispatch_status,
                                             "terminalState": terminal_state,
                                             "retainedReason": resource.get("retainedReason")}],
@@ -1249,7 +1272,7 @@ def sample_host(seconds: float) -> list[dict]:
 
 
 def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_s: float = PRE_SAMPLE_S,
-              allow_agents=(), paths: AnyDeskPaths | None = None, now: float | None = None,
+              allow_agents=(), allow_dispatches=(), paths: AnyDeskPaths | None = None, now: float | None = None,
               sampler=sample_host, processes=anydesk_processes, orca_ps=_orca_ps, orca_workers=_orca_workers,
               wsl_uptime=_wsl_uptime,
               include_p7: bool = True) -> dict:
@@ -1302,6 +1325,10 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
         entries = _live_supervised_workers(worker_data if worker_available else None, {}, None)
         allow_record = {"entries": [{"entry": str(a), "matched": [], "error": "worktree inventory unavailable"}
                                                       for a in allow_agents], "errors": ["orca worktree ps unavailable"]}
+        for dispatch in allow_dispatches:
+            allow_record["entries"].append({"entry": str(dispatch), "matched": [],
+                                              "error": "worker inventory unavailable"})
+            allow_record["errors"].append(f"allow dispatch {dispatch!r} unmatched: worker inventory unavailable")
         cli_hint = "orca CLI unavailable (set ORCA_CLI_COMMAND or install orca); " if not _orca_command() else ""
         labels = [f"{e['repo']}:{e['displayName']} ({e['path']}) [dispatch={e.get('dispatchId') or 'unknown'}]"
                   for e in entries]
@@ -1310,8 +1337,16 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
         ok_p3 = False
     else:
         entries, allow_record = working_agents(ps, allow_agents)
+        for dispatch in allow_dispatches:
+            allow_record["entries"].append({"entry": str(dispatch), "matched": [], "error": None})
         supervised_allow, _ = _allow_matches(_worktrees(ps), allow_agents)
+        dispatch_allow = {str(value).strip() for value in allow_dispatches}
         supervised = _live_supervised_workers(worker_data, supervised_allow, ps, allow_agents)
+        for worker in supervised:
+            wid_dispatch = worker.get("dispatchId")
+            worker["allowEntry"] = next((value for value in dispatch_allow if value == wid_dispatch), worker.get("allowEntry"))
+            if worker.get("allowEntry") in dispatch_allow:
+                worker["allowed"] = True
         worker_allow_matches = {}
         for worker in supervised:
             if worker.get("allowEntry"):
@@ -1344,16 +1379,33 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
                 primary.setdefault("supervisedWorkers", []).extend(worker.get("supervisedWorkers", []))
             else:
                 entries.append(worker)
+        for dispatch in allow_dispatches:
+            matches = [w for w in supervised if w.get("dispatchId") == dispatch]
+            if matches:
+                for record in allow_record["entries"]:
+                    if record["entry"] == str(dispatch):
+                        record["matched"] = [{"dispatchId": w.get("dispatchId"), "path": w.get("path"),
+                                              "worktreeId": w.get("worktreeId")} for w in matches]
+                        record["error"] = None
+            else:
+                msg = f"allow dispatch {dispatch!r} matched no dispatch id"
+                allow_record["errors"].append(msg)
+                next(record for record in allow_record["entries"] if record["entry"] == str(dispatch))["error"] = msg
         errors = allow_record["errors"]
-        blockers = [e for e in entries if e["activity"] == "ACTIVE" and not e["allowed"]]
+        blockers = [e for e in entries if e["activity"] in ("ACTIVE", "ACTIVE-UNVERIFIED") and not e["allowed"]]
         details = []
+        settled_counts = Counter()
         for e in entries:
+            if e["activity"] == "SETTLED":
+                settled_counts[(str(e.get("workerState") or "missing"), str(e.get("dispatchStatus") or "missing"),
+                                str(e.get("terminalState") or "missing"))] += 1
+                continue
             label = f"{e.get('repo') or 'unknown-repo'}:{e.get('displayName') or 'unknown-name'} ({e.get('path') or 'unknown-path'})"
             original = e.get("originalPath")
             path_note = f" originalPath={original!r}" if original is not None else ""
             worker_note = ("; supervisedWorkers=" + ",".join(
                 f"{w.get('dispatchId') or 'unknown'}:{w.get('workerState') or 'missing'}/"
-                f"{w.get('dispatchStatus') or 'missing'} terminal={w.get('terminalState') or 'missing'}"
+                f"{w.get('dispatchStatus') or 'missing'} run={w.get('ownerRunId') or 'unknown'} terminal={w.get('terminalState') or 'missing'}"
                 for w in e.get("supervisedWorkers", [])) if e.get("supervisedWorkers") else "")
             details.append(f"{e['activity']} {label}{path_note} [{e.get('worktreeId') or 'unknown-id'}] agent={e.get('agentType') or 'unknown'} "
                            f"terminal={e.get('terminalVerdict')}/{e.get('liveTerminalCount')} prompt={e.get('prompt', '')!r}"
@@ -1361,6 +1413,9 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
                            f"{'; workerState=' + str(e.get('workerState')) + ' dispatchStatus=' + str(e.get('dispatchStatus')) + ' retainedReason=' + str(e.get('retainedReason')) if e.get('activity') == 'SETTLED' else ''}"
                            f"{'; dispatches=' + ','.join(x for x in e.get('dispatchIds', []) if x) if e.get('dispatchIds') else ''}"
                            f"{'; allowed' if e['allowed'] else ''}{worker_note}; {e['reason']}")
+        if settled_counts:
+            details.append("SETTLED counts=" + ",".join(f"{state}/{dispatch}/{terminal}:{count}"
+                            for (state, dispatch, terminal), count in sorted(settled_counts.items())))
         details.extend(errors)
         if not worker_available:
             details.append("FAIL: orca orchestration worker-list unavailable; cannot rule out live supervised workers" +

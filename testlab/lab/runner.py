@@ -56,7 +56,7 @@ def _player_fingerprint(cfg: LabConfig) -> dict:
 
 def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, build_server: bool = False,
         keep_clients: bool = False, run_id: str | None = None, quiet: bool = False,
-        require_clean_host: bool = False, allow_agents=(), expect_player_sha: str | None = None,
+        require_clean_host: bool = False, allow_agents=(), allow_dispatches=(), expect_player_sha: str | None = None,
         expect_server_sha: str | None = None) -> dict:
     sc = scenarios.load(scenario_name, overrides)
     # H6: a soak-class run never starts on a default player or server checkout; raises before a run directory exists.
@@ -128,6 +128,7 @@ def run(cfg: LabConfig, scenario_name: str, *, overrides: dict | None = None, bu
         if required:
             log("host preflight: sampling the host (P1-P6)")
             pf = hostguard.preflight(window_min=float(sc["duration_s"]) / 60.0 + 30.0, allow_agents=allow_agents,
+                                     allow_dispatches=allow_dispatches,
                                      include_p7=False)
             util.write_json(run_dir / "host" / "preflight.json", pf)
             p3 = next((row for row in pf.get("rows", []) if row.get("id") == "P3"), {})

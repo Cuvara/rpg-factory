@@ -6,9 +6,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- Follow-up P7D: P3 treats settled supervised workers with live liveness, and abandoned workers with liveness other than exited, as ACTIVE-UNVERIFIED when their normalized workspace is absent from worktree ps. Wrongly typed worker fields fail closed; `--allow-dispatch` allows exact repeatable dispatch ids and records matches; settled detail is counted by task and terminal state while complete evidence remains measured. Shared settled-state constants drive implementation and threshold documentation.
 - testlab soak preflight P3 now classifies supervised workers from settled `workerState` (`succeeded`, `failed`, `cancelled`, `stopped`, `abandoned`) and `dispatchStatus` (`completed`, `failed`, `cancelled`), independent of retained terminal accounting. Settled dispatches are reported without blocking, while missing or unsettled task states remain ACTIVE; live worktree agents still block. P3 continues to read every worker-list page, fail closed when worker-list is unavailable, deduplicate active worktree/worker evidence, and store allow-list resolution in run.json.
-
-### Fixed
 
 - testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
   evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event

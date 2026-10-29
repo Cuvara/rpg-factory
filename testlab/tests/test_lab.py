@@ -3696,18 +3696,66 @@ class HostGuardTests(unittest.TestCase):
         retained_result = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
             orca_workers=lambda: {"result": {"workers": [retained_worker]}}, **common)
         retained_p3 = next(r for r in retained_result["rows"] if r["id"] == "P3")
-        self.assertEqual(retained_p3["status"], "PASS")
-        self.assertIn("SETTLED", retained_p3["detail"])
+        self.assertEqual(retained_p3["status"], "FAIL")
+        self.assertIn("ACTIVE-UNVERIFIED", retained_p3["detail"])
         self.assertIn("ctx-fixture", retained_p3["detail"])
-        self.assertIn("user_takeover", retained_p3["detail"])
+        unverifiable_retained = {**retained_worker, "projection": {"workspace": {"id": "host::C:/outside/worker"},
+                                                                     "liveness": {"verdict": "unverifiable"}}}
+        settled_result = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [unverifiable_retained]}}, **common)
+        settled_p3 = next(r for r in settled_result["rows"] if r["id"] == "P3")
+        self.assertEqual(settled_p3["status"], "PASS")
+        self.assertIn("SETTLED counts", settled_p3["detail"])
+        self.assertIn("user_takeover", settled_p3["measured"]["agents"][0]["retainedReason"])
         for terminal in ("release_unknown", "retained"):
-            settled_worker = {**retained_worker, "terminalState": terminal}
+            settled_worker = {**retained_worker, "terminalState": terminal,
+                              "projection": {"workspace": {"id": "host::C:/outside/worker"},
+                                             "liveness": {"verdict": "unverifiable"}}}
             settled = hostguard._live_supervised_workers({"result": {"workers": [settled_worker]}}, {}, None)
             self.assertEqual(settled[0]["activity"], "SETTLED")
         for terminal_worker_state in ("stopped", "abandoned"):
             terminal_worker = {**retained_worker, "workerState": terminal_worker_state, "dispatchStatus": "failed"}
+            if terminal_worker_state == "abandoned":
+                terminal_worker["projection"] = {"workspace": {"id": "host::C:/outside/worker"},
+                                                  "liveness": {"verdict": "exited"}}
+            expected = "SETTLED" if terminal_worker_state == "abandoned" else "ACTIVE-UNVERIFIED"
             self.assertEqual(hostguard._live_supervised_workers(
-                {"result": {"workers": [terminal_worker]}}, {}, None)[0]["activity"], "SETTLED")
+                {"result": {"workers": [terminal_worker]}}, {}, None)[0]["activity"], expected)
+        abandoned_unverifiable = {**retained_worker, "workerState": "abandoned", "dispatchStatus": "failed",
+                                  "projection": {"workspace": {"id": "host::\\\\wsl.localhost\\Ubuntu\\repo\\wt"},
+                                                 "liveness": {"verdict": "unverifiable"}}}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [abandoned_unverifiable]}}, {},
+                         {"result": {"worktrees": []}})[0]["activity"], "ACTIVE-UNVERIFIED")
+        wsl_ps = {"result": {"worktrees": [{"path": "//wsl.localhost/Ubuntu/repo/wt", "agents": []}]}}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [abandoned_unverifiable]}}, {},
+                         wsl_ps)[0]["activity"], "ACTIVE-UNVERIFIED")
+        wsl_deciding_ps = {"result": {"worktrees": [{"path": "//wsl.localhost/Ubuntu/repo/wt",
+            "liveTerminalCount": 1, "terminalVerdict": "live", "agents": [{"state": "working"}]}]}}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [abandoned_unverifiable]}}, {},
+                         wsl_deciding_ps)[0]["activity"], "SETTLED")
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [
+            {**abandoned_unverifiable, "projection": {"workspace": {"id": "host::/repo/wt"},
+                "liveness": {"verdict": "exited"}}}]}}, {}, {"result": {"worktrees": []}})[0]["activity"], "SETTLED")
+        succeeded_live = {**retained_worker, "projection": {"workspace": {"id": "host::C:/outside/live"},
+                                                             "liveness": {"verdict": "live"}}}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [succeeded_live]}}, {},
+                         {"result": {"worktrees": []}})[0]["activity"], "ACTIVE-UNVERIFIED")
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [
+            {**succeeded_live, "projection": {"workspace": {"id": "host::C:/outside/live"},
+                                                "liveness": {"verdict": "unverifiable"}}}]}}, {},
+                         {"result": {"worktrees": []}})[0]["activity"], "SETTLED")
+        malformed_worker = {**retained_worker, "workerState": [], "dispatchStatus": {}}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [malformed_worker]}}, {}, None)[0]["activity"], "ACTIVE")
+        malformed_workspace = {**worker, "projection": {"workspace": {"id": 42}, "liveness": {"verdict": "live"}}}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [malformed_workspace]}}, {}, None)[0]["activity"], "ACTIVE")
+        malformed_settled_identity = {**retained_worker,
+            "resource": {"worktreeId": 17},
+            "projection": {"workspace": {"id": 42}, "liveness": {"verdict": "unverifiable"}}}
+        malformed_entry = hostguard._live_supervised_workers({"result": {"workers": [malformed_settled_identity]}}, {}, None)[0]
+        self.assertEqual(malformed_entry["activity"], "ACTIVE")
+        self.assertIn("invalid workspace identity", malformed_entry["reason"])
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [
+            {**worker, "workerState": "start_unknown", "dispatchStatus": "pending"}]}}, {}, None)[0]["activity"], "ACTIVE")
         for uncertain_state in ("running", "unknown", None):
             unsettled = {**retained_worker, "workerState": uncertain_state}
             self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [unsettled]}}, {}, None)[0]["activity"], "ACTIVE")
@@ -3731,6 +3779,14 @@ class HostGuardTests(unittest.TestCase):
         worker_only_record = worker_only_p3["measured"]["allow_list"]["entries"][0]
         self.assertEqual(worker_only_record["error"], None)
         self.assertEqual(worker_only_record["matched"][0]["path"], hostguard._normal_path("C:/outside/worker"))
+        dispatch_allowed = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-fixture",), **common)
+        dispatch_p3 = next(r for r in dispatch_allowed["rows"] if r["id"] == "P3")
+        self.assertEqual(dispatch_p3["status"], "PASS")
+        self.assertEqual(dispatch_p3["measured"]["allow_list"]["entries"][-1]["matched"][0]["dispatchId"], "ctx-fixture")
+        dispatch_missing = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-other",), **common)
+        self.assertEqual(next(r for r in dispatch_missing["rows"] if r["id"] == "P3")["status"], "FAIL")
         worker_missing = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
                     orca_workers=lambda: None, **common)
         worker_missing_p3 = next(r for r in worker_missing["rows"] if r["id"] == "P3")
