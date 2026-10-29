@@ -318,9 +318,13 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
   rpg-factory pull request. GPG signing is out of scope.
 
   `artifact-trace.py` validates each approval file in five steps:
-  1. **Find the commit.** Because approval files are immutable, the introducing commit is unambiguous:
-     `git log --diff-filter=A --format=%H -- <file>` must return exactly one commit, and
-     `git log --diff-filter=MRD --format=%H -- <file>` must return none.
+  1. **Find the commit.** Rename detection is turned off (`--no-renames`), so a rename or move shows up as an
+     add plus a delete:
+     - `git log --no-renames --diff-filter=A --format=%H -- "$FILE"` must return exactly one commit;
+     - `git log --no-renames --diff-filter=MD --format=%H -- "$FILE"` must return none;
+     - `git log --no-renames --diff-filter=D --format=%H -- approvals/` must return none. No approval file was
+       ever deleted or moved anywhere, so no file can arrive at a new path by rename.
+     - The path must match the content: directory = `artifact`, file name = `<gate>-<rev>.json`.
   2. **Build the signers file.** Write a temporary allowed-signers file containing only the registry keys,
      one line per approver: `<principal> namespaces="git" <key>`.
   3. **Verify.** Run `git -c gpg.format=ssh -c "gpg.ssh.allowedSignersFile=$SIGNERS" verify-commit "$SHA"`.
@@ -332,7 +336,8 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
   5. **Fail closed.** In any of these cases the approval grades **HUMAN_REQUIRED** with the reason, and is
      never accepted:
      - zero or several adding commits;
-     - any later modification, rename or deletion;
+     - any later modification, or any deletion or rename under `approvals/`;
+     - a path that doesn't match the file's content;
      - an unsigned commit, a failed verification, an unknown key or a principal mismatch;
      - a shallow clone;
      - a stale `rev`.
