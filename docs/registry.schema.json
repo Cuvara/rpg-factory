@@ -204,7 +204,7 @@
             "description": "Relative to the workspace root."
           },
           "remote": {
-            "type": "string"
+            "type": ["string", "null"]
           },
           "default_branch": {
             "type": "string"

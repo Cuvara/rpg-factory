@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- Added the optional authoring repository, Game Design modules, artifact lifecycles, human review gate, and phase-scoped design permissions.
 - Added the shared artifact schema, lifecycle registry data, artifact lint and trace checks, and signed approval verification.
 - Routing JSON now includes `routing.domain`, derived from the selected lead skill (defaulting to `engineering`).
 - `factory-context.sh` and `/rpg-factory:route` accept domain and artifact-kind entry points; optional repos are skipped until present.

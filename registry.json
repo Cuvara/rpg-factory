@@ -288,8 +288,8 @@
       "source": "CLAUDE.md (workspace root)"
     },
     {
-      "id": "phase-plumbing-only",
-      "rule": "Current phase is core plumbing only - no gameplay content. If a task would require inventing a gameplay rule (numbers, formulas, content), STOP and ask the user.",
+      "id": "phase-scope",
+      "rule": "No agent makes a numerical gameplay value or binds a gameplay rule. Design may draft and propose; binding requires verified approval. Engineering implements gameplay values only from approved artifacts or existing code.",
       "source": "rpg-mmo-server/backend/TEAM.md#current-phase"
     },
     {
@@ -323,8 +323,8 @@
       "source": "rpg-mmo-server/backend/TEAM.md; user decision 2026-09-30 (package repos)"
     },
     {
-      "id": "no-feature-registry",
-      "rule": "Factory never creates feature registries, GDD state or task trackers (.ai/, docs/registry/, docs/features/) - that lifecycle belongs to the game-ai-workflows plugin.",
+      "id": "feature-state-ownership",
+      "rule": "Only domains with may_own_feature_state: true create GDD or feature state, and only in that domain's registered authoring-repo paths. Product-repo .ai/, docs/registry/ and docs/features/ stay forbidden. .ai/ is never read as a source of skills, routing or configuration; there is no importer.",
       "source": "rpg-factory skill contract"
     }
   ],
@@ -457,9 +457,204 @@
         "No CLAUDE.md in this repo.",
         "CHANGELOG.md is not valid UTF-8 (tools must read with replacement)."
       ]
+    },
+    "authoring": {
+      "path": "game-authoring",
+      "optional": true,
+      "default_branch": "main",
+      "protected_branches": [
+        "main"
+      ],
+      "instructions": [],
+      "remote": null
     }
   },
   "modules": [
+    {
+      "id": "authoring.root",
+      "repo": "authoring",
+      "paths": [
+        ""
+      ],
+      "responsibility": "Authoring repository fallback.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [],
+      "obligations": [],
+      "fallback": true,
+      "domain": "design"
+    },
+    {
+      "id": "authoring.design-gdd",
+      "repo": "authoring",
+      "paths": [
+        "design/gdd/"
+      ],
+      "responsibility": "Game design design/gdd/ authoring artifacts.",
+      "depends_on": [],
+      "rules": [
+        "Agents draft GDD content; numerical gameplay values are TBD or labelled proposals until verified approval."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design"
+    },
+    {
+      "id": "authoring.design-features",
+      "repo": "authoring",
+      "paths": [
+        "design/features/"
+      ],
+      "responsibility": "Game design design/features/ authoring artifacts.",
+      "depends_on": [],
+      "rules": [
+        "Agents draft feature specifications; binding values require verified gameplay-rules approval."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design"
+    },
+    {
+      "id": "authoring.design-decisions",
+      "repo": "authoring",
+      "paths": [
+        "design/decisions/"
+      ],
+      "responsibility": "Game design design/decisions/ authoring artifacts.",
+      "depends_on": [],
+      "rules": [
+        "Agents propose design decisions; accepted binding values require verified approval."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design"
+    },
+    {
+      "id": "authoring.approvals",
+      "repo": "authoring",
+      "paths": [
+        "approvals/"
+      ],
+      "responsibility": "Game design approvals/ authoring artifacts.",
+      "depends_on": [],
+      "rules": [
+        "Human-only immutable approval records; agents never write or modify approvals."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "design"
+    },
     {
       "id": "server.proto",
       "repo": "server",
@@ -3654,6 +3849,15 @@
         "measure"
       ],
       "summary": "How com.cuvara.netcode works on the client: TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning/merge, interpolation clock, movement prediction and reconciliation, reconnect policy, current per-packet allocation pitfalls, speed presence, subscriber isolation, headless tests."
+    },
+    "game-design": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "design",
+      "order": 85,
+      "summary": "Design GDDs, feature specifications and decisions for the Game Design domain"
     }
   },
   "human_gates": [
@@ -3740,6 +3944,10 @@
       "read_only_exempt": true,
       "rule": "Only the lead releases Shared.GameLogic: package.json version bump for release, sgl-v* tags, dispatching publish-shared-gamelogic.yml. Skills stop at 'ready to tag server sgl-vX.Y.Z'.",
       "match": "\\bgh\\s+workflow\\s+run\\s+\\S*publish-shared-gamelogic"
+    },
+    {
+      "id": "design-review",
+      "rule": "A maintainer reviews and accepts a design artifact before it becomes approved; agents never approve their own proposals."
     }
   ],
   "contracts": [
@@ -4295,22 +4503,234 @@
       "handoffs": [],
       "may_own_feature_state": false,
       "approvers": []
+    },
+    "design": {
+      "summary": "Game design artifacts, feature lifecycle and traceability.",
+      "status": "active",
+      "lead": "game-design",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "gdd",
+        "feature-spec",
+        "design-decision"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace"
+      ],
+      "human_gates": [
+        "design-review",
+        "gameplay-rules"
+      ],
+      "handoffs": [],
+      "may_own_feature_state": true,
+      "approvers": []
     }
   },
   "artifact_lifecycles": {
     "default": {
-      "states": ["draft", "review", "approved", "in-implementation", "verified", "released", "deprecated"],
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated"
+      ],
       "transitions": {
-        "draft": ["review"], "review": ["approved"], "approved": ["in-implementation"],
-        "in-implementation": ["verified"], "verified": ["released"], "released": ["deprecated"],
-        "deprecated": ["draft"]
+        "draft": [
+          "review"
+        ],
+        "review": [
+          "approved"
+        ],
+        "approved": [
+          "in-implementation"
+        ],
+        "in-implementation": [
+          "verified"
+        ],
+        "verified": [
+          "released"
+        ],
+        "released": [
+          "deprecated"
+        ],
+        "deprecated": [
+          "draft"
+        ]
       },
       "requirements": {
-        "approved": {"needs_approval": ["review"], "approval_when_binding": true},
-        "in-implementation": {"needs_approval": ["review"], "needs_trace": ["impl"], "approval_when_binding": true},
-        "verified": {"needs_approval": ["review"], "needs_trace_for_test": ["impl", "test"], "approval_when_binding": true},
-        "released": {"needs_approval": ["review"], "needs_trace": ["release"], "needs_trace_for_test": ["impl", "test"], "approval_when_binding": true}
+        "approved": {
+          "needs_approval": [
+            "review"
+          ],
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_approval": [
+            "review"
+          ],
+          "needs_trace": [
+            "impl"
+          ],
+          "approval_when_binding": true
+        },
+        "verified": {
+          "needs_approval": [
+            "review"
+          ],
+          "needs_trace_for_test": [
+            "impl",
+            "test"
+          ],
+          "approval_when_binding": true
+        },
+        "released": {
+          "needs_approval": [
+            "review"
+          ],
+          "needs_trace": [
+            "release"
+          ],
+          "needs_trace_for_test": [
+            "impl",
+            "test"
+          ],
+          "approval_when_binding": true
+        }
+      }
+    },
+    "gdd": {
+      "states": [
+        "draft",
+        "approved",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "approved"
+        ],
+        "approved": [
+          "superseded"
+        ],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "needs_approval": [
+            "design-review"
+          ],
+          "approval_when_binding": [
+            "gameplay-rules"
+          ]
+        }
+      }
+    },
+    "feature-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated"
+      ],
+      "transitions": {
+        "draft": [
+          "review"
+        ],
+        "review": [
+          "approved"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft"
+        ],
+        "verified": [
+          "released",
+          "draft"
+        ],
+        "released": [
+          "deprecated",
+          "draft"
+        ],
+        "deprecated": [
+          "draft"
+        ]
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": [
+            "gameplay-rules"
+          ]
+        },
+        "verified": {
+          "needs_trace_for_test": [
+            "impl",
+            "test"
+          ]
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "needs_trace_for_test": [
+            "impl",
+            "test"
+          ]
+        }
+      }
+    },
+    "design-decision": {
+      "states": [
+        "proposed",
+        "accepted",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "proposed": [
+          "accepted",
+          "rejected"
+        ],
+        "accepted": [
+          "superseded"
+        ],
+        "rejected": [
+          "superseded"
+        ],
+        "superseded": []
+      },
+      "requirements": {
+        "accepted": {
+          "approval_when_binding": [
+            "gameplay-rules"
+          ]
+        }
       }
     }
+  },
+  "phase": {
+    "id": "core-plumbing",
+    "engineering": {
+      "gameplay_values": "approved-artifacts-or-existing-code"
+    },
+    "design": {
+      "draft": true,
+      "propose_values": true,
+      "binding_values": "verified-approval"
+    },
+    "acceptance": [
+      "Product-repo TEAM.md phase rules remain authoritative for product code."
+    ]
   }
 }

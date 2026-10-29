@@ -42,6 +42,10 @@ problems=$(jq -r '
         | select($r[.] == null) | "missing top-level key: \(.)"),
       ($ids | group_by(.) | map(select(length > 1))[] | "duplicate module id: \(.[0])"),
       (select(($r.domains.engineering // null) == null) | "missing domain: engineering"),
+      (select(($r.phase.id // null) == null or ($r.phase.engineering.gameplay_values // null) == null
+        or ($r.phase.design.draft | type) != "boolean" or ($r.phase.design.propose_values | type) != "boolean"
+        or ($r.phase.design.binding_values // null) == null or ($r.phase.acceptance | type) != "array")
+        | "phase: expected id, engineering.gameplay_values, design.draft/propose_values/binding_values and acceptance"),
       (($r.domains // {}) | keys[] | select(test("^[a-z][a-z0-9-]*$") | not) | "domain id \(.) must match ^[a-z][a-z0-9-]*$"),
       (($r.domains // {}) | to_entries[] | select((.value.status // "") | IN("active","planned","foundation") | not) | "domain \(.key): status must be active|planned|foundation"),
       (($r.domains // {}) | to_entries[] as $d
@@ -84,6 +88,9 @@ problems=$(jq -r '
           ($m.depends_on[] | . as $d | select(($ids | index($d)) == null) | "\($m.id): depends_on unknown module \(.)"),
           ($m.tools[] | select(($r.tools[.] // null) == null) | "\($m.id): unknown tool \(.)"),
           (($m.skills // [])[] | select(($r.skills[.] // null) == null) | "\($m.id): unknown skill \(.)"),
+          (select(($r.domains[$m.domain // "engineering"].may_own_feature_state // false) != true)
+            | ($m.paths[] | select(test("(^|/)(\\.ai|docs/registry|docs/features)(/|$)"))
+              | "\($m.id): module outside a feature-state domain cannot own feature-state path \(.)")),
           (($m.gates // [])[] | select(type != "string") | "\($m.id): gate must be a string"),
           (["fast","extended","external"][] as $t
             | ($m.checks[$t] // null) as $cs

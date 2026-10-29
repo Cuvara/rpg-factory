@@ -42,12 +42,15 @@ expect_fail d-module-repo '(.domains.engineering.repos = ["server"]) | (.modules
 expect_fail e-quality-gate '.domains.engineering.quality_gates = ["not-a-check"]' 'unknown quality gate not-a-check'
 expect_fail e-handoff '.domains.engineering.handoffs = ["not-a-contract"]' 'unknown handoff not-a-contract'
 expect_fail e-human-gate '.domains.engineering.human_gates = ["not-a-gate"]' 'unknown human gate not-a-gate'
+# g: phase declaration is a checked contract; feature-state paths need an owning domain.
+expect_fail g-phase-shape '.phase.design.binding_values = null' 'phase: expected id'
+expect_fail g-feature-path '(.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' 'cannot own feature-state path docs/features/'
 # f: artifact role is constrained when supplied.
 expect_fail f-role '.modules[0].role = "observer"' 'role must be orchestrator|implementer|reference'
 expect_fail f-skill-role '.skills["server-realtime"].role = "observer"' 'role must be orchestrator|implementer|reference'
 # g: absent optional repository paths are skipped and reported in a stand-in workspace.
 G="$TMP/optional.json"
-jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server}) | (.domains.engineering.repos = ["server"]) | (.modules = [.modules[] | select(.repo == "server" and (.fallback == true or .id == "server.proto"))]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
+jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server, authoring:.repos.authoring}) | (.domains.engineering.repos = ["server"]) | (.modules = [.modules[] | select((.repo == "server" and (.fallback == true or .id == "server.proto")) or .repo == "authoring")]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
 mkdir -p "$TMP/workspace"; touch "$TMP/workspace/marker"
 if out=$(RPG_FACTORY_WORKSPACE="$TMP/workspace" "$CHECKER" --registry "$G" 2>&1); then
   if grep -Fq 'optional repo server absent (not checked)' <<<"$out"; then echo "PASS g-optional-repo-absent"; pass=$((pass + 1));
