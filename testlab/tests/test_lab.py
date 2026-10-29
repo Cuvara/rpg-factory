@@ -3660,7 +3660,8 @@ class HostGuardTests(unittest.TestCase):
             self.assertEqual(malformed[0]["activity"], "ACTIVE")
             self.assertIn("liveTerminalCount", malformed[0]["reason"])
 
-        worker = {"terminalState": "active", "dispatchId": "ctx-fixture", "taskId": "task-fixture",
+        worker = {"terminalState": "active", "workerState": "running", "dispatchStatus": "running",
+                  "dispatchId": "ctx-fixture", "taskId": "task-fixture",
                   "resource": {"worktreeId": "wid::C:/outside/worker"},
                   "projection": {"liveness": {"verdict": "live"}, "workspace": {"id": "host::C:/outside/worker"},
                                  "provider": {"id": "claude"}}}
@@ -3671,7 +3672,7 @@ class HostGuardTests(unittest.TestCase):
             uncertain = {**worker, "terminalState": state}
             self.assertEqual(len(hostguard._live_supervised_workers({"result": {"workers": [uncertain]}}, {}, None)), 1)
         self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [
-            {**worker, "terminalState": "released"}]}}, {}, None), [])
+            {**worker, "terminalState": "released"}]}}, {}, None)[0]["activity"], "ACTIVE")
         missing_projection = {k: v for k, v in worker.items() if k != "projection"}
         self.assertEqual(len(hostguard._live_supervised_workers(
             {"result": {"workers": [missing_projection]}}, {}, None)), 1)
@@ -3690,15 +3691,34 @@ class HostGuardTests(unittest.TestCase):
         p3 = next(r for r in blocked["rows"] if r["id"] == "P3")
         self.assertEqual(p3["status"], "FAIL")
         self.assertIn("ctx-fixture", p3["detail"])
-        retained_worker = {**worker, "terminalState": "retained"}
+        retained_worker = {**worker, "terminalState": "retained", "workerState": "succeeded", "dispatchStatus": "completed",
+                           "resource": {"retainedReason": "user_takeover"}}
         retained_result = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
             orca_workers=lambda: {"result": {"workers": [retained_worker]}}, **common)
         retained_p3 = next(r for r in retained_result["rows"] if r["id"] == "P3")
-        self.assertEqual(retained_p3["status"], "FAIL")
-        self.assertIn("ctx-fixture:retained", retained_p3["detail"])
+        self.assertEqual(retained_p3["status"], "PASS")
+        self.assertIn("SETTLED", retained_p3["detail"])
+        self.assertIn("ctx-fixture", retained_p3["detail"])
+        self.assertIn("user_takeover", retained_p3["detail"])
+        for terminal in ("release_unknown", "retained"):
+            settled_worker = {**retained_worker, "terminalState": terminal}
+            settled = hostguard._live_supervised_workers({"result": {"workers": [settled_worker]}}, {}, None)
+            self.assertEqual(settled[0]["activity"], "SETTLED")
+        for terminal_worker_state in ("stopped", "abandoned"):
+            terminal_worker = {**retained_worker, "workerState": terminal_worker_state, "dispatchStatus": "failed"}
+            self.assertEqual(hostguard._live_supervised_workers(
+                {"result": {"workers": [terminal_worker]}}, {}, None)[0]["activity"], "SETTLED")
+        for uncertain_state in ("running", "unknown", None):
+            unsettled = {**retained_worker, "workerState": uncertain_state}
+            self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [unsettled]}}, {}, None)[0]["activity"], "ACTIVE")
+        missing_state = {k: v for k, v in retained_worker.items() if k != "workerState"}
+        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [missing_state]}}, {}, None)[0]["activity"], "ACTIVE")
         duplicate_ps = {"result": {"worktrees": [{"repo": "outside", "displayName": "worker",
             "path": "C:/outside/worker", "worktreeId": "wid", "liveTerminalCount": 1,
             "terminalVerdict": "live", "agents": [{"state": "working", "agentType": "claude"}]}]}}
+        settled_working_ps = hostguard.preflight(orca_ps=lambda: duplicate_ps,
+            orca_workers=lambda: {"result": {"workers": [retained_worker]}}, **common)
+        self.assertEqual(next(r for r in settled_working_ps["rows"] if r["id"] == "P3")["status"], "FAIL")
         deduped = hostguard.preflight(orca_ps=lambda: duplicate_ps,
                     orca_workers=lambda: {"result": {"workers": [worker]}}, **common)
         deduped_entries = next(r for r in deduped["rows"] if r["id"] == "P3")["measured"]["agents"]

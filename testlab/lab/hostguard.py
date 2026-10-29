@@ -1160,16 +1160,18 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
     for worker in result["workers"]:
         if not isinstance(worker, dict):
             worker = {}
-        # Only `released` is a known-dead terminalState in worker-list's documented
-        # state set. The live host snapshot also corroborates it with liveness=exited.
-        # Retained/reclaimable/release_pending/release_unknown, missing state, and
-        # malformed/missing projections all fail closed as ACTIVE.
+        # Task state, rather than terminal accounting, determines whether work is
+        # active. Terminal accounting remains evidence but may outlive the work.
         raw_projection = worker.get("projection")
         projection = raw_projection if isinstance(raw_projection, dict) else {}
-        state = worker.get("terminalState")
-        dead = isinstance(raw_projection, dict) and state == "released"
-        if dead:
-            continue
+        terminal_state = worker.get("terminalState")
+        worker_state = worker.get("workerState")
+        dispatch_status = worker.get("dispatchStatus")
+        # `stopped` and `abandoned` are also terminal worker outcomes in live
+        # worker-list data; their paired failed dispatch status is settled.
+        settled_worker_states = {"succeeded", "failed", "cancelled", "stopped", "abandoned"}
+        settled_dispatch_statuses = {"completed", "failed", "cancelled"}
+        is_settled = worker_state in settled_worker_states and dispatch_status in settled_dispatch_statuses
         resource = worker.get("resource")
         resource = resource if isinstance(resource, dict) else {}
         workspace = projection.get("workspace")
@@ -1200,13 +1202,18 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                     "path": normalized, "worktreeId": wid,
                     "originalPath": original_path,
                     "agentType": provider.get("id"), "terminalVerdict": "live",
-                    "liveTerminalCount": 1, "prompt": "", "state": "working", "activity": "ACTIVE",
-                    "reason": ("live supervised worker; missing projection, fail closed" if not isinstance(raw_projection, dict)
-                               else f"live supervised worker terminalState={state!r} is not known-dead"), "allowed": allowed,
+                    "liveTerminalCount": 1, "prompt": "", "state": worker_state,
+                    "activity": "SETTLED" if is_settled else "ACTIVE",
+                    "reason": (f"settled workerState={worker_state}; dispatchStatus={dispatch_status}"
+                               if is_settled else "worker state missing, unknown, or not settled; fail closed"), "allowed": allowed,
                     "allowEntry": allow_entry,
                     "dispatchId": worker.get("dispatchId"), "taskId": worker.get("taskId"),
                     "supervisedWorkers": [{"dispatchId": worker.get("dispatchId"), "taskId": worker.get("taskId"),
-                                            "terminalState": state}]})
+                                            "workerState": worker_state, "dispatchStatus": dispatch_status,
+                                            "terminalState": terminal_state,
+                                            "retainedReason": resource.get("retainedReason")}],
+                    "workerState": worker_state, "dispatchStatus": dispatch_status,
+                    "terminalState": terminal_state, "retainedReason": resource.get("retainedReason")})
     return out
 
 
@@ -1322,6 +1329,9 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
             allow_record["errors"] = [error for error in allow_record["errors"]
                                        if not any(repr(entry) in error for entry in worker_allow_matches)]
         for worker in supervised:
+            if worker["activity"] != "ACTIVE":
+                entries.append(worker)
+                continue
             same_path = [entry for entry in entries if _normal_path(entry.get("path")) == worker["path"]]
             if same_path:
                 # Keep one P3 row per worktree while preserving dispatch evidence.
@@ -1342,11 +1352,13 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
             original = e.get("originalPath")
             path_note = f" originalPath={original!r}" if original is not None else ""
             worker_note = ("; supervisedWorkers=" + ",".join(
-                f"{w.get('dispatchId') or 'unknown'}:{w.get('terminalState') or 'missing'}"
+                f"{w.get('dispatchId') or 'unknown'}:{w.get('workerState') or 'missing'}/"
+                f"{w.get('dispatchStatus') or 'missing'} terminal={w.get('terminalState') or 'missing'}"
                 for w in e.get("supervisedWorkers", [])) if e.get("supervisedWorkers") else "")
             details.append(f"{e['activity']} {label}{path_note} [{e.get('worktreeId') or 'unknown-id'}] agent={e.get('agentType') or 'unknown'} "
                            f"terminal={e.get('terminalVerdict')}/{e.get('liveTerminalCount')} prompt={e.get('prompt', '')!r}"
                            f"{'; dispatch=' + e['dispatchId'] if e.get('dispatchId') else ''}"
+                           f"{'; workerState=' + str(e.get('workerState')) + ' dispatchStatus=' + str(e.get('dispatchStatus')) + ' retainedReason=' + str(e.get('retainedReason')) if e.get('activity') == 'SETTLED' else ''}"
                            f"{'; dispatches=' + ','.join(x for x in e.get('dispatchIds', []) if x) if e.get('dispatchIds') else ''}"
                            f"{'; allowed' if e['allowed'] else ''}{worker_note}; {e['reason']}")
         details.extend(errors)

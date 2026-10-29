@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
-- testlab soak preflight P3 now reads every worker-list page and fails closed for supervised workers unless their terminal state is `released`, reports malformed terminal counts as ACTIVE, fails when worker-list is unavailable, deduplicates worktree/worker evidence, and stores allow-list resolution in run.json. P3 also prints original paths alongside normalized paths.
+- testlab soak preflight P3 now classifies supervised workers from settled `workerState` (`succeeded`, `failed`, `cancelled`, `stopped`, `abandoned`) and `dispatchStatus` (`completed`, `failed`, `cancelled`), independent of retained terminal accounting. Settled dispatches are reported without blocking, while missing or unsettled task states remain ACTIVE; live worktree agents still block. P3 continues to read every worker-list page, fail closed when worker-list is unavailable, deduplicate active worktree/worker evidence, and store allow-list resolution in run.json.
 
 ### Fixed
 
