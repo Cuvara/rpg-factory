@@ -322,7 +322,7 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
      one line per approver: `<principal> namespaces="git" <key>`.
   3. **Verify.** Run `git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=<temp file> verify-commit <sha>`.
      The user's own git signing configuration is never consulted.
-  4. **Match the signer.** The signer principal git reports (`git log -1 --format=%GS <sha>`, with status
+  4. **Match the signer.** The signer principal git reports (`git log -1 --format=%GS <sha>` with the same `-c` settings as step 3, and status
      `%G?` = `G`) must equal the record's `by`.
   5. **Fail closed.** In any of these cases the record grades **HUMAN_REQUIRED** with the reason, and is never
      accepted:
