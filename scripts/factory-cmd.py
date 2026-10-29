@@ -66,8 +66,12 @@ def cmd_status(args):
 
 def cmd_route(args):
     if args and args[0] in ("--domain", "--kind"):
-        if len(args) != 2:
-            raise ValueError(f"route {args[0]} needs exactly one value")
+        # selector form: --domain <id> | --kind <kind>, optionally with --domain/--lead to resolve an AMBIGUOUS kind
+        if len(args) % 2:
+            raise ValueError(f"route {args[0]}: every flag needs exactly one value")
+        for flag, value in zip(args[::2], args[1::2]):
+            if flag not in ("--domain", "--kind", "--lead") or value.startswith("--"):
+                raise ValueError(f"route {args[0]} accepts only --domain, --kind and --lead with one value each")
         return run(["bash", os.path.join(ROOT, "scripts", "factory-context.sh"), *args])
     lead = None
     if "--lead" in args:
