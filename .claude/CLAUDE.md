@@ -82,7 +82,9 @@ env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo wi
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 
 # routing / state, read-only against the workspace
-scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--explain] [--json]
+scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--domain <id>] [--explain] [--json]
+scripts/factory-context.sh --domain <id> [--json]
+scripts/factory-context.sh --kind <artifact-kind> [--lead <skill>] [--json]
 python3 -B scripts/factory-status.py
 python3 -B scripts/run-checks.py --repo <key> --paths <files> [--status]
 

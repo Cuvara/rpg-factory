@@ -126,6 +126,12 @@ yet (known issue `no-csharp-lsp`); the Go one is the workspace `lsp` MCP server.
 Each registry module lists its owning `skills`; each contract lists a `driver`. For the files a task
 touches (`--paths`), `factory-context.sh` prints a **routing** block:
 
+Domains group artifact kinds, leads, repositories, quality gates and handoffs. For intent without paths,
+`--domain <id>` prints a domain entry point and `--kind <artifact-kind>` finds its claiming domain; when a
+kind has multiple claims, choose with `--domain` or a validated `--lead`. Path routing keeps module ownership
+precedence and reports the selected lead's domain as `routing.domain`; combining `--domain` with paths warns
+when that route selects another domain. No keyword inference is used.
+
 - **lead:** exactly one skill, chosen deterministically - a cross-repo contract driver first, then a
   repo-kind driver whose contract source changed, then the primary owner of a touched module, then a
   secondary owner; ties break on `skills.<name>.order` (wire-contract 10 … measure 80).
