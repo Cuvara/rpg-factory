@@ -14,6 +14,7 @@
 set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/compat.sh"
 src=""
 if [ "${RPG_FACTORY_REPO_KEY:-}" = netcode ] || [ -z "${RPG_FACTORY_REPO_KEY:-}" ]; then
   src="${RPG_FACTORY_REPO_DIR:-}"
@@ -62,9 +63,11 @@ fi
 if $resolve_only; then echo "server: ${srv:-<none needed: no Shared.GameLogic pin>} tag: ${sgl_tag:-<none>}"; exit 0; fi
 
 if command -v dotnet >/dev/null 2>&1; then dotnet=dotnet; base="${TMPDIR:-/tmp}"
-  case "$base" in /*) [ -d "$base" ] && [ -w "$base" ] || base=/tmp ;; *) base=/tmp ;; esac   # never a relative/invalid TMPDIR
-elif command -v dotnet.exe >/dev/null 2>&1; then dotnet=dotnet.exe; base="$PLUGIN_ROOT"   # Windows dotnet needs a /mnt/c path
+  is_abs "$base" && [ -d "$base" ] && [ -w "$base" ] || base=/tmp   # never a relative/invalid TMPDIR
+elif command -v dotnet.exe >/dev/null 2>&1; then dotnet=dotnet.exe; base="${TMPDIR:-$PLUGIN_ROOT}"
+  is_abs "$base" && [ -d "$base" ] && [ -w "$base" ] || base="$PLUGIN_ROOT"   # Windows dotnet needs a native Windows path
 else echo "NOT-RUN(tool-missing): neither dotnet nor dotnet.exe on PATH"; exit 2; fi
+if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then base=$(cygpath -u "$base"); fi
 
 work=$(mktemp -d "$base/.tmp-netcode-headless-XXXXXX")
 $keep || trap 'rm -rf "$work"' EXIT
