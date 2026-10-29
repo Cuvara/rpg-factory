@@ -1406,9 +1406,11 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
             if worker["activity"] != "ACTIVE":
                 entries.append(worker)
                 continue
-            same_path = [entry for entry in entries if _normal_path(entry.get("path")) == worker["path"]]
+            same_path = [entry for entry in entries if _normal_path(entry.get("path")) == worker["path"]
+                         and bool(entry.get("allowed")) == bool(worker.get("allowed"))]
             if same_path:
-                # Keep one P3 row per worktree while preserving dispatch evidence.
+                # Coalesce only rows with the same authorization; dispatch exemptions
+                # must never transfer to another worker sharing this workspace.
                 primary = same_path[0]
                 primary["activity"] = "ACTIVE"
                 primary["reason"] = "working agent with live supervised worker"

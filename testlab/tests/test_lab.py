@@ -3827,6 +3827,22 @@ class HostGuardTests(unittest.TestCase):
         dispatch_plus_ps = hostguard.preflight(orca_ps=lambda: ps_same_workspace,
             orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-fixture",), **common)
         self.assertEqual(next(r for r in dispatch_plus_ps["rows"] if r["id"] == "P3")["status"], "FAIL")
+        worker_a = {**worker, "dispatchId": "ctx-a"}
+        worker_b = {**worker, "dispatchId": "ctx-b"}
+        for ordered in ([worker_a, worker_b], [worker_b, worker_a]):
+            one_dispatch_allowed = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+                orca_workers=lambda ordered=ordered: {"result": {"workers": ordered}},
+                allow_dispatches=("ctx-a",), **common)
+            self.assertEqual(next(r for r in one_dispatch_allowed["rows"] if r["id"] == "P3")["status"], "FAIL")
+        both_dispatches_allowed = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker_a, worker_b]}},
+            allow_dispatches=("ctx-a", "ctx-b"), **common)
+        self.assertEqual(next(r for r in both_dispatches_allowed["rows"] if r["id"] == "P3")["status"], "PASS")
+        invalid_id_sibling = {key: value for key, value in worker_b.items() if key != "dispatchId"}
+        allowed_invalid_pair = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker_a, invalid_id_sibling]}},
+            allow_dispatches=("ctx-a",), **common)
+        self.assertEqual(next(r for r in allowed_invalid_pair["rows"] if r["id"] == "P3")["status"], "FAIL")
         empty_path_ps = {"result": {"worktrees": [{"repo": "bad", "displayName": "bad", "path": "",
             "worktreeId": "", "liveTerminalCount": 1, "terminalVerdict": "live",
             "agents": [{"state": "working", "agentType": "claude"}]}]}}
@@ -4403,7 +4419,9 @@ class HostGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg, stopped = t._patched_run(d, None)
             cfg.explicit |= {"player_exe", "server_repo"}      # H6: a soak names its player and server checkout
-            allow_record = {"entries": [{"entry": "ctx-fixture", "matched": [{"dispatchId": "ctx-fixture",
+            allow_record = {"entries": [{"entry": "C:/allowed/runner", "matched": [{"repo": "repo",
+                                         "displayName": "runner", "path": "c:/allowed/runner", "worktreeId": "wid"}],
+                                         "error": None}, {"entry": "ctx-fixture", "matched": [{"dispatchId": "ctx-fixture",
                                          "runId": "run-fixture", "workerState": "succeeded",
                                          "dispatchStatus": "completed", "terminalState": "reclaimable",
                                          "livenessVerdict": "unverifiable", "workspace": "C:/allowed/tree"}],
@@ -4415,7 +4433,10 @@ class HostGuardTests(unittest.TestCase):
             self.assertEqual(res["outcome"], analyze.INCONCLUSIVE)
             self.assertIn("host preflight failed: P1, P3, P6, P7", res["harness_error"])
             self.assertEqual(t._run_json(cfg)["host_guard"]["preflight"]["allow_list"], allow_record)
-            self.assertEqual(t._run_json(cfg)["host_guard"]["preflight"]["allow_list"]["entries"][0]["matched"][0]["dispatchId"], "ctx-fixture")
+            run_allow_entries = t._run_json(cfg)["host_guard"]["preflight"]["allow_list"]["entries"]
+            self.assertEqual(run_allow_entries[0]["entry"], "C:/allowed/runner")
+            self.assertEqual(run_allow_entries[0]["matched"][0]["path"], "c:/allowed/runner")
+            self.assertEqual(run_allow_entries[1]["matched"][0]["dispatchId"], "ctx-fixture")
             ensure.assert_not_called()
             self.assertEqual(stopped, [])
             meta = t._run_json(cfg)
