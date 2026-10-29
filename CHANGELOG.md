@@ -172,6 +172,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   now holds the guard until a sample at or after the window end exists (`HostGuard.hold_until`); a sampler that does
   not deliver is still reported by G5, and the window is unchanged.
 
+### Documentation
+- `docs/architecture/multi-discipline-factory.md`: proposed architecture plan for a multi-discipline factory (Game Design, UI/UX, 2D Art, 3D Art, VFX, Engineering) with a discipline-neutral core, domain metadata in a flat registry, a shared artifact and handoff contract, native Game Design without a game-ai-workflows dependency, and an incremental migration roadmap. Proposal only: no runtime behaviour changes.
+
 ## [1.1.0] - 2026-10-24
 
 Feature release. Adds `testlab/`, autonomous multiplayer gameplay tests with real rendered Unity clients (scenarios
