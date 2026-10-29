@@ -1733,6 +1733,27 @@ class GracefulLeaveTests(unittest.TestCase):
     def test_without_a_quit_it_is_inconclusive(self):
         self.assertEqual(analyze.check_graceful_leave(_ev(clients=2), {})["status"], analyze.INCONCLUSIVE)
 
+    def test_a_viewer_that_never_removed_the_leaver_still_fails(self):
+        """P5-S08G-LEAVE: a viewer that held the leaver at quit and never saw it removed is a ghost."""
+        ev = self._ev(gone_at=15.4)
+        ev["clients"][1]["events"] = [{"event": "entity_added", "id": "u2", "st": -1}]
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.FAIL, res)
+        self.assertIsNone(res["measured"][0]["others_removed_after_s"][1])
+
+    def test_a_viewer_that_had_already_lost_the_leaver_is_not_judged_as_a_ghost_holder(self):
+        """P5-S08G-LEAVE: the leaver walked out of viewer 1's area of interest (removal at 11.9 s) before
+        it quit at 15 s; viewer 1 has nothing to remove, which is a scenario-geometry gap, not a leak."""
+        ev = self._ev(gone_at=15.4)
+        ev["clients"][1]["events"] = [{"event": "entity_added", "id": "u2", "st": -1},
+                                      {"event": "entity_removed", "id": "u2", "st": 11.9}]
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE, res)
+        self.assertEqual(res["measured"][0]["not_in_view_at_quit"], [1])
+        # ...and a viewer that did hold it and missed the removal still fails alongside it.
+        ev["clients"][0]["events"] = []
+        self.assertEqual(analyze.check_graceful_leave(ev, {})["status"], analyze.FAIL)
+
     def test_expected_outcomes_let_a_leaver_complete(self):
         ev = self._ev(gone_at=15.4)
         self.assertEqual(analyze.check_clients_completed(ev, {})["status"], analyze.FAIL)
@@ -1765,6 +1786,15 @@ class HookScenarioTests(unittest.TestCase):
         self.assertEqual(by["clients_completed"]["expected_outcomes"], {"2": "left"})
         self.assertEqual(by["players_online"]["expected"], sc["clients"] - 1)
         self.assertNotIn("disruptions", {k for k, v in sc.items() if v})
+
+    def test_s08g_leaver_stays_inside_every_viewers_area_of_interest(self):
+        """P5-S08G-LEAVE: the leaver once walked 10 s, ending at x~50 (AOI radius 50) and just outside a
+        stationary viewer's interest, so that viewer had nothing to remove. At the 6 units/s speed cap
+        it must end well inside the radius, from spawn offsets of a few units."""
+        sc = scenarios.load("S08G")
+        walk = sc["per_client"][2]["steps"][0]
+        reach = (walk["t1"] - walk["t0"]) * 6.0
+        self.assertLessEqual(reach + 10.0, 50.0 - 2.0)
 
 
 class PredictionBoundTests(unittest.TestCase):

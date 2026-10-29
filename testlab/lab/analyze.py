@@ -3027,19 +3027,35 @@ def check_graceful_leave(ev, a):
         last_seen = max((s for s in t["st"] if s >= st), default=None)
         row.update({"server_removed_after_s": None if last_seen is None else round(last_seen - st, 2),
                     "present_after_timeout": len(still)})
-        seen_removed = {}
+        seen_removed, not_in_view = {}, []
         for o in ev["clients"]:
             if o is c:
+                continue
+            # A viewer that no longer held the entity when the leave began (it walked out of the area
+            # of interest and got the removal then) has nothing left to remove: it cannot be judged.
+            life = sorted((x["st"], x["event"]) for x in o["events"]
+                          if x.get("event") in ("entity_added", "entity_removed") and x.get("id") == uid
+                          and x.get("st") is not None and x["st"] <= st)
+            if life and life[-1][1] == "entity_removed":
+                not_in_view.append(o["index"])
                 continue
             rm = [x["st"] for x in o["events"] if x.get("event") == "entity_removed" and x.get("id") == uid
                   and x.get("st") is not None and x["st"] >= st]
             seen_removed[o["index"]] = round(min(rm) - st, 2) if rm else None
         row["others_removed_after_s"] = seen_removed
+        if not_in_view:
+            row["not_in_view_at_quit"] = not_in_view
         late_others = [k for k, v in seen_removed.items() if v is None or v > timeout]
         has_c3 = any(x.get("event") == "entity_removed" for o in ev["clients"] if o is not c for x in o["events"])
         ok = row["outcome"] == "left" and row["disconnected"] and not still and (not has_c3 or not late_others)
         row["ok"] = ok
         bad += 0 if ok else 1
+        if ok and not_in_view:
+            row["ok"] = None
+            row["result"] = ("viewer(s) %s had already dropped the leaver out of their area of interest when it "
+                             "quit: nothing to remove, so their view of the leave is not judged (keep the leaver "
+                             "inside every viewer's area of interest until it quits)" % not_in_view)
+            unjudged += 1
         rows.append(row)
     status = FAIL if bad else (INCONCLUSIVE if unjudged else PASS)
     # How the server saw the session end: a dead_link close means the polite disconnect frame never

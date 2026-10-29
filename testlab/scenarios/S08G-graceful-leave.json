@@ -1,9 +1,9 @@
 {
   "schema": "rpg.testlab.scenario.v1",
   "id": "S08G",
-  "version": 1,
+  "version": 2,
   "title": "Graceful disconnect: a client leaves through the game's own Disconnect() and is gone for everyone",
-  "description": "S08's world without the kill: client 2 leaves at 15 s with the plan action quit (client hook C6: NetworkClient.Disconnect(), the player's own way out; ReconnectPolicy does not fire) and does not come back. Its run ends with outcome left. The server must drop its player entity, and the other clients must remove it, within 5 s: far below the 60 s KCP idle timeout that cleans up a silent client, so the leave is not mistaken for a crash.",
+  "description": "S08's world without the kill: client 2 walks away for 6 s (about 30 units, inside the 50-unit area of interest of every other client) and leaves at 15 s with the plan action quit (client hook C6: NetworkClient.Disconnect(), the player's own way out; ReconnectPolicy does not fire) and does not come back. Its run ends with outcome left. The server must drop its player entity, and the other clients must remove it, within 5 s: far below the 60 s KCP idle timeout that cleans up a silent client, so the leave is not mistaken for a crash.",
   "clients": 3,
   "map": "map_01",
   "seed": 8,
@@ -31,7 +31,7 @@
       "steps": [
         {
           "t0": 2,
-          "t1": 12,
+          "t1": 8,
           "mode": "move",
           "x": 1,
           "y": 0
