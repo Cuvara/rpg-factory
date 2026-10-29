@@ -179,5 +179,20 @@ if state!="HUMAN_REQUIRED": raise SystemExit(1)
 PY
 result=$?
 if [ "$result" -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# asset manifest records: anyOf (source_rev or hash) must not short-circuit the other schema rules
+A="$T/assets"; mkdir -p "$A"; git -C "$A" init -q -b main
+asset() { # name json-patch
+  python3 - "$A/item.asset.json" "$2" <<'PY2'
+import json,sys
+o={"id":"FX-asset-001","kind":"spec","domain":"fixture","status":"draft","source_uri":"figma://file/1","source_rev":"r1","license":"CC0","provenance":"authored","delivery":{"repo":"product","path":"Assets/Art/item.png"}}
+o.update(json.loads(sys.argv[2])); [o.pop(k) for k in [k for k,v in list(o.items()) if v is None]]
+open(sys.argv[1],"w").write(json.dumps(o))
+PY2
+  python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$A" --registry "$T/reg.json" | head -1
+}
+got=$(asset valid '{}'); [[ "$got" == 'PASS FX-asset-001' ]] && ok 'valid asset record' || bad "valid asset: $got"
+got=$(asset unknown '{"hash":"abc","mystery":true}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset unknown key rejected (anyOf does not short-circuit)' || bad "asset unknown key: $got"
+got=$(asset wrongtype '{"license":5}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset wrong type rejected' || bad "asset wrong type: $got"
+got=$(asset nosource '{"source_rev":null}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset without source_rev or hash rejected' || bad "asset no source: $got"
 echo "artifacts: $((pass+fail+skip)) run, $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

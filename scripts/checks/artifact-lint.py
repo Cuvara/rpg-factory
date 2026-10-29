@@ -29,17 +29,17 @@ def schema_errors(value, rule, schema, path="$", seen=None):
         if key in seen:
             return []
         return schema_errors(value, resolve_ref(schema, rule["$ref"]), schema, path, seen | {key})
-    if "oneOf" in rule or "anyOf" in rule:
-        keyword = "oneOf" if "oneOf" in rule else "anyOf"
-        matches = [schema_errors(value, branch, schema, path, seen) for branch in rule[keyword]]
-        valid = sum(not errors for errors in matches)
-        accepted = valid == 1 if keyword == "oneOf" else valid > 0
-        if accepted:
-            return []
-        if valid == 0 and matches:
-            return min(matches, key=len)
-        return [f"{path} must match {keyword}"]
     errors = []
+    # oneOf/anyOf constrain the value in addition to the sibling keywords (type, properties,
+    # additionalProperties, ...), which are always evaluated below
+    for keyword in ("oneOf", "anyOf"):
+        if keyword not in rule:
+            continue
+        matches = [schema_errors(value, branch, schema, path, seen) for branch in rule[keyword]]
+        valid = sum(not errors_ for errors_ in matches)
+        accepted = valid == 1 if keyword == "oneOf" else valid > 0
+        if not accepted:
+            errors.extend(min(matches, key=len) if valid == 0 and matches else [f"{path} must match {keyword}"])
     expected = rule.get("type")
     types = {"object": dict, "array": list, "string": str, "boolean": bool, "integer": int, "number": (int, float)}
     if expected and (expected not in types or not isinstance(value, types[expected]) or expected in ("integer", "number") and isinstance(value, bool)):
