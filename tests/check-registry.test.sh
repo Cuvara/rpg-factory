@@ -44,6 +44,7 @@ expect_fail e-handoff '.domains.engineering.handoffs = ["not-a-contract"]' 'unkn
 expect_fail e-human-gate '.domains.engineering.human_gates = ["not-a-gate"]' 'unknown human gate not-a-gate'
 # g: phase declaration is a checked contract; feature-state paths need an owning domain.
 expect_fail g-phase-shape '.phase.design.binding_values = null' 'phase: expected id'
+expect_fail g-phase-engineering '.phase.engineering.gameplay_values = "existing-code-only"' 'phase: expected id'
 expect_fail g-feature-path '(.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' 'cannot own feature-state path docs/features/'
 # f: artifact role is constrained when supplied.
 expect_fail f-role '.modules[0].role = "observer"' 'role must be orchestrator|implementer|reference'

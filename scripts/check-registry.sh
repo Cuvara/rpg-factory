@@ -42,10 +42,15 @@ problems=$(jq -r '
         | select($r[.] == null) | "missing top-level key: \(.)"),
       ($ids | group_by(.) | map(select(length > 1))[] | "duplicate module id: \(.[0])"),
       (select(($r.domains.engineering // null) == null) | "missing domain: engineering"),
-      (select(($r.phase.id // null) == null or ($r.phase.engineering.gameplay_values // null) == null
+      (select(($r.phase | type) != "object" or ($r.phase.id | type) != "string"
+        or ($r.phase.engineering | type) != "object"
+        or $r.phase.engineering.gameplay_values != "approved-artifacts-or-existing-code"
+        or ($r.phase.design | type) != "object"
         or ($r.phase.design.draft | type) != "boolean" or ($r.phase.design.propose_values | type) != "boolean"
-        or ($r.phase.design.binding_values // null) == null or ($r.phase.acceptance | type) != "array")
-        | "phase: expected id, engineering.gameplay_values, design.draft/propose_values/binding_values and acceptance"),
+        or $r.phase.design.binding_values != "verified-approval"
+        or ($r.phase.acceptance | type) != "array"
+        or any($r.phase.acceptance[]; type != "string"))
+        | "phase: expected id, engineering gameplay_values, design permissions and string acceptance"),
       (($r.domains // {}) | keys[] | select(test("^[a-z][a-z0-9-]*$") | not) | "domain id \(.) must match ^[a-z][a-z0-9-]*$"),
       (($r.domains // {}) | to_entries[] | select((.value.status // "") | IN("active","planned","foundation") | not) | "domain \(.key): status must be active|planned|foundation"),
       (($r.domains // {}) | to_entries[] as $d

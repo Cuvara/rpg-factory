@@ -2361,7 +2361,7 @@
       ],
       "changelog": "backend/gameserver-dotnet/CHANGELOG.md",
       "rules": [
-        "Content values are gameplay content: phase-plumbing-only applies - do not invent numbers.",
+        "Content values are gameplay content: phase-scope applies - do not invent numbers.",
         "The server exits 1 on invalid content (ADR-19); ContentLoaderTests validates the shipped files inside dotnet test.",
         "Copied into the gameserver image (Dockerfile.gameserver-dotnet COPY content/)."
       ],

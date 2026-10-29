@@ -77,7 +77,7 @@ A knob is two things: the name the server parses, and a line in every gated mani
 2. **Parse.** Use `TryCreate(..., out settings, out error)` and exit 2 before the startup banner
    (`Program.cs` ~225-250). Never fall back to the default on a bad value. Use InvariantCulture.
 3. **Default.** Put a server default in `Server/ServerDefaults.cs` or in the Settings class. A new
-   number needs the user's decision (`phase-plumbing-only`).
+   number needs the user's decision (`phase-scope`).
 4. **Passthrough.** The gates reflect over every `GAMESERVER_*` const (`Tests/Deploy/DeclaredKnobs.cs`)
    and require each knob in all five manifests, or an entry in the gate's exclusion dictionary with a reason:
    - `ComposeEnvPassthroughTests.GatedServices`: `backend/deploy/docker-compose.yml` service

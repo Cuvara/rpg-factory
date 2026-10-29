@@ -2,7 +2,7 @@
 
 Verified 2026-10-21 against rpg-mmo-server `origin/develop` @ e982a6d. Paths are relative to `backend/gameserver-dotnet/` unless
 `backend/` is named. Every number in content is a placeholder pending design
-(the `PLACEHOLDER` header, `backend/content/abilities.json:3`, and siblings): the global rule `phase-plumbing-only` applies to any
+(the `PLACEHOLDER` header, `backend/content/abilities.json:3`, and siblings): the global rule `phase-scope` applies to any
 new value. This page says where gameplay lives and how authority is enforced, not what the game is.
 
 ## Where each mechanic lives
@@ -21,7 +21,7 @@ new value. This page says where gameplay lives and how authority is enforced, no
 | Persistence | - | `Persistence/AsyncSaver.cs` every 30 s (`SaveInterval`, `Server/GameServer.cs:322`); migrations `Persistence/Migrations/` (server-services owns) | - |
 
 Not present: quests, XP grant, NPC dialogue, PvP, bosses (the unused `Pvp` / `Boss` / `Quest` importance factors, `Snapshot/ReplicationImportance.cs:114-119`).
-Adding one is a design decision first (game-ai-workflows), then plumbing here.
+Adding one starts with a design decision, then plumbing here.
 
 ## Authority checklist for a new input or command
 
@@ -44,7 +44,7 @@ Adding one is a design decision first (game-ai-workflows), then plumbing here.
 ## Determinism (Shared.GameLogic, ADR-10)
 
 - Allowed float ops: `+ - * /`, comparisons, `MathF.Min/Max/Abs/Sqrt`; transcendentals (`Sin`, `Atan2`, `Pow`) are banned
-  because NativeAOT x64 and IL2CPP ARM64 may disagree (`backend/docs/ARCHITECTURE-DECISIONS.md`, ADR-10 — Shared simulation: pure logic boundary, ECS on the server only);
+  because NativeAOT x64 and IL2CPP ARM64 may disagree (`backend/docs/ARCHITECTURE-DECISIONS.md`, ADR-10 â€” Shared simulation: pure logic boundary, ECS on the server only);
   round every intermediate to `float`, because `RyuJIT` and Unity's Mono JIT differ (ADR-10). Server-only code may use them (`Net/FacingCodec.cs`).
 - Fixed-point integers for stat math (64-bit permille; float only in the final speed scale, cast like `MovementSystem`, `StatusLogic.cs:138-140`).
 - Enforced by the registry check `sgl-determinism` (fast tier), golden vectors on both sides, and review.
