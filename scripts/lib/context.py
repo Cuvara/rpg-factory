@@ -6,7 +6,7 @@ Collects live git state per repo (worktree-aware), resolves it through scripts/l
 renders a compact markdown snapshot or full JSON.
 
 Usage (via factory-context.sh):
-  [--repo <key>|all] [--repo-path <dir>] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--explain]
+  [--repo <key>|all] [--repo-path <dir>] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--domain <id>] [--kind <artifact-kind>] [--explain]
   [--full] [--toolchain] [--submodules] [--mode analyze|plan|implement|validate|review|resume]
   --repo      default: the repo (or worktree) containing the cwd, else all registered repos
   --repo-path explicit checkout or linked worktree to target (must belong to the registered repo). Without it the
@@ -22,6 +22,8 @@ Usage (via factory-context.sh):
   --mode      declare the Factory execution mode (also --mode=<m>; --repo, --base, --lead likewise); the
               hooks then add advisories for state changes in read-only modes - advisory only, they never block
   --lead      override the lead skill; must be one of the candidates (else exit 2)
+  --domain    show domain entry points; may accompany routing to warn when ownership differs
+  --kind      route an artifact kind to its claiming domain (ambiguous kinds require --domain or --lead)
   --explain   why every registered skill was or was not selected
   --full      include all rules, all human gates, all known issues, full toolchain versions
   --toolchain probe tool versions (slow on WSL: dotnet.exe ~5 s)
@@ -39,7 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 import devtools  # noqa: E402
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(HERE))
-REGISTRY = os.path.join(PLUGIN_ROOT, "registry.json")
+REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "registry.json")
 RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 
 
@@ -67,7 +69,7 @@ def git(cwd, *args, timeout=60):
 
 
 def parse_args(argv):
-    a = {"repo": None, "repo_path": None, "paths": [], "base": None, "json": False, "lead": None, "explain": False,
+    a = {"repo": None, "repo_path": None, "paths": [], "base": None, "json": False, "lead": None, "domain": None, "kind": None, "explain": False,
          "full": False, "toolchain": False, "submodules": False, "mode": None}
     i = 0
     while i < len(argv):
@@ -79,10 +81,10 @@ def parse_args(argv):
                 j += 1
             i = j
             continue
-        if x.split("=", 1)[0] in ("--repo", "--repo-path", "--base", "--lead", "--mode") and "=" in x:
+        if x.split("=", 1)[0] in ("--repo", "--repo-path", "--base", "--lead", "--mode", "--domain", "--kind") and "=" in x:
             x, val = x.split("=", 1)
             argv = argv[:i] + [x, val] + argv[i + 1:]
-        if x in ("--repo", "--repo-path", "--base", "--lead", "--mode"):
+        if x in ("--repo", "--repo-path", "--base", "--lead", "--mode", "--domain", "--kind"):
             if i + 1 >= len(argv):
                 die(f"{x} needs a value")
             a[x[2:].replace("-", "_")] = argv[i + 1]
@@ -115,6 +117,79 @@ def find_workspace(reg):
             break
         d = os.path.dirname(d)
     return reg["workspace"]["root_default"] if ok(reg["workspace"]["root_default"]) else None
+
+
+def domain_result(reg, domain_id, ws, lead_override=None):
+    domains = reg.get("domains", {})
+    if domain_id not in domains:
+        die(f"unknown domain {domain_id}; known: {', '.join(domains) or 'none'}")
+    d = dict(domains[domain_id])
+    lead = d.get("lead")
+    if lead_override:
+        if lead_override not in reg.get("skills", {}):
+            die(f"unknown lead {lead_override}; known: {', '.join(reg.get('skills', {}))}")
+        if reg["skills"][lead_override].get("domain", "engineering") != domain_id:
+            die(f"lead {lead_override} does not belong to domain {domain_id}")
+        lead = lead_override
+    repos = []
+    for key in d.get("repos", []):
+        rep = reg["repos"][key]
+        path = os.path.join(ws, rep["path"]) if ws else rep["path"]
+        present = os.path.isdir(path)
+        if not present and not rep.get("optional", False):
+            present = True
+        repos.append({"id": key, "path": path, "status": "present" if present else "absent"})
+    return {"id": domain_id, "status": d.get("status"), "summary": d.get("summary"), "lead": lead,
+            "repos": repos, "artifact_kinds": d.get("artifact_kinds", []), "quality_gates": d.get("quality_gates", []),
+            "human_gates": d.get("human_gates", []), "handoffs": d.get("handoffs", [])}
+
+
+def intent_domain(reg, args, ws):
+    domains = reg.get("domains", {})
+    if args["domain"]:
+        result = domain_result(reg, args["domain"], ws, args["lead"])
+        if args["kind"] and args["kind"] not in result["artifact_kinds"]:
+            die(f"kind {args['kind']} is not claimed by domain {args['domain']}")
+        return result
+    if not args["kind"]:
+        return None
+    kinds = {}
+    for did, d in domains.items():
+        for kind in d.get("artifact_kinds", []):
+            kinds.setdefault(kind, []).append(did)
+    candidates = kinds.get(args["kind"], [])
+    if not candidates:
+        die("unknown artifact kind; known: " + (", ".join(sorted(kinds)) if kinds else "no artifact kinds registered"))
+    if args["lead"]:
+        skill = reg.get("skills", {}).get(args["lead"])
+        if not skill:
+            die(f"unknown lead {args['lead']}; known: {', '.join(reg.get('skills', {}))}")
+        did = skill.get("domain", "engineering")
+        if did not in candidates:
+            die(f"lead {args['lead']} does not belong to a domain claiming kind {args['kind']}")
+        return domain_result(reg, did, ws, args["lead"])
+    if len(candidates) > 1:
+        if args["json"]:
+            print(json.dumps({"ambiguous": True, "domains": candidates}))
+        else:
+            print(f"AMBIGUOUS: kind {args['kind']} is claimed by domains {', '.join(candidates)}")
+        sys.exit(3)
+    return domain_result(reg, candidates[0], ws)
+
+
+def print_domain(result, as_json):
+    if as_json:
+        print(json.dumps({"domain": result}))
+        return
+    print("Domain")
+    for key in ("id", "status", "summary"):
+        print(f"{key}: {result.get(key) or ''}")
+    print("lead: " + (result["lead"] if result["lead"] else "routes by --repo/--paths (module ownership)"))
+    for key in ("repos", "artifact_kinds", "quality_gates", "human_gates", "handoffs"):
+        values = result[key]
+        if key == "repos":
+            values = [f"{r['id']} ({r['status']}: {r['path']})" for r in values]
+        print(f"{key}: {', '.join(values) if values else 'none'}")
 
 
 def main_checkout(top):
@@ -526,8 +601,19 @@ def main():
         die(f"registry not found at {REGISTRY}", 3)
     reg = json.load(open(REGISTRY, encoding="utf-8"))
     ws = find_workspace(reg)
+    route_requested = bool(args["repo"] or args["repo_path"] or args["paths"])
+    if (args["domain"] or args["kind"]) and not route_requested:
+        if args["repo_path"]:
+            die("intent routing cannot use --repo-path")
+        result = intent_domain(reg, args, ws)
+        if result:
+            print_domain(result, args["json"])
+            return
     if not ws:
         die("not inside the RPG MMO workspace (markers not found; set RPG_FACTORY_WORKSPACE)", 4)
+    requested_domain = None
+    if args["domain"]:
+        requested_domain = domain_result(reg, args["domain"], ws)
     here_key, here_dir = cwd_repo(reg, ws)
     explicit = False
     if args["repo_path"]:
@@ -563,11 +649,18 @@ def main():
     subst = {"{dotnet}": os.path.basename(tools.get("dotnet") or "") or "<dotnet-not-found>", "{plugin_root}": PLUGIN_ROOT.replace("\\", "/")}  # check commands run through bash, which eats backslashes
     services = devtools.probe_services(reg)
     prober = devtools.Prober(ws, reg, services)
-    repos, views = [], {}
+    repos, views, optional_absent = [], {}, []
     needed = set()
     for key in keys:
         rep = reg["repos"][key]
         canonical = os.path.join(ws, rep["path"])
+        if not os.path.isdir(canonical) and rep.get("optional"):
+            if args["repo"] == key:
+                die(f"optional repo {key} is not present at {canonical}")
+            optional_absent.append(key)
+            continue
+        if not os.path.isdir(canonical) and args["repo"] == key:
+            die(f"repo {key} is not present at {canonical}")
         d = here_dir if key == here_key and here_dir else canonical
         if d is canonical:
             resolution = {"source": "canonical-fallback", "canonical": canonical, "note":
@@ -623,11 +716,20 @@ def main():
             "install": install_line(), "repos": repos, "toolchain": tc, "services": services, "cwd_clone": clone, "mode": args["mode"],
             "global_rules": reg["global_rules"], "human_gates": reg["human_gates"],
             "known_issues": reg.get("known_issues", [])}
+    if requested_domain:
+        mismatches = [r["routing"]["domain"] for r in repos if not r.get("error") and r.get("routing", {}).get("domain") != args["domain"]]
+        if mismatches:
+            snap["warnings"] = [f"requested domain {args['domain']} differs from routed domain {mismatches[0]}"]
+    snap["optional_repos_absent"] = optional_absent
     snap["elapsed_ms"] = round((time.perf_counter() - t0) * 1000)
     if args["json"]:
         print(json.dumps(snap, indent=None))
     else:
         print(render(snap, reg, args, views))
+        for key in optional_absent:
+            print(f"optional repo {key} absent")
+        for warning in snap.get("warnings", []):
+            print(f"Warning: {warning}")
 
 
 if __name__ == "__main__":

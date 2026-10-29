@@ -1,6 +1,6 @@
 ---
 description: Show how Factory routes a change - lead skill, co-leads, legs, follow-ups, contracts, checks, gates, and why each skill was or was not chosen. Read-only.
-argument-hint: "<repo> <path>... [--lead <skill>]   e.g. server backend/gateway/server/server.go"
+argument-hint: "(--domain <id> | --kind <artifact-kind>) | <repo> <path>... [--lead <skill>]"
 disable-model-invocation: true
 allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py:*)
 ---

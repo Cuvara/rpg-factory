@@ -2,7 +2,7 @@
 """Entry point behind the rpg-factory slash commands. Validates arguments, then runs the real script.
 
   status [--remote]                       factory-status.py: pending cross-repo work, evidence, freshness
-  route <repo> <path>... [--lead SKILL]   factory-context.sh --explain: lead / co-leads / legs / follow-ups,
+  route (--domain ID | --kind KIND) | <repo> <path>... [--lead SKILL] factory-context.sh: domain or file routing,
                                           contracts, checks and gates for those files, and why
   check <repo> [<path>...] [--status]     run-checks.py (fast tier) - or --status: grade stored evidence
                                           against the current tree without running anything
@@ -65,6 +65,10 @@ def cmd_status(args):
 
 
 def cmd_route(args):
+    if args and args[0] in ("--domain", "--kind"):
+        if len(args) != 2:
+            raise ValueError(f"route {args[0]} needs exactly one value")
+        return run(["bash", os.path.join(ROOT, "scripts", "factory-context.sh"), *args])
     lead = None
     if "--lead" in args:
         i = args.index("--lead")

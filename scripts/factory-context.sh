@@ -3,7 +3,7 @@
 # Thin entry point; the engine is scripts/lib/context.py and the routing is scripts/lib/resolve.jq.
 #
 # Usage: factory-context.sh [--repo <key>|all] [--repo-path <dir>] [--paths <path>...] [--base <ref>] [--json]
-#                           [--lead <skill>] [--explain] [--full] [--toolchain] [--submodules]
+#                           [--lead <skill>] [--domain <id>] [--kind <artifact-kind>] [--explain] [--full] [--toolchain] [--submodules]
 #                           [--mode analyze|plan|implement|validate|review|resume]
 #   --repo       default: the repo/worktree containing the cwd, else every registered repo
 #   --repo-path  explicit checkout or linked worktree to target; default: the git toplevel of the cwd when it is inside
@@ -12,6 +12,8 @@
 #                repo-prefixed, absolute (C:\ , C:/ , /c/ , /mnt/c/) and glob forms are accepted
 #   --mode       declare the Factory execution mode for this session (also --mode=<m>); the hooks then add
 #                advisories for state changes in read-only modes - they never block
+#   --domain     show a domain entry point, or warn when path routing selects another domain
+#   --kind       resolve an artifact kind to its domain; ambiguous kinds need --domain or --lead
 #   --lead       override the lead skill (must be a candidate; exit 2 otherwise)
 #   --explain    why each registered skill was or was not selected
 #   --full       all rules, gates, known issues and tool versions
