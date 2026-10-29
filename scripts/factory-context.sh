@@ -20,7 +20,7 @@
 #   --toolchain  probe tool versions (dotnet.exe ~5 s on WSL)
 #   --submodules scan uncommitted work inside submodules (client com.gdk.* ~9 s)
 #   --json       machine-readable output
-# Env: RPG_FACTORY_WORKSPACE  workspace root override.
+# Env: RPG_FACTORY_WORKSPACE workspace root override; RPG_FACTORY_REGISTRY registry file override (fixtures).
 set -uo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 command -v jq >/dev/null 2>&1 || { echo "factory-context: jq is required" >&2; exit 3; }

@@ -8,6 +8,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 - Routing JSON now includes `routing.domain`, derived from the selected lead skill (defaulting to `engineering`).
 - `factory-context.sh` and `/rpg-factory:route` accept domain and artifact-kind entry points; optional repos are skipped until present.
+- `tests/domains-routing.test.sh` covers domain/kind selection, optional repositories and path-domain warnings.
 - `tests/routing-golden.test.sh` freezes the engineering routing contract: every task scenario of
   `tests/routing.test.sh` (59) must keep its lead, co-leads, legs, follow-ups, tech skills, touched modules and
   check ids (`tests/fixtures/routing-golden.json`, recorded before domain metadata). Added fields are ignored.
