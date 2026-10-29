@@ -195,7 +195,7 @@ valid as-is.
     "artifact_kinds": ["gdd", "feature-spec", "design-decision"],
     "quality_gates": ["artifact-lint", "artifact-trace"],
     "human_gates": ["gameplay-rules"],
-    "approvers": [{"name": "<maintainer>", "ssh_signing_key": "<public key>"}],
+    "approvers": [{"principal": "<maintainer>", "ssh_public_key": "ssh-ed25519 AAAA..."}],
     "handoffs": ["feature-spec-to-impl"],
     "may_own_feature_state": true
   }
@@ -311,18 +311,31 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
   the same way, with its evidence path.
 - **Approval trust.** An `approvals[]` entry is text in the artifact, and git author names, emails and
   trailers are self-asserted. None of them proves who approved. Agents never write approval records.
-  The trust root is a **cryptographic commit signature**. A record counts as an approval only when the commit
-  that introduced it:
-  - verifies with `git verify-commit` (SSH or GPG signing);
-  - against an allowed-signers list in rpg-factory's registry (`domains.<id>.approvers`: public keys).
-    That list can only change through a reviewed rpg-factory pull request.
+  The trust root is an **SSH commit signature** checked only against keys held in rpg-factory's registry
+  (`domains.<id>.approvers`: principal name plus SSH public key). That list changes only through a reviewed
+  rpg-factory pull request. GPG signing is out of scope.
 
-  `artifact-trace.py` finds the commit (`git log -L` on the record) and runs that verification locally and
-  offline. A reviewed pull request on the authoring repo's protected branch is optional extra evidence: an
-  external-tier check that reads the review through `gh`, reported as HUMAN_REQUIRED when it cannot be read.
-  An unsigned record, a signature that fails to verify, or a key not on the list grades **HUMAN_REQUIRED**
-  with the reason; it is never accepted. Until approvers have registered signing keys, every approval is
-  advisory.
+  `artifact-trace.py` validates each record in five steps:
+  1. **Find the commit.** Locate the commit that introduced the record with `git log -L` on its lines. It
+     must be exactly one non-merge commit.
+  2. **Build the signers file.** Write a temporary allowed-signers file containing only the registry keys,
+     one line per approver: `<principal> namespaces="git" <key>`.
+  3. **Verify.** Run `git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=<temp file> verify-commit <sha>`.
+     The user's own git signing configuration is never consulted.
+  4. **Match the signer.** The signer principal git reports (`git log -1 --format=%GS <sha>`, with status
+     `%G?` = `G`) must equal the record's `by`.
+  5. **Fail closed.** In any of these cases the record grades **HUMAN_REQUIRED** with the reason, and is never
+     accepted:
+     - an unsigned commit;
+     - a signature that fails to verify;
+     - a key that is not on the list;
+     - a principal mismatch;
+     - no introducing commit, or more than one (for example after a history rewrite or a merge-only change);
+     - a shallow clone.
+
+  A reviewed pull request on the authoring repo's protected branch is optional extra evidence. It is an
+  external-tier check that reads the review through `gh`, and grades HUMAN_REQUIRED when the review can't be
+  read. Until approvers register signing keys, every approval is advisory.
 
 ## 8. Game Design as a native domain
 
@@ -470,7 +483,7 @@ Each phase is one pull request with its own approval, independent review and `te
 - **Global rule wording:** the exact `no-feature-registry` and `phase-plumbing-only` text.
 - **P0 release:** whether P0 ships as 1.1.1.
 - **Coexistence:** whether rpg-factory ignores `.ai/` entirely (recommended) or offers an optional importer.
-- **Approvers:** who is on `domains.design.approvers` and their signing keys, and whether the authoring repo
+- **Approvers:** who is on `domains.design.approvers` and their SSH signing keys, and whether the authoring repo
   also requires reviewed pull requests on its default branch (section 7.3).
 - **Testlab:** whether it becomes a QA domain. It isn't one of the six requested.
 
