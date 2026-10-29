@@ -1114,44 +1114,82 @@ def _orca_ps() -> dict | None:
 
 
 def _orca_workers() -> dict | None:
+    all_workers = []
+    run_evidence = []
     try:
         command = _orca_command()
         if not command:
-            return None
-        workers = []
-        cursors = set()
-        first = None
-        cursor = None
-        while True:
-            argv = [*command, "orchestration", "worker-list", "--limit", "100", "--json"]
-            if cursor:
-                argv.extend(("--cursor", cursor))
-            r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-            page = json.loads(r.stdout or "")
-            result = page.get("result") if isinstance(page, dict) else None
-            if (not isinstance(result, dict) or page.get("ok") is False or
-                    not isinstance(result.get("workers"), list)):
-                return None
-            if first is None:
-                first = page
-            workers.extend(result["workers"])
-            page_info = result.get("page")
-            if page_info is not None and not isinstance(page_info, dict):
-                return None
-            if page_info is None and len(result["workers"]) >= 100:
-                return None
-            next_cursor = (page_info or {}).get("nextCursor")
-            if not next_cursor:
-                first["result"]["workers"] = workers
-                first["result"]["page"] = {**(first["result"].get("page") or {}),
-                                            "total": len(workers), "hasMore": False, "nextCursor": None}
-                return first
-            if next_cursor in cursors:
-                return None
-            cursors.add(next_cursor)
-            cursor = next_cursor
-    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
-        return None
+            return {"ok": False, "error": "orca CLI unavailable"}
+
+        def read_pages(argv, collection_key, label, expected_scope=None, evidence=None):
+            rows = []
+            cursors = set()
+            scopes = []
+            cursor = None
+            while True:
+                page_argv = [*argv]
+                if cursor:
+                    page_argv.extend(("--cursor", cursor))
+                response = subprocess.run(page_argv, capture_output=True, text=True, encoding="utf-8",
+                                          errors="replace", timeout=60)
+                page = json.loads(response.stdout or "")
+                result = page.get("result") if isinstance(page, dict) else None
+                if not isinstance(page, dict) or page.get("ok") is False or not isinstance(result, dict):
+                    context = f" for run {expected_scope}" if expected_scope is not None else ""
+                    raise ValueError(f"{label} unavailable{context}: response missing successful result")
+                page_rows = result.get(collection_key)
+                if not isinstance(page_rows, list):
+                    raise ValueError(f"{label} response missing {collection_key} list")
+                if expected_scope is not None:
+                    scope = result.get("scope")
+                    scopes.append(scope)
+                    if evidence is not None:
+                        evidence["scope_pages"].append(scope)
+                    if (not isinstance(scope, dict) or scope.get("run") != expected_scope or
+                            scope.get("source") != "flag"):
+                        raise ValueError(f"worker-list scope mismatch for {expected_scope}: {scope!r}")
+                rows.extend(page_rows)
+                if evidence is not None:
+                    evidence["count"] += len(page_rows)
+                page_info = result.get("page") if collection_key == "workers" else None
+                if page_info is not None and not isinstance(page_info, dict):
+                    raise ValueError(f"{label} response has malformed page metadata")
+                if collection_key == "workers" and page_info and page_info.get("hasMore") is True and not page_info.get("nextCursor"):
+                    raise ValueError(f"worker-list pagination cursor missing for {expected_scope}")
+                if collection_key == "workers" and page_info is None and len(page_rows) >= 100:
+                    raise ValueError(f"worker-list pagination metadata missing for {expected_scope}")
+                next_cursor = (page_info or {}).get("nextCursor") if collection_key == "workers" else result.get("nextCursor")
+                if collection_key == "runs" and not next_cursor and len(page_rows) >= 100:
+                    raise ValueError("run-list pagination cursor missing")
+                if not next_cursor:
+                    return rows, scopes
+                if not isinstance(next_cursor, str) or next_cursor in cursors:
+                    raise ValueError(f"{label} pagination cursor repeated or malformed")
+                cursors.add(next_cursor)
+                cursor = next_cursor
+
+        runs, _ = read_pages([*command, "orchestration", "run-list", "--limit", "100", "--json"], "runs", "run-list")
+        run_ids = [run.get("id") for run in runs if isinstance(run, dict)]
+        if len(run_ids) != len(runs) or any(not isinstance(run_id, str) or not run_id for run_id in run_ids):
+            raise ValueError("run-list returned a malformed run id")
+        if len(set(run_ids)) != len(run_ids):
+            raise ValueError("run-list returned duplicate run ids")
+
+        for run_id in run_ids:
+            evidence = {"run": run_id, "count": 0, "scope_pages": []}
+            run_evidence.append(evidence)
+            rows, scopes = read_pages([*command, "orchestration", "worker-list", "--run", run_id,
+                                       "--limit", "100", "--json"], "workers", "worker-list",
+                                      expected_scope=run_id, evidence=evidence)
+            if any(not isinstance(worker, dict) or worker.get("runId") != run_id for worker in rows):
+                raise ValueError(f"worker-list returned a worker outside requested run {run_id}")
+            all_workers.extend(rows)
+        return {"ok": True, "result": {"workers": all_workers,
+                "page": {"total": len(all_workers), "hasMore": False, "nextCursor": None},
+                "runCoverage": run_evidence}}
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+        return {"ok": False, "error": str(exc) or "Orca worker inventory query failed",
+                "result": {"workers": all_workers, "runCoverage": run_evidence}}
 
 
 def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict | None, allow_entries=()) -> list[dict]:
@@ -1343,6 +1381,7 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
     worker_data = orca_workers()
     ps_available = _ps_available(ps)
     worker_available = _workers_available(worker_data)
+    worker_error = (worker_data.get("error") if isinstance(worker_data, dict) else None)
     worker_rows = (worker_data.get("result") or {}).get("workers", []) if worker_available else []
     dispatch_matches = {}
     for value in allow_dispatches:
@@ -1456,16 +1495,22 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
             details.append("SETTLED counts=" + ",".join(f"{state}/{dispatch}/{terminal}:{count}"
                             for (state, dispatch, terminal), count in sorted(settled_counts.items())))
         details.extend(errors)
-        if not worker_available:
-            details.append("FAIL: orca orchestration worker-list unavailable; cannot rule out live supervised workers" +
-                           (" (worktree ps available)" if ps_available else " (worktree ps unavailable)"))
         p3_detail = "; ".join(details) if details else "no active or stale agents found"
         ok_p3 = not blockers and not errors and worker_available
+    if not worker_available:
+        p3_detail += "; FAIL: Orca worker-list unavailable; complete per-run inventory cannot rule out live supervised workers"
+        if worker_error:
+            p3_detail += f" ({worker_error})"
+        p3_detail += " (worktree ps available)" if ps_available else " (worktree ps unavailable)"
+        ok_p3 = False
+    worker_result = (worker_data.get("result") if isinstance(worker_data, dict) and
+                     isinstance(worker_data.get("result"), dict) else {})
     rows.append(_row("P3", ok_p3, p3_detail,
                      {"agents": entries, "allow_list": allow_record, "supervised_workers_available": worker_available,
                       "supervised_worker_count": sum(len(e.get("supervisedWorkers", [])) if e.get("supervisedWorkers")
                                                       else len(e.get("dispatchIds", [])) + int(bool(e.get("dispatchId")))
-                                                      for e in entries)}))
+                                                      for e in entries),
+                      "run_coverage": (worker_result or {}).get("runCoverage", [])}))
 
     # P4: no sustained heavy foreign process.
     b = [float((s.get("groups") or {}).get("build") or 0.0) for s in body]

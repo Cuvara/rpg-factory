@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- P3 now lists every Orca Run and every worker page per Run, verifies each page's explicit Run scope, fails closed with the query error when coverage is incomplete, and records per-run worker counts and scope evidence.
+
 - Follow-up P7F: P3 only coalesces same-workspace worker rows when their allow status matches, so a dispatch exemption cannot authorize a sibling worker; run.json coverage again asserts both agent and dispatch allow entries.
 
 - Follow-up P7E: P3 fails closed on missing, malformed or unknown worker liveness; rejects malformed dispatch identities and dispatch exemptions that do not resolve to exactly one non-empty ID; keeps dispatch exemptions scoped to their worker row; records full matched worker identity; and prevents empty paths or worktree IDs from matching. README documents the supported Windows path normalization and that other path forms remain uncovered.

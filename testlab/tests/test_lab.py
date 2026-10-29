@@ -3590,24 +3590,86 @@ class HostGuardTests(unittest.TestCase):
         from lab import hostguard
         from unittest import mock
         from types import SimpleNamespace
-        first = {"ok": True, "result": {"workers": [{"dispatchId": "one"}],
-                  "page": {"total": 2, "hasMore": True, "nextCursor": "cursor-2"}}}
-        second = {"ok": True, "result": {"workers": [{"dispatchId": "two"}],
-                   "page": {"total": 2, "hasMore": False, "nextCursor": None}}}
+        def response(value):
+            return SimpleNamespace(stdout=json.dumps(value))
+
+        def p3_for(inventory):
+            outcome = hostguard.preflight(
+                sampler=lambda _: [{"first": True, "ad_cpu": 0.0, "cpu": 10.0,
+                                    "groups": {"build": 0.0, "av": 0.0}}],
+                processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
+                orca_workers=lambda: inventory, wsl_uptime=lambda: 3600.0,
+                paths=hostguard.AnyDeskPaths(None, None), announced="test", include_p7=False)
+            return next(row for row in outcome["rows"] if row["id"] == "P3")
+
+        run_a = {"id": "run-a"}
+        run_b = {"id": "run-b"}
+        run_page_1 = {"ok": True, "result": {"runs": [run_a], "nextCursor": "runs-2"}}
+        run_page_2 = {"ok": True, "result": {"runs": [run_b], "nextCursor": None}}
+        worker_page_a1 = {"ok": True, "result": {"workers": [{"dispatchId": "one", "runId": "run-a"}],
+                           "page": {"total": 2, "hasMore": True, "nextCursor": "a-2"},
+                           "scope": {"run": "run-a", "source": "flag"}}}
+        worker_page_a2 = {"ok": True, "result": {"workers": [{"dispatchId": "two", "runId": "run-a"}],
+                           "page": {"total": 2, "hasMore": False, "nextCursor": None},
+                           "scope": {"run": "run-a", "source": "flag"}}}
+        worker_page_b = {"ok": True, "result": {"workers": [{"dispatchId": "three", "runId": "run-b"}],
+                          "page": {"total": 1, "hasMore": False, "nextCursor": None},
+                          "scope": {"run": "run-b", "source": "flag"}}}
         with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
                 mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
                 mock.patch.object(hostguard.subprocess, "run", side_effect=[
-                    SimpleNamespace(stdout=json.dumps(first)), SimpleNamespace(stdout=json.dumps(second))]) as run:
+                    response(run_page_1), response(run_page_2), response(worker_page_a1),
+                    response(worker_page_a2), response(worker_page_b)]) as run:
             data = hostguard._orca_workers()
-        self.assertEqual([row["dispatchId"] for row in data["result"]["workers"]], ["one", "two"])
+        self.assertEqual([row["dispatchId"] for row in data["result"]["workers"]], ["one", "two", "three"])
         self.assertIn("--cursor", run.call_args_list[1].args[0])
-        broken = {"ok": True, "result": {"workers": [{"dispatchId": "one"}],
-                   "page": {"hasMore": True, "nextCursor": "same"}}}
+        self.assertIn("--run", run.call_args_list[2].args[0])
+        self.assertEqual(data["result"]["runCoverage"], [
+            {"run": "run-a", "count": 2, "scope_pages": [
+                {"run": "run-a", "source": "flag"}, {"run": "run-a", "source": "flag"}]},
+            {"run": "run-b", "count": 1, "scope_pages": [{"run": "run-b", "source": "flag"}]}])
+        settled = hostguard._live_supervised_workers(data, {}, {"result": {"worktrees": []}})
+        self.assertEqual({row["ownerRunId"] for row in settled}, {"run-a", "run-b"})
+
+        bound_scope = {"ok": True, "result": {"workers": [], "page": {"nextCursor": None},
+                          "scope": {"run": "some-other-run", "source": "bound"}}}
         with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
                 mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
                 mock.patch.object(hostguard.subprocess, "run", side_effect=[
-                    SimpleNamespace(stdout=json.dumps(broken)), SimpleNamespace(stdout=json.dumps(broken))]):
-            self.assertIsNone(hostguard._orca_workers())
+                    response({"ok": True, "result": {"runs": [run_a], "nextCursor": None}}), response(bound_scope)]):
+            failed_scope = hostguard._orca_workers()
+        self.assertFalse(hostguard._workers_available(failed_scope))
+        self.assertIn("scope mismatch", failed_scope["error"])
+        self.assertEqual(p3_for(failed_scope)["status"], "FAIL")
+        self.assertIn("scope mismatch", p3_for(failed_scope)["detail"])
+        self.assertEqual(p3_for(failed_scope)["measured"]["run_coverage"], [
+            {"run": "run-a", "count": 0, "scope_pages": [{"run": "some-other-run", "source": "bound"}]}])
+
+        with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
+                mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
+                mock.patch.object(hostguard.subprocess, "run", return_value=response({"ok": False, "error": "missing"})):
+            unavailable_runs = hostguard._orca_workers()
+        self.assertFalse(hostguard._workers_available(unavailable_runs))
+        self.assertIn("run-list", unavailable_runs["error"])
+        self.assertEqual(p3_for(unavailable_runs)["status"], "FAIL")
+        self.assertIn("run-list", p3_for(unavailable_runs)["detail"])
+
+        with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
+                mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
+                mock.patch.object(hostguard.subprocess, "run", side_effect=[
+                    response({"ok": True, "result": {"runs": [run_a, run_b], "nextCursor": None}}),
+                    response({"ok": True, "result": {"workers": [{"dispatchId": "a", "runId": "run-a"}],
+                              "page": {"hasMore": False, "nextCursor": None},
+                              "scope": {"run": "run-a", "source": "flag"}}}),
+                    response({"ok": False, "error": "worker query failed"})]):
+            unavailable_run = hostguard._orca_workers()
+        self.assertFalse(hostguard._workers_available(unavailable_run))
+        self.assertIn("run-b", unavailable_run["error"])
+        self.assertEqual(p3_for(unavailable_run)["status"], "FAIL")
+        self.assertIn("run-b", p3_for(unavailable_run)["detail"])
+        self.assertEqual(p3_for(unavailable_run)["measured"]["run_coverage"], [
+            {"run": "run-a", "count": 1, "scope_pages": [{"run": "run-a", "source": "flag"}]},
+            {"run": "run-b", "count": 0, "scope_pages": []}])
 
     def test_p3_identity_classification_allowlist_and_supervised_workers(self):
         from lab import hostguard
