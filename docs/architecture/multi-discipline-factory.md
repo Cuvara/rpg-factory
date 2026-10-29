@@ -1,7 +1,6 @@
 # rpg-factory as a modular multi-discipline game development factory
 
-**Status:** proposed architecture plan. Nothing in this document is implemented. Each migration phase in
-section 11 is a separate, separately approved change.
+**Status:** accepted architecture; phases P2-P7 implemented in separate PRs.
 
 **Baseline:** `origin/main` @ `0bbe51a` (runtime release `v1.1.0` @ `d57be0b` plus 42 unreleased commits).
 Code is cited as `path:line` at `0bbe51a`. Documents are cited by section.
@@ -13,11 +12,13 @@ Code is cited as `path:line` at `0bbe51a`. Documents are cited by section.
      implementation, test, review and release.
    - The domain must work when game-ai-workflows is absent, and must serve Claude, Codex and other agents
      through rpg-factory's own contracts.
-   - The `no-feature-registry` rule and the plugin-boundary lint change narrowly and on the record. The
-     protection against unauthorized feature registries stays in force for every other domain.
+   - Feature state is owned only by domains with `may_own_feature_state: true`, and only in their
+     registered authoring-repo paths. Product-repo feature registries remain forbidden.
 2. **Artifacts live in a hybrid home.**
    - Engine-ready outputs stay in the existing product repos.
-   - Authoring artifacts live in one new git repo registered in `registry.json` `repos`.
+   - Authoring artifacts live in the optional `authoring` registry repo (`game-authoring`). Agents do not
+     create or publish it; until it exists, domain checks and tests use fixture repos, and routing to it
+     reports it absent without failing.
    - External sources (Figma files, DCC files) are referenced by manifest entries, never by routed paths.
 3. **Architecture documents live in `docs/architecture/`**, with Mermaid diagrams. README and SKILL files keep
    their ASCII diagrams, because agents read them as raw text.
@@ -44,8 +45,8 @@ Design, UI/UX, 2D Art, 3D Art, VFX and Engineering.
 - **One shared artifact contract** (schema + lifecycle + trace + approvals) serves design documents, UI
   specifications, asset manifests and VFX specifications. Non-automatable results stay explicit as
   `HUMAN_REQUIRED`.
-- **The change is incremental.** Phases P0-P6 build the foundation. P7+ adds each discipline under its own
-  plan.
+- **The change is incremental.** P0 completed in release 1.1.1. Phases P2-P7 are implemented in separate
+  PRs.
 
 ## 2. Current-state architecture (verified)
 
@@ -189,18 +190,30 @@ valid as-is.
   },
   "design": {
     "summary": "Game design: GDDs, feature specs, design decisions, feature lifecycle and traceability.",
-    "status": "planned",
+    "status": "active",
     "lead": "design-lead",
     "repos": ["authoring"],
     "artifact_kinds": ["gdd", "feature-spec", "design-decision"],
     "quality_gates": ["artifact-lint", "artifact-trace"],
     "human_gates": ["gameplay-rules"],
-    "approvers": [{"principal": "<maintainer>", "ssh_public_key": "ssh-ed25519 AAAA..."}],
+    "approvers": [],
     "handoffs": ["feature-spec-to-impl"],
     "may_own_feature_state": true
+  },
+  "phase": {
+    "id": "P7",
+    "domains": {
+      "design": {"allowed_scope": ["draft", "propose"]},
+      "engineering": {"allowed_scope": ["approved-artifacts", "existing-code"]}
+    },
+    "rule": "No agent binds numerical gameplay values or rules; binding requires verified approval."
   }
 }
 ```
+
+The authoring repo entry is `repos.authoring = {"path": "game-authoring", "optional": true}`. It is not
+created by agents; until it exists, checks and tests use fixture repos, and routing to it reports it absent
+without failing. The QA harness `testlab` stays outside the domain registry.
 
 - `lead: null` means module ownership routes the domain. That is how Engineering keeps today's precedence.
 - `kind` keeps its enum. It is checked in `check-registry.sh`, `new-skill.py`, `skill-touchpoints.py` and
@@ -221,7 +234,7 @@ New `check-registry.sh` rules:
 |---|---|---|
 | File paths in a product repo | Existing algorithm | Output gains one field, `domain` |
 | Artifact in the authoring repo | The authoring repo is a normal registry repo with per-domain modules (`authoring.design-*`, `authoring.ui-*`, …, plus `authoring.root` fallback); longest-prefix routing applies | Data only |
-| Intent only, no paths yet | New `--domain <id>` and `--kind <artifact-kind>` on `context.py` / `factory-context.sh`; the result is `domains[id].lead` plus repo, gates and artifact kinds | New flags; no keyword inference |
+| Intent only, no paths yet | P2 `--domain <id>` and `--kind <artifact-kind>` on `context.py` / `factory-context.sh`; the result is `domains[id].lead` plus repo, gates and artifact kinds | New flags; no keyword inference |
 | Domain unclear | factory-core asks once; `--lead` stays the validated override (existing) | Skill text |
 | Two domain leads claim one task | `AMBIGUOUS`, reachable only across domains; the user chooses | Engineering precedence untouched |
 
@@ -304,7 +317,7 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
 ### 7.3 Outputs that tests can't prove
 
 - A review or approval is one immutable **approval file** in the authoring repo:
-  `approvals/<artifact-id>/<gate>-<artifact blob sha>.json`, holding `{artifact, gate, rev, by, date}`. It is
+  `approvals/<artifact-id>/<gate>-<artifact blob sha>.json`, holding `{artifact, gate, scope, rev, by, date}`. It is
   bound to the artifact's blob SHA, so editing the artifact makes it stale (no approval file for the new
   revision).
 - A missing or stale approval is an external-tier check that grades **HUMAN_REQUIRED**. That state already
@@ -314,8 +327,10 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
 - **Approval trust.** Git author names, emails and trailers are self-asserted, so none of them proves who
   approved. Agents never write approval files.
   The trust root is an **SSH commit signature** checked only against keys held in rpg-factory's registry
-  (`domains.<id>.approvers`: principal name plus SSH public key). That list changes only through a reviewed
-  rpg-factory pull request. GPG signing is out of scope.
+  (`domains.<id>.approvers`: principal name plus SSH public key). The maintainer is the sole initial approver.
+  The list stays empty until the maintainer registers an SSH signing key from an authorized source (GitHub
+  account SSH signing keys, currently none, or a maintainer-authored registry change). Until then every
+  approval grades `HUMAN_REQUIRED`. GPG signing is out of scope.
 
   `artifact-trace.py` validates each approval file in five steps:
   1. **Find the commit.** Rename detection is turned off (`--no-renames`), so a rename or move shows up as an
@@ -330,21 +345,24 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
   3. **Verify.** Run `git -c gpg.format=ssh -c "gpg.ssh.allowedSignersFile=$SIGNERS" verify-commit "$SHA"`.
      The quoted `$SIGNERS` path may contain spaces. The user's own git signing configuration is never
      consulted.
-  4. **Match the signer.** With the same `-c` settings, `git log -1 --format='%G? %GS' "$SHA"` must report
-     status `G` and a principal equal to the file's `by`. The file's `rev` must equal the artifact's current
-     blob SHA.
+  4. **Match the signer and binding.** With the same `-c` settings, `git log -1 --format='%G? %GS' "$SHA"`
+     must report status `G` and a principal equal to `by`. The key must be trusted and not revoked
+     (`revoked: true` or a revoked fingerprint), and the approval must bind the artifact id, gate, scope and
+     current artifact revision. Copying an approval to another artifact, gate or revision fails the
+     path/content/revision binding and is rejected as replay.
   5. **Fail closed.** In any of these cases the approval grades **HUMAN_REQUIRED** with the reason, and is
      never accepted:
      - zero or several adding commits;
      - any later modification, or any deletion or rename under `approvals/`;
      - a path that doesn't match the file's content;
-     - an unsigned commit, a failed verification, an unknown key or a principal mismatch;
+     - an unsigned or altered commit, failed signature integrity verification, an untrusted or unknown key,
+       a revoked key (`revoked: true` or a revoked fingerprint), or a principal mismatch;
      - a shallow clone;
      - a stale `rev`.
 
   A reviewed pull request on the authoring repo's protected branch is optional extra evidence. It is an
   external-tier check that reads the review through `gh`, and grades HUMAN_REQUIRED when the review can't be
-  read. Until approvers register signing keys, every approval is advisory.
+  read.
 
 ## 8. Game Design as a native domain
 
@@ -363,20 +381,22 @@ Feature-spec transition rules:
 - **Going backwards** is allowed only to `draft`. Earlier approval files stay in history but no longer match the
   current revision.
 
-### 8.2 Gameplay rules and approvals
+### 8.2 Phase-scoped permissions and gameplay rules
 
-- The design lead drafts structure and options. Numbers are `TBD` or clearly labelled proposals.
-- Only a human approval record makes a value binding.
-- The `gameplay-rules` human gate is unchanged and is attached to the design modules.
+- The registry `phase` object names the current phase id and each domain's allowed scope. Product-repo
+  `TEAM.md` phase rules remain authoritative for product code.
+- No agent makes a numerical gameplay value or binds a gameplay rule. Design may draft and propose; binding
+  requires verified approval. Engineering implements gameplay values only from approved artifacts or existing code.
+- Acceptance is measurable: `artifact-trace` links every implemented gameplay value to an approved artifact;
+  an unlinked value grades `HUMAN_REQUIRED`.
+- The `gameplay-rules` human gate is attached to the design modules.
 
-### 8.3 Narrow policy change (proposed for phase P5; the exact wording needs approval)
+### 8.3 Feature-state ownership
 
-- **`no-feature-registry`.** Only domains with `may_own_feature_state: true` (Design) create or change GDD and
-  feature state, and only in the authoring repo.
-  - `.ai/`, `docs/registry/` and `docs/features/` in product repos stay forbidden for every domain.
-  - game-ai-workflows is an optional, independent peer: never a dependency, never a source of truth.
-- **`phase-plumbing-only`.** Add a clause: recording human-approved values in an approved design artifact is
-  allowed. Inventing values stays forbidden.
+- **`feature-state-ownership`.** Only domains with `may_own_feature_state: true` create GDD or feature state,
+  and only in that domain's registered authoring-repo paths.
+  - `.ai/`, `docs/registry/` and `docs/features/` in product repos stay forbidden.
+  - `.ai/` is never read as a source of skills, routing or configuration; there is no importer.
 - **`tests/skills-lint.sh:170-175`.**
   - The web-game-factory boundary stays.
   - The requirement that factory-core hand design work to game-ai-workflows is removed.
@@ -423,10 +443,8 @@ Rules:
   - `factory-status.py`, which stays engineering-only.
 - **Gains metadata only:** existing skills and modules (`domain` defaults to `engineering`).
 - **Path assumptions that must be handled:**
-  - `check-registry.sh` fails when a registered repo path is missing, and `context.py:548` snapshots every
-    repo.
-  - So the authoring repo needs `repos.<key>.optional: true`: skipped when absent, and excluded from the
-    default snapshot until present.
+  - The `authoring` repo is registered at `game-authoring` with `optional: true`. Domain checks and tests
+    use fixture repos until it exists; routing to it reports it absent and never fails.
   - Dogfood expectations must be re-checked when the snapshot gains a line.
 - **Unreleased commits (`v1.1.0..0bbe51a`).**
   - Mostly testlab, plus `run-checks` worktree targeting (`--repo-path`, canonical-checkout guard), git
@@ -437,18 +455,18 @@ Rules:
 
 ## 11. Migration roadmap
 
-Each phase is one pull request with its own approval, independent review and `tests/run-all.sh` = 0 failed.
+Each phase P2-P7 was implemented in a separate pull request with its own approval and independent review.
 
 | Phase | Scope (affected files) | Acceptance criteria (measurable) | Release |
 |---|---|---|---|
-| **P0 Baseline** | Review and adopt the 42 unreleased commits; fix the CHANGELOG headings and mis-filed `[1.1.0]` entries; record the baseline: run-all count, routing scenario count, `routing-properties` statistics, dogfood and eval results | run-all 0 failed; the `[1.1.0]` section equals the tagged text; baseline file committed | patch 1.1.1 (needs release authorization) |
-| **P1 Architecture docs** | `docs/architecture/` (this plan, README, ADR-0001 "domains"); `english-only.py` report-only; README pointer | lint green; routing outputs unchanged | patch |
-| **P2 Domain metadata** | `registry.json` `domains{engineering}` and optional `domain`/`role`; `docs/registry.schema.json`; `check-registry.sh` rules and fixtures; `resolve.jq` `domain` output field; `repos.*.optional` in `check-registry.sh` and `context.py` | routing output byte-identical except the new field across all `tests/routing.test.sh` scenarios and the 17 history replays; `routing-properties` statistics identical; new check-registry cases pass; dogfood 19/19 | minor |
+| **P0 Baseline (done)** | Release 1.1.1 on 2026-10-29 | Release branch integrated | release 1.1.1 |
+| **P1 Architecture docs (this PR)** | `docs/architecture/` (this plan, README, ADR-0001 "domains"); `english-only.py` report-only; README pointer | targeted checks pass; baseline findings reported without translation | patch |
+| **P2 Domain metadata and entry points** | Registry domains and optional `domain`/`role`; schema and validation; `--domain`/`--kind`; optional authoring repo | Routing preserved except additive domain field; fixture checks pass | minor |
 | **P3 Core neutrality** | Move the engineering sections of `validation.md` ("Evidence per tool", "Environment notes (WSL)", "CI coverage facts"), the generator/branch parts of `git-safety.md` "Rules" and `repos.md` into an engineering reference; neutral factory-core description and "Skills" introduction | SKILL.md ≤160 lines; skills-lint, touchpoints and citations green; dogfood 19/19; eval results unchanged | patch |
-| **P4 Shared artifact contract** | `docs/artifact.schema.json`; `artifact-lint.py`, `artifact-trace.py`, `asset-manifest.py`; `--domain`/`--kind` flags; fixture authoring repo | new `tests/artifacts.test.sh`: valid artifact PASS; illegal transition, stale upstream and unknown SHA FAIL; missing approval HUMAN_REQUIRED; engineering routing unchanged | minor |
+| **P4 Shared artifact contract** | `docs/artifact.schema.json`; `artifact-lint.py`, `artifact-trace.py`, `asset-manifest.py`; fixture authoring repo | Artifact and approval fixture scenarios pass; engineering routing unchanged | minor |
 | **P5 Game Design domain** | Register the authoring repo (optional) and design modules; `design-lead` skill via `new-skill.py`; policy and lint change (section 8.3); dogfood scenario and eval | new `tests/domains.test.sh`: standalone without game-ai-workflows (no runtime reference); a non-design skill claiming GDD still fails lint; a non-design module owning `docs/features/` fails check-registry; approval without the gate fails; engineering replay identical; checks pass without `CLAUDE_*` environment | minor |
 | **P6 Cross-domain handoffs** | Handoff contracts feature-spec → server/client/ui spec; trace over product commit SHAs | fixture: editing an upstream spec fails the downstream trace with `upstream-changed`; completion rule evaluated end to end | minor |
-| **P7+ Disciplines** | UI/UX, then 2D Art, 3D Art and VFX, each under its own discipline plan | same template as P5 | minor each |
+| **P7 Disciplines** | UI/UX, then 2D Art, 3D Art and VFX, each under its own discipline plan | same template as P5 | minor each |
 
 **Rollback:**
 - Every phase is additive and reverts as one PR.
@@ -487,16 +505,6 @@ Each phase is one pull request with its own approval, independent review and `te
   weaker isolation between disciplines.
 - **Flat registry.** No disruption, at the cost of a long `registry.json`.
 
-**Open decisions for the maintainer:**
-- **Authoring repo:** name and key (proposed key `authoring`, directory `game-authoring`) and its creation.
-  Creating a GitHub repo is a `publish`/`shared-infra` action.
-- **Global rule wording:** the exact `no-feature-registry` and `phase-plumbing-only` text.
-- **P0 release:** whether P0 ships as 1.1.1.
-- **Coexistence:** whether rpg-factory ignores `.ai/` entirely (recommended) or offers an optional importer.
-- **Approvers:** who is on `domains.design.approvers` and their SSH signing keys, and whether the authoring repo
-  also requires reviewed pull requests on its default branch (section 7.3).
-- **Testlab:** whether it becomes a QA domain. It isn't one of the six requested.
-
 **Not verified:**
 - whether Claude Code discovers nested skill directories (the plan avoids nesting either way);
 - whether `skill-touchpoints.py` needs a domain column for a non-engineering lead in the README tables.
@@ -507,5 +515,4 @@ Each phase is one pull request with its own approval, independent review and `te
 - **Tooling:** art, image, modeling, animation and VFX tools and their dev-tool probes.
 - **Ownership moves** of engine-ready client assets out of `client-integration`.
 - **Domain-aware `factory-status`** view.
-- **QA/testlab** as a domain.
 - **Optional interoperability** with game-ai-workflows (import only, never a dependency).

@@ -388,6 +388,8 @@ with the scratch-stack hooks. See `testlab/README.md`.
 
 ## Development
 
+Architecture documentation and decision records are indexed in `docs/architecture/`.
+
 - `registry.json` (schema v3) is the source of truth for module knowledge: modules, contracts,
   checks with parsers, human gates, `facts[]` with probe commands. Schema in
   `docs/registry.schema.json`; validated by `scripts/check-registry.sh` (paths exist, unique skill

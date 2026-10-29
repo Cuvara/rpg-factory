@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- `docs/architecture/`: architecture index, accepted multi-discipline factory architecture, and the domains ADR.
+- `scripts/checks/english-only.py`: report-only Unicode language check with optional enforcement and allowlisting.
+
 ## [1.1.1] - 2026-10-29
 
 Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state, accepts a Windows-form TMPDIR in netcode-headless and refreshes citations. No breaking changes or user action beyond the usual update command.
@@ -196,9 +201,6 @@ Patch release. Hardens testlab host guards, native server mode, failure summarie
   (scenario end + `finish_grace_s`), so every full-length soak ended with a 20 s blind gap and G5 INVALID. The runner
   now holds the guard until a sample at or after the window end exists (`HostGuard.hold_until`); a sampler that does
   not deliver is still reported by G5, and the window is unchanged.
-
-### Documentation
-- `docs/architecture/multi-discipline-factory.md`: proposed architecture plan for a multi-discipline factory (Game Design, UI/UX, 2D Art, 3D Art, VFX, Engineering) with a discipline-neutral core, domain metadata in a flat registry, a shared artifact and handoff contract, native Game Design without a game-ai-workflows dependency, and an incremental migration roadmap. Proposal only: no runtime behaviour changes.
 
 ## [1.1.0] - 2026-10-24
 
