@@ -3612,6 +3612,9 @@ class HostGuardTests(unittest.TestCase):
     def test_p3_identity_classification_allowlist_and_supervised_workers(self):
         from lab import hostguard
         from unittest import mock
+        self.assertEqual(hostguard.SETTLED_WORKER_STATES,
+                         frozenset({"succeeded", "failed", "cancelled", "stopped", "abandoned"}))
+        self.assertEqual(hostguard.SETTLED_DISPATCH_STATUSES, frozenset({"completed", "failed", "cancelled"}))
         fixture = json.loads((Path(__file__).parent / "fixtures" / "p3-worktrees.json").read_text(encoding="utf-8"))
         entries, allow_info = hostguard.working_agents(fixture)
         self.assertEqual(entries[0]["activity"], "ACTIVE")

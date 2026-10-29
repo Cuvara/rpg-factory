@@ -1220,8 +1220,11 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
         out.append({"repo": inferred_repo, "displayName": path_parts[-1] if path_parts else "unknown-name",
                     "path": normalized, "worktreeId": wid,
                     "originalPath": original_path,
-                    "agentType": provider.get("id"), "terminalVerdict": "live",
-                    "liveTerminalCount": 1, "prompt": "", "state": worker_state,
+                    "agentType": provider.get("id"),
+                    "terminalVerdict": liveness_verdict if isinstance(liveness_verdict, str) else "unverifiable",
+                    "liveTerminalCount": 1 if liveness_verdict == "live" else 0 if liveness_verdict == "exited" else None,
+                    "livenessVerdict": liveness_verdict if isinstance(liveness_verdict, str) else "unverifiable",
+                    "prompt": "", "state": worker_state,
                     "activity": "ACTIVE-UNVERIFIED" if unverified_live else "SETTLED" if is_settled else "ACTIVE",
                     "reason": ("invalid workspace identity type; fail closed" if invalid_workspace_identity else
                                "settled worker has live or unverifiable liveness outside worktree ps" if unverified_live else
@@ -1232,6 +1235,7 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                     "ownerRunId": worker.get("runId") if isinstance(worker.get("runId"), str) else projection.get("runId"),
                     "supervisedWorkers": [{"dispatchId": worker.get("dispatchId"), "taskId": worker.get("taskId"),
                                             "ownerRunId": worker.get("runId") if isinstance(worker.get("runId"), str) else projection.get("runId"),
+                                            "livenessVerdict": liveness_verdict if isinstance(liveness_verdict, str) else "unverifiable",
                                             "workerState": worker_state, "dispatchStatus": dispatch_status,
                                             "terminalState": terminal_state,
                                             "retainedReason": resource.get("retainedReason")}],
@@ -1405,7 +1409,7 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
             path_note = f" originalPath={original!r}" if original is not None else ""
             worker_note = ("; supervisedWorkers=" + ",".join(
                 f"{w.get('dispatchId') or 'unknown'}:{w.get('workerState') or 'missing'}/"
-                f"{w.get('dispatchStatus') or 'missing'} run={w.get('ownerRunId') or 'unknown'} terminal={w.get('terminalState') or 'missing'}"
+                f"{w.get('dispatchStatus') or 'missing'} run={w.get('ownerRunId') or 'unknown'} terminal={w.get('terminalState') or 'missing'} liveness={w.get('livenessVerdict') or 'unverifiable'}"
                 for w in e.get("supervisedWorkers", [])) if e.get("supervisedWorkers") else "")
             details.append(f"{e['activity']} {label}{path_note} [{e.get('worktreeId') or 'unknown-id'}] agent={e.get('agentType') or 'unknown'} "
                            f"terminal={e.get('terminalVerdict')}/{e.get('liveTerminalCount')} prompt={e.get('prompt', '')!r}"
