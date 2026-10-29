@@ -2,15 +2,22 @@
 # check-registry.sh — validate registry.json structure and that every path it names
 # exists in the workspace. Read-only. Exit 0 only if zero problems and >0 items checked.
 #
-# Usage: check-registry.sh [--structure-only]
+# Usage: check-registry.sh [--structure-only] [--registry <file>]
 #   --structure-only  skip on-disk path checks (for machines without the workspace)
+#   --registry <file> validate a registry other than the default
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib/compat.sh"
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REGISTRY="$PLUGIN_ROOT/registry.json"
 structure_only=false
-[ "${1:-}" = "--structure-only" ] && structure_only=true
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --structure-only) structure_only=true; shift ;;
+    --registry) [ "$#" -ge 2 ] || { echo "FAIL: --registry needs a file"; exit 1; }; REGISTRY="$2"; shift 2 ;;
+    *) echo "FAIL: unknown argument $1"; exit 1 ;;
+  esac
+done
 
 if ! jq empty "$REGISTRY" 2>/dev/null; then echo "FAIL: $REGISTRY is not valid JSON"; exit 1; fi
 # a duplicate key is valid JSON, and jq and Python both keep the last one silently
@@ -34,6 +41,41 @@ problems=$(jq -r '
       (["schema_version","workspace","tiers","result_states","tools","repos","modules","global_rules"][]
         | select($r[.] == null) | "missing top-level key: \(.)"),
       ($ids | group_by(.) | map(select(length > 1))[] | "duplicate module id: \(.[0])"),
+      (select(($r.domains.engineering // null) == null) | "missing domain: engineering"),
+      (($r.domains // {}) | keys[] | select(test("^[a-z][a-z0-9-]*$") | not) | "domain id \(.) must match ^[a-z][a-z0-9-]*$"),
+      (($r.domains // {}) | to_entries[] | select((.value.status // "") | IN("active","planned","foundation") | not) | "domain \(.key): status must be active|planned|foundation"),
+      (($r.domains // {}) | to_entries[] as $d
+        | (($d.value.repos // [])[] | select(($r.repos[.] // null) == null) | "domain \($d.key): unknown repo \(.)")),
+      (($r.domains // {}) | to_entries[] as $d
+        | select(($d.value.lead // null) != null) | $d.key as $did | $d.value.lead as $lead
+        | if ($r.skills[$lead] // null) == null then "domain \($did): unknown lead skill \($lead)"
+          elif (($r.skills[$lead].kind // "") | IN("repo","cross-repo") | not) then "domain \($did): lead \($lead) must be a repo or cross-repo skill"
+          elif (($r.skills[$lead].domain // "engineering") != $did) then "domain \($did): lead \($lead) belongs to domain \($r.skills[$lead].domain // "engineering")"
+          else empty end),
+      (($r.skills // {}) | to_entries[] | .key as $id | (.value.domain // "engineering") as $d
+        | select(($r.domains[$d] // null) == null) | "skill \($id): unknown domain \($d)"),
+      ($r.modules[] | .id as $id | (.domain // "engineering") as $d
+        | select(($r.domains[$d] // null) == null) | "\($id): unknown domain \($d)"),
+      (($r.contracts // [])[] | .id as $id | (.domain // "engineering") as $d
+        | select(($r.domains[$d] // null) == null) | "contract \($id): unknown domain \($d)"),
+      ($r.modules[] as $m | ($m.domain // "engineering") as $d
+        | select(($r.domains[$d].repos // []) | index($m.repo) == null)
+        | "\($m.id): repo \($m.repo) is not in domain \($d)"),
+      (($r.domains // {}) | to_entries[] as $d | $d.key as $did
+        | (($d.value.quality_gates // [])[] as $gate
+          | select([$r.modules[] | select((.domain // "engineering") == $did) | .checks[]?[]? | .id] | index($gate) == null)
+          | "domain \($did): unknown quality gate \($gate)")),
+      (($r.domains // {}) | to_entries[] as $d | $d.key as $did
+        | (($d.value.handoffs // [])[] as $handoff
+          | select([($r.contracts // [])[].id] | index($handoff) == null)
+          | "domain \($did): unknown handoff \($handoff)")),
+      (($r.domains // {}) | to_entries[] as $d | $d.key as $did
+        | (($d.value.human_gates // [])[] as $gate
+          | select([($r.human_gates // [])[].id] | index($gate) == null)
+          | "domain \($did): unknown human gate \($gate)")),
+      (([ (($r.skills // {}) | to_entries[] | {id:.key, role:.value.role}), ($r.modules[] | {id:.id, role:.role}), (($r.contracts // [])[] | {id:("contract " + .id), role:.role}) ][]) 
+        | select(.role != null and (.role | IN("orchestrator","implementer","reference") | not))
+        | "\(.id): role must be orchestrator|implementer|reference"),
       (.modules[] as $m
         | (["id","repo","paths","responsibility","depends_on","checks","rules","generated","tools","obligations"][]
              | select($m[.] == null) | "\($m.id // "?"): missing field \(.)"),
@@ -97,26 +139,37 @@ modules_count=$(jq '.modules | length' "$REGISTRY")
 missing=""; path_count=0
 if ! $structure_only; then
   ws="${RPG_FACTORY_WORKSPACE:-$(jq -r '.workspace.root_default' "$REGISTRY")}"
-  while IFS=$'\t' read -r owner rel; do
+  optional_absent="|"
+  while IFS=$'\t' read -r key rel; do
+    if [ ! -d "$ws/$rel" ]; then
+      echo "optional repo $key absent (not checked)"
+      optional_absent+="$key|"
+    fi
+  done < <(jq -r '.repos | to_entries[] | select(.value.optional == true) | [.key, .value.path] | @tsv' "$REGISTRY")
+  repo_skipped() { case "$optional_absent" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }
+  while IFS=$'\t' read -r owner rel repo; do
     [ -z "$rel" ] && continue
+    repo_skipped "$repo" && continue
     rel="${rel%%#*}"                 # strip doc anchors
     case "$rel" in *'*'*) continue ;; esac   # globs are patterns, not paths
     path_count=$((path_count + 1))
     [ -e "$ws/$rel" ] || missing+="$owner: missing path $rel"$'\n'
   done < <(jq -r '
-      (.repos | to_entries[] | .value.path as $p
-        | ["repo:" + .key, $p], (.value.instructions[] | ["repo:" , $p + "/" + .])),
-      (.repos as $repos | .modules[] | $repos[.repo].path as $p | .id as $id
+      (.repos | to_entries[] | .key as $k | .value.path as $p
+        | ["repo:" + $k, $p, $k], (.value.instructions[] | ["repo:" + $k, $p + "/" + ., $k])),
+      (.repos as $repos | .modules[] | .repo as $k | $repos[$k].path as $p | .id as $id
         | (.paths[], (.claude_md // empty), (.changelog // empty), .docs[], .generated[])
-        | [$id, $p + "/" + .]),
-      (.workspace.root_markers[] | ["workspace", .])
+        | [$id, $p + "/" + ., $k]),
+      (.workspace.root_markers[] | ["workspace", ., ""])
       | @tsv' "$REGISTRY")
-  # contract ends
-  while IFS=$'\t' read -r owner rel; do
+  while IFS=$'\t' read -r owner rel repo; do
+    [ -z "$rel" ] && continue
+    repo_skipped "$repo" && continue
     path_count=$((path_count + 1))
     [ -e "$ws/$rel" ] || missing+="$owner: missing path $rel"$'\n'
   done < <(jq -r '.repos as $repos | (.contracts // [])[] | .id as $id
-      | ([.source] + (.copies // []) + (.upstream // []) + (.watchers // []))[] | ["contract " + $id, $repos[.repo].path + "/" + .path] | @tsv' "$REGISTRY")
+      | ([.source] + (.copies // []) + (.upstream // []) + (.watchers // []))[]
+      | ["contract " + $id, $repos[.repo].path + "/" + .path, .repo] | @tsv' "$REGISTRY")
   # every registered skill has a SKILL.md, and every skill dir is registered
   while IFS= read -r sk; do
     path_count=$((path_count + 1))
@@ -130,7 +183,7 @@ if ! $structure_only; then
   while IFS= read -r rel; do
     path_count=$((path_count + 1))
     [ -e "$PLUGIN_ROOT/$rel" ] || missing+="plugin: missing $rel"$'\n'
-  done < <(jq -r '.modules[].checks[][]?.run | scan("\\{plugin_root\\}/([^ \"]+)") | .[0]' "$REGISTRY" | sort -u)
+  done < <(jq -r '.modules[].checks[][]?.run | scan("\\{plugin_root\\}/([^ \" ]+)") | .[0]' "$REGISTRY" | sort -u)
 fi
 
 # JSON Schema (docs/registry.schema.json) when python3-jsonschema is installed
