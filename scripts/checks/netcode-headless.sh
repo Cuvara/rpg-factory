@@ -64,8 +64,9 @@ if $resolve_only; then echo "server: ${srv:-<none needed: no Shared.GameLogic pi
 
 if command -v dotnet >/dev/null 2>&1; then dotnet=dotnet; base="${TMPDIR:-/tmp}"
   is_abs "$base" && [ -d "$base" ] && [ -w "$base" ] || base=/tmp   # never a relative/invalid TMPDIR
-elif command -v dotnet.exe >/dev/null 2>&1; then dotnet=dotnet.exe; base="${TMPDIR:-$PLUGIN_ROOT}"
-  is_abs "$base" && [ -d "$base" ] && [ -w "$base" ] || base="$PLUGIN_ROOT"   # Windows dotnet needs a native Windows path
+elif command -v dotnet.exe >/dev/null 2>&1; then dotnet=dotnet.exe; base="$PLUGIN_ROOT"   # WSL: Windows dotnet needs a /mnt/c path
+  # Git Bash: a usable Windows TMPDIR is reachable by dotnet.exe; under WSL a Linux TMPDIR (/tmp) is not
+  if [ -n "$RPGF_WINDOWS" ] && [ -n "${TMPDIR:-}" ] && is_abs "$TMPDIR" && [ -d "$TMPDIR" ] && [ -w "$TMPDIR" ]; then base="$TMPDIR"; fi
 else echo "NOT-RUN(tool-missing): neither dotnet nor dotnet.exe on PATH"; exit 2; fi
 if [ -n "$RPGF_WINDOWS" ] && command -v cygpath >/dev/null 2>&1; then base=$(cygpath -u "$base"); fi
 
