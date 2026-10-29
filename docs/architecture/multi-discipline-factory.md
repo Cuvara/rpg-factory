@@ -195,7 +195,7 @@ valid as-is.
     "artifact_kinds": ["gdd", "feature-spec", "design-decision"],
     "quality_gates": ["artifact-lint", "artifact-trace"],
     "human_gates": ["gameplay-rules"],
-    "approvers": [],
+    "approvers": [{"name": "<maintainer>", "ssh_signing_key": "<public key>"}],
     "handoffs": ["feature-spec-to-impl"],
     "may_own_feature_state": true
   }
@@ -309,18 +309,20 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
   means "a human or an external system has to act" (`run-checks.py:489`).
 - No new result state is introduced. A visual review (for example a screenshot against a frame) is recorded
   the same way, with its evidence path.
-- **Approval trust.** An `approvals[]` entry is text in the artifact, so anyone who can edit the artifact
-  could add one. Agents never write approval records. A record counts as an approval only when all three
-  hold:
-  - the commit that introduced it is authored by an identity listed in a registry allowlist
-    (`domains.<id>.approvers`: git author emails);
-  - that commit reached the authoring repo's protected default branch through a reviewed pull request;
-  - the commit carries no agent co-author trailer.
+- **Approval trust.** An `approvals[]` entry is text in the artifact, and git author names, emails and
+  trailers are self-asserted. None of them proves who approved. Agents never write approval records.
+  The trust root is a **cryptographic commit signature**. A record counts as an approval only when the commit
+  that introduced it:
+  - verifies with `git verify-commit` (SSH or GPG signing);
+  - against an allowed-signers list in rpg-factory's registry (`domains.<id>.approvers`: public keys).
+    That list can only change through a reviewed rpg-factory pull request.
 
-  `artifact-trace.py` checks the first and third conditions from git history (`git log` on the line that
-  introduced the record). The second is a repository setting (branch protection) and is reported, not
-  verified. Records that fail these checks grade **HUMAN_REQUIRED** with the reason. Until the authoring repo
-  and its branch protection exist, every approval is advisory.
+  `artifact-trace.py` finds the commit (`git log -L` on the record) and runs that verification locally and
+  offline. A reviewed pull request on the authoring repo's protected branch is optional extra evidence: an
+  external-tier check that reads the review through `gh`, reported as HUMAN_REQUIRED when it cannot be read.
+  An unsigned record, a signature that fails to verify, or a key not on the list grades **HUMAN_REQUIRED**
+  with the reason; it is never accepted. Until approvers have registered signing keys, every approval is
+  advisory.
 
 ## 8. Game Design as a native domain
 
@@ -468,8 +470,8 @@ Each phase is one pull request with its own approval, independent review and `te
 - **Global rule wording:** the exact `no-feature-registry` and `phase-plumbing-only` text.
 - **P0 release:** whether P0 ships as 1.1.1.
 - **Coexistence:** whether rpg-factory ignores `.ai/` entirely (recommended) or offers an optional importer.
-- **Approvers:** who is on `domains.design.approvers`, and whether the authoring repo requires reviewed pull
-  requests on its default branch (needed for approval trust, section 7.3).
+- **Approvers:** who is on `domains.design.approvers` and their signing keys, and whether the authoring repo
+  also requires reviewed pull requests on its default branch (section 7.3).
 - **Testlab:** whether it becomes a QA domain. It isn't one of the six requested.
 
 **Not verified:**
