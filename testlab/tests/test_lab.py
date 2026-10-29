@@ -3588,6 +3588,7 @@ class ChurnTests(unittest.TestCase):
 class HostGuardTests(unittest.TestCase):
     def test_p3_identity_classification_allowlist_and_supervised_workers(self):
         from lab import hostguard
+        from unittest import mock
         fixture = json.loads((Path(__file__).parent / "fixtures" / "p3-worktrees.json").read_text(encoding="utf-8"))
         entries, allow_info = hostguard.working_agents(fixture)
         self.assertEqual(entries[0]["activity"], "ACTIVE")
@@ -3602,13 +3603,14 @@ class HostGuardTests(unittest.TestCase):
                             allow_agents=("main",))
         fixture_p3 = next(r for r in fixture_result["rows"] if r["id"] == "P3")
         self.assertEqual(fixture_p3["status"], "FAIL")
-        self.assertIn("repo-1:main (c:/fixture/repo-1)", fixture_p3["detail"])
+        self.assertIn(f"repo-1:main ({hostguard._normal_path('C:/fixture/repo-1')})", fixture_p3["detail"])
         self.assertIn("ambiguous displayName", fixture_p3["detail"])
 
         row = {"repo": "repo", "displayName": "agent", "path": "C:/Agent/Tree/", "worktreeId": "id-1",
                "liveTerminalCount": 1, "terminalVerdict": "live", "agents": [{"state": "working", "agentType": "codex", "prompt": "p" * 100}]}
         ps = {"result": {"worktrees": [row]}}
-        normalized, _ = hostguard.working_agents(ps, ("c:\\agent\\tree",))
+        with mock.patch.object(hostguard.util, "IS_WINDOWS", True):
+            normalized, _ = hostguard.working_agents(ps, ("c:\\agent\\tree",))
         self.assertTrue(normalized[0]["allowed"])
         self.assertEqual(len(normalized[0]["prompt"]), 80)
         stale, _ = hostguard.working_agents({"result": {"worktrees": [{**row, "liveTerminalCount": 0,
@@ -3658,8 +3660,9 @@ class HostGuardTests(unittest.TestCase):
         allowed_worker = {"terminalState": "active", "resource": {"worktreeId": "wid::C:/allowed/runner"},
                           "projection": {"liveness": {"verdict": "live"}, "workspace": {"id": "host::C:/allowed/runner"}}}
         for exception in ("C:\\allowed\\runner\\", "wid"):
-            accepted = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": [allowed_row]}},
-                        orca_workers=lambda: {"result": {"workers": [allowed_worker]}}, allow_agents=(exception,), **common)
+            with mock.patch.object(hostguard.util, "IS_WINDOWS", True):
+                accepted = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": [allowed_row]}},
+                            orca_workers=lambda: {"result": {"workers": [allowed_worker]}}, allow_agents=(exception,), **common)
             recorded = next(r for r in accepted["rows"] if r["id"] == "P3")["measured"]["allow_list"]
             self.assertEqual(recorded["entries"][0]["entry"], exception)
             self.assertEqual(len(recorded["entries"][0]["matched"]), 1)
@@ -3671,9 +3674,10 @@ class HostGuardTests(unittest.TestCase):
                "liveTerminalCount": 1, "terminalVerdict": "live", "agents": []}
         worker = {"terminalState": "active", "resource": {"worktreeId": "wid::C:/allowed/runner"},
                   "projection": {"liveness": {"verdict": "live"}, "workspace": {"id": "host::C:/allowed/runner"}}}
-        allowed, _ = hostguard._allow_matches([row], ("C:\\ALLOWED\\RUNNER/",))
-        self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [worker]}}, allowed,
-                         {"result": {"worktrees": [row]}}), [])
+        with mock.patch.object(hostguard.util, "IS_WINDOWS", True):
+            allowed, _ = hostguard._allow_matches([row], ("C:\\ALLOWED\\RUNNER/",))
+            self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [worker]}}, allowed,
+                             {"result": {"worktrees": [row]}}), [])
         with mock.patch.dict(os.environ, {"ORCA_CLI_COMMAND": ""}), mock.patch.object(hostguard.shutil, "which", return_value=None):
             self.assertIsNone(hostguard._orca_command())
         with mock.patch.dict(os.environ, {"ORCA_CLI_COMMAND": r"C:\Program Files\Orca\orca.cmd"}), \
