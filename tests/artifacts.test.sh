@@ -50,6 +50,12 @@ p=sys.argv[1]; s=open(p).read();o=json.loads(s.split("\n",1)[1].split("\n---",1)
 PY
 got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'FAIL FX-test-001 unknown trace SHA' ]] && ok 'unknown trace SHA rejected' || bad "unknown trace: $got"
 python3 "$T/make.py" "$R" approved
+python3 - "$R/spec.md" <<'PY'
+import json,sys
+p=sys.argv[1];s=open(p).read();o=json.loads(s.split("\n",1)[1].split("\n---",1)[0]);o["upstream"]=[{"id":"FX-parent-001","rev":"0000000000000000000000000000000000000000"}];open(p,"w").write("---json\n"+json.dumps(o)+"\n---\n")
+PY
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'FAIL FX-test-001 upstream-changed FX-parent-001' ]] && ok 'stale upstream rejected' || bad "stale upstream: $got"
+python3 "$T/make.py" "$R" approved
 got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'HUMAN_REQUIRED FX-test-001 missing approval' ]] && ok 'missing approval is human required' || bad "approval state: $got"
 if command -v ssh-keygen >/dev/null; then
   ssh-keygen -q -t ed25519 -N '' -f "$T/approver" -C fixture-approver
@@ -59,10 +65,35 @@ if command -v ssh-keygen >/dev/null; then
 import json,sys
 json.dump({"artifact":"FX-test-001","gate":"review","scope":"fixture","rev":sys.argv[2],"by":"fixture-approver","date":"2026-10-29T10:00:00Z"},open(sys.argv[1],"w"))
 PY
+  for variant in unsigned principal; do
+    git clone -q "$R" "$T/$variant"
+    mkdir -p "$T/$variant/approvals/FX-test-001"
+    by=fixture-approver; [ "$variant" = principal ] && by=other-principal
+    python3 - "$T/$variant/approvals/FX-test-001/review-$rev.json" "$rev" "$by" <<'PY'
+import json,sys
+json.dump({"artifact":"FX-test-001","gate":"review","scope":"fixture","rev":sys.argv[2],"by":sys.argv[3],"date":"2026-10-29T10:00:00Z"},open(sys.argv[1],"w"))
+PY
+    git -C "$T/$variant" add approvals
+    if [ "$variant" = principal ]; then git -C "$T/$variant" -c gpg.format=ssh -c user.signingkey="$T/approver" commit -S -m 'Mismatched principal' >/dev/null 2>&1
+    else git -C "$T/$variant" commit -qm 'Unsigned approval'; fi
+    got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$T/$variant" --registry "$T/with-key.json" --repos product="$P" | head -1)
+    if [ "$variant" = principal ]; then [[ "$got" == 'HUMAN_REQUIRED FX-test-001 approval principal mismatch' ]] && ok 'principal mismatch requires human' || bad "principal mismatch: $got"
+    else [[ "$got" == 'HUMAN_REQUIRED FX-test-001 approval signature untrusted or invalid' ]] && ok 'unsigned approval requires human' || bad "unsigned approval: $got"; fi
+  done
   git -C "$R" add approvals
   if git -C "$R" -c gpg.format=ssh -c user.signingkey="$T/approver" commit -S -m 'Add approval' >/dev/null 2>&1; then
     got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/with-key.json" --repos product="$P" | head -1)
     [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'signed approval verified' || bad "signed approval: $got"
+    git clone -q "$R" "$T/replay"
+    python3 - "$T/replay/spec.md" <<'PY'
+import json,sys
+p=sys.argv[1];s=open(p).read();o=json.loads(s.split("\n",1)[1].split("\n---",1)[0]);o["id"]="FX-other-001";open(p,"w").write("---json\n"+json.dumps(o)+"\n---\n")
+PY
+    git -C "$T/replay" add spec.md; git -C "$T/replay" commit -qm 'Change artifact identity'
+    replay_rev=$(git -C "$T/replay" rev-parse HEAD:spec.md); mkdir -p "$T/replay/approvals/FX-other-001"
+    cp "$R/approvals/FX-test-001/review-$rev.json" "$T/replay/approvals/FX-other-001/review-$replay_rev.json"
+    git -C "$T/replay" add approvals; git -C "$T/replay" commit -qm 'Replay approval'
+    got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$T/replay" --registry "$T/with-key.json" --repos product="$P" | head -1); [[ "$got" == 'HUMAN_REQUIRED FX-other-001 approval path/content/rev mismatch' ]] && ok 'approval replay rejected' || bad "approval replay: $got"
     ssh-keygen -q -t ed25519 -N '' -f "$T/untrusted" -C untrusted
     jq --arg key "$(cat "$T/untrusted.pub")" '.domains.fixture.approvers[0].ssh_public_key=$key' "$T/with-key.json" > "$T/untrusted.json"
     got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/untrusted.json" --repos product="$P" | head -1); [[ "$got" == 'HUMAN_REQUIRED FX-test-001 approval signature untrusted or invalid' ]] && ok 'untrusted signer requires human' || bad "untrusted signer: $got"
