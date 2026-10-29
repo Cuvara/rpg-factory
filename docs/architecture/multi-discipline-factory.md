@@ -195,6 +195,7 @@ valid as-is.
     "artifact_kinds": ["gdd", "feature-spec", "design-decision"],
     "quality_gates": ["artifact-lint", "artifact-trace"],
     "human_gates": ["gameplay-rules"],
+    "approvers": [],
     "handoffs": ["feature-spec-to-impl"],
     "may_own_feature_state": true
   }
@@ -308,6 +309,18 @@ authoring-repo module, so `run-checks.py` and `lib/evidence.py` work unchanged.
   means "a human or an external system has to act" (`run-checks.py:489`).
 - No new result state is introduced. A visual review (for example a screenshot against a frame) is recorded
   the same way, with its evidence path.
+- **Approval trust.** An `approvals[]` entry is text in the artifact, so anyone who can edit the artifact
+  could add one. Agents never write approval records. A record counts as an approval only when all three
+  hold:
+  - the commit that introduced it is authored by an identity listed in a registry allowlist
+    (`domains.<id>.approvers`: git author emails);
+  - that commit reached the authoring repo's protected default branch through a reviewed pull request;
+  - the commit carries no agent co-author trailer.
+
+  `artifact-trace.py` checks the first and third conditions from git history (`git log` on the line that
+  introduced the record). The second is a repository setting (branch protection) and is reported, not
+  verified. Records that fail these checks grade **HUMAN_REQUIRED** with the reason. Until the authoring repo
+  and its branch protection exist, every approval is advisory.
 
 ## 8. Game Design as a native domain
 
@@ -331,7 +344,7 @@ Feature-spec transition rules:
 - Only a human approval record makes a value binding.
 - The `gameplay-rules` human gate is unchanged and is attached to the design modules.
 
-### 8.3 Narrow policy change (applied in phase P5; the exact wording needs approval)
+### 8.3 Narrow policy change (proposed for phase P5; the exact wording needs approval)
 
 - **`no-feature-registry`.** Only domains with `may_own_feature_state: true` (Design) create or change GDD and
   feature state, and only in the authoring repo.
@@ -455,6 +468,8 @@ Each phase is one pull request with its own approval, independent review and `te
 - **Global rule wording:** the exact `no-feature-registry` and `phase-plumbing-only` text.
 - **P0 release:** whether P0 ships as 1.1.1.
 - **Coexistence:** whether rpg-factory ignores `.ai/` entirely (recommended) or offers an optional importer.
+- **Approvers:** who is on `domains.design.approvers`, and whether the authoring repo requires reviewed pull
+  requests on its default branch (needed for approval trust, section 7.3).
 - **Testlab:** whether it becomes a QA domain. It isn't one of the six requested.
 
 **Not verified:**
