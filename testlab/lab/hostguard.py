@@ -1179,6 +1179,7 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
         wid = resource.get("worktreeId") or ""
         workspace_id = workspace.get("id") or wid
         path = workspace_id.split("::", 1)[-1] if "::" in workspace_id else workspace_id
+        original_path = path
         normalized = _normal_path(path)
         path_match = next((str(entry) for entry in allow_entries
                            if _absolute_path(entry) and _normal_path(entry) == normalized), None)
@@ -1197,6 +1198,7 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
         inferred_repo = path_parts[-2] if len(path_parts) > 1 else "unknown-repo"
         out.append({"repo": inferred_repo, "displayName": path_parts[-1] if path_parts else "unknown-name",
                     "path": normalized, "worktreeId": wid,
+                    "originalPath": original_path,
                     "agentType": provider.get("id"), "terminalVerdict": "live",
                     "liveTerminalCount": 1, "prompt": "", "state": "working", "activity": "ACTIVE",
                     "reason": ("live supervised worker; missing projection, fail closed" if not isinstance(raw_projection, dict)
@@ -1338,7 +1340,7 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
         for e in entries:
             label = f"{e.get('repo') or 'unknown-repo'}:{e.get('displayName') or 'unknown-name'} ({e.get('path') or 'unknown-path'})"
             original = e.get("originalPath")
-            path_note = f" originalPath={original!r}" if original and original != e.get("path") else ""
+            path_note = f" originalPath={original!r}" if original is not None else ""
             worker_note = ("; supervisedWorkers=" + ",".join(
                 f"{w.get('dispatchId') or 'unknown'}:{w.get('terminalState') or 'missing'}"
                 for w in e.get("supervisedWorkers", [])) if e.get("supervisedWorkers") else "")
