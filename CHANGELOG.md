@@ -4,6 +4,73 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-29
+
+Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state and refreshes citations. No breaking changes or user action beyond the usual update command.
+
+### Added
+
+- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
+  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
+  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
+  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
+  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
+  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
+  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
+  `testlab/tests/test_failsum.py`.
+
+- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
+  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
+  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
+  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
+
+- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
+  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
+  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
+  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
+  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
+  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
+  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
+  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
+  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
+  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
+  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
+
+- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
+  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
+  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
+  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
+  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
+  episodes are documented: two attributed, one start-up, two unexplained.
+
+- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
+  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
+  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
+  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
+  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
+  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
+  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
+  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
+  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
+  (real scrubbed `ad.trace` fixture).
+
+
+### Changed
+
+- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
+  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
+  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
+  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
+  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
+  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
+  ibz3 stays INVALID on G1 (three real outgoing sessions).
+
+- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
+  the Windows high-resolution timer path accurately.
+
+- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
+
+
 ### Fixed
 
 - testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
@@ -13,6 +80,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   lifecycle event, or there is no other client), the result is INCONCLUSIVE. This supersedes the sentence below
   that said an already-dropped viewer alone is INCONCLUSIVE beside judged ones: a judged viewer that got the
   removal now gives PASS and lists the others as `not_in_view_at_quit` / `no_lifecycle_events`.
+
 - testlab S08G (P5-S08G-LEAVE): the graceful-leave scenario failed on `rpg-mmo-server` `00ef906` (runs ccle, 4lz1)
   with `others_removed_after_s[1]=null` although the server and client 0 removed the leaver in 0.03/0.05 s. Root
   cause was scenario geometry, not a missed removal: the leaver walked 10 s to x~49.6 while the stationary viewer
@@ -22,6 +90,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `graceful_leave` now reports a viewer that had dropped the leaver before it quit as `not_in_view_at_quit` and
   leaves the check INCONCLUSIVE instead of FAIL; a viewer that held the leaver and never saw it removed still
   FAILs, and the thresholds are unchanged.
+
 - run-checks: checks no longer write into the user's protected main checkout when invoked from an agent's linked
   worktree (incidents 2026-10-25 and 2026-10-29: `.github/scripts/__pycache__/*.pyc` appeared in the canonical
   `rpg-mmo-server`). Root causes: `python3 -m py_compile` (registry `server.*` check) writes `.pyc` even with
@@ -43,6 +112,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `scripts/lib/compat.sh`, which every test sources, now unsets the `GIT_*` state variables. `tests/run-all.sh` hashes
   the shared config before and after the run and fails with `shared git config changed during the run` (diff and a
   copy of the old file in the message); `tests/git-env-isolation.test.sh` fails without the fix.
+
 - testlab H1-H7 (M1 failure matrix, section 7c; no recorded verdict changed, no threshold weakened):
   - H1: viewer (outgoing, `front` process) AnyDesk sessions now have an end and a duration, from the
     `ad_app.control - Session count: (total, incoming)` lines (new event type `session_count`, not a guard input). The
@@ -69,40 +139,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - Tests: `testlab/tests/test_m4_harness.py` (30 tests, 28 fail on the previous harness). The frozen-reference comparison in
     `test_lab.py` ignores exactly the additive reporting keys above; verdicts and every other field still have to equal it.
 
-### Fixed
-
 - testlab `analyze` now isolates the full failure-summary build/write step: non-`OSError` exceptions no longer escape,
   and a minimal summary records the exception type/message and preserves the original verdict and exit code when possible.
-
-### Added
-
-- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
-  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
-  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
-  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
-  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
-  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
-  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
-  `testlab/tests/test_failsum.py`.
-- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
-  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
-  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
-  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
-
-### Changed
-
-- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
-  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
-  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
-  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
-  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
-  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
-  ibz3 stays INVALID on G1 (three real outgoing sessions).
-
-- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
-  the Windows high-resolution timer path accurately.
-
-### Fixed
 
 - testlab `render_jumps`: a LOCAL snap at a server-confirmed respawn of the same player is explained by the respawn and
   counted as `local_respawn`, bound tightly (RV-F29 B1): the snapshot carrying the new position has a world tick inside
@@ -110,10 +148,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   snap went (cos >= 0.7), and one respawn explains one snap. Run ibz3 st 911.107 (rendered 1.088, received 0.8407, 3.4 %
   short of the old 0.8 x rule) failed a real respawn. A later unrelated snap, a second snap, another player's respawn
   and a local major without that evidence still FAIL.
+
 - testlab `entity_lifecycle`: the id-reuse tolerance is per entity type. A projectile uses its content (or measured)
   speed x 0.15 s + 0.2 instead of the player `max_speed`, so a first draw one snapshot ahead after a client stall no longer
   fails (ibz3 proj-17, 1.33 u from spawn vs 1.1). The stale-buffer detection is kept: a first draw at or near the previous
   incarnation's last position still FAILs.
+
 - testlab: S01 no longer FAILs `kcp` (3 `dead_link` closes) and `redis` (6-9 session keys for 3 users) because the WSL
   distro stopped under the run (runs 6qgq, ii3h, jmag, hj3f, imed; native and docker alike). WSL terminates a distro with no
   open `wsl.exe` session; dockerd and the scratch stack died with it mid-run (gateway "shutting down gateway", Redis
@@ -125,18 +165,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   with no `session:*` keys in the scratch Redis (`stack.clear_session_keys`, count in `stale_session_keys_cleared`); and
   a `kcp` or `redis` check whose evidence was taken after the window (timeline `metrics_end_late` / `redis_late`) is
   INCONCLUSIVE, not a FAIL or a false PASS. No threshold or assertion was changed.
+
 - testlab host guard: G1 no longer reports false historical sessions ("active at window start") after the AnyDesk
   log rotates. The tailer re-read the file from 0 and re-emitted its Accepts; each duplicate queued a phantom
   session that a later close ended, shifting every pairing (run 9tgw: sessions 'ended' 13:16:14Z hours late). Events
   are now de-duplicated in the tailer and in `sessions_from_events`, and every open-ended session counts as active at
   the start only with a live backend process sample at or after the window start (matching PID when known). A real
   session in the window still fires G1, G2 and G3.
+
 - testlab: a native game server that cannot be stopped at teardown no longer leaves a green exit and a running
   stack: `stack.down` still brings the scratch backing stack down, then raises, and `_with_stack_teardown` turns an
   exit of 0 or 4 into 3 (a run's own 1 or 2 is kept) and keeps the error in `<runs>/stack/teardown-failure.json`.
+
 - testlab: native `--build-server` builds the Nakama plugin for the version of the resolved scratch compose Nakama
   image (what `.env.scratch` decides) and not for the scenario env or a fixed 3.40.0, so the plugin ABI matches the
   running Nakama; an unreadable image fails the build instead of guessing.
+
 - testlab: native mode with `--build-server` no longer runs `stack.sh --scratch up` (its `up` ends in `dc up -d`
   for the whole project and started the container `gameserver-dotnet` before the native server replaced it).
   The Nakama plugin and the gateway image are built directly (the two builds of `stack.sh do_up`; the game server
@@ -145,33 +189,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   15 s wait now keeps its state and fails the stop with an error (the next run is refused until the process is
   gone) instead of dropping its pid record.
 
-### Added
-
-- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
-  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
-  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
-  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
-  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
-  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
-  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
-  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
-  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
-  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
-  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
-- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
-  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
-  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
-  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
-  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
-  episodes are documented: two attributed, one start-up, two unexplained.
-
-### Fixed
-
 - testlab: the host guard kept sampling only until the players exited, not until the measurement window end
   (scenario end + `finish_grace_s`), so every full-length soak ended with a 20 s blind gap and G5 INVALID. The runner
   now holds the guard until a sample at or after the window end exists (`HostGuard.hold_until`); a sampler that does
   not deliver is still reported by G5, and the window is unchanged.
-
 ## [1.1.0] - 2026-10-24
 
 Feature release. Adds `testlab/`, autonomous multiplayer gameplay tests with real rendered Unity clients (scenarios
@@ -189,24 +210,12 @@ session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope change
 
 ### Changed
 
-- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
 - Refreshed Netcode client guidance for v0.49.0: KcpCrypto reuses per-session crypto state, subscribers are isolated, and snapshot speed distinguishes absent (`NaN`) from present zero; documented the server unknown-type counter, kick-reason drain, and readiness/release runbooks.
 - Clarified that `factory-status` derives client and package-CI pin versions from repository state instead of storing moving pin versions in registry prose.
 - Updated drifted client, server, and Netcode skill citations to match their integration branches, including client `origin/develop` at `45634b1`.
 - `testlab analyze --delivery` now fits server/client clock mapping independently in 10 second windows using one minimum-delay sample per 1 second bin. It reports relative excess above each window's minimum envelope and the empirical p95 fit error bound; absolute one-way delay remains explicitly unavailable, and poor fits yield no delay values or PATH attribution.
 
 ### Added
-
-- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
-  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
-  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
-  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
-  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
-  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
-  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
-  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
-  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
-  (real scrubbed `ad.trace` fixture).
 
 - **testlab S16 judges the undefined-message-type case** on `gameserver_messages_rejected_total{reason="unknown_type"}`
   (rpg-mmo-server #490, `76aa973`): the `malformed_input` rule gains `rejections_counter` (default `gameserver_inputs_rejected_total`), the
@@ -481,132 +490,6 @@ session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope change
   another linked worktree of the repo (checks run in, and evidence describes, the checkout `run-checks` runs in:
   run it from that worktree), and prints `none registered` when no check is declared for the paths.
   `validation.md`, factory-core `SKILL.md` and the README describe the new `BLOCKED` meaning.
-
-## [1.0.5] - 2026-10-22
-
-Stability release after a full audit of 1.0.4 (hooks, session state, routing, install, release workflow). Hooks stay
-advisory-only and never block; nothing asks for approval. Fixes: tag/push/destructive commands the guard missed
-(git-bash `/c/` paths, shell blocks and functions, heredocs read by a shell, `gh --repo`), a missing or failing hook
-script can no longer return Claude Code's blocking exit code, atomic and lossless session state and evidence under
-concurrency, absolute `--paths` routing on Windows, stale-install detection, workspace worktrees in file-guard, and a
-pre-tag `scripts/release-check.py`. Update the plugin (`claude plugin marketplace update rpg-factory && claude plugin
-update rpg-factory@rpg-factory`) and start a new session. Evidence stored by 1.0.4 shows as NOT_RUN once (new
-workspace key). No command-line or registry changes for users.
-
-### Changed
-- **Release policy wording matches practice.** The docs, skills, registry rule `no-tags`, snapshot header and guard
-  advisories said agents never tag, while 1.0.4 was tagged and released by an agent on the user's explicit
-  authorization. They now say: without explicit release authorization from the user in the current task, stop at
-  READY_TO_TAG and the lead tags; with it, perform exactly the authorized merge, version, tag and release steps after
-  the release checks pass on the tagged commit (never move, delete or reuse a tag). No behaviour change: the guard
-  flags the same commands at the same advisory level, nothing blocks or asks. `run-all.sh` fails if the absolute
-  "agents never tag" wording returns or a policy file drops the authorization rule.
-
-### Fixed
-- **Guard classification gaps.** `git-guard.py` stays advisory only (no permission decision, exit 0); these
-  commands were missed or misread and now get the advisory they should:
-  - Windows git-bash paths: `cd /c/...`, `git -C /c/...`, `/mnt/c/...` and such paths in the human-gate scan
-    resolved to `C:\c\...` (no workspace, no advisory); they are mapped to drive paths first (`native_path`).
-  - Shell reserved words hid git: `{ git tag v1; }`, `! git tag`, `if/then/else/elif`, `for/while/until ... do`,
-    `f() { ...; }`, `function f { ... }`, PowerShell `if (...) { git tag v1 }` / `foreach (...) { ... }` (braces end
-    a PowerShell command).
-  - A heredoc read by a shell (`bash <<EOF`, `bash -s <<EOF`, `cat <<EOF | sh`) is analysed as commands; read by an
-    interpreter (`python3 - <<PY`) and mentioning git/gh it is warn (opaque). Other heredocs (commit messages,
-    `cat > file <<EOF`) stay data.
-  - `gh --repo/-R/--hostname <x>` before the group or verb hid `release create`, `pr merge` and the `publish` gate.
-  - Interpreter one-liners invoking `gh` (`python3 -c "...gh release create..."`, `node -e`) are warn like git.
-  - Non-object JSON payloads (`[]`, `null`, `42`) crashed with a traceback (exit 1); stdin is read as UTF-8, so a
-    non-ASCII cwd no longer breaks the workspace match on Windows.
-  - `git tag --merged`, `--no-merged <c>`, `--no-contains <c>` and `--sort <full key>` / `--format '%(...)'` as
-    separate words are listings (allow); a name after them, and the abbreviated `--sort -v:refname`, stay high.
-  - Speed: read-only git subcommands (status, log, diff, ...) skip the per-repo git calls and the others are
-    memoised per directory (30 x `git -C backend status`: ~1.36 s -> ~0.18 s on Windows); commands over 200 KB
-    get one warn ("command too large to check") instead of minutes of parsing.
-  - `factory-context.sh --mode <m>` run outside the workspace now records the mode (a stale read-only mode stayed),
-    and the mode is only recorded when the script is actually run - `grep factory-context.sh --mode review` or
-    `echo ... --mode plan` no longer switch it.
-  - Wording: the module and `classify_gh` docstrings describe advisory levels high/warn, not deny/ask decisions.
-- **Session state and evidence robustness.** Hooks stay advisory-only and never block; tests in
-  `session-state.test.sh`, `run-checks.test.sh` and `factory-status.test.sh` cover each fix.
-  - Evidence records and run records are written atomically (`fstate.write_json`, readers retry the Windows
-    replace window); log and run-record names carry a pid + random suffix, so parallel or same-second runs never
-    share or truncate a file. Only the newest 20 logs per check are kept (never the one the latest record names).
-  - Valid JSON of the wrong shape in the evidence dir (`{"identity":"x"}`, `[1]`, no `state`) is treated as no
-    evidence (NOT_RUN) instead of crashing `run-checks.py --status` and `factory-status.py`.
-  - `run-checks.py --dry-run` writes nothing (no run record).
-  - The auto-correction of an early tech skill to factory-core happens once per session even under parallel Skill
-    calls (claimed by an exclusive `CORRECTED` file; the other calls get the lead-missing advisory).
-  - The Skill hook's logs are one file per event (`SKILLS.d/`, `ADVISORIES.d/`): parallel appends lost lines on
-    Windows. Legacy `SKILLS` / `ADVISORIES` files are still read. Read them with
-    `factory_session.py --skills <session-id>` / `--advisories <session-id>` (used by git-guard.test.sh and dogfood.sh).
-  - `MODE` is replaced atomically (no torn reads). A mode is recorded only when the command really runs
-    `factory-context.sh` / `context.py` (`grep factory-context.sh --mode review` or `echo ...` no longer set it), and
-    "do not implement" alone in Skill arguments is no longer a plan-mode declaration.
-  - The hook prints its advisory / correction before logging; an unwritable log loses nothing the session sees,
-    and with no usable session dir it advises without correcting.
-  - Session ids go through one helper, `fstate.session_key()`: plain ids are unchanged, anything else (`..`, `.`,
-    over 100 characters, characters a substitution would collide) becomes `s-<sha1>`.
-  - A bare registry skill name (`go-backend` without `rpg-factory:`) is recorded and gated like the prefixed name.
-  - `fstate.scratch()` skips a candidate whose `rpg-factory/` cannot be created; `persistent()` falls back to the
-    platform temp dir (absolute on Windows too).
-  - The evidence workspace key is the case-folded real path, and `run-checks.py` and `factory-status.py` resolve
-    `RPG_FACTORY_WORKSPACE` the same way. Evidence stored under the old key shows as NOT_RUN once; rerun the checks.
-- **Routing, install and docs.**
-  - `factory-context.sh --paths` with an absolute (`C:\`, `C:/`, git-bash `/c/`, WSL `/mnt/c/`) or glob path
-    routed nowhere on Windows (`relpath` returned backslashes, lead null). Paths are normalised to repo-relative
-    forward slashes; another drive no longer raises. New routing scenarios (absolute forms, glob).
-  - A missing hook script made python exit 2, Claude Code's blocking code. Every `hooks.json` command now ends
-    with `; exit 0` (bash and PowerShell); stdout still passes through. run-all checks the wiring and runs each
-    command against a missing and an exit-2 script.
-  - `install-status.py` reported CURRENT for an old cache copy on Windows (backslash `CLAUDE_PLUGIN_ROOT` missed
-    the `/.claude/plugins/cache/` test) and whenever the runtime version differed from the source; both are now
-    RESTART_REQUIRED. `--session` never tracebacks on malformed `installed_plugins.json` /
-    `known_marketplaces.json` and always exits 0. New informational note (doctor, `--json` `notes`) when the
-    source HEAD is not the commit of tag `v<VERSION>` (`source 1.0.4 + N commits past v1.0.4`); no state change.
-  - `file-guard.py`: linked worktrees of a workspace repo (`.wt-client-cleanup/`) get that repo's rules (via the
-    git common dir); paths outside the workspace get no advisory even with `RPG_FACTORY_WORKSPACE` set; the mode
-    advisory command is quoted with forward slashes; secret names match case-insensitively (`.ENV`).
-  - `tests/dogfood.sh` looks for the session's `ADVISORIES` / `MODE` under both `fstate.scratch()` and
-    `persistent()/tmp` (headless hooks on Windows Python 3.14 fall back to the latter).
-  - Agent-facing wording said the hooks enforce or deny (snapshot mode line, `tag (deny)` in Human gates, pin-bump
-    "denied by the guard", `.claude/CLAUDE.md`); it now says advisory (`tag (high)`), pin-bump names the explicit
-    release authorization, README marks the pre-1.0.3 "denied" note historical and states the Windows scratch
-    root, and the `--mode` / path forms are documented in the usage headers. run-all fails if
-    `denied by the guard`, `hooks enforce` or `(deny)` returns in agent-facing text.
-  - New `scripts/release-check.py` (read-only) gates a release before the tag (versions agree, CHANGELOG section,
-    empty `[Unreleased]`, tag absent locally and on origin, HEAD == origin/main, clean tree; `--notes` prints the
-    release notes) and verifies it afterwards (`--verify-tag`: annotated, `rpg-factory X.Y.Z`, at HEAD, VERSION).
-    `tests/release-check.test.sh` (throwaway repo, local bare origin) runs in run-all; the order is in
-    `.claude/CLAUDE.md` "Releases".
-
-## [1.0.4] - 2026-10-22
-
-Fix: tech skills stay behind their lead skills under the advisory-only hooks of 1.0.3, still without blocking or
-asking. A tech skill requested before factory-core loads factory-core instead (auto-corrected); one requested
-before its lead runs with an advisory. Update the plugin (`claude plugin marketplace update rpg-factory && claude
-plugin update rpg-factory@rpg-factory`) and start a new session. No command-line or registry changes.
-
-### Fixed
-- **Skill order under advisory-only hooks (1.0.3 dogfood regression, `tech-go` and `tech-dots`).** With the
-  Skill hook advisory-only, a model could load a tech skill before its lead; dogfood reported it as a failure
-  and nothing showed whether the session corrected itself. The hook still never blocks or asks:
-  - a tech skill requested **before factory-core** is auto-corrected: the call loads `rpg-factory:factory-core`
-    instead (`updatedInput`; Claude Code honours it for the Skill tool - verified in a headless session, not
-    documented for Skill), with an advisory naming the route command and the leads. Once per session (factory-core
-    is then recorded), so it cannot repeat or loop. If a Claude Code version ignores `updatedInput`, the tech skill
-    loads and the advisory still applies;
-  - requested **after factory-core but before its lead**, it runs with an actionable advisory ("this call
-    continues", the route command, the leads). No auto-correction there: two to four leads use each tech skill and
-    only routing knows which applies.
-  - every advisory is logged to the session's `ADVISORIES` file, and `SKILLS` records what actually loaded.
-  - `tests/dogfood.sh` now grades what loaded (the "Launching skill" results, so an auto-corrected call counts as
-    factory-core) and passes a tech-first session only with evidence: the hook's advisory for it, one of its leads
-    loading afterwards, and a finished session. New scenario `tech-first` forces the auto-correction. The mode check
-    reads the real session state path (`fstate.scratch()`, not `/tmp/rpg-factory`).
-  - regression cases in `git-guard.test.sh` (early go-backend, early unity-dots, normal order, no second
-    auto-correction, never a permission decision, the hook always exits 0) and `session-state.test.sh`.
-- The README "Version" line still said 1.0.0 through 1.0.1-1.0.3; `run-all.sh`'s version check now covers it
-  (VERSION == plugin.json == marketplace == CHANGELOG section == README).
 
 ## [1.0.3] - 2026-10-22
 
