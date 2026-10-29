@@ -4276,5 +4276,25 @@
       "probe": "jq -r '.dependencies[\"com.unity.test-framework.performance\"].version' Packages/packages-lock.json",
       "why": "Unity Performance Testing is resolved transitively (lock depth 1), not a direct manifest dependency; a perf-test asmdef references Unity.PerformanceTesting"
     }
-  ]
+  ],
+  "domains": {
+    "engineering": {
+      "summary": "Server, client, netcode and package code, infrastructure, tests and measurement.",
+      "status": "active",
+      "lead": null,
+      "repos": [
+        "server",
+        "client",
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "artifact_kinds": [],
+      "quality_gates": [],
+      "human_gates": [],
+      "handoffs": [],
+      "may_own_feature_state": false,
+      "approvers": []
+    }
+  }
 }
