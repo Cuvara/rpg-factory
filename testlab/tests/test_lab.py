@@ -3810,6 +3810,10 @@ class HostGuardTests(unittest.TestCase):
                     orca_workers=lambda: {"result": {"workers": [worker]}}, **common)
         self.assertIn(hostguard._normal_path("C:/outside/worker"),
                       next(r for r in ps_missing_with_worker["rows"] if r["id"] == "P3")["detail"])
+        ps_missing_dispatch = hostguard.preflight(orca_ps=lambda: None,
+            orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-fixture",), **common)
+        ps_missing_allow = next(r for r in ps_missing_dispatch["rows"] if r["id"] == "P3")["measured"]["allow_list"]
+        self.assertEqual(ps_missing_allow["entries"][0]["matched"][0]["dispatchId"], "ctx-fixture")
 
         allowed_row = {"repo": "repo", "displayName": "runner", "path": "C:/allowed/runner", "worktreeId": "wid",
                        "liveTerminalCount": 1, "terminalVerdict": "live", "agents": []}

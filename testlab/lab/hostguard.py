@@ -1330,9 +1330,18 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
         allow_record = {"entries": [{"entry": str(a), "matched": [], "error": "worktree inventory unavailable"}
                                                       for a in allow_agents], "errors": ["orca worktree ps unavailable"]}
         for dispatch in allow_dispatches:
-            allow_record["entries"].append({"entry": str(dispatch), "matched": [],
-                                              "error": "worker inventory unavailable"})
-            allow_record["errors"].append(f"allow dispatch {dispatch!r} unmatched: worker inventory unavailable")
+            matches = [e for e in entries if e.get("dispatchId") == dispatch]
+            if matches:
+                for entry in matches:
+                    entry["allowed"], entry["allowEntry"] = True, str(dispatch)
+                allow_record["entries"].append({"entry": str(dispatch), "matched": [
+                    {"dispatchId": e.get("dispatchId"), "path": e.get("path"), "worktreeId": e.get("worktreeId")}
+                    for e in matches], "error": None})
+            else:
+                reason = "worker inventory unavailable" if not worker_available else "matched no dispatch id"
+                msg = f"allow dispatch {dispatch!r} {reason}"
+                allow_record["entries"].append({"entry": str(dispatch), "matched": [], "error": msg})
+                allow_record["errors"].append(msg)
         cli_hint = "orca CLI unavailable (set ORCA_CLI_COMMAND or install orca); " if not _orca_command() else ""
         labels = [f"{e['repo']}:{e['displayName']} ({e['path']}) [dispatch={e.get('dispatchId') or 'unknown'}]"
                   for e in entries]
