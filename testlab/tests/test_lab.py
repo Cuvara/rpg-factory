@@ -3787,6 +3787,11 @@ class HostGuardTests(unittest.TestCase):
         dispatch_missing = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
             orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-other",), **common)
         self.assertEqual(next(r for r in dispatch_missing["rows"] if r["id"] == "P3")["status"], "FAIL")
+        dispatch_wildcard = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-*",), **common)
+        wildcard_p3 = next(r for r in dispatch_wildcard["rows"] if r["id"] == "P3")
+        self.assertEqual(wildcard_p3["status"], "FAIL")
+        self.assertIn("matched no dispatch id", wildcard_p3["detail"])
         worker_missing = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
                     orca_workers=lambda: None, **common)
         worker_missing_p3 = next(r for r in worker_missing["rows"] if r["id"] == "P3")
