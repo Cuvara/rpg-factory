@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab soak preflight P3 now reports exact agent identities and terminal evidence, distinguishes stale agents from active work, detects live supervised Orca workers missing from worktree ps, and validates allow-list entries by normalized path, exact worktree id, or unique display name.
+
+### Fixed
+
 - testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
   evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event
   for the leaver before the quit is an add is judged: it must receive the removal within the bound or the check

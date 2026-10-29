@@ -30,10 +30,13 @@ import os
 import re
 import statistics
 import subprocess
+import shutil
+import shlex
 import threading
 import time
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from . import util
 
@@ -973,23 +976,156 @@ def _row(pid: str, ok: bool, detail: str, measured=None, note: str | None = None
     return {"id": pid, "status": "PASS" if ok else "FAIL", "detail": detail, "measured": measured, **({"note": note} if note else {})}
 
 
-def working_agents(ps_json: dict | None, allow=()) -> list[str]:
-    """Names of Orca worktrees with an agent in the `working` state, except those in `allow`
-    (display names or paths: the soak runner and the Lead). Input is `orca worktree ps --json`."""
-    out = []
-    for w in ((ps_json or {}).get("result") or {}).get("worktrees") or []:
-        names = {str(w.get("displayName")), str(w.get("path")), str(w.get("worktreeId"))}
-        if any((a.get("state") == "working") for a in (w.get("agents") or [])) and not (names & set(allow)):
-            out.append(str(w.get("displayName") or w.get("path")))
-    return out
+def _normal_path(value: Any) -> str:
+    value = str(value or "").strip().replace("\\", "/")
+    while len(value) > 1 and value.endswith("/"):
+        value = value[:-1]
+    return value.casefold() if util.IS_WINDOWS else value
+
+
+def _absolute_path(value: Any) -> bool:
+    path = str(value or "").replace("\\", "/")
+    return path.startswith("/") or (len(path) >= 3 and path[1:3] == ":/")
+
+
+def _worktrees(ps_json: dict | None) -> list[dict]:
+    return ((ps_json or {}).get("result") or {}).get("worktrees") or []
+
+
+def _allow_matches(worktrees: list[dict], allow=()) -> tuple[dict[int, str], list[str]]:
+    """Resolve allow entries to rows, refusing ambiguous display names and recording misses."""
+    matched: dict[int, str] = {}
+    errors = []
+    for entry in allow:
+        value = str(entry).strip()
+        exact_id = [i for i, w in enumerate(worktrees) if value and value == str(w.get("worktreeId") or "")]
+        paths = [i for i, w in enumerate(worktrees) if _absolute_path(value) and _absolute_path(w.get("path"))
+                 and _normal_path(value) == _normal_path(w.get("path"))]
+        names = [i for i, w in enumerate(worktrees) if value and value == str(w.get("displayName") or "")]
+        ambiguous = names and len(names) > 1 and not exact_id and not paths
+        hits = exact_id or paths or ([] if ambiguous else names)
+        if ambiguous:
+            errors.append(f"allow entry {value!r} is ambiguous displayName ({len(names)} worktrees)")
+        elif not hits:
+            errors.append(f"allow entry {value!r} matched no worktree")
+        else:
+            for i in hits:
+                matched[i] = value
+    return matched, errors
+
+
+def working_agents(ps_json: dict | None, allow=()) -> tuple[list[dict], dict]:
+    """Return P3 worktree evidence and allow-list resolution; missing classification data fails closed."""
+    worktrees = _worktrees(ps_json)
+    matched, errors = _allow_matches(worktrees, allow)
+    entries = []
+    for i, w in enumerate(worktrees):
+        agents_missing = "agents" not in w or not isinstance(w.get("agents"), list)
+        agents = w.get("agents") if not agents_missing else [{}]
+        agents = agents or []
+        if not agents:
+            continue
+        missing = agents_missing or any(not isinstance(a, dict) or any(k not in a for k in ("state", "agentType")) for a in agents)
+        for a in agents:
+            if not isinstance(a, dict):
+                a = {}
+            if a.get("state") != "working" and not missing:
+                continue
+            terminal_count = w.get("liveTerminalCount")
+            verdict = w.get("terminalVerdict")
+            if (missing or terminal_count is None or verdict is None or
+                    any(not w.get(k) for k in ("repo", "displayName", "path", "worktreeId"))):
+                activity = "ACTIVE"
+                reason = "missing classification field; fail closed"
+            elif a.get("state") == "working" and terminal_count > 0 and verdict == "live":
+                activity, reason = "ACTIVE", "working agent with live terminal"
+            elif a.get("state") == "working" and terminal_count == 0 and verdict in ("none", "dead"):
+                activity, reason = "STALE", "working state with no live terminal"
+            elif a.get("state") == "working":
+                activity, reason = "ACTIVE", "terminal evidence is not conclusively inactive"
+            else:
+                continue
+            path = w.get("path")
+            identity = {"repo": w.get("repo"), "displayName": w.get("displayName"), "path": _normal_path(path),
+                        "worktreeId": w.get("worktreeId"), "agentType": a.get("agentType"),
+                        "terminalVerdict": verdict, "liveTerminalCount": terminal_count,
+                        "prompt": str(a.get("prompt") or "")[:80], "state": a.get("state"),
+                        "activity": activity, "reason": reason, "allowed": i in matched}
+            entries.append(identity)
+    allow_record = {"entries": [{"entry": str(a), "matched": [dict(repo=w.get("repo"), displayName=w.get("displayName"),
+                          path=_normal_path(w.get("path")), worktreeId=w.get("worktreeId"))
+                          for i, w in enumerate(worktrees) if matched.get(i) == str(a)],
+                          "error": next((e for e in errors if repr(str(a)) in e), None)} for a in allow],
+                    "errors": errors}
+    return entries, allow_record
+
+
+def _orca_command() -> list[str] | None:
+    configured = os.environ.get("ORCA_CLI_COMMAND")
+    if configured:
+        configured = configured.strip()
+        unquoted = configured[1:-1] if len(configured) >= 2 and configured[0] == configured[-1] == '"' else configured
+        if util.IS_WINDOWS and unquoted.lower().endswith((".cmd", ".bat", ".exe")):
+            command = [unquoted]
+        else:
+            command = shlex.split(configured, posix=not util.IS_WINDOWS)
+    else:
+        found = shutil.which("orca")
+        command = [found] if found else []
+    if not command:
+        return None
+    if util.IS_WINDOWS and command[0].lower().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/d", "/c", *command]
+    return command
 
 
 def _orca_ps() -> dict | None:
     try:
-        r = subprocess.run(["orca", "worktree", "ps", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        command = _orca_command()
+        if not command:
+            return None
+        r = subprocess.run([*command, "worktree", "ps", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         return json.loads(r.stdout or "")
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         return None
+
+
+def _orca_workers() -> dict | None:
+    try:
+        command = _orca_command()
+        if not command:
+            return None
+        r = subprocess.run([*command, "orchestration", "worker-list", "--json"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
+        return json.loads(r.stdout or "")
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+
+
+def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict | None) -> list[dict]:
+    if not data or data.get("ok") is False or not isinstance((data.get("result") or {}).get("workers"), list):
+        return []
+    worktrees = _worktrees(ps)
+    out = []
+    for worker in data["result"]["workers"]:
+        projection = worker.get("projection") or {}
+        if worker.get("terminalState") != "active" and (projection.get("liveness") or {}).get("verdict") != "live":
+            continue
+        wid = (worker.get("resource") or {}).get("worktreeId") or ""
+        workspace_id = ((projection.get("workspace") or {}).get("id") or wid)
+        path = workspace_id.split("::", 1)[-1] if "::" in workspace_id else workspace_id
+        normalized = _normal_path(path)
+        if any(_normal_path(w.get("path")) == normalized and i in allow for i, w in enumerate(worktrees)):
+            continue
+        path_parts = [p for p in normalized.split("/") if p]
+        inferred_repo = path_parts[-2] if len(path_parts) > 1 else "unknown-repo"
+        out.append({"repo": inferred_repo, "displayName": path_parts[-1] if path_parts else "unknown-name",
+                    "path": normalized, "worktreeId": wid,
+                    "agentType": (projection.get("provider") or {}).get("id"), "terminalVerdict": "live",
+                    "liveTerminalCount": 1, "prompt": "", "state": "working", "activity": "ACTIVE",
+                    "reason": "live supervised worker absent from or not allowed by worktree ps", "allowed": False,
+                    "dispatchId": worker.get("dispatchId"), "taskId": worker.get("taskId")})
+    return out
 
 
 def _wsl_uptime(distro: str = "Ubuntu") -> float | None:
@@ -1025,7 +1161,8 @@ def sample_host(seconds: float) -> list[dict]:
 
 def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_s: float = PRE_SAMPLE_S,
               allow_agents=(), paths: AnyDeskPaths | None = None, now: float | None = None,
-              sampler=sample_host, processes=anydesk_processes, orca_ps=_orca_ps, wsl_uptime=_wsl_uptime,
+              sampler=sample_host, processes=anydesk_processes, orca_ps=_orca_ps, orca_workers=_orca_workers,
+              wsl_uptime=_wsl_uptime,
               include_p7: bool = True) -> dict:
     """P1-P6 over a `sample_s` sample (and P7 when `include_p7`). Every input is injectable. The result
     is {"ok": bool, "rows": [...], "failed": [ids], "anydesk_pids": [...]}; the runner refuses to start
@@ -1066,14 +1203,49 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
                      f"over {len(body)} samples" if ad_mean is not None else "no sample (sampler unavailable)", {"mean_pct": None if ad_mean is None else round(ad_mean, 3),
                                                               "max_pct": max(ad) if ad else None}))
 
-    # P3: no other agent working.
+    # P3: no other ACTIVE agent.
     ps = orca_ps()
-    if ps is None:
-        rows.append(_row("P3", False, "orca worktree ps unavailable: cannot show that no other agent is working"))
+    worker_data = orca_workers()
+    ps_available = (ps is not None and ps.get("ok") is not False and
+                    isinstance((ps.get("result") or {}).get("worktrees"), list))
+    worker_available = (worker_data is not None and worker_data.get("ok") is not False and
+                        isinstance((worker_data.get("result") or {}).get("workers"), list))
+    supervised = []
+    if not ps_available:
+        entries = _live_supervised_workers(worker_data if worker_available else None, {}, None)
+        allow_record = {"entries": [{"entry": str(a), "matched": [], "error": "worktree inventory unavailable"}
+                                                      for a in allow_agents], "errors": ["orca worktree ps unavailable"]}
+        cli_hint = "orca CLI unavailable (set ORCA_CLI_COMMAND or install orca); " if not _orca_command() else ""
+        labels = [f"{e['repo']}:{e['displayName']} ({e['path']}) [dispatch={e.get('dispatchId') or 'unknown'}]"
+                  for e in entries]
+        p3_detail = (cli_hint + "orca worktree ps unavailable: cannot show that no other agent is working" +
+                     ("; live supervised workers: " + ", ".join(labels) if labels else ""))
+        ok_p3 = False
     else:
-        busy = working_agents(ps, allow_agents)
-        rows.append(_row("P3", not busy, "no other agent in the working state" if not busy else "working: " + ", ".join(busy),
-                         {"working": busy}))
+        entries, allow_record = working_agents(ps, allow_agents)
+        supervised = _live_supervised_workers(worker_data, {i: str(a) for i, w in enumerate(_worktrees(ps))
+                                              for a in allow_agents if _normal_path(a) == _normal_path(w.get("path")) or
+                                              a == w.get("worktreeId") or
+                                              (a == w.get("displayName") and sum(1 for x in _worktrees(ps) if x.get("displayName") == a) == 1)}, ps)
+        entries.extend(supervised)
+        errors = allow_record["errors"]
+        blockers = [e for e in entries if e["activity"] == "ACTIVE" and not e["allowed"]]
+        details = []
+        for e in entries:
+            label = f"{e.get('repo') or 'unknown-repo'}:{e.get('displayName') or 'unknown-name'} ({e.get('path') or 'unknown-path'})"
+            details.append(f"{e['activity']} {label} [{e.get('worktreeId') or 'unknown-id'}] agent={e.get('agentType') or 'unknown'} "
+                           f"terminal={e.get('terminalVerdict')}/{e.get('liveTerminalCount')} prompt={e.get('prompt', '')!r}"
+                           f"{'; dispatch=' + e['dispatchId'] if e.get('dispatchId') else ''}"
+                           f"{'; allowed' if e['allowed'] else ''}; {e['reason']}")
+        details.extend(errors)
+        if not worker_available:
+            details.append("orca orchestration worker-list unavailable" +
+                           ("; worktree ps available" if ps_available else "; worktree ps unavailable, fail closed"))
+        p3_detail = "; ".join(details) if details else "no active or stale agents found"
+        ok_p3 = not blockers and not errors
+    rows.append(_row("P3", ok_p3, p3_detail,
+                     {"agents": entries, "allow_list": allow_record, "supervised_workers_available": worker_available,
+                      "supervised_worker_count": sum(1 for e in entries if e.get("dispatchId"))}))
 
     # P4: no sustained heavy foreign process.
     b = [float((s.get("groups") or {}).get("build") or 0.0) for s in body]

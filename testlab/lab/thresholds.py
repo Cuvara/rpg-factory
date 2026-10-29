@@ -282,7 +282,7 @@ CHECK_DEFAULTS = [
     ("preflight P1", "no session now", f"no `--backend`, no session event or connection entry in the last {hostguard.PRE_QUIET_S:.0f} s", POLICY),
     ("preflight P2", "AnyDesk residents idle", f"mean CPU < {hostguard.ANYDESK_IDLE_MAX_PCT} % and max < {hostguard.G3_THRESHOLD_CAP_PCT} % (the G3 cap) of host over a {hostguard.PRE_SAMPLE_S:.0f} s sample",
      f"{POLICY}: observed idle mean 0.03 %, max 0.13 %"),
-    ("preflight P3", "no other agent working", "0 `working` agents in `orca worktree ps` except the allowed ones", POLICY),
+    ("preflight P3", "no ACTIVE agent", "`working` agent with live terminal blocks; zero live terminals with `none`/`dead` verdict is reported STALE; live supervised workers also block. Missing evidence fails closed. Allow entries resolve by normalized absolute path, exact worktree id, or unique display name; ambiguous/unmatched entries fail and resolution is recorded.", POLICY),
     ("preflight P4", "no heavy foreign process", f"build-tool mean <= {hostguard.P4_FOREIGN_PCT} %, MsMpEng mean < {hostguard.G4_AV_PCT} %", POLICY),
     ("preflight P5", "host CPU", f"refuse above {hostguard.P5_REFUSE_PCT} % mean, flag shared-host above {hostguard.P5_SHARED_PCT} %",
      f"{POLICY}: idle baseline mean 15.8 %, p95 33 %"),

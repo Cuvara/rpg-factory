@@ -347,13 +347,13 @@ A freeze in a rendered player is evidence about the game only if nothing else on
 
 **The rule.** No `AnyDesk.exe --backend` process (that process is the session) and no AnyDesk session event from 2 min before the first scheduled client until the run ends. The three resident AnyDesk processes (`AnyDesk.exe`, `--local-service`, `--local-control`) are allowed. This replaces the older "no `AnyDesk.exe` process" wording, which cannot be met while remote access is kept.
 
-**Preflight** (`python3 testlab/testlab.py preflight-soak [--window-min 90] [--window-announced "18:30Z 90min"] [--allow-agent NAME] [--json]`): a 2 min passive sample plus the AnyDesk, Orca and WSL state, one PASS/FAIL row each, exit 0 only when all pass.
+**Preflight** (`python3 testlab/testlab.py preflight-soak [--window-min 90] [--window-announced "18:30Z 90min"] [--allow-agent PATH|WORKTREE-ID|UNIQUE-NAME] [--json]`): a 2 min passive sample plus the AnyDesk, Orca and WSL state, one PASS/FAIL row each, exit 0 only when all pass. P3 records each agent's repo, display name, normalized path, worktree id, agent type, terminal evidence, and an 80-character prompt prefix. A working agent with a live terminal is ACTIVE and blocks; a working state with zero live terminals and terminal verdict `none` or `dead` is reported as STALE and does not block. Missing evidence fails closed. P3 also checks live supervised Orca workers, including workers absent from worktree ps. `--allow-agent` matches a normalized absolute path or exact worktree id; a display name is accepted only when unique. Ambiguous and unmatched entries fail P3, and each entry's match is recorded in the preflight JSON saved to `host/preflight.json` and `run.json`. Set `ORCA_CLI_COMMAND` when the Orca CLI is not on PATH.
 
 | Row | Needs |
 |---|---|
 | P1 | no `--backend` process, no session event or connection entry in the last 2 min (residents allowed) |
 | P2 | AnyDesk residents idle: mean CPU under 0.5 % and max under 1.0 % (the G3 cap) of the host |
-| P3 | no other agent in the `working` state in `orca worktree ps` (`--allow-agent` names the soak runner and the Lead) |
+| P3 | no ACTIVE agent: a `working` agent with a live terminal or a live supervised worker blocks; a `working` agent with zero live terminals and `none`/`dead` verdict is reported STALE. Missing classification evidence blocks. `--allow-agent` accepts a normalized absolute path, exact worktree id, or unique display name; ambiguous or unmatched entries fail. Full identities and allow-list matches are retained in the preflight/run record. |
 | P4 | no sustained build tools (mean 2 % or less) or Defender scan (`MsMpEng` under 5 %) |
 | P5 | host CPU mean 50 % or less; above 30 % it is flagged shared-host |
 | P6 | the WSL distro is running with uptime of 10 min or more (the probe never starts it) |

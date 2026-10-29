@@ -449,7 +449,7 @@ def main(argv=None) -> int:
                                                     "client commit (7+ hex digits; testlab-build.json)")
         sp.add_argument("--expect-server-sha", help="soak-class scenarios: refuse to start unless --server-repo is at this commit")
         sp.add_argument("--allow-agent", action="append",
-                        help="Orca worktree name or path whose working agent P3 may ignore (the soak runner, the Lead)")
+                        help="P3 exception by normalized absolute path, worktreeId, or unique displayName; ambiguous names fail")
     r.set_defaults(fn=cmd_run)
     s.set_defaults(fn=cmd_suite)
     w.set_defaults(fn=cmd_sweep)
@@ -484,7 +484,8 @@ def main(argv=None) -> int:
     pf.add_argument("--window-min", type=float, default=90.0)
     pf.add_argument("--window-announced", help='the window the user named, e.g. "18:30Z 90min" (P7)')
     pf.add_argument("--sample-s", type=float, default=hostguard.PRE_SAMPLE_S, help="passive sample length (default 120)")
-    pf.add_argument("--allow-agent", action="append", help="Orca worktree name or path P3 may ignore")
+    pf.add_argument("--allow-agent", action="append",
+                    help="P3 exception by normalized absolute path, worktreeId, or unique displayName; ambiguous names fail")
     pf.add_argument("--out", help="also write the result JSON here")
     pf.add_argument("--json", action="store_true")
     pf.set_defaults(fn=cmd_preflight_soak)
