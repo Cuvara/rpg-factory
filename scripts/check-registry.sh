@@ -159,6 +159,15 @@ if ! $structure_only; then
     fi
   done < <(jq -r '.repos | to_entries[] | select(.value.optional == true) | [.key, .value.path] | @tsv' "$REGISTRY")
   repo_skipped() { case "$optional_absent" in *"|$1|"*) return 0 ;; *) return 1 ;; esac; }
+  # computed first: a jq error must fail the check, not silently shorten the path list
+  path_rows=$(jq -r '
+      (.repos | to_entries[] | .key as $k | .value.path as $p
+        | ["repo:" + $k, $p, $k], ((.value.instructions // [])[] | ["repo:" + $k, $p + "/" + ., $k])),
+      (.repos as $repos | .modules[] | .repo as $k | $repos[$k].path as $p | .id as $id
+        | (.paths[], (.claude_md // empty), (.changelog // empty), (.docs // [])[], (.generated // [])[])
+        | [$id, $p + "/" + ., $k]),
+      (.workspace.root_markers[] | ["workspace", ., ""])
+      | @tsv' "$REGISTRY") || missing+="registry: path query failed (jq error above) - paths not checked"$'\n'
   while IFS=$'\t' read -r owner rel repo; do
     [ -z "$rel" ] && continue
     repo_skipped "$repo" && continue
@@ -166,14 +175,7 @@ if ! $structure_only; then
     case "$rel" in *'*'*) continue ;; esac   # globs are patterns, not paths
     path_count=$((path_count + 1))
     [ -e "$ws/$rel" ] || missing+="$owner: missing path $rel"$'\n'
-  done < <(jq -r '
-      (.repos | to_entries[] | .key as $k | .value.path as $p
-        | ["repo:" + $k, $p, $k], (.value.instructions[] | ["repo:" + $k, $p + "/" + ., $k])),
-      (.repos as $repos | .modules[] | .repo as $k | $repos[$k].path as $p | .id as $id
-        | (.paths[], (.claude_md // empty), (.changelog // empty), .docs[], .generated[])
-        | [$id, $p + "/" + ., $k]),
-      (.workspace.root_markers[] | ["workspace", ., ""])
-      | @tsv' "$REGISTRY")
+  done <<<"$path_rows"
   while IFS=$'\t' read -r owner rel repo; do
     [ -z "$rel" ] && continue
     repo_skipped "$repo" && continue

@@ -58,5 +58,18 @@ if out=$(RPG_FACTORY_WORKSPACE="$TMP/workspace" "$CHECKER" --registry "$G" 2>&1)
   else echo "FAIL g-optional-repo-absent: missing notice"; printf '%s\n' "$out" | head -8; fail=$((fail + 1)); fi
 else echo "FAIL g-optional-repo-absent"; printf '%s\n' "$out" | head -12; fail=$((fail + 1)); fi
 
+# h: a module without a docs array still gets its paths checked (no jq error, nothing skipped).
+H="$TMP/nodocs.json"; jq '.modules |= map(del(.docs))' "$G" > "$H"
+out=$(RPG_FACTORY_WORKSPACE="$TMP/workspace" "$CHECKER" --registry "$H" 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q 'jq: error' <<<"$out"; then echo "PASS h-missing-arrays-tolerated"; pass=$((pass + 1));
+else echo "FAIL h-missing-arrays-tolerated (rc=$rc)"; printf '%s
+' "$out" | head -6; fail=$((fail + 1)); fi
+# i: a path query error fails the check instead of silently shortening the path list.
+I="$TMP/badpaths.json"; jq '.modules[0].paths = 5' "$G" > "$I"
+out=$(RPG_FACTORY_WORKSPACE="$TMP/workspace" "$CHECKER" --registry "$I" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && grep -Fq 'path query failed' <<<"$out"; then echo "PASS i-path-query-error-fails"; pass=$((pass + 1));
+else echo "FAIL i-path-query-error-fails (rc=$rc)"; printf '%s
+' "$out" | head -6; fail=$((fail + 1)); fi
+
 echo "check-registry: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

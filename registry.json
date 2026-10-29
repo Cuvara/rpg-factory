@@ -465,8 +465,7 @@
       "protected_branches": [
         "main"
       ],
-      "instructions": [],
-      "remote": null
+      "instructions": []
     }
   },
   "modules": [
@@ -503,7 +502,8 @@
       "gates": [],
       "obligations": [],
       "fallback": true,
-      "domain": "design"
+      "domain": "design",
+      "docs": []
     },
     {
       "id": "authoring.design-gdd",
@@ -541,7 +541,8 @@
         "gameplay-rules"
       ],
       "obligations": [],
-      "domain": "design"
+      "domain": "design",
+      "docs": []
     },
     {
       "id": "authoring.design-features",
@@ -579,7 +580,8 @@
         "gameplay-rules"
       ],
       "obligations": [],
-      "domain": "design"
+      "domain": "design",
+      "docs": []
     },
     {
       "id": "authoring.design-decisions",
@@ -617,7 +619,8 @@
         "gameplay-rules"
       ],
       "obligations": [],
-      "domain": "design"
+      "domain": "design",
+      "docs": []
     },
     {
       "id": "authoring.approvals",
@@ -653,7 +656,8 @@
       ],
       "gates": [],
       "obligations": [],
-      "domain": "design"
+      "domain": "design",
+      "docs": []
     },
     {
       "id": "server.proto",

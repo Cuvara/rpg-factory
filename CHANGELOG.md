@@ -27,6 +27,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `registry.json` now defines engineering domain ownership; the schema and `check-registry.sh` validate artifact domains, roles, leads, repos, gates and optional repositories. `tests/check-registry.test.sh` covers these rules.
 - `scripts/checks/english-only.py`: report-only Unicode language check with optional enforcement and allowlisting.
 
+### Fixed
+
+- `factory-status.py` and `git-guard.py` accept a registry repo without a `remote` (absent or null); `check-registry.sh` tolerates modules without `docs` and fails when its path query errors instead of silently checking fewer paths.
+
 ## [1.1.1] - 2026-10-29
 
 Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state, accepts a Windows-form TMPDIR in netcode-headless and refreshes citations. No breaking changes or user action beyond the usual update command.

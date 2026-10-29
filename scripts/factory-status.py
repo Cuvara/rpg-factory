@@ -62,7 +62,7 @@ def substitute(run):
     return run
 REPO_BY_NAME = {}
 for _k, _r in REG["repos"].items():
-    _m = re.search(r"github\.com[:/][^/]+/([^/.]+)", _r.get("remote", ""))
+    _m = re.search(r"github\.com[:/][^/]+/([^/.]+)", (_r.get("remote") or ""))
     if _m:
         REPO_BY_NAME[_m.group(1).lower()] = _k
 
