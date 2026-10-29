@@ -20,6 +20,13 @@ assert() {
   local name="$1" repo="$2" pred="$3"; shift 3
   local out
   out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+  # ROUTING_GOLDEN_OUT=<file>: also record the routing contract of this scenario (tests/routing-golden.test.sh)
+  if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
+    jq -c --arg name "$name" --arg repo "$repo" '.repos[0] | {name: $name, repo: $repo,
+        routing: (.routing | {lead, co_leads, legs, follow_ups, tech, ambiguous}),
+        touched, checks: [.checks[].id]}' <<<"$out" >> "$ROUTING_GOLDEN_OUT" 2>/dev/null       || printf '{"name":%s,"error":true}
+' "$(jq -Rn --arg n "$name" '$n')" >> "$ROUTING_GOLDEN_OUT"
+  fi
   if jq -e ".repos[0] | $pred" <<<"$out" >/dev/null 2>&1; then
     pass=$((pass + 1)); echo "PASS  $name"
   else

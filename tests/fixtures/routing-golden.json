@@ -1,0 +1,2013 @@
+{
+  "DOTS Sample recopy -> pin-bump": [
+    {
+      "checks": [
+        "package-pins",
+        "ci-package-pins"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "pin-bump",
+        "legs": [],
+        "tech": [
+          "unity-client-tech"
+        ]
+      },
+      "touched": [
+        "client.dots-sample"
+      ]
+    }
+  ],
+  "Nakama party RPC payload -> server-services leads (nakama-rpc), client follow-up": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "client-integration"
+        ],
+        "lead": "server-services",
+        "legs": [
+          "server-realtime"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.nakama"
+      ]
+    }
+  ],
+  "Nakama session flow in client -> client-integration": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "Netcode Wire.cs copy -> wire-contract leads, unity-package leg": [
+    {
+      "checks": [
+        "check-metas",
+        "wire-parity",
+        "ci-wire",
+        "ci-unity",
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "client-wire-conformance",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-samples",
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "check-metas",
+        "headless-tests",
+        "ci-unity"
+      ],
+      "repo": "netcode",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "unity-package"
+        ],
+        "tech": [
+          "unity-client-tech",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "netcode.protocol"
+      ]
+    }
+  ],
+  "Netcode package code -> tech unity-client-tech via unity-package": [
+    {
+      "checks": [
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "client-wire-conformance",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-samples",
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "check-metas",
+        "headless-tests",
+        "ci-unity"
+      ],
+      "repo": "netcode",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "wire-contract",
+          "pin-bump"
+        ],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "netcode.codec"
+      ]
+    }
+  ],
+  "Netcode prediction code -> tech netcode-client, unity-package leads": [
+    {
+      "checks": [
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-samples",
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "check-metas",
+        "headless-tests",
+        "ci-unity"
+      ],
+      "repo": "netcode",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump"
+        ],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "netcode.runtime"
+      ]
+    }
+  ],
+  "Netcode runtime carries the SGL-only game-rule rule": [
+    {
+      "checks": [
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-samples",
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "check-metas",
+        "headless-tests",
+        "ci-unity"
+      ],
+      "repo": "netcode",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump"
+        ],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "netcode.runtime"
+      ]
+    }
+  ],
+  "Netcode transport fix -> unity-package leads, not wire-contract": [
+    {
+      "checks": [
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "client-wire-conformance",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-samples",
+        "check-metas",
+        "headless-tests",
+        "ci-unity",
+        "check-metas",
+        "headless-tests",
+        "ci-unity"
+      ],
+      "repo": "netcode",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "wire-contract",
+          "pin-bump"
+        ],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "netcode.codec"
+      ]
+    }
+  ],
+  "Redis servers:id -> wire-contract leads": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services",
+          "measure"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.gameserver-dotnet"
+      ]
+    }
+  ],
+  "SGL change -> server-realtime leads, tech dotnet-gameserver listed, never routed": [
+    {
+      "checks": [
+        "check-metas",
+        "sgl-determinism",
+        "golden-regen",
+        "client-sgl-pin",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package",
+          "client-integration"
+        ],
+        "lead": "server-realtime",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.shared-gamelogic"
+      ]
+    }
+  ],
+  "Shared.GameLogic system -> server-realtime; client pin follow-up": [
+    {
+      "checks": [
+        "check-metas",
+        "sgl-determinism",
+        "golden-regen",
+        "client-sgl-pin",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package",
+          "client-integration"
+        ],
+        "lead": "server-realtime",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.shared-gamelogic"
+      ]
+    }
+  ],
+  "UIToolkit codegen core -> unity-package, generated files noted": [
+    {
+      "checks": [
+        "check-metas",
+        "ci-unity",
+        "client-codegen-drift",
+        "check-metas",
+        "uxml-drift",
+        "client-codegen-drift",
+        "check-metas",
+        "ci-unity"
+      ],
+      "repo": "uitoolkit",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech"
+        ]
+      },
+      "touched": [
+        "uitoolkit.editor"
+      ]
+    }
+  ],
+  "UIToolkit screen flow -> unity-package": [
+    {
+      "checks": [
+        "check-metas",
+        "standalone",
+        "uss-prefix",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "client-codegen-drift",
+        "check-metas",
+        "uxml-drift",
+        "client-codegen-drift",
+        "check-metas",
+        "samples",
+        "ci-unity",
+        "check-metas",
+        "ci-unity"
+      ],
+      "repo": "uitoolkit",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech"
+        ]
+      },
+      "touched": [
+        "uitoolkit.runtime"
+      ]
+    }
+  ],
+  "UnityDots runtime behaviour -> unity-package": [
+    {
+      "checks": [
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "test-floor-selftest",
+        "ci-unity"
+      ],
+      "repo": "unitydots",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "unitydots.runtime"
+      ]
+    }
+  ],
+  "UnityDots runtime carries the SGL-only game-rule rule": [
+    {
+      "checks": [
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "test-floor-selftest",
+        "ci-unity"
+      ],
+      "repo": "unitydots",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "unitydots.runtime"
+      ]
+    }
+  ],
+  "UnityDots simulation system -> tech unity-dots (and unity-client-tech), unity-package leads": [
+    {
+      "checks": [
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "ci-unity",
+        "check-metas",
+        "test-floor-selftest",
+        "ci-unity"
+      ],
+      "repo": "unitydots",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "unitydots.runtime"
+      ]
+    }
+  ],
+  "absolute path (WSL /mnt/c/ form) routes like repo-relative": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "absolute path (backslashes) routes like repo-relative": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "absolute path (forward slashes) routes like repo-relative": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "absolute path (git-bash /c/ form) routes like repo-relative": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "absolute path (native form) routes like repo-relative": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "bench harness only -> measure leads, server-realtime co-leads": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [
+          "server-realtime"
+        ],
+        "follow_ups": [],
+        "lead": "measure",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.bench"
+      ]
+    }
+  ],
+  "benchmark docs -> measure is the lead": [
+    {
+      "checks": [],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "measure",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.measurement-docs"
+      ]
+    }
+  ],
+  "client ECS bridge code -> tech unity-dots and netcode-client via client-integration": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "client HUD -> client-integration": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "client HUD ECS code -> tech unity-client-tech": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "client build config -> client-integration": [
+    {
+      "checks": [
+        "buildconfig-json",
+        "ci-build"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.buildscripts"
+      ]
+    }
+  ],
+  "client end of nakama-rpc names the upstream driver": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [
+          "server-services"
+        ],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "client game code carries the SGL-only game-rule rule": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "client measurement tools (measure) -> Unity tech, not dotnet-gameserver": [
+    {
+      "checks": [
+        "shell-syntax"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "measure",
+        "legs": [],
+        "tech": [
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.tools"
+      ]
+    }
+  ],
+  "client pin loader is an end of transport-security": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [
+          "server-ops"
+        ],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "comma-joined paths are split": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "client-integration"
+        ],
+        "lead": "server-services",
+        "legs": [
+          "server-realtime"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.gateway",
+        "server.nakama"
+      ]
+    }
+  ],
+  "content items.json -> server-realtime; gameplay gate": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration",
+        "content-json",
+        "content-loader-tests"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-realtime",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.content"
+      ]
+    }
+  ],
+  "deploy-only change -> no tech skill": [
+    {
+      "checks": [
+        "monitoring-parse",
+        "monitoring-up"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-ops",
+        "legs": [],
+        "tech": []
+      },
+      "touched": [
+        "server.monitoring"
+      ]
+    }
+  ],
+  "docs-only ADR edit -> no specialised lead": [
+    {
+      "checks": [],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": null,
+        "legs": [],
+        "tech": []
+      },
+      "touched": [
+        "server.docs"
+      ]
+    }
+  ],
+  "game server carries the SGL placement rule": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-realtime",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.gameserver-dotnet"
+      ]
+    }
+  ],
+  "gateway JoinToken claims -> wire-contract leads (join-token), server-services leg": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.gateway"
+      ]
+    }
+  ],
+  "gateway TLS/sealed manifest -> server-ops drives transport-security; client + netcode follow up": [
+    {
+      "checks": [
+        "validate-manifests",
+        "autoscaler-rule-offline",
+        "shell-syntax",
+        "validate-k8s-app",
+        "deploy-passthrough-tests",
+        "server-dry-run",
+        "k8s-verify",
+        "cd-deploy"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "unity-package",
+          "client-integration"
+        ],
+        "lead": "server-ops",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.deploy-k8s"
+      ]
+    }
+  ],
+  "gateway allocator internals -> server-services, no contract": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-services",
+        "legs": [],
+        "tech": [
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.gateway"
+      ]
+    }
+  ],
+  "gateway change -> tech go-backend, not dotnet-gameserver": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-services",
+        "legs": [],
+        "tech": [
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.gateway"
+      ]
+    }
+  ],
+  "glob path expands to repo-relative forward-slash files": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "k8s deployment -> server-ops; shared-infra gate": [
+    {
+      "checks": [
+        "validate-manifests",
+        "autoscaler-rule-offline",
+        "shell-syntax",
+        "validate-k8s-app",
+        "deploy-passthrough-tests",
+        "server-dry-run",
+        "k8s-verify",
+        "cd-deploy"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "unity-package",
+          "client-integration"
+        ],
+        "lead": "server-ops",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.deploy-k8s"
+      ]
+    }
+  ],
+  "monitoring alert -> server-ops": [
+    {
+      "checks": [
+        "monitoring-parse",
+        "monitoring-up"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-ops",
+        "legs": [],
+        "tech": []
+      },
+      "touched": [
+        "server.monitoring"
+      ]
+    }
+  ],
+  "move client to Netcode vX -> pin-bump leads; tag gate": [
+    {
+      "checks": [
+        "package-pins",
+        "ci-package-pins",
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "package-pins",
+        "ci-package-pins"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "pin-bump",
+        "legs": [
+          "client-integration"
+        ],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.packages"
+      ]
+    }
+  ],
+  "netcode measurement test -> unity-package leads, measure co-leads": [
+    {
+      "checks": [
+        "check-metas",
+        "headless-tests",
+        "ci-unity"
+      ],
+      "repo": "netcode",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [
+          "measure"
+        ],
+        "follow_ups": [],
+        "lead": "unity-package",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "netcode.measurement"
+      ]
+    }
+  ],
+  "new Nakama RPC -> server-services": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "client-integration"
+        ],
+        "lead": "server-services",
+        "legs": [
+          "server-realtime"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.nakama"
+      ]
+    }
+  ],
+  "new migration -> server-services; gamestate-migrations contract": [
+    {
+      "checks": [
+        "shell-syntax",
+        "migrator-tests",
+        "cd-backup",
+        "migrator-tests"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-services",
+        "legs": [
+          "server-ops"
+        ],
+        "tech": [
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.persistence"
+      ]
+    }
+  ],
+  "replication throughput measurement -> measure": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "measure",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.loadtest",
+        "server.measurement-docs"
+      ]
+    }
+  ],
+  "replication/snapshot code -> server-realtime, no contract": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-realtime",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.gameserver-dotnet"
+      ]
+    }
+  ],
+  "repo-prefixed path routes like repo-relative": [
+    {
+      "checks": [
+        "validate-manifests",
+        "autoscaler-rule-offline",
+        "shell-syntax",
+        "validate-k8s-app",
+        "deploy-passthrough-tests",
+        "server-dry-run",
+        "k8s-verify",
+        "cd-deploy"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "unity-package",
+          "client-integration"
+        ],
+        "lead": "server-ops",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.deploy-k8s"
+      ]
+    }
+  ],
+  "sample build scripts -> client.buildscripts with build gates": [
+    {
+      "checks": [
+        "buildconfig-json",
+        "ci-build"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.buildscripts"
+      ]
+    }
+  ],
+  "server loadtest (measure) -> server tech only, no Unity tech skill": [
+    {
+      "checks": [
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "measure",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.loadtest"
+      ]
+    }
+  ],
+  "server tick change -> no Unity tech skill": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-realtime",
+        "legs": [],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.gameserver-dotnet"
+      ]
+    }
+  ],
+  "submodule gitlink bump -> pin-bump is the primary lead": [
+    {
+      "checks": [],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "pin-bump",
+        "legs": [],
+        "tech": [
+          "unity-client-tech"
+        ]
+      },
+      "touched": [
+        "client.build-workflows"
+      ]
+    }
+  ],
+  "tick-rate knob -> server-realtime leads, server-ops leg, server-knobs contract": [
+    {
+      "checks": [
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "server-realtime",
+        "legs": [
+          "server-ops"
+        ],
+        "tech": [
+          "dotnet-gameserver"
+        ]
+      },
+      "touched": [
+        "server.gameserver-dotnet"
+      ]
+    }
+  ],
+  "wire change: cross-repo dependents add only their PRIMARY owner as follow-up (no measure noise)": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "wire field -> both server tech skills (wire-contract uses both)": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "wire field -> wire-contract leads; server legs; Netcode + client follow-ups; tag gate": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ],
+  "wire field in server repo -> no client tech skill (the Netcode leg gets it in its repo)": [
+    {
+      "checks": [
+        "proto-regen",
+        "ci-proto-generated",
+        "go-vet",
+        "go-test",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "nakama-plugin-image",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "go-vet",
+        "go-test",
+        "go-build",
+        "loadtest-shell-syntax",
+        "encoding-report-smoke",
+        "go-vet",
+        "go-build",
+        "dotnet-build",
+        "dotnet-test",
+        "verify-test-counters",
+        "aot-publish",
+        "ci-dotnet",
+        "dotnet-build",
+        "dotnet-test",
+        "go-vet-integration",
+        "integration-e2e",
+        "ci-integration"
+      ],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [
+          "pin-bump",
+          "unity-package"
+        ],
+        "lead": "wire-contract",
+        "legs": [
+          "server-realtime",
+          "server-services"
+        ],
+        "tech": [
+          "dotnet-gameserver",
+          "go-backend"
+        ]
+      },
+      "touched": [
+        "server.proto"
+      ]
+    }
+  ]
+}

@@ -138,6 +138,7 @@ else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
 else skp "registry facts re-probed in the repos" "--no-workspace"; fi
 run "skill citation checker (fixture repos)" env -u TMPDIR tests/skill-citations.test.sh
+run "engineering routing contract unchanged (golden, stand-in workspace)" env -u TMPDIR tests/routing-golden.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
