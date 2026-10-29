@@ -73,7 +73,7 @@ problems=$(jq -r '
         | (($d.value.human_gates // [])[] as $gate
           | select([($r.human_gates // [])[].id] | index($gate) == null)
           | "domain \($did): unknown human gate \($gate)")),
-      (([ (($r.skills // {}) | to_entries[] | {id:.key, role:.value.role}), ($r.modules[] | {id:.id, role:.role}), (($r.contracts // [])[] | {id:("contract " + .id), role:.role}) ][]) 
+      (([ (($r.skills // {}) | to_entries[] | {id:.key, role:.value.role}), ($r.modules[] | {id:.id, role:.role}), (($r.contracts // [])[] | {id:("contract " + .id), role:.role}) ][])
         | select(.role != null and (.role | IN("orchestrator","implementer","reference") | not))
         | "\(.id): role must be orchestrator|implementer|reference"),
       (.modules[] as $m

@@ -59,5 +59,9 @@ out=$(ctx --repo uitoolkit --json --paths Runtime/Widget.cs 2>&1)
 jq -e '.repos[0].routing.lead == "unity-package" and .repos[0].routing.domain == "engineering"' <<<"$out" >/dev/null && ok "present optional repo routes normally" || no "optional present route"
 out=$(python3 -B "$ROOT/scripts/factory-cmd.py" route --domain engineering 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'routes by --repo/--paths' <<<"$out" && ok "factory-cmd route --domain" || no "factory-cmd route --domain (rc=$rc)"
+out=$(python3 -B "$ROOT/scripts/factory-cmd.py" route --kind shared --lead design-lead 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q 'id: design' <<<"$out" && ok "factory-cmd route --kind --lead resolves an ambiguous kind" || no "factory-cmd route --kind --lead (rc=$rc)"
+out=$(python3 -B "$ROOT/scripts/factory-cmd.py" route --kind shared --repo server 2>&1); rc=$?
+[ "$rc" -ne 0 ] && grep -q 'accepts only --domain, --kind and --lead' <<<"$out" && ok "factory-cmd route selector rejects other flags" || no "factory-cmd route selector flag check (rc=$rc)"
 total=$((pass + fail)); echo "domains-routing: $total run, $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
