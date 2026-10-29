@@ -1,6 +1,6 @@
 ---
 name: factory-core
-description: Shared Factory workflow for every registered discipline domain in the UnityIndie game workspace (rpg-mmo-server, IndieRPGMMOAdventure, Netcode, UnityDots, UIToolkit and the domains' authoring artifacts). Use at the start of ANY task that changes code, configuration, CI, deployment, measurements, documents or domain artifacts there, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic domain and skill routing, coordination, validation with evidence, human gates, git safety and the verify-a-result report; domain workflows live with their registered leads. Not for game design / GDD / feature-registry lifecycle (game-ai-workflows) or web game projects (web-game-factory).
+description: Shared Factory workflow for every registered discipline domain in the UnityIndie game workspace (rpg-mmo-server, IndieRPGMMOAdventure, Netcode, UnityDots, UIToolkit and the domains' authoring artifacts). Use at the start of ANY task that changes code, configuration, CI, deployment, measurements, documents or domain artifacts there, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic domain and skill routing, coordination, validation with evidence, human gates, git safety and the verify-a-result report; domain workflows live with their registered leads. Game Design is a native domain for design artifacts. Not for web-game projects; web-game-factory owns those.
 argument-hint: "[mode: analyze|plan|implement|validate|review|resume] [task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*)
 ---
@@ -36,8 +36,7 @@ Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill argu
 in analyze/plan/review every file write and mutating command gets a `high` advisory; validate flags anything but
 `run-checks.py`. Respect the mode yourself. Switch mode only when the user asks for it (e.g. "now implement it").
 Every mode except validate/resume invokes the lead skill: its workflow is where the plan comes from.
-Parallel work: the main session is the lead and integrator; it delegates in worktrees, runs QA in parallel and
-integrates the results - `references/parallel-work.md`.
+Parallel work: the main session leads and integrates; delegate in worktrees and follow `references/parallel-work.md`.
 
 ## Workflow
 
@@ -47,7 +46,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    lists pending work derived from the repos (wire rollout stage, READY_TO_TAG packages,
    released-but-unpinned, in-flight `<type>/<area>/<topic>` branches) with the owning skill.
 2. **Scope (M).** Name repos and modules; read each touched module's `claude_md`. A task that
-   would invent gameplay rules or numbers stops here (**H**, `phase-plumbing-only`).
+   would bind gameplay values without verified approval stops here (**H**, `phase-scope`).
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
 4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --mode <mode> --repo <key> --paths <files the task will write>`
@@ -134,6 +133,7 @@ Engineering leads (the registry remains authoritative); supporting Engineering s
 
 | Situation | Lead skill |
 |---|---|
+| Game concepts, mechanics, GDDs, feature specs and design decisions | `game-design` (optional authoring repo) |
 | wire message/field, protocol version, JSON encoding, JoinToken claims, Redis servers:id | `wire-contract` (server → Netcode → client) |
 | move a client pin (package / sgl tag) or the unity-build-workflows submodule | `pin-bump` |
 | C# game server, ECS systems, knobs, metrics, content, Shared.GameLogic | `server-realtime` |

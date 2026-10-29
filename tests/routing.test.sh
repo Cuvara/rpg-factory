@@ -173,7 +173,7 @@ else fail=$((fail + 1)); echo "FAIL  --explain tech rows: $(grep -E '^- (dotnet-
 echo "== task scope (throwaway fixture workspace)"
 . "$ROOT/scripts/lib/compat.sh"
 FX="$(mktemp_win)" && [ -d "$FX" ] && trap 'rm -rf "$FX"' EXIT
-FW="$FX/ws"; FS="$FW/rpg-mmo-server"; FC="$FW/IndieRPGMMOAdventure"
+FW="$FX/ws"; FS="$FW/rpg-mmo-server"; FC="$FW/IndieRPGMMOAdventure"; FA="$FW/game-authoring"
 fgc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 mkdir -p "$FS/backend/gateway/server" "$FS/backend/shared/proto" "$FC/ProjectSettings"
 touch "$FS/backend/TEAM.md" "$FS/backend/gateway/server/server.go" "$FS/backend/shared/proto/wire.proto" "$FC/ProjectSettings/ProjectVersion.txt"
@@ -181,6 +181,14 @@ for r in "$FS" "$FC"; do git -C "$r" init -q -b develop; fgc "$r" add -A; fgc "$
 echo "// user edit" >> "$FS/backend/gateway/server/server.go"           # pre-existing user change = baseline
 fctx() { (cd "$1" && RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" "${@:2}" 2>&1); }
 fexpect() { if eval "$2"; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1"; head -c 600 <<<"$out" | sed 's/^/      /'; fi; }
+mkdir -p "$FA/design/features"; echo 'fixture' > "$FA/design/features/crafting.md"
+git -C "$FA" init -q -b main; fgc "$FA" add -A; fgc "$FA" commit -qm init
+# The design scenario uses the same lead predicate, but stays outside the engineering routing golden.
+design_lead="$(lead game-design)"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths design/features/crafting.md 2>&1)
+fexpect 'authoring design path -> game-design leads' "jq -e '.repos[0] | $design_lead' <<<\"\$out\" >/dev/null"
+out=$(fctx "$FA" --kind feature-spec --json)
+fexpect "--kind feature-spec -> design domain and game-design lead" 'jq -e ".domain.lead == \"game-design\" and .domain.id == \"design\"" <<<"$out" >/dev/null'
 out=$(fctx "$FS")
 fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
   'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'

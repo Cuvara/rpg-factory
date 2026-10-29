@@ -15,7 +15,7 @@ workspace and how to query the registry. It does not repeat module data.
 | `netcode` | `Netcode/` | com.cuvara.netcode: wire codec, transport, prediction, content client | registry |
 | `unitydots` | `UnityDots/` | com.cuvara.dots: ECS runtime, DI, views, netcode/physics bridges | registry |
 | `uitoolkit` | `UIToolkit/` | com.cuvara.uitoolkit: screens, flow, binding, UXML codegen | registry |
-| - | `game-art-mcp/`, `rpg-factory/`, `game-ai-workflows` (plugin) | tooling | out of scope |
+| - | `game-art-mcp/`, `rpg-factory/` (tooling) | tooling | out of scope |
 
 Most Unity code lives in the package repos (Netcode ~62k LOC, UnityDots ~31k, UIToolkit ~14.5k);
 the client repo holds ~55 C# files. The client consumes the packages as git-tag pins

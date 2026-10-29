@@ -35,6 +35,8 @@ LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r 
 # TOOLRUN: a script the session must run (e.g. run-checks.py), if set.
 # SHOWS:   text the transcript must contain (command output), if set; RAW scenarios send the prompt as-is.
 declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW CORRECTS
+PROMPT[design-feature-spec]="Draft a feature spec for a crafting system with --domain design. Do not create files in product repos; the authoring repo may be absent."
+EXPECT[design-feature-spec]="factory-core game-design"; HANDOFF[design-feature-spec]=""
 PROMPT[realtime-knob]="Add a configurable GAMESERVER_ tick-rate knob to the rpg-mmo-server C# game server and expose the value in force on /status."
 EXPECT[realtime-knob]="server-realtime"; HANDOFF[realtime-knob]=""
 PROMPT[nakama-rpc]="Add a new Nakama RPC party_kick to rpg-mmo-server and call it from the Unity client's party service."
@@ -77,7 +79,7 @@ EXPECT[tech-first]="server-services go-backend"; HANDOFF[tech-first]=""; CORRECT
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
+scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
@@ -125,7 +127,8 @@ roots = list(dict.fromkeys([fstate.scratch(), os.path.join(fstate.persistent(), 
 cands = [os.path.join(r, key) for r in roots]
 print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/lib" "${sid:-none}")
   # the reader knows the on-disk layout (ADVISORIES.d/ + legacy file) and probes both roots itself
-  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '' | tr '
+  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '
+' | tr '
 ' ';')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')

@@ -7,6 +7,7 @@ Usage:
                [--owns-modules MODULE,...]      lead: become the primary owner of these modules
                [--drives-contract CONTRACT,...] lead: become the driver of these contracts (must have none)
                [--tools TOOL,...]               registry dev_tools the skill uses (its ## Tools section)
+               [--domain ID]                 assign the skill to a registered domain
                [--cite-root PREFIX=REPO:SUB]... where its path:line citations resolve (registry cite_roots)
                [--dry-run]
 
@@ -187,6 +188,11 @@ def main():
     if bad:
         return refuse(f"unknown dev tool(s) {bad} (known: {', '.join(known_tools)})")
     spec = {"kind": kind, "repos": rlist}
+    domain = a.get("domain")
+    if domain:
+        if domain not in reg.get("domains", {}):
+            return refuse(f"unknown domain {domain}")
+        spec["domain"] = domain
     used_by, mods, contracts = csv(a.get("used_by")), csv(a.get("owns_modules")), csv(a.get("drives_contract"))
     if kind == "tech":
         if mods or contracts:

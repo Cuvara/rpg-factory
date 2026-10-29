@@ -10,7 +10,7 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
      │          (snapshot: modules, dependents, cross-repo dependents, contracts, suggested skills, gates)
      ├── cross-repo drivers  - wire-contract, pin-bump, measure
      │        own: ordering, contract evidence, hand-offs, human gates between legs, per-repo report
-     └── repo skills         - server-realtime, server-services, server-ops, unity-package, client-integration
+     domain + Engineering leads - game-design, server-realtime, server-services, server-ops, unity-package, client-integration
               own: implementation + validation inside one repo (one leg)
                    │
                    └── tech skills - dotnet-gameserver, go-backend, unity-client-tech, unity-dots, netcode-client
@@ -49,8 +49,7 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
    release in the current task does the agent tag and publish itself (`git-safety.md` rule 5).
    The guard flags `git tag <name>` and pushing tags (advisory `high`) either way.
 9. **Never bypass Core.** This covers the baseline, the guard, and the report template.
-10. **Never create another registry.** No feature lists, GDD state or task trackers. Feature and
-    GDD lifecycle belongs to `game-ai-workflows`. Module knowledge belongs to `registry.json`.
+10. **Own feature state only through the domain.** A domain with `may_own_feature_state: true` owns feature state only in registered authoring paths. Product-repo `.ai/`, `docs/registry/` and `docs/features/` stay forbidden. Module knowledge belongs to `registry.json`.
 
 ## Tech skills
 

@@ -3,7 +3,7 @@
 Shared artifact metadata, lifecycle transitions, trace requirements and signed approval rules are documented in
 [docs/architecture/artifacts.md](docs/architecture/artifacts.md).
 
-`rpg-factory` is a Claude Code plugin that organises development work across the UnityIndie RPG MMO workspace. The workspace holds five repos:
+`rpg-factory` is a Claude Code plugin that organises development work across the UnityIndie RPG MMO workspace. Engineering work spans five product repos; Game Design artifacts live in the optional `game-authoring` repo:
 
 | Repo key | Directory | Contents |
 |---|---|---|
@@ -12,6 +12,7 @@ Shared artifact metadata, lifecycle transitions, trace requirements and signed a
 | `netcode` | `Netcode` | `com.cuvara.netcode` package |
 | `unitydots` | `UnityDots` | `com.cuvara.dots` package |
 | `uitoolkit` | `UIToolkit` | `com.cuvara.uitoolkit` package |
+| `authoring` | `game-authoring` (optional) | Game Design GDDs, feature specs and decisions |
 
 You give Claude a development request. The plugin works out, from the live state of the workspace, the following:
 
@@ -49,11 +50,10 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
 
 | Use | For |
 |---|---|
-| `rpg-factory` | engineering changes in the five repos above: code, config, CI, deploy, measurement, their docs |
-| `game-ai-workflows` | game design: GDD, feature registry lifecycle, design review |
+| `rpg-factory` | Engineering changes in the five product repos and native Game Design artifacts in `game-authoring` |
 | `web-game-factory` | web game projects outside this workspace |
 
-`factory-core` stops a task that would invent gameplay rules or numbers (`phase-plumbing-only`).
+Game Design may draft and propose gameplay values; binding them requires verified approval (`phase-scope`).
 
 ## Architecture
 
@@ -71,7 +71,8 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
                                │  gates, facts)                           in-flight topic branches)
               ┌────────────────┴─────────────────┐
               ▼                                  ▼
-     cross-repo drivers                     repo skills (one leg each)
+     cross-repo drivers                     domain + repo leads
+     game-design                            GDD ? feature specs ? design decisions
      wire-contract  server → Netcode → client     server-realtime   (C# game server, SGL)
      pin-bump       released tag → client pins    server-services   (Go gateway, Nakama, Redis, migrations)
      measure        benchmarks / baselines        server-ops        (Docker, k8s/Agones, monitoring, CD)
@@ -96,6 +97,7 @@ lead's workflow. Switching (e.g. to `implement`) is only done when you ask for i
 
 | Typical task | Lead skill | Repos | Key validation |
 |---|---|---|---|
+| Game concepts, mechanics, progression, GDD, feature spec or design decision | `game-design` | optional `authoring` | `artifact-lint`, `artifact-trace`, human gates |
 | Add a message or field to the wire protocol, change the protocol version, JoinToken claims, or the Redis `servers:id` hash | `wire-contract` | server → netcode → client | `generate.sh` (protoc 29.3), `wire-parity.sh`, TestDotnetInterop, Netcode headless tests, pin-bump |
 | Move the client to Netcode/UnityDots/UIToolkit vX.Y.Z or to sgl-vX.Y.Z; bump the unity-build-workflows toolkit | `pin-bump` | client (upstream read-only) | `pin-plan.py`, `pin-status.py`, DOTS Sample byte diff, CI 02-package-pins |
 | Benchmark, encoding sweep, re-baseline, multi-client check | `measure` | server + client tools | expected value, control, run id, attribution; `bench.sh` legs |
