@@ -6,6 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Changed
 
+- Made artifact lint validate against the published JSON Schema and bind immutable IDs and lifecycle transitions to each artifact path; added JSON history and schema regressions.
 - Made artifact trace and approval gates follow lifecycle requirements, with regression coverage for draft, verified, and binding-value cases.
 - Made Factory Core discipline-neutral by moving Engineering reference material into `engineering.md`; English-only policy is now enforced by the skill lint and full test runner.
 
