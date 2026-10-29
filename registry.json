@@ -4306,10 +4306,10 @@
         "deprecated": ["draft"]
       },
       "requirements": {
-        "approved": {"needs_approval": ["review"]},
-        "in-implementation": {"needs_approval": ["review"], "needs_trace": ["impl"]},
-        "verified": {"needs_approval": ["review"], "needs_trace": ["impl", "test"]},
-        "released": {"needs_approval": ["review"], "needs_trace": ["impl", "test", "release"]}
+        "approved": {"needs_approval": ["review"], "approval_when_binding": true},
+        "in-implementation": {"needs_approval": ["review"], "needs_trace": ["impl"], "approval_when_binding": true},
+        "verified": {"needs_approval": ["review"], "needs_trace_for_test": ["impl", "test"], "approval_when_binding": true},
+        "released": {"needs_approval": ["review"], "needs_trace": ["release"], "needs_trace_for_test": ["impl", "test"], "approval_when_binding": true}
       }
     }
   }

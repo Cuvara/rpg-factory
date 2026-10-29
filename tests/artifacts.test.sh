@@ -11,18 +11,23 @@ R="$T/author"; P="$T/product"; mkdir -p "$R" "$P"
 git -C "$R" init -q -b main; git -C "$P" init -q -b main
 for repo in "$R" "$P"; do git -C "$repo" config user.name Fixture; git -C "$repo" config user.email fixture@example.test; done
 cat > "$T/reg.json" <<'EOF'
-{"domains":{"fixture":{"artifact_kinds":["spec"],"human_gates":["review"],"approvers":[]}},"artifact_lifecycles":{"default":{"states":["draft","review","approved","in-implementation","verified","released","deprecated"],"transitions":{"draft":["review"],"review":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"released":["deprecated"],"deprecated":["draft"]},"requirements":{"approved":{"needs_approval":["review"]},"in-implementation":{"needs_trace":["impl"]},"verified":{"needs_trace":["impl","test"]},"released":{"needs_trace":["impl","test","release"]}}}}}
+{"domains":{"fixture":{"artifact_kinds":["spec"],"human_gates":["review"],"approvers":[]}},"artifact_lifecycles":{"default":{"states":["draft","review","approved","in-implementation","verified","released","deprecated"],"transitions":{"draft":["review"],"review":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"released":["deprecated"],"deprecated":["draft"]},"requirements":{"approved":{"needs_approval":["review"],"approval_when_binding":true},"in-implementation":{"needs_trace":["impl"],"approval_when_binding":true},"verified":{"needs_trace_for_test":["impl","test"],"approval_when_binding":true},"released":{"needs_trace":["release"],"needs_trace_for_test":["impl","test"],"approval_when_binding":true}}}}}
 EOF
 cat > "$T/make.py" <<'PY'
 import json,sys
-base=sys.argv[1]; status=sys.argv[2]
-o={"id":"FX-test-001","kind":"spec","domain":"fixture","status":status,"title":"Fixture","upstream":[],"acceptance":[{"id":"AC1","text":"Works","verify":"review"}],"trace":[]}
+base=sys.argv[1]; status=sys.argv[2]; verify=sys.argv[3] if len(sys.argv)>3 else "review"; binding=len(sys.argv)>4 and sys.argv[4]=="binding"
+o={"id":"FX-test-001","kind":"spec","domain":"fixture","status":status,"title":"Fixture","upstream":[],"acceptance":[{"id":"AC1","text":"Works","verify":verify}],"trace":[]}
+if binding: o["binding_values"]=True
 open(base+"/spec.md","w").write("---json\n"+json.dumps(o)+"\n---\n")
 PY
 git -C "$P" -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -qm product
 export TMPDIR="$T" RPG_FACTORY_STATE_DIR="$T/state"
-python3 "$T/make.py" "$R" draft
+python3 "$T/make.py" "$R" draft test
 git -C "$R" add spec.md; git -C "$R" commit -qm init
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'draft test criterion needs no trace' || bad "draft coverage: $got"
+python3 "$T/make.py" "$R" draft review binding
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'draft binding values need no approval' || bad "draft binding: $got"
+python3 "$T/make.py" "$R" draft
 line() { python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$R" --registry "$T/reg.json" | head -1; }
 got=$(line); [[ "$got" == 'PASS FX-test-001' ]] && ok 'valid artifact' || bad "valid artifact: $got"
 python3 - "$R/spec.md" <<'PY'
@@ -42,8 +47,14 @@ git -C "$R" add spec.md; git -C "$R" commit -qm approved
 cp "$R/spec.md" "$R/duplicate.md"
 got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$R" --registry "$T/reg.json" | grep '^FAIL' | head -1); [[ "$got" == 'FAIL FX-test-001 duplicate id' ]] && ok 'duplicate id rejected' || bad "duplicate id: $got"
 rm "$R/duplicate.md"
-python3 "$T/make.py" "$R" verified
+python3 "$T/make.py" "$R" verified test
 got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'FAIL FX-test-001 missing AC coverage' ]] && ok 'verified AC coverage enforced' || bad "verified AC coverage: $got"
+python3 "$T/make.py" "$R" verified review
+git -C "$R" add spec.md; git -C "$R" commit -qm 'Verified review criterion'
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'verified review criterion needs no impl/test trace' || bad "verified review coverage: $got"
+python3 "$T/make.py" "$R" approved review binding
+git -C "$R" add spec.md; git -C "$R" commit -qm 'Approved binding values'
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'HUMAN_REQUIRED FX-test-001 missing approval' ]] && ok 'approved binding values require approval' || bad "approved binding: $got"
 python3 - "$R/spec.md" <<'PY'
 import json,sys
 p=sys.argv[1]; s=open(p).read();o=json.loads(s.split("\n",1)[1].split("\n---",1)[0]);o["status"]="draft";o["trace"]=[{"repo":"product","ref":"0123456789abcdef0123456789abcdef01234567","kind":"impl","ac":[]}];open(p,"w").write("---json\n"+json.dumps(o)+"\n---\n")
@@ -84,6 +95,11 @@ PY
   if git -C "$R" -c gpg.format=ssh -c user.signingkey="$T/approver" commit -S -m 'Add approval' >/dev/null 2>&1; then
     got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/with-key.json" --repos product="$P" | head -1)
     [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'signed approval verified' || bad "signed approval: $got"
+    got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1)
+    [[ "$got" == 'HUMAN_REQUIRED FX-test-001 no trusted approver keys' ]] && ok 'empty trusted approver list requires human' || bad "empty approvers: $got"
+    git clone -q --depth 1 "file://$R" "$T/shallow"
+    got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$T/shallow" --registry "$T/with-key.json" --repos product="$P" | head -1)
+    [[ "$got" == 'HUMAN_REQUIRED FX-test-001 shallow clone' ]] && ok 'shallow clone requires human' || bad "shallow clone: $got"
     git clone -q "$R" "$T/replay"
     python3 - "$T/replay/spec.md" <<'PY'
 import json,sys
