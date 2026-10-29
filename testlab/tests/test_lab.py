@@ -3677,8 +3677,29 @@ class HostGuardTests(unittest.TestCase):
         self.assertEqual(hostguard._live_supervised_workers({"result": {"workers": [
             {**worker, "terminalState": "released"}]}}, {}, None)[0]["activity"], "ACTIVE")
         missing_projection = {k: v for k, v in worker.items() if k != "projection"}
-        self.assertEqual(len(hostguard._live_supervised_workers(
-            {"result": {"workers": [missing_projection]}}, {}, None)), 1)
+        missing_projection = {**missing_projection, "workerState": "succeeded", "dispatchStatus": "completed"}
+        self.assertEqual(hostguard._live_supervised_workers(
+            {"result": {"workers": [missing_projection]}}, {}, None)[0]["activity"], "ACTIVE-UNVERIFIED")
+        for malformed_liveness in (None, "live", [], ["live"], "x"):
+            settled_malformed = {**missing_projection, "projection": {"workspace": {"id": "host::C:/outside/worker"},
+                                                                          "liveness": malformed_liveness}}
+            self.assertEqual(hostguard._live_supervised_workers(
+                {"result": {"workers": [settled_malformed]}}, {}, None)[0]["activity"], "ACTIVE-UNVERIFIED")
+        for invalid_dispatch in (12, True, [], {}, ""):
+            malformed_dispatch = {**worker, "workerState": "succeeded", "dispatchStatus": "completed",
+                                  "dispatchId": invalid_dispatch}
+            outcome = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+                orca_workers=lambda: {"result": {"workers": [malformed_dispatch]}},
+                sampler=lambda _: [{"first": True, "ad_cpu": 0.0, "cpu": 10.0, "groups": {"build": 0.0, "av": 0.0}}],
+                processes=lambda: [], wsl_uptime=lambda: 3600.0, paths=hostguard.AnyDeskPaths(None, None),
+                announced="test", include_p7=False)
+            malformed_p3 = next(r for r in outcome["rows"] if r["id"] == "P3")
+            self.assertEqual(malformed_p3["status"], "FAIL")
+            self.assertEqual(malformed_p3["measured"]["agents"][0]["activity"], "ACTIVE")
+        unknown_verdict = {**missing_projection, "projection": {"workspace": {"id": "host::C:/outside/worker"},
+                                                                    "liveness": {"verdict": "alive"}}}
+        self.assertEqual(hostguard._live_supervised_workers(
+            {"result": {"workers": [unknown_verdict]}}, {}, None)[0]["activity"], "ACTIVE-UNVERIFIED")
         worker_allow = hostguard._live_supervised_workers({"result": {"workers": [worker]}}, {}, None,
                                                           ("C:/outside/worker",))
         self.assertEqual(len(worker_allow), 1)
@@ -3787,6 +3808,38 @@ class HostGuardTests(unittest.TestCase):
         dispatch_p3 = next(r for r in dispatch_allowed["rows"] if r["id"] == "P3")
         self.assertEqual(dispatch_p3["status"], "PASS")
         self.assertEqual(dispatch_p3["measured"]["allow_list"]["entries"][-1]["matched"][0]["dispatchId"], "ctx-fixture")
+        dispatch_match = dispatch_p3["measured"]["allow_list"]["entries"][-1]["matched"][0]
+        self.assertEqual(dispatch_match["workerState"], "running")
+        self.assertEqual(dispatch_match["runId"], None)
+        duplicate_dispatch = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [worker, {**worker, "resource": {"worktreeId": "wid::C:/other"}}]}},
+            allow_dispatches=("ctx-fixture",), **common)
+        duplicate_p3 = next(r for r in duplicate_dispatch["rows"] if r["id"] == "P3")
+        self.assertEqual(duplicate_p3["status"], "FAIL")
+        self.assertIn("more than one worker", duplicate_p3["detail"])
+        empty_dispatch = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: {"result": {"workers": [{**worker, "dispatchId": ""}]}},
+            allow_dispatches=("",), **common)
+        self.assertEqual(next(r for r in empty_dispatch["rows"] if r["id"] == "P3")["status"], "FAIL")
+        ps_same_workspace = {"result": {"worktrees": [{"repo": "outside", "displayName": "worker",
+            "path": "C:/outside/worker", "worktreeId": "wid", "liveTerminalCount": 1,
+            "terminalVerdict": "live", "agents": [{"state": "working", "agentType": "claude"}]}]}}
+        dispatch_plus_ps = hostguard.preflight(orca_ps=lambda: ps_same_workspace,
+            orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-fixture",), **common)
+        self.assertEqual(next(r for r in dispatch_plus_ps["rows"] if r["id"] == "P3")["status"], "FAIL")
+        empty_path_ps = {"result": {"worktrees": [{"repo": "bad", "displayName": "bad", "path": "",
+            "worktreeId": "", "liveTerminalCount": 1, "terminalVerdict": "live",
+            "agents": [{"state": "working", "agentType": "claude"}]}]}}
+        empty_path_worker = {**worker, "resource": {"worktreeId": ""},
+            "projection": {"workspace": {"id": ""}, "liveness": {"verdict": "live"}}}
+        empty_path = hostguard.preflight(orca_ps=lambda: empty_path_ps,
+            orca_workers=lambda: {"result": {"workers": [empty_path_worker]}}, allow_agents=("",), **common)
+        self.assertEqual(next(r for r in empty_path["rows"] if r["id"] == "P3")["status"], "FAIL")
+        self.assertFalse(next(r for r in empty_path["rows"] if r["id"] == "P3")["measured"]["agents"][0]["allowed"])
+        empty_coverage_worker = {**empty_path_worker, "workerState": "abandoned", "dispatchStatus": "failed",
+            "projection": {"workspace": {"id": ""}, "liveness": {"verdict": "unverifiable"}}}
+        empty_coverage = hostguard._live_supervised_workers({"result": {"workers": [empty_coverage_worker]}}, {}, empty_path_ps)
+        self.assertEqual(empty_coverage[0]["activity"], "ACTIVE-UNVERIFIED")
         dispatch_missing = hostguard.preflight(orca_ps=lambda: {"result": {"worktrees": []}},
             orca_workers=lambda: {"result": {"workers": [worker]}}, allow_dispatches=("ctx-other",), **common)
         self.assertEqual(next(r for r in dispatch_missing["rows"] if r["id"] == "P3")["status"], "FAIL")
@@ -4350,7 +4403,10 @@ class HostGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg, stopped = t._patched_run(d, None)
             cfg.explicit |= {"player_exe", "server_repo"}      # H6: a soak names its player and server checkout
-            allow_record = {"entries": [{"entry": "C:/allowed/tree", "matched": [{"worktreeId": "w1"}],
+            allow_record = {"entries": [{"entry": "ctx-fixture", "matched": [{"dispatchId": "ctx-fixture",
+                                         "runId": "run-fixture", "workerState": "succeeded",
+                                         "dispatchStatus": "completed", "terminalState": "reclaimable",
+                                         "livenessVerdict": "unverifiable", "workspace": "C:/allowed/tree"}],
                                          "error": None}], "errors": []}
             next(row for row in bad["rows"] if row["id"] == "P3")["measured"]["allow_list"] = allow_record
             ensure = stack.ensure
@@ -4359,6 +4415,7 @@ class HostGuardTests(unittest.TestCase):
             self.assertEqual(res["outcome"], analyze.INCONCLUSIVE)
             self.assertIn("host preflight failed: P1, P3, P6, P7", res["harness_error"])
             self.assertEqual(t._run_json(cfg)["host_guard"]["preflight"]["allow_list"], allow_record)
+            self.assertEqual(t._run_json(cfg)["host_guard"]["preflight"]["allow_list"]["entries"][0]["matched"][0]["dispatchId"], "ctx-fixture")
             ensure.assert_not_called()
             self.assertEqual(stopped, [])
             meta = t._run_json(cfg)

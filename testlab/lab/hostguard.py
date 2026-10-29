@@ -1163,6 +1163,9 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
     for worker in result["workers"]:
         if not isinstance(worker, dict):
             worker = {}
+        invalid_dispatch_identity = not isinstance(worker.get("dispatchId"), str) or not worker.get("dispatchId")
+        if invalid_dispatch_identity:
+            worker = {**worker, "dispatchId": None}
         # Task state, rather than terminal accounting, determines whether work is
         # active. Terminal accounting remains evidence but may outlive the work.
         raw_projection = worker.get("projection")
@@ -1173,7 +1176,8 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
         # `stopped` and `abandoned` are also terminal worker outcomes in live
         # worker-list data; their paired failed dispatch status is settled.
         is_settled = (isinstance(worker_state, str) and worker_state in SETTLED_WORKER_STATES and
-                      isinstance(dispatch_status, str) and dispatch_status in SETTLED_DISPATCH_STATUSES)
+                      isinstance(dispatch_status, str) and dispatch_status in SETTLED_DISPATCH_STATUSES and
+                      not invalid_dispatch_identity)
         resource = worker.get("resource")
         resource = resource if isinstance(resource, dict) else {}
         workspace = projection.get("workspace")
@@ -1191,7 +1195,7 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
         path_match = next((str(entry) for entry in allow_entries
                            if _absolute_path(entry) and _normal_path(entry) == normalized), None)
         id_match = next((str(entry) for entry in allow_entries if str(entry) and str(entry) == str(wid)), None)
-        matched_worktree = any(_normal_path(w.get("path")) == normalized and i in allow
+        matched_worktree = bool(normalized) and any(_normal_path(w.get("path")) == normalized and i in allow
                                for i, w in enumerate(worktrees))
         if matched_worktree or path_match or id_match:
             if matched_worktree:
@@ -1201,18 +1205,21 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                 allowed, allow_entry = True, path_match or id_match
         else:
             allowed, allow_entry = False, None
-        liveness = projection.get("liveness") if isinstance(projection.get("liveness"), dict) else {}
+        raw_liveness = projection.get("liveness")
+        liveness = raw_liveness if isinstance(raw_liveness, dict) else {}
         liveness_verdict = liveness.get("verdict")
-        workspace_covered = any(
+        workspace_covered = bool(normalized) and any(
             _normal_path(w.get("path")) == normalized and
             isinstance(w.get("agents"), list) and
             any(isinstance(agent, dict) and agent.get("state") == "working" for agent in w["agents"]) and
             type(w.get("liveTerminalCount")) is int and w.get("liveTerminalCount") > 0 and
             w.get("terminalVerdict") == "live"
             for w in worktrees)
+        known_liveness = isinstance(raw_liveness, dict) and liveness_verdict in ("live", "exited", "unverifiable")
+        safe_settled_liveness = (liveness_verdict == "exited" if worker_state == "abandoned"
+                                 else liveness_verdict in ("exited", "unverifiable"))
         unverified_live = is_settled and not workspace_covered and not invalid_workspace_identity and (
-            liveness_verdict == "live" or
-            (isinstance(worker_state, str) and worker_state == "abandoned" and liveness_verdict != "exited"))
+            not known_liveness or not safe_settled_liveness)
         if invalid_workspace_identity:
             is_settled = False
         path_parts = [p for p in normalized.split("/") if p]
@@ -1226,8 +1233,9 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                     "livenessVerdict": liveness_verdict if isinstance(liveness_verdict, str) else "unverifiable",
                     "prompt": "", "state": worker_state,
                     "activity": "ACTIVE-UNVERIFIED" if unverified_live else "SETTLED" if is_settled else "ACTIVE",
-                    "reason": ("invalid workspace identity type; fail closed" if invalid_workspace_identity else
-                               "settled worker has live or unverifiable liveness outside worktree ps" if unverified_live else
+                    "reason": ("invalid or missing dispatchId; fail closed" if invalid_dispatch_identity else
+                               "invalid workspace identity type; fail closed" if invalid_workspace_identity else
+                               "missing, malformed, or unsafe liveness verdict; fail closed" if unverified_live else
                                f"settled workerState={worker_state}; dispatchStatus={dispatch_status}" if is_settled else
                                "worker state missing, unknown, or not settled; fail closed"), "allowed": allowed,
                     "allowEntry": allow_entry,
@@ -1242,6 +1250,17 @@ def _live_supervised_workers(data: dict | None, allow: dict[int, str], ps: dict 
                     "workerState": worker_state, "dispatchStatus": dispatch_status,
                     "terminalState": terminal_state, "retainedReason": resource.get("retainedReason")})
     return out
+
+
+def _dispatch_match_record(worker: dict) -> dict:
+    projection = worker.get("projection") if isinstance(worker.get("projection"), dict) else {}
+    workspace = projection.get("workspace") if isinstance(projection.get("workspace"), dict) else {}
+    liveness = projection.get("liveness") if isinstance(projection.get("liveness"), dict) else {}
+    resource = worker.get("resource") if isinstance(worker.get("resource"), dict) else {}
+    return {"dispatchId": worker.get("dispatchId"), "runId": worker.get("runId") or projection.get("runId"),
+            "workerState": worker.get("workerState"), "dispatchStatus": worker.get("dispatchStatus"),
+            "terminalState": worker.get("terminalState"), "livenessVerdict": liveness.get("verdict"),
+            "workspace": workspace.get("id") or resource.get("worktreeId")}
 
 
 def _wsl_uptime(distro: str = "Ubuntu") -> float | None:
@@ -1324,21 +1343,27 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
     worker_data = orca_workers()
     ps_available = _ps_available(ps)
     worker_available = _workers_available(worker_data)
+    worker_rows = (worker_data.get("result") or {}).get("workers", []) if worker_available else []
+    dispatch_matches = {}
+    for value in allow_dispatches:
+        hits = [w for w in worker_rows if isinstance(w, dict) and isinstance(w.get("dispatchId"), str)
+                and w.get("dispatchId") and isinstance(value, str) and value and w.get("dispatchId") == value]
+        dispatch_matches[value] = hits
     supervised = []
     if not ps_available:
         entries = _live_supervised_workers(worker_data if worker_available else None, {}, None)
         allow_record = {"entries": [{"entry": str(a), "matched": [], "error": "worktree inventory unavailable"}
                                                       for a in allow_agents], "errors": ["orca worktree ps unavailable"]}
         for dispatch in allow_dispatches:
-            matches = [e for e in entries if e.get("dispatchId") == dispatch]
-            if matches:
-                for entry in matches:
-                    entry["allowed"], entry["allowEntry"] = True, str(dispatch)
-                allow_record["entries"].append({"entry": str(dispatch), "matched": [
-                    {"dispatchId": e.get("dispatchId"), "path": e.get("path"), "worktreeId": e.get("worktreeId")}
-                    for e in matches], "error": None})
+            matches = dispatch_matches.get(dispatch, [])
+            if len(matches) == 1:
+                entry_match = next((e for e in entries if e.get("dispatchId") == dispatch), None)
+                if entry_match:
+                    entry_match["allowed"], entry_match["allowEntry"] = True, dispatch
+                full = _dispatch_match_record(matches[0])
+                allow_record["entries"].append({"entry": str(dispatch), "matched": [full], "error": None})
             else:
-                reason = "worker inventory unavailable" if not worker_available else "matched no dispatch id"
+                reason = "worker inventory unavailable" if not worker_available else ("matched no dispatch id" if not matches else "matched more than one worker")
                 msg = f"allow dispatch {dispatch!r} {reason}"
                 allow_record["entries"].append({"entry": str(dispatch), "matched": [], "error": msg})
                 allow_record["errors"].append(msg)
@@ -1353,13 +1378,14 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
         for dispatch in allow_dispatches:
             allow_record["entries"].append({"entry": str(dispatch), "matched": [], "error": None})
         supervised_allow, _ = _allow_matches(_worktrees(ps), allow_agents)
-        dispatch_allow = {str(value).strip() for value in allow_dispatches}
+        dispatch_allow = {value for value, hits in dispatch_matches.items() if isinstance(value, str) and value and len(hits) == 1}
         supervised = _live_supervised_workers(worker_data, supervised_allow, ps, allow_agents)
         for worker in supervised:
             wid_dispatch = worker.get("dispatchId")
             worker["allowEntry"] = next((value for value in dispatch_allow if value == wid_dispatch), worker.get("allowEntry"))
-            if worker.get("allowEntry") in dispatch_allow:
+            if wid_dispatch in dispatch_allow:
                 worker["allowed"] = True
+                worker["allowEntry"] = wid_dispatch
         worker_allow_matches = {}
         for worker in supervised:
             if worker.get("allowEntry"):
@@ -1386,22 +1412,20 @@ def preflight(*, window_min: float = 90.0, announced: str | None = None, sample_
                 primary = same_path[0]
                 primary["activity"] = "ACTIVE"
                 primary["reason"] = "working agent with live supervised worker"
-                primary["allowed"] = primary["allowed"] or worker["allowed"]
                 primary.setdefault("dispatchIds", []).append(worker.get("dispatchId"))
                 primary.setdefault("taskIds", []).append(worker.get("taskId"))
                 primary.setdefault("supervisedWorkers", []).extend(worker.get("supervisedWorkers", []))
             else:
                 entries.append(worker)
         for dispatch in allow_dispatches:
-            matches = [w for w in supervised if w.get("dispatchId") == dispatch]
-            if matches:
+            matches = [w for w in supervised if isinstance(dispatch, str) and dispatch and w.get("dispatchId") == dispatch]
+            if len(matches) == 1:
                 for record in allow_record["entries"]:
                     if record["entry"] == str(dispatch):
-                        record["matched"] = [{"dispatchId": w.get("dispatchId"), "path": w.get("path"),
-                                              "worktreeId": w.get("worktreeId")} for w in matches]
+                        record["matched"] = [_dispatch_match_record(dispatch_matches[dispatch][0])]
                         record["error"] = None
             else:
-                msg = f"allow dispatch {dispatch!r} matched no dispatch id"
+                msg = f"allow dispatch {dispatch!r} {'matched no dispatch id' if not matches else 'matched more than one worker'}"
                 allow_record["errors"].append(msg)
                 next(record for record in allow_record["entries"] if record["entry"] == str(dispatch))["error"] = msg
         errors = allow_record["errors"]
