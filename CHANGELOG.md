@@ -6,6 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- Routing JSON now includes `routing.domain`, derived from the selected lead skill (defaulting to `engineering`).
 - `tests/routing-golden.test.sh` freezes the engineering routing contract: every task scenario of
   `tests/routing.test.sh` (59) must keep its lead, co-leads, legs, follow-ups, tech skills, touched modules and
   check ids (`tests/fixtures/routing-golden.json`, recorded before domain metadata). Added fields are ignored.

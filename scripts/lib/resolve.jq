@@ -145,6 +145,7 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
 | ([ $o.suggested_skills[] | select(.role == "lead") ]) as $leads
 | $o + {routing: {
     lead: ($leads[0].skill // null),
+    domain: (if $leads[0].skill == null then null else ($reg.skills[$leads[0].skill].domain // "engineering") end),
     co_leads: [ $leads[1:][] | .skill ],
     legs: [ $o.suggested_skills[] | select(.role == "leg") | .skill ],
     follow_ups: [ $o.suggested_skills[] | select(.role == "follow-up") | .skill ],
