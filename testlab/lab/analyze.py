@@ -3027,19 +3027,42 @@ def check_graceful_leave(ev, a):
         last_seen = max((s for s in t["st"] if s >= st), default=None)
         row.update({"server_removed_after_s": None if last_seen is None else round(last_seen - st, 2),
                     "present_after_timeout": len(still)})
-        seen_removed = {}
+        seen_removed, not_in_view, no_evidence = {}, [], []
         for o in ev["clients"]:
             if o is c:
+                continue
+            # Only a viewer that provably held the leaver when the leave began (its own latest entity_added
+            # before the quit has no later entity_removed) can be judged. One that already lost it has
+            # nothing left to remove; one with no lifecycle event for the leaver gives no evidence either
+            # way. Neither may turn the check into a PASS.
+            life = sorted((x["st"], x["event"]) for x in o["events"]
+                          if x.get("event") in ("entity_added", "entity_removed") and x.get("id") == uid
+                          and x.get("st") is not None and x["st"] <= st)
+            if not life:
+                no_evidence.append(o["index"])
+                continue
+            if life[-1][1] == "entity_removed":
+                not_in_view.append(o["index"])
                 continue
             rm = [x["st"] for x in o["events"] if x.get("event") == "entity_removed" and x.get("id") == uid
                   and x.get("st") is not None and x["st"] >= st]
             seen_removed[o["index"]] = round(min(rm) - st, 2) if rm else None
         row["others_removed_after_s"] = seen_removed
+        if not_in_view:
+            row["not_in_view_at_quit"] = not_in_view
+        if no_evidence:
+            row["no_lifecycle_events"] = no_evidence
         late_others = [k for k, v in seen_removed.items() if v is None or v > timeout]
-        has_c3 = any(x.get("event") == "entity_removed" for o in ev["clients"] if o is not c for x in o["events"])
-        ok = row["outcome"] == "left" and row["disconnected"] and not still and (not has_c3 or not late_others)
+        ok = row["outcome"] == "left" and row["disconnected"] and not still and not late_others
         row["ok"] = ok
         bad += 0 if ok else 1
+        if ok and not seen_removed:
+            row["ok"] = None
+            row["result"] = ("no viewer provably held the leaver at the quit (area-of-interest exit at %s, no "
+                             "entity_added/entity_removed events at %s): nobody's view of the leave can be judged "
+                             "(keep the leaver inside a viewer's area of interest until it quits, with hook C3)"
+                             % (not_in_view, no_evidence))
+            unjudged += 1
         rows.append(row)
     status = FAIL if bad else (INCONCLUSIVE if unjudged else PASS)
     # How the server saw the session end: a dead_link close means the polite disconnect frame never

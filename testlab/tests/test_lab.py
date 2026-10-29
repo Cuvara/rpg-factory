@@ -1718,7 +1718,8 @@ class GracefulLeaveTests(unittest.TestCase):
         leaver["events"] = [{"event": "quit_requested", "st": 15.0}, {"event": "disconnected", "st": 15.05}]
         if others_removed:
             for c in ev["clients"][:2]:
-                c["events"] = [{"event": "entity_removed", "id": "u2", "st": gone_at + 0.1}]
+                c["events"] = [{"event": "entity_added", "id": "u2", "st": -1},
+                               {"event": "entity_removed", "id": "u2", "st": gone_at + 0.1}]
         return ev
 
     def test_a_polite_leave_removes_the_player_quickly(self):
@@ -1732,6 +1733,56 @@ class GracefulLeaveTests(unittest.TestCase):
 
     def test_without_a_quit_it_is_inconclusive(self):
         self.assertEqual(analyze.check_graceful_leave(_ev(clients=2), {})["status"], analyze.INCONCLUSIVE)
+
+    def test_a_viewer_that_never_removed_the_leaver_still_fails(self):
+        """P5-S08G-LEAVE: a viewer that held the leaver at quit and never saw it removed is a ghost."""
+        ev = self._ev(gone_at=15.4)
+        ev["clients"][1]["events"] = [{"event": "entity_added", "id": "u2", "st": -1}]
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.FAIL, res)
+        self.assertIsNone(res["measured"][0]["others_removed_after_s"][1])
+
+    def test_a_viewer_that_had_already_lost_the_leaver_is_not_judged_as_a_ghost_holder(self):
+        """P5-S08G-LEAVE: the leaver walked out of viewer 1's area of interest (removal at 11.9 s) before
+        it quit at 15 s; viewer 1 has nothing to remove, which is a scenario-geometry gap, not a leak."""
+        ev = self._ev(gone_at=15.4)
+        ev["clients"][1]["events"] = [{"event": "entity_added", "id": "u2", "st": -1},
+                                      {"event": "entity_removed", "id": "u2", "st": 11.9}]
+        res = analyze.check_graceful_leave(ev, {})
+        # viewer 0 did hold it and got the removal, so the leave is judged; viewer 1 is only listed.
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual(res["measured"][0]["not_in_view_at_quit"], [1])
+        # ...and a viewer that did hold it and missed the removal still fails alongside it.
+        ev["clients"][0]["events"] = [{"event": "entity_added", "id": "u2", "st": -1}]
+        self.assertEqual(analyze.check_graceful_leave(ev, {})["status"], analyze.FAIL)
+
+    def test_viewers_without_lifecycle_events_for_the_leaver_are_inconclusive(self):
+        """RV-P5-1: absence of client evidence must never turn into a PASS."""
+        ev = self._ev(gone_at=15.4, others_removed=False)
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE, res)
+        self.assertEqual(res["measured"][0]["no_lifecycle_events"], [0, 1])
+
+    def test_all_viewers_out_of_view_at_the_quit_are_inconclusive(self):
+        ev = self._ev(gone_at=15.4)
+        for c in ev["clients"][:2]:
+            c["events"] = [{"event": "entity_added", "id": "u2", "st": -1},
+                           {"event": "entity_removed", "id": "u2", "st": 11.9}]
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.INCONCLUSIVE, res)
+        self.assertEqual(res["measured"][0]["not_in_view_at_quit"], [0, 1])
+
+    def test_one_viewer_in_view_that_got_the_removal_passes_beside_an_unjudged_one(self):
+        ev = self._ev(gone_at=15.4)
+        ev["clients"][1]["events"] = []
+        res = analyze.check_graceful_leave(ev, {})
+        self.assertEqual(res["status"], analyze.PASS, res)
+        self.assertEqual(list(res["measured"][0]["others_removed_after_s"]), [0])
+
+    def test_one_viewer_in_view_that_missed_the_removal_fails_beside_a_good_one(self):
+        ev = self._ev(gone_at=15.4)
+        ev["clients"][1]["events"] = [{"event": "entity_added", "id": "u2", "st": -1}]
+        self.assertEqual(analyze.check_graceful_leave(ev, {})["status"], analyze.FAIL)
 
     def test_expected_outcomes_let_a_leaver_complete(self):
         ev = self._ev(gone_at=15.4)
@@ -1765,6 +1816,15 @@ class HookScenarioTests(unittest.TestCase):
         self.assertEqual(by["clients_completed"]["expected_outcomes"], {"2": "left"})
         self.assertEqual(by["players_online"]["expected"], sc["clients"] - 1)
         self.assertNotIn("disruptions", {k for k, v in sc.items() if v})
+
+    def test_s08g_leaver_stays_inside_every_viewers_area_of_interest(self):
+        """P5-S08G-LEAVE: the leaver once walked 10 s, ending at x~50 (AOI radius 50) and just outside a
+        stationary viewer's interest, so that viewer had nothing to remove. At the 6 units/s speed cap
+        it must end well inside the radius, from spawn offsets of a few units."""
+        sc = scenarios.load("S08G")
+        walk = sc["per_client"][2]["steps"][0]
+        reach = (walk["t1"] - walk["t0"]) * 6.0
+        self.assertLessEqual(reach + 10.0, 50.0 - 2.0)
 
 
 class PredictionBoundTests(unittest.TestCase):

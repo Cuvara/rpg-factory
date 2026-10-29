@@ -6,6 +6,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
+  evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event
+  for the leaver before the quit is an add is judged: it must receive the removal within the bound or the check
+  FAILs. If no viewer is evidenced as holding the leaver at the quit (all removed it earlier, or none logged any
+  lifecycle event, or there is no other client), the result is INCONCLUSIVE. This supersedes the sentence below
+  that said an already-dropped viewer alone is INCONCLUSIVE beside judged ones: a judged viewer that got the
+  removal now gives PASS and lists the others as `not_in_view_at_quit` / `no_lifecycle_events`.
+- testlab S08G (P5-S08G-LEAVE): the graceful-leave scenario failed on `rpg-mmo-server` `00ef906` (runs ccle, 4lz1)
+  with `others_removed_after_s[1]=null` although the server and client 0 removed the leaver in 0.03/0.05 s. Root
+  cause was scenario geometry, not a missed removal: the leaver walked 10 s to x~49.6 while the stationary viewer
+  stood at x~-1.6, 51.2 units away against the 50-unit area of interest, so that viewer had already received the
+  `removed` event at 11.9 s and held nothing at the 15 s quit (the pass on `ee80bb8` ended at 50.1 with the
+  viewer 0.8 closer, a coin flip). S08G v2 walks 6 s (about 30 units), inside every viewer's interest.
+  `graceful_leave` now reports a viewer that had dropped the leaver before it quit as `not_in_view_at_quit` and
+  leaves the check INCONCLUSIVE instead of FAIL; a viewer that held the leaver and never saw it removed still
+  FAILs, and the thresholds are unchanged.
 - run-checks: checks no longer write into the user's protected main checkout when invoked from an agent's linked
   worktree (incidents 2026-10-25 and 2026-10-29: `.github/scripts/__pycache__/*.pyc` appeared in the canonical
   `rpg-mmo-server`). Root causes: `python3 -m py_compile` (registry `server.*` check) writes `.pyc` even with
