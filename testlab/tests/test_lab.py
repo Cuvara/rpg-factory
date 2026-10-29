@@ -3653,7 +3653,8 @@ class HostGuardTests(unittest.TestCase):
         self.assertIn("P3", ps_missing["failed"])
         ps_missing_with_worker = hostguard.preflight(orca_ps=lambda: None,
                     orca_workers=lambda: {"result": {"workers": [worker]}}, **common)
-        self.assertIn("c:/outside/worker", next(r for r in ps_missing_with_worker["rows"] if r["id"] == "P3")["detail"])
+        self.assertIn(hostguard._normal_path("C:/outside/worker"),
+                      next(r for r in ps_missing_with_worker["rows"] if r["id"] == "P3")["detail"])
 
         allowed_row = {"repo": "repo", "displayName": "runner", "path": "C:/allowed/runner", "worktreeId": "wid",
                        "liveTerminalCount": 1, "terminalVerdict": "live", "agents": []}
