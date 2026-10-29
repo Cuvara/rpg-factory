@@ -2,6 +2,7 @@
 """Validate artifact files. Markdown metadata uses strict JSON between ---json delimiters."""
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -10,6 +11,70 @@ import sys
 
 ID = re.compile(r"^[A-Z]{2,5}-[a-z0-9-]+-\d{3}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def resolve_ref(schema, ref):
+    if not ref.startswith("#/"):
+        raise ValueError("unsupported schema reference " + ref)
+    value = schema
+    for part in ref[2:].split("/"):
+        value = value[part.replace("~1", "/").replace("~0", "~")]
+    return value
+
+
+def schema_errors(value, rule, schema, path="$", seen=None):
+    seen = set() if seen is None else seen
+    if "$ref" in rule:
+        key = (rule["$ref"], path)
+        if key in seen:
+            return []
+        return schema_errors(value, resolve_ref(schema, rule["$ref"]), schema, path, seen | {key})
+    errors = []
+    # oneOf/anyOf constrain the value in addition to the sibling keywords (type, properties,
+    # additionalProperties, ...), which are always evaluated below
+    for keyword in ("oneOf", "anyOf"):
+        if keyword not in rule:
+            continue
+        matches = [schema_errors(value, branch, schema, path, seen) for branch in rule[keyword]]
+        valid = sum(not errors_ for errors_ in matches)
+        accepted = valid == 1 if keyword == "oneOf" else valid > 0
+        if not accepted:
+            errors.extend(min(matches, key=len) if valid == 0 and matches else [f"{path} must match {keyword}"])
+    expected = rule.get("type")
+    types = {"object": dict, "array": list, "string": str, "boolean": bool, "integer": int, "number": (int, float)}
+    if expected and (expected not in types or not isinstance(value, types[expected]) or expected in ("integer", "number") and isinstance(value, bool)):
+        return [f"{path} must be {expected}"]
+    if "const" in rule and value != rule["const"]:
+        errors.append(f"{path} must equal {rule['const']!r}")
+    if "enum" in rule and value not in rule["enum"]:
+        errors.append(f"{path} must be one of {rule['enum']!r}")
+    if isinstance(value, str):
+        if "pattern" in rule and not re.search(rule["pattern"], value):
+            errors.append(f"{path} does not match pattern")
+        if len(value) < rule.get("minLength", 0):
+            errors.append(f"{path} is too short")
+        if rule.get("format") == "date-time":
+            try:
+                datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                errors.append(f"{path} must be date-time")
+    if isinstance(value, list):
+        if len(value) < rule.get("minItems", 0):
+            errors.append(f"{path} has too few items")
+        if "items" in rule:
+            for i, item in enumerate(value):
+                errors.extend(schema_errors(item, rule["items"], schema, f"{path}[{i}]", seen))
+    if isinstance(value, dict):
+        for key in rule.get("required", []):
+            if key not in value:
+                errors.append(f"{path} missing {key}")
+        props = rule.get("properties", {})
+        for key, item in value.items():
+            if key in props:
+                errors.extend(schema_errors(item, props[key], schema, f"{path}.{key}", seen))
+            elif rule.get("additionalProperties") is False:
+                errors.append(f"{path} unknown field {key}")
+    return errors
 
 
 def git(root, *args):
@@ -37,8 +102,9 @@ def lifecycle(reg, kind):
     return all_l.get(kind, all_l.get("default", {}))
 
 
-def validate(obj, reg):
+def validate(obj, reg, schema):
     errors = []
+    errors.extend(schema_errors(obj, schema, schema))
     if not isinstance(obj, dict):
         return ["document must be an object"]
     if "acceptance" not in obj and "trace" not in obj:
@@ -166,6 +232,7 @@ def main():
     a = p.parse_args()
     root = os.path.abspath(a.repo_dir)
     reg = json.load(open(a.registry, encoding="utf-8"))
+    schema = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "docs", "artifact.schema.json"), encoding="utf-8"))
     files = []
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d != ".git" and d != "approvals"]
@@ -182,7 +249,7 @@ def main():
         reasons = []
         try:
             obj = load_file(f)
-            reasons.extend(validate(obj, reg))
+            reasons.extend(validate(obj, reg, schema))
             ident = obj.get("id")
             if ident in seen:
                 reasons.append("duplicate id")
@@ -192,15 +259,17 @@ def main():
             if prev.returncode == 0:
                 try:
                     old = (
-                        json.loads(prev.stdout.split("\n", 1)[1].rsplit("\n---", 1)[0])
-                        if rel.endswith(".artifact.json")
+                        json.loads(prev.stdout)
+                        if rel.endswith((".artifact.json", ".asset.json"))
                         else json.loads(
                             re.search(
                                 r"\A---json\s*\n(.*?)\n---", prev.stdout, re.S
                             ).group(1)
                         )
                     )
-                    if old.get("id") == ident and obj.get("status") not in lifecycle(
+                    if old.get("id") != ident:
+                        reasons.append(f"id changed {old.get('id')} -> {ident}")
+                    if obj.get("status") not in lifecycle(
                         reg, obj.get("kind")
                     ).get("transitions", {}).get(old.get("status"), []):
                         reasons.append("illegal transition")
