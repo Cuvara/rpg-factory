@@ -12,6 +12,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- Added `docs/architecture/domains.md` with the domain ownership table and Game Design contract.
 - Added the native `game-design` lead skill, domain routing touchpoints and a `--domain` option in the skill scaffolder.
 - Added the optional authoring repository, Game Design modules, artifact lifecycles, human review gate, and phase-scoped design permissions.
 - Added the shared artifact schema, lifecycle registry data, artifact lint and trace checks, and signed approval verification.
