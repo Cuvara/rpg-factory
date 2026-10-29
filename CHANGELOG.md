@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
+  evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event
+  for the leaver before the quit is an add is judged: it must receive the removal within the bound or the check
+  FAILs. If no viewer is evidenced as holding the leaver at the quit (all removed it earlier, or none logged any
+  lifecycle event, or there is no other client), the result is INCONCLUSIVE. This supersedes the sentence below
+  that said an already-dropped viewer alone is INCONCLUSIVE beside judged ones: a judged viewer that got the
+  removal now gives PASS and lists the others as `not_in_view_at_quit` / `no_lifecycle_events`.
 - testlab S08G (P5-S08G-LEAVE): the graceful-leave scenario failed on `rpg-mmo-server` `00ef906` (runs ccle, 4lz1)
   with `others_removed_after_s[1]=null` although the server and client 0 removed the leaver in 0.03/0.05 s. Root
   cause was scenario geometry, not a missed removal: the leaver walked 10 s to x~49.6 while the stationary viewer
