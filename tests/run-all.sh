@@ -111,6 +111,7 @@ find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
+run "registry domain rules + optional repos" tests/check-registry.test.sh
 if $use_ws; then run "registry paths exist in workspace" scripts/check-registry.sh
 else skp "registry paths exist in workspace" "--no-workspace"; fi
 
