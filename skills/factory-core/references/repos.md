@@ -71,4 +71,3 @@ Read `.known_issues` in the registry (the snapshot prints them). They include: t
 reference in `TEAM.md`, stale docs claiming the wire-compat E2E suite does not run on PRs
 (it does, via `ci.yml` `test-integration`), `toggle-packages.sh` not updating
 `packages-lock.json`, local `protoc` vs CI pin, and `dotnet.exe`-only WSL.
-# Engineering domain repository map
