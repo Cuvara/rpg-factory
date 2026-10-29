@@ -174,13 +174,9 @@ case "$desc" in *game-ai-workflows*web-game-factory*) ok;; *) bad "factory-core 
 claims=$(grep -lE "^description: .*(game design document|GDD|feature registry|web game)" "$ROOT"/skills/*/SKILL.md | grep -v factory-core || true)
 if [ -z "$claims" ]; then ok; else bad "skills claim other plugins' triggers: $claims"; fi
 
-# English-only is report-only during baseline cleanup; show findings as informational output.
-english_out=$(cd "$ROOT" && python3 -B scripts/checks/english-only.py --report 2>&1)
-if [ $? -eq 0 ]; then
-  while IFS= read -r line; do echo "INFO  $line"; done <<<"$english_out"
-else
-  echo "INFO  English-only report unavailable: $english_out"
-fi
+# English-only is enforced; --report remains the machine-readable findings source.
+english_out=$(cd "$ROOT" && python3 -B scripts/checks/english-only.py --enforce 2>&1)
+if [ $? -eq 0 ]; then ok "English-only: $(tail -1 <<<"$english_out")"; else bad "English-only findings:"; echo "$english_out" | sed 's/^/      /'; fi
 
 # parallel-work policy: one canonical copy in factory-core/references/parallel-work.md, linked from the
 # files that defer to it, never blocking, and keeping the release and human-gate rules

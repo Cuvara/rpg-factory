@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- Made Factory Core discipline-neutral by moving Engineering reference material into `engineering.md`; English-only policy is now enforced by the skill lint and full test runner.
+
 ### Added
 
 - Routing JSON now includes `routing.domain`, derived from the selected lead skill (defaulting to `engineering`).

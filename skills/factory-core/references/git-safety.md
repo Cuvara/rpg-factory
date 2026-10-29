@@ -13,11 +13,7 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    untracked `Assets/Samples/...` imports and scratch scenes are the user's work in progress.
 2. **Right repo.** The workspace root is not a repo. Run git with `git -C <repo>` or from
    inside the repo, and check the snapshot's repo and branch before acting.
-3. **Branch.** Default and protected branches are per repo in `registry.json` `repos.<key>`
-   (server/client/Netcode: develop; UnityDots/UIToolkit: main). Commits go to `<type>/<area>/<topic>`
-   branches created from an up-to-date default branch (`feat/gateway/redirect-ttl`). A cross-repo
-   task uses the **same topic** in every repo (`feat/wire/party` in server, Netcode, client) so
-   `factory-status.py` links the legs and can resume them.
+3. **Branch.** Default and protected branches are per repo in registry data. See [engineering.md](engineering.md) for Engineering repo defaults and branch examples.
 4. **Stage explicit paths.** `git add <path>...` only. Never `add -A`, `add .`, `add :/`,
    `commit -a`.
 5. **Commit, push, PR, merge only on request - except worker commits and task-branch integration inside a
@@ -33,20 +29,8 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    or reuse a tag, never publish past a failing check.
 6. **No history rewrites** on shared branches: no force push, rebase of pushed commits,
    amend of pushed commits, or filter-branch.
-7. **Generated files only via their generator:**
-
-   | Generated | Generator |
-   |---|---|
-   | `backend/shared/proto/gen/`, `backend/gameserver-dotnet/GameServer/Net/Generated/` | `backend/shared/proto/generate.sh` (protoc + protoc-gen-go at the CI pins - registry facts) |
-   | `Shared.GameLogic/GoldenVectors/*.json` | `GOLDEN_REGEN=1 dotnet test --filter Regenerate` |
-   | `Assets/Samples/Netcode/DOTS Sample/` | recopy from com.cuvara.netcode `Samples~/DOTSSample` + `.sample-source` |
-   | `Assets/Samples/Cuvara */<version>/` | Unity Package Manager sample import |
-   | `**/*.uxml.g.cs` | com.cuvara.uitoolkit UXML codegen |
-   | `*.meta`, root `*.csproj` / `*.sln` (client) | Unity Editor |
-
-8. **Never edit** the `Packages/com.gdk.*` submodules, the `unity-build-workflows`
-   submodule content, or the gitignored embedded `Packages/com.cuvara.*` clones from the
-   client repo. Changes go to their own repos.
+7. **Generated files only via their generator:** use the owning domain reference; Engineering generator paths and commands are listed in [engineering.md](engineering.md).
+8. **Submodules and embedded clones.** Follow the owning domain reference; Engineering `com.gdk.*` and `com.cuvara.*` rules are in [engineering.md](engineering.md).
 9. **Never commit `file:` package paths.** `toggle-packages.sh dev` writes them and leaves
    `packages-lock.json` untouched.
 10. **Worktrees and parallel agents:** `parallel-work.md` (one worktree per task; one Unity

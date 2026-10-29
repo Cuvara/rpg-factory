@@ -120,9 +120,7 @@ run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
 run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
-english_report=$(python3 -B scripts/checks/english-only.py --report 2>&1); english_rc=$?
-english_summary=$(tail -1 <<<"$english_report")
-if [ $english_rc -eq 0 ]; then ok "$english_summary"; else bad "english-only report" "$english_report"; fi
+run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.test.sh

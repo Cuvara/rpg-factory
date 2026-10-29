@@ -1,20 +1,20 @@
 ---
 name: factory-core
-description: Engineering workflow for the UnityIndie RPG MMO workspace - rpg-mmo-server (Go/C# backend), IndieRPGMMOAdventure (Unity client) and the Netcode, UnityDots and UIToolkit package repos. Use at the start of ANY code, config, CI, deploy, measurement or docs change in those repos, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic routing to the specialised skill, cross-repo status, Factory-run validation with evidence, human gates, git safety and the verify-a-result report. Not for game design / GDD / feature-registry lifecycle (game-ai-workflows) or web game projects (web-game-factory).
+description: Factory workflow for the UnityIndie game workspace - rpg-mmo-server, IndieRPGMMOAdventure and the Netcode, UnityDots and UIToolkit package repos - across discipline domains (Engineering first). Use at the start of ANY code, config, CI, deploy, measurement or docs change in those repos, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic domain and skill routing, cross-repo status, validation with evidence, human gates, git safety and the verify-a-result report; domain workflows live with their registered leads. Not for game design / GDD / feature-registry lifecycle (game-ai-workflows) or web game projects (web-game-factory).
 argument-hint: "[mode: analyze|plan|implement|validate|review|resume] [task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*)
 ---
 
-# Factory Core - RPG MMO workspace
+# Factory Core
 
-The Factory workflow every rpg-factory skill builds on. Task: $ARGUMENTS
+The Factory workflow for every discipline domain. Engineering is the first domain and keeps its existing behavior. Task: $ARGUMENTS
+**Domains:** use `--domain` / `--kind` for domain entry points; non-engineering leads come from registry `domains`.
 
 ## Live snapshot (computed now - uncommitted paths shown are the user's baseline, not routed)
 
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh`
 
-Design and feature lifecycle (GDD, feature specs, `implement-feature` from game-ai-workflows) stays with
-that plugin; when such work reaches these repos, the engineering runs through this workflow.
+Domain-specific artifact knowledge belongs to the registered domain lead; Factory Core coordinates the shared workflow.
 
 Module rules, docs, changelogs, generated paths, dependencies, checks, contracts and facts live
 in `${CLAUDE_PLUGIN_ROOT}/registry.json`; read them through the scripts, never guess them. If the
@@ -124,12 +124,13 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
 - Stage explicit paths only. Policy: `references/git-safety.md`.
 
 ## Commands (the user types these; they are read-only except `check`)
-
 `/rpg-factory:status` · `/rpg-factory:route <repo> <paths>` · `/rpg-factory:check <repo> [paths] [--status]` ·
 `/rpg-factory:doctor`. Suggest them when the user asks "what is pending", "what would this touch", "is it
 validated", "is Factory healthy".
 
 ## Skills
+
+Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`.
 
 | Situation | Lead skill |
 |---|---|
@@ -143,15 +144,14 @@ validated", "is Factory healthy".
 | benchmark harness (`GameServer.Tests/Bench/`), encoding sweep, re-baseline, multi-client verification | `measure` |
 
 Orientation only, not routing: naming a lead from this table is not doing the task. In every mode, run
-Route (step 4) and **invoke** the lead it prints before answering; tech skills (`dotnet-gameserver`,
-`go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`) come after the lead, never instead of
-it. The Skill hook never blocks: a tech skill requested before factory-core loads factory-core instead; one
-requested before its lead runs with an advisory - then route and invoke the lead.
+Route (step 4) and **invoke** the lead it prints before answering; supporting skills come after the lead.
+The Skill hook never blocks: a supporting skill requested before factory-core loads factory-core instead;
+one requested before its lead runs with an advisory - then route and invoke the lead. Engineering-specific tool details are in [references/engineering.md](references/engineering.md).
 
 ## References - read when
-
 - `references/repos.md` - first time in a repo, unmapped or repo-level paths.
 - `references/validation.md` - before running or reporting any check.
+- `references/engineering.md` - Engineering repository map, tool evidence and procedures.
 - `references/git-safety.md` - before any branch, stage, commit or cleanup.
 - `references/report.md` - before the final report (always).
 - `references/skill-contract.md` - routing precedence and how skills compose.
