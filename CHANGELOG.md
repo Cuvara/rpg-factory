@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [1.1.1] - 2026-10-29
 
-Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state and refreshes citations. No breaking changes or user action beyond the usual update command.
+Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state, accepts a Windows-form TMPDIR in netcode-headless and refreshes citations. No breaking changes or user action beyond the usual update command.
 
 ### Added
 
