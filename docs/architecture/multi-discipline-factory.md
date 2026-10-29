@@ -488,8 +488,8 @@ Each phase P2-P7 was implemented in a separate pull request with its own approva
   - New `check-registry` fixtures (P2).
   - English-only fixtures (P1).
   - One new dogfood scenario per domain lead.
-- **Not run for this plan:** no test proves the architecture. This document was validated only by the
-  docs-only `tests/run-all.sh` run recorded in its pull request.
+- **What this document does not prove:** no test validates the architecture itself. Each phase records its
+  own test evidence (suites, counts and logs) in its pull request and the initiative report.
 
 ## 13. Risks, trade-offs, rollback and open decisions
 
