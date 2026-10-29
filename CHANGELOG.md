@@ -10,6 +10,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `tests/routing.test.sh` (59) must keep its lead, co-leads, legs, follow-ups, tech skills, touched modules and
   check ids (`tests/fixtures/routing-golden.json`, recorded before domain metadata). Added fields are ignored.
 - `docs/architecture/`: architecture index, accepted multi-discipline factory architecture, and the domains ADR.
+- `registry.json` now defines engineering domain ownership; the schema and `check-registry.sh` validate artifact domains, roles, leads, repos, gates and optional repositories. `tests/check-registry.test.sh` covers these rules.
 - `scripts/checks/english-only.py`: report-only Unicode language check with optional enforcement and allowlisting.
 
 ## [1.1.1] - 2026-10-29
