@@ -3637,7 +3637,7 @@ class HostGuardTests(unittest.TestCase):
                                  "provider": {"id": "claude"}}}
         supervised = hostguard._live_supervised_workers({"result": {"workers": [worker]}}, {}, {"result": {"worktrees": []}})
         self.assertEqual(supervised[0]["activity"], "ACTIVE")
-        self.assertEqual(supervised[0]["path"], "c:/outside/worker")
+        self.assertEqual(supervised[0]["path"], hostguard._normal_path("C:/outside/worker"))
 
         quiet = [{"epoch": 1.0, "first": True, "ad_cpu": 0.0, "cpu": 10.0, "groups": {"build": 0.0, "av": 0.0}}]
         empty_processes = lambda: []
