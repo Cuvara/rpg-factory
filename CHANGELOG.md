@@ -73,6 +73,9 @@ Patch release. Hardens testlab host guards, native server mode, failure summarie
 
 ### Fixed
 
+- `netcode-headless.sh` now recognizes usable `C:/...` and `C:\\...` `TMPDIR` paths on Windows Git Bash,
+  keeping temporary build and TRX data outside the Netcode source tree; candidate checks repeat every TRX
+  parser case with a Windows-form temporary directory.
 - testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
   evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event
   for the leaver before the quit is an add is judged: it must receive the removal within the bound or the check
