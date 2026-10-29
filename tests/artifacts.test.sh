@@ -7,11 +7,11 @@ ok() { pass=$((pass+1)); echo "PASS $1"; }
 bad() { fail=$((fail+1)); echo "FAIL $1"; }
 skp() { skip=$((skip+1)); echo "SKIP $1"; }
 T=$(mktemp_win) || exit 1; trap 'rm -rf "$T"' EXIT
-R="$T/author"; P="$T/product"; mkdir -p "$R" "$P"
-git -C "$R" init -q -b main; git -C "$P" init -q -b main
-for repo in "$R" "$P"; do git -C "$repo" config user.name Fixture; git -C "$repo" config user.email fixture@example.test; done
+R="$T/author"; P="$T/product"; D="$T/design-author"; mkdir -p "$R" "$P" "$D"
+git -C "$R" init -q -b main; git -C "$P" init -q -b main; git -C "$D" init -q -b main
+for repo in "$R" "$P" "$D"; do git -C "$repo" config user.name Fixture; git -C "$repo" config user.email fixture@example.test; done
 cat > "$T/reg.json" <<'EOF'
-{"domains":{"fixture":{"artifact_kinds":["spec"],"human_gates":["review"],"approvers":[]}},"artifact_lifecycles":{"default":{"states":["draft","review","approved","in-implementation","verified","released","deprecated"],"transitions":{"draft":["review"],"review":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"released":["deprecated"],"deprecated":["draft"]},"requirements":{"approved":{"needs_approval":["review"],"approval_when_binding":true},"in-implementation":{"needs_trace":["impl"],"approval_when_binding":true},"verified":{"needs_trace_for_test":["impl","test"],"approval_when_binding":true},"released":{"needs_trace":["release"],"needs_trace_for_test":["impl","test"],"approval_when_binding":true}}}}}
+{"domains":{"fixture":{"artifact_kinds":["spec","feature-spec"],"human_gates":["review","gameplay-rules"],"approvers":[]}},"artifact_lifecycles":{"default":{"states":["draft","review","approved","in-implementation","verified","released","deprecated"],"transitions":{"draft":["review"],"review":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"released":["deprecated"],"deprecated":["draft"]},"requirements":{"approved":{"needs_approval":["review"],"approval_when_binding":true},"in-implementation":{"needs_trace":["impl"],"approval_when_binding":true},"verified":{"needs_trace_for_test":["impl","test"],"approval_when_binding":true},"released":{"needs_trace":["release"],"needs_trace_for_test":["impl","test"],"approval_when_binding":true}}},"feature-spec":{"states":["draft","approved"],"transitions":{"draft":["approved"],"approved":[]},"requirements":{"approved":{"approval_when_binding":["gameplay-rules"]}}}}}
 EOF
 cat > "$T/make.py" <<'PY'
 import json,sys
@@ -27,6 +27,21 @@ git -C "$R" add spec.md; git -C "$R" commit -qm init
 got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'draft test criterion needs no trace' || bad "draft coverage: $got"
 python3 "$T/make.py" "$R" draft review binding
 got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$R" --registry "$T/reg.json" --repos product="$P" | head -1); [[ "$got" == 'PASS FX-test-001 trace and approvals verified' ]] && ok 'draft binding values need no approval' || bad "draft binding: $got"
+write_design() {
+  python3 - "$D/feature.md" "$1" "${2:-false}" <<'PY'
+import json,sys
+obj={"id":"ZZ-test-001","kind":"feature-spec","domain":"fixture","status":sys.argv[2],"title":"Value-free feature","upstream":[],"acceptance":[],"trace":[]}
+if sys.argv[3] == "true": obj["binding_values"]=True
+open(sys.argv[1],"w",encoding="utf-8").write("---json\n"+json.dumps(obj)+"\n---\n")
+PY
+}
+write_design draft false; git -C "$D" add feature.md; git -C "$D" commit -qm 'Draft value-free feature spec'
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$D" --registry "$T/reg.json" --repos product="$P" | grep '^PASS ZZ-test-001'); [[ "$got" == 'PASS ZZ-test-001 trace and approvals verified' ]] && ok 'value-free draft feature spec needs no approval' || bad "value-free draft: $got"
+write_design approved true; git -C "$D" add feature.md; git -C "$D" commit -qm 'Approve binding feature spec'
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$D" --registry "$T/reg.json" --repos product="$P" | grep '^HUMAN_REQUIRED ZZ-test-001'); [[ "$got" == 'HUMAN_REQUIRED ZZ-test-001 missing approval' ]] && ok 'approved binding feature spec requires gameplay-rules approval' || bad "binding feature: $got"
+write_design approved false; git -C "$D" add feature.md; git -C "$D" commit -qm 'Approve value-free feature spec'
+got=$(python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$D" --registry "$T/reg.json" --repos product="$P" | grep '^PASS ZZ-test-001'); [[ "$got" == 'PASS ZZ-test-001 trace and approvals verified' ]] && ok 'approved value-free feature spec needs no approval' || bad "value-free approved: $got"
+rm "$D/feature.md"
 python3 "$T/make.py" "$R" draft
 line() { python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$R" --registry "$T/reg.json" | head -1; }
 got=$(line); [[ "$got" == 'PASS FX-test-001' ]] && ok 'valid artifact' || bad "valid artifact: $got"

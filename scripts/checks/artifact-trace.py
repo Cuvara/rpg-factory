@@ -218,18 +218,16 @@ def main():
                         break
             if reason is None:
                 gates = list(req.get("needs_approval", []))
-                if (
-                    obj.get("binding_values") is True
-                    and req.get("approval_when_binding") is True
-                ):
-                    gates = list(
-                        dict.fromkeys(
-                            gates
-                            + reg.get("domains", {})
-                            .get(obj.get("domain"), {})
-                            .get("human_gates", [])
-                        )
+                conditional = req.get("approval_when_binding")
+                if obj.get("binding_values") is True and conditional:
+                    extra = (
+                        conditional
+                        if isinstance(conditional, list)
+                        else reg.get("domains", {})
+                        .get(obj.get("domain"), {})
+                        .get("human_gates", [])
                     )
+                    gates = list(dict.fromkeys(gates + extra))
                 for gate in gates:
                     reason = approval(root, rel, obj, gate, reg)
                     if reason:
