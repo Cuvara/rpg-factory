@@ -164,6 +164,20 @@ with tempfile.TemporaryDirectory() as folder:
         raise AssertionError('truncated PNG must fail')
     except ValueError as exc:
         expect('truncated PNG fails with reason: ' + str(exc), bool(str(exc)))
+    bad_jpeg = pathlib.Path(folder) / 'truncated.jpg'
+    bad_jpeg.write_bytes(records['rgb.jpg'].read_bytes()[:-2])
+    try:
+        module._dimensions(bad_jpeg)
+        raise AssertionError('truncated JPEG must fail')
+    except ValueError as exc:
+        expect('truncated JPEG fails with reason: ' + str(exc), bool(str(exc)))
+    malformed_webp = pathlib.Path(folder) / 'malformed.webp'
+    malformed_webp.write_bytes(b'RIFF' + (22).to_bytes(4, 'little') + b'WEBPVP8 ' + (10).to_bytes(4, 'little') + bytes(10))
+    try:
+        module._dimensions(malformed_webp)
+        raise AssertionError('malformed WebP frame must fail')
+    except ValueError as exc:
+        expect('malformed WebP fails with reason: ' + str(exc), bool(str(exc)))
     bad_webp = temp / 'client' / 'art2d_prop_icon_bad.webp'
     bad_webp.write_bytes(b'RIFF\x14\x00\x00\x00WEBPVP8L\x05\x00\x00\x00/')
     bad_export = export('rgba.png', file_path=bad_webp.name, sha256=hashlib.sha256(bad_webp.read_bytes()).hexdigest())
