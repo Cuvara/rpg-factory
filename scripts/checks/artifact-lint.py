@@ -284,7 +284,8 @@ def main():
                     )
                     if old.get("id") != ident:
                         reasons.append(f"id changed {old.get('id')} -> {ident}")
-                    if obj.get("status") not in lifecycle(
+                    # an unchanged status is no transition (editing a draft keeps it a draft)
+                    if obj.get("status") != old.get("status") and obj.get("status") not in lifecycle(
                         reg, obj.get("kind")
                     ).get("transitions", {}).get(old.get("status"), []):
                         reasons.append("illegal transition")

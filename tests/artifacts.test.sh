@@ -210,5 +210,15 @@ got=$(asset structured-provenance '{"schema_version":2,"provenance":{"generated_
 got=$(asset unknown '{"hash":"abc","mystery":true}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset unknown key rejected (anyOf does not short-circuit)' || bad "asset unknown key: $got"
 got=$(asset wrongtype '{"license":5}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset wrong type rejected' || bad "asset wrong type: $got"
 got=$(asset nosource '{"source_rev":null}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset without source_rev or hash rejected' || bad "asset no source: $got"
+# editing an artifact without changing its status is not a transition (a draft edited twice stays legal)
+K="$T/same-status"; mkdir -p "$K"; git -C "$K" init -q -b main; git -C "$K" config user.email t@example.com; git -C "$K" config user.name t
+python3 "$T/make.py" "$K" draft; git -C "$K" add spec.md; git -C "$K" commit -qm one
+python3 - "$K/spec.md" <<'PY3'
+import json, sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read(); o = json.loads(s.split("\n", 1)[1].split("\n---", 1)[0]); o["title"] = o["title"] + " revised"
+open(p, "w", encoding="utf-8", newline="\n").write("---json\n" + json.dumps(o) + "\n---\n")
+PY3
+git -C "$K" add spec.md; git -C "$K" commit -qm two
+got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$K" --registry "$T/reg.json" | head -1); [[ "$got" == 'PASS FX-test-001' ]] && ok 'unchanged status across commits is not a transition' || bad "draft edited twice: $got"
 echo "artifacts: $((pass+fail+skip)) run, $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]
