@@ -15,17 +15,39 @@ def main():
                 folder.mkdir(parents=True, exist_ok=True)
                 if "approvals" not in Path(route).parts:
                     (folder / ".gitkeep").touch()
+    def from_template(relative, artifact_id, title, spec=None):
+        template = root / "templates" / relative
+        raw = template.read_text(encoding="utf-8")
+        value = json.loads(raw.split("---json\n", 1)[1].split("\n---", 1)[0])
+        value["id"], value["title"], value["status"] = artifact_id, title, "draft"
+        if spec is not None:
+            value["spec"].update(spec)
+        return value
+
     seeds = {
-        "feature-spec": ("design/features/FD-inventory-001.artifact.json", {"schema_version": 2, "id": "FD-inventory-001", "kind": "feature-spec", "domain": "design", "status": "approved", "title": "Inventory feature", "authors": [{"kind": "agent", "id": "dogfood-fixture"}], "sources": [], "upstream": [], "acceptance": [], "trace": [], "spec": {"summary": "Manage carried items", "requirements": ["show item slots"]}}),
-        "approved-feature": ("design/features/FD-approved-001.artifact.json", {"schema_version": 2, "id": "FD-approved-001", "kind": "feature-spec", "domain": "design", "status": "approved", "title": "Approved crafting feature", "authors": [{"kind": "agent", "id": "dogfood-fixture"}], "sources": [], "upstream": [], "acceptance": [], "trace": [], "spec": {"summary": "Craft a field tool", "requirements": ["show recipe and result"]}}),
-        "design-event": ("design/events/DE-craft-complete-001.artifact.json", {"schema_version": 2, "id": "DE-craft-complete-001", "kind": "design-event", "domain": "design", "status": "approved", "title": "Crafting complete", "authors": [{"kind": "agent", "id": "dogfood-fixture"}], "sources": [], "upstream": [], "acceptance": [], "trace": [], "spec": {"event": "crafting.complete"}}),
-        "asset-3d": ("art3d/deliveries/A3-workstation-001.artifact.json", {"schema_version": 2, "id": "A3-workstation-001", "kind": "asset-3d", "domain": "art3d", "status": "approved", "title": "Workstation asset", "authors": [{"kind": "agent", "id": "dogfood-fixture"}], "sources": [], "upstream": [], "acceptance": [], "trace": [], "spec": {"format": "glb", "source": "fixture"}}),
+        "feature-spec": ("design/features/FD-inventory-001.artifact.json", from_template("design/feature-spec.md", "FD-inventory-001", "Inventory feature", {"summary": "Manage carried items", "requirements": [{"id": "REQ1", "description": "Show item slots"}]})),
+        "approved-feature": ("design/features/FD-approved-001.artifact.json", from_template("design/feature-spec.md", "FD-approved-001", "Feature brief: craft a field tool", {"summary": "Craft a field tool", "requirements": [{"id": "REQ1", "description": "Show recipe and result"}]})),
+        "field-tool-system": ("design/systems/GS-field-tool-001.artifact.json", from_template("design/gameplay-system.md", "GS-field-tool-001", "Field tool crafting system", {"core_loop": "Select a recipe, provide ingredients, and receive a crafted tool", "mechanics": ["Show recipe and result"]})),
+        "design-event": ("design/features/GS-craft-complete-001.artifact.json", from_template("design/gameplay-system.md", "GS-craft-complete-001", "Craft completion gameplay system", {"system_type": "combat", "core_loop": "Crafting completes and presents a result", "mechanics": ["Emit a completion event"], "progression": ["TBD"], "combat_interaction": ["TBD"], "economy": {"currencies": ["TBD"], "sources": ["TBD"], "sinks": ["TBD"]}, "difficulty_balancing": ["TBD"], "meta_progression": ["TBD"]})),
+        "asset-3d": ("art3d/assets/ARTD-workstation-001.artifact.json", from_template("art3d/asset-3d.md", "ARTD-workstation-001", "Workstation asset")),
     }
     if seed == "stale-pair":
-        seeds["stale-upstream"] = ("design/events/DE-stale-001.artifact.json", {"schema_version": 2, "id": "DE-stale-001", "kind": "design-event", "domain": "design", "status": "approved", "title": "Changed crafting event", "authors": [{"kind": "agent", "id": "dogfood-fixture"}], "sources": [], "upstream": [], "acceptance": [], "trace": [], "spec": {"event": "crafting.complete", "revision_note": "changed"}})
-        seeds["stale-downstream"] = ("vfx/specs/VFX-craft-complete-001.artifact.json", {"schema_version": 2, "id": "VFX-craft-complete-001", "kind": "vfx-spec", "domain": "vfx", "status": "draft", "title": "Crafting completion effect", "authors": [{"kind": "agent", "id": "dogfood-fixture"}], "sources": [], "upstream": [{"id": "DE-stale-001", "rev": "0000000000000000000000000000000000000000"}], "acceptance": [], "trace": [], "spec": {"duration": 1.0, "phases": [{"name": "burst", "duration": 1.0}], "platform_budgets": {"pc": {}, "console": {}, "mobile": {}, "web": {}}}})
-    if seed in seeds:
-        rel, value = seeds[seed]
+        seeds["stale-upstream"] = ("design/features/GS-stale-001.artifact.json", from_template("design/gameplay-system.md", "GS-stale-001", "Changed crafting gameplay system", {"system_type": "combat", "core_loop": "Changed event"}))
+        stale_vfx = from_template("vfx/vfx-spec.md", "VFX-craft-complete-001", "Crafting completion effect", {"purpose": "TBD: crafting completion effect", "triggers": ["GS-stale-001"]})
+        stale_vfx["upstream"] = [{"id": "GS-stale-001", "rev": "0000000000000000000000000000000000000000"}]
+        seeds["stale-downstream"] = ("vfx/specs/VFX-craft-complete-001.artifact.json", stale_vfx)
+    if seed == "asset-3d-vfx":
+        selected = ("asset-3d", "design-event")
+    elif seed == "stale-pair":
+        selected = ("stale-upstream", "stale-downstream")
+    elif seed == "approved-feature":
+        selected = ("approved-feature", "field-tool-system")
+    else:
+        selected = (seed,) if seed in seeds else ()
+    for key in selected:
+        rel, value = seeds[key]
+        if value.get("status") == "approved":
+            value["status"] = "draft"
         (workspace / rel).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 

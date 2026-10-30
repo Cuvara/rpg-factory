@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -11,7 +12,18 @@ from pathlib import Path
 
 
 def norm(value):
-    return str(value).replace("\\", "/").lower().rstrip("/")
+    value = str(value).replace("\\", "/")
+    msys = re.match(r"^/([a-zA-Z])/(.*)$", value)
+    if msys:
+        value = msys.group(1).upper() + ":/" + msys.group(2)
+    return posixpath.normpath(value).lower().rstrip("/")
+
+
+def normalized_path(value, root):
+    value = str(value).replace("\\", "/")
+    if not value.startswith("/") and not re.match(r"^[a-zA-Z]:/", value):
+        value = root.rstrip("/") + "/" + value
+    return norm(value)
 
 
 def records(path):
@@ -92,26 +104,36 @@ def main():
         except (OSError, ValueError):
             continue
     found = {obj.get("kind") for _, obj in artifacts}
-    def authoring_paths(kind, domain):
-        normalized = kind.replace("-", "").lower()
-        modules = [m for m in reg.get("modules", []) if m.get("repo") == "authoring" and m.get("domain") == domain and m.get("paths")]
-        exact = next((m for m in modules if normalized in m.get("id", "").replace("-", "").lower()), None)
-        words = set(re.split(r"[-/._]+", kind.lower()))
-        def score(value):
-            parts = set(re.split(r"[-/._]+", value.lower()))
-            return len(words & (parts | {x[:-1] for x in parts if len(x) > 3 and x.endswith("s")}))
-        module = exact or (max(modules, key=lambda m: max([score(m.get("id", ""))] + [score(p) for p in m["paths"]])) if modules else None)
-        if not module:
-            return []
-        return [max(module["paths"], key=score)]
+    def routed_to_domain(relative, domain):
+        relative = relative.replace("\\", "/").strip("/")
+        matches = []
+        for module in reg.get("modules", []):
+            if module.get("repo") != "authoring":
+                continue
+            for route in module.get("paths", []):
+                route = route.replace("\\", "/").strip("/")
+                if not route or relative == route or relative.startswith(route + "/"):
+                    matches.append((len(route), module.get("domain", "")))
+        if matches:
+            depth = max(length for length, _ in matches)
+            if any(owner == domain for length, owner in matches if length == depth):
+                return True
+        for contract in reg.get("contracts", []):
+            for endpoint in [contract.get("source", {})] + contract.get("copies", []):
+                if endpoint.get("repo") != "authoring" or endpoint.get("domain") != domain:
+                    continue
+                route = endpoint.get("path", "").replace("\\", "/").strip("/")
+                if route and (relative == route or relative.startswith(route + "/")):
+                    return True
+        return False
     for kind in a.expected_kinds.split():
         if kind not in found:
             failures.append("missing artifact kind " + kind)
         else:
             for path, obj in artifacts:
-                if obj.get("kind") == kind and not any(path.relative_to(authoring).as_posix().startswith(route.rstrip("/") + "/") for route in authoring_paths(kind, obj.get("domain", ""))):
+                if obj.get("kind") == kind and not routed_to_domain(path.relative_to(authoring).as_posix(), obj.get("domain", "")):
                     failures.append("artifact is outside registry-routed path: " + str(path.relative_to(authoring)))
-    needed = {"ui-write": ("FD-inventory-001", "feature-spec"), "vfx-write": ("DE-craft-complete-001", "design-event"), "xdomain-art3d-vfx": ("A3-workstation-001", "asset-3d"), "xdomain-stale": ("DE-stale-001", "design-event")}.get(a.scenario)
+    needed = {"ui-write": ("FD-inventory-001", "feature-spec"), "vfx-write": ("GS-craft-complete-001", "gameplay-system"), "xdomain-art3d-vfx": ("ARTD-workstation-001", "asset-3d"), "xdomain-stale": ("GS-stale-001", "gameplay-system")}.get(a.scenario)
     if needed:
         upstream_id, upstream_kind = needed
         upstream_path = None
@@ -135,17 +157,15 @@ def main():
                     failures.append("downstream does not retain the stale upstream revision for " + upstream_id)
             elif not any(ref.get("rev") == revision for ref in matching):
                 failures.append("missing current upstream id/revision reference to " + upstream_id)
-    if any("approvals" in p.relative_to(authoring).parts for p in authoring.rglob("*")):
-        failures.append("approval file created")
     base = norm(a.workspace.resolve())
     for path in writes:
         if not path:
             failures.append("write tool path missing")
-        elif not norm(Path(path).resolve()).startswith(base + "/"):
+        elif not normalized_path(path, base).startswith(base + "/"):
             failures.append("write outside scratch workspace: " + path)
     for command in bash_commands:
         for match in re.findall(r"(?:^|\s)(/(?:[A-Za-z0-9_.-]+/)+[^\s;&|]+|[A-Za-z]:\\[^\s;&|]+)", command):
-            if (match.startswith("/") or re.match(r"^[A-Za-z]:\\", match)) and not norm(match).startswith(base + "/") and any(x in match.lower() for x in ("write", "rm ", "mv ", "cp ", ".json", ".md")):
+            if (match.startswith("/") or re.match(r"^[A-Za-z]:\\", match)) and not normalized_path(match, base).startswith(base + "/") and any(x in match.lower() for x in ("write", "rm ", "mv ", "cp ", ".json", ".md")):
                 failures.append("possible write outside scratch workspace: " + match)
     for event in events:
         if event.get("type") == "result" and event.get("subtype") not in (None, "success"):
@@ -162,6 +182,8 @@ def main():
             changed.add(rel.replace("\\", "/"))
         if rel and (rel.startswith("../") or ":" in rel or rel.startswith("/")):
             failures.append("unexpected git path " + rel)
+    if any("approvals" in p.split("/") and p in changed for p in changed):
+        failures.append("approval file created")
     written = [(p, obj) for p, obj in artifacts if p.relative_to(authoring).as_posix() in changed]
     if written:
         lint = subprocess.run([sys.executable, "-B", str(a.root / "scripts/checks/artifact-lint.py"), str(authoring), "--registry", str(a.root / "registry.json")], capture_output=True, text=True, encoding="utf-8")
