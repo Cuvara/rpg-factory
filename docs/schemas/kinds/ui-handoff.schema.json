@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/ui-handoff.schema.json",
+  "title": "ui-handoff",
+  "type": "object",
+  "required": [
+    "screens"
+  ],
+  "properties": {
+    "screens": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
+}
