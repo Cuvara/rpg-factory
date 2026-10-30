@@ -47,7 +47,7 @@ out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry.sh" --structure-on
 
 # Base proof: P4's checker accepts the same non-design path in a P4-compatible registry.
 git show d63e768aff4f440d745fa54cbb5334ab7797fd8b:scripts/check-registry.sh > "$P/scripts/check-registry-base.sh"
-jq 'del(.domains.design) | .repos |= del(.authoring) | .modules = [.modules[] | select(.repo != "authoring")] | .skills |= with_entries(select(.value.domain != "design")) | .human_gates |= map(select(.id != "design-review")) | (.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' "$P/registry.json" > "$T/base-mutated.json"
+jq 'del(.domains.design) | .repos |= del(.authoring) | .contracts |= map(select(.id != "feature-spec-to-impl")) | .modules = [.modules[] | select(.repo != "authoring")] | .skills |= with_entries(select(.value.domain != "design")) | .human_gates |= map(select(.id != "design-review")) | (.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' "$P/registry.json" > "$T/base-mutated.json"
 out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry-base.sh" --structure-only --registry "$T/base-mutated.json" 2>&1); rc=$?
 [ $rc -eq 0 ] && grep -q '^OK:' <<<"$out" \
   && ok 'base P4 checker accepts the path (regression proof)' || no 'base P4 regression proof' "$out"
