@@ -1,1 +1,115 @@
-{"type":"object"}
+{
+  "type": "object",
+  "required": [
+    "file",
+    "hash",
+    "format",
+    "lods",
+    "collision",
+    "physics",
+    "textures",
+    "export_settings",
+    "engine_constraints",
+    "required_deliverables"
+  ],
+  "properties": {
+    "file": {
+      "type": "string"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "format": {
+      "type": "string",
+      "enum": [
+        "gltf",
+        "glb",
+        "fbx",
+        "blend",
+        "obj"
+      ]
+    },
+    "lods": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "collision": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "physics": {
+      "type": "object"
+    },
+    "textures": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "export_settings": {
+      "type": "object",
+      "required": [
+        "scale",
+        "units",
+        "up_axis"
+      ],
+      "properties": {
+        "scale": {
+          "type": "number"
+        },
+        "units": {
+          "type": "string"
+        },
+        "up_axis": {
+          "type": "string"
+        }
+      }
+    },
+    "engine_constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_deliverables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "polygon_budget_by_lod": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "uv_required": {
+      "type": "boolean"
+    },
+    "naming_pattern": {
+      "type": "string"
+    },
+    "node_naming_pattern": {
+      "type": "string"
+    },
+    "materials_required": {
+      "type": "boolean"
+    },
+    "root_required": {
+      "type": "boolean"
+    },
+    "rig_required": {
+      "type": "boolean"
+    },
+    "animation_required": {
+      "type": "boolean"
+    }
+  },
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/asset-3d-v1.schema.json",
+  "title": "asset-3d specification schema v1"
+}

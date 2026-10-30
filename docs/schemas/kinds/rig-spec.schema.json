@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "required": [
+    "skeleton",
+    "root_bone",
+    "naming_pattern",
+    "scale",
+    "units"
+  ],
+  "properties": {
+    "skeleton": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "root_bone": {
+      "type": "string"
+    },
+    "naming_pattern": {
+      "type": "string"
+    },
+    "scale": {
+      "type": "number"
+    },
+    "units": {
+      "type": "string"
+    },
+    "deform_only": {
+      "type": "boolean"
+    }
+  },
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/rig-spec-v1.schema.json",
+  "title": "rig-spec specification schema v1"
+}

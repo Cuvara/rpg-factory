@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "required": [
+    "materials",
+    "textures"
+  ],
+  "properties": {
+    "materials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "shader"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "shader": {
+            "type": "string"
+          },
+          "maps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "textures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "map",
+          "resolution",
+          "format",
+          "colour_space"
+        ],
+        "properties": {
+          "map": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "integer"
+          },
+          "format": {
+            "type": "string"
+          },
+          "colour_space": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/material-spec-v1.schema.json",
+  "title": "material-spec specification schema v1"
+}
