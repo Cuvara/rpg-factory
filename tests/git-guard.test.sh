@@ -67,6 +67,81 @@ check allow "$SERVER" 'kill 1234'
 check allow "$SERVER" 'kill $!'
 check allow "$SERVER" 'kill %1'
 
+# a query that selects processes by name/pattern + any terminator, whatever the separators (RV-B9 MAJOR-1)
+check high "$SERVER" 'taskkill //F //PID $(powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='"'"'bash.exe'"'"'\" | Where-Object { $_.CommandLine -like '"'"'*run.sh*'"'"' } | % { $_.ProcessId }") //T'
+check high "$SERVER" 'for p in $(powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '"'"'*run.sh*'"'"' }).ProcessId"); do taskkill //F //PID $p; done'
+check high "$SERVER" 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*vstest*" } | ForEach-Object { taskkill /F /PID $_.ProcessId }' "" PowerShell
+check high "$SERVER" '$ps = Get-CimInstance Win32_Process -Filter "Name='"'"'dotnet.exe'"'"'"; $ps | % { Stop-Process -Id $_.ProcessId -Force }' "" PowerShell
+check high "$SERVER" 'foreach ($p in Get-CimInstance Win32_Process -Filter "Name='"'"'dotnet.exe'"'"'") { Stop-Process -Id $p.ProcessId -Force }' "" PowerShell
+check high "$SERVER" 'Get-Process -Name dotnet | % { Stop-Process -Id $_.Id }' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | ForEach-Object { $_.Kill() }' "" PowerShell
+check high "$SERVER" '(Get-Process dotnet).Kill()' "" PowerShell
+check high "$SERVER" 'Stop-Process -InputObject (Get-Process dotnet)' "" PowerShell
+check high "$SERVER" 'gps dotnet | spps' "" PowerShell
+check high "$SERVER" 'ps dotnet | kill' "" PowerShell
+check high "$SERVER" 'gcim Win32_Process | Invoke-CimMethod -MethodName Terminate' "" PowerShell
+check high "$SERVER" 'Invoke-CimMethod -Query "SELECT * FROM Win32_Process WHERE Name='"'"'dotnet.exe'"'"'" -MethodName Terminate' "" PowerShell
+check high "$SERVER" 'kill -9 $(pgrep -f run.sh)'
+check high "$SERVER" 'kill $(pidof dotnet)'
+check high "$SERVER" 'kill `pgrep dotnet`'
+check high "$SERVER" 'kill "$(pgrep dotnet)"'
+check high "$SERVER" 'pgrep dotnet | while read p; do kill $p; done'
+check high "$SERVER" "ps aux | grep run.sh | awk '{print \$2}' | xargs kill"
+check high "$SERVER" "kill -9 \$(ps aux | grep '[r]un.sh' | awk '{print \$2}')"
+check high "$SERVER" 'tasklist /FI "IMAGENAME eq dotnet.exe" | awk "{print \$2}" | xargs taskkill //F //PID'
+check high "$SERVER" 'taskkill /F /FI "IMAGENAME eq dotnet.exe"'
+check high "$SERVER" 'taskkill /FI "WINDOWTITLE eq build*" /F'
+check high "$SERVER" 'taskkill -F -IM dotnet.exe'
+check high "$SERVER" 'taskkill /IM:dotnet.exe'
+check high "$SERVER" 'Stop-Process -N dotnet' "" PowerShell
+check high "$SERVER" 'spps -Name dotnet' "" PowerShell
+check high "$SERVER" 'kill -Name dotnet' "" PowerShell
+check high "$SERVER" "Start-Process taskkill -ArgumentList '/F','/IM','dotnet.exe'" "" PowerShell
+check high "$SERVER" 'exec /usr/bin/pkill dotnet'  # `exec`: git-bash must not rewrite the leading path
+check high "$SERVER" 'pwsh -c "Get-Process dotnet | Stop-Process"'
+check high "$SERVER" 'powershell.exe -NoProfile -Command "& {Stop-Process -Name dotnet}"'
+check high "$SERVER" 'wsl -e pkill dotnet'
+check high "$SERVER" 'wsl.exe --exec killall dotnet'
+check high "$SERVER" 'kill -9 -1'
+check high "$SERVER" 'wmic process dotnet.exe delete'
+check high "$SERVER" 'wmic /node:localhost process where "name='"'"'dotnet.exe'"'"'" delete'
+# host safety, not repo policy: the same advisory outside the workspace and without RPG_FACTORY_WORKSPACE
+check high "$TMP" 'taskkill //F //IM dotnet.exe'
+check high "$TMP" 'pkill -f dotnet'
+check high "$TMP" 'kill -9 $(pgrep -f run.sh)'
+# scoped kills and look-alikes stay quiet
+check allow "$TMP" 'taskkill /F /PID 1234 /T'
+check allow "$TMP" 'taskkill //F //PID $pid //T'
+check allow "$TMP" 'kill -0 $pid'
+check allow "$TMP" 'kill -9 1234'
+check allow "$TMP" 'kill -1 1234'
+check allow "$TMP" 'kill -n 9 1234'
+check allow "$TMP" 'docker kill rpg-gameserver-1'
+check allow "$TMP" 'tmux kill-server'
+check allow "$TMP" 'pgrep dotnet'
+check allow "$TMP" 'ps aux'
+check allow "$TMP" 'Get-Process -Id 1234 | Stop-Process' "" PowerShell
+check allow "$TMP" '$p | Stop-Process' "" PowerShell
+check allow "$TMP" 'wmic process where processid=1234 delete'
+check allow "$TMP" "grep -E 'foo|pkill' file"
+check allow "$TMP" 'rg "taskkill|pkill|killall" scripts/'
+check allow "$TMP" "grep -rnE 'Stop-Process|taskkill /IM' ."
+check allow "$TMP" 'echo "step 1; pkill is forbidden"'
+check allow "$TMP" 'echo "do not run taskkill /F /IM dotnet.exe"'
+check allow "$TMP" 'git commit -m "fix(guard): flag a; killall"'
+check allow "$TMP" "jq -r '.a | killall' f"
+check allow "$TMP" "python scripts/x.py --pattern 'a|killall'"
+check allow "$TMP" 'git commit -m "docs: warn on
+taskkill /IM and
+pkill usage"'
+check allow "$TMP" 'gh pr create --title x --body "Flags taskkill /IM.
+pkill and killall too."'
+check allow "$TMP" "git commit -F - <<'MSG_EOF'
+fix: note
+pkill dotnet
+taskkill /IM x
+MSG_EOF"
+
 # Linked Orca worktrees outside the workspace inherit the main checkout's guard scope.
 check high "$LINKED" 'taskkill //F //IM dotnet.exe'
 check allow "$LINKED" 'taskkill /T /PID 1234 /F'
