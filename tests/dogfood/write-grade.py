@@ -214,7 +214,8 @@ def main():
                 failures.append("artifact-quality returned invalid JSON for " + domain)
     if a.scenario == "xdomain-stale":
         downstream_id = "VFX-craft-complete-001"
-        quality = subprocess.run([sys.executable, "-B", str(a.root / "scripts/checks/artifact-quality.py"), str(authoring), "--registry", str(a.root / "registry.json"), "--domain", "vfx", "--json"], capture_output=True, text=True, encoding="utf-8")
+        checker = os.environ.get("RPG_FACTORY_ARTIFACT_QUALITY", str(a.root / "scripts/checks/artifact-quality.py"))
+        quality = subprocess.run([sys.executable, "-B", checker, str(authoring), "--registry", str(a.root / "registry.json"), "--domain", "vfx", "--json"], capture_output=True, text=True, encoding="utf-8")
         try:
             rows = json.loads(quality.stdout).get("results", [])
             stale_rows = [row for row in rows if row.get("artifact") == downstream_id and row.get("check") == "trace-approval"]

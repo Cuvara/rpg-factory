@@ -72,11 +72,11 @@ PY
   python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$1" --scenario fixture --transcript "$1/transcript.jsonl" --expected-skills game-design --expected-kinds game-concept --domain design
 }
 newcase bash-redirect
-check 'Bash redirection outside workspace fails' fail outside_shell "$T/bash-redirect" 'printf test > /tmp/q.json'
+check 'Bash redirection outside workspace fails' fail outside_shell "$T/bash-redirect" 'printf test > /tmp/q'
 newcase bash-tee
-check 'tee output outside workspace fails' fail outside_shell "$T/bash-tee" 'printf test | tee /tmp/q.json'
+check 'tee output outside workspace fails' fail outside_shell "$T/bash-tee" 'printf test | tee /tmp/q'
 newcase bash-output
-check 'command -o output outside workspace fails' fail outside_shell "$T/bash-output" 'tool -o /tmp/q.json'
+check 'command -o output outside workspace fails' fail outside_shell "$T/bash-output" 'tool -o /tmp/q'
 newcase bash-null
 check 'discarded output to /dev/null is allowed' pass outside_shell "$T/bash-null" 'printf test > /dev/null'
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
@@ -100,5 +100,15 @@ rows[-1]['result']='The VFX downstream artifact is stale and needs revalidation.
 open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in rows))
 PY
 check 'stale workflow expects downstream upstream-changed FAIL and stale status without a VFX lead' pass python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$T/stale" --scenario xdomain-stale --transcript "$T/stale/transcript.jsonl" --expected-skills game-design --expected-kinds 'gameplay-system vfx-spec' --domain vfx --plan stale
+cat >"$T/no-stale-row.py" <<'PY'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1]); rows=[]
+for path in root.rglob('*.artifact.json'):
+    try: obj=json.loads(path.read_text(encoding='utf-8'))
+    except (OSError,ValueError): continue
+    rows.append({'artifact':obj.get('id'),'check':'lifecycle','state':'PASS','reasons':[]})
+print(json.dumps({'results':rows}))
+PY
+check 'stale grader rejects missing upstream-changed quality row' fail env RPG_FACTORY_ARTIFACT_QUALITY="$T/no-stale-row.py" python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$T/stale" --scenario xdomain-stale --transcript "$T/stale/transcript.jsonl" --expected-skills game-design --expected-kinds 'gameplay-system vfx-spec' --domain vfx --plan stale
 echo "dogfood grader: $((ok+bad)) run, $ok passed, $bad failed"
 [ "$bad" -eq 0 ]
