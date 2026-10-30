@@ -11,7 +11,11 @@ jq '.repos.uitoolkit.optional = true
   | .domains.engineering.artifact_kinds = ["shared"]
   | .domains.design = {summary:"Design artifacts",status:"active",lead:"design-lead",repos:["uitoolkit"],artifact_kinds:["spec","shared"],quality_gates:["lint"],human_gates:["rules"],handoffs:["spec-to-code"]}
   | .skills["design-lead"] = {kind:"repo",domain:"design",order:999}
-  | .skills["outside-lead"] = {kind:"repo",domain:"elsewhere",order:998}' "$ROOT/registry.json" > "$REG"
+  | .skills["outside-lead"] = {kind:"repo",domain:"elsewhere",order:998}
+  | .domains.design.repos += ["server"]
+  | .contracts += [{id:"spec-to-code",kind:"handoff",domain:"design",summary:"fixture handoff",source:{repo:"server",path:"backend/content/"},copies:[{repo:"server",path:"backend/gameserver-dotnet/"}],driver:"design-lead",gate:null,evidence:"artifact-trace"}]' "$ROOT/registry.json" > "$REG"
+jq '(.modules |= map(if .id == "server.content" then .domain = "design" else . end)) | .skills["server-realtime"].domain = "design"' "$REG" > "$TMP/ambiguous-registry.json"
+mv "$TMP/ambiguous-registry.json" "$REG"
 export RPG_FACTORY_REGISTRY="$REG" RPG_FACTORY_WORKSPACE="$WS" CLAUDE_PLUGIN_ROOT="$ROOT"
 mkdir -p "$WS"
 while IFS= read -r p; do
@@ -24,6 +28,18 @@ pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; }
 ctx() { bash "$ROOT/scripts/factory-context.sh" "$@"; }
+out=$(ctx --domain design --graph 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q 'Dependency graph: design -> engineering' <<<"$out" && ok "handoff graph topological order" || no "handoff graph (rc=$rc): $out"
+out=$(ctx --repo server --paths backend/content/ backend/shared/proto/wire.proto 2>&1); rc=$?
+[ "$rc" -eq 3 ] && grep -q 'AMBIGUOUS: paths resolve to leads in multiple domains' <<<"$out" && grep -q 'design-lead:' <<<"$out" && grep -q 'wire-contract:' <<<"$out" && ok "cross-domain paths report both leads" || no "ambiguous paths (rc=$rc): $out"
+out=$(ctx --repo server --lead wire-contract --paths backend/content/ backend/shared/proto/wire.proto 2>&1); rc=$?
+[ "$rc" -eq 0 ] && grep -q 'wire-contract' <<<"$out" && ok "--lead resolves cross-domain paths" || no "lead override (rc=$rc)"
+cycle_reg="$TMP/cycle-registry.json"
+jq '.contracts += [{id:"reverse-handoff",kind:"handoff",domain:"engineering",summary:"reverse",source:{repo:"server",path:"backend/shared/proto/"},copies:[{repo:"authoring",path:"design/features/"}],driver:"wire-contract",gate:null,evidence:"artifact-trace"}]' "$REG" > "$cycle_reg"
+export RPG_FACTORY_REGISTRY="$cycle_reg"
+out=$(ctx --domain design --graph 2>&1); rc=$?
+[ "$rc" -eq 3 ] && grep -q 'CYCLE: design -> engineering -> design' <<<"$out" && ok "graph cycle exits 3 with cycle" || no "graph cycle (rc=$rc): $out"
+export RPG_FACTORY_REGISTRY="$REG"
 out=$(ctx --domain engineering 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'Domain' <<<"$out" && grep -q 'routes by --repo/--paths (module ownership)' <<<"$out" && ok "--domain engineering text" || no "--domain engineering text (rc=$rc)"
 out=$(ctx --json --domain engineering 2>&1); rc=$?

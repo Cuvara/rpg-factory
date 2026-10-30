@@ -6,7 +6,7 @@ Collects live git state per repo (worktree-aware), resolves it through scripts/l
 renders a compact markdown snapshot or full JSON.
 
 Usage (via factory-context.sh):
-  [--repo <key>|all] [--repo-path <dir>] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--domain <id>] [--kind <artifact-kind>] [--explain]
+  [--repo <key>|all] [--repo-path <dir>] [--paths <p>...] [--base <ref>] [--json] [--lead <skill>] [--domain <id>] [--kind <artifact-kind>] [--graph] [--explain]
   [--full] [--toolchain] [--submodules] [--mode analyze|plan|implement|validate|review|resume]
   --repo      default: the repo (or worktree) containing the cwd, else all registered repos
   --repo-path explicit checkout or linked worktree to target (must belong to the registered repo). Without it the
@@ -69,7 +69,7 @@ def git(cwd, *args, timeout=60):
 
 
 def parse_args(argv):
-    a = {"repo": None, "repo_path": None, "paths": [], "base": None, "json": False, "lead": None, "domain": None, "kind": None, "explain": False,
+    a = {"repo": None, "repo_path": None, "paths": [], "base": None, "json": False, "lead": None, "domain": None, "kind": None, "graph": False, "explain": False,
          "full": False, "toolchain": False, "submodules": False, "mode": None}
     i = 0
     while i < len(argv):
@@ -90,7 +90,7 @@ def parse_args(argv):
             a[x[2:].replace("-", "_")] = argv[i + 1]
             i += 2
             continue
-        flag = {"--json": "json", "--explain": "explain", "--full": "full", "--toolchain": "toolchain",
+        flag = {"--json": "json", "--graph": "graph", "--explain": "explain", "--full": "full", "--toolchain": "toolchain",
                 "--submodules": "submodules"}.get(x)
         if flag:
             a[flag] = True
@@ -190,6 +190,51 @@ def print_domain(result, as_json):
         if key == "repos":
             values = [f"{r['id']} ({r['status']}: {r['path']})" for r in values]
         print(f"{key}: {', '.join(values) if values else 'none'}")
+
+
+def handoff_graph(reg, domain_id):
+    """Return all domains in stable topological order or a concrete cycle."""
+    domains = reg.get("domains", {})
+    if domain_id not in domains:
+        die(f"unknown domain {domain_id}; known: {', '.join(domains)}", 3)
+    edges = {name: set() for name in domains}
+    for c in reg.get("contracts", []):
+        if c.get("kind") != "handoff":
+            continue
+        src = c.get("domain") or next((m.get("domain", "engineering") for m in reg["modules"]
+                                        if m["repo"] == c.get("source", {}).get("repo") and
+                                        any(c["source"].get("path", "").startswith(p.rstrip("/") + "/") or
+                                            c["source"].get("path", "") == p.rstrip("/") for p in m.get("paths", []))), "engineering")
+        for end in c.get("copies", []):
+            dst = next((m.get("domain", "engineering") for m in reg["modules"] if m["repo"] == end.get("repo") and
+                        any(end.get("path", "").startswith(p.rstrip("/") + "/") or end.get("path", "") == p.rstrip("/")
+                            for p in m.get("paths", []))), "engineering")
+            if src in edges and dst in edges and src != dst:
+                edges[src].add(dst)
+    indegree = {n: 0 for n in edges}
+    for targets in edges.values():
+        for target in targets:
+            indegree[target] += 1
+    ready = sorted(n for n, d in indegree.items() if d == 0)
+    order = []
+    while ready:
+        node = ready.pop(0)
+        order.append(node)
+        for target in sorted(edges[node]):
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+                ready.sort()
+    if len(order) != len(edges):
+        remaining = {n for n, d in indegree.items() if d}
+        start = sorted(remaining)[0]
+        cycle, seen, cur = [], {}, start
+        while cur not in seen:
+            seen[cur] = len(cycle); cycle.append(cur)
+            cur = sorted(edges[cur] & remaining)[0]
+        cycle = cycle[seen[cur]:] + [cur]
+        return None, cycle
+    return order, None
 
 
 def main_checkout(top):
@@ -601,6 +646,19 @@ def main():
         die(f"registry not found at {REGISTRY}", 3)
     reg = json.load(open(REGISTRY, encoding="utf-8"))
     ws = find_workspace(reg)
+    if args["graph"]:
+        if not args["domain"] or args["paths"] or args["kind"] or args["repo"] or args["repo_path"]:
+            die("--graph requires --domain <id> and cannot be combined with --repo, --repo-path, --paths, or --kind", 3)
+        order, cycle = handoff_graph(reg, args["domain"])
+        if cycle:
+            line = "CYCLE: " + " -> ".join(cycle)
+            print(json.dumps({"cycle": cycle}) if args["json"] else line)
+            sys.exit(3)
+        if args["json"]:
+            print(json.dumps({"graph": order}))
+        else:
+            print("Dependency graph: " + " -> ".join(order))
+        return
     route_requested = bool(args["repo"] or args["repo_path"] or args["paths"])
     if (args["domain"] or args["kind"]) and not route_requested:
         if args["repo_path"]:
@@ -706,6 +764,25 @@ def main():
                         if m["id"] == c["module"]:
                             needed |= set(m.get("tools", []))
         repos.append(st)
+    if args["paths"] and not args["lead"]:
+        claims = {}
+        for state in repos:
+            if state.get("error"):
+                continue
+            selected = state.get("suggested_skills", [])
+            for item in selected:
+                if item.get("role") not in ("lead", "co-lead"):
+                    continue
+                skill = reg.get("skills", {}).get(item["skill"], {})
+                domain_id = skill.get("domain", "engineering")
+                claims.setdefault(domain_id, {})[item["skill"]] = item.get("reasons", [])
+        if len(claims) > 1:
+            print("AMBIGUOUS: paths resolve to leads in multiple domains")
+            for did in sorted(claims):
+                for skill, reasons in sorted(claims[did].items()):
+                    print(f"{did}: {skill}: {'; '.join(reasons)}")
+            sys.exit(3)
+
     tc = []
     show = set(reg["tools"]) if (args["full"] or args["toolchain"]) else needed
     for name in sorted(show):
