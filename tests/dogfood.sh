@@ -87,7 +87,7 @@ EXPECT[tech-first]="server-services go-backend"; HANDOFF[tech-first]=""; CORRECT
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
+scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
