@@ -4193,6 +4193,106 @@
       "domain": "vfx",
       "order": 89,
       "summary": "VFX foundation artifacts"
+    },
+    "ui-orchestrator": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 95,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Entry point for UI requests: deterministic UI plan, intent, minimal skill set, missing context",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-component-selection": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 96,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Component discovery and selection against the real com.cuvara.uitoolkit catalog plus Unity built-in controls: reuse, configure, compose or missing",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-figma-import": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 97,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Figma to Unity through the official UI Toolkit Figma connector and the com.cuvara.uitoolkit 0.8 Figma integration: scope, import, validator, diagnostics",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-toolkit-screen": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 98,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Screen implementation on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, navigator, theme service, typed queries",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-validation": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 99,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "UI integration review and validation: references, theme light/dark, responsive layout, Play mode, tests, evidence",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
     }
   },
   "human_gates": [

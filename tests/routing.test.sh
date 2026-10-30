@@ -145,6 +145,11 @@ assert "wire field -> both server tech skills (wire-contract uses both)" server 
   "$(lead wire-contract) and $(tech dotnet-gameserver) and $(tech go-backend)" backend/shared/proto/wire.proto
 assert "client HUD ECS code -> tech unity-client-tech" client \
   "$(lead client-integration) and $(tech unity-client-tech) and $(notech dotnet-gameserver)" Assets/Scripts/UI/Hud/Ecs/HudEcsBootstrap.cs
+assert "client UXML screen -> UI tech skills listed (scoped by paths), never routed" client \
+  "$(lead client-integration) and $(tech ui-orchestrator) and $(tech ui-component-selection) and $(tech ui-figma-import) and $(tech ui-toolkit-screen) and $(tech ui-validation) and (any(.suggested_skills[]; .skill | startswith(\"ui-\")) | not)" \
+  "Assets/Scripts/UI/Settings/SettingsScreen.uxml"
+assert "client non-UI code -> no UI tech skills" client \
+  "$(lead client-integration) and $(notech ui-orchestrator) and $(notech ui-figma-import)" Assets/Scripts/Session/MainSessionFlow.cs
 assert "Netcode package code -> tech unity-client-tech via unity-package" netcode \
   "$(lead unity-package) and $(tech unity-client-tech)" Runtime/Transport/ITransport.cs
 assert "sample build scripts -> client.buildscripts with build gates" client \

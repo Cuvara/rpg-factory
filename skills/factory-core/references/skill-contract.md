@@ -62,6 +62,9 @@ already uses, pitfalls with the file that proves them, how to run one test, and 
   or follow-up. The snapshot lists it as `tech` in the routing line when a skill in `used_by` works on
   the change **and** the snapshot's repo is in the tech skill's `repos` (`routing.tech`): a measure run on
   the server lists `dotnet-gameserver`, not `unity-dots`.
+  An optional `paths` list (module-style prefixes or `**/*.ext` globs) narrows that further: the skill is
+  listed only when a changed file matches, so the UI skills (`ui-*`) appear for `.uxml`/`.uss` and
+  `Assets/Scripts/UI/` changes, not for every client change.
 - Every skill in `used_by` names `rpg-factory:<tech skill>` in its body (lint), at the step that needs it,
   as "invoke" (Skill tool) for implementing, debugging, reviewing and how-it-works/how-to-test questions.
 - Below the prerequisite line a tech skill carries the guard `> **Supporting skill, never the owner:**

@@ -336,6 +336,13 @@
             },
             "description": "tech skills only: the repo/cross-repo skills whose work needs this technology."
           },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "tech skills only, optional: list the skill in routing.tech only when a changed file matches one of these module-style paths or `**/*.ext` globs (default: every change in its repos)."
+          },
           "cite_roots": {
             "type": "object",
             "additionalProperties": {

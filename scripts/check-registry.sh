@@ -118,6 +118,8 @@ problems=$(jq -r '
         | (select(($t.value.used_by // []) | length == 0) | "tech skill \($t.key): used_by (repo/cross-repo skills) missing"),
           (($t.value.used_by // [])[] | select((($r.skills[.].kind) // "") | IN("repo","cross-repo") | not)
              | "tech skill \($t.key): used_by \(.) is not a repo/cross-repo skill"),
+          (select(($t.value.paths // null) != null and (($t.value.paths | type) != "array" or ($t.value.paths | length) == 0))
+             | "tech skill \($t.key): paths must be a non-empty array when present"),
           (select([$r.modules[] | select((.skills // []) | index($t.key))] + [($r.contracts // [])[] | select(.driver == $t.key)] | length > 0)
              | "tech skill \($t.key): must not own a module or contract (tech skills are never routed as lead/leg)")),
       (($r.dev_tools // []) | map(.id) | group_by(.) | map(select(length > 1))[] | "duplicate dev_tools id: \(.[0])"),
