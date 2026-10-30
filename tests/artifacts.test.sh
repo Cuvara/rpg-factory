@@ -206,6 +206,7 @@ PY2
   python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$A" --registry "$T/reg.json" | head -1
 }
 got=$(asset valid '{}'); [[ "$got" == 'PASS FX-asset-001' ]] && ok 'valid asset record' || bad "valid asset: $got"
+got=$(asset structured-provenance '{"schema_version":2,"provenance":{"generated_by":"asset-import","tool":"fixture"},"authors":[{"kind":"human","id":"artist"}]}'); [[ "$got" == 'PASS FX-asset-001' ]] && ok 'version 2 asset metadata accepted' || bad "structured asset provenance: $got"
 got=$(asset unknown '{"hash":"abc","mystery":true}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset unknown key rejected (anyOf does not short-circuit)' || bad "asset unknown key: $got"
 got=$(asset wrongtype '{"license":5}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset wrong type rejected' || bad "asset wrong type: $got"
 got=$(asset nosource '{"source_rev":null}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset without source_rev or hash rejected' || bad "asset no source: $got"

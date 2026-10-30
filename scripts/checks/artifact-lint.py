@@ -122,7 +122,8 @@ def validate(obj, reg, schema):
                 errors.append("missing " + k)
         if not isinstance(obj.get("id"), str) or not ID.fullmatch(obj.get("id", "")):
             errors.append("bad id")
-        if obj.get("provenance") not in ("authored", "library", "generated"):
+        provenance = obj.get("provenance")
+        if provenance not in ("authored", "library", "generated") and not isinstance(provenance, dict):
             errors.append("bad provenance")
         if not (
             isinstance(obj.get("source_rev"), str)

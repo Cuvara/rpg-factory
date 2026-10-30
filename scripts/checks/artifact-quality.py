@@ -116,7 +116,7 @@ def main():
                 elif ac.get('verify')=='test' and not all((k,ac.get('id')) in traces for k in need): reason.append('test implementation coverage required for '+ac.get('id','?'))
         if state=='released':
             if not any(t.get('kind')=='release' for t in obj.get('trace',[])): reason.append('release trace required')
-            if not any(st in ('approved','verified') for st in history): reason.append('release must pass approved or verified')
+            if not all(st in history for st in ('approved','verified')): reason.append('release must pass approved and verified')
         if state=='rejected' and not (obj.get('rejection') or {}).get('reason'): reason.append('rejection reason required')
         if state=='blocked' and (not obj.get('blocked_by') or not obj.get('reason')): reason.append('blocked_by and reason required')
         if reason: add(aid,obj,rel,'lifecycle','FAIL',reason)
