@@ -79,6 +79,14 @@ assert plugin.check(missing,ctx)[0]['state']=='FAIL'
 fake=dict(asset); fake['spec']=dict(asset['spec'],file='asset.fbx',format='fbx')
 (repo/'asset.fbx').write_bytes(b'fixture')
 absent=plugin.check(fake,ctx); assert absent[0]['state']!='PASS', absent
+unavailable=Context(); unavailable.repo=str(repo); unavailable.tools=lambda name: None
+missing_blender=plugin.blender_check(repo/'asset.glb',unavailable,asset['spec'])
+assert missing_blender['state']=='NOT_AVAILABLE' and 'Blender not available' in missing_blender['reasons'][0],missing_blender
+from unittest.mock import patch
+with patch.object(plugin.subprocess,'run',side_effect=subprocess.TimeoutExpired('blender',90)):
+    timed_out=plugin.blender_check(repo/'asset.glb',ctx,asset['spec'])
+assert timed_out['state']=='HUMAN_REQUIRED' and '90 second timeout' in timed_out['reasons'][0],timed_out
+print('PASS Blender absence is NOT_AVAILABLE and timeout is HUMAN_REQUIRED with reason')
 if tool_detector.find_tool('blender'):
     blender=tool_detector.find_tool('blender')['path']
     generator=temp/'make_dcc_fixtures.py'
