@@ -27,14 +27,61 @@ HANDOFF: Engineering imports the verified export through client.unity-assets rou
 
 ## Skill touchpoints
 
-The lead skill remains `art-2d`; shared skill maps and touchpoint references require integration edits in factory-core, skill-contract, README, `.claude/CLAUDE.md`, routing tests, dogfood, and evals. These files are outside this worker's allowed write set. Run `python3 -B scripts/skill-touchpoints.py --all` after lead integration updates.
+The lead remains `art-2d`; no new skill is introduced. Apply these exact table and map updates during lead integration.
+
+### README.md exact text
+
+Replace the art2d diagram row:
+
+```text
+art-2d                                 2D art direction, concepts, production specifications and runtime exports
+```
+
+Replace the skill map row:
+
+```markdown
+| 2D art direction, concepts, asset specifications or runtime exports | `art-2d` | optional `authoring` | `artifact-lint`, `artifact-trace`, `art2d-quality` |
+```
+
+### .claude/CLAUDE.md exact text
+
+Keep the existing skill count and replace only the list with:
+
+```text
+13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
+unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx.
+```
+
+The current count stays 13; this domain replaces the foundation skill in place.
+
+### skills/factory-core/references/skill-contract.md exact text
+
+Replace the domain lead sequence in the Layering diagram with:
+
+```text
+domain + Engineering leads - game-design; ui-ux -> art-2d -> engineering; art-3d -> vfx -> engineering, server-realtime, server-services, server-ops, unity-package, client-integration
+```
+
+The sequence is already present on this base, so no factory-core file change is needed for this integration.
+
+## run-all.sh exact line
+
+```bash
+tests/art2d-workflow.test.sh
+```
+
+The lead adds this line to `tests/run-all.sh`; it is outside this task's write scope.
 
 - `registry.json`: the requested formal art2d ? UI contract creates a cycle with existing `ui-spec-to-art2d-brief` in domain routing (`domains-routing.test.sh`). Current registry retains the UI ? art2d requirements contract; integrate reverse flow support or make the UI contract directional metadata instead of a graph dependency.
 
+## Shared CORE3 integration dependencies
+
+These are implemented in the concurrent CORE3 task and must arrive in the integrated base before final end-to-end checks:
+
+- `scripts/checks/artifact-quality.py` and `scripts/checks/domains/_api.py`: pass the caller's registered repo roots into plugin context. The art2d plugin consumes `ctx.repo_roots` as an optional fallback so it also works before CORE3 merges; it retains the legacy registry lookup for clean merge compatibility.
+- `scripts/factory-workflow.py`: recognize the five art2d kinds and attach their dependency/wave/status behavior. The domain test will exercise the shared planner after this change lands.
+- `scripts/lib/tools.py`: advertise optional provider tool names; the adapter itself calls `ctx.tools(name)` via safe attribute access and never makes network calls.
+
 ## Shared-file change requests
 
-- `scripts/checks/artifact-quality.py`: pass registered repo roots from `--repos` into `Context`; current `Context` exposes only the authoring root and registry metadata, so plugin cannot verify a file stored in the registered client repo. Until integrated, the plugin's export file check reports a clear failure when the target root is unavailable.
-- `scripts/checks/domains/_api.py`: extend `Context` with `repo_roots: dict` sourced from artifact-quality's existing `--repos` mapping; domain plugins can then safely resolve exported file paths against caller-supplied registered repo roots.
-- `scripts/factory-workflow.py`: accept `art-direction-2d`, `concept-2d`, `asset-spec-2d`, `runtime-export-2d`, and `reference-2d` workflow targets and map their authoring paths. Current planning does not generalize artifact node kinds to domain kinds, so the example plan requires this shared extension.
-- `scripts/lib/tools.py`: add generic MCP provider discovery for optional image-generation providers (`game-art-mcp`, `ai-pixel-art-image-generation`, arbitrary MCP image tools). Current detector only handles a few binaries and Pillow; absent tools should remain optional.
-- `scripts/checks/artifact-quality.py`: discover `.artifact.json` files, or document/use `.md` strict JSON front matter templates consistently. Current discovery misses `.artifact.json` only if suffix naming differs from target authoring convention.
+- No additional shared-file edits are requested from this branch beyond the concurrent CORE3 integration dependencies listed above.

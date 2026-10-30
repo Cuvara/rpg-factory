@@ -25,6 +25,26 @@
     },
     "image": {
       "type": "string"
+    },
+    "generated_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_on": {
+      "type": "string",
+      "format": "date"
     }
   },
   "additionalProperties": false
