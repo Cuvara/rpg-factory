@@ -44,6 +44,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
 4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --mode <mode> --repo <key> --paths <files the task will write>`
+   If routing selects a non-engineering domain or spans domains, write a workflow spec and use `factory-workflow.py plan`, then dispatch ready nodes by wave; use `status` while work lands and `report` for delivery. See `references/workflows.md`.
    - run Factory scripts with the **absolute path exactly as printed here** (the permission allowlist matches
      it; a shortened relative path needs manual approval and stalls unattended sessions)
    (repo-relative; for a benchmark or measurement that is the bench harness / `docs/BENCHMARK.md` /

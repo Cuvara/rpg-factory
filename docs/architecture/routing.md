@@ -6,6 +6,8 @@ Factory Core accepts three routing entry points:
 - `--kind <artifact-kind>` resolves an artifact kind to its owning domain. Use `--lead` when a kind has more than one owner.
 - `--repo <key> --paths <path...>` resolves registered module ownership and contract ends. Paths in an authoring repo show downstream handoff follow-ups from the source contract.
 
+For planned work spanning one or more domains, `/rpg-factory:workflow` uses the same registry ownership and handoff graph to build explicit dispatch contracts. Artifact kinds resolve through `domains.*.artifact_kinds`; unknown or ambiguous kinds are errors. Engineering implementation targets use registered repository paths and existing path routing.
+
 ## Dependency graph
 
 Handoff contracts are entries in `registry.json` with `kind: "handoff"`. Their source belongs to the upstream domain lead; `copies` lists the downstream repository/module or authoring path ends. The owning domain lists the contract id in `domains.<id>.handoffs`. Run `scripts/factory-context.sh --domain <id> --graph` to print a stable topological order. Cycles are reported as a path and exit with status 3.

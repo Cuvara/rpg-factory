@@ -8,6 +8,7 @@
                                           against the current tree without running anything
   doctor                                  install state, registry, state paths, tools,
                                           dev tools (MCP servers, plugins, binaries) per skill
+  workflow plan|status|dispatch|report     dependency-aware artifact workflow entry point
 
 Read-only except `check` without --status, which runs the fast checks (builds/tests) exactly like
 run-checks.py. Exit code = the underlying script's; 2 = usage error.
@@ -142,11 +143,17 @@ def cmd_doctor(args):
     return rc
 
 
+def cmd_workflow(args):
+    if not args or args[0] not in ("plan", "status", "dispatch", "report"):
+        raise ValueError("workflow needs plan|status|dispatch|report followed by a spec")
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-workflow.py"), *args])
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         return usage()
     verb, args = argv[0], split_args(argv[1:])
-    fn = {"status": cmd_status, "route": cmd_route, "check": cmd_check, "doctor": cmd_doctor}.get(verb)
+    fn = {"status": cmd_status, "route": cmd_route, "check": cmd_check, "doctor": cmd_doctor, "workflow": cmd_workflow}.get(verb)
     if not fn:
         return usage(f"unknown command '{verb}'")
     try:
