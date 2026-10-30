@@ -4039,6 +4039,35 @@ class HostGuardTests(unittest.TestCase):
         self.assertNotIn("0000000001", json.dumps(events))
         self.assertTrue(all(set(e) <= {"type", "ts", "epoch", "proc", "pid", "source", "fiber", "backend_pid"} for e in events))
 
+    def test_fiber_numbers_reused_after_a_service_restart_bind_to_the_new_session(self):
+        # After a reboot the service restarts and its fiber numbers start over; the old fiber 28
+        # session is closed, the new one on (new pid, fiber 28) must open and close on its own.
+        from lab import hostguard
+
+        def line(ts, proc, pid, fiber, module, text):
+            fib = f"{fiber:>4} " if fiber is not None else ""
+            return f"   info {ts}       {proc}  {pid}  1000 {fib}{module} - {text}"
+        rows = [
+            line("2026-10-29 04:03:00.703", "lsvc", 9000, 12, "app.local_service", "Accept request from 0000000001"),
+            line("2026-10-29 04:03:01.000", "lsvc", 9000, 28, "app.session", "Authenticated with permanent token."),
+            line("2026-10-29 04:03:01.100", "lsvc", 9000, 28, "app.session", "Backend PID: 20484"),
+            line("2026-10-29 04:04:45.770", "lsvc", 9000, 28, "app.session", "Session closed by remote side: x."),
+            line("2026-10-30 02:31:48.237", "lsvc", 10304, 12, "app.local_service", "Accept request from 0000000001"),
+            line("2026-10-30 02:31:48.729", "lsvc", 10304, 28, "app.session", "Authenticated with permanent token."),
+            line("2026-10-30 02:31:49.562", "lsvc", 10304, 28, "app.session", "Backend PID: 20484"),
+            line("2026-10-30 02:46:50.162", "lsvc", 10304, 28, "app.session", "Session closed by remote side: x."),
+        ]
+        events, _ = hostguard.parse_ad_trace("\n".join(rows) + "\n")
+        self.assertEqual(len([e for e in events if e["type"] == "auth"]), 2)    # the fixture lines parse
+        sessions = [s for s in hostguard.sessions_from_events(events) if s["start"] is not None]
+        self.assertEqual(len(sessions), 2)
+        self.assertTrue(all(s["end"] is not None for s in sessions))
+        self.assertAlmostEqual(sessions[1]["end"] - sessions[1]["start"], 901.925, places=3)
+        # a still-open new session stays open (fail closed): drop its close line
+        events2, _ = hostguard.parse_ad_trace("\n".join(rows[:-1]) + "\n")
+        open_ = [s for s in hostguard.sessions_from_events(events2) if s["start"] is not None and s["end"] is None]
+        self.assertEqual(len(open_), 1)
+
     # (b) residents only
     def test_b_residents_only_and_idle_cpu_is_info_and_does_not_block_pass(self):
         from lab import hostguard
