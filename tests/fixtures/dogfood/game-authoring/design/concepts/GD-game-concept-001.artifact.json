@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "id": "GD-game-concept-001",
+  "kind": "game-concept",
+  "domain": "design",
+  "status": "draft",
+  "title": "Test concept",
+  "authors": [{"kind": "agent", "id": "game-design"}],
+  "sources": [],
+  "upstream": [],
+  "acceptance": [],
+  "trace": [],
+  "spec": {
+    "concept": "A small cooperative crafting adventure",
+    "target_audience": "Players who enjoy short co-op sessions",
+    "pillars": ["Readable combat"],
+    "genre": "Action RPG",
+    "platforms": ["PC"],
+    "usp": "Craft together",
+    "design_constraints": ["Damage values remain proposals until approved"]
+  }
+}

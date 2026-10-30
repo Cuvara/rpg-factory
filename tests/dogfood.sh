@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Headless end-to-end dogfood: real Claude sessions, one per scenario, read-only prompts ("do not
-# edit"). Asserts which Factory skills the model actually invoked (Skill tool calls in the
-# stream-json transcript) and which skills its answer hands work to.
+# Headless end-to-end dogfood: read-only routing sessions plus opt-in isolated write sessions.
 #
 #   --installed   use the INSTALLED plugin (no --plugin-dir) and assert the session loaded
 #                 rpg-factory@rpg-factory (not @inline) at the source version from the install's
@@ -14,18 +12,21 @@
 # Tools are restricted to Skill/Read/Grep/Glob; the skills' own allowed-tools grant the
 # factory-context / status / check scripts. Transcripts land in ${DOGFOOD_OUT:-/tmp/rpgf-dogfood}/.
 #
-# Usage: tests/dogfood.sh [--installed] [--model sonnet] [scenario...]
+# Usage: tests/dogfood.sh [--write|--all] [--installed] [--model sonnet] [scenario...]
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
 OUT="${DOGFOOD_OUT:-/tmp/rpgf-dogfood}"; mkdir -p "$OUT"
-model=sonnet; installed=false
+model=sonnet; installed=false; write_mode=false; all_mode=false
 while [ $# -gt 0 ]; do case "$1" in
   --installed) installed=true; shift;;
+  --write) write_mode=true; shift;;
+  --all) all_mode=true; shift;;
   --model) model="$2"; shift 2;;
   *) break;;
 esac; done
+if $all_mode; then write_mode=true; fi
 VERSION=$(jq -r .version "$ROOT/.claude-plugin/plugin.json")
 LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r '.installed.loads_from // empty')
 
@@ -86,6 +87,50 @@ PROMPT[tech-first]="Your very first action: invoke the Skill tool with skill rpg
 EXPECT[tech-first]="server-services go-backend"; HANDOFF[tech-first]=""; CORRECTS[tech-first]="go-backend"; SHOWS[tech-first]="-race"
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
+
+# WRITE scenarios use an isolated game-authoring repository per session. The helper creates
+# registry-routed folders, commits the empty layout, and grades disk state plus transcript.
+declare -A W_PROMPT W_EXPECT W_KINDS W_DOMAIN W_PLAN W_SEEDS
+W_PROMPT[design-write]="Create a game concept and a combat gameplay system for a small action RPG. Include one proposed damage number, clearly labelled as a proposal pending approval or TBD, never a binding value. Write the artifacts, run Factory artifact lint and the design quality checks, and report their IDs, revisions and human gates."
+W_EXPECT[design-write]="game-design"; W_KINDS[design-write]="game-concept gameplay-system"; W_DOMAIN[design-write]=design
+W_PROMPT[ui-write]="Using the supplied feature spec, create an inventory screen spec, a component spec and a UI handoff. Write the artifacts, run Factory artifact lint and UI quality checks, then report IDs, revisions and human gates."
+W_EXPECT[ui-write]="ui-ux"; W_KINDS[ui-write]="screen-spec component-spec ui-handoff"; W_DOMAIN[ui-write]=ui; W_SEEDS[ui-write]=feature-spec
+W_PROMPT[art2d-write]="Create 2D art direction and an asset spec for a coherent inventory icon set. No image generation is needed; omit any runtime export unless a real file exists. Validate the written artifacts with Factory checks and report IDs, revisions and human gates."
+W_EXPECT[art2d-write]="art-2d"; W_KINDS[art2d-write]="art-direction-2d asset-spec-2d"; W_DOMAIN[art2d-write]=art2d
+W_PROMPT[art3d-write]="Create 3D art direction, a model spec and a material spec for a crafting workstation prop. Validate the written artifacts with Factory checks and report IDs, revisions and human gates."
+W_EXPECT[art3d-write]="art-3d"; W_KINDS[art3d-write]="art-direction-3d model-spec material-spec"; W_DOMAIN[art3d-write]=art3d
+W_PROMPT[vfx-write]="Using the supplied design event, create a VFX spec for a crafting-complete effect with explicit budgets for every platform. Reference the event by artifact ID and revision. Validate with Factory checks and report IDs, revisions and human gates."
+W_EXPECT[vfx-write]="vfx"; W_KINDS[vfx-write]="vfx-spec"; W_DOMAIN[vfx-write]=vfx; W_SEEDS[vfx-write]=design-event
+W_PROMPT[xdomain-design-ui-eng]="From the supplied approved feature brief, produce a design feature spec, a UI screen spec and a technical handoff. Validate all artifacts, then run workflow plan and status on the produced artifacts. Report the required order from design through UI to engineering and all human gates."
+W_EXPECT[xdomain-design-ui-eng]="game-design ui-ux"; W_KINDS[xdomain-design-ui-eng]="feature-spec screen-spec technical-handoff"; W_DOMAIN[xdomain-design-ui-eng]=design; W_PLAN[xdomain-design-ui-eng]=design-ui-eng; W_SEEDS[xdomain-design-ui-eng]=approved-feature
+W_PROMPT[xdomain-art3d-vfx]="Using the supplied 3D asset record, create a VFX spec referencing that asset by ID and revision. Validate the artifacts and run workflow plan and status, confirming the 3D art work precedes VFX. Report any human gates."
+W_EXPECT[xdomain-art3d-vfx]="vfx"; W_KINDS[xdomain-art3d-vfx]="vfx-spec"; W_DOMAIN[xdomain-art3d-vfx]=vfx; W_PLAN[xdomain-art3d-vfx]=art3d-vfx; W_SEEDS[xdomain-art3d-vfx]=asset-3d
+W_PROMPT[xdomain-stale]="The supplied design event has changed. Update its upstream artifact, then inspect workflow status for the existing downstream VFX spec. Report that the downstream artifact is stale and needs revalidation, with both IDs and revisions. Do not create approvals."
+W_EXPECT[xdomain-stale]="vfx"; W_KINDS[xdomain-stale]="design-event vfx-spec"; W_DOMAIN[xdomain-stale]=vfx; W_PLAN[xdomain-stale]=stale; W_SEEDS[xdomain-stale]=stale-pair
+
+if $write_mode; then
+  write_scenarios=(design-write ui-write art2d-write art3d-write vfx-write xdomain-design-ui-eng xdomain-art3d-vfx xdomain-stale)
+  [ ${#scenarios[@]} -gt 0 ] || scenarios=("${write_scenarios[@]}")
+  for n in "${scenarios[@]}"; do
+    case " ${write_scenarios[*]} " in *" $n "*) ;; *) continue;; esac
+    out_abs="$(cd "$OUT" && pwd)"; ws="$out_abs/ws-$n"
+    case "$ws" in "$out_abs"/ws-*) ;; *) echo "unsafe write workspace: $ws" >&2; exit 2;; esac
+    rm -rf -- "$ws"; mkdir -p "$ws/game-authoring"
+    python3 -B "$ROOT/tests/dogfood/write-setup.py" "$ROOT" "$ws/game-authoring" "${W_SEEDS[$n]:-}"
+    ws_native="$(cygpath -m "$ws")"
+    git -C "$ws/game-authoring" init -q
+    git -C "$ws/game-authoring" config user.name "Factory Dogfood"
+    git -C "$ws/game-authoring" config user.email "dogfood@example.invalid"
+    git -C "$ws/game-authoring" add -- design ui art2d art3d vfx; git -C "$ws/game-authoring" commit -qm "Seed isolated authoring workspace"
+    local_prompt="${W_PROMPT[$n]} Write artifacts only inside the game-authoring repository in the current workspace. Never write elsewhere and never create approval records. Validate with scripts/checks/artifact-lint.py and scripts/checks/artifact-quality.py --domain ${W_DOMAIN[$n]} --json; run workflow plan and status when requested."
+    pd=(); $installed || pd=(--plugin-dir "$ROOT")
+    (cd "$ws" && RPG_FACTORY_WORKSPACE="$ws_native" timeout 900 claude "${pd[@]}" -p "$local_prompt" --model "$model" --output-format stream-json --verbose --allowedTools "Skill,Read,Grep,Glob,Write,Edit,Bash" </dev/null > "$OUT/$n.jsonl" 2>/dev/null) || true
+    grade_args=(); $installed && grade_args+=(--installed --version "$VERSION" --loads "$LOADS")
+    python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$ws" --scenario "$n" --transcript "$OUT/$n.jsonl" --expected-skills "${W_EXPECT[$n]}" --expected-kinds "${W_KINDS[$n]}" --domain "${W_DOMAIN[$n]}" --plan "${W_PLAN[$n]:-}" "${grade_args[@]}" || fail=$(( ${fail:-0} + 1 ))
+  done
+  if ! $all_mode; then exit $(( ${fail:-0} > 0 ? 1 : 0 )); fi
+  scenarios=()
+fi
 
 scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
 run() {
