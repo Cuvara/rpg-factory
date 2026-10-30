@@ -7,6 +7,7 @@ Usage:
                [--owns-modules MODULE,...]      lead: become the primary owner of these modules
                [--drives-contract CONTRACT,...] lead: become the driver of these contracts (must have none)
                [--tools TOOL,...]               registry dev_tools the skill uses (its ## Tools section)
+               [--domain ID]                 assign the skill to a registered domain
                [--cite-root PREFIX=REPO:SUB]... where its path:line citations resolve (registry cite_roots)
                [--dry-run]
 
@@ -187,6 +188,11 @@ def main():
     if bad:
         return refuse(f"unknown dev tool(s) {bad} (known: {', '.join(known_tools)})")
     spec = {"kind": kind, "repos": rlist}
+    domain = a.get("domain")
+    if domain:
+        if domain not in reg.get("domains", {}):
+            return refuse(f"unknown domain {domain}")
+        spec["domain"] = domain
     used_by, mods, contracts = csv(a.get("used_by")), csv(a.get("owns_modules")), csv(a.get("drives_contract"))
     if kind == "tech":
         if mods or contracts:
@@ -209,11 +215,10 @@ def main():
         bad = [c for c in contracts if c not in known_c or known_c[c].get("driver")]
         if bad:
             return refuse(f"contract(s) {bad} unknown or already driven by another skill")
-        # after every existing lead: a lower order wins routing ties, so a new skill never outranks an old one
-        # silently (move it later on purpose if it should); stays below the tech skills (90+)
+        # Existing leads keep precedence. Place new leads after every current order; resolver lead
+        # class outranks tech class, so this remains safe when the historical 1..89 range is exhausted.
         used = {int(s["order"]) for s in skills.values()}
-        top = max(int(s["order"]) for s in skills.values() if s["kind"] in ("repo", "cross-repo"))
-        spec["order"] = next(o for o in list(range(top + 5, 90, 5)) + list(range(top + 1, 90)) if o not in used)
+        spec["order"] = max(used, default=0) + 1
     spec["summary"] = a["summary"]
     roots = {}
     for cr in a["cite_root"]:

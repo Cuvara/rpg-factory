@@ -4,6 +4,58 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-30
+
+Feature release: rpg-factory becomes a multi-discipline factory with a discipline-neutral core. A `domains` registry
+section adds Game Design (native; no game-ai-workflows dependency) and foundation domains for UI/UX, 2D Art, 3D Art
+and VFX next to Engineering. `--domain` / `--kind` route tasks without file paths and `--graph` shows the handoff
+order. A shared artifact contract (schema, lifecycle, trace links to implementation, test and release commits,
+SSH-signed immutable approvals) is checked by `artifact-lint` and `artifact-trace`; results a human must judge grade
+HUMAN_REQUIRED. Handoffs mark downstream work stale when a design changes. Engineering routing is unchanged (golden
+test over 59 scenarios). `feature-state-ownership` and `phase-scope` replace `no-feature-registry` and
+`phase-plumbing-only`. The English-only documentation check is enforced. Foundation domains have no production
+workflows yet; no approver signing key is registered, so design approvals stay HUMAN_REQUIRED, and the optional
+`game-authoring` repo is not created. Update with `claude plugin marketplace update rpg-factory && claude plugin
+update rpg-factory@rpg-factory`, then start a new session.
+
+### Added
+
+- Added foundation plans and readiness status for UI/UX, 2D Art, 3D Art and VFX.
+- Registered foundation domains for UI/UX, 2D Art, 3D Art and VFX with handoffs, lead skills and shared quality checks. Added asset manifest validation for license, provenance and safe registered-repository delivery paths. New lead skill scaffolding now allocates unique orders beyond the legacy lead-order range.
+- Added the `feature-spec-to-impl` handoff contract and registry checks for cross-domain path conflicts, artifact-kind uniqueness, and handoff driver ownership.
+- Added domain dependency graph routing, cross-domain path ambiguity reporting, and downstream stale-implementation detection.
+- Documented routing entry points, dependency graphs, ownership conflicts and downstream invalidation; updated the Game Design handoff workflow.
+- Added `docs/architecture/domains.md` with the domain ownership table and Game Design contract.
+- Added the native `game-design` lead skill, domain routing touchpoints and a `--domain` option in the skill scaffolder.
+- Added the optional authoring repository, Game Design modules, artifact lifecycles, human review gate, and phase-scoped design permissions.
+- Added the shared artifact schema, lifecycle registry data, artifact lint and trace checks, and signed approval verification.
+- Routing JSON now includes `routing.domain`, derived from the selected lead skill (defaulting to `engineering`).
+- `factory-context.sh` and `/rpg-factory:route` accept domain and artifact-kind entry points; optional repos are skipped until present.
+- `tests/domains-routing.test.sh` covers domain/kind selection, optional repositories and path-domain warnings.
+- `tests/routing-golden.test.sh` freezes the engineering routing contract: every task scenario of
+  `tests/routing.test.sh` (59) must keep its lead, co-leads, legs, follow-ups, tech skills, touched modules and
+  check ids (`tests/fixtures/routing-golden.json`, recorded before domain metadata). Added fields are ignored.
+- `docs/architecture/`: architecture index, accepted multi-discipline factory architecture, and the domains ADR.
+- `registry.json` now defines engineering domain ownership; the schema and `check-registry.sh` validate artifact domains, roles, leads, repos, gates and optional repositories. `tests/check-registry.test.sh` covers these rules.
+- `scripts/checks/english-only.py`: Unicode language check (report or enforce, with an allowlist); skills-lint and run-all enforce it.
+
+### Changed
+
+- `run-checks.py` now honors `RPG_FACTORY_REGISTRY`, allowing isolated fixture registries to exercise real PASS, FAIL and HUMAN_REQUIRED grading.
+- Replaced the blanket feature-registry ban and plumbing-only rule with domain-scoped feature-state ownership and phase-scope policy; non-owning modules cannot claim feature-state paths.
+- Made artifact lint validate against the published JSON Schema and bind immutable IDs and lifecycle transitions to each artifact path; added JSON history and schema regressions.
+- Made artifact trace and approval gates follow lifecycle requirements, with regression coverage for draft, verified, and binding-value cases.
+- Made Factory Core discipline-neutral by moving Engineering reference material into `engineering.md`; English-only policy is now enforced by the skill lint and full test runner.
+
+### Fixed
+
+- `tests/routing-golden.test.sh` and `tests/registry-nulls.test.sh` are host-independent (Linux CI without a workspace): host path-form scenarios stay out of the golden, and the guard is compared with itself on the real registry.
+- Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and configure UTF-8 stdio for the executable asset manifest checker.
+- Keep the base P4 checker fixture consistent by removing domains, modules, skills and contracts that depend on the removed authoring repository.
+- Store the P4 checker snapshot used by the base regression proof so the proof works from an Orca worktree without Git metadata reachable in the Linux test shell.
+- Run dependency graph behavior checks on fixed fixtures and assert the live graph remains acyclic with the required domain order.
+- `factory-status.py` and `git-guard.py` accept a registry repo without a `remote` (absent or null); `check-registry.sh` tolerates modules without `docs` and fails when its path query errors instead of silently checking fewer paths.
+
 ## [1.1.1] - 2026-10-30
 
 Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state, accepts a Windows-form TMPDIR in netcode-headless and refreshes citations. No breaking changes or user action beyond the usual update command.

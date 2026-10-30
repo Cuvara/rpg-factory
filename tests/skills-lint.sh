@@ -31,7 +31,8 @@ for dir in skills/*/; do
   for r in $(grep -oE 'references/[A-Za-z0-9_.-]+\.md' "$f" | sort -u); do
     [ -f "$dir/$r" ] && ok || bad "$s: links missing $r"
   done
-  if grep -qE 'TODO|TBD|FIXME' "$f" "$dir"/references/*.md 2>/dev/null; then bad "$s: TODO/TBD left"; else ok; fi
+  markers=$(grep -nE 'TODO|TBD|FIXME' "$f" "$dir"/references/*.md 2>/dev/null || true)
+  if [ -n "$markers" ] && { [ "$s" != game-design ] || printf '%s\n' "$markers" | grep -vE '([Nn]umbers?|gameplay values).*`TBD`|`TBD`.*(number|gameplay value)' >/dev/null; }; then bad "$s: TODO/TBD left"; else ok; fi
   if [ "$s" != "factory-core" ]; then
     grep -q 'Prerequisite:\*\* follow `rpg-factory:factory-core`' "$f" && ok || bad "$s: missing Core prerequisite line"
     kind=$(jq -r --arg s "$s" '.skills[$s].kind // ""' registry.json)
@@ -67,8 +68,9 @@ PYC
   if grep -nE '(^|[`$ ])git (-C [^ ]+ )?tag [^-]|git push [^`]*--tags' "$f" "$dir"/references/*.md 2>/dev/null | grep -viE 'lead|human|deny|denies|denied|never|guard|not |no agent|agents never|by the lead' >/dev/null; then
     bad "$s: instructs an agent to create/push a tag"; grep -nE '(^|[`$ ])git (-C [^ ]+ )?tag [^-]|git push [^`]*--tags' "$f" "$dir"/references/*.md | head -3
   else ok; fi
-  # never create another feature registry
-  if grep -nE '(features\.yaml|docs/registry/|\.ai/)' "$f" "$dir"/references/*.md 2>/dev/null | grep -viE 'never|not |game-ai-workflows' >/dev/null; then
+  # feature-state path claims are allowed only for skills in an owning domain.
+  if [ "$(jq -r --arg s "$s" '.domains[.skills[$s].domain // "engineering"].may_own_feature_state // false' "$ROOT/registry.json")" = true ]; then ok
+  elif grep -nE '(features\.yaml|docs/registry/|\.ai/)' "$f" "$dir"/references/*.md 2>/dev/null | grep -viE 'never|not |forbidden' >/dev/null; then
     bad "$s: references a feature registry"; else ok; fi
 done
 # registry is the single source of module rules: no skill may copy one (>=50% of its 8-word shingles)
@@ -79,7 +81,7 @@ reg = json.load(open(f"{root}/registry.json"))
 sh = lambda t, n=8: (lambda w: {" ".join(w[i:i + n]) for i in range(len(w) - n + 1)})(re.findall(r"[A-Za-z0-9_./#*-]+", t.lower()))
 rules = [(m["id"], x, sh(x)) for m in reg["modules"] for x in m["rules"]] + [(g["id"], g["rule"], sh(g["rule"])) for g in reg["global_rules"]]
 for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md") + glob.glob(f"{root}/skills/*/references/*.md")):
-    S = sh(open(f).read())
+    S = sh(open(f, encoding="utf-8").read())
     for mid, x, s in rules:
         if s and len(s & S) / len(s) >= 0.5:
             print(f"{f.replace(root + '/', '')}: copies registry rule of {mid}: {x[:80]}")
@@ -167,12 +169,28 @@ if [ $? -eq 0 ]; then ok; else bad "skill touchpoints (skill-touchpoints.py --al
 cite_out=$(cd "$ROOT" && CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B scripts/checks/skill-citations.py --offline 2>&1); cite_rc=$?
 if [ $cite_rc -eq 0 ]; then ok; else bad "line citations (skill-citations.py --offline):"; grep '^FAIL' <<<"$cite_out" | sed 's/^FAIL  /      /' | head -20; tail -1 <<<"$cite_out" | sed 's/^/      /'; fi
 
-# plugin boundaries: factory-core must hand design work to game-ai-workflows and web projects to
-# web-game-factory, and no Factory skill may claim their triggers
+# plugin boundaries: design claims require an owning domain; web-game claims stay forbidden for all.
 desc=$(sed -n 's/^description: //p' "$ROOT/skills/factory-core/SKILL.md")
-case "$desc" in *game-ai-workflows*web-game-factory*) ok;; *) bad "factory-core description lacks the game-ai-workflows / web-game-factory boundary";; esac
-claims=$(grep -lE "^description: .*(game design document|GDD|feature registry|web game)" "$ROOT"/skills/*/SKILL.md | grep -v factory-core || true)
-if [ -z "$claims" ]; then ok; else bad "skills claim other plugins' triggers: $claims"; fi
+case "$desc" in *"Game Design"*native*web-game-factory*) ok;; *) bad "factory-core description lacks native Game Design / web-game-factory boundary";; esac
+claims=$(python3 -B - "$ROOT" <<'PYBOUND'
+import glob, json, re, sys
+root=sys.argv[1]; reg=json.load(open(root+"/registry.json", encoding="utf-8"))
+for skill, spec in reg["skills"].items():
+    path=f"{root}/skills/{skill}/SKILL.md"
+    text=open(path, encoding="utf-8").read()
+    desc=text.split("\n---", 1)[0]
+    domain=reg.get("domains", {}).get(spec.get("domain", "engineering"), {})
+    owns=domain.get("may_own_feature_state") is True
+    if re.search(r"web[- ]game", desc, re.I) and not re.search(r"not for web[- ]game", desc, re.I): print(f"{skill}: web-game trigger is forbidden")
+    if not owns and re.search(r"game design document|\bGDD\b|feature registry", desc, re.I):
+        print(f"{skill}: design trigger requires may_own_feature_state")
+PYBOUND
+)
+if [ -z "$claims" ]; then ok; else bad "skills claim unavailable design/web triggers:"; echo "$claims" | sed 's/^/      /'; fi
+
+# English-only is enforced; --report remains the machine-readable findings source.
+english_out=$(cd "$ROOT" && python3 -B scripts/checks/english-only.py --enforce 2>&1)
+if [ $? -eq 0 ]; then ok "English-only: $(tail -1 <<<"$english_out")"; else bad "English-only findings:"; echo "$english_out" | sed 's/^/      /'; fi
 
 # parallel-work policy: one canonical copy in factory-core/references/parallel-work.md, linked from the
 # files that defer to it, never blocking, and keeping the release and human-gate rules

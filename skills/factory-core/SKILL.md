@@ -1,25 +1,23 @@
 ---
 name: factory-core
-description: Engineering workflow for the UnityIndie RPG MMO workspace - rpg-mmo-server (Go/C# backend), IndieRPGMMOAdventure (Unity client) and the Netcode, UnityDots and UIToolkit package repos. Use at the start of ANY code, config, CI, deploy, measurement or docs change in those repos, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic routing to the specialised skill, cross-repo status, Factory-run validation with evidence, human gates, git safety and the verify-a-result report. Not for game design / GDD / feature-registry lifecycle (game-ai-workflows) or web game projects (web-game-factory).
+description: Shared Factory workflow for every registered discipline domain in the UnityIndie game workspace (rpg-mmo-server, IndieRPGMMOAdventure, Netcode, UnityDots, UIToolkit and the domains' authoring artifacts). Use at the start of ANY task that changes code, configuration, CI, deployment, measurements, documents or domain artifacts there, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic domain and skill routing, coordination, validation with evidence, human gates, git safety and the verify-a-result report; domain workflows live with their registered leads. Game Design is a native domain for design artifacts. Not for web-game projects; web-game-factory owns those.
 argument-hint: "[mode: analyze|plan|implement|validate|review|resume] [task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*)
 ---
 
-# Factory Core - RPG MMO workspace
+# Factory Core
 
-The Factory workflow every rpg-factory skill builds on. Task: $ARGUMENTS
+The Factory workflow for every discipline domain. Engineering is the first domain and keeps its existing behavior. Task: $ARGUMENTS
+**Domains:** use `--domain` / `--kind` for domain entry points; non-engineering leads come from registry `domains`.
 
 ## Live snapshot (computed now - uncommitted paths shown are the user's baseline, not routed)
 
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh`
 
-Design and feature lifecycle (GDD, feature specs, `implement-feature` from game-ai-workflows) stays with
-that plugin; when such work reaches these repos, the engineering runs through this workflow.
-
+Domain-specific artifact knowledge belongs to the registered domain lead; Factory Core coordinates the shared workflow.
 Module rules, docs, changelogs, generated paths, dependencies, checks, contracts and facts live
 in `${CLAUDE_PLUGIN_ROOT}/registry.json`; read them through the scripts, never guess them. If the
 header says the install state is not CURRENT, tell the user (this session may run an old copy).
-
 ## Mode (decide first, declare it, and keep to it)
 
 | Mode | When the user... | Does | Never |
@@ -30,24 +28,19 @@ header says the install state is not CURRENT, tell the user (this session may ru
 | `validate` | asks to test / verify existing changes | `run-checks.py --status`, then run the checks, report | change files |
 | `review` | asks to review a diff / branch | lead skill's review checklist + registry rules | change files |
 | `resume` | asks to continue interrupted work | `factory-status.py`, then continue at the first incomplete step (implement rules) | redo finished legs |
-
 Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill arguments) and in the Route call
 (`factory-context.sh --mode <mode> ...`). The hooks then **flag** departures (advisory only, they never block):
 in analyze/plan/review every file write and mutating command gets a `high` advisory; validate flags anything but
 `run-checks.py`. Respect the mode yourself. Switch mode only when the user asks for it (e.g. "now implement it").
 Every mode except validate/resume invokes the lead skill: its workflow is where the plan comes from.
-Parallel work: the main session is the lead and integrator; it delegates in worktrees, runs QA in parallel and
-integrates the results - `references/parallel-work.md`.
-
+Parallel work: the main session leads and integrates; delegate in worktrees and follow `references/parallel-work.md`.
 ## Workflow
-
 Steps are **M** mandatory, **O** optional, **H** need the user.
-
 1. **Resume (M for cross-repo or interrupted work).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`
    lists pending work derived from the repos (wire rollout stage, READY_TO_TAG packages,
    released-but-unpinned, in-flight `<type>/<area>/<topic>` branches) with the owning skill.
 2. **Scope (M).** Name repos and modules; read each touched module's `claude_md`. A task that
-   would invent gameplay rules or numbers stops here (**H**, `phase-plumbing-only`).
+   would bind gameplay values without verified approval stops here (**H**, `phase-scope`).
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
 4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --mode <mode> --repo <key> --paths <files the task will write>`
@@ -87,7 +80,6 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
     file of every `routing.tech` skill that has one (e.g. the `unity-dots` ECS review checklist).
 12. **Report (M).** `references/report.md`, including the runner table and routing. A release
     ends at **READY_TO_TAG** - the lead creates the tag, unless the user explicitly authorized the release in this task.
-
 ## Validation states (from run-checks.py)
 
 | State | Meaning | Done? |
@@ -100,7 +92,6 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 | SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`) | n/a |
 | NOT_RUN | (`--status`) declared for this change, never executed | no - run it |
 | STALE | (`--status`) ran, but the tree changed since (HEAD, diff, untracked, check definition) | no - rerun |
-
 Never write PASS yourself; never convert NOT_AVAILABLE / HUMAN_REQUIRED into success. Details and
 per-tool evidence: `references/validation.md`.
 
@@ -124,15 +115,21 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
 - Stage explicit paths only. Policy: `references/git-safety.md`.
 
 ## Commands (the user types these; they are read-only except `check`)
-
 `/rpg-factory:status` · `/rpg-factory:route <repo> <paths>` · `/rpg-factory:check <repo> [paths] [--status]` ·
 `/rpg-factory:doctor`. Suggest them when the user asks "what is pending", "what would this touch", "is it
 validated", "is Factory healthy".
 
 ## Skills
 
+Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`.
+
 | Situation | Lead skill |
 |---|---|
+| Game concepts, mechanics, GDDs, feature specs and design decisions | `game-design` (optional authoring repo) |
+| UI flows and interface specifications | `ui-ux` (optional authoring repo) |
+| 2D art briefs and delivery manifests | `art-2d` (optional authoring repo) |
+| 3D art briefs and delivery manifests | `art-3d` (optional authoring repo) |
+| VFX specifications and delivery manifests | `vfx` (optional authoring repo) |
 | wire message/field, protocol version, JSON encoding, JoinToken claims, Redis servers:id | `wire-contract` (server → Netcode → client) |
 | move a client pin (package / sgl tag) or the unity-build-workflows submodule | `pin-bump` |
 | C# game server, ECS systems, knobs, metrics, content, Shared.GameLogic | `server-realtime` |
@@ -143,15 +140,14 @@ validated", "is Factory healthy".
 | benchmark harness (`GameServer.Tests/Bench/`), encoding sweep, re-baseline, multi-client verification | `measure` |
 
 Orientation only, not routing: naming a lead from this table is not doing the task. In every mode, run
-Route (step 4) and **invoke** the lead it prints before answering; tech skills (`dotnet-gameserver`,
-`go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`) come after the lead, never instead of
-it. The Skill hook never blocks: a tech skill requested before factory-core loads factory-core instead; one
-requested before its lead runs with an advisory - then route and invoke the lead.
+Route (step 4) and **invoke** the lead it prints before answering; supporting skills come after the lead.
+The Skill hook never blocks: a supporting skill requested before factory-core loads factory-core instead;
+one requested before its lead runs with an advisory - then route and invoke the lead. Engineering-specific tool details are in [references/engineering.md](references/engineering.md).
 
 ## References - read when
-
 - `references/repos.md` - first time in a repo, unmapped or repo-level paths.
 - `references/validation.md` - before running or reporting any check.
+- `references/engineering.md` - Engineering repository map, tool evidence and procedures.
 - `references/git-safety.md` - before any branch, stage, commit or cleanup.
 - `references/report.md` - before the final report (always).
 - `references/skill-contract.md` - routing precedence and how skills compose.

@@ -52,7 +52,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
-REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8"))
+REG = json.load(open(os.environ.get("RPG_FACTORY_REGISTRY", os.path.join(PLUGIN_ROOT, "registry.json")), encoding="utf-8"))
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import evidence  # noqa: E402
 import fstate  # noqa: E402
@@ -444,6 +444,19 @@ def parser_for(check):
 def grade(parser, code, out):
     """(state, counts, reason)"""
     counts = {}
+    if parser == "artifact":
+        lines = [line for line in out.splitlines() if re.match(r"^(PASS|FAIL|HUMAN_REQUIRED) ", line)]
+        counts = {"passed": sum(line.startswith("PASS ") for line in lines),
+                  "failed": sum(line.startswith("FAIL ") for line in lines),
+                  "human_required": sum(line.startswith("HUMAN_REQUIRED ") for line in lines),
+                  "discovered": len(lines)}
+        if code != 0 or counts["failed"]:
+            return "FAIL", counts, f"exit {code}, {counts['failed']} artifact failures"
+        if not lines:
+            return "FAIL", counts, "no artifact result lines"
+        if counts["human_required"]:
+            return "HUMAN_REQUIRED", counts, f"{counts['human_required']} artifact(s) need human approval"
+        return "PASS", counts, None
     if parser == "go-test":
         counts = {"passed": len(re.findall(r"^\s*--- PASS", out, re.M)), "failed": len(re.findall(r"^\s*--- FAIL", out, re.M)),
                   "skipped": len(re.findall(r"^\s*--- SKIP", out, re.M)),

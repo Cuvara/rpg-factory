@@ -111,6 +111,7 @@ find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
+run "registry domain rules + optional repos" tests/check-registry.test.sh
 if $use_ws; then run "registry paths exist in workspace" scripts/check-registry.sh
 else skp "registry paths exist in workspace" "--no-workspace"; fi
 
@@ -118,12 +119,15 @@ else skp "registry paths exist in workspace" "--no-workspace"; fi
 run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -u TMPDIR tests/compat.test.sh
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
+run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
+run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.test.sh
 run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
+run "artifact contract, lifecycle, trace and approval fixtures" tests/artifacts.test.sh
 run "run-checks targets the invoking worktree, writes no pyc, guards the canonical checkout" tests/worktree-target.test.sh
 run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
@@ -134,6 +138,10 @@ else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
 else skp "registry facts re-probed in the repos" "--no-workspace"; fi
 run "skill citation checker (fixture repos)" env -u TMPDIR tests/skill-citations.test.sh
+run "engineering routing contract unchanged (golden, stand-in workspace)" env -u TMPDIR tests/routing-golden.test.sh
+run "repos without a remote do not crash status or the git guard" env -u TMPDIR tests/registry-nulls.test.sh
+  run "domain and artifact-kind routing (stand-in workspace)" env -u TMPDIR tests/domains-routing.test.sh
+  run "Game Design domain: routing, feature-state ownership, standalone (no game-ai-workflows)" env -u TMPDIR tests/domains.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
@@ -187,8 +195,12 @@ expect "no files -> no checks" '.checks == [] and .touched == []' "$r"
 
 # ---- live context script (read-only against the real workspace)
 if $use_ws; then
-  if out=$(scripts/factory-context.sh --json 2>&1) && jq -e --argjson n "$(jq '.repos | length' registry.json)" '.repos | length == $n' <<<"$out" >/dev/null; then
-    ok "factory-context --json: every registered repo"
+  # every registered repo is snapshotted, except optional repos that are absent on disk, which are reported
+  if out=$(scripts/factory-context.sh --json 2>&1) && jq -e --slurpfile reg registry.json '
+      ([.repos[].repo] + (.optional_repos_absent // [])) as $seen
+      | ($seen | sort) == ($reg[0].repos | keys | sort)
+        and all((.optional_repos_absent // [])[]; $reg[0].repos[.].optional == true)' <<<"$out" >/dev/null; then
+    ok "factory-context --json: every registered repo (absent optional repos reported)"
     jq -e 'all(.repos[]; .error == null and (.branch | length) > 0)' <<<"$out" >/dev/null \
       && ok "factory-context: branch resolved for each repo" || bad "factory-context: branch per repo" "$out"
     out2=$(scripts/factory-context.sh --repo server --json --paths backend/gameserver-dotnet/GameServer/Program.cs 2>&1)

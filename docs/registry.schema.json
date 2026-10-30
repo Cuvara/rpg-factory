@@ -15,7 +15,8 @@
     "global_rules",
     "skills",
     "contracts",
-    "human_gates"
+    "human_gates",
+    "domains"
   ],
   "properties": {
     "schema_version": {
@@ -203,7 +204,7 @@
             "description": "Relative to the workspace root."
           },
           "remote": {
-            "type": "string"
+            "type": ["string", "null"]
           },
           "default_branch": {
             "type": "string"
@@ -258,6 +259,10 @@
               },
               "additionalProperties": false
             }
+          },
+          "optional": {
+            "type": "boolean",
+            "description": "When true, the repo may be absent from the workspace; paths are skipped only while absent."
           }
         }
       }
@@ -338,6 +343,18 @@
               "pattern": "^[a-z]+:"
             },
             "description": "Where this skill's `path:line` citations resolve (scripts/checks/skill-citations.py): citation prefix (\"\" = default, \"dots:\", \"backend/\", ...) -> \"<repo key>:<subpath>\". Default \"\" -> the first repo's root; every repo directory name is a prefix already."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Owning domain; defaults to engineering."
+          },
+          "role": {
+            "enum": [
+              "orchestrator",
+              "implementer",
+              "reference"
+            ],
+            "description": "Artifact role inside its domain."
           }
         }
       }
@@ -437,8 +454,27 @@
           },
           "evidence": {
             "type": "string"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Owning domain; defaults to engineering."
+          },
+          "role": {
+            "enum": [
+              "orchestrator",
+              "implementer",
+              "reference"
+            ],
+            "description": "Artifact role inside its domain."
           }
         }
+      }
+    },
+    "domains": {
+      "type": "object",
+      "description": "Top-level engineering domains and their ownership, checks, gates and approvers.",
+      "additionalProperties": {
+        "$ref": "#/$defs/domain"
       }
     }
   },
@@ -611,6 +647,18 @@
         "fallback": {
           "type": "boolean",
           "description": "Repository-level catch-all (<repo>.root, paths ['./']): files no other module owns route here instead of 'unmapped'."
+        },
+        "domain": {
+          "type": "string",
+          "description": "Owning domain; defaults to engineering."
+        },
+        "role": {
+          "enum": [
+            "orchestrator",
+            "implementer",
+            "reference"
+          ],
+          "description": "Artifact role inside its domain."
         }
       }
     },
@@ -629,6 +677,104 @@
         },
         "how": {
           "type": "string"
+        }
+      }
+    },
+    "domain": {
+      "type": "object",
+      "required": [
+        "summary",
+        "status",
+        "lead",
+        "repos",
+        "artifact_kinds",
+        "quality_gates",
+        "human_gates",
+        "handoffs",
+        "may_own_feature_state",
+        "approvers"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "planned",
+            "foundation"
+          ]
+        },
+        "lead": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifact_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quality_gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "human_gates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "handoffs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "may_own_feature_state": {
+          "type": "boolean"
+        },
+        "approvers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/domain_approver"
+          }
+        },
+        "revoked_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Revoked SSH key fingerprints."
+          }
+        }
+      }
+    },
+    "domain_approver": {
+      "type": "object",
+      "required": [
+        "principal",
+        "ssh_public_key"
+      ],
+      "properties": {
+        "principal": {
+          "type": "string"
+        },
+        "ssh_public_key": {
+          "type": "string",
+          "pattern": "^ssh-"
+        },
+        "revoked": {
+          "type": "boolean"
         }
       }
     }

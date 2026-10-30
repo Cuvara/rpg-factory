@@ -44,7 +44,7 @@ Read-only here: `client.packages`, `client.dots-sample`, `client.samples-importe
    `rpg-factory:unity-client-tech`; input send, session or prediction wiring: `rpg-factory:netcode-client`.
 2. **Game rule or wiring?** Logic the server must agree with (movement, combat, damage, validation,
    cooldowns, any formula) belongs in `Shared.GameLogic`, never under `Assets/` (ADR-10): stop this leg and
-   hand it to `server-realtime` (table below). A new number is a gameplay rule as well (`phase-plumbing-only`).
+   hand it to `server-realtime` (table below). A new number is a gameplay rule as well (`phase-scope`).
 3. **Check the package boundary.** Code against the pinned tag's API only
    (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/pin-status.py`; not the gitignored embedded clone, not package
    `develop`, never edit those clones). A new or changed package API stops the client leg (hand-off below).

@@ -20,6 +20,13 @@ assert() {
   local name="$1" repo="$2" pred="$3"; shift 3
   local out
   out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+  # ROUTING_GOLDEN_OUT=<file>: also record the routing contract of this scenario (tests/routing-golden.test.sh)
+  if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
+    jq -c --arg name "$name" --arg repo "$repo" '.repos[0] | {name: $name, repo: $repo,
+        routing: (.routing | {lead, co_leads, legs, follow_ups, tech, ambiguous}),
+        touched, checks: [.checks[].id]}' <<<"$out" >> "$ROUTING_GOLDEN_OUT" 2>/dev/null       || printf '{"name":%s,"error":true}
+' "$(jq -Rn --arg n "$name" '$n')" >> "$ROUTING_GOLDEN_OUT"
+  fi
   if jq -e ".repos[0] | $pred" <<<"$out" >/dev/null 2>&1; then
     pass=$((pass + 1)); echo "PASS  $name"
   else
@@ -166,7 +173,7 @@ else fail=$((fail + 1)); echo "FAIL  --explain tech rows: $(grep -E '^- (dotnet-
 echo "== task scope (throwaway fixture workspace)"
 . "$ROOT/scripts/lib/compat.sh"
 FX="$(mktemp_win)" && [ -d "$FX" ] && trap 'rm -rf "$FX"' EXIT
-FW="$FX/ws"; FS="$FW/rpg-mmo-server"; FC="$FW/IndieRPGMMOAdventure"
+FW="$FX/ws"; FS="$FW/rpg-mmo-server"; FC="$FW/IndieRPGMMOAdventure"; FA="$FW/game-authoring"
 fgc() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 mkdir -p "$FS/backend/gateway/server" "$FS/backend/shared/proto" "$FC/ProjectSettings"
 touch "$FS/backend/TEAM.md" "$FS/backend/gateway/server/server.go" "$FS/backend/shared/proto/wire.proto" "$FC/ProjectSettings/ProjectVersion.txt"
@@ -174,6 +181,23 @@ for r in "$FS" "$FC"; do git -C "$r" init -q -b develop; fgc "$r" add -A; fgc "$
 echo "// user edit" >> "$FS/backend/gateway/server/server.go"           # pre-existing user change = baseline
 fctx() { (cd "$1" && RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" "${@:2}" 2>&1); }
 fexpect() { if eval "$2"; then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1"; head -c 600 <<<"$out" | sed 's/^/      /'; fi; }
+mkdir -p "$FA/design/features"; echo 'fixture' > "$FA/design/features/crafting.md"
+git -C "$FA" init -q -b main; fgc "$FA" add -A; fgc "$FA" commit -qm init
+# The design scenario uses the same lead predicate, but stays outside the engineering routing golden.
+design_lead="$(lead game-design)"
+ui_lead="$(lead ui-ux)"
+art2d_lead="$(lead art-2d)"
+art3d_lead="$(lead art-3d)"
+vfx_lead="$(lead vfx)"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths design/features/crafting.md 2>&1)
+fexpect 'authoring design path -> game-design leads' "jq -e '.repos[0] | $design_lead' <<<\"\$out\" >/dev/null"
+out=$(fctx "$FA" --kind feature-spec --json)
+fexpect "--kind feature-spec -> design domain and game-design lead" 'jq -e ".domain.lead == \"game-design\" and .domain.id == \"design\"" <<<"$out" >/dev/null'
+for spec in "ui-ux:ui:ui-spec" "art-2d:art2d:art2d-asset" "art-3d:art3d:art3d-asset" "vfx:vfx:vfx-spec"; do
+  IFS=: read -r skill domain kind <<<"$spec"
+  out=$(fctx "$FA" --kind "$kind" --json)
+  fexpect "--kind $kind routes to $skill" "jq -e '.domain.id == \"$domain\" and .domain.lead == \"$skill\"' <<<\"\$out\" >/dev/null"
+done
 out=$(fctx "$FS")
 fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
   'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'

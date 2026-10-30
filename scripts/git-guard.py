@@ -746,7 +746,7 @@ def classify_gh(argv):
 def names_registry_repo(argv, registry):
     slugs = set()
     for r in registry.get("repos", {}).values():
-        m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", r.get("remote", ""))
+        m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", (r.get("remote") or ""))
         if m:
             slugs.add(m.group(1).lower())
     text = " ".join(argv).lower()
