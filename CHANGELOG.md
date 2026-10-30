@@ -5,6 +5,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Added foundation plans and readiness status for UI/UX, 2D Art, 3D Art and VFX.
+
+### Added
 - Added the `feature-spec-to-impl` handoff contract and registry checks for cross-domain path conflicts, artifact-kind uniqueness, and handoff driver ownership.
 - Added domain dependency graph routing, cross-domain path ambiguity reporting, and downstream stale-implementation detection.
 - Documented routing entry points, dependency graphs, ownership conflicts and downstream invalidation; updated the Game Design handoff workflow.

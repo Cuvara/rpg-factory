@@ -7,13 +7,23 @@ Domains describe who owns a discipline's artifacts, which registry paths route w
 | Domain | Lead | Authoring repo | Artifact kinds | Routing |
 |---|---|---|---|---|
 | Game Design | `game-design` | Optional `authoring` (`game-authoring`) | `gdd`, `feature-spec`, `design-decision` | `--domain design`, `--kind`, or registered paths under `design/` |
-| UI/UX | Planned | Optional `authoring` | UI specifications | `--domain ui` (planned) |
-| 2D Art | Planned | Optional `authoring` | Art briefs and asset manifests | `--domain art2d` (planned) |
-| 3D Art | Planned | Optional `authoring` | Model, material, rig and LOD manifests | `--domain art3d` (planned) |
-| VFX | Planned | Optional `authoring` | Effect specifications and budgets | `--domain vfx` (planned) |
+| UI/UX | `ui-ux` | Optional `authoring` | `ui-flow`, `ui-spec` | `--domain ui`, `--kind`, or `ui/` paths |
+| 2D Art | `art-2d` | Optional `authoring` | `art2d-brief`, `art2d-asset` | `--domain art2d`, `--kind`, or `art2d/` paths |
+| 3D Art | `art-3d` | Optional `authoring` | `art3d-brief`, `art3d-asset` | `--domain art3d`, `--kind`, or `art3d/` paths |
+| VFX | `vfx` | Optional `authoring` | `vfx-spec`, `vfx-asset` | `--domain vfx`, `--kind`, or `vfx/` paths |
 | Engineering | Existing Engineering leads | Product repos | Code, tests, packages and deployment outputs | Existing `--repo` / `--paths` routing |
 
-Planned rows describe the accepted architecture. Only domains registered as active in `registry.json` are routable.
+## Readiness
+
+| Domain | Domain foundation | Production workflow |
+|---|---|---|
+| Game Design | Active; registered, routed, contracted and checked | Existing design workflow |
+| UI/UX | Foundation; registered, routed, contracted and checked | Not implemented |
+| 2D Art | Foundation; registered, routed, contracted and checked | Not implemented |
+| 3D Art | Foundation; registered, routed, contracted and checked | Not implemented |
+| VFX | Foundation; registered, routed, contracted and checked | Not implemented |
+
+A foundation means registry ownership, routing, handoff contracts, shared checks and a scope-limited lead skill exist. It does not mean production workflows or discipline tooling exist. Domain plans: [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md).
 
 ## Game Design
 
