@@ -27,6 +27,7 @@ while [ $# -gt 0 ]; do case "$1" in
   *) break;;
 esac; done
 if $all_mode; then write_mode=true; fi
+scenarios=("$@")
 VERSION=$(jq -r .version "$ROOT/.claude-plugin/plugin.json")
 LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r '.installed.loads_from // empty')
 
@@ -132,7 +133,7 @@ if $write_mode; then
   scenarios=()
 fi
 
-scenarios=("$@"); [ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
