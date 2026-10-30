@@ -131,6 +131,7 @@ grep -rqE "$SECRET1|$SECRET2" "$RPG_FACTORY_STATE_DIR" "$TMP/state" 2>/dev/null 
 
 # -- check-registry rejects malformed dev_tools and tech skills (mutated copies, --structure-only)
 PR="$TMP/pr"; mkdir -p "$PR/docs"; ln -s "$ROOT/skills" "$PR/skills"; cp "$ROOT/docs/registry.schema.json" "$PR/docs/"; cp -r "$ROOT/docs/schemas" "$PR/docs/"
+mkdir -p "$PR/scripts/checks"; cp -r "$ROOT/scripts/checks/domains" "$PR/scripts/checks/"  # domains.*.quality_plugin paths
 reject() { # name expected-message jq-mutation
   jq "$3" "$ROOT/registry.json" > "$PR/registry.json"
   local o; o=$(CLAUDE_PLUGIN_ROOT="$PR" bash "$ROOT/scripts/check-registry.sh" --structure-only 2>&1)
