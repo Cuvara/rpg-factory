@@ -166,9 +166,14 @@ def main():
         # Existing staleness and immutable signature logic remains intact.
         cmd=[sys.executable,str(HERE/'artifact-trace.py'),str(root),'--registry',a.registry]+sum((['--repos',f'{k}={v}'] for k,v in repo_map.items()),[])
         tr=subprocess.run(cmd,capture_output=True,text=True,encoding='utf-8')
-        own=[line for line in tr.stdout.splitlines() if aid in line]
+        # rows are attributed by their subject id ("<STATE> <id> ..."): another artifact's failure, or a line that
+        # merely names this artifact as its upstream, is not this artifact's failure
+        lines=tr.stdout.splitlines()
+        own=[line for line in lines if len(line.split())>1 and line.split()[1]==aid]
+        attributed=any(len(line.split())>1 and line.split()[0]=='FAIL' and line.split()[1] in artifacts for line in lines)
         human=any(line.startswith('HUMAN_REQUIRED ') for line in own)
-        trace_fail=tr.returncode!=0 or any(line.startswith('FAIL ') for line in own)
+        trace_fail=any(line.startswith('FAIL ') for line in own) or (tr.returncode!=0 and not attributed)
+        if trace_fail and not own: own=[line for line in lines if line.startswith('FAIL ')] or [(tr.stderr.strip() or 'artifact-trace failed')[:300]]
         add(aid,obj,rel,'trace-approval','FAIL' if trace_fail else ('HUMAN_REQUIRED' if human else 'PASS'),own if trace_fail or human else [])
         domain=reg.get('domains',{}).get(obj.get('domain'),{}); plugin=domain.get('quality_plugin')
         if plugin:

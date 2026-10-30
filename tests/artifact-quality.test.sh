@@ -182,3 +182,14 @@ done
 jq -e '[.results[].artifact] | unique == ["UI-down-001"]' <<<"$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "$T/reg-xd.json" --domain ui --json || true)" >/dev/null \
   || { echo "FAIL --domain ui reported artifacts of another domain"; exit 1; }
 echo "PASS --domain/--kind report only the selection and still resolve cross-domain sources"
+# trace rows are attributed to their subject: a stale downstream fails, its upstream (named in the row) does not
+python3 -B - "$T/xd/ui/UI-down-001.artifact.json" <<'PY'
+import json, sys
+p = sys.argv[1]; o = json.load(open(p, encoding="utf-8")); o["upstream"] = [{"id": "DS-up-001", "rev": "0" * 40}]
+open(p, "w", encoding="utf-8", newline="\n").write(json.dumps(o))
+PY
+git -C "$T/xd" add -A; git -C "$T/xd" -c user.email=t@example.com -c user.name=t commit -qm xd
+out=$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "$T/reg-xd.json" --json || true)
+jq -e '[.results[] | select(.check=="trace-approval") | {(.artifact): .state}] | add == {"DS-up-001": "PASS", "UI-down-001": "FAIL"}' <<<"$out" >/dev/null \
+  || { echo "FAIL trace rows misattributed: $(jq -c '[.results[]|select(.check=="trace-approval")|[.artifact,.state]]' <<<"$out")"; exit 1; }
+echo "PASS trace-approval fails only the stale downstream, not the upstream it names"
