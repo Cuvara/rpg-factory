@@ -1,0 +1,173 @@
+{
+  "type": "object",
+  "required": [
+    "system_type",
+    "core_loop",
+    "mechanics",
+    "progression",
+    "combat_interaction",
+    "economy",
+    "difficulty_balancing",
+    "meta_progression"
+  ],
+  "properties": {
+    "system_type": {
+      "enum": [
+        "core-loop",
+        "mechanics",
+        "progression",
+        "combat",
+        "interaction",
+        "economy",
+        "difficulty",
+        "meta-progression",
+        "other"
+      ]
+    },
+    "core_loop": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mechanics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "progression": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "combat_interaction": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "economy": {
+      "type": "object",
+      "required": [
+        "currencies",
+        "sources",
+        "sinks"
+      ],
+      "properties": {
+        "currencies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "sinks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "difficulty_balancing": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "number"
+          },
+          {
+            "const": "TBD"
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "status",
+              "rationale"
+            ],
+            "properties": {
+              "value": {},
+              "status": {
+                "const": "proposal"
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "difficulty_curve": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "status",
+              "rationale"
+            ],
+            "properties": {
+              "value": {
+                "type": "number"
+              },
+              "status": {
+                "const": "proposal"
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "meta_progression": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "binding_values": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

@@ -48,6 +48,25 @@
     },
     "binding_values": {
       "type": "boolean"
+    },
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "game_concept": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gameplay_systems": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"
+      },
+      "minItems": 1
     }
   },
   "additionalProperties": false

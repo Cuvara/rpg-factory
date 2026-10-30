@@ -1,0 +1,99 @@
+{
+  "type": "object",
+  "required": [
+    "game_concept",
+    "gameplay_systems",
+    "item_type",
+    "function",
+    "progression_role",
+    "acquisition",
+    "rewards",
+    "content_refs"
+  ],
+  "properties": {
+    "game_concept": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gameplay_systems": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"
+      },
+      "minItems": 1
+    },
+    "item_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "function": {
+      "type": "string",
+      "minLength": 1
+    },
+    "progression_role": {
+      "type": "string",
+      "minLength": 1
+    },
+    "acquisition": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "cost": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "const": "TBD"
+        },
+        {
+          "type": "object",
+          "required": [
+            "value",
+            "status",
+            "rationale"
+          ],
+          "properties": {
+            "value": {},
+            "status": {
+              "const": "proposal"
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "rewards": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "content_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"
+      }
+    }
+  },
+  "additionalProperties": false
+}
