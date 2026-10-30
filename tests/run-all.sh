@@ -195,8 +195,12 @@ expect "no files -> no checks" '.checks == [] and .touched == []' "$r"
 
 # ---- live context script (read-only against the real workspace)
 if $use_ws; then
-  if out=$(scripts/factory-context.sh --json 2>&1) && jq -e --argjson n "$(jq '.repos | length' registry.json)" '.repos | length == $n' <<<"$out" >/dev/null; then
-    ok "factory-context --json: every registered repo"
+  # every registered repo is snapshotted, except optional repos that are absent on disk, which are reported
+  if out=$(scripts/factory-context.sh --json 2>&1) && jq -e --slurpfile reg registry.json '
+      ([.repos[].repo] + (.optional_repos_absent // [])) as $seen
+      | ($seen | sort) == ($reg[0].repos | keys | sort)
+        and all((.optional_repos_absent // [])[]; $reg[0].repos[.].optional == true)' <<<"$out" >/dev/null; then
+    ok "factory-context --json: every registered repo (absent optional repos reported)"
     jq -e 'all(.repos[]; .error == null and (.branch | length) > 0)' <<<"$out" >/dev/null \
       && ok "factory-context: branch resolved for each repo" || bad "factory-context: branch per repo" "$out"
     out2=$(scripts/factory-context.sh --repo server --json --paths backend/gameserver-dotnet/GameServer/Program.cs 2>&1)
