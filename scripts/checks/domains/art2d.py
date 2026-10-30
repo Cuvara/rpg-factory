@@ -185,6 +185,9 @@ def check(artifact, ctx):
     else:
         results.append(Result('art2d-direction', 'PASS'))
     if kind == 'asset-spec-2d':
+        if status not in ('in-implementation', 'verified', 'released'):
+            results.append(Result('art2d-runtime-export', 'PASS', ['runtime exports are required only after implementation is claimed']))
+            return results
         exports = [obj for _, obj in refs.values() if obj.get('kind') == 'runtime-export-2d' and _spec(obj).get('asset_spec_id') == artifact.get('id')]
         usable = []
         details = []

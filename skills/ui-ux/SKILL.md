@@ -19,7 +19,7 @@ Task: $ARGUMENTS
 ## Start and inputs
 
 1. Start with `/rpg-factory:workflow` for multi-domain work, or run `factory-context.sh --domain ui` for a UI-only task. Follow the routed lead and path.
-2. Read upstream design `feature-spec` and any relevant `vfx-spec` by artifact ID and revision. Record exact IDs in `sources` and revisions in `upstream`; request missing goals, player constraints, engine paths, or effect behavior instead of inventing them.
+2. Read upstream design `feature-spec` and any relevant `vfx-spec` by artifact ID and revision. Record exact IDs in `sources` and revisions in `upstream`; compute each revision with `git hash-object <path>` on the upstream file. Request missing goals, player constraints, engine paths, or effect behavior instead of inventing them.
 3. Set stable artifact IDs, `schema_version: 2`, `authors`, `sources`, and a domain-specific `spec`. Use the matching `templates/ui/<kind>.md` as a valid draft.
 
 ## Production steps by artifact kind
@@ -35,11 +35,12 @@ Task: $ARGUMENTS
 
 - Deliver outputs as stable UI artifact IDs/revisions. Design inputs arrive from `feature-spec`; engineering receives `ui-handoff` and screen specs; art2d receives visual briefs; VFX dependencies remain explicit in both directions.
 - Do not invent binding data, identifiers, or paths. For unknown gameplay values, state that the value is unresolved or label it as a proposal pending design approval. Mark concept and production readiness explicitly in the artifact status/title when relevant.
+- `spec.data_bindings` is an array of objects shaped as `{"source_artifact_id":"<artifact-id>","field":"<dot.path>"}`. The source ID must also appear in `sources` or `upstream`, and `field` must resolve inside that artifact's `spec`; do not use bare strings, alternate keys, or embedded values.
 - Figma is optional. Checks never call network APIs. A Figma reference requires a file key and node ID; visual verification remains `HUMAN_REQUIRED` without attached screenshot/export evidence. Structured specs work without Figma.
 
 ## Validation delta
 
-Run CORE artifact lint/trace and `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py <repo> --registry ${CLAUDE_PLUGIN_ROOT}/registry.json`. Leave off `--domain ui` so declared design and engineering source artifacts remain available for data-binding field resolution. Read each UI plugin check by name: screen states, interaction/accessibility, reference integrity, navigation graph, responsive/platform declaration, data bindings, component quality, handoff acceptance, token format, and Figma adapter state. `FAIL` requires correction; `NOT_AVAILABLE` explains optional tooling absence; `HUMAN_REQUIRED` needs human visual review. Also run workflow `plan` and `status` for multi-artifact work and address stale upstream revisions.
+Run CORE artifact lint/trace and `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py <repo> --registry ${CLAUDE_PLUGIN_ROOT}/registry.json`. Leave off `--domain ui` so declared design and engineering source artifacts remain available for data-binding field resolution. Read each UI plugin check by name: screen states, interaction/accessibility, reference integrity, navigation graph, responsive/platform declaration, data bindings, component quality, handoff acceptance, token format, and Figma adapter state. Resolve every `FAIL` and rerun all checks until none remain; `NOT_AVAILABLE` explains optional tooling absence; `HUMAN_REQUIRED` needs human visual review. Also run workflow `plan` and `status` for multi-artifact work and address stale upstream revisions.
 
 ## Scope
 

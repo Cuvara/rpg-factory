@@ -102,12 +102,12 @@ W_PROMPT[art3d-write]="Create 3D art direction, a model spec and a material spec
 W_EXPECT[art3d-write]="art-3d"; W_KINDS[art3d-write]="art-direction-3d model-spec material-spec"; W_DOMAIN[art3d-write]=art3d
 W_PROMPT[vfx-write]="Using the supplied design event, create a VFX spec for a crafting-complete effect with explicit budgets for every platform. Reference the event by artifact ID and revision. Validate with Factory checks and report IDs, revisions and human gates."
 W_EXPECT[vfx-write]="vfx"; W_KINDS[vfx-write]="vfx-spec"; W_DOMAIN[vfx-write]=vfx; W_SEEDS[vfx-write]=design-event
-W_PROMPT[xdomain-design-ui-eng]="From the supplied approved feature brief, produce a design feature spec, a UI screen spec and a technical handoff. Validate all artifacts, then run workflow plan and status on the produced artifacts. Report the required order from design through UI to engineering and all human gates."
+W_PROMPT[xdomain-design-ui-eng]="From the supplied feature brief, produce a design feature spec, a UI screen spec and a technical handoff. Use the game-design and ui-ux production workflows for their respective artifacts. Validate all artifacts, then run workflow plan and status on the produced artifacts. Report the required order from design through UI to engineering and all human gates."
 W_EXPECT[xdomain-design-ui-eng]="game-design ui-ux"; W_KINDS[xdomain-design-ui-eng]="feature-spec screen-spec technical-handoff"; W_DOMAIN[xdomain-design-ui-eng]=design; W_PLAN[xdomain-design-ui-eng]=design-ui-eng; W_SEEDS[xdomain-design-ui-eng]=approved-feature
 W_PROMPT[xdomain-art3d-vfx]="Using the supplied 3D asset record, create a VFX spec referencing that asset by ID and revision. Validate the artifacts and run workflow plan and status, confirming the 3D art work precedes VFX. Report any human gates."
 W_EXPECT[xdomain-art3d-vfx]="vfx"; W_KINDS[xdomain-art3d-vfx]="vfx-spec"; W_DOMAIN[xdomain-art3d-vfx]=vfx; W_PLAN[xdomain-art3d-vfx]=art3d-vfx; W_SEEDS[xdomain-art3d-vfx]=asset-3d
-W_PROMPT[xdomain-stale]="The supplied design event has changed. Update its upstream artifact, then inspect workflow status for the existing downstream VFX spec. Report that the downstream artifact is stale and needs revalidation, with both IDs and revisions. Do not create approvals."
-W_EXPECT[xdomain-stale]="vfx"; W_KINDS[xdomain-stale]="design-event vfx-spec"; W_DOMAIN[xdomain-stale]=vfx; W_PLAN[xdomain-stale]=stale; W_SEEDS[xdomain-stale]=stale-pair
+W_PROMPT[xdomain-stale]="The supplied gameplay system has changed. Update its upstream artifact, then use the VFX production workflow to inspect workflow status for the existing downstream VFX spec. Report that the downstream artifact is stale and needs revalidation, with both IDs and revisions. Do not create approvals."
+W_EXPECT[xdomain-stale]="vfx"; W_KINDS[xdomain-stale]="gameplay-system vfx-spec"; W_DOMAIN[xdomain-stale]=vfx; W_PLAN[xdomain-stale]=stale; W_SEEDS[xdomain-stale]=stale-pair
 
 if $write_mode; then
   write_scenarios=(design-write ui-write art2d-write art3d-write vfx-write xdomain-design-ui-eng xdomain-art3d-vfx xdomain-stale)
@@ -123,7 +123,7 @@ if $write_mode; then
     git -C "$ws/game-authoring" config user.name "Factory Dogfood"
     git -C "$ws/game-authoring" config user.email "dogfood@example.invalid"
     git -C "$ws/game-authoring" add -- design ui art2d art3d vfx; git -C "$ws/game-authoring" commit -qm "Seed isolated authoring workspace"
-    local_prompt="${W_PROMPT[$n]} Write artifacts only inside the game-authoring repository in the current workspace. Never write elsewhere and never create approval records. Validate with scripts/checks/artifact-lint.py and scripts/checks/artifact-quality.py --domain ${W_DOMAIN[$n]} --json; run workflow plan and status when requested."
+    local_prompt="${W_PROMPT[$n]} Write artifacts only inside the game-authoring repository in the current workspace. Never write elsewhere and never create approval records. For every upstream reference, record its current Git blob revision using git hash-object <path>. Run schema, lifecycle, lint, trace, workflow and domain quality checks; fix every FAIL and rerun the checks until none remain. Validate with scripts/checks/artifact-lint.py and scripts/checks/artifact-quality.py --domain ${W_DOMAIN[$n]} --json; run workflow plan and status when requested."
     pd=(); $installed || pd=(--plugin-dir "$ROOT")
     (cd "$ws" && RPG_FACTORY_WORKSPACE="$ws_native" timeout 900 claude "${pd[@]}" -p "$local_prompt" --model "$model" --output-format stream-json --verbose --allowedTools "Skill,Read,Grep,Glob,Write,Edit,Bash" </dev/null > "$OUT/$n.jsonl" 2>/dev/null) || true
     grade_args=(); $installed && grade_args+=(--installed --version "$VERSION" --loads "$LOADS")

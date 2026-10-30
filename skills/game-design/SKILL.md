@@ -16,13 +16,13 @@ Applies to design concepts and production artifacts in the design domain. Route 
 Use `/rpg-factory:workflow` or `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --domain design`. Author only in registered authoring modules. Inputs are upstream artifact ids and revisions; outputs are versioned design artifacts and named handoffs. If authoring is absent, return artifact text and report checks as not run.
 
 ## Workflow delta
-1. Resolve scope and upstream ids/revisions through Core. Record sources and upstream revisions.
+1. Resolve scope and upstream ids/revisions through Core. Record each upstream revision as the Git blob id from `git hash-object <path>` for that source file.
 2. Draft a `game-concept` before systems/content when the project premise is unsettled. Capture audience, pillars, genre, platforms, USP and constraints.
 3. Write one `gameplay-system` per system type. Define core loop, mechanics, progression, interaction/combat, economy sources and sinks, difficulty and meta progression.
 4. Write feature and content specs (`level-spec`, `quest-spec`, `npc-spec`, `item-spec`) against existing concept/system ids. Keep IDs stable.
 5. Produce a GDD to integrate approved concepts and systems; record decisions as `design-decision` artifacts with alternatives and consequences.
 6. Create `technical-handoff` with gameplay/state/data requirements, events, edge cases, testable acceptance criteria and registered engineering dependencies.
-7. Validate using `artifact-quality.py`; route accepted design to UI, engineering, art2d/art3d and VFX through registered contracts.
+7. Validate using `artifact-quality.py`; resolve every `FAIL` and rerun until none remain. Route accepted design to UI, engineering, art2d/art3d and VFX through registered contracts.
 
 ## Rules
 Use schema version 2, stable ids, authors, sources and spec payloads. Gameplay numbers are explicitly unresolved (`TBD`) or `{value, status: proposal, rationale}` unless the artifact declares `binding_values: true` and the shared verifier reports approval as `verified` for its current revision. Missing approval is `HUMAN_REQUIRED`; invalid or untrusted approval fails with verifier reasons. A source id must resolve. Economy systems declare currencies, sources and sinks. Difficulty curves are monotonic when declared. Never write approval records.

@@ -22,11 +22,11 @@ Own the `art3d` domain in the optional `authoring` repo. Outputs are registered 
 
 ## Workflow
 
-1. Start from `/rpg-factory:workflow` for cross-domain work or `factory-context.sh --domain art3d` for one domain. Read each upstream artifact by id/rev; request missing design, UI, or 2D art inputs through the workflow graph.
+1. Start from `/rpg-factory:workflow` for cross-domain work or `factory-context.sh --domain art3d` for one domain. Read each upstream artifact by id/rev; compute its revision with `git hash-object <path>` on the source file. Request missing design, UI, or 2D art inputs through the workflow graph.
 2. Create an `art3d-brief` from feature/UI references and art direction. Keep unknown gameplay-impacting numbers as pending placeholders or explicitly labelled proposals until the owning design authority binds them.
 3. Create `model-spec` for topology, polygon budgets by LOD, UVs, naming, units, scale, and pivot. Create `material-spec` for material assignments and texture maps, sizes, formats, and colour spaces. Create `rig-spec` and `animation-spec` when required; state rig hierarchy, skeleton naming, clips, fps, looping, and root motion.
 4. Record the complete output in `asset-3d`: source file and hash, format, LODs, collision/physics, texture files, export settings, and engine constraints. Keep concept/proposal artifacts distinct from production-approved values.
-5. Validate every artifact with `artifact-quality.py`; review plugin findings and lifecycle output. Use Blender adapter evidence for DCC formats. Missing Blender is `NOT_AVAILABLE` or `HUMAN_REQUIRED`, never evidence of a pass.
+5. Validate every artifact with `artifact-quality.py`; correct every `FAIL` and rerun until none remain. Review plugin findings and lifecycle output. Use Blender adapter evidence for DCC formats. Missing Blender is `NOT_AVAILABLE` or `HUMAN_REQUIRED`, never evidence of a pass.
 6. Ask an independent reviewer to assess visual quality, topology, UVs, naming, technical constraints, rights, and completeness. Human approval gates remain human-owned.
 7. Hand off approved asset records to VFX and Engineering with current source revisions. Engineering owns importing and runtime integration.
 

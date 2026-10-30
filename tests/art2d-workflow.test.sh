@@ -107,7 +107,8 @@ for item in (concept, reference):
 expect('unknown art direction fails', state({'kind': 'asset-spec-2d', 'spec': {'art_direction_id': 'missing'}}, 'art2d-direction') == 'FAIL')
 expect('missing art direction fails', state({'kind': 'asset-spec-2d', 'spec': {}}, 'art2d-direction') == 'FAIL')
 expect('known art direction passes', state({'kind': 'asset-spec-2d', 'spec': {'art_direction_id': 'style-1'}}, 'art2d-direction') == 'PASS')
-expect('asset spec without a runtime export fails', state({'id': 'bare', 'kind': 'asset-spec-2d', 'spec': {'art_direction_id': 'style-1'}}, 'art2d-runtime-export') == 'FAIL')
+expect('draft asset spec does not claim a runtime export', state({'id': 'bare', 'kind': 'asset-spec-2d', 'status': 'draft', 'spec': {'art_direction_id': 'style-1'}}, 'art2d-runtime-export') == 'PASS')
+expect('in-implementation asset spec requires a runtime export', state({'id': 'bare-impl', 'kind': 'asset-spec-2d', 'status': 'in-implementation', 'spec': {'art_direction_id': 'style-1'}}, 'art2d-runtime-export') == 'FAIL')
 
 def export(filename, **changes):
     path = records[filename]
