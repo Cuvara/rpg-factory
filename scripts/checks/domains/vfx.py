@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """VFX domain quality rules; intentionally independent of engine installations."""
-import re
+import math
+import numbers
 from domains._api import Result
+
+
+def _valid_number(value, *, integer=False):
+    """Return whether a budget or measurement is finite and non-negative."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    if not math.isfinite(value) or value < 0:
+        return False
+    return not integer or isinstance(value, numbers.Integral)
 
 def check(artifact, ctx):
     kind = artifact.get("kind")
@@ -26,7 +36,8 @@ def check(artifact, ctx):
         try:
             durations = [float(p["duration_seconds"]) for p in spec.get("phases", [])]
             declared = float(spec["duration_seconds"])
-            if any(x < 0 for x in durations): phase_errors.append("phase durations must be non-negative")
+            if not math.isfinite(declared) or any(not math.isfinite(x) for x in durations): phase_errors.append("phase durations and total duration must be finite numbers")
+            if any(x < 0 for x in durations) or declared < 0: phase_errors.append("phase durations and total duration must be non-negative")
             if abs(sum(durations) - declared) > max(0.001, declared * 0.001): phase_errors.append("lifecycle phases must sum to declared total duration")
         except (TypeError, ValueError, KeyError): phase_errors.append("phase durations and total duration must be numeric")
         add("vfx-timing", phase_errors)
@@ -35,7 +46,8 @@ def check(artifact, ctx):
             times = []
             for point in curve.get("keyframes", []):
                 try:
-                    t = float(point["time"]); float(point["value"])
+                    t = float(point["time"]); value = float(point["value"])
+                    if not math.isfinite(t) or not math.isfinite(value): curve_errors.append("curve keyframe time and value must be finite numbers")
                     if not 0 <= t <= 1: curve_errors.append("curve keyframe time must be in [0,1]")
                     times.append(t)
                 except (TypeError, ValueError, KeyError): curve_errors.append("curve keyframes need numeric time and value")
@@ -44,12 +56,23 @@ def check(artifact, ctx):
         budget_errors = []
         platforms = spec.get("platforms", {})
         if not platforms: budget_errors.append("every target platform needs a budget")
-        maximum = sum(int(x.get("max_particles", 0)) for x in spec.get("particle_systems", []) if isinstance(x, dict))
+        maximum = 0
+        for system in spec.get("particle_systems", []):
+            value = system.get("max_particles") if isinstance(system, dict) else None
+            if not _valid_number(value, integer=True):
+                budget_errors.append("particle-system max_particles must be a finite non-negative integer")
+            else:
+                maximum += value
         for platform, data in platforms.items():
             budget = data.get("budget") if isinstance(data, dict) else None
             if not isinstance(budget, dict) or not all(k in budget for k in ("max_particles", "max_overdraw", "max_draw_calls", "max_ms")):
                 budget_errors.append(platform + " platform needs complete particle, overdraw, draw-call and ms budget")
-            elif maximum > budget["max_particles"]: budget_errors.append(platform + " particle maxima exceed platform budget")
+            else:
+                for key in ("max_particles", "max_overdraw", "max_draw_calls", "max_ms"):
+                    if not _valid_number(budget[key], integer=key in ("max_particles", "max_draw_calls")):
+                        budget_errors.append(platform + " " + key + " budget must be a finite non-negative" + (" integer" if key in ("max_particles", "max_draw_calls") else " number"))
+                if _valid_number(budget["max_particles"], integer=True) and maximum > budget["max_particles"]:
+                    budget_errors.append(platform + " particle maxima exceed platform budget")
         add("vfx-platform-budgets", budget_errors)
         dependency_errors = []
         for dep in spec.get("dependencies", []):
@@ -75,13 +98,17 @@ def check(artifact, ctx):
                     errors.append("missing measured or declared stats for platform " + platform)
             for platform, measured in stats.items():
                 budget = source.get("spec", {}).get("platforms", {}).get(platform, {}).get("budget")
-                if not budget: errors.append("no declared budget for measured platform " + platform); continue
+                if not isinstance(budget, dict) or not budget: errors.append("no declared budget for measured platform " + platform); continue
                 if not isinstance(measured, dict):
                     errors.append(platform + " stats must be an object"); continue
                 for stat, bkey in (("particles", "max_particles"), ("overdraw", "max_overdraw"), ("draw_calls", "max_draw_calls"), ("ms", "max_ms")):
-                    try:
-                        if float(measured[stat]) > float(budget[bkey]): errors.append(platform + " " + stat + " exceeds declared budget")
-                    except (TypeError, KeyError, ValueError): errors.append(platform + " missing numeric " + stat)
+                    integer = stat in ("particles", "draw_calls")
+                    if stat not in measured or not _valid_number(measured[stat], integer=integer):
+                        errors.append(platform + " " + stat + " must be a finite non-negative" + (" integer" if integer else " number"))
+                    elif not _valid_number(budget.get(bkey), integer=integer):
+                        errors.append(platform + " " + bkey + " budget must be a finite non-negative" + (" integer" if integer else " number"))
+                    elif measured[stat] > budget[bkey]:
+                        errors.append(platform + " " + stat + " exceeds declared budget")
         add("vfx-asset-budget", errors)
         path = str(spec.get("asset_path", ""))
         if path.lower().endswith(".vfx"):

@@ -5,16 +5,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp_win)" || exit 1
 trap 'rm -rf "$T"' EXIT
-base_failures=0
-if [[ ! -f "$ROOT/scripts/adapters/vfx/unity.py" ]]; then
-  echo 'FAIL missing-budget-adapter: cannot reject a Unity PASS without a spec budget'
-  base_failures=$((base_failures + 1))
-fi
-if [[ ! -f "$ROOT/scripts/checks/domains/vfx.py" ]] || ! grep -q 'production-complete asset requires measured or declared stats' "$ROOT/scripts/checks/domains/vfx.py"; then
-  echo 'FAIL missing-asset-stats-rule: empty delivery stats cannot be rejected as production-incomplete'
-  base_failures=$((base_failures + 1))
-fi
-if (( base_failures > 0 )); then exit 1; fi
 mkdir -p "$T/authoring/vfx/specs" "$T/unity/Assets"
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,json,pathlib,re,sys
@@ -42,6 +32,41 @@ bad=json.loads(json.dumps(valid)); bad['spec']['dependencies']=[{'id':'missing-u
 bad=json.loads(json.dumps(valid)); bad['kind']='vfx-asset'; bad['sources']=['VFX-burst-001']; bad['spec']={'asset_path':'Assets/VFX/a.prefab','stats':{}}; cases.append(('missing asset stats',bad,'vfx-asset-budget'))
 bad=json.loads(json.dumps(valid)); bad['kind']='vfx-asset'; bad['sources']=['VFX-burst-001']; bad['spec']={'asset_path':'Assets/VFX/a.prefab','stats':{'mobile':{'particles':1,'overdraw':0.1,'draw_calls':1,'ms':0.1}}}; cases.append(('missing expected platform stats',bad,'vfx-asset-budget'))
 for name,artifact,check in cases: assert states(artifact)[check]=='FAIL',(name,states(artifact))
+# Numeric budgets, particle maxima and measurements must reject NaN, infinity and negatives.
+numeric_failures=[]
+for key,value in [('max_particles',float('nan')),('max_overdraw',float('inf')),('max_draw_calls',-1),('max_ms',float('nan'))]:
+    bad=json.loads(json.dumps(valid)); bad['spec']['platforms']['desktop']['budget'][key]=value
+    try:
+        if states(bad)['vfx-platform-budgets']!='FAIL': numeric_failures.append('invalid budget '+key)
+    except Exception: numeric_failures.append('invalid budget '+key+' crashed')
+for value in (float('nan'),float('inf'),-1):
+    bad=json.loads(json.dumps(valid)); bad['spec']['particle_systems'][0]['max_particles']=value
+    try:
+        if states(bad)['vfx-platform-budgets']!='FAIL': numeric_failures.append('invalid particle maximum '+str(value))
+    except Exception: numeric_failures.append('invalid particle maximum '+str(value)+' crashed')
+for label,mutate in [('non-finite phase',lambda a:a['spec']['phases'][0].update(duration_seconds=float('nan'))),('non-finite curve',lambda a:a['spec']['curves'][0]['keyframes'][0].update(value=float('inf')))]:
+    bad=json.loads(json.dumps(valid)); mutate(bad)
+    try:
+        check='vfx-timing' if label.endswith('phase') else 'vfx-curves'
+        if states(bad)[check]!='FAIL': numeric_failures.append(label)
+    except Exception: numeric_failures.append(label+' crashed')
+source=valid
+ctx.artifacts['VFX-burst-001']=('vfx/specs/spec.json',source)
+for stat,value in [('particles',float('nan')),('overdraw',float('inf')),('draw_calls',-1),('ms',float('nan'))]:
+    bad={'id':'VFX-stat-test','kind':'vfx-asset','domain':'vfx','sources':['VFX-burst-001'],'spec':{'asset_path':'Assets/VFX/a.prefab','stats':{'desktop':{'particles':1,'overdraw':0.1,'draw_calls':1,'ms':0.1}}}}
+    bad['spec']['stats']['desktop'][stat]=value
+    try:
+        if states(bad)['vfx-asset-budget']!='FAIL': numeric_failures.append('invalid stat '+stat)
+    except Exception: numeric_failures.append('invalid stat '+stat+' crashed')
+adapter_spec=importlib.util.spec_from_file_location('unity_vfx',root/'scripts/adapters/vfx/unity.py'); adapter=importlib.util.module_from_spec(adapter_spec); adapter_spec.loader.exec_module(adapter)
+prefab=temp/'unity/Assets/test.prefab'; prefab.write_text('ParticleSystem:\n  maxNumParticles: 2\n')
+for value in (float('nan'),float('inf'),-1,2.5):
+    try:
+        result=adapter.inspect(temp/'unity','Assets/test.prefab',budget={'max_particles':value})
+        if result['state']!='FAIL' or result['comparisons']: numeric_failures.append('Unity invalid numeric budget '+str(value))
+    except Exception: numeric_failures.append('Unity invalid numeric budget '+str(value)+' crashed')
+if numeric_failures: print('FAIL '+', '.join(numeric_failures),file=sys.stderr)
+assert not numeric_failures, 'invalid numeric budgets or stats were accepted'
 ctx.registry['domains']['vfx']['engineering_event_ids']=['EVT-combat-hit']
 event_spec=json.loads(json.dumps(valid)); event_spec['spec']['triggers']=['EVT-combat-hit']; assert states(event_spec)['vfx-triggers']=='PASS'
 ctx.artifacts['UI-cue-001']=('ui/specs/cue.json',{'domain':'ui'})
@@ -96,6 +121,14 @@ jq -e '.state == "HUMAN_REQUIRED" and (.asset | contains("test.prefab"))' "$T/gu
 printf '{"max_particles":4}\n' > "$T/budget.json"
 if python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/test.prefab --budget-json "$T/budget.json" > "$T/over-budget.json"; then echo 'Unity adapter budget overrun unexpectedly passed' >&2; exit 1; fi
 jq -e '.state == "FAIL" and any(.reasons[]; contains("exceed spec budget"))' "$T/over-budget.json" >/dev/null
+python3 -B - "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" <<'PY'
+import importlib.util,pathlib,sys
+spec=importlib.util.spec_from_file_location('unity_vfx',sys.argv[1]); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+for value in (float('nan'),float('inf'),-1,2.5):
+    result=module.inspect(sys.argv[2],'Assets/VFX/test.prefab',budget={'max_particles':value})
+    assert result['state']=='FAIL' and result['comparisons']==[] and any('finite non-negative integer' in reason for reason in result['reasons']), (value,result)
+print('Unity invalid numeric budgets: 4 passed, 0 failed')
+PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import json,pathlib,sys
 r=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2])
@@ -119,13 +152,27 @@ workflow.write_text(json.dumps({'id':'workflow','title':'VFX task','goal':'Autho
 PY
 python3 -B "$ROOT/scripts/factory-workflow.py" status "$T/workflow.json" --authoring "$T/authoring" --json > "$T/stale.json"
 jq -e '.states.effect == "stale" and (.stale_upstream|length) == 1' "$T/stale.json" >/dev/null
-# Overlay this updated regression test on an archive of the base and require it to fail there.
-BASE=acec91692797bc0204e6a72bb5c92594c295fc45
-mkdir -p "$T/base"
-git -C "$ROOT" archive "$BASE" | tar -x -C "$T/base"
-cp "$ROOT/tests/vfx-workflow.test.sh" "$T/base/tests/vfx-workflow.test.sh"
-if (cd "$T/base" && bash tests/vfx-workflow.test.sh) > "$T/base-proof.log" 2>&1; then echo 'Base proof unexpectedly passed' >&2; exit 1; fi
-grep -q 'FAIL missing-budget-adapter:' "$T/base-proof.log"
-grep -q 'FAIL missing-asset-stats-rule:' "$T/base-proof.log"
-echo 'Base proof: missing-budget-adapter and missing-asset-stats-rule both failed on git archive acec916'
+# Overlay this updated behavioral suite on archives and require behavior assertions to fail there.
+for BASE in acec91692797bc0204e6a72bb5c92594c295fc45 fc8d435f4ea1c73124701d3e0af64bec035334e5; do
+  mkdir -p "$T/base-$BASE"
+  PROOF_DIR="${VFX_PROOF_DIR:-$T}"
+  mkdir -p "$PROOF_DIR"
+  git -C "$ROOT" archive "$BASE" | tar -x -C "$T/base-$BASE"
+  cp "$ROOT/tests/vfx-workflow.test.sh" "$T/base-$BASE/tests/vfx-workflow.test.sh"
+  PROOF_LOG="$PROOF_DIR/base-$BASE-proof.log"
+  if (cd "$(cygpath -u "$T/base-$BASE")" && bash tests/vfx-workflow.test.sh) > "$PROOF_LOG" 2>&1; then echo "Base proof unexpectedly passed: $BASE" >&2; exit 1; fi
+  if [[ "$BASE" == acec916* ]]; then
+    # acec916 predates the VFX plugin; the test executes it and records its missing behavior entry point.
+    grep -q 'FileNotFoundError' "$PROOF_LOG"
+    grep -q 'domains.*vfx.py' "$PROOF_LOG"
+    echo "Behavior proof: VFX behavior could not be exercised because the domain plugin is absent on git archive $BASE (log: $PROOF_LOG)"
+  else
+    grep -q 'invalid budget max_particles' "$PROOF_LOG"
+    grep -q 'invalid stat particles' "$PROOF_LOG"
+    grep -q 'Unity invalid numeric budget nan' "$PROOF_LOG"
+    grep -q 'non-finite phase' "$PROOF_LOG"
+    grep -q 'non-finite curve' "$PROOF_LOG"
+    echo "Behavior proof: invalid budgets, stats and Unity NaN cases failed against git archive $BASE (log: $PROOF_LOG)"
+  fi
+done
 echo 'vfx workflow: PASS'

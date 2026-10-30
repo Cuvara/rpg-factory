@@ -2,9 +2,19 @@
 """Read-only Unity prefab text adapter. Never launches the Editor."""
 import argparse
 import json
+import math
+import numbers
 import re
 import sys
 from pathlib import Path
+
+
+def _valid_budget(value, integer=False):
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    if not math.isfinite(value) or value < 0:
+        return False
+    return not integer or isinstance(value, numbers.Integral)
 
 
 def inspect(project, asset, guid=None, budget=None):
@@ -41,17 +51,16 @@ def inspect(project, asset, guid=None, budget=None):
     if not isinstance(budget, dict):
         state = "HUMAN_REQUIRED"; reasons.append("spec budget missing; prefab cannot PASS without a budget comparison")
     elif fields:
-        try:
-            if "max_particles" not in fields:
-                state = "HUMAN_REQUIRED"; reasons.append("prefab does not expose max_particles for comparison")
-            elif "max_particles" not in budget:
-                state = "HUMAN_REQUIRED"; reasons.append("spec budget is missing max_particles")
-            elif int(fields["max_particles"]) > float(budget["max_particles"]):
-                state = "FAIL"; reasons.append("prefab maximum particles exceed spec budget")
-            else:
-                comparisons.append("max_particles")
-        except (TypeError, ValueError):
-            state = "HUMAN_REQUIRED"; reasons.append("max_particles value or budget is not numeric")
+        if "max_particles" not in fields:
+            state = "HUMAN_REQUIRED"; reasons.append("prefab does not expose max_particles for comparison")
+        elif "max_particles" not in budget:
+            state = "HUMAN_REQUIRED"; reasons.append("spec budget is missing max_particles")
+        elif not _valid_budget(budget["max_particles"], integer=True):
+            state = "FAIL"; reasons.append("max_particles budget must be a finite non-negative integer")
+        elif int(fields["max_particles"]) > budget["max_particles"]:
+            state = "FAIL"; reasons.append("prefab maximum particles exceed spec budget")
+        else:
+            comparisons.append("max_particles")
         for key in ("start_lifetime", "looping", "duration"):
             if key in fields: reasons.append(key + " parsed but has no comparable spec budget")
         if any(key in fields for key in ("start_lifetime", "looping", "duration")):
