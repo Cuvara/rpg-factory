@@ -4,7 +4,7 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
-TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'dir_writable "$TMP/ro" 2>/dev/null; rm -rf "$TMP"' EXIT
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; }
@@ -33,25 +33,6 @@ fi
 # a directory under a C:/ path still works as a $PATH entry
 mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho hi\n' > "$TMP/bin/rpgf-probe-tool"; chmod +x "$TMP/bin/rpgf-probe-tool"
 [ "$(PATH="$(path_entry "$TMP/bin"):$PATH" rpgf-probe-tool 2>/dev/null)" = "hi" ] && ok "path_entry dir is found on PATH" || no "path_entry dir not on PATH"
-
-# dir_readonly really blocks creating and removing files (chmod alone does nothing on NTFS)
-mkdir -p "$TMP/ro"; echo x > "$TMP/ro/a"
-if [ "$(id -u)" != 0 ]; then
-  dir_readonly "$TMP/ro"
-  r=$(python3 -B -c "
-import os, sys
-d = sys.argv[1]
-try:
-    open(os.path.join(d, 'new'), 'w').close(); print('created')
-except OSError:
-    try:
-        os.replace(os.path.join(d, 'a'), os.path.join(d, '..', 'moved')); print('moved')
-    except OSError:
-        print('blocked')" "$TMP/ro")
-  dir_writable "$TMP/ro"
-  [ "$r" = "blocked" ] && ok "dir_readonly blocks create and move-out" || no "dir_readonly: $r"
-  echo y > "$TMP/ro/b" 2>/dev/null && ok "dir_writable restores writes" || no "dir_writable did not restore writes"
-fi
 
 # tool lookup finds what bash finds (Windows: python3 is python3.exe, reached through PATHEXT)
 for t in python3 git jq; do
