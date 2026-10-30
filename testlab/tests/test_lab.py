@@ -3671,6 +3671,54 @@ class HostGuardTests(unittest.TestCase):
             {"run": "run-a", "count": 1, "scope_pages": [{"run": "run-a", "source": "flag"}]},
             {"run": "run-b", "count": 0, "scope_pages": []}])
 
+
+    def _assert_orca_pagination_failure(self, responses, reason):
+        from lab import hostguard
+        from unittest import mock
+        from types import SimpleNamespace
+
+        with mock.patch.object(hostguard, "_orca_command", return_value=["orca"]), \
+                mock.patch.object(hostguard.util, "IS_WINDOWS", False), \
+                mock.patch.object(hostguard.subprocess, "run", side_effect=[
+                    SimpleNamespace(stdout=json.dumps(item)) for item in responses]):
+            inventory = hostguard._orca_workers()
+        self.assertFalse(hostguard._workers_available(inventory))
+        self.assertIn(reason, inventory["error"])
+        outcome = hostguard.preflight(
+            sampler=lambda _: [{"first": True, "ad_cpu": 0.0, "cpu": 10.0,
+                                "groups": {"build": 0.0, "av": 0.0}}],
+            processes=lambda: [], orca_ps=lambda: {"result": {"worktrees": []}},
+            orca_workers=lambda: inventory, wsl_uptime=lambda: 3600.0,
+            paths=hostguard.AnyDeskPaths(None, None), announced="test", include_p7=False)
+        p3 = next(row for row in outcome["rows"] if row["id"] == "P3")
+        self.assertEqual(p3["status"], "FAIL")
+        self.assertIn(reason, p3["detail"])
+
+    def test_orca_worker_repeated_cursor_fails_p3_closed(self):
+        self._assert_orca_pagination_failure([
+            {"ok": True, "result": {"runs": [{"id": "run-a"}], "nextCursor": None}},
+            {"ok": True, "result": {"workers": [{"dispatchId": "one", "runId": "run-a"}],
+             "page": {"hasMore": True, "nextCursor": "workers-2"},
+             "scope": {"run": "run-a", "source": "flag"}}},
+            {"ok": True, "result": {"workers": [{"dispatchId": "two", "runId": "run-a"}],
+             "page": {"hasMore": True, "nextCursor": "workers-2"},
+             "scope": {"run": "run-a", "source": "flag"}}}],
+            "pagination cursor repeated or malformed")
+
+    def test_orca_worker_has_more_without_cursor_fails_p3_closed(self):
+        self._assert_orca_pagination_failure([
+            {"ok": True, "result": {"runs": [{"id": "run-a"}], "nextCursor": None}},
+            {"ok": True, "result": {"workers": [{"dispatchId": "one", "runId": "run-a"}],
+             "page": {"hasMore": True, "nextCursor": None},
+             "scope": {"run": "run-a", "source": "flag"}}}],
+            "pagination cursor missing")
+
+    def test_orca_run_list_cursor_loop_fails_p3_closed(self):
+        self._assert_orca_pagination_failure([
+            {"ok": True, "result": {"runs": [{"id": "run-a"}], "nextCursor": "runs-2"}},
+            {"ok": True, "result": {"runs": [{"id": "run-b"}], "nextCursor": "runs-2"}}],
+            "pagination cursor repeated or malformed")
+
     def test_p3_identity_classification_allowlist_and_supervised_workers(self):
         from lab import hostguard
         from unittest import mock

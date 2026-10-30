@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- testlab P3 regressions now assert that repeated worker cursors, `hasMore` without `nextCursor`, and repeated run-list cursors make the worker inventory unavailable and P3 FAIL with the pagination reason.
+
 - AnyDesk session pairing keys service fibers by (service pid, fiber): after a reboot the service restarts its fiber numbering, and the new session's auth/close lines bound to an old, closed session, so preflight P1 reported a closed session as still open (2026-10-30, sessions 02:31Z and 03:00Z). A still-open session stays open.
 
 - P3 now lists every Orca Run and every worker page per Run, verifies each page's explicit Run scope, fails closed with the query error when coverage is incomplete, and records per-run worker counts and scope evidence.
