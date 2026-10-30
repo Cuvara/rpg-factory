@@ -3956,6 +3956,19 @@
   ],
   "contracts": [
     {
+      "id": "feature-spec-to-impl",
+      "kind": "handoff",
+      "summary": "An approved design feature specification is implemented and tested by the server and client engineering teams.",
+      "source": {"repo": "authoring", "path": "design/features/"},
+      "copies": [
+        {"repo": "server", "path": "backend/"},
+        {"repo": "client", "path": "Assets/"}
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
       "id": "wire-generated",
       "summary": "wire.proto is the single source; Go and C# server bindings are generated from it and Netcode carries a byte-identical copy of the C# binding.",
       "source": {
@@ -4528,7 +4541,7 @@
         "design-review",
         "gameplay-rules"
       ],
-      "handoffs": [],
+      "handoffs": ["feature-spec-to-impl"],
       "may_own_feature_state": true,
       "approvers": []
     }

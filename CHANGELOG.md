@@ -4,6 +4,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added the `feature-spec-to-impl` handoff contract and registry checks for cross-domain path conflicts, artifact-kind uniqueness, and handoff driver ownership.
+
 ### Changed
 
 - Replaced the blanket feature-registry ban and plumbing-only rule with domain-scoped feature-state ownership and phase-scope policy; non-owning modules cannot claim feature-state paths.
