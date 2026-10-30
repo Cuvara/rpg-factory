@@ -18,12 +18,16 @@ while IFS= read -r m; do mkdir -p "$SW/$(dirname "$m")"; touch "$SW/$m"; done < 
 OUT="$TMP/routing.jsonl"; : > "$OUT"
 RPG_FACTORY_WORKSPACE="$SW" ROUTING_GOLDEN_OUT="$OUT" bash "$ROOT/tests/routing.test.sh" --no-history > "$TMP/routing.log" 2>&1
 # canonical: one object keyed by scenario name (sorted keys); a name used twice keeps both in order
-jq -S -s 'reduce .[] as $s ({}; .[$s.name] += [$s | del(.name)])' "$OUT" > "$TMP/current.json"
+# "absolute path (...)" scenarios depend on the host's path forms (C:/, /c/, /mnt/c/ exist only on Windows);
+# tests/routing.test.sh asserts their lead on every platform, so they are kept out of the cross-platform golden
+PLATFORM='with_entries(select(.key | startswith("absolute path (") | not))'
+jq -S -s "reduce .[] as \$s ({}; .[\$s.name] += [\$s | del(.name)]) | $PLATFORM" "$OUT" > "$TMP/current.json"
 n=$(jq 'length' "$TMP/current.json")
 if [ "${1:-}" = "--update" ]; then cp "$TMP/current.json" "$GOLDEN"; echo "routing-golden: updated $n scenarios"; exit 0; fi
 [ -f "$GOLDEN" ] || { echo "FAIL  no golden file $GOLDEN"; exit 1; }
 if [ "$n" -lt 40 ]; then echo "FAIL  only $n scenarios recorded (expected >= 40)"; tail -5 "$TMP/routing.log"; exit 1; fi
-if diff -u "$GOLDEN" "$TMP/current.json" > "$TMP/diff.txt"; then
+jq -S "$PLATFORM" "$GOLDEN" > "$TMP/golden.json"
+if diff -u "$TMP/golden.json" "$TMP/current.json" > "$TMP/diff.txt"; then
   echo "PASS  routing contract identical to the golden file ($n scenarios)"; echo "routing-golden: 1 passed, 0 failed"; exit 0
 fi
 echo "FAIL  routing contract changed:"; head -60 "$TMP/diff.txt" | sed 's/^/      /'

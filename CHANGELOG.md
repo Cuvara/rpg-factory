@@ -49,6 +49,7 @@ update rpg-factory@rpg-factory`, then start a new session.
 
 ### Fixed
 
+- `tests/routing-golden.test.sh` and `tests/registry-nulls.test.sh` are host-independent (Linux CI without a workspace): host path-form scenarios stay out of the golden, and the guard is compared with itself on the real registry.
 - Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and configure UTF-8 stdio for the executable asset manifest checker.
 - Keep the base P4 checker fixture consistent by removing domains, modules, skills and contracts that depend on the removed authoring repository.
 - Store the P4 checker snapshot used by the base regression proof so the proof works from an Orca worktree without Git metadata reachable in the Linux test shell.
