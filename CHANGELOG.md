@@ -4,21 +4,71 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-30
+
+Patch release. Hardens testlab host guards, native server mode, failure summaries and soak analysis; targets run-checks at the invoking worktree with bytecode and canonical-checkout safeguards; isolates git environment state, accepts a Windows-form TMPDIR in netcode-headless and refreshes citations. No breaking changes or user action beyond the usual update command.
+
+### Added
+
+- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
+  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
+  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
+  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
+  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
+  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
+  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
+  `testlab/tests/test_failsum.py`.
+- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
+  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
+  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
+  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
+- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
+  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
+  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
+  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
+  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
+  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
+  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
+  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
+  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
+  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
+  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
+- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
+  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
+  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
+  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
+  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
+  episodes are documented: two attributed, one start-up, two unexplained.
+- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
+  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
+  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
+  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
+  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
+  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
+  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
+  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
+  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
+  (real scrubbed `ad.trace` fixture).
+
+### Changed
+
+- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
+  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
+  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
+  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
+  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
+  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
+  ibz3 stays INVALID on G1 (three real outgoing sessions).
+- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
+  the Windows high-resolution timer path accurately.
+- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
+
 ### Fixed
 
-- testlab P3 regressions now assert that repeated worker cursors, `hasMore` without `nextCursor`, and repeated run-list cursors make the worker inventory unavailable and P3 FAIL with the pagination reason.
-
-- AnyDesk session pairing keys service fibers by (service pid, fiber): after a reboot the service restarts its fiber numbering, and the new session's auth/close lines bound to an old, closed session, so preflight P1 reported a closed session as still open (2026-10-30, sessions 02:31Z and 03:00Z). A still-open session stays open.
-
-- P3 now lists every Orca Run and every worker page per Run, verifies each page's explicit Run scope, fails closed with the query error when coverage is incomplete, and records per-run worker counts and scope evidence.
-
-- Follow-up P7F: P3 only coalesces same-workspace worker rows when their allow status matches, so a dispatch exemption cannot authorize a sibling worker; run.json coverage again asserts both agent and dispatch allow entries.
-
-- Follow-up P7E: P3 fails closed on missing, malformed or unknown worker liveness; rejects malformed dispatch identities and dispatch exemptions that do not resolve to exactly one non-empty ID; keeps dispatch exemptions scoped to their worker row; records full matched worker identity; and prevents empty paths or worktree IDs from matching. README documents the supported Windows path normalization and that other path forms remain uncovered.
-
-- Follow-up P7D: P3 treats settled supervised workers with live liveness, and abandoned workers with liveness other than exited, as ACTIVE-UNVERIFIED when their normalized workspace is absent from worktree ps. Wrongly typed worker fields fail closed; `--allow-dispatch` allows exact repeatable dispatch ids and records matches; settled detail is counted by task and terminal state while complete evidence remains measured. Shared settled-state constants drive implementation and threshold documentation.
-- testlab soak preflight P3 now classifies supervised workers from settled `workerState` (`succeeded`, `failed`, `cancelled`, `stopped`, `abandoned`) and `dispatchStatus` (`completed`, `failed`, `cancelled`), independent of retained terminal accounting. Settled dispatches are reported without blocking, while missing or unsettled task states remain ACTIVE; live worktree agents still block. P3 continues to read every worker-list page, fail closed when worker-list is unavailable, deduplicate active worktree/worker evidence, and store allow-list resolution in run.json.
-
+- `server-realtime` gameserver reference: `SimulationPhaseFactory` citation follows `Program.cs` on server `origin/develop` (1136 -> 1143).
+- `netcode-headless.sh` now recognizes usable `C:/...` and `C:\\...` `TMPDIR` paths on Windows Git Bash,
+  keeping temporary build and TRX data outside the Netcode source tree; candidate checks repeat every TRX
+  parser case with a Windows-form temporary directory.
 - testlab `graceful_leave` (RV-P5-1): the legacy "no C3 events, no judgement" waiver is removed, so missing client
   evidence can no longer make the check PASS. Only a viewer whose own latest `entity_added`/`entity_removed` event
   for the leaver before the quit is an add is judged: it must receive the removal within the bound or the check
@@ -47,7 +97,6 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   checkout's `git status --ignored` is snapshotted (with size/mtime) before and after, and any difference adds a FAIL
   row `runner/canonical-checkout-guard` (exit 1). `tests/worktree-target.test.sh` covers all three and fails on the
   previous runner (a `.pyc` appeared in the checkout, no guard row).
-
 - tests: no test can rewrite the shared git config of the repository it runs in. Root cause (reproduced): a git
   process that runs a command (`git rebase --exec tests/run-all.sh`, `git bisect run`, a hook) exports `GIT_DIR`; the
   fixtures' `git init <tmpdir>` then re-initialised the CALLER's repository, and from a linked worktree that wrote
@@ -81,42 +130,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     accept/authenticate lines redacted) are copied to `host/ad-trace-excerpt.txt`; `guard-summary.json` records the outcome.
   - Tests: `testlab/tests/test_m4_harness.py` (30 tests, 28 fail on the previous harness). The frozen-reference comparison in
     `test_lab.py` ignores exactly the additive reporting keys above; verdicts and every other field still have to equal it.
-
-### Fixed
-
 - testlab `analyze` now isolates the full failure-summary build/write step: non-`OSError` exceptions no longer escape,
   and a minimal summary records the exception type/message and preserves the original verdict and exit code when possible.
-
-### Added
-
-- testlab `failure-summary.json`: every run that is not a clean PASS writes a machine-readable triage next to
-  `report.md` at the end of `analyze` (`lab/failsum.py`): verdict, earliest event (scenario time and wall-clock UTC),
-  per failing/invalid check the earliest event, evidence files with line pointers, suspected layer
-  (environment / harness / server / netcode / client / unknown) by documented rules, confidence, host guard events within
-  +-10 s, and a next action. Derived output only: it never changes the verdict or a check result, and a build error is
-  recorded in the file. `check_render_jumps` leaves its counted jumps in `ev["_failsum"]` for it (not part of the result).
-  Rules and tables: `testlab/docs/FAILURE-SUMMARY.md`; tests on scrubbed excerpts of runs k4n5, ibz3, 9tgw, 3ng5:
-  `testlab/tests/test_failsum.py`.
-- testlab host guard: optional 1 s per-process CPU sampler (`hostprocs.ps1`, top 10) for S09-class runs, written to
-  `host/procs.ndjson` with its own measured cost in `host/procs-summary.json` (about 0.2 % of the host). Evidence only:
-  the `host_guard` detail gains a `proc_sampler` summary (INFO); it is not a guard. A scenario can turn it off with
-  `proc_sampler: false`. Added so the 40-140 ms client stalls of run ibz3 (F28) can be attributed to a process.
-
-### Changed
-
-- testlab `host_guard` G3 is relative to the preflight-measured resident AnyDesk baseline: it fires above
-  min(1.0 %, max(0.5 %, baseline max x 2 + 0.3 %)) for 2 consecutive samples (policy, unvalidated). The 1.0 % cap keeps a
-  session-like burst (>= 1.36 % seen in F28) firing however noisy the preflight was; a preflight resident max at or above
-  the cap fails P2 and the run does not start (RV-F29 B2). After the reboot the idle resident
-  `front` process runs 0.18 % mean / 0.33 % max (0.03 % in F19), which the fixed 0.5 % limit flagged. The baseline is recorded
-  in `host/preflight.json` (`anydesk_baseline`) and in the guard stats. G1 and G2 are unchanged and still detect sessions;
-  ibz3 stays INVALID on G1 (three real outgoing sessions).
-
-- skills: refresh TickLoop citations after the server TickSleeper pacing change, and describe
-  the Windows high-resolution timer path accurately.
-
-### Fixed
-
 - testlab `render_jumps`: a LOCAL snap at a server-confirmed respawn of the same player is explained by the respawn and
   counted as `local_respawn`, bound tightly (RV-F29 B1): the snapshot carrying the new position has a world tick inside
   [HP 0 probe tick, max-HP probe tick + 2], the received step is >= half the rendered step and points where the rendered
@@ -157,33 +172,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   `build` true or false, runs the full-stack `up`. A native server that is still alive after `kill_tree` and the
   15 s wait now keeps its state and fails the stop with an error (the next run is refused until the process is
   gone) instead of dropping its pid record.
-
-### Added
-
-- testlab: `--server-mode native` runs the game server as a Windows process built with the Windows dotnet, so its
-  `Stopwatch` is the QueryPerformanceCounter the players use and not the WSL VM's clock (F23 finding B, F24B, soak
-  `3ng5`). The server is built from the configured checkout (`aot` when the MSVC linker exists, else self-contained
-  ReadyToRun `r2r`; recorded as `server.native` with SDK, source sha and exe/dll hashes), takes the environment of the
-  scratch compose service (`docker compose config`, with only the container-network addresses rewritten to the
-  published localhost ports) and registers `127.0.0.1:<game port>` in the scratch Redis. The scratch stack runs
-  without its `gameserver-dotnet` service (a leftover container and its registry entry are removed), the status
-  endpoints are addressed as `localhost` (a Windows `HttpListener` answers 400 to `Host: 127.0.0.1`), CPU/memory come
-  from a process sampler and the server console is kept as `server/gameserver.log`. Provenance gains
-  `server.runtime` (`docker` or `windows-native`) and `image_id = native:<exe sha256>`; the report and
-  `results.json` state the runtime. S18 (netem) is refused in native mode. Docker mode is unchanged.
-- testlab: host guard G6 detects sustained server clock-rate steps against the harness monotonic clock and marks
-  the run INVALID while preserving any FAIL evidence. The policy thresholds are documented as unvalidated and
-  cite the F23 9mre soak evidence. The rate is measured over sliding windows of at least 2 s and needs three
-  consecutive same-sign windows, so polling jitter and a single late poll do not fire it. Stalls are excluded with
-  a 3 s margin (the achieved-rate meter lags by its 2 s window) and a 35 % plausibility cap. The five 9mre
-  episodes are documented: two attributed, one start-up, two unexplained.
-
-### Fixed
-
 - testlab: the host guard kept sampling only until the players exited, not until the measurement window end
   (scenario end + `finish_grace_s`), so every full-length soak ended with a 20 s blind gap and G5 INVALID. The runner
   now holds the guard until a sample at or after the window end exists (`HostGuard.hold_until`); a sampler that does
   not deliver is still reported by G5, and the window is unchanged.
+- AnyDesk session pairing keys service fibers by (service pid, fiber): after a reboot the service restarts its fiber numbering, and the new session's auth/close lines bound to an old, closed session, so preflight P1 reported a closed session as still open (2026-10-30, sessions 02:31Z and 03:00Z). A still-open session stays open.
+- P3 now lists every Orca Run and every worker page per Run, verifies each page's explicit Run scope, fails closed with the query error when coverage is incomplete, and records per-run worker counts and scope evidence.
+- Follow-up P7F: P3 only coalesces same-workspace worker rows when their allow status matches, so a dispatch exemption cannot authorize a sibling worker; run.json coverage again asserts both agent and dispatch allow entries.
+- Follow-up P7E: P3 fails closed on missing, malformed or unknown worker liveness; rejects malformed dispatch identities and dispatch exemptions that do not resolve to exactly one non-empty ID; keeps dispatch exemptions scoped to their worker row; records full matched worker identity; and prevents empty paths or worktree IDs from matching. README documents the supported Windows path normalization and that other path forms remain uncovered.
+- Follow-up P7D: P3 treats settled supervised workers with live liveness, and abandoned workers with liveness other than exited, as ACTIVE-UNVERIFIED when their normalized workspace is absent from worktree ps. Wrongly typed worker fields fail closed; `--allow-dispatch` allows exact repeatable dispatch ids and records matches; settled detail is counted by task and terminal state while complete evidence remains measured. Shared settled-state constants drive implementation and threshold documentation.
+- testlab soak preflight P3 now classifies supervised workers from settled `workerState` (`succeeded`, `failed`, `cancelled`, `stopped`, `abandoned`) and `dispatchStatus` (`completed`, `failed`, `cancelled`), independent of retained terminal accounting. Settled dispatches are reported without blocking, while missing or unsettled task states remain ACTIVE; live worktree agents still block. P3 continues to read every worker-list page, fail closed when worker-list is unavailable, deduplicate active worktree/worker evidence, and store allow-list resolution in run.json.
+- testlab P3 regressions now assert that repeated worker cursors, `hasMore` without `nextCursor`, and repeated run-list cursors make the worker inventory unavailable and P3 FAIL with the pagination reason.
 
 ## [1.1.0] - 2026-10-24
 
@@ -202,24 +201,12 @@ session. Evidence recorded by 1.0.5 re-grades once as STALE (`check scope change
 
 ### Changed
 
-- `testlab` AnyDesk trace tailing now detects replacement by file identity and a prefix fingerprint, rereads rotations from byte zero even when the replacement is equal to or larger than the previous offset, and records unavailable log identity as G5 blind evidence.
 - Refreshed Netcode client guidance for v0.49.0: KcpCrypto reuses per-session crypto state, subscribers are isolated, and snapshot speed distinguishes absent (`NaN`) from present zero; documented the server unknown-type counter, kick-reason drain, and readiness/release runbooks.
 - Clarified that `factory-status` derives client and package-CI pin versions from repository state instead of storing moving pin versions in registry prose.
 - Updated drifted client, server, and Netcode skill citations to match their integration branches, including client `origin/develop` at `45634b1`.
 - `testlab analyze --delivery` now fits server/client clock mapping independently in 10 second windows using one minimum-delay sample per 1 second bin. It reports relative excess above each window's minimum envelope and the empirical p95 fit error bound; absolute one-way delay remains explicitly unavailable, and poor fits yield no delay values or PATH attribution.
 
 ### Added
-
-- **testlab host guard** marks contaminated soaks INVALID (`feat(testlab)`): `lab/hostguard.py` + `hostguard.ps1` sample the host every 5 s
-  (AnyDesk processes with role, host CPU/DPC/interrupt, build-tool and Defender load, the guard's own CPU) and tail AnyDesk's log for
-  session events, all passive and read-only; AnyDesk is never stopped. Guards G1-G5 (session start or active session, new AnyDesk process,
-  AnyDesk CPU burst, foreign build load, blind guard) inside `start_scheduled - 30 s .. end + finish_grace_s` make the new always-on
-  `host_guard` assertion, and the run, **INVALID**: ordered before FAIL, never PASS, exit code 2, FAIL evidence kept and named. New
-  `testlab.py preflight-soak` (P1-P7) and an automatic P1-P6 preflight for scenarios with `requires_clean_host` (S09 v5, which refuses to
-  start on a FAIL; `--require-clean-host` for others). The rule becomes "no `AnyDesk.exe --backend` and no session event from T-2 min to
-  the end; resident processes allowed". `host_quiet` names the nearest guard event for every single-process frame of 1 s or more.
-  Limits are policy, unvalidated (`testlab/docs/THRESHOLDS.md`); no scenario threshold or pass rule changed. Tests: `HostGuardTests`
-  (real scrubbed `ad.trace` fixture).
 
 - **testlab S16 judges the undefined-message-type case** on `gameserver_messages_rejected_total{reason="unknown_type"}`
   (rpg-mmo-server #490, `76aa973`): the `malformed_input` rule gains `rejections_counter` (default `gameserver_inputs_rejected_total`), the
