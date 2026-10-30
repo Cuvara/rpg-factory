@@ -25,7 +25,7 @@ Owns the Game Design domain in the optional `authoring` repo, in its registered 
 1. Route through Factory Core with `--domain design`, `--kind`, or authoring paths; read module rules and gates from the snapshot.
 2. Draft the artifact with the shared front matter and lifecycle from `docs/architecture/artifacts.md`. Mark numbers `TBD` or as labelled proposals; binding values need verified approval.
 3. Never write or edit `approvals/`. Run the registered `artifact-lint` and `artifact-trace` checks when the authoring repo exists.
-4. Prepare engineering handoff through the P6 contracts when available; record artifact ids and revisions in the report.
+4. Prepare engineering handoff through the registered contracts; for feature specs, route the server and client follow-ups through `feature-spec-to-impl`, and record each implementation trace's `spec_rev` and commit ref.
 
 ## Rules
 

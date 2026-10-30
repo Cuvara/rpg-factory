@@ -246,15 +246,17 @@ New `check-registry.sh` rules:
   new orchestrator agent.
 - **Dependency graph.** Built from data: `domains.*.handoffs` name `contracts[]`, where `source` is the
   upstream artifact path and `copies` are the downstream artifact or code paths.
-  - The existing contract resolution (`resolve.jq:53-66`) already reports the other ends of a touched source
-    as legs or follow-ups.
+  - Run `scripts/factory-context.sh --domain <id> --graph` for a stable topological ordering; cycles exit 3
+    with the cycle path. Routing paths under a handoff source reports its downstream ends as follow-ups.
 - **Parallel work.** Follows `skills/factory-core/references/parallel-work.md`: one worktree per workstream,
   QA and review on recorded candidate commits, and the lead integrates.
-- **Conflicts.** The stricter rule wins (skill contract, "Composition"). Ownership disputes are settled by
-  registry ownership, never by an agent.
+- **Conflicts.** Cross-domain module path overlaps and artifact kinds shared by domains fail registry checks.
+  Routing one path set to leads in multiple domains prints `AMBIGUOUS` and exits 3; `--lead` selects the lead.
+  Ownership disputes are settled by registry ownership, never by an agent.
 - **Revalidation.** A downstream artifact records `upstream[].rev`, the git blob SHA of the upstream file. The
-  trace check fails with `upstream-changed` when the upstream moves. Evidence `STALE` keeps its existing
-  meaning: the tree identity changed.
+  trace check fails with `upstream-changed` when the upstream moves. Engineering implementation traces also
+  record `spec_rev`; changed specification content fails with `downstream-stale` until reimplemented. Evidence
+  `STALE` keeps its existing meaning: the tree identity changed.
 - **Completion.** Every artifact in the graph has the status its contract requires, every acceptance criterion
   is traced, and the run-checks table has no FAIL, NOT_RUN or STALE.
 

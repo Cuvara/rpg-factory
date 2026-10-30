@@ -30,6 +30,8 @@ no() { fail=$((fail + 1)); echo "FAIL  $1"; }
 ctx() { bash "$ROOT/scripts/factory-context.sh" "$@"; }
 out=$(ctx --domain design --graph 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'Dependency graph: design -> engineering' <<<"$out" && ok "handoff graph topological order" || no "handoff graph (rc=$rc): $out"
+out=$(ctx --repo authoring --json --paths design/features/crafting.md 2>&1); rc=$?
+[ "$rc" -eq 0 ] && jq -e '.repos[0].routing.follow_ups | length > 0' <<<"$out" >/dev/null && ok "authoring source routes downstream follow-ups" || no "authoring follow-ups (rc=$rc)"
 out=$(ctx --repo server --paths backend/content/ backend/shared/proto/wire.proto 2>&1); rc=$?
 [ "$rc" -eq 3 ] && grep -q 'AMBIGUOUS: paths resolve to leads in multiple domains' <<<"$out" && grep -q 'design-lead:' <<<"$out" && grep -q 'wire-contract:' <<<"$out" && ok "cross-domain paths report both leads" || no "ambiguous paths (rc=$rc): $out"
 out=$(ctx --repo server --lead wire-contract --paths backend/content/ backend/shared/proto/wire.proto 2>&1); rc=$?

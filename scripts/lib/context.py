@@ -227,13 +227,29 @@ def handoff_graph(reg, domain_id):
                 ready.sort()
     if len(order) != len(edges):
         remaining = {n for n, d in indegree.items() if d}
-        start = sorted(remaining)[0]
-        cycle, seen, cur = [], {}, start
-        while cur not in seen:
-            seen[cur] = len(cycle); cycle.append(cur)
-            cur = sorted(edges[cur] & remaining)[0]
-        cycle = cycle[seen[cur]:] + [cur]
-        return None, cycle
+        visited, stack, positions = set(), [], {}
+
+        def find_cycle(node):
+            if node in positions:
+                return stack[positions[node]:] + [node]
+            if node in visited:
+                return None
+            visited.add(node)
+            positions[node] = len(stack)
+            stack.append(node)
+            for target in sorted(edges[node] & remaining):
+                found = find_cycle(target)
+                if found:
+                    return found
+            stack.pop()
+            positions.pop(node)
+            return None
+
+        for start in sorted(remaining):
+            cycle = find_cycle(start)
+            if cycle:
+                return None, cycle
+        return None, sorted(remaining)
     return order, None
 
 

@@ -22,8 +22,10 @@ follow the transition table.
 `artifact-lint.py <repo-dir> [--registry R]` validates metadata and transitions against `HEAD~1`. It reports each
 artifact and a final tally. `artifact-trace.py <repo-dir> --registry R [--repos key=dir ...]` verifies upstream blob
 revisions, trace commit existence, and status coverage. Every `test` acceptance criterion requires both `impl` and
-`test` trace; a released artifact also requires `release` coverage. Registry quality gates can add checks for domain
-specific evidence without changing these shared checks.
+`test` trace; a released artifact also requires `release` coverage. A handoff implementation trace records `spec_rev`,
+the source spec blob revision. A later specification-content edit reports `downstream-stale` until implementation is
+traced again; lifecycle status and trace bookkeeping changes preserve the implemented payload. Registry quality gates
+can add checks for domain specific evidence without changing these shared checks.
 
 Approvals are immutable JSON records at
 `approvals/<artifact-id>/<gate>-<artifact-blob-sha>.json`, with `{artifact, gate, scope, rev, by, date}`. `scope` must
