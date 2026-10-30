@@ -95,7 +95,8 @@ def main():
         if errors: add(aid,obj,rel,'schema','FAIL',errors)
         else: add(aid,obj,rel,'schema','PASS')
         reason=[]
-        history=git_statuses(root,rel)
+        committed=git_statuses(root,rel)
+        history=[x for i,x in enumerate(committed) if i==0 or x!=committed[i-1]]  # repeated statuses are edits, not transitions
         transitions=life.get('transitions',{})
         before=history[-2] if len(history)>1 and history[-1]==state else (history[-1] if history and history[-1]!=state else None)
         if before:

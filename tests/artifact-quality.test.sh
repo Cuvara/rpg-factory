@@ -193,3 +193,14 @@ out=$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "
 jq -e '[.results[] | select(.check=="trace-approval") | {(.artifact): .state}] | add == {"DS-up-001": "PASS", "UI-down-001": "FAIL"}' <<<"$out" >/dev/null \
   || { echo "FAIL trace rows misattributed: $(jq -c '[.results[]|select(.check=="trace-approval")|[.artifact,.state]]' <<<"$out")"; exit 1; }
 echo "PASS trace-approval fails only the stale downstream, not the upstream it names"
+# a draft committed twice (edited, status unchanged) is not a draft -> draft transition
+python3 -B - "$T/xd/design/DS-up-001.artifact.json" <<'PY'
+import json, sys
+p = sys.argv[1]; o = json.load(open(p, encoding="utf-8")); o["title"] = "t revised"
+open(p, "w", encoding="utf-8", newline="\n").write(json.dumps(o))
+PY
+git -C "$T/xd" add -A; git -C "$T/xd" -c user.email=t@example.com -c user.name=t commit -qm edit
+out=$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "$T/reg-xd.json" --json || true)
+jq -e '[.results[] | select(.artifact=="DS-up-001" and .check=="lifecycle")][0].state == "PASS"' <<<"$out" >/dev/null \
+  || { echo "FAIL edited draft graded as a transition: $(jq -c '[.results[]|select(.artifact=="DS-up-001" and .check=="lifecycle")]' <<<"$out")"; exit 1; }
+echo "PASS an artifact edited without a status change has no lifecycle transition"
