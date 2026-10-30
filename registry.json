@@ -3535,6 +3535,301 @@
         "external": []
       },
       "obligations": []
+    },
+    {
+      "id": "authoring.ui-flow",
+      "repo": "authoring",
+      "paths": [
+        "ui/flows/"
+      ],
+      "responsibility": "UI/UX flows and interface specifications.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "ui-ux"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "ui",
+      "docs": []
+    },
+    {
+      "id": "authoring.ui-spec",
+      "repo": "authoring",
+      "paths": [
+        "ui/specs/"
+      ],
+      "responsibility": "UI/UX flows and interface specifications.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "ui-ux"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "ui",
+      "docs": []
+    },
+    {
+      "id": "authoring.art2d-brief",
+      "repo": "authoring",
+      "paths": [
+        "art2d/briefs/"
+      ],
+      "responsibility": "2D art briefs and asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-2d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art2d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art2d-asset",
+      "repo": "authoring",
+      "paths": [
+        "art2d/assets/"
+      ],
+      "responsibility": "2D art briefs and asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "asset-manifest",
+            "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
+            "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-2d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art2d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-brief",
+      "repo": "authoring",
+      "paths": [
+        "art3d/briefs/"
+      ],
+      "responsibility": "3D art briefs and asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-asset",
+      "repo": "authoring",
+      "paths": [
+        "art3d/assets/"
+      ],
+      "responsibility": "3D art briefs and asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "asset-manifest",
+            "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
+            "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.vfx-spec",
+      "repo": "authoring",
+      "paths": [
+        "vfx/specs/"
+      ],
+      "responsibility": "VFX specifications and asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
+    },
+    {
+      "id": "authoring.vfx-asset",
+      "repo": "authoring",
+      "paths": [
+        "vfx/assets/"
+      ],
+      "responsibility": "VFX specifications and asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "asset-manifest",
+            "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
+            "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
     }
   ],
   "known_issues": [
@@ -3862,6 +4157,42 @@
       "domain": "design",
       "order": 85,
       "summary": "Design GDDs, feature specifications and decisions for the Game Design domain"
+    },
+    "ui-ux": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "ui",
+      "order": 86,
+      "summary": "UI and UX foundation artifacts"
+    },
+    "art-2d": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "art2d",
+      "order": 87,
+      "summary": "2D art foundation artifacts"
+    },
+    "art-3d": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "art3d",
+      "order": 88,
+      "summary": "3D art foundation artifacts"
+    },
+    "vfx": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "vfx",
+      "order": 89,
+      "summary": "VFX foundation artifacts"
     }
   },
   "human_gates": [
@@ -4354,6 +4685,139 @@
       "driver": "server-ops",
       "evidence": "Before a switch goes on: the Netcode tag the client pins supports it (factory-status pins), the client loads a pin for that backend, smoketest/verify pin the target cluster's certificate. History: ed090ab (every dungeon entry failed once meta-hop TLS went on), 437a3db (verify pinned dev's certificate against another cluster).",
       "gate": "shared-infra"
+    },
+    {
+      "id": "feature-spec-to-ui-spec",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "Foundation handoff contract.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/features/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "ui/specs/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "ui-spec-to-art2d-brief",
+      "kind": "handoff",
+      "domain": "ui",
+      "summary": "Foundation handoff contract.",
+      "source": {
+        "repo": "authoring",
+        "path": "ui/specs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art2d/briefs/"
+        }
+      ],
+      "driver": "ui-ux",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "ui-spec-to-client",
+      "kind": "handoff",
+      "domain": "ui",
+      "summary": "Foundation handoff contract.",
+      "source": {
+        "repo": "authoring",
+        "path": "ui/specs/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/"
+        }
+      ],
+      "driver": "ui-ux",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "art3d-asset-to-vfx",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Foundation handoff contract.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/assets/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "art3d-asset-to-impl",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Foundation handoff contract.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/assets/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/Art/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "vfx-spec-to-impl",
+      "kind": "handoff",
+      "domain": "vfx",
+      "summary": "Foundation handoff contract.",
+      "source": {
+        "repo": "authoring",
+        "path": "vfx/specs/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/VFX/"
+        }
+      ],
+      "driver": "vfx",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "art2d-asset-to-impl",
+      "kind": "handoff",
+      "domain": "art2d",
+      "summary": "2D asset delivery handoff for engineering import.",
+      "source": {
+        "repo": "authoring",
+        "path": "art2d/assets/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/Art/2D/"
+        }
+      ],
+      "driver": "art-2d",
+      "gate": null,
+      "evidence": "artifact-trace"
     }
   ],
   "facts": [
@@ -4552,9 +5016,106 @@
         "gameplay-rules"
       ],
       "handoffs": [
-        "feature-spec-to-impl"
+        "feature-spec-to-impl",
+        "feature-spec-to-ui-spec"
       ],
       "may_own_feature_state": true,
+      "approvers": []
+    },
+    "ui": {
+      "summary": "UI/UX flows and interface specifications.",
+      "status": "foundation",
+      "lead": "ui-ux",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "ui-flow",
+        "ui-spec"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace"
+      ],
+      "human_gates": [],
+      "handoffs": [
+        "feature-spec-to-ui-spec",
+        "ui-spec-to-art2d-brief",
+        "ui-spec-to-client"
+      ],
+      "may_own_feature_state": false,
+      "approvers": []
+    },
+    "art2d": {
+      "summary": "2D art briefs and asset delivery records.",
+      "status": "foundation",
+      "lead": "art-2d",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "art2d-brief",
+        "art2d-asset"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace",
+        "asset-manifest"
+      ],
+      "human_gates": [],
+      "handoffs": [
+        "ui-spec-to-art2d-brief",
+        "art2d-asset-to-impl"
+      ],
+      "may_own_feature_state": false,
+      "approvers": []
+    },
+    "art3d": {
+      "summary": "3D art briefs and asset delivery records.",
+      "status": "foundation",
+      "lead": "art-3d",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "art3d-brief",
+        "art3d-asset"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace",
+        "asset-manifest"
+      ],
+      "human_gates": [],
+      "handoffs": [
+        "art3d-asset-to-vfx",
+        "art3d-asset-to-impl"
+      ],
+      "may_own_feature_state": false,
+      "approvers": []
+    },
+    "vfx": {
+      "summary": "VFX specifications and asset delivery records.",
+      "status": "foundation",
+      "lead": "vfx",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "vfx-spec",
+        "vfx-asset"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace",
+        "asset-manifest"
+      ],
+      "human_gates": [],
+      "handoffs": [
+        "art3d-asset-to-vfx",
+        "vfx-spec-to-impl"
+      ],
+      "may_own_feature_state": false,
       "approvers": []
     }
   },

@@ -10,7 +10,7 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
      │          (snapshot: modules, dependents, cross-repo dependents, contracts, suggested skills, gates)
      ├── cross-repo drivers  - wire-contract, pin-bump, measure
      │        own: ordering, contract evidence, hand-offs, human gates between legs, per-repo report
-     domain + Engineering leads - game-design, server-realtime, server-services, server-ops, unity-package, client-integration
+     domain + Engineering leads - game-design; ui-ux -> art-2d -> engineering; art-3d -> vfx -> engineering, server-realtime, server-services, server-ops, unity-package, client-integration
               own: implementation + validation inside one repo (one leg)
                    │
                    └── tech skills - dotnet-gameserver, go-backend, unity-client-tech, unity-dots, netcode-client

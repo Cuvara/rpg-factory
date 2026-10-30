@@ -134,6 +134,10 @@ Engineering leads (the registry remains authoritative); supporting Engineering s
 | Situation | Lead skill |
 |---|---|
 | Game concepts, mechanics, GDDs, feature specs and design decisions | `game-design` (optional authoring repo) |
+| UI flows and interface specifications | `ui-ux` (optional authoring repo) |
+| 2D art briefs and delivery manifests | `art-2d` (optional authoring repo) |
+| 3D art briefs and delivery manifests | `art-3d` (optional authoring repo) |
+| VFX specifications and delivery manifests | `vfx` (optional authoring repo) |
 | wire message/field, protocol version, JSON encoding, JoinToken claims, Redis servers:id | `wire-contract` (server → Netcode → client) |
 | move a client pin (package / sgl tag) or the unity-build-workflows submodule | `pin-bump` |
 | C# game server, ECS systems, knobs, metrics, content, Shared.GameLogic | `server-realtime` |

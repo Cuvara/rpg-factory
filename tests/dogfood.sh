@@ -37,6 +37,10 @@ LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r 
 declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW CORRECTS
 PROMPT[design-feature-spec]="Draft a feature spec for a crafting system with --domain design. Do not create files in product repos; the authoring repo may be absent."
 EXPECT[design-feature-spec]="factory-core game-design"; HANDOFF[design-feature-spec]=""
+EXPECT[ui-foundation]="ui-ux"; HANDOFF[ui-foundation]=""
+EXPECT[art2d-foundation]="art-2d"; HANDOFF[art2d-foundation]=""
+EXPECT[art3d-foundation]="art-3d"; HANDOFF[art3d-foundation]=""
+EXPECT[vfx-foundation]="vfx"; HANDOFF[vfx-foundation]=""
 PROMPT[realtime-knob]="Add a configurable GAMESERVER_ tick-rate knob to the rpg-mmo-server C# game server and expose the value in force on /status."
 EXPECT[realtime-knob]="server-realtime"; HANDOFF[realtime-knob]=""
 PROMPT[nakama-rpc]="Add a new Nakama RPC party_kick to rpg-mmo-server and call it from the Unity client's party service."

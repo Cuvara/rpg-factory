@@ -185,10 +185,19 @@ mkdir -p "$FA/design/features"; echo 'fixture' > "$FA/design/features/crafting.m
 git -C "$FA" init -q -b main; fgc "$FA" add -A; fgc "$FA" commit -qm init
 # The design scenario uses the same lead predicate, but stays outside the engineering routing golden.
 design_lead="$(lead game-design)"
+ui_lead="$(lead ui-ux)"
+art2d_lead="$(lead art-2d)"
+art3d_lead="$(lead art-3d)"
+vfx_lead="$(lead vfx)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths design/features/crafting.md 2>&1)
 fexpect 'authoring design path -> game-design leads' "jq -e '.repos[0] | $design_lead' <<<\"\$out\" >/dev/null"
 out=$(fctx "$FA" --kind feature-spec --json)
 fexpect "--kind feature-spec -> design domain and game-design lead" 'jq -e ".domain.lead == \"game-design\" and .domain.id == \"design\"" <<<"$out" >/dev/null'
+for spec in "ui-ux:ui:ui-spec" "art-2d:art2d:art2d-asset" "art-3d:art3d:art3d-asset" "vfx:vfx:vfx-spec"; do
+  IFS=: read -r skill domain kind <<<"$spec"
+  out=$(fctx "$FA" --kind "$kind" --json)
+  fexpect "--kind $kind routes to $skill" "jq -e '.domain.id == \"$domain\" and .domain.lead == \"$skill\"' <<<\"\$out\" >/dev/null"
+done
 out=$(fctx "$FS")
 fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
   'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'

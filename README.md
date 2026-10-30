@@ -73,6 +73,10 @@ Game Design may draft and propose gameplay values; binding them requires verifie
               ▼                                  ▼
      cross-repo drivers                     domain + repo leads
      game-design                            GDD, feature specs, design decisions
+     ui-ux                                  UI flows and interface specifications
+     art-2d                                 2D art briefs and delivery manifests
+     art-3d                                 3D art briefs and delivery manifests
+     vfx                                    VFX specifications and delivery manifests
      wire-contract  server → Netcode → client     server-realtime   (C# game server, SGL)
      pin-bump       released tag → client pins    server-services   (Go gateway, Nakama, Redis, migrations)
      measure        benchmarks / baselines        server-ops        (Docker, k8s/Agones, monitoring, CD)
@@ -98,6 +102,10 @@ Game Design may draft and propose gameplay values; binding them requires verifie
 | Typical task | Lead skill | Repos | Key validation |
 |---|---|---|---|
 | Game concepts, mechanics, progression, GDD, feature spec or design decision | `game-design` | optional `authoring` | `artifact-lint`, `artifact-trace`, human gates |
+| UI flow or interface specification | `ui-ux` | optional `authoring` | `artifact-lint`, `artifact-trace` |
+| 2D art brief or asset manifest | `art-2d` | optional `authoring` | shared artifact checks, `asset-manifest` |
+| 3D art brief or asset manifest | `art-3d` | optional `authoring` | shared artifact checks, `asset-manifest` |
+| VFX specification or asset manifest | `vfx` | optional `authoring` | shared artifact checks, `asset-manifest` |
 | Add a message or field to the wire protocol, change the protocol version, JoinToken claims, or the Redis `servers:id` hash | `wire-contract` | server → netcode → client | `generate.sh` (protoc 29.3), `wire-parity.sh`, TestDotnetInterop, Netcode headless tests, pin-bump |
 | Move the client to Netcode/UnityDots/UIToolkit vX.Y.Z or to sgl-vX.Y.Z; bump the unity-build-workflows toolkit | `pin-bump` | client (upstream read-only) | `pin-plan.py`, `pin-status.py`, DOTS Sample byte diff, CI 02-package-pins |
 | Benchmark, encoding sweep, re-baseline, multi-client check | `measure` | server + client tools | expected value, control, run id, attribution; `bench.sh` legs |
