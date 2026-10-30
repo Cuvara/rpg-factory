@@ -34,6 +34,25 @@ def git_blob(root, path):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def spec_payload(raw):
+    """Compare the implemented specification while ignoring lifecycle and trace bookkeeping."""
+    try:
+        obj = front_text(raw)
+        if not isinstance(obj, dict):
+            return None
+        obj = dict(obj)
+        obj.pop("trace", None)
+        obj.pop("status", None)
+        return obj
+    except Exception:
+        return None
+
+
+def front_text(raw):
+    m = re.match(r"\A---json\s*\n(.*?)\n---(?:\s*\n|\Z)", raw, re.S)
+    return json.loads(m.group(1)) if m else (json.loads(raw) if raw.lstrip().startswith("{") else None)
+
+
 def approval(root, artifact_path, obj, gate, reg):
     aid = obj["id"]
     rev = git_blob(root, artifact_path)
@@ -169,6 +188,7 @@ def main():
                 continue
             aid = obj["id"]
             reason = None
+            downstream_stale = None
             for up in obj.get("upstream", []):
                 candidates = []
                 for b, d, ns in os.walk(root):
@@ -185,6 +205,29 @@ def main():
                 if not candidates or up.get("rev") != git_blob(root, candidates[0]):
                     reason = f"upstream-changed {up.get('id')}"
                     break
+            if reason is None:
+                for contract in reg.get("contracts", []):
+                    if contract.get("kind") != "handoff":
+                        continue
+                    source = contract.get("source", {})
+                    if source.get("repo") != "authoring" or not rel.startswith(source.get("path", "")):
+                        continue
+                    engineering_repos = {end.get("repo") for end in contract.get("copies", [])
+                                          if end.get("repo") in reg.get("domains", {}).get("engineering", {}).get("repos", [])}
+                    for trace in obj.get("trace", []):
+                        spec_rev = trace.get("spec_rev", "")
+                        if trace.get("kind") == "impl" and trace.get("repo") in engineering_repos and spec_rev:
+                            old = run(root, "cat-file", "blob", spec_rev)
+                            if old.returncode or spec_payload(old.stdout) != spec_payload(open(path, encoding="utf-8").read()):
+                                downstream_stale = f"downstream-stale {aid} impl {trace['repo']}@{trace.get('ref', '')}"
+                            else:
+                                continue
+                        elif trace.get("kind") == "impl" and trace.get("repo") in engineering_repos:
+                            downstream_stale = f"downstream-stale {aid} impl {trace['repo']}@{trace.get('ref', '')}"
+                        if downstream_stale:
+                            break
+                    if downstream_stale:
+                        break
             if reason is None:
                 for t in obj.get("trace", []):
                     repo = repos.get(t.get("repo"))
@@ -243,6 +286,9 @@ def main():
             if human_reason:
                 humans += 1
             if reason and state == "FAIL":
+                fails += 1
+            if downstream_stale:
+                print(f"FAIL {downstream_stale}")
                 fails += 1
             print(f"{state} {aid} {reason or 'trace and approvals verified'}")
     return 1 if fails else 0

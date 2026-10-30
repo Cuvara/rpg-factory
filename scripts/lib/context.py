@@ -201,12 +201,12 @@ def handoff_graph(reg, domain_id):
     for c in reg.get("contracts", []):
         if c.get("kind") != "handoff":
             continue
-        src = c.get("domain") or next((m.get("domain", "engineering") for m in reg["modules"]
+        src = c.get("domain") or next((m.get("domain", "engineering") for m in reg.get("modules", [])
                                         if m["repo"] == c.get("source", {}).get("repo") and
                                         any(c["source"].get("path", "").startswith(p.rstrip("/") + "/") or
                                             c["source"].get("path", "") == p.rstrip("/") for p in m.get("paths", []))), "engineering")
         for end in c.get("copies", []):
-            dst = next((m.get("domain", "engineering") for m in reg["modules"] if m["repo"] == end.get("repo") and
+            dst = next((m.get("domain", "engineering") for m in reg.get("modules", []) if m["repo"] == end.get("repo") and
                         any(end.get("path", "").startswith(p.rstrip("/") + "/") or end.get("path", "") == p.rstrip("/")
                             for p in m.get("paths", []))), "engineering")
             if src in edges and dst in edges and src != dst:
