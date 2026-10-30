@@ -111,6 +111,7 @@ def main():
                     relative=rp.relative_to(root).as_posix(); identity,error=review.review_commit(root,relative)
                     if error: continue
                     commit,email=identity
+                    if valid_review(rv,aid,rev,rp.name) and reviewer!=email: reason.append('review identity mismatch')
                     if valid_review(rv,aid,rev,rp.name) and email not in authors and reviewer==email:
                         assurance='process'; requirement=requirements.get('review_assurance',reg.get('artifact_lifecycles',{}).get('default',{}).get('review_assurance','process'))
                         if requirement=='signed':

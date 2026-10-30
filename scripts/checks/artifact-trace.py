@@ -302,6 +302,10 @@ def main():
                         review_path = "reviews/" + obj["id"] + "/" + review_name
                         identity, immutable_error = _review.review_commit(root, review_path)
                         author_ids = {x.get("id") for x in obj.get("authors", []) if isinstance(x, dict)} | _review.author_emails(root, rel)
+                        if (identity and review.get("artifact") == obj["id"] and review.get("rev") == current_rev
+                                and reviewer.get("id") and reviewer.get("id") != identity[1]):
+                            reason = "review identity mismatch"
+                            continue
                         if (review.get("artifact") == obj["id"] and review.get("rev") == current_rev
                                 and identity and reviewer.get("id") == identity[1] and identity[1] not in author_ids
                                 and review.get("verdict") in ("approve", "changes-requested", "reject")
