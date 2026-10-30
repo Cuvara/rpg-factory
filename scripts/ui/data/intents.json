@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.ui-intents/1",
- "note": "Deterministic UI request classification. Patterns are Python regexes matched case-insensitively against the request with URLs removed. Intents are tried in order; the first whose patterns match wins (an empty list matches anything). figma: true means the intent needs Figma context (a Figma URL or a Figma/connector term), unless the verb is ui-figma.",
+ "note": "Deterministic UI request classification. Patterns are Python regexes matched case-insensitively against the request with URLs removed. Intents are tried in order; the first whose patterns match wins (an empty list matches anything). figma: true means the intent needs Figma context (a Figma URL or a Figma/connector term), unless the verb is ui-figma. An intent id may appear twice (figma-validate also matches 'validate imported UXML/USS' without a Figma term: imported UXML/USS is connector output).",
  "ui_signals": [
   "\\bui\\b",
   "\\bux\\b",
@@ -44,7 +44,7 @@
   "figma-manifest",
   "com\\.unity\\.ui\\.figma"
  ],
- "figma_url": "https?://(?:www\\.)?figma\\.com/(?:design|file|proto|board)/(?P<key>[A-Za-z0-9]+)(?:/[^\\s?#]*)?(?:\\?[^\\s#]*)?",
+ "figma_url": "(?:https?://)?(?:www\\.)?figma\\.com/(?:design|file|proto|board)/(?P<key>[A-Za-z0-9]+)(?:/[^\\s?#]*)?(?:\\?[^\\s#]*)?",
  "figma_node_id": "[?&]node-id=(?P<id>\\d+(?:-|:|%3A)\\d+)",
  "package_signals": [
   "com\\.cuvara\\.uitoolkit",
@@ -82,6 +82,13 @@
    "patterns": [
     "\\breview",
     "\\baudit"
+   ]
+  },
+  {
+   "id": "figma-validate",
+   "figma": false,
+   "patterns": [
+    "\\bvalidat\\w*\\b.{0,40}\\bimported\\b.{0,20}\\b(uxml|uss)\\b"
    ]
   },
   {

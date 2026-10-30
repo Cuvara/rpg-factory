@@ -34,7 +34,8 @@ lead and `ui-toolkit-screen` build from.
 1. Run the selection, never a memory of the package:
    `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py ui-components --json <request>` (the plan carries
    `components`), or directly `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ui/ui_select.py --screen <archetype>` /
-   `--need <need>...` (archetypes: settings, inventory, popup, hud, quest-panel, shop, confirm). Add
+   `--need <need>...` (archetypes: settings, inventory, popup, hud, quest-panel, shop, confirm; a need is a
+   recipe id or plain words such as `confirmation popup`, matched by alias - the `recipe` field says which). Add
    `--uitoolkit-ref <ref>` only when the task targets another tag; the default is the client pin.
 2. Read the header first: ref, source (`arg`, `client-pin`, `latest-tag`) and every warning. A pin-behind warning
    means an entry absent at the pin needs a `pin-bump` follow-up before client code may use it.
@@ -43,7 +44,7 @@ lead and `ui-toolkit-screen` build from.
    Never create a component the catalog has; prefer composing built-ins over a new custom control.
 4. **missing:** name the owner from `owner_if_missing` - `unity-package` for a reusable package control,
    `client-integration` for a game-specific one - and stop for the user's decision before creating anything.
-   `NOT_AVAILABLE` (no UIToolkit repo or unknown ref) is reported as is; nothing is guessed.
+   `NOT_AVAILABLE` (no UIToolkit repo or unknown ref) is reported as is: package needs are listed under `not_available`, never as a selection; nothing is guessed.
 5. Hand the table (need, status, choice, evidence) to the lead and to `ui-toolkit-screen`. Each choice keeps its
    catalog `source` (`<path>:<line>@<ref>` or the Unity docs URL) as evidence.
 6. Look up anything the recipes do not cover in the full catalog:
