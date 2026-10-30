@@ -16,7 +16,7 @@ The domain owns `game-concept`, `gameplay-system`, `feature-spec`, `level-spec`,
 
 ## Domain quality and tools
 
-Gameplay numbers are `TBD` or labelled proposals (`value`, `status: proposal`, `rationale`) until verified approval. Economy specs declare currencies and non-empty sources and sinks. Declared difficulty curves are monotonic. Content references resolve to existing artifact ids. Technical handoffs cover state, events, edge cases and acceptance criteria with verify types, and dependencies route through registered modules or repository paths. Optional balancing CSVs need no external program; no tool is required for the core workflow.
+Gameplay numbers are `TBD` or labelled proposals (`value`, `status: proposal`, `rationale`) unless the artifact declares `binding_values: true` and the shared verifier confirms approval for its current revision. Verified approval lets the numbers pass the design quality rule. Missing approval is `HUMAN_REQUIRED`; invalid or untrusted approval fails with the verifier's reasons. Agents never create approvals. Economy specs declare currencies and non-empty sources and sinks. Declared difficulty curves are monotonic. Content references resolve to existing artifact ids. Technical handoffs cover state, events, edge cases and acceptance criteria with verify types, and dependencies route through registered modules or repository paths. Optional balancing CSVs need no external program; no tool is required for the core workflow.
 
 ## Handoffs
 
