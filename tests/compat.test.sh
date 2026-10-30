@@ -48,8 +48,13 @@ except OSError:
         os.replace(os.path.join(d, 'a'), os.path.join(d, '..', 'moved')); print('moved')
     except OSError:
         print('blocked')" "$TMP/ro")
+  diag=""  # on failure, show the ACLs and the token so a runner-specific bypass can be diagnosed
+  if [ "$r" != blocked ] && [ -n "$RPGF_WINDOWS" ]; then
+    diag=$(MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$TMP/ro")" 2>&1; [ -e "$TMP/ro/a" ] && MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$TMP/ro/a")" 2>&1
+      [ -e "$TMP/moved" ] && MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$TMP/moved")" 2>&1; echo "USERNAME=$USERNAME"; whoami.exe /user /priv 2>&1 | tr -s ' ')
+  fi
   dir_writable "$TMP/ro"
-  [ "$r" = "blocked" ] && ok "dir_readonly blocks create and move-out" || no "dir_readonly: $r"
+  [ "$r" = "blocked" ] && ok "dir_readonly blocks create and move-out" || no "dir_readonly: $r $diag"
   echo y > "$TMP/ro/b" 2>/dev/null && ok "dir_writable restores writes" || no "dir_writable did not restore writes"
 fi
 
