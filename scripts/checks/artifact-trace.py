@@ -214,18 +214,22 @@ def main():
                         continue
                     engineering_repos = {end.get("repo") for end in contract.get("copies", [])
                                           if end.get("repo") in reg.get("domains", {}).get("engineering", {}).get("repos", [])}
+                    # per engineering repo: stale only when no impl trace implements the current spec payload
+                    # (older impl traces may stay in the list after a re-implementation)
+                    current_payload = spec_payload(open(path, encoding="utf-8").read())
+                    current_repos, stale_by_repo = set(), {}
                     for trace in obj.get("trace", []):
+                        if trace.get("kind") != "impl" or trace.get("repo") not in engineering_repos:
+                            continue
                         spec_rev = trace.get("spec_rev", "")
-                        if trace.get("kind") == "impl" and trace.get("repo") in engineering_repos and spec_rev:
-                            old = run(root, "cat-file", "blob", spec_rev)
-                            if old.returncode or spec_payload(old.stdout) != spec_payload(open(path, encoding="utf-8").read()):
-                                downstream_stale = f"downstream-stale {aid} impl {trace['repo']}@{trace.get('ref', '')}"
-                            else:
-                                continue
-                        elif trace.get("kind") == "impl" and trace.get("repo") in engineering_repos:
-                            downstream_stale = f"downstream-stale {aid} impl {trace['repo']}@{trace.get('ref', '')}"
-                        if downstream_stale:
-                            break
+                        old = run(root, "cat-file", "blob", spec_rev) if spec_rev else None
+                        if old is not None and not old.returncode and spec_payload(old.stdout) == current_payload:
+                            current_repos.add(trace["repo"])
+                        else:
+                            stale_by_repo.setdefault(trace["repo"], trace.get("ref", ""))
+                    for repo_key in sorted(set(stale_by_repo) - current_repos):
+                        downstream_stale = f"downstream-stale {aid} impl {repo_key}@{stale_by_repo[repo_key]}"
+                        break
                     if downstream_stale:
                         break
             if reason is None:

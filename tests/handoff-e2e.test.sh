@@ -77,6 +77,16 @@ out=$(trace)
 expect stale-approval 'HUMAN_REQUIRED FS-P6-001 missing approval' "$(grep '^HUMAN_REQUIRED' <<<"$out" | head -1)"
 expect stale-downstream "FAIL downstream-stale FS-P6-001 impl server@$IMPL" "$(grep '^FAIL downstream-stale' <<<"$out" | head -1)"
 expect run-checks-stale 'FAIL' "$(run_state)"
+# re-implementation: a new impl trace for the current spec clears downstream-stale; the old trace stays listed
+SPEC_REV2=$(git -C "$A" rev-parse "HEAD:design/features/crafting.md")
+git -C "$S" -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -q -m reimplementation
+IMPL2=$(git -C "$S" rev-parse HEAD)
+TR2="${TR%]},{\"repo\":\"server\",\"ref\":\"$IMPL2\",\"kind\":\"impl\",\"ac\":[\"AC1\"],\"spec_rev\":\"$SPEC_REV2\"}]"
+write_artifact released "$TR2"
+python3 -c 'import sys; p=sys.argv[1]; s=open(p,encoding="utf-8").read().replace("\"title\": \"Crafting\"","\"title\": \"Crafting Reworked\""); open(p,"w",encoding="utf-8").write(s)' "$F"
+git -C "$A" add design; git -C "$A" commit -q -m "Trace the re-implementation"
+out=$(trace)
+expect reimplemented-not-stale '0' "$(grep -c '^FAIL downstream-stale' <<<"$out")"
 CONFLICTS=$(python3 - "$ROOT/scripts/checks/registry-ownership.py" <<'PY'
 import json,subprocess,sys,tempfile,os
 r={"repos":{"server":{}},"domains":{"design":{"artifact_kinds":["feature-spec"]},"engineering":{"artifact_kinds":["feature-spec"]}},"modules":[{"id":"design.mod","repo":"server","domain":"design","paths":["backend/design/"]},{"id":"engineering.mod","repo":"server","domain":"engineering","paths":["backend/"]}],"contracts":[],"skills":{}}
