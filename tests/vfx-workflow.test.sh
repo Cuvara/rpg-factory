@@ -43,7 +43,7 @@ ctx.artifacts['VFX-asset-001']=('vfx/assets/a.asset.json',asset)
 assert states(asset)['vfx-asset-budget']=='FAIL'
 verified=json.loads(json.dumps(valid)); verified['status']='verified'; assert states(verified)['vfx-verification-evidence']=='FAIL'
 asset['status']='verified'; asset['spec']['checks']=['prefab-inspection']; assert states(verified)['vfx-verification-evidence']=='PASS'
-print('VFX plugin cases: 13 passed, 0 failed')
+print('VFX domain failure cases: %d passed, 0 failed' % len(cases))
 PY
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T/authoring" --registry "$ROOT/registry.json"
 # The shared lifecycle rejects a direct draft -> released shortcut.
