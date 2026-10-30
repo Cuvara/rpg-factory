@@ -77,6 +77,8 @@ newcase bash-tee
 check 'tee output outside workspace fails' fail outside_shell "$T/bash-tee" 'printf test | tee /tmp/q.json'
 newcase bash-output
 check 'command -o output outside workspace fails' fail outside_shell "$T/bash-output" 'tool -o /tmp/q.json'
+newcase bash-null
+check 'discarded output to /dev/null is allowed' pass outside_shell "$T/bash-null" 'printf test > /dev/null'
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
 import json,sys
 p=sys.argv[1]; d=[json.loads(x) for x in open(p,encoding='utf-8')]; d[2]['message']['content'][0]['input']['command']='python scripts/factory-workflow.py status x; # wrong order engineering design ui'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in d))

@@ -176,7 +176,7 @@ def main():
             failures.append("write outside scratch workspace: " + path)
     for command in bash_commands:
         for path in shell_output_paths(command):
-            if not normalized_path(path, base).startswith(base + "/"):
+            if norm(path) != "/dev/null" and not normalized_path(path, base).startswith(base + "/"):
                 failures.append("possible write outside scratch workspace: " + path)
     for event in events:
         if event.get("type") == "result" and event.get("subtype") not in (None, "success"):
