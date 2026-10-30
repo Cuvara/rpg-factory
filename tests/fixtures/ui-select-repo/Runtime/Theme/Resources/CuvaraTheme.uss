@@ -1,0 +1,13 @@
+/* Cuvara theme tokens: hosts override --cuvara-* on the same root. */
+.cuvara-theme-root {
+    --cuvara-color-surface: rgba(38.25, 38.25, 38.25, 1);
+    --cuvara-color-surface-raised: rgba(63.75, 63.75, 76.5, 0.95);
+    --cuvara-color-on-surface: rgba(255, 255, 255, 1);
+    --cuvara-color-primary: rgba(51, 127.5, 229.5, 1);
+    --cuvara-color-on-primary: rgba(255, 255, 255, 1);
+    --cuvara-color-scrim: rgba(0, 0, 0, 0.5);
+}
+
+.cuvara-confirm-dialog__panel {
+    background-color: var(--cuvara-color-surface-raised);
+}
