@@ -27,7 +27,7 @@ else echo "FAIL unmodified registry"; cat "$TMP/clean.out"; fail=$((fail + 1)); 
 # a: domain assignment on skills/modules/contracts must resolve, and engineering is mandatory.
 expect_fail a-unknown-skill-domain '.skills["server-realtime"].domain = "missing-domain"' 'skill server-realtime: unknown domain missing-domain'
 expect_fail a-unknown-module-domain '.modules[0].domain = "missing-domain"' 'unknown domain missing-domain'
-expect_fail a-unknown-contract-domain '.contracts[0].domain = "missing-domain"' 'contract wire-generated: unknown domain missing-domain'
+expect_fail a-unknown-contract-domain '(.contracts |= map(if .id == "wire-generated" then .domain = "missing-domain" else . end))' 'contract wire-generated: unknown domain missing-domain'
 expect_fail a-engineering-required 'del(.domains.engineering)' 'missing domain: engineering'
 # b: ids follow the domain slug grammar; status is one of active/planned/foundation.
 expect_fail b-domain-id '.domains["Bad Domain"] = .domains.engineering' 'domain id Bad Domain must match'
@@ -51,10 +51,10 @@ expect_fail f-role '.modules[0].role = "observer"' 'role must be orchestrator|im
 expect_fail f-skill-role '.skills["server-realtime"].role = "observer"' 'role must be orchestrator|implementer|reference'
 expect_fail handoff-driver-domain '(.modules |= map(if .id == "authoring.design-features" then .domain = "engineering" else . end))' 'source module domain engineering differs from driver domain design'
 expect_fail duplicate-domain-artifact-kind '.domains.engineering.artifact_kinds = ["feature-spec"]' 'artifact kind feature-spec is shared by domains engineering, design'
-expect_fail cross-domain-path-overlap '(.modules |= map(if .id == "server.proto" then .paths = ["design/features/"] | .domain = "engineering" else . end))' 'domain path conflict'
+expect_fail cross-domain-path-overlap '(.domains.design.repos += ["server"]) | (.modules |= map(if .id == "authoring.design-features" then .repo = "server" | .paths = ["backend/shared/proto/"] else . end))' 'domain path conflict'
 # g: absent optional repository paths are skipped and reported in a stand-in workspace.
 G="$TMP/optional.json"
-jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server, authoring:.repos.authoring}) | (.domains.engineering.repos = ["server"]) | (.modules = [.modules[] | select((.repo == "server" and (.fallback == true or .id == "server.proto")) or .repo == "authoring")]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
+jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server, authoring:.repos.authoring}) | (.domains.engineering.repos = ["server"]) | (.domains.design.handoffs = []) | (.modules = [.modules[] | select((.repo == "server" and (.fallback == true or .id == "server.proto")) or .repo == "authoring")]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
 mkdir -p "$TMP/workspace"; touch "$TMP/workspace/marker"
 if out=$(RPG_FACTORY_WORKSPACE="$TMP/workspace" "$CHECKER" --registry "$G" 2>&1); then
   if grep -Fq 'optional repo server absent (not checked)' <<<"$out"; then echo "PASS g-optional-repo-absent"; pass=$((pass + 1));

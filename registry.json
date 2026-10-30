@@ -3958,6 +3958,7 @@
     {
       "id": "feature-spec-to-impl",
       "kind": "handoff",
+      "domain": "design",
       "summary": "An approved design feature specification is implemented and tested by the server and client engineering teams.",
       "source": {"repo": "authoring", "path": "design/features/"},
       "copies": [
