@@ -221,7 +221,7 @@ def validate(obj, reg, schema):
     if obj.get("schema_version", 1) not in (1, 2):
         errors.append("unsupported schema_version")
     if "spec" in obj:
-        schema_path = reg.get("kind_schemas", {}).get(obj.get("kind"))
+        schema_path = reg.get("kind_schemas", {}).get(obj.get("kind"), reg.get("kind_schemas", {}).get("default"))
         if schema_path:
             try:
                 kind_schema = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", schema_path), encoding="utf-8"))
@@ -234,7 +234,7 @@ def validate(obj, reg, schema):
 def main():
     for _stream in (sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
-            _stream.reconfigure(encoding="utf-8")
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
     p.add_argument("repo_dir")
     p.add_argument(
@@ -261,6 +261,9 @@ def main():
         reasons = []
         try:
             obj = load_file(f)
+            if not isinstance(obj, dict): raise ValueError("artifact document must be a JSON object")
+            if not obj.get("id"): raise ValueError("missing id")
+            if not obj.get("kind"): raise ValueError("missing kind")
             reasons.extend(validate(obj, reg, schema))
             ident = obj.get("id")
             if ident in seen:

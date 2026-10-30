@@ -445,17 +445,23 @@ def grade(parser, code, out):
     """(state, counts, reason)"""
     counts = {}
     if parser == "artifact":
-        lines = [line for line in out.splitlines() if re.match(r"^(PASS|FAIL|HUMAN_REQUIRED) ", line)]
+        lines = [line for line in out.splitlines() if re.match(r"^(PASS|FAIL|HUMAN_REQUIRED|NOT_AVAILABLE) ", line)]
         counts = {"passed": sum(line.startswith("PASS ") for line in lines),
                   "failed": sum(line.startswith("FAIL ") for line in lines),
                   "human_required": sum(line.startswith("HUMAN_REQUIRED ") for line in lines),
+                  "not_available": sum(line.startswith("NOT_AVAILABLE ") for line in lines),
                   "discovered": len(lines)}
         if code != 0 or counts["failed"]:
             return "FAIL", counts, f"exit {code}, {counts['failed']} artifact failures"
         if not lines:
             return "FAIL", counts, "no artifact result lines"
-        if counts["human_required"]:
-            return "HUMAN_REQUIRED", counts, f"{counts['human_required']} artifact(s) need human approval"
+        if counts["human_required"] or counts["not_available"]:
+            reasons = []
+            if counts["human_required"]: reasons.append(f"{counts['human_required']} artifact(s) need human approval")
+            reasons.extend(line[len("NOT_AVAILABLE "):] for line in lines if line.startswith("NOT_AVAILABLE "))
+            return "HUMAN_REQUIRED", counts, "; ".join(reasons)
+        if counts["passed"] == 0:
+            return "FAIL", counts, "no artifact PASS result lines"
         return "PASS", counts, None
     if parser == "go-test":
         counts = {"passed": len(re.findall(r"^\s*--- PASS", out, re.M)), "failed": len(re.findall(r"^\s*--- FAIL", out, re.M)),

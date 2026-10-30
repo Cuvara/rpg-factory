@@ -158,7 +158,7 @@ def approval(root, artifact_path, obj, gate, reg):
 def main():
     for _stream in (sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
-            _stream.reconfigure(encoding="utf-8")
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
     p.add_argument("repo_dir")
     p.add_argument("--registry", required=True)
@@ -176,15 +176,27 @@ def main():
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in (".git", "approvals")]
         for name in sorted(names):
-            if not (name.endswith(".md") or name.endswith(".artifact.json")):
-                continue
             path = os.path.join(base, name)
+            if name.endswith(".md"):
+                try:
+                    if open(path, encoding="utf-8").read(7) != "---json": continue
+                except Exception as exc:
+                    print(f"FAIL {os.path.relpath(path, root).replace(os.sep, '/')} {exc}")
+                    fails += 1
+                    continue
+            elif not name.endswith(".artifact.json"):
+                continue
             rel = os.path.relpath(path, root).replace(os.sep, "/")
             try:
                 obj = front(path)
-            except Exception:
-                obj = None
-            if not isinstance(obj, dict) or "id" not in obj:
+                if not isinstance(obj, dict): raise ValueError("artifact document must be a JSON object")
+                if not obj.get("id"): raise ValueError("missing id")
+                if not obj.get("kind"): raise ValueError("missing kind")
+            except Exception as exc:
+                print(f"FAIL {rel} {exc}")
+                fails += 1
+                continue
+            if not isinstance(obj, dict):
                 continue
             aid = obj["id"]
             reason = None
@@ -247,6 +259,10 @@ def main():
                 obj.get("kind"), reg.get("artifact_lifecycles", {}).get("default", {})
             )
             req = life.get("requirements", {}).get(obj.get("status"), {})
+            for trace_kind in req.get("needs_trace", []):
+                if not any(t.get("kind") == trace_kind for t in obj.get("trace", [])):
+                    reason = f"missing {trace_kind} trace"
+                    break
             if reason is None:
                 coverage = {
                     (trace.get("kind"), ac_id)
@@ -254,8 +270,10 @@ def main():
                     for ac_id in trace.get("ac", [])
                 }
                 for criterion in obj.get("acceptance", []):
-                    criterion_required = set(req.get("needs_trace", []))
-                    if criterion.get("verify") == "test":
+                    criterion_required = set()
+                    coverage_rule = req.get("verify_type_coverage", {}).get(criterion.get("verify"), {})
+                    criterion_required.update(coverage_rule.get("needs_trace", []))
+                    if criterion.get("verify") == "test" and not coverage_rule:
                         criterion_required.update(req.get("needs_trace_for_test", []))
                     if any(
                         (kind, criterion.get("id")) not in coverage
@@ -263,6 +281,26 @@ def main():
                     ):
                         reason = "missing AC coverage"
                         break
+            review_required = req.get("needs_review") or any(
+                rule.get("needs_review") for rule in req.get("verify_type_coverage", {}).values()
+            )
+            if reason is None and review_required:
+                current_rev = git_blob(root, rel)
+                review_dir = os.path.join(root, "reviews", obj["id"])
+                valid = False
+                for review_name in os.listdir(review_dir) if os.path.isdir(review_dir) else []:
+                    try:
+                        review = json.load(open(os.path.join(review_dir, review_name), encoding="utf-8"))
+                        reviewer = review.get("reviewer", {})
+                        author_ids = {x.get("id") for x in obj.get("authors", []) if isinstance(x, dict)}
+                        if (review.get("artifact") == obj["id"] and review.get("rev") == current_rev
+                                and reviewer.get("id") and reviewer.get("id") not in author_ids
+                                and review.get("verdict") in ("approve", "changes-requested", "reject")
+                                and isinstance(review.get("findings"), list)):
+                            valid = True; break
+                    except Exception:
+                        continue
+                if not valid: reason = "review evidence required"
             if reason is None:
                 gates = list(req.get("needs_approval", []))
                 conditional = req.get("approval_when_binding")

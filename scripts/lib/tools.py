@@ -26,7 +26,8 @@ def find_tool(name):
     for path in candidates:
         if not path or not os.path.isfile(path): continue
         try:
-            r=subprocess.run([path,'--version'],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=3)
+            command=[sys.executable,path,'--version'] if path.lower().endswith('.py') else [path,'--version']
+            r=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=3)
             version=(r.stdout or r.stderr).strip().splitlines()[0][:160]
             return {'name':name,'path':os.path.abspath(path),'version':version}
         except Exception: return {'name':name,'path':os.path.abspath(path),'version':''}

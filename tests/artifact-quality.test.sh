@@ -2,11 +2,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; T="${TMPDIR:-/tmp}/artifact-quality-$$"; mkdir -p "$T/repo/specs" "$T/repo/reviews"; trap 'rm -rf "$T"' EXIT
 cat > "$T/reg.json" <<EOF
-{"domains":{"fixture":{"artifact_kinds":["spec"],"quality_plugin":"scripts/checks/domains/noop.py"}},"artifact_lifecycles":{"spec":{"states":["draft","proposed","reviewed","approved","in-implementation","verified","released","rejected","blocked"],"transitions":{"draft":["proposed"],"proposed":["reviewed"],"reviewed":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"rejected":["draft"]},"requirements":{}}},"kind_schemas":{"spec":"docs/schemas/kinds/feature-spec.schema.json"}}
+{"domains":{"fixture":{"artifact_kinds":["spec"],"quality_plugin":"scripts/checks/domains/noop.py"}},"artifact_lifecycles":{"spec":{"states":["draft","proposed","reviewed","approved","in-implementation","verified","released","rejected","blocked"],"transitions":{"draft":["proposed"],"proposed":["reviewed"],"reviewed":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"rejected":["draft"]},"requirements":{"proposed":{"acceptance":true},"reviewed":{"independent_review":true},"rejected":{"rejection_record":true},"blocked":{"blocked_by":true}}}},"kind_schemas":{"spec":"docs/schemas/kinds/feature-spec.schema.json"}}
 EOF
 git -C "$T/repo" init -q -b main; git -C "$T/repo" config user.email test@example.com; git -C "$T/repo" config user.name Test
 cat > "$T/repo/specs/a.artifact.json" <<'EOF'
-{"schema_version":1,"id":"FX-one-001","kind":"spec","domain":"fixture","status":"draft","title":"One","upstream":[],"acceptance":[{"id":"A1","text":"Works","verify":"test"}],"trace":[],"authors":[{"kind":"human","id":"author"}],"spec":{"name":"one"}}
+{"schema_version":1,"id":"FX-one-001","kind":"spec","domain":"fixture","status":"draft","title":"One","upstream":[],"acceptance":[{"id":"A1","text":"Works","verify":"test"}],"trace":[],"authors":[{"kind":"human","id":"author"}],"spec":{"summary":"One","goals":["Work"],"requirements":[{"id":"A1","description":"Works"}]}}
 EOF
 git -C "$T/repo" add .; git -C "$T/repo" commit -qm fixture
 python3 -B - "$ROOT" "$T" <<'PY'
@@ -27,16 +27,31 @@ def check(mutator):
 def has(rows, check_name, state, fragment=None): return any(x['check']==check_name and x['state']==state and (fragment is None or fragment in ' '.join(x['reasons'])) for x in rows)
 assert has(check(lambda x:x.update(spec=[])),'schema','FAIL')
 assert has(check(lambda x:x.update(sources=['FX-missing-009'])),'dependencies','FAIL','unknown source')
+assert has(check(lambda x:x.update(blocked_by=['FX-missing-009'],reason='waiting')),'dependencies','FAIL','unknown blocked_by')
 rows=check(lambda x:x.update(status='released')); assert has(rows,'lifecycle','FAIL','illegal transition'), rows
 rows=check(lambda x:x.update(status='rejected')); assert has(rows,'lifecycle','FAIL','rejection reason'), rows
 rows=check(lambda x:x.update(status='blocked')); assert has(rows,'lifecycle','FAIL','blocked_by'), rows
 obj['status']='reviewed'; p.write_text(json.dumps(obj)); rev=subprocess.run(['git','-C',str(t/'repo'),'rev-parse','HEAD:specs/a.artifact.json'],capture_output=True,text=True).stdout.strip(); review_dir=t/'repo/reviews/FX-one-001'; review_dir.mkdir(exist_ok=True); (review_dir/f'{rev}-author.json').write_text(json.dumps({'artifact':'FX-one-001','rev':rev,'reviewer':{'kind':'human','id':'author'},'verdict':'approve','findings':[],'date':'2026-10-30T00:00:00Z'})); rows=json.loads(subprocess.run([sys.executable,str(root/'scripts/checks/artifact-quality.py'),str(t/'repo'),'--registry',str(t/'reg.json'),'--json'],capture_output=True,text=True).stdout)['results']; assert has(rows,'lifecycle','FAIL','independent review')
 obj['status']='proposed'; p.write_text(json.dumps(obj)); subprocess.run(['git','-C',str(t/'repo'),'add','specs/a.artifact.json'],check=True); subprocess.run(['git','-C',str(t/'repo'),'commit','-qm','proposed'],check=True); obj['status']='reviewed'; p.write_text(json.dumps(obj)); rev=subprocess.run(['git','-C',str(t/'repo'),'rev-parse','HEAD:specs/a.artifact.json'],capture_output=True,text=True).stdout.strip(); (review_dir/f'{rev}-reviewer.json').write_text(json.dumps({'artifact':'FX-one-001','rev':rev,'reviewer':{'kind':'human','id':'reviewer'},'verdict':'approve','findings':[],'date':'2026-10-30T00:00:00Z'})); rows=json.loads(subprocess.run([sys.executable,str(root/'scripts/checks/artifact-quality.py'),str(t/'repo'),'--registry',str(t/'reg.json'),'--json'],capture_output=True,text=True).stdout)['results']; assert has(rows,'lifecycle','PASS')
+obj['status']='proposed'; obj['acceptance']=[]; p.write_text(json.dumps(obj)); rows=json.loads(subprocess.run([sys.executable,str(root/'scripts/checks/artifact-quality.py'),str(t/'repo'),'--registry',str(t/'reg.json'),'--json'],capture_output=True,text=True).stdout)['results']; assert has(rows,'lifecycle','FAIL','acceptance criteria')
+reg=json.loads((t/'reg.json').read_text()); reg['artifact_lifecycles']['spec']['requirements']['proposed'].pop('acceptance'); (t/'reg.json').write_text(json.dumps(reg)); rows=json.loads(subprocess.run([sys.executable,str(root/'scripts/checks/artifact-quality.py'),str(t/'repo'),'--registry',str(t/'reg.json'),'--json'],capture_output=True,text=True).stdout)['results']; assert has(rows,'lifecycle','PASS')
+PY
+printf '{invalid json' > "$T/repo/specs/bad.artifact.json"
+printf '{"id":"FX-missing-kind-002"}' > "$T/repo/specs/missing-kind.artifact.json"
+printf '{"kind":"spec"}' > "$T/repo/specs/missing-id.artifact.json"
+python3 -B - "$ROOT" "$T" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); p=subprocess.run([sys.executable,str(root/'scripts/checks/artifact-quality.py'),str(t/'repo'),'--registry',str(t/'reg.json'),'--json'],capture_output=True,text=True)
+data=json.loads(p.stdout); broken=[x for x in data['results'] if x['check']=='parse']; assert p.returncode==1 and len(broken)==3 and any('bad.artifact.json' in x['artifact'] and x['reasons'][0] for x in broken) and any('missing kind' in x['reasons'][0] for x in broken) and any('missing id' in x['reasons'][0] for x in broken)
+for script,args in [('artifact-lint.py',[]),('artifact-trace.py',['--registry',str(t/'reg.json')])]:
+ result=subprocess.run([sys.executable,str(root/'scripts/checks'/script),str(t/'repo'),*args],capture_output=True,text=True)
+ assert result.returncode==1 and 'bad.artifact.json' in result.stdout and 'missing kind' in result.stdout and 'missing id' in result.stdout,(script,result.stdout,result.stderr)
+print('PASS malformed artifacts fail closed with path and parse reason')
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,os,pathlib,sys
-root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); exe=t/'fake-tool'; exe.write_text('#!/bin/sh\necho fake 1.0\n'); exe.chmod(0o755); os.environ['RPG_FACTORY_TOOL_NODE']=str(exe)
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); exe=t/'fake-tool.py'; exe.write_text('print("fake 1.0")\n'); os.environ['RPG_FACTORY_TOOL_NODE']=str(exe)
 s=importlib.util.spec_from_file_location('tools',root/'scripts/lib/tools.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); found=m.find_tool('node'); assert found and found['path']==str(exe.resolve()) and 'fake' in found['version']
 print('PASS tool override discovery')
 PY
-echo "artifact-quality: 11 passed, 0 failed"
+echo "artifact-quality: 18 assertions passed, 0 failed"

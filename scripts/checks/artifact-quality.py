@@ -51,17 +51,31 @@ def main():
             _stream.reconfigure(encoding="utf-8", errors="replace")
     ap=argparse.ArgumentParser(); ap.add_argument('repo_dir'); ap.add_argument('--registry',required=True); ap.add_argument('--repos',nargs='*',default=[]); ap.add_argument('--json',action='store_true'); ap.add_argument('--kind'); ap.add_argument('--domain'); a=ap.parse_args()
     root=Path(a.repo_dir).resolve(); reg=json.loads(Path(a.registry).read_text(encoding='utf-8')); schema=json.loads((ROOT/'docs/artifact.schema.json').read_text(encoding='utf-8'))
-    paths=[]
-    for p in root.rglob('*'):
-        if p.is_file() and (p.name.endswith(('.artifact.json','.asset.json')) or p.suffix=='.md' and p.read_text(encoding='utf-8',errors='replace').startswith('---json')) and '.git' not in p.parts and 'approvals' not in p.parts: paths.append(p)
-    artifacts={}; entries=[]
+    paths=[]; discovery_errors=[]
+    def discovery_error(exc): discovery_errors.append((Path(getattr(exc,'filename',None) or root), str(exc)))
+    for base, dirs, names in os.walk(root, onerror=discovery_error):
+        dirs[:] = [d for d in dirs if d not in ('.git','approvals')]
+        for name in sorted(names):
+            p=Path(base)/name
+            if name.endswith(('.artifact.json','.asset.json')): paths.append(p)
+            elif p.suffix=='.md':
+                try:
+                    if p.read_text(encoding='utf-8').startswith('---json'): paths.append(p)
+                except Exception as exc: discovery_errors.append((p, str(exc)))
+    artifacts={}; malformed=[]
     for p in sorted(paths):
-        try: obj=read_artifact(p)
-        except Exception: continue
-        if not isinstance(obj,dict) or not obj.get('id'): continue
+        try:
+            obj=read_artifact(p)
+            if not isinstance(obj,dict): raise ValueError('artifact document must be a JSON object')
+            if not obj.get('id'): raise ValueError('missing id')
+            if not obj.get('kind'): raise ValueError('missing kind')
+        except Exception as exc:
+            malformed.append((p, str(exc))); continue
         if a.kind and obj.get('kind')!=a.kind or a.domain and obj.get('domain')!=a.domain: continue
         rel=p.relative_to(root).as_posix(); artifacts[obj['id']]=(rel,obj)
     results=[]
+    for p, error in malformed + discovery_errors:
+        results.append({'artifact':p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p),'kind':'','domain':'','status':'','check':'parse','state':'FAIL','reasons':[error]})
     def add(aid,obj,rel,check,state,reasons=()): results.append({'artifact':aid,'kind':obj.get('kind',''),'domain':obj.get('domain',''),'status':obj.get('status',''),'check':check,'state':state,'reasons':list(reasons)})
     repo_map={}
     for item in a.repos:
@@ -83,9 +97,9 @@ def main():
             if before=='review' and 'proposed' in transitions: allowed=transitions.get('proposed',[])
             if new not in allowed: reason.append('illegal transition '+str(before)+' -> '+str(state))
         requirements=life.get('requirements',{}).get(state,{})
-        # v2 standard states; legacy lifecycle-specific behavior remains in artifact-trace.
-        if state=='proposed' and not obj.get('acceptance'): reason.append('acceptance criteria required')
-        if state=='reviewed':
+        if requirements.get('schema_complete') and errors: reason.append('complete artifact schema required')
+        if requirements.get('acceptance') and not obj.get('acceptance'): reason.append('acceptance criteria required')
+        if requirements.get('independent_review'):
             authors={x.get('id') for x in obj.get('authors',[]) if isinstance(x,dict)}
             candidates=[]
             rev=subprocess.run(['git','-C',str(root),'rev-parse',f'HEAD:{rel}'],capture_output=True,text=True,encoding='utf-8').stdout.strip()
@@ -95,11 +109,11 @@ def main():
                     if valid_review(rv,aid,rev,rp.name) and reviewer not in authors: candidates.append(rv)
                 except Exception: pass
             if not candidates: reason.append('independent review record required')
-        if state=='approved':
-            # Existing signed approval verifier remains authoritative in artifact-trace.
-            if not any(t.get('kind')=='approval' for t in obj.get('trace',[])) and not obj.get('binding_values'): pass
-        if state=='in-implementation' and not any(t.get('kind')=='impl' for t in obj.get('trace',[])): reason.append('implementation trace required')
-        if state=='verified':
+        required_traces=requirements.get('needs_trace',[])
+        for trace_kind in required_traces:
+            if not any(t.get('kind')==trace_kind for t in obj.get('trace',[])): reason.append(trace_kind+' trace required')
+        if requirements.get('needs_review') and not (root/'reviews'/aid).exists(): reason.append('review evidence required')
+        if requirements.get('coverage_by_acceptance'):
             traces={(t.get('kind'),ac) for t in obj.get('trace',[]) for ac in t.get('ac',[])}
             reviews=False
             if (root/'reviews'/aid).exists():
@@ -110,15 +124,14 @@ def main():
                         if valid_review(rv,aid,rev,rp.name) and reviewer not in {x.get('id') for x in obj.get('authors',[]) if isinstance(x,dict)}: reviews=True
                     except Exception: pass
             for ac in obj.get('acceptance',[]):
-                need={'test':('impl','test'),'review':('review',),'measure':('evidence',)}.get(ac.get('verify'),())
-                if ac.get('verify')=='review' and not reviews: reason.append('review evidence required for '+ac.get('id','?'))
-                elif ac.get('verify')=='measure' and not (ac.get('evidence') and ((ac.get('evidence') in artifacts) or (root/ac.get('evidence','')).exists())): reason.append('existing measure evidence required for '+ac.get('id','?'))
-                elif ac.get('verify')=='test' and not all((k,ac.get('id')) in traces for k in need): reason.append('test implementation coverage required for '+ac.get('id','?'))
-        if state=='released':
-            if not any(t.get('kind')=='release' for t in obj.get('trace',[])): reason.append('release trace required')
-            if not all(st in history for st in ('approved','verified')): reason.append('release must pass approved and verified')
-        if state=='rejected' and not (obj.get('rejection') or {}).get('reason'): reason.append('rejection reason required')
-        if state=='blocked' and (not obj.get('blocked_by') or not obj.get('reason')): reason.append('blocked_by and reason required')
+                coverage=requirements.get('verify_type_coverage',{}).get(ac.get('verify'), {})
+                if coverage.get('needs_review') and not reviews: reason.append('review evidence required for '+ac.get('id','?'))
+                if coverage.get('needs_evidence') and not (ac.get('evidence') and ((ac.get('evidence') in artifacts) or (root/ac.get('evidence','')).exists())): reason.append('existing measure evidence required for '+ac.get('id','?'))
+                need=coverage.get('needs_trace', [])
+                if need and not all((k,ac.get('id')) in traces for k in need): reason.append('test implementation coverage required for '+ac.get('id','?'))
+        if requirements.get('requires_approved_verified') and not all(st in history for st in ('approved','verified')): reason.append('release must pass approved and verified')
+        if requirements.get('rejection_record') and not (obj.get('rejection') or {}).get('reason'): reason.append('rejection reason required')
+        if requirements.get('blocked_by') and (not obj.get('blocked_by') or not obj.get('reason')): reason.append('blocked_by and reason required')
         if reason: add(aid,obj,rel,'lifecycle','FAIL',reason)
         else: add(aid,obj,rel,'lifecycle','PASS')
         deps=[]

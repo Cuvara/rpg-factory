@@ -5196,7 +5196,21 @@
           ]
         },
         "verified": {
-          "coverage_by_acceptance": true
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
         },
         "released": {
           "needs_trace": [
@@ -5258,7 +5272,21 @@
           ]
         },
         "verified": {
-          "coverage_by_acceptance": true
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
         },
         "released": {
           "needs_trace": [
@@ -5345,7 +5373,21 @@
           "approval_when_binding": true
         },
         "verified": {
-          "coverage_by_acceptance": true
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
         },
         "released": {
           "needs_trace": [
@@ -5422,7 +5464,21 @@
           ]
         },
         "verified": {
-          "coverage_by_acceptance": true
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
         },
         "released": {
           "needs_trace": [
@@ -5464,6 +5520,7 @@
     "art3d-brief": "docs/schemas/kinds/art3d-brief.schema.json",
     "art3d-asset": "docs/schemas/kinds/art3d-asset.schema.json",
     "vfx-spec": "docs/schemas/kinds/vfx-spec.schema.json",
-    "vfx-asset": "docs/schemas/kinds/vfx-asset.schema.json"
+    "vfx-asset": "docs/schemas/kinds/vfx-asset.schema.json",
+    "default": "docs/schemas/kinds/default.schema.json"
   }
 }

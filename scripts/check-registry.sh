@@ -158,8 +158,19 @@ import json, os, sys
 r=json.load(open(sys.argv[1],encoding="utf-8")); root=os.path.abspath(sys.argv[2]); errors=[]
 known={k for d in r.get("domains",{}).values() for k in d.get("artifact_kinds",[])}
 for kind,path in r.get("kind_schemas",{}).items():
-    if kind not in known: errors.append(f"kind schema {kind}: kind is not registered")
-    if not isinstance(path,str) or not path.startswith("docs/schemas/kinds/") or not os.path.isfile(os.path.join(root,path)): errors.append(f"kind schema {kind}: missing or invalid path {path}")
+    if kind != "default" and kind not in known: errors.append(f"kind schema {kind}: kind is not registered")
+    if not isinstance(path,str) or not path.startswith("docs/schemas/kinds/") or not os.path.isfile(os.path.join(root,path)):
+        errors.append(f"kind schema {kind}: missing or invalid path {path}"); continue
+    try: schema=json.load(open(os.path.join(root,path),encoding="utf-8"))
+    except Exception as exc: errors.append(f"kind schema {kind}: invalid JSON: {exc}"); continue
+    if kind == "default" or any(kind in d.get("artifact_kinds",[]) and d.get("status") in ("active","production") for d in r.get("domains",{}).values()):
+        if "required" not in schema or not isinstance(schema.get("required"),list) or not schema["required"]:
+            errors.append(f"kind schema {kind}: spec schema must declare non-empty required")
+        props=schema.get("properties")
+        if not isinstance(props,dict) or not props:
+            errors.append(f"kind schema {kind}: spec schema must declare properties")
+        elif not any(isinstance(v,dict) and (v.get("type") or v.get("enum") or v.get("const") or v.get("$ref")) for v in props.values()):
+            errors.append(f"kind schema {kind}: spec properties must constrain at least one field")
 for domain,data in r.get("domains",{}).items():
     plugin=data.get("quality_plugin")
     if plugin and (not plugin.startswith("scripts/checks/domains/") or not plugin.endswith(".py") or not os.path.isfile(os.path.join(root,plugin))): errors.append(f"domain {domain}: invalid quality_plugin {plugin}")
