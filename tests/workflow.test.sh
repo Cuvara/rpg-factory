@@ -118,5 +118,25 @@ assert mod.state_for(node,plan,{})=='rejected'; plan['existing']['x'].update(sta
 plan['existing']['x'].update(status='approved'); assert mod.state_for(node,plan,{'x':{'results':[{'state':'HUMAN_REQUIRED'}]}})=='human-required'
 PY
 [ "$?" -eq 0 ] || exit 1
-echo 'PASS stale upstream, ordered revalidation, rejected recovery, approval state, and ID/revision-only dispatch inputs'
-echo 'workflow tests: 11 run, 11 passed, 0 failed'
+echo 'PASS stale upstream, ordered revalidation, end-to-end rejected recovery, approval state, and ID/revision-only dispatch inputs'
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); author=t/'quality-failure-authoring'; (author/'design/features').mkdir(parents=True)
+artifact={'schema_version':1,'id':'DS-quality-001','kind':'feature-spec','domain':'design','status':'approved','title':'Approved in front matter','upstream':[],'acceptance':[{'id':'A1','text':'Feature works','verify':'test'}],'trace':[],'authors':[],'spec':{'summary':'Quality gate','goals':['Fail closed'],'requirements':[{'id':'A1','description':'Feature works'}]}}
+(author/'design/features/DS-quality-001.artifact.json').write_text(json.dumps(artifact))
+subprocess.run(['git','init','-q','-b','main',str(author)],check=True); subprocess.run(['git','-C',str(author),'config','user.email','fixture@example.com'],check=True); subprocess.run(['git','-C',str(author),'config','user.name','Fixture'],check=True); subprocess.run(['git','-C',str(author),'add','.'],check=True); subprocess.run(['git','-C',str(author),'commit','-qm','approved front matter'],check=True)
+spec=t/'quality-failure.json'; spec.write_text(json.dumps({'id':'quality-failure','title':'Quality failure','goal':'Fail closed','targets':[{'id':'DS-quality-001','kind':'feature-spec','sources':[],'acceptance':['Gated']},{'id':'impl','kind':'implementation','repo':'server','paths':['backend/gameserver-dotnet/'],'sources':['DS-quality-001'],'acceptance':['Implement']}],'existing':['DS-quality-001']}))
+checker=t/'fake-artifact-quality.py'; checker.write_text("import json,os,sys\nmode=os.environ['FAKE_QUALITY_MODE']\nif mode=='exit': print(json.dumps({'results':[]})); sys.exit(23)\nelif mode=='invalid': print('{invalid json')\nelse: print(json.dumps({'results':[{'artifact':'OTHER-001','check':'lifecycle','state':'PASS','reasons':[]}]}))\n")
+for mode,fragment in [('exit','exited 23'),('invalid','invalid JSON'),('missing','no lifecycle result')]:
+    env=dict(__import__('os').environ,FAKE_QUALITY_MODE=mode,RPG_FACTORY_ARTIFACT_QUALITY=str(checker))
+    def run(command,*extra): return subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),command,str(spec),'--registry',str(t/'registry.json'),'--authoring',str(author),'--json',*extra],capture_output=True,text=True,env=env)
+    status_run=run('status'); assert status_run.returncode==0,status_run.stderr; status=json.loads(status_run.stdout)
+    assert status['states']['DS-quality-001']=='blocked' and status['states']['impl']=='blocked' and status['ready']==[],(mode,status)
+    assert fragment in status['quality_check_unavailable']['DS-quality-001'],(mode,status)
+    dispatch=run('dispatch','--node','impl'); assert dispatch.returncode==2 and 'not ready' in dispatch.stderr,(mode,dispatch.returncode,dispatch.stdout,dispatch.stderr)
+    report_run=run('report'); assert report_run.returncode==0,report_run.stderr; report=json.loads(report_run.stdout)
+    row=report['nodes']['DS-quality-001']; assert report['overall']=='incomplete' and row['status']=='blocked' and any(x['check']=='quality-check-unavailable' and fragment in ' '.join(x['reasons']) for x in row['validation']['results']),(mode,report)
+print('PASS workflow fails closed for nonzero, invalid JSON, and missing quality results; approved front matter cannot ready dependent dispatch')
+PY
+[ "$?" -eq 0 ] || exit 1
+echo 'workflow tests: 12 run, 12 passed, 0 failed'

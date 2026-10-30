@@ -8,6 +8,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 - Added dependency-aware workflow planning, status, dispatch, and integrated reports through the factory entry point.
 - Added lifecycle-aware workflow status, signed approval grading, upstream blob invalidation, ordered revalidation, engineering traces, and schemas for every workflow output.
+- Workflow readiness now blocks artifacts when artifact-quality cannot produce lifecycle results, and reports the unavailable-check reason.
 - Added lifecycle v2 metadata and quality result contracts, per-kind schema registration, review records, adapter tool discovery and domain quality plugin interfaces.
 
 ### Changed

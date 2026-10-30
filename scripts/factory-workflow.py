@@ -240,15 +240,36 @@ def build(spec, reg, authoring):
 
 def quality(authoring, reg_path, repos, involved):
     if not authoring or not Path(authoring).is_dir(): return {}
-    cmd=[sys.executable,"-B",str(ROOT/"scripts/checks/artifact-quality.py"),authoring,"--registry",reg_path,"--json"]
+    def unavailable(aid, detail):
+        if not detail.startswith("quality-check-unavailable:"):
+            detail="quality-check-unavailable: " + detail
+        return {"results":[{"artifact":aid,"check":"quality-check-unavailable","state":"BLOCKED","reasons":[detail]}]}
+    checker=os.environ.get("RPG_FACTORY_ARTIFACT_QUALITY",str(ROOT/"scripts/checks/artifact-quality.py"))
+    cmd=[sys.executable,"-B",checker,authoring,"--registry",reg_path,"--json"]
     for item in repos: cmd += ["--repos",item]
-    p=subprocess.run(cmd,capture_output=True,text=True,encoding="utf-8")
+    try:
+        p=subprocess.run(cmd,capture_output=True,text=True,encoding="utf-8")
+    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
+        detail=f"could not run artifact-quality: {exc}"
+        return {aid:unavailable(aid,detail) for aid in involved}
+    detail=None
+    if p.returncode not in (0,1): detail=f"artifact-quality exited {p.returncode}: {(p.stderr or p.stdout).strip()}"
     try: data=json.loads(p.stdout)
-    except ValueError: return {}
+    except (ValueError, TypeError):
+        data=None
+        detail=detail or f"artifact-quality returned invalid JSON: {(p.stderr or p.stdout).strip()}"
+    if not isinstance(data,dict) or not isinstance(data.get("results"),list):
+        detail=detail or "artifact-quality JSON has no results array"
+    if detail:
+        return {aid:unavailable(aid,detail) for aid in involved}
     grouped = {}
     for result in data.get("results", []):
-        if result.get("artifact") in involved:
+        if isinstance(result,dict) and result.get("artifact") in involved:
             grouped.setdefault(result["artifact"], {"results": []})["results"].append(result)
+    for aid in involved:
+        rows=grouped.get(aid,{}).get("results",[])
+        if not rows or not any(row.get("check")=="lifecycle" for row in rows):
+            grouped[aid]=unavailable(aid,f"artifact-quality returned no lifecycle result for {aid}")
     return grouped
 
 
@@ -256,12 +277,12 @@ def state_for(node, plan, quality_map):
     artifact=plan["existing"].get(node.get("artifact_id") or node["id"])
     if not artifact:
         return "missing"
-    if artifact["status"] == "rejected": return "rejected"
-    if artifact["status"] == "blocked": return "blocked"
     q=quality_map.get(artifact.get("id"),{})
     if any(r.get("state")=="BLOCKED" for r in q.get("results",[])): return "blocked"
     if any(r.get("state")=="HUMAN_REQUIRED" for r in q.get("results",[])): return "human-required"
     if any(r.get("state")=="FAIL" for r in q.get("results",[])): return "blocked"
+    if artifact["status"] == "rejected": return "rejected"
+    if artifact["status"] == "blocked": return "blocked"
     return artifact["status"] if artifact["status"] in ("missing","draft","proposed","reviewed","approved","in-implementation","verified","released","rejected","blocked") else "draft"
 
 
@@ -402,7 +423,8 @@ def main():
     revalidate=[nid for wave in plan["waves"] for nid in wave if nid in affected]
     if a.command=="status":
         ready=[nid for nid,n in plan["nodes"].items() if states[nid] in ("missing","draft","rejected") and all(states[e["from"]] in ("approved","in-implementation","verified","released") for e in plan["edges"] if e["to"]==nid) and inputs_ready(n)]
-        out={"schema":"rpg-factory.workflow-status/1","states":states,"ready":ready,"stale_upstream":stale_upstream,"revalidate":revalidate,"waves":plan["waves"]}
+        unavailable={nid:"; ".join(r for row in q.get(art.get("id"),{}).get("results",[]) if row.get("check")=="quality-check-unavailable" for r in row.get("reasons",[])) for nid,node in plan["nodes"].items() if (art:=node_artifact(node,plan)) and any(row.get("check")=="quality-check-unavailable" for row in q.get(art.get("id"),{}).get("results",[]))}
+        out={"schema":"rpg-factory.workflow-status/1","states":states,"ready":ready,"stale_upstream":stale_upstream,"revalidate":revalidate,"waves":plan["waves"],"quality_check_unavailable":unavailable}
     else:
         node_rows={}
         for nid,n in plan["nodes"].items():
