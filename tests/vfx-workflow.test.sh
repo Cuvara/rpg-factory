@@ -129,6 +129,21 @@ for value in (float('nan'),float('inf'),-1,2.5):
     assert result['state']=='FAIL' and result['comparisons']==[] and any('finite non-negative integer' in reason for reason in result['reasons']), (value,result)
 print('Unity invalid numeric budgets: 4 passed, 0 failed')
 PY
+# A prefab with several ParticleSystems: the effect budget covers their sum, not only the first one.
+cat > "$T/unity/Assets/VFX/multi.prefab" <<'EOF'
+--- !u!198 &1
+ParticleSystem:
+  maxNumParticles: 10
+--- !u!198 &2
+ParticleSystem:
+  maxNumParticles: 12
+EOF
+printf '{"max_particles":16}\n' > "$T/budget.json"
+if python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/multi.prefab --budget-json "$T/budget.json" > "$T/multi.json"; then echo 'Unity adapter ignored the second ParticleSystem' >&2; exit 1; fi
+jq -e '.state == "FAIL" and .fields.max_particles == "22" and .fields.particle_systems == 2' "$T/multi.json" >/dev/null
+printf '{"max_particles":30}\n' > "$T/budget.json"
+python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/multi.prefab --budget-json "$T/budget.json" > "$T/multi-ok.json" || true
+jq -e '.state != "FAIL" and (.comparisons|index("max_particles") != null)' "$T/multi-ok.json" >/dev/null
 python3 -B - "$ROOT" "$T" <<'PY'
 import json,pathlib,sys
 r=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2])

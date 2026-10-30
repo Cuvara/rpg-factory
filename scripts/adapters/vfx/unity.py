@@ -40,6 +40,12 @@ def inspect(project, asset, guid=None, budget=None):
     for key, pattern in patterns.items():
         match = re.search(pattern, text)
         if match: fields[key] = match.group(1)
+    # every ParticleSystem in the prefab counts: the effect budget covers all of them
+    per_system = [int(v) for v in re.findall(r"maxNumParticles:\s*(\d+)", text)]
+    if per_system:
+        fields["max_particles"] = str(sum(per_system))
+        fields["particle_systems"] = len(per_system)
+        fields["max_particles_per_system"] = per_system
     meta = Path(str(path) + ".meta")
     guid = None
     if meta.exists():
