@@ -25,20 +25,20 @@ Use `/rpg-factory:workflow` or `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-conte
 7. Validate using `artifact-quality.py`; route accepted design to UI, engineering, art2d/art3d and VFX through registered contracts.
 
 ## Rules
-Use schema version 2, stable ids, authors, sources and spec payloads. Gameplay numbers are explicitly unresolved or `{value, status: proposal, rationale}` until the registered `gameplay-rules` approval binds them. A source id must resolve. Economy systems declare currencies, sources and sinks. Difficulty curves are monotonic when declared. Never write approval records.
+Use schema version 2, stable ids, authors, sources and spec payloads. Gameplay numbers are explicitly unresolved (`TBD`) or `{value, status: proposal, rationale}` unless the artifact declares `binding_values: true` and the shared verifier reports approval as `verified` for its current revision. Missing approval is `HUMAN_REQUIRED`; invalid or untrusted approval fails with verifier reasons. A source id must resolve. Economy systems declare currencies, sources and sinks. Difficulty curves are monotonic when declared. Never write approval records.
 
 ## Generated & protected paths
 Approvals are immutable human records; agents never write or edit them. No generated paths.
 
 ## Validation delta
-Core checks metadata, lifecycle, dependencies, trace and approvals. The design plugin checks numbers, source resolution, economy balance declarations, content ids, difficulty curves and handoff completeness. Plugin `FAIL` blocks readiness; missing optional balancing tools report `NOT_AVAILABLE` or `HUMAN_REQUIRED`, never PASS. There is no required external tool.
+Core checks metadata, lifecycle, dependencies, trace and approvals. The design plugin checks numbers against verified approval for the current artifact revision, source resolution, economy balance declarations, content ids, difficulty curves and handoff completeness. Plugin `FAIL` blocks readiness; missing gameplay-rules approval reports `HUMAN_REQUIRED`; missing optional balancing tools report `NOT_AVAILABLE` or `HUMAN_REQUIRED`, never PASS. There is no required external tool.
 
 ## Human gates
 `design-review` for independent review and `gameplay-rules` before binding values. Report open gates; agents do not approve.
 
 ## Review checklist
 - [ ] Each artifact has stable identity, version, authors, sources and required payload.
-- [ ] Gameplay values are unresolved or justified proposals unless approved.
+- [ ] Gameplay values are unresolved or justified proposals, or binding values have verified current-revision gameplay-rules approval.
 - [ ] Source ids resolve and upstream revisions are current.
 - [ ] Handoff acceptance criteria are testable and engineering dependencies are routed.
 - [ ] Required human gates are complete before binding.

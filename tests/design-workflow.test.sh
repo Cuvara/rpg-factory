@@ -24,6 +24,19 @@ for name,obj,expected in [
  C.artifacts={}; C.registry=reg; C.repo='';C.artifact_path='';C.tools=lambda _:None
  results=plugin.check(obj,C()); assert any(r.check==expected and r.state=='FAIL' for r in results),(name,[(r.check,r.state,r.reasons) for r in results])
 print('PASS domain rule failure cases')
+# Binding values pass only when the shared verifier confirms this artifact revision.
+binding={'id':'GD-binding-001','kind':'gameplay-system','binding_values':True,'spec':{'damage':12}}
+class ApprovalContext(C):
+ def __init__(self,state,reasons=None): self.registry=reg; self.artifacts={}; self.state=state; self.reasons=reasons or []
+ def approval(self,artifact_id): assert artifact_id==binding['id']; return {'state':self.state,'reasons':self.reasons}
+for state,expected,reasons in [('verified','PASS',[]),('missing','HUMAN_REQUIRED',['human gameplay-rules approval required']),('invalid','FAIL',['signature invalid']),('untrusted','FAIL',['signer not trusted'])]:
+ results=plugin.check(binding,ApprovalContext(state,reasons)); number=next(r for r in results if r.check=='design-numbers')
+ assert number.state==expected,(state,number.state,number.reasons)
+ if state in ('invalid','untrusted'): assert number.reasons==reasons,(state,number.reasons)
+class NoApprovalContext: registry=reg; artifacts={}
+number=next(r for r in plugin.check(binding,NoApprovalContext()) if r.check=='design-numbers')
+assert number.state=='HUMAN_REQUIRED',(number.state,number.reasons)
+print('PASS binding approval states: verified, missing, invalid, untrusted, and unavailable API')
 # Each production quality rule also accepts a complete, linked draft fixture.
 concept={'id':'GD-concept-001','kind':'game-concept','schema_version':2,'authors':[{'kind':'agent','id':'tester'}],'sources':[],'spec':{}}
 system={'id':'GD-system-001','kind':'gameplay-system','schema_version':2,'authors':[{'kind':'agent','id':'tester'}],'sources':['GD-concept-001'],'spec':{'game_concept':'GD-concept-001','gameplay_systems':['GD-system-001'],'economy':{'currencies':['coin'],'sources':['quest'],'sinks':['vendor']},'difficulty_curve':[{'value':1,'status':'proposal','rationale':'starting point'},{'value':2,'status':'proposal','rationale':'later stage'}]}}
@@ -61,4 +74,4 @@ assert states=={'concept':'missing','system':'blocked','handoff':'blocked'},stat
 print('PASS workflow plan waves and missing/blocked statuses across design production nodes')
 PY
 [ "$?" -eq 0 ] || exit 1
-echo 'design-workflow: 26 run, 26 passed, 0 failed'
+echo 'design-workflow: 31 run, 31 passed, 0 failed'

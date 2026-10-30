@@ -12,7 +12,7 @@ def check(artifact, ctx):
         for key in ("authors","sources","spec"):
             if key not in artifact: envelope.append("version 2 artifact requires "+key)
     add("envelope",envelope)
-    # All unapproved gameplay numbers must be TBD or explicitly justified proposals.
+    # Gameplay numbers are TBD/proposals unless this artifact has verified approval.
     errors=[]
     def walk(value,path="spec"):
         if isinstance(value,dict):
@@ -22,12 +22,22 @@ def check(artifact, ctx):
         elif isinstance(value,list):
             for i,v in enumerate(value): walk(v,f"{path}[{i}]")
     walk(spec)
-    if artifact.get("binding_values") is True or spec.get("binding_values") is True:
-        approval=(ctx.registry.get("domains",{}).get("design",{}).get("human_gates",[]))
-        # Binding requires the shared approval check; plugin does not create or infer approvals.
-        if "gameplay-rules" not in approval: errors.append("gameplay-rules gate is not registered")
-        elif spec.get("binding_values") is True and artifact.get("binding_values") is not True: errors.append("binding values require verified gameplay-rules approval recorded at artifact level")
-    add("numbers",errors)
+    if errors and artifact.get("binding_values") is True:
+        approval_check=getattr(ctx,"approval",None)
+        approval=approval_check(artifact.get("id")) if callable(approval_check) else {"state":"missing","reasons":[]}
+        state=approval.get("state","missing") if isinstance(approval,dict) else "missing"
+        reasons=approval.get("reasons",[]) if isinstance(approval,dict) else []
+        if state=="verified":
+            errors=[]
+            add("numbers",errors)
+        elif state=="missing":
+            out.append(Result("design-numbers","HUMAN_REQUIRED",reasons or ["gameplay-rules approval is required for binding values"]))
+        elif state in ("invalid","untrusted"):
+            out.append(Result("design-numbers","FAIL",reasons or ["gameplay-rules approval is "+state]))
+        else:
+            out.append(Result("design-numbers","FAIL",reasons or ["gameplay-rules approval state is invalid: "+str(state)]))
+    else:
+        add("numbers",errors)
     known={aid:obj for aid,(_,obj) in ctx.artifacts.items()}
     references=[]
     if kind in ("feature-spec","gameplay-system","level-spec","quest-spec","npc-spec","item-spec"):
