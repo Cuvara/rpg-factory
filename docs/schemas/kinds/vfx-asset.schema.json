@@ -1,1 +1,63 @@
-{"type":"object"}
+{
+  "type": "object",
+  "required": [
+    "engine",
+    "asset_path",
+    "hash",
+    "stats",
+    "checks"
+  ],
+  "properties": {
+    "engine": {
+      "type": "string",
+      "minLength": 1
+    },
+    "asset_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{40,64}$"
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "particles",
+          "overdraw",
+          "draw_calls",
+          "ms"
+        ],
+        "properties": {
+          "particles": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "overdraw": {
+            "type": "number",
+            "minimum": 0
+          },
+          "draw_calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ms": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}

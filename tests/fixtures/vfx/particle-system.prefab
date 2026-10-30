@@ -1,0 +1,5 @@
+ParticleSystem:
+  maxNumParticles: 12
+  startLifetime: 0.4
+  looping: 0
+  duration: 1.2
