@@ -270,13 +270,16 @@ def _distinct_events(rows: list[dict]) -> list[dict]:
 def sessions_from_events(events: list[dict]) -> list[dict]:
     """Sessions from log events: {start, end, backend_pid, end_reason}. `start` is None for a session
     that was already running when the log begins. An Accept binds to the next session fiber that
-    shows up; later events of that fiber (and of the backend pid) belong to the same session."""
+    shows up; later events of that fiber (and of the backend pid) belong to the same session.
+    Fibers are numbered per service process and restart after a reboot or service restart, so a
+    fiber is keyed by (lsvc pid, fiber), and an `auth` on a fiber whose session already ended
+    starts a new binding instead of attaching to the old, closed session."""
     rows = sorted((e for e in events if e.get("epoch") is not None and e["type"] in SESSION_TYPES),
                   key=lambda e: e["epoch"])
     rows = _distinct_events(rows)
     sessions: list[dict] = []
     pending: list[dict] = []
-    by_fiber: dict[int, dict] = {}
+    by_fiber: dict[tuple, dict] = {}
     by_backend: dict[int, dict] = {}
     for e in rows:
         t = e["type"]
@@ -286,12 +289,15 @@ def sessions_from_events(events: list[dict]) -> list[dict]:
             pending.append(s)
             continue
         if e.get("proc") == "lsvc" and e.get("fiber") is not None and t in ("auth", "backend_pid", "session_closed", "net_closed"):
-            s = by_fiber.get(e["fiber"])
+            key = (e.get("pid"), e["fiber"])
+            s = by_fiber.get(key)
+            if s is not None and t == "auth" and s["end"] is not None:
+                s = None
             if s is None:
                 s = pending.pop(0) if pending else {"start": None, "end": None, "backend_pid": None, "end_reason": None}
                 if s not in sessions:
                     sessions.append(s)
-                by_fiber[e["fiber"]] = s
+                by_fiber[key] = s
             if t == "backend_pid":
                 s["backend_pid"] = e["backend_pid"]
                 by_backend[e["backend_pid"]] = s
