@@ -123,7 +123,10 @@ def blender_check(path, ctx, spec):
     with tempfile.TemporaryDirectory(prefix="rpg-art3d-") as temp:
         output = Path(temp) / "stats.json"
         try:
-            proc = subprocess.run([tool["path"], "-b", str(path), "--python", str(adapter), "--", str(output)], capture_output=True, text=True, encoding="utf-8", timeout=90)
+            command = [tool["path"], "-b"]
+            if path.suffix.lower() == ".blend": command.append(str(path))
+            command.extend(["--python", str(adapter), "--", str(output), str(path)])
+            proc = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=90)
         except subprocess.TimeoutExpired:
             return result("art3d-dcc-inspection", "HUMAN_REQUIRED", "Blender inspection exceeded 90 second timeout")
         if proc.returncode or not output.exists():
@@ -133,16 +136,38 @@ def blender_check(path, ctx, spec):
         except (ValueError, OSError) as exc:
             return result("art3d-dcc-inspection", "HUMAN_REQUIRED", "invalid Blender adapter output: " + str(exc))
         problems = []
-        budget = spec.get("polygon_budget_by_lod", {}).get("default")
-        triangles_total = sum(x.get("triangles", 0) for x in stats.get("objects", []) if x.get("type") == "MESH")
-        if budget is not None and triangles_total > budget:
-            problems.append(f"triangle count {triangles_total} exceeds budget {budget}")
+        import re
+        mesh_objects = [x for x in stats.get("objects", []) if x.get("type") == "MESH"]
+        if not mesh_objects: problems.append("asset contains no meshes")
+        budgets = spec.get("polygon_budget_by_lod", {})
+        lods = spec.get("lods", [])
+        total = sum(x.get("triangles", 0) for x in mesh_objects)
+        if not lods and budgets.get("default") is not None and total > budgets["default"]:
+            problems.append(f"triangle count {total} exceeds budget {budgets['default']}")
+        for lod in lods:
+            name = lod.get("name") if isinstance(lod, dict) else lod
+            matches = [x for x in mesh_objects if name in x.get("name", "")]
+            if not matches: problems.append("required LOD missing: " + str(name)); continue
+            limit = budgets.get(name, budgets.get("default"))
+            count = sum(x.get("triangles", 0) for x in matches)
+            if limit is not None and count > limit: problems.append(f"{name} triangle count {count} exceeds budget {limit}")
+        if spec.get("naming_pattern"):
+            for obj in mesh_objects:
+                if not re.fullmatch(spec["naming_pattern"], obj.get("name", "")): problems.append("mesh naming convention failed: " + obj.get("name", "<unnamed>"))
+        if spec.get("node_naming_pattern"):
+            for obj in stats.get("objects", []):
+                if not re.fullmatch(spec["node_naming_pattern"], obj.get("name", "")): problems.append("node naming convention failed: " + obj.get("name", "<unnamed>"))
+        if spec.get("materials_required") and not stats.get("materials"): problems.append("materials required but none found")
         if spec.get("uv_required") and any(not x.get("uv_sets") for x in stats.get("objects", []) if x.get("type") == "MESH"):
             problems.append("required UV set missing")
         if spec.get("rig_required") and not stats.get("armatures"):
             problems.append("required armature missing")
         if spec.get("animation_required") and not stats.get("actions"):
             problems.append("required animation action missing")
+        actual = stats.get("export_settings", {})
+        for key, expected in spec.get("export_settings", {}).items():
+            if actual.get(key) != expected: problems.append(f"export {key} mismatch: expected {expected}, got {actual.get(key)}")
+        if not stats: return result("art3d-dcc-inspection", "HUMAN_REQUIRED", "Blender adapter produced no scene statistics")
         return result("art3d-dcc-inspection", "FAIL" if problems else "PASS", *(problems or ["Blender scene statistics collected"]))
 
 
@@ -180,6 +205,7 @@ def check(artifact, ctx):
         dcc = blender_check(candidate, ctx, spec)
     else: errors.append("unsupported automatic inspection format: " + suffix)
     dcc_state = dcc.get("state") if dcc else None
+    if dcc_state == "FAIL": errors.extend(dcc.get("reasons", []))
     production_state = "FAIL" if errors else (dcc_state if dcc_state in ("NOT_AVAILABLE", "HUMAN_REQUIRED", "FAIL") else "PASS")
     output = [result("art3d-asset-production", production_state, *errors)]
     if dcc: output.append(dcc)

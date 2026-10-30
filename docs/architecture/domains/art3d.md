@@ -32,7 +32,7 @@ Each kind uses the shared lifecycle v2 state graph and kind-specific schema-comp
 
 The plugin parses glTF JSON and GLB JSON chunks using Python's standard library. It checks triangle counts against per-LOD budgets, required LODs, material indices and presence, UV sets, texture URI files, node names, scene structure, rig/animation presence, file hash/format, export scale/units/up-axis, and required collision/texture/deliverable files. A file's existence alone never passes.
 
-Blender is optional and detected through `scripts/lib/tools.py`. The headless adapter emits scene object, mesh triangle, material, UV, armature, and action statistics for Blend, FBX, and OBJ. Missing Blender is `NOT_AVAILABLE`; timeout or unusable adapter output is `HUMAN_REQUIRED`. The core workflow does not require Blender. Visual quality, rights, and binding gameplay decisions remain human gates.
+Blender is optional and detected through `scripts/lib/tools.py`. The headless adapter emits scene object, mesh triangle, material assignment, UV, armature, and action statistics for Blend, FBX, and OBJ. FBX and OBJ are imported into a fresh scene using Blender's import operators. Their export settings are supplied alongside the source as `<file>.rpgfactory.json` under `export_settings`; Blend scenes may store `rpg_factory_export_settings` as scene metadata. All formats use the same LOD budgets, naming, material, UV, rig, animation, export-setting, and required-deliverable checks. Missing Blender is `NOT_AVAILABLE`; timeout or unusable adapter output is `HUMAN_REQUIRED`. The core workflow does not require Blender. Visual quality, rights, and binding gameplay decisions remain human gates.
 
 ## Handoffs
 

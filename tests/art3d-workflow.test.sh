@@ -74,8 +74,42 @@ fake=dict(asset); fake['spec']=dict(asset['spec'],file='asset.fbx',format='fbx')
 (repo/'asset.fbx').write_bytes(b'fixture')
 absent=plugin.check(fake,ctx); assert absent[0]['state']!='PASS', absent
 if tool_detector.find_tool('blender'):
-    assert absent[1]['state'] in ('PASS','HUMAN_REQUIRED','FAIL'), absent
-    print('PASS conditional Blender adapter exercised (tool present)')
+    blender=tool_detector.find_tool('blender')['path']
+    generator=temp/'make_dcc_fixtures.py'
+    generator.write_text('''import bpy, json, sys
+from pathlib import Path
+out=Path(sys.argv[sys.argv.index("--")+1])
+bpy.ops.object.select_all(action="SELECT"); bpy.ops.object.delete(use_global=False)
+mesh=bpy.data.meshes.new("mesh"); mesh.from_pydata([(0,0,0),(1,0,0),(0,1,0)],[],[(0,1,2)]); mesh.update()
+mesh.uv_layers.new(name="UVMap")
+obj=bpy.data.objects.new("LOD0_mesh",mesh); bpy.context.collection.objects.link(obj)
+mat=bpy.data.materials.new("FixtureMaterial"); mesh.materials.append(mat)
+bpy.context.scene["rpg_factory_export_settings"]={"scale":1,"units":"meters","up_axis":"Z"}
+bpy.ops.wm.save_as_mainfile(filepath=str(out/"valid.blend"))
+bpy.data.objects["LOD0_mesh"].data.materials.clear(); bpy.ops.wm.save_as_mainfile(filepath=str(out/"nomat.blend"))
+bpy.data.objects["LOD0_mesh"].data.materials.append(mat)
+bpy.ops.object.select_all(action="SELECT"); bpy.ops.wm.obj_export(filepath=str(out/"valid.obj"),export_selected_objects=True)
+bpy.ops.export_scene.fbx(filepath=str(out/"valid.fbx"),use_selection=True)
+''',encoding='utf-8')
+    generated=subprocess.run([blender,'-b','--python',str(generator),'--',str(temp)],capture_output=True,text=True,encoding='utf-8',timeout=90)
+    assert generated.returncode==0,generated.stderr
+    dcc_spec=dict(asset['spec'],naming_pattern='.*',node_naming_pattern='.*',export_settings={'scale':1,'units':'meters','up_axis':'Z'})
+    for ext in ('blend','obj','fbx'):
+        path=temp/f'valid.{ext}'; target=repo/path.name; target.write_bytes(path.read_bytes())
+        if ext!='blend': target.with_suffix(target.suffix+'.rpgfactory.json').write_text(json.dumps({'export_settings':dcc_spec['export_settings']}),encoding='utf-8')
+        dcc_asset=dict(asset); dcc_asset['spec']=dict(dcc_spec,file=target.name,format=ext,hash=hashlib.sha256(target.read_bytes()).hexdigest(),lods=['LOD0'])
+        checked=plugin.check(dcc_asset,ctx)
+        assert checked[0]['state']=='PASS' and checked[1]['state']=='PASS', (ext,checked)
+        print(f'PASS Blender {ext.upper()} imported/inspected with checked scene statistics')
+    bad=dict(asset); bad['spec']=dict(dcc_spec,file='valid.blend',format='blend',lods=['LOD0','LOD1'],naming_pattern='^NO_MATCH$',polygon_budget_by_lod={'default':-1},materials_required=True,export_settings={'scale':5,'units':'feet','up_axis':'Y'})
+    failed=plugin.check(bad,ctx)
+    assert failed[0]['state']=='FAIL' and failed[1]['state']=='FAIL' and all(any(word in reason for reason in failed[1]['reasons']) for word in ('LOD1','naming','exceeds budget','scale mismatch','units mismatch','up_axis mismatch')),failed
+    missing_files=dict(asset); missing_files['spec']=dict(dcc_spec,file='valid.blend',format='blend',required_deliverables=['missing.texture'],textures=['missing.texture'])
+    file_failure=plugin.check(missing_files,ctx); assert file_failure[0]['state']=='FAIL' and all(any(needle in reason for reason in file_failure[0]['reasons']) for needle in ('required deliverable missing','required textures deliverable missing')),file_failure
+    nomat=repo/'nomat.blend'; nomat.write_bytes((temp/'nomat.blend').read_bytes())
+    no_material=dict(asset); no_material['spec']=dict(dcc_spec,file='nomat.blend',format='blend',hash=hashlib.sha256(nomat.read_bytes()).hexdigest(),materials_required=True)
+    missing_material=plugin.check(no_material,ctx); assert missing_material[1]['state']=='FAIL' and any('materials required' in x for x in missing_material[1]['reasons']),missing_material
+    print('PASS Blender production requirements reject LOD, naming, budget, materials, scale, units, up-axis and deliverable violations')
 else:
     assert absent[1]['state']=='NOT_AVAILABLE', absent
     print('SKIP Blender adapter: Blender not available; explicit NOT_AVAILABLE confirmed')
