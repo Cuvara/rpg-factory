@@ -1,0 +1,5 @@
+{
+  "name": "Cuvara.UIToolkit.Editor",
+  "references": ["Cuvara.UIToolkit"],
+  "includePlatforms": ["Editor"]
+}

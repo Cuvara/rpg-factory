@@ -1,0 +1,303 @@
+{
+ "schema": "rpg-factory.ui-intents/1",
+ "note": "Deterministic UI request classification. Patterns are Python regexes matched case-insensitively against the request with URLs removed. Intents are tried in order; the first whose patterns match wins (an empty list matches anything). figma: true means the intent needs Figma context (a Figma URL or a Figma/connector term), unless the verb is ui-figma.",
+ "ui_signals": [
+  "\\bui\\b",
+  "\\bux\\b",
+  "\\buxml\\b",
+  "\\buss\\b",
+  "\\btss\\b",
+  "ui ?toolkit",
+  "\\bfigma\\b",
+  "\\bscreens?\\b",
+  "\\bpop-?ups?\\b",
+  "\\bhud\\b",
+  "\\bmenus?\\b",
+  "\\bdialogs?\\b",
+  "\\bmodal\\b",
+  "\\bbuttons?\\b",
+  "\\btoasts?\\b",
+  "\\btabs?\\b",
+  "\\bwidgets?\\b",
+  "\\blayout\\b",
+  "\\btheme\\b",
+  "\\bwireframes?\\b",
+  "\\bmock-?ups?\\b",
+  "\\binterface\\b",
+  "\\bpanels?\\b",
+  "\\bsliders?\\b",
+  "\\bdropdowns?\\b",
+  "\\btooltips?\\b",
+  "\\bscreencreator\\b",
+  "\\bvisualelement\\b",
+  "\\bpresenter\\b",
+  "\\buidocument\\b",
+  "com\\.cuvara\\.uitoolkit",
+  "\\bfig0\\d\\d\\b",
+  "\\b(settings|options|inventory|shop|store|quest|journal|login|title|pause|loading|main|character|equipment) (screen|panel|menu|flow|page|popup|window|dialog)s?\\b",
+  "\\b(ui|ux|user|screen) flows?\\b"
+ ],
+ "figma_terms": [
+  "\\bfigma\\b",
+  "\\bconnector\\b",
+  "\\bfig0\\d\\d\\b",
+  "figma-manifest",
+  "com\\.unity\\.ui\\.figma"
+ ],
+ "figma_url": "https?://(?:www\\.)?figma\\.com/(?:design|file|proto|board)/(?P<key>[A-Za-z0-9]+)(?:/[^\\s?#]*)?(?:\\?[^\\s#]*)?",
+ "figma_node_id": "[?&]node-id=(?P<id>\\d+(?:-|:|%3A)\\d+)",
+ "package_signals": [
+  "com\\.cuvara\\.uitoolkit",
+  "\\buitoolkit (package|repo)\\b",
+  "\\bin the (ui ?toolkit )?package\\b",
+  "\\bpackage (control|component)\\b"
+ ],
+ "components_signals": [
+  "\\bcomponents?\\b",
+  "\\bcontrols?\\b",
+  "\\bwidgets?\\b",
+  "\\breuse\\b",
+  "\\bcatalog\\b"
+ ],
+ "intents": [
+  {
+   "id": "troubleshoot",
+   "figma": false,
+   "patterns": [
+    "\\btroubleshoot",
+    "\\bdebug",
+    "\\bfix\\b",
+    "\\bwhy\\b",
+    "\\bfig0\\d\\d\\b",
+    "\\bbroken\\b",
+    "\\bcrash",
+    "\\bexception\\b",
+    "nullreference",
+    "(\\bnot|n't|\\bcannot) (work|show|render|appear|connect|load|import|display)"
+   ]
+  },
+  {
+   "id": "review",
+   "figma": false,
+   "patterns": [
+    "\\breview",
+    "\\baudit"
+   ]
+  },
+  {
+   "id": "figma-validate",
+   "figma": true,
+   "patterns": [
+    "\\bvalidat",
+    "\\bverify\\b",
+    "\\bcheck (the |this )?import"
+   ]
+  },
+  {
+   "id": "figma-analyze",
+   "figma": true,
+   "patterns": [
+    "\\banaly[sz]",
+    "\\binspect",
+    "\\bbreak (it )?down\\b",
+    "\\bcomponents?\\b",
+    "\\bwhat (is|are|does)\\b"
+   ]
+  },
+  {
+   "id": "figma-import",
+   "figma": true,
+   "patterns": []
+  },
+  {
+   "id": "design",
+   "figma": false,
+   "patterns": [
+    "\\b(re)?design (a|an|the|this|our|my)\\b",
+    "\\bwireframe",
+    "\\bmock-?up",
+    "\\b(ux|ui|user) flow\\b",
+    "\\bui spec",
+    "\\bux spec"
+   ]
+  },
+  {
+   "id": "components",
+   "figma": false,
+   "patterns": [
+    "\\b(find|which|what|list|select|choose|pick|reuse|need(ed)?)\\b.{0,60}\\b(components?|controls?|widgets?)\\b",
+    "\\b(components?|controls?|widgets?)\\b.{0,30}\\b(needed|for|to use)\\b",
+    "\\bcomponent selection\\b",
+    "\\bcatalog\\b"
+   ]
+  },
+  {
+   "id": "integrate",
+   "figma": false,
+   "patterns": [
+    "\\bintegrat",
+    "\\bhook (it )?up\\b",
+    "\\bwire (it |this )?(up|into)\\b",
+    "\\b(existing|imported) uxml\\b",
+    "\\bthis uxml\\b"
+   ]
+  },
+  {
+   "id": "analyze",
+   "figma": false,
+   "patterns": [
+    "\\banaly[sz]",
+    "\\bexplain\\b",
+    "\\bhow does\\b",
+    "\\barchitecture\\b",
+    "\\bmap out\\b"
+   ]
+  },
+  {
+   "id": "screen",
+   "figma": false,
+   "patterns": []
+  }
+ ],
+ "verbs": {
+  "ui": null,
+  "ui-figma": [
+   "troubleshoot",
+   "figma-validate",
+   "figma-analyze",
+   "figma-import"
+  ],
+  "ui-components": [
+   "components"
+  ],
+  "ui-screen": [
+   "integrate",
+   "analyze",
+   "screen"
+  ],
+  "ui-review": [
+   "troubleshoot",
+   "review"
+  ]
+ },
+ "intent_skills": {
+  "design": [],
+  "figma-import": [
+   "ui-figma-import",
+   "ui-component-selection",
+   "ui-toolkit-screen",
+   "ui-validation"
+  ],
+  "figma-analyze": [
+   "ui-figma-import",
+   "ui-component-selection"
+  ],
+  "figma-validate": [
+   "ui-figma-import",
+   "ui-validation"
+  ],
+  "components": [
+   "ui-component-selection"
+  ],
+  "screen": [
+   "ui-component-selection",
+   "ui-toolkit-screen",
+   "ui-validation"
+  ],
+  "integrate": [
+   "ui-toolkit-screen",
+   "ui-validation"
+  ],
+  "review": [
+   "ui-validation"
+  ],
+  "troubleshoot": [
+   "ui-toolkit-screen",
+   "ui-validation"
+  ],
+  "analyze": [
+   "ui-toolkit-screen"
+  ]
+ },
+ "intent_mode": {
+  "design": "implement",
+  "figma-import": "implement",
+  "figma-analyze": "analyze",
+  "figma-validate": "validate",
+  "components": "plan",
+  "screen": "implement",
+  "integrate": "implement",
+  "review": "review",
+  "troubleshoot": "implement",
+  "analyze": "analyze"
+ },
+ "skill_why": {
+  "ui-figma-import": "Figma frame through the official connector (com.unity.ui.figma): profiles, validator, diagnostics",
+  "ui-component-selection": "pick components from the real com.cuvara.uitoolkit catalog and Unity built-ins: reuse > configure > compose > missing",
+  "ui-toolkit-screen": "build or wire the screen on the package's View/Presenter, navigator and theme service",
+  "ui-validation": "validate references, theme, layout and runtime behaviour with evidence"
+ },
+ "screens": [
+  {
+   "id": "settings",
+   "name": "Settings",
+   "patterns": [
+    "\\bsettings\\b",
+    "\\boptions (screen|menu)\\b",
+    "\\bpreferences\\b"
+   ]
+  },
+  {
+   "id": "inventory",
+   "name": "Inventory",
+   "patterns": [
+    "\\binventory\\b",
+    "\\bbackpack\\b",
+    "\\bbag\\b"
+   ]
+  },
+  {
+   "id": "shop",
+   "name": "Shop",
+   "patterns": [
+    "\\bshop\\b",
+    "\\bstore\\b",
+    "\\bvendor\\b",
+    "\\bmerchant\\b"
+   ]
+  },
+  {
+   "id": "quest-panel",
+   "name": "QuestPanel",
+   "patterns": [
+    "\\bquests?\\b",
+    "\\bjournal\\b",
+    "\\bmission log\\b"
+   ]
+  },
+  {
+   "id": "hud",
+   "name": "Hud",
+   "patterns": [
+    "\\bhud\\b",
+    "\\bheads-up\\b"
+   ]
+  },
+  {
+   "id": "confirm",
+   "name": "ConfirmPopup",
+   "patterns": [
+    "\\bconfirm(ation)? (dialog|popup|pop-up)\\b"
+   ]
+  },
+  {
+   "id": "popup",
+   "name": "Popup",
+   "patterns": [
+    "\\bpop-?up\\b",
+    "\\bmodal\\b",
+    "\\bdialog\\b"
+   ]
+  }
+ ]
+}
