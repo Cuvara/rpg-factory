@@ -127,9 +127,7 @@ roots = list(dict.fromkeys([fstate.scratch(), os.path.join(fstate.persistent(), 
 cands = [os.path.join(r, key) for r in roots]
 print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/lib" "${sid:-none}")
   # the reader knows the on-disk layout (ADVISORIES.d/ + legacy file) and probes both roots itself
-  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '
-' | tr '
-' ';')
+  advisories=$(python3 -B "$ROOT/scripts/factory_session.py" --advisories "${sid:-none}" 2>/dev/null | tr -d '\r' | tr '\n' ';')
   [ -n "${RAW[$n]:-}" ] || grep -qw "factory-core" <<<"$used" || why+="factory-core not invoked; "
   cmds=$(grep '^{' "$f" | jq -r 'select(.type=="assistant") | .message.content[] | select(.type=="tool_use" and (.name=="Bash" or .name=="PowerShell")) | .input.command')
   if [ -n "${MODE[$n]:-}" ]; then  # declared via --mode, or recorded by the Skill hook in the session's state

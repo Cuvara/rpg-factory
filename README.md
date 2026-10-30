@@ -72,7 +72,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
               ┌────────────────┴─────────────────┐
               ▼                                  ▼
      cross-repo drivers                     domain + repo leads
-     game-design                            GDD ? feature specs ? design decisions
+     game-design                            GDD, feature specs, design decisions
      wire-contract  server → Netcode → client     server-realtime   (C# game server, SGL)
      pin-bump       released tag → client pins    server-services   (Go gateway, Nakama, Redis, migrations)
      measure        benchmarks / baselines        server-ops        (Docker, k8s/Agones, monitoring, CD)

@@ -1,6 +1,6 @@
 # Domains
 
-Domains describe who owns a discipline?s artifacts, which registry paths route work to its lead, and which quality and human gates apply. Factory Core reads this information from `registry.json`; the domain lead holds the discipline workflow. See [the multi-discipline architecture](multi-discipline-factory.md#5-domain-ownership-and-skill-classification) and [the shared artifact contract](artifacts.md).
+Domains describe who owns a discipline's artifacts, which registry paths route work to its lead, and which quality and human gates apply. Factory Core reads this information from `registry.json`; the domain lead holds the discipline workflow. See [the multi-discipline architecture](multi-discipline-factory.md#5-domain-ownership-and-skill-classification) and [the shared artifact contract](artifacts.md).
 
 ## Domain table
 
@@ -31,4 +31,4 @@ The registered quality gates are `artifact-lint` and `artifact-trace`. `design-r
 
 During `core-plumbing`, design may draft content and propose values, but numbers remain `TBD` or labelled proposals until verified approval. Engineering may use approved artifacts or existing code, subject to product-repo `TEAM.md` phase rules. Read [artifact lifecycles and approvals](artifacts.md) for schema, trace and trust details.
 
-Feature state may live only in registered authoring paths of a domain with `may_own_feature_state: true`. Product-repo `.ai/`, `docs/registry/` and `docs/features/` remain forbidden, and `.ai/` is never read as configuration. P6 adds registered engineering handoff contracts; P5 leaves the design domain?s handoffs empty.
+Feature state may live only in registered authoring paths of a domain with `may_own_feature_state: true`. Product-repo `.ai/`, `docs/registry/` and `docs/features/` remain forbidden, and `.ai/` is never read as configuration. P6 adds registered engineering handoff contracts; P5 leaves the design domain's handoffs empty.

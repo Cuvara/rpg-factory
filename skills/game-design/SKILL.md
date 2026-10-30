@@ -29,7 +29,7 @@ Owns the Game Design domain in the optional `authoring` repo, in its registered 
 
 ## Rules
 
-- This domain owns GDDs, feature specifications, design decisions and feature state only in its registered authoring paths. See `docs/architecture/multi-discipline-factory.md`, sections 5, 8.1?8.4.
+- This domain owns GDDs, feature specifications, design decisions and feature state only in its registered authoring paths. See `docs/architecture/multi-discipline-factory.md`, sections 5, 8.1-8.4.
 - Product-repo phase rules remain authoritative for product code. The shared artifact and approval contract is in `docs/architecture/artifacts.md`.
 
 ## Generated & protected paths
