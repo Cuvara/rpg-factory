@@ -8,6 +8,8 @@ ROOT=HERE.parent.parent
 sys.path.insert(0,str(HERE))
 sys.path.insert(0,str(ROOT/'scripts'))
 from lib import tools as tool_detector
+import importlib.util as review_loader
+review_spec=review_loader.spec_from_file_location('artifact_review',HERE/'artifact-review.py'); review=review_loader.module_from_spec(review_spec); review_spec.loader.exec_module(review)
 import importlib.util as iu
 spec=iu.spec_from_file_location('artifact_lint',HERE/'artifact-lint.py'); lint=iu.module_from_spec(spec); spec.loader.exec_module(lint)
 VALID={'PASS','FAIL','WARN','HUMAN_REQUIRED','NOT_AVAILABLE','BLOCKED'}
@@ -100,15 +102,25 @@ def main():
         if requirements.get('schema_complete') and errors: reason.append('complete artifact schema required')
         if requirements.get('acceptance') and not obj.get('acceptance'): reason.append('acceptance criteria required')
         if requirements.get('independent_review'):
-            authors={x.get('id') for x in obj.get('authors',[]) if isinstance(x,dict)}
+            authors={x.get('id') for x in obj.get('authors',[]) if isinstance(x,dict)} | review.author_emails(root,rel)
             candidates=[]
             rev=subprocess.run(['git','-C',str(root),'rev-parse',f'HEAD:{rel}'],capture_output=True,text=True,encoding='utf-8').stdout.strip()
             for rp in (root/'reviews'/aid).glob('*.json') if (root/'reviews'/aid).exists() else []:
                 try:
                     rv=json.loads(rp.read_text(encoding='utf-8')); reviewer=rv.get('reviewer',{}).get('id')
-                    if valid_review(rv,aid,rev,rp.name) and reviewer not in authors: candidates.append(rv)
+                    relative=rp.relative_to(root).as_posix(); identity,error=review.review_commit(root,relative)
+                    if error: continue
+                    commit,email=identity
+                    if valid_review(rv,aid,rev,rp.name) and email not in authors and reviewer==email:
+                        assurance='process'; requirement=requirements.get('review_assurance',reg.get('artifact_lifecycles',{}).get('default',{}).get('review_assurance','process'))
+                        if requirement=='signed':
+                            assurance,_=review.signed(root,commit,reg.get('domains',{}).get(obj.get('domain'),{}));
+                            if assurance!='PASS': reason.append('signed review required: '+_); continue
+                            assurance='signed'
+                        candidates.append((rv,assurance))
                 except Exception: pass
-            if not candidates: reason.append('independent review record required')
+            if not candidates and not reason: reason.append('independent review record required')
+            elif candidates: add(aid,obj,rel,'review-assurance','PASS',[candidates[0][1]])
         required_traces=requirements.get('needs_trace',[])
         for trace_kind in required_traces:
             if not any(t.get('kind')==trace_kind for t in obj.get('trace',[])): reason.append(trace_kind+' trace required')
@@ -121,7 +133,8 @@ def main():
                     try:
                         rv=json.loads(rp.read_text(encoding='utf-8')); reviewer=rv.get('reviewer',{}).get('id')
                         rev=subprocess.run(['git','-C',str(root),'rev-parse',f'HEAD:{rel}'],capture_output=True,text=True,encoding='utf-8').stdout.strip()
-                        if valid_review(rv,aid,rev,rp.name) and reviewer not in {x.get('id') for x in obj.get('authors',[]) if isinstance(x,dict)}: reviews=True
+                        identity,error=review.review_commit(root,rp.relative_to(root).as_posix())
+                        if not error and identity[1]==reviewer and identity[1] not in ({x.get('id') for x in obj.get('authors',[]) if isinstance(x,dict)} | review.author_emails(root,rel)) and valid_review(rv,aid,rev,rp.name): reviews=True
                     except Exception: pass
             for ac in obj.get('acceptance',[]):
                 coverage=requirements.get('verify_type_coverage',{}).get(ac.get('verify'), {})

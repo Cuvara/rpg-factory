@@ -9,6 +9,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import importlib.util
+
+_review_spec = importlib.util.spec_from_file_location("artifact_review", os.path.join(os.path.dirname(__file__), "artifact-review.py"))
+_review = importlib.util.module_from_spec(_review_spec)
+_review_spec.loader.exec_module(_review)
 
 
 def run(cwd, *args):
@@ -288,19 +293,31 @@ def main():
                 current_rev = git_blob(root, rel)
                 review_dir = os.path.join(root, "reviews", obj["id"])
                 valid = False
+                assurance = "process"
+                required_assurance = req.get("review_assurance", life.get("review_assurance", reg.get("artifact_lifecycles", {}).get("default", {}).get("review_assurance", "process")))
                 for review_name in os.listdir(review_dir) if os.path.isdir(review_dir) else []:
                     try:
                         review = json.load(open(os.path.join(review_dir, review_name), encoding="utf-8"))
                         reviewer = review.get("reviewer", {})
-                        author_ids = {x.get("id") for x in obj.get("authors", []) if isinstance(x, dict)}
+                        review_path = "reviews/" + obj["id"] + "/" + review_name
+                        identity, immutable_error = _review.review_commit(root, review_path)
+                        author_ids = {x.get("id") for x in obj.get("authors", []) if isinstance(x, dict)} | _review.author_emails(root, rel)
                         if (review.get("artifact") == obj["id"] and review.get("rev") == current_rev
-                                and reviewer.get("id") and reviewer.get("id") not in author_ids
+                                and identity and reviewer.get("id") == identity[1] and identity[1] not in author_ids
                                 and review.get("verdict") in ("approve", "changes-requested", "reject")
                                 and isinstance(review.get("findings"), list)):
+                            if required_assurance == "signed":
+                                signed_state, signed_reason = _review.signed(root, identity[0], reg.get("domains", {}).get(obj.get("domain"), {}))
+                                if signed_state != "PASS":
+                                    reason = "signed review required: " + signed_reason
+                                    continue
+                                assurance = "signed"
                             valid = True; break
                     except Exception:
                         continue
-                if not valid: reason = "review evidence required"
+                if not valid and reason is None: reason = "review evidence required"
+                if valid:
+                    print(f"PASS {aid} review-assurance {assurance}")
             if reason is None:
                 gates = list(req.get("needs_approval", []))
                 conditional = req.get("approval_when_binding")
