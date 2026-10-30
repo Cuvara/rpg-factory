@@ -36,6 +36,10 @@ LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r 
 # SHOWS:   text the transcript must contain (command output), if set; RAW scenarios send the prompt as-is.
 declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW CORRECTS
 PROMPT[design-feature-spec]="Draft a feature spec for a crafting system with --domain design. Do not create files in product repos; the authoring repo may be absent."
+PROMPT[ui-foundation]="Plan a settings screen flow for a crafting feature; route and draft only a UI flow artifact, with no production tooling."
+PROMPT[art2d-foundation]="Draft a 2D art brief for an icon set referenced by a UI spec; include delivery metadata and no generated art."
+PROMPT[art3d-foundation]="Draft a 3D art brief for a crafting workstation prop; describe handoffs to VFX and engineering without generating assets."
+PROMPT[vfx-foundation]="Draft a VFX specification for a crafting completion effect; hand off implementation intent to engineering without creating effect assets."
 EXPECT[design-feature-spec]="factory-core game-design"; HANDOFF[design-feature-spec]=""
 EXPECT[ui-foundation]="ui-ux"; HANDOFF[ui-foundation]=""
 EXPECT[art2d-foundation]="art-2d"; HANDOFF[art2d-foundation]=""
