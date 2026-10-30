@@ -67,6 +67,11 @@ problems=$(jq -r '
         | select(($r.domains[$d] // null) == null) | "\($id): unknown domain \($d)"),
       (($r.contracts // [])[] | .id as $id | (.domain // "engineering") as $d
         | select(($r.domains[$d] // null) == null) | "contract \($id): unknown domain \($d)"),
+      (($r.contracts // [])[] | select(.kind == "handoff") | .id as $id
+        | select([($r.domains // {})[].handoffs[]?] | index($id) == null)
+        | "handoff contract \($id): not listed by an owning domain"),
+      (($r.contracts // [])[] | select(.ordering != null and (.ordering | IN("ordered","none") | not))
+        | "contract \(.id): ordering must be ordered|none"),
       ($r.modules[] as $m | ($m.domain // "engineering") as $d
         | select(($r.domains[$d].repos // []) | index($m.repo) == null)
         | "\($m.id): repo \($m.repo) is not in domain \($d)"),
@@ -156,6 +161,30 @@ echo "$ownership_out"
 python3 -B - "$REGISTRY" "$PLUGIN_ROOT" <<'PY'
 import json, os, sys
 r=json.load(open(sys.argv[1],encoding="utf-8")); root=os.path.abspath(sys.argv[2]); errors=[]
+graph={}
+def domain_for(repo, path, fallback):
+    path=path.strip("/")
+    choices=[]
+    for module in r.get("modules",[]):
+        if module.get("repo")!=repo: continue
+        for prefix in module.get("paths",[]):
+            prefix=prefix.strip("/")
+            if not prefix or path==prefix or path.startswith(prefix+"/"): choices.append((len(prefix),module.get("domain","engineering")))
+    return max(choices,default=(0,fallback))[1]
+for c in r.get("contracts",[]):
+    if c.get("kind")!="handoff" or c.get("ordering")=="none": continue
+    source=c.get("source",{}).get("path",""); source_repo=c.get("source",{}).get("repo","")
+    src=domain_for(source_repo,source,c.get("domain","engineering"))
+    for end in c.get("copies",[]):
+        dest=domain_for(end.get("repo"),end.get("path",""),"engineering")
+        if src!=dest: graph.setdefault(src,set()).add(dest)
+def visit(node, stack, done):
+    if node in stack: return True
+    if node in done: return False
+    stack.add(node)
+    cycle=any(visit(child,stack,done) for child in graph.get(node,()))
+    stack.remove(node); done.add(node); return cycle
+if any(visit(n,set(),set()) for n in graph): errors.append("ordered handoff contracts contain a cycle")
 known={k for d in r.get("domains",{}).values() for k in d.get("artifact_kinds",[])}
 for kind,path in r.get("kind_schemas",{}).items():
     if kind != "default" and kind not in known: errors.append(f"kind schema {kind}: kind is not registered")

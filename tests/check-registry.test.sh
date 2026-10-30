@@ -54,7 +54,9 @@ expect_fail handoff-unmapped-copy '(.contracts |= map(if .id == "feature-spec-to
 expect_fail duplicate-domain-artifact-kind '.domains.engineering.artifact_kinds = ["feature-spec"]' 'artifact kind feature-spec is shared by domains engineering, design'
 expect_fail cross-domain-path-overlap '(.domains.design.repos += ["server"]) | (.modules |= map(if .id == "authoring.design-features" then .repo = "server" | .paths = ["backend/shared/proto/"] else . end))' 'domain path conflict'
 # Active kinds require meaningful spec payload schemas; foundation domains stay exempt.
-expect_fail active-kind-placeholder-schema '.kind_schemas["feature-spec"] = "docs/schemas/kinds/ui-flow.schema.json"' 'kind schema feature-spec: spec schema must declare non-empty required'
+expect_fail active-kind-placeholder-schema '.kind_schemas["feature-spec"] = "docs/schemas/kinds/placeholder.schema.json"' 'kind schema feature-spec: spec schema must declare non-empty required'
+expect_fail handoff-missing-domain-index '(.domains.vfx.handoffs |= map(select(. != "vfx-spec-to-impl")))' 'handoff contract vfx-spec-to-impl: not listed by an owning domain'
+expect_fail ordered-handoff-cycle '(.contracts |= map(if .id == "ui-vfx-sync" then .ordering = "ordered" else . end)) | (.contracts += [({id:"test-sync-reverse",kind:"handoff",domain:"vfx",summary:"cycle fixture",source:{repo:"authoring",path:"vfx/specs/"},copies:[{repo:"authoring",path:"ui/specs/"}],driver:"vfx",gate:null,evidence:"artifact-trace",ordering:"ordered"})]) | (.domains.vfx.handoffs += ["test-sync-reverse"])' 'ordered handoff contracts contain a cycle'
 if jq '.kind_schemas["ui-flow"] = "docs/schemas/kinds/ui-flow.schema.json"' "$REAL" > "$TMP/foundation-schema.json" && "$CHECKER" --structure-only --registry "$TMP/foundation-schema.json" > "$TMP/foundation-schema.out" 2>&1; then
   echo "PASS foundation kind schema remains exempt"; pass=$((pass + 1))
 else echo "FAIL foundation kind schema should be exempt"; cat "$TMP/foundation-schema.out"; fail=$((fail + 1)); fi

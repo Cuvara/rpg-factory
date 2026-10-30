@@ -201,20 +201,14 @@ def check(artifact, ctx):
     repo_key = spec.get('repo')
     repo = ctx.registry.get('repos', {}).get(repo_key, {}) if repo_key else {}
     # Repository roots are supplied by the caller's artifact set as optional roots.
-    root = ctx.registry.get('_repo_roots', {}).get(repo_key)
-    if not root and repo_key == 'authoring':
-        root = ctx.repo
-    repo_roots = getattr(ctx, 'repo_roots', {})
-    if not root and repo_key:
-        root = repo_roots.get(repo_key)
-    full = (Path(root) / Path(path_value)) if root and path_value else None
+    # Context.resolve_repo_path contains the path in the registered root (no absolute paths, traversal or symlink escapes).
+    full = ctx.resolve_repo_path(repo_key, path_value) if repo_key and path_value else None
+    if not path_value or not repo or not full or not full.is_file():
+        reason = 'registered repository root is unavailable' if repo_key in ctx.registry.get('repos', {}) and repo_key not in ctx.repo_roots else 'runtime export file path/repo is missing, unregistered, unsafe, or does not exist in the registered repo'
+        results.append(Result('art2d-export-file', 'FAIL', [reason]))
+        results.append(Result('art2d-export-integrity', 'FAIL', [reason]))
+        return results
     try:
-        if not path_value or not repo or not full or not full.is_file():
-            raise ValueError('runtime export file path/repo is missing, unregistered, or does not exist in the registered repo')
-        resolved_root = Path(root).resolve()
-        full = full.resolve()
-        if not full.is_relative_to(resolved_root):
-            raise ValueError('runtime export path escapes the registered repository root')
         w, h, fmt, alpha = _dimensions(full)
         declared = spec.get('dimensions') if isinstance(spec.get('dimensions'), dict) else {}
         mismatch = []

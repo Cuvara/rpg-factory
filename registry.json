@@ -5618,32 +5618,13 @@
       "evidence": "artifact-trace"
     },
     {
-      "id": "design-event-to-vfx",
-      "kind": "handoff",
-      "domain": "design",
-      "summary": "Gameplay event identifiers and timing intent consumed by VFX specifications.",
-      "source": {
-        "repo": "authoring",
-        "path": "design/features/"
-      },
-      "copies": [
-        {
-          "repo": "authoring",
-          "path": "vfx/specs/"
-        }
-      ],
-      "driver": "game-design",
-      "gate": null,
-      "evidence": "artifact-trace"
-    },
-    {
       "id": "ui-vfx-sync",
       "kind": "handoff",
-      "domain": "vfx",
-      "summary": "VFX specifications declare stable UI cue references and timing so UI and VFX reviews stay synchronized.",
+      "domain": "ui",
+      "summary": "UI cue timing and VFX effect timing stay synchronized through stable artifact references.",
       "source": {
         "repo": "authoring",
-        "path": "vfx/specs/"
+        "path": "ui/specs/"
       },
       "copies": [
         {
@@ -5651,13 +5632,14 @@
           "path": "vfx/specs/"
         }
       ],
-      "driver": "vfx",
+      "driver": "ui-ux",
       "gate": null,
       "evidence": "artifact-trace",
       "participants": [
         "ui",
         "vfx"
-      ]
+      ],
+      "ordering": "none"
     },
     {
       "id": "art3d-asset-to-impl",
@@ -5960,7 +5942,8 @@
       "handoffs": [
         "feature-spec-to-ui-spec",
         "ui-spec-to-art2d-brief",
-        "ui-spec-to-client"
+        "ui-spec-to-client",
+        "ui-vfx-sync"
       ],
       "may_own_feature_state": false,
       "approvers": [],
@@ -6055,7 +6038,7 @@
       ],
       "human_gates": [],
       "handoffs": [
-        "design-event-to-vfx",
+        "gameplay-event-to-vfx",
         "art3d-asset-to-vfx",
         "ui-vfx-sync",
         "vfx-spec-to-impl"
