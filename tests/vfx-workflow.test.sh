@@ -29,6 +29,8 @@ bad=json.loads(json.dumps(valid)); bad['spec']['curves'][0]['keyframes'].reverse
 bad=json.loads(json.dumps(valid)); bad['spec']['curves'][0]['keyframes'][0]['time']=2; cases.append(('curve range',bad,'vfx-curves'))
 bad=json.loads(json.dumps(valid)); bad['spec']['platforms']['desktop']['budget']['max_particles']=2; cases.append(('particle maximum',bad,'vfx-platform-budgets'))
 bad=json.loads(json.dumps(valid)); bad['spec']['dependencies']=[{'id':'missing-ui','kind':'ui','status':'required'}]; cases.append(('sync dependency',bad,'vfx-sync-dependencies'))
+bad=json.loads(json.dumps(valid)); bad['kind']='vfx-asset'; bad['sources']=['VFX-burst-001']; bad['spec']={'asset_path':'Assets/VFX/a.prefab','stats':{}}; cases.append(('missing asset stats',bad,'vfx-asset-budget'))
+bad=json.loads(json.dumps(valid)); bad['kind']='vfx-asset'; bad['sources']=['VFX-burst-001']; bad['spec']={'asset_path':'Assets/VFX/a.prefab','stats':{'mobile':{'particles':1,'overdraw':0.1,'draw_calls':1,'ms':0.1}}}; cases.append(('missing expected platform stats',bad,'vfx-asset-budget'))
 for name,artifact,check in cases: assert states(artifact)[check]=='FAIL',(name,states(artifact))
 ctx.registry['domains']['vfx']['engineering_event_ids']=['EVT-combat-hit']
 event_spec=json.loads(json.dumps(valid)); event_spec['spec']['triggers']=['EVT-combat-hit']; assert states(event_spec)['vfx-triggers']=='PASS'
@@ -75,10 +77,12 @@ ParticleSystem:
 EOF
 printf 'guid: abcdef1234567890\n' > "$T/unity/Assets/VFX/test.prefab.meta"
 printf '{"max_particles":16}\n' > "$T/budget.json"
-python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/test.prefab --budget-json "$T/budget.json" > "$T/present.json"
-jq -e '.state == "PASS" and .fields.max_particles == "12" and .guid == "abcdef1234567890"' "$T/present.json" >/dev/null
-python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" --guid abcdef1234567890 --budget-json "$T/budget.json" > "$T/guid.json"
-jq -e '.state == "PASS" and (.asset | contains("test.prefab"))' "$T/guid.json" >/dev/null
+python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/test.prefab --budget-json "$T/budget.json" > "$T/present.json" || true
+jq -e '.state == "HUMAN_REQUIRED" and .fields.max_particles == "12" and .guid == "abcdef1234567890" and (.comparisons|index("max_particles") != null)' "$T/present.json" >/dev/null
+python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/test.prefab > "$T/missing-budget.json" || true
+jq -e '.state == "HUMAN_REQUIRED" and any(.reasons[]; contains("spec budget missing"))' "$T/missing-budget.json" >/dev/null
+python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" --guid abcdef1234567890 --budget-json "$T/budget.json" > "$T/guid.json" || true
+jq -e '.state == "HUMAN_REQUIRED" and (.asset | contains("test.prefab"))' "$T/guid.json" >/dev/null
 printf '{"max_particles":4}\n' > "$T/budget.json"
 if python3 -B "$ROOT/scripts/adapters/vfx/unity.py" "$T/unity" Assets/VFX/test.prefab --budget-json "$T/budget.json" > "$T/over-budget.json"; then echo 'Unity adapter budget overrun unexpectedly passed' >&2; exit 1; fi
 jq -e '.state == "FAIL" and any(.reasons[]; contains("exceed spec budget"))' "$T/over-budget.json" >/dev/null
@@ -105,13 +109,12 @@ workflow.write_text(json.dumps({'id':'workflow','title':'VFX task','goal':'Autho
 PY
 python3 -B "$ROOT/scripts/factory-workflow.py" status "$T/workflow.json" --authoring "$T/authoring" --json > "$T/stale.json"
 jq -e '.states.effect == "stale" and (.stale_upstream|length) == 1' "$T/stale.json" >/dev/null
-# The specified base has placeholder schemas and no domain plugin, so these new rules cannot pass there.
+# Overlay this updated regression test on an archive of the base and require it to fail there.
 BASE=acec91692797bc0204e6a72bb5c92594c295fc45
-if git -C "$ROOT" cat-file -e "$BASE:docs/schemas/kinds/vfx-spec.schema.json" 2>/dev/null; then
-  git -C "$ROOT" show "$BASE:docs/schemas/kinds/vfx-spec.schema.json" > "$T/base-schema.json"
-  jq -e '. == {"type":"object"}' "$T/base-schema.json" >/dev/null
-  if git -C "$ROOT" cat-file -e "$BASE:scripts/checks/domains/vfx.py" 2>/dev/null; then echo 'Base proof failed: VFX plugin unexpectedly exists' >&2; exit 1; fi
-else
-  echo "NOT_RUN base proof: git object unavailable in this worktree runtime"
-fi
+mkdir -p "$T/base"
+git -C "$ROOT" archive "$BASE" | tar -x -C "$T/base"
+cp "$ROOT/tests/vfx-workflow.test.sh" "$T/base/tests/vfx-workflow.test.sh"
+if (cd "$T/base" && bash tests/vfx-workflow.test.sh) > "$T/base-proof.log" 2>&1; then echo 'Base proof unexpectedly passed' >&2; exit 1; fi
+grep -Eq 'FileNotFoundError|No such file|cannot open' "$T/base-proof.log"
+echo 'Base proof: updated test over git archive acec916 failed because VFX production rules were absent'
 echo 'vfx workflow: PASS'

@@ -36,14 +36,27 @@ def inspect(project, asset, guid=None, budget=None):
         match = re.search(r"^guid:\s*([0-9a-f]+)\s*$", meta.read_text(encoding="utf-8", errors="replace"), re.M)
         guid = match.group(1) if match else None
     reasons = [] if fields else ["Prefab parsed but no supported ParticleSystem fields were found"]
-    state = "PASS" if fields else "HUMAN_REQUIRED"
-    if budget and fields:
+    state = "HUMAN_REQUIRED" if not fields else "PASS"
+    comparisons = []
+    if not isinstance(budget, dict):
+        state = "HUMAN_REQUIRED"; reasons.append("spec budget missing; prefab cannot PASS without a budget comparison")
+    elif fields:
         try:
-            if int(fields["max_particles"]) > float(budget["max_particles"]):
+            if "max_particles" not in fields:
+                state = "HUMAN_REQUIRED"; reasons.append("prefab does not expose max_particles for comparison")
+            elif "max_particles" not in budget:
+                state = "HUMAN_REQUIRED"; reasons.append("spec budget is missing max_particles")
+            elif int(fields["max_particles"]) > float(budget["max_particles"]):
                 state = "FAIL"; reasons.append("prefab maximum particles exceed spec budget")
-        except (KeyError, TypeError, ValueError):
-            state = "HUMAN_REQUIRED"; reasons.append("complete particle budget unavailable for comparison")
-    return {"state": state, "asset": str(path), "guid": guid or (re.search(r"^guid:\s*([0-9a-f]+)\s*$", meta.read_text(encoding="utf-8", errors="replace"), re.M).group(1) if meta.exists() and re.search(r"^guid:\s*([0-9a-f]+)\s*$", meta.read_text(encoding="utf-8", errors="replace"), re.M) else None), "fields": fields, "reasons": reasons}
+            else:
+                comparisons.append("max_particles")
+        except (TypeError, ValueError):
+            state = "HUMAN_REQUIRED"; reasons.append("max_particles value or budget is not numeric")
+        for key in ("start_lifetime", "looping", "duration"):
+            if key in fields: reasons.append(key + " parsed but has no comparable spec budget")
+        if any(key in fields for key in ("start_lifetime", "looping", "duration")):
+            if state != "FAIL": state = "HUMAN_REQUIRED"
+    return {"state": state, "asset": str(path), "guid": guid or (re.search(r"^guid:\s*([0-9a-f]+)\s*$", meta.read_text(encoding="utf-8", errors="replace"), re.M).group(1) if meta.exists() and re.search(r"^guid:\s*([0-9a-f]+)\s*$", meta.read_text(encoding="utf-8", errors="replace"), re.M) else None), "fields": fields, "comparisons": comparisons, "reasons": reasons}
 
 
 def main():

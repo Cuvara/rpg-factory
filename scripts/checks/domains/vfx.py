@@ -64,10 +64,20 @@ def check(artifact, ctx):
         errors = []
         linked = [obj for _, obj in ctx.artifacts.values() if obj.get("kind") == "vfx-spec" and obj.get("id") in artifact.get("sources", []) + [x.get("id") for x in artifact.get("upstream", []) if isinstance(x, dict)]]
         if not linked: errors.append("asset record must reference its vfx-spec")
+        stats = spec.get("stats")
+        if not isinstance(stats, dict) or not stats:
+            errors.append("production-complete asset requires measured or declared stats")
         for source in linked:
-            for platform, measured in spec.get("stats", {}).items():
+            expected_platforms = source.get("spec", {}).get("platforms", {})
+            if not isinstance(stats, dict): stats = {}
+            for platform in expected_platforms:
+                if platform not in stats:
+                    errors.append("missing measured or declared stats for platform " + platform)
+            for platform, measured in stats.items():
                 budget = source.get("spec", {}).get("platforms", {}).get(platform, {}).get("budget")
                 if not budget: errors.append("no declared budget for measured platform " + platform); continue
+                if not isinstance(measured, dict):
+                    errors.append(platform + " stats must be an object"); continue
                 for stat, bkey in (("particles", "max_particles"), ("overdraw", "max_overdraw"), ("draw_calls", "max_draw_calls"), ("ms", "max_ms")):
                     try:
                         if float(measured[stat]) > float(budget[bkey]): errors.append(platform + " " + stat + " exceeds declared budget")
