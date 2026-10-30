@@ -6,7 +6,7 @@ trap 'rm -rf "$T"' EXIT
 ok=0; bad=0
 check() { local name="$1" expected="$2"; shift 2; local rc=0; "$@" >"$T/out" 2>&1 || rc=$?; if [ "$expected" = pass ] && [ "$rc" -eq 0 ]; then ok=$((ok+1)); echo "ok $name"; elif [ "$expected" = fail ] && [ "$rc" -ne 0 ]; then ok=$((ok+1)); echo "ok $name rejected"; else bad=$((bad+1)); echo "not ok $name (exit $rc; expected $expected)"; cat "$T/out"; fi; }
 newcase() {
-  local name="$1"; mkdir -p "$T/$name"; cp -R "$ROOT/tests/fixtures/dogfood/game-authoring" "$T/$name/game-authoring"; git -C "$T/$name/game-authoring" init -q; git -C "$T/$name/game-authoring" config user.name Fixture; git -C "$T/$name/game-authoring" config user.email fixture@example.invalid; git -C "$T/$name/game-authoring" add -- design; git -C "$T/$name/game-authoring" commit -qm seed
+  local name="$1"; mkdir -p "$T/$name"; cp -R "$ROOT/tests/fixtures/dogfood/game-authoring" "$T/$name/game-authoring"; git -C "$T/$name/game-authoring" init -q; git -C "$T/$name/game-authoring" config user.name Fixture; git -C "$T/$name/game-authoring" config user.email fixture@example.invalid; git -C "$T/$name/game-authoring" add -- design; git -C "$T/$name/game-authoring" commit -qm seed; mkdir -p "$T/$name/game-authoring/approvals"
   local native; native="$(cygpath -m "$T/$name")"
   sed "s|SCRATCH|$native|g" "$ROOT/tests/fixtures/dogfood/transcript.jsonl" >"$T/$name/transcript.jsonl"
 }
