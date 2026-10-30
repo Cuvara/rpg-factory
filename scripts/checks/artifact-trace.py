@@ -286,7 +286,7 @@ def main():
                     ):
                         reason = "missing AC coverage"
                         break
-            review_required = req.get("needs_review") or any(
+            review_required = req.get("independent_review") or req.get("needs_review") or any(
                 rule.get("needs_review") for rule in req.get("verify_type_coverage", {}).values()
             )
             if reason is None and review_required:
