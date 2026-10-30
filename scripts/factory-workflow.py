@@ -266,9 +266,13 @@ def quality(authoring, reg_path, repos, involved):
     for result in data.get("results", []):
         if isinstance(result,dict) and result.get("artifact") in involved:
             grouped.setdefault(result["artifact"], {"results": []})["results"].append(result)
+    valid_states={"PASS","FAIL","WARN","HUMAN_REQUIRED","NOT_AVAILABLE","BLOCKED"}
     for aid in involved:
         rows=grouped.get(aid,{}).get("results",[])
-        if not rows or not any(row.get("check")=="lifecycle" for row in rows):
+        bad=[row for row in rows if row.get("state") not in valid_states]
+        if bad:
+            grouped[aid]=unavailable(aid,f"artifact-quality returned an invalid result for {aid}: {bad[0].get('check')!r} state {bad[0].get('state')!r}")
+        elif not rows or not any(row.get("check")=="lifecycle" for row in rows):
             grouped[aid]=unavailable(aid,f"artifact-quality returned no lifecycle result for {aid}")
     return grouped
 
@@ -281,6 +285,7 @@ def state_for(node, plan, quality_map):
     if any(r.get("state")=="BLOCKED" for r in q.get("results",[])): return "blocked"
     if any(r.get("state")=="HUMAN_REQUIRED" for r in q.get("results",[])): return "human-required"
     if any(r.get("state")=="FAIL" for r in q.get("results",[])): return "blocked"
+    if any(r.get("state")=="NOT_AVAILABLE" for r in q.get("results",[])): return "human-required"
     if artifact["status"] == "rejected": return "rejected"
     if artifact["status"] == "blocked": return "blocked"
     return artifact["status"] if artifact["status"] in ("missing","draft","proposed","reviewed","approved","in-implementation","verified","released","rejected","blocked") else "draft"
