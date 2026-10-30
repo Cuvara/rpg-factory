@@ -43,7 +43,8 @@
       "type": "array"
     },
     "breakpoints": {
-      "type": "array"
+      "type": "array",
+      "items": {"type": "number", "exclusiveMinimum": 0}
     },
     "states": {
       "type": "object"
@@ -52,7 +53,16 @@
       "type": "array"
     },
     "data_bindings": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_artifact_id", "field"],
+        "properties": {
+          "source_artifact_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "field": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "element_id": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        }
+      }
     },
     "figma": {
       "type": "object"

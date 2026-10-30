@@ -18,12 +18,28 @@
   "trace": [],
   "spec": {
     "component_id": "status-panel",
-    "variants": [],
-    "props": [],
-    "states": [
-      "default"
+    "variants": [
+      {
+        "name": "default",
+        "description": "Standard status panel presentation."
+      }
     ],
-    "tokens": [],
+    "props": [
+      {
+        "name": "statusText",
+        "type": "string",
+        "description": "Status text supplied by a declared source artifact."
+      }
+    ],
+    "states": [
+      {
+        "name": "default",
+        "description": "Panel is visible and ready for input."
+      }
+    ],
+    "tokens": [
+      "color.surface"
+    ],
     "accessibility": {
       "label": "Player status",
       "focus_order": "after header",

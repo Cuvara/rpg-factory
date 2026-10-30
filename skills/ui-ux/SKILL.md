@@ -26,7 +26,7 @@ Task: $ARGUMENTS
 
 1. `ux-requirements`: identify users, goals, and task flows from upstream design.
 2. `ia-map`: list screens, choose an entry screen, and connect every screen with a reachable navigation graph.
-3. `design-tokens`: define named color, typography, spacing, radius, elevation, and motion tokens. Reference token names elsewhere; never inline token values there. Use `an explicit unresolved value or labelled proposal for gameplay-relevant numbers.
+3. `design-tokens`: define named color, typography, spacing, radius, elevation, and motion tokens. Reference token names elsewhere; never inline token values there. Use an explicit unresolved value or a labelled proposal for gameplay-relevant numbers.
 4. `component-spec`: describe component variants, props, states, accessibility, and token references.
 5. `screen-spec`: describe purpose, layout regions, components, navigation, platforms or breakpoints, bindings by known design/engineering IDs, five required states, and per-element interaction and accessibility contracts. Mark a state not applicable only with a reason.
 6. `ui-handoff`: map screen IDs to testable acceptance criteria and exact registered client engine paths. Send illustrations/icons to art2d and effect dependencies to VFX through registered contracts.
@@ -39,7 +39,7 @@ Task: $ARGUMENTS
 
 ## Validation delta
 
-Run CORE artifact lint/trace and `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py <repo> --registry ${CLAUDE_PLUGIN_ROOT}/registry.json --domain ui`. Read each plugin check by name: screen states, interaction/accessibility, reference integrity, navigation graph, responsive/platform declaration, handoff acceptance, token format, and Figma adapter state. `FAIL` requires correction; `NOT_AVAILABLE` explains optional tooling absence; `HUMAN_REQUIRED` needs human visual review. Also run workflow `plan` and `status` for multi-artifact work and address stale upstream revisions.
+Run CORE artifact lint/trace and `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py <repo> --registry ${CLAUDE_PLUGIN_ROOT}/registry.json`. Leave off `--domain ui` so declared design and engineering source artifacts remain available for data-binding field resolution. Read each UI plugin check by name: screen states, interaction/accessibility, reference integrity, navigation graph, responsive/platform declaration, data bindings, component quality, handoff acceptance, token format, and Figma adapter state. `FAIL` requires correction; `NOT_AVAILABLE` explains optional tooling absence; `HUMAN_REQUIRED` needs human visual review. Also run workflow `plan` and `status` for multi-artifact work and address stale upstream revisions.
 
 ## Scope
 
