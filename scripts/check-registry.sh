@@ -147,7 +147,7 @@ problems=$(jq -r '
 structure_count=$(jq '[.modules[] | .checks[]?[]?] | length' "$REGISTRY")
 modules_count=$(jq '.modules | length' "$REGISTRY")
 
-ownership_out=$(python3 -B "$PLUGIN_ROOT/scripts/checks/registry-ownership.py" "$REGISTRY" 2>&1) || {
+ownership_out=$(python3 -B "$(dirname "${BASH_SOURCE[0]}")/checks/registry-ownership.py" "$REGISTRY" 2>&1) || {
   echo "$ownership_out"
   exit 1
 }
