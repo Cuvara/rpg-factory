@@ -20,6 +20,12 @@ for path in templates:
     errors=artifact_lint.validate(obj,reg,common)
     assert not errors, f'{path.name}: {errors}'
 print(f'PASS templates schema-valid drafts ({len(templates)})')
+schema_ids=[]
+for kind in reg['domains']['art3d']['artifact_kinds']:
+    schema_path=root/reg['kind_schemas'][kind]
+    schema_ids.append(json.loads(schema_path.read_text(encoding='utf-8'))['$id'])
+assert len(schema_ids)==len(set(schema_ids)), 'art3d artifact schema $id values must be unique, including aliases'
+print(f'PASS artifact schema ids unique ({len(schema_ids)} kinds)')
 
 spec_file=root/'scripts/checks/domains/art3d.py'
 spec=importlib.util.spec_from_file_location('art3d_plugin',spec_file); plugin=importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
