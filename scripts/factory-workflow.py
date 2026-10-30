@@ -423,10 +423,16 @@ def main():
             print("Workflow status")
             for nid,state in states.items(): print(f"{nid}: {state}")
             print("Ready: " + (", ".join(out["ready"]) or "none"))
+            print("Stale upstream: " + ("; ".join(x["node"]+" <- "+", ".join(x["upstream"]) for x in stale_upstream) or "none"))
             print("Revalidate: " + (", ".join(revalidate) or "none"))
         else:
             print(f"Workflow report: {out['overall']}")
-            for nid,row in node_rows.items(): print(f"{nid}: {row['status']} ({row['artifact_id'] or 'no artifact'})")
+            for nid,row in node_rows.items():
+                print(f"{nid}: {row['status']} ({row['artifact_id'] or 'no artifact'}{('@'+row['rev']) if row['rev'] else ''})")
+                print("  Validation: " + ", ".join(f"{key} {value}" for key,value in row["validation"]["summary"].items()))
+                print(f"  Reviews: {len(row['reviews'])}; approval: {row['approvals']['state']}")
+                if row["engineering_trace"]:
+                    print("  Engineering commits: " + ", ".join(t.get("repo", "?")+"@"+t.get("ref", "?")+" ("+("valid" if t.get("commit_valid") else "unverified")+")" for t in row["engineering_trace"]))
             print("Stale: " + (", ".join(out["stale"]) or "none"))
             print("Blocked: " + (", ".join(blocked) or "none"))
             print("Human required: " + (", ".join(human) or "none"))

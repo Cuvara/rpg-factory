@@ -67,6 +67,7 @@ echo 'PASS multi-domain workflow orders registered dependencies with parallel ro
 python3 -B "$ROOT/scripts/factory-workflow.py" status "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" --json >"$TMP/status" || exit 1
 python3 -B "$ROOT/scripts/factory-workflow.py" dispatch "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" --node design --json >"$TMP/dispatch" || exit 1
 python3 -B "$ROOT/scripts/factory-workflow.py" report "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" --json >"$TMP/report" || exit 1
+python3 -B "$ROOT/scripts/factory-workflow.py" report "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" >"$TMP/report.txt" || exit 1
 python3 - "$ROOT" "$TMP" <<'PY'
 import importlib.util,json,pathlib,sys,subprocess
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2])
@@ -78,6 +79,7 @@ for name,kind in [('out','workflow-plan'),('status','workflow-status'),('dispatc
     assert not errors,(name,errors)
 assert json.loads((t/'status').read_text())['states']['design']=='missing'
 assert json.loads((t/'report').read_text())['overall']=='incomplete'
+assert 'Validation:' in (t/'report.txt').read_text() and 'approval:' in (t/'report.txt').read_text()
 contract=json.loads((t/'dispatch').read_text()); assert contract['allowed_write_paths'] and contract['inputs']==[]
 for runner in ('print','orca','agent'):
     p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'dispatch',str(t/'design.json'),'--registry',str(t/'registry.json'),'--authoring',str(t/'authoring'),'--node','design','--runner',runner],capture_output=True,text=True)
