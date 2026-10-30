@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Added
 
+- Added production Game Design artifacts, schemas, templates, gameplay-number checks, and design-to-UI, art, VFX, and Engineering contracts.
+- Added production UI/UX artifact schemas, draft templates, quality rules, workflow guidance, and registry handoffs.
+- Added production 2D art direction, concepts, asset specifications, runtime export records, references, schemas, and image integrity quality rules.
+- Added 3D art artifact kinds, per-kind schemas and draft templates for direction, models, materials, rigs, animation, and delivery.
+- Added standard-library glTF/GLB production validation and optional Blender scene-statistics inspection for DCC formats.
+- Added production VFX direction, specification, and delivery workflows, domain quality rules, and optional Unity prefab inspection.
+- Added the `/rpg-factory:workflow` production workflow for planning, status, and integrated reports across domains.
 - Added dependency-aware workflow planning, status, dispatch, and integrated reports through the factory entry point.
 - Added lifecycle-aware workflow status, signed approval grading, upstream blob invalidation, ordered revalidation, engineering traces, and schemas for every workflow output.
 - Workflow readiness now blocks artifacts when artifact-quality cannot produce lifecycle results, and reports the unavailable-check reason.
@@ -14,6 +21,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Changed
 
+- Replaced foundation guidance with production workflows, valid drafts, quality rules, and domain handoff requirements.
+- Routed workflow planning from registered artifact kinds and ordered waves from handoff contracts; synchronization contracts trigger revalidation without imposing wave order.
+- Documented registry-derived repository roots, safe path resolution, provider discovery, and the shared `Context.approval` contract.
 - Artifact reviews bind to git author identities, expose process or signed assurance, and support registry-required signed reviews.
 - Workflow planning routes all registered artifact kinds; synchronization contracts provide revalidation without adding wave order.
 - Unity and Blender availability detection is path-only so quality checks never launch editor processes.
@@ -67,6 +77,12 @@ update rpg-factory@rpg-factory`, then start a new session.
 
 ### Fixed
 
+- Deduplicated equivalent handoff contracts while retaining distinct Art3D source and delivery paths.
+- Kept binding gameplay approvals `HUMAN_REQUIRED` until a trusted signing key is registered; verified approvals bind to the artifact revision.
+- Enforced UI production quality rules for breakpoints, source-backed data bindings, components, and uniquely resolved handoff screens.
+- Validated WebP headers and palette constraints, and made optional 2D art providers report availability without network calls.
+- Made tool detection side-effect-free; Windows tool discovery uses Git Bash instead of the System32 WSL launcher.
+- Added a Windows CI job for the shared workflow test suites.
 - `tests/routing-golden.test.sh` and `tests/registry-nulls.test.sh` are host-independent (Linux CI without a workspace): host path-form scenarios stay out of the golden, and the guard is compared with itself on the real registry.
 - Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and configure UTF-8 stdio for the executable asset manifest checker.
 - Keep the base P4 checker fixture consistent by removing domains, modules, skills and contracts that depend on the removed authoring repository.

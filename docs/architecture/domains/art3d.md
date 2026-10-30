@@ -10,12 +10,14 @@ Every artifact uses stable ids, `schema_version: 2`, `sources`, `authors`, upstr
 
 | Kind | Payload |
 |---|---|
-| `art3d-brief`, `art-direction-3d` | Visual direction, palette, references, constraints; the first kind remains a compatibility alias. |
+| `art-direction-3d` | Visual direction, palette, references, constraints. |
 | `model-spec` | Topology, per-LOD polygon budget, UV requirements, naming, scale, units, pivot, scene/rig requirements. |
 | `material-spec` | Material assignments and texture maps, resolution, format, colour space. |
 | `rig-spec` | Skeleton and root-bone naming, units, scale, deformation policy. |
 | `animation-spec` | Clips, fps, looping, root motion and duration. |
-| `asset-3d`, `art3d-asset` | File and SHA-256, format, LODs, collision/physics, textures, export settings, engine constraints and required deliverables. `art3d-asset` remains a compatibility alias. |
+| `asset-3d` | File and SHA-256, format, LODs, collision/physics, textures, export settings, engine constraints and required deliverables. |
+
+The registry also retains `art3d-brief` and `art3d-asset` as legacy kinds. The production workflow plans registered kinds; legacy aliases remain valid compatibility inputs.
 
 Each kind uses the shared lifecycle v2 state graph and kind-specific schema-complete proposal requirements. Rejected artifacts recover through a new draft; blocked artifacts require a reason and blocker ids; upstream revision changes require revalidation. No shortcut may skip review, approval, or evidence requirements.
 

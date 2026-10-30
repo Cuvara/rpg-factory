@@ -121,7 +121,7 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   covered by `tests/commands.test.sh`.
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work) routes to
   13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
-  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 5 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
+  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. These domain leads own production artifact workflows and quality checks. 5 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
   unity-client-tech, unity-dots, netcode-client) own no module, are never routed, and appear as `routing.tech` for their `used_by`.
 - **Dev tools:** registry `dev_tools[]` → `lib/devtools.py` probes (PATH, TCP services, MCP server and
   plugin names only - never config values) → snapshot "Tools for this change" and doctor "Dev tools".
