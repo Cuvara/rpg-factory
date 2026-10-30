@@ -6,6 +6,7 @@ from pathlib import Path
 HERE=Path(__file__).resolve().parent
 ROOT=HERE.parent.parent
 sys.path.insert(0,str(HERE))
+sys.path.insert(0,str(HERE/'domains'))
 sys.path.insert(0,str(ROOT/'scripts'))
 from lib import tools as tool_detector
 import importlib.util as review_loader
@@ -83,6 +84,8 @@ def main():
     for item in a.repos:
         if '=' in item:
             k,v=item.split('=',1); repo_map[k]=os.path.abspath(v)
+    repo_roots={k:Path(v).resolve() for k,v in repo_map.items() if k in reg.get('repos',{})}
+    repo_roots.setdefault('authoring', root.resolve())
     for aid,(rel,obj) in artifacts.items():
         life=lint.lifecycle(reg,obj.get('kind')); state=obj.get('status'); errors=lint.validate(obj,reg,schema)
         if state=='review':
@@ -171,7 +174,7 @@ def main():
             try:
                 ps=iu.spec_from_file_location('domain_quality_plugin',pp); mod=iu.module_from_spec(ps); ps.loader.exec_module(mod)
                 from domains._api import Context
-                ctx=Context(str(root),reg,rel,artifacts,tool_detector.find_tool)
+                ctx=Context(str(root),reg,rel,artifacts,tool_detector.find_tool,repo_roots)
                 for result in mod.check(obj,ctx):
                     if isinstance(result,dict): check=result.get('check','plugin'); st=result.get('state','PASS'); reasons=result.get('reasons',[])
                     else: check=result.check; st=result.state; reasons=result.reasons

@@ -83,8 +83,9 @@ unavailable=Context(); unavailable.repo=str(repo); unavailable.tools=lambda name
 missing_blender=plugin.blender_check(repo/'asset.glb',unavailable,asset['spec'])
 assert missing_blender['state']=='NOT_AVAILABLE' and 'Blender not available' in missing_blender['reasons'][0],missing_blender
 from unittest.mock import patch
+timeout_ctx=Context(); timeout_ctx.repo=str(repo); timeout_ctx.tools=lambda name:{'path':'blender-fixture'}
 with patch.object(plugin.subprocess,'run',side_effect=subprocess.TimeoutExpired('blender',90)):
-    timed_out=plugin.blender_check(repo/'asset.glb',ctx,asset['spec'])
+    timed_out=plugin.blender_check(repo/'asset.glb',timeout_ctx,asset['spec'])
 assert timed_out['state']=='HUMAN_REQUIRED' and '90 second timeout' in timed_out['reasons'][0],timed_out
 print('PASS Blender absence is NOT_AVAILABLE and timeout is HUMAN_REQUIRED with reason')
 if tool_detector.find_tool('blender'):
@@ -140,7 +141,7 @@ workflow={'id':'art3d-fixture','title':'Art3D fixture','goal':'Plan art3d and en
 wf=temp/'workflow.json'; wf.write_text(json.dumps(workflow),encoding='utf-8')
 p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'plan',str(wf),'--registry',str(root/'registry.json'),'--json'],capture_output=True,text=True,encoding='utf-8',check=True)
 plan=json.loads(p.stdout); assert plan['nodes']['direction']['domain']=='art3d' and plan['nodes']['asset']['lead_skill']=='art-3d' and plan['nodes']['asset']['paths'][0].startswith('art3d/deliveries/') and plan['nodes']['implementation']['domain']=='engineering', plan
-assert plan['edges'] and plan['waves'][0]==['direction'], plan
+assert plan['edges'] and plan['waves']==[['upstream-design-to-art3d'],['direction'],['asset'],['implementation']], plan
 print('PASS workflow plan routes art3d and Engineering in dependency waves')
 
 stale_repo=temp/'stale-authoring'; (stale_repo/'art3d/direction').mkdir(parents=True); (stale_repo/'art3d/deliveries').mkdir(parents=True)

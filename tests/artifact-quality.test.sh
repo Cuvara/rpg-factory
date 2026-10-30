@@ -57,10 +57,45 @@ for script,args in [('artifact-lint.py',[]),('artifact-trace.py',['--registry',s
 print('PASS malformed artifacts fail closed with path and parse reason')
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
-import importlib.util,os,pathlib,sys
+import importlib.util,json,os,pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); exe=t/'fake-tool.py'; exe.write_text('print("fake 1.0")\n'); os.environ['RPG_FACTORY_TOOL_NODE']=str(exe)
 s=importlib.util.spec_from_file_location('tools',root/'scripts/lib/tools.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); found=m.find_tool('node'); assert found and found['path']==str(exe.resolve()) and 'fake' in found['version']
 print('PASS tool override discovery')
+for name in ('game-art-mcp','ai-pixel-art-image-generation','figma'):
+    os.environ.pop('RPG_FACTORY_TOOL_'+name.upper().replace('-','_'),None)
+    assert m.find_tool(name) is None, name
+provider='game-art-mcp'; secret='fixture-never-print-this-secret'; settings=t/'mcp-fixture.json'; settings.write_text(json.dumps({'mcpServers':{provider:{'command':'hidden-command','env':{'TOKEN':secret}}}}))
+os.environ['RPG_FACTORY_MCP_FILE']=str(settings); found=m.find_tool(provider); assert found=={'name':provider,'source':'mcp'},found
+os.environ['RPG_FACTORY_TOOL_'+provider.upper().replace('-','_')]='configured-value'; assert m.find_tool(provider)=={'name':provider,'source':'environment override'}
+result=subprocess.run([sys.executable,str(root/'scripts/lib/tools.py'),provider],capture_output=True,text=True,env=os.environ.copy()); assert result.returncode==0 and secret not in result.stdout+result.stderr and 'configured-value' not in result.stdout+result.stderr
+plugins=t/'plugin-settings.json'; plugins.write_text(json.dumps({'enabledPlugins':{'figma@fixture-market':True,'other@fixture-market':True},'apiKey':secret})); os.environ['RPG_FACTORY_PROJECT_SETTINGS']=str(plugins); os.environ.pop('RPG_FACTORY_TOOL_FIGMA',None); assert m.find_tool('figma')=={'name':'figma','source':'plugin'}
+print('PASS optional MCP provider absent/present discovery reports names only')
+PY
+python3 -B - "$ROOT" "$T" <<'PY'
+import importlib.util,json,os,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); marker=t/'unity-invoked.log'; fake=t/'unity.py'; fake.write_text(f"import pathlib; pathlib.Path({str(marker)!r}).write_text('invoked')\n")
+os.environ['RPG_FACTORY_TOOL_UNITY']=str(fake); spec=importlib.util.spec_from_file_location('tools_safe',root/'scripts/lib/tools.py'); tools=importlib.util.module_from_spec(spec); spec.loader.exec_module(tools); found=tools.find_tool('unity'); assert found and found['path']==str(fake.resolve()) and not marker.exists(),found
+repo=t/'vfx-tool-fixture'; (repo/'specs').mkdir(parents=True); (repo/'specs/asset.artifact.json').write_text(json.dumps({'schema_version':1,'id':'VFX-tool-001','kind':'vfx-asset','domain':'vfx','status':'draft','title':'Tool probe','upstream':[],'acceptance':[],'trace':[],'spec':{'summary':'No launch'}}))
+registry={'repos':{},'domains':{'vfx':{'artifact_kinds':['vfx-asset'],'quality_plugin':'scripts/checks/domains/vfx.py'}},'artifact_lifecycles':{}}
+reg=t/'vfx-tool-registry.json'; reg.write_text(json.dumps(registry)); result=subprocess.run([sys.executable,'-B',str(root/'scripts/checks/artifact-quality.py'),str(repo),'--registry',str(reg),'--domain','vfx','--json'],capture_output=True,text=True,env=os.environ.copy()); data=json.loads(result.stdout); assert not marker.exists(),result.stdout; assert any(x['check']=='unity-editor-availability' and x['state']=='WARN' for x in data['results']),data
+print('PASS Unity tool detection is path-only in direct and artifact-quality calls')
+PY
+python3 -B - "$ROOT" "$T" <<'PY'
+import pathlib,sys
+root=pathlib.Path(sys.argv[1]); temp=pathlib.Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts/checks'))
+from domains._api import Context
+repo=temp/'contained'; outside=temp/'outside'; repo.mkdir(); outside.mkdir(); (repo/'ok.png').write_bytes(b'x'); (outside/'escape.png').write_bytes(b'x')
+ctx=Context(str(repo),{'repos':{'client':{}}},'',{},lambda _:None,{'client':repo})
+assert ctx.resolve_repo_path('client','ok.png')==(repo/'ok.png').resolve()
+assert ctx.resolve_repo_path('client','../outside/escape.png') is None
+assert ctx.resolve_repo_path('client',str(outside/'escape.png')) is None
+try:
+    (repo/'link.png').symlink_to(outside/'escape.png')
+except (OSError,NotImplementedError):
+    pass
+else:
+    assert ctx.resolve_repo_path('client','link.png') is None
+print('PASS registered repo paths reject absolute, traversal and symlink escapes')
 PY
 echo "artifact-quality: expanded review identity assertions passed, 0 failed"
 python3 -B - "$ROOT" "$T" <<'PY'
@@ -93,4 +128,26 @@ review.write_text(review.read_text()+' '); git('add','reviews'); git('commit','-
 git('mv',str(review.relative_to(repo)),str((rd/'renamed.json').relative_to(repo))); git('commit','-qm','rename review'); rows=results(); assert any(x['check']=='lifecycle' and x['state']=='FAIL' and 'independent review record required' in ' '.join(x['reasons']) for x in rows),rows
 shutil.rmtree(keydir)
 print('PASS edited and renamed review files fail immutability validation')
+PY
+python3 -B - "$ROOT" "$T" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); temp=pathlib.Path(sys.argv[2]); repo=temp/'approval-context'; (repo/'specs').mkdir(parents=True)
+key=temp/'approval-key'; subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True); public=' '.join(pathlib.Path(str(key)+'.pub').read_text().strip().split()[:2]); principal='context-approver@example.com'
+def git(*args): return subprocess.run(['git','-C',str(repo),*args],check=True,capture_output=True,text=True)
+git('init','-q','-b','main'); git('config','user.email','author@example.com'); git('config','user.name','Author')
+ids=('missing','invalid','untrusted','verified')
+for aid in ids: (repo/'specs'/f'{aid}.artifact.json').write_text(json.dumps({'schema_version':1,'id':aid,'kind':'approval-case','domain':'fixture','status':'approved','title':aid,'upstream':[],'acceptance':[],'trace':[],'spec':{'summary':'Approval context fixture'}}))
+git('add','.'); git('commit','-qm','artifacts'); gate='fixture-approval'
+for aid in ('invalid','untrusted','verified'):
+    rel=f'specs/{aid}.artifact.json'; rev=git('rev-parse',f'HEAD:{rel}').stdout.strip(); folder=repo/'approvals'/aid; folder.mkdir(parents=True)
+    record={'artifact':aid,'gate':gate,'scope':'fixture','rev':rev,'date':'2026-10-31T00:00:00Z','by':principal}
+    if aid=='invalid': record['rev']='0'*40
+    (folder/f'{gate}-{rev}.json').write_text(json.dumps(record)); git('add',f'approvals/{aid}')
+    git('config','commit.gpgsign','true' if aid=='verified' else 'false')
+    if aid=='verified': git('config','gpg.format','ssh'); git('config','user.signingkey',str(key))
+    git('commit','-qm',f'{aid} approval')
+reg={'repos':{},'domains':{'fixture':{'artifact_kinds':['approval-case'],'quality_plugin':'tests/fixtures/approval-context-plugin.py','human_gates':[gate],'approvers':[{'principal':principal,'ssh_public_key':public}]}},'artifact_lifecycles':{'approval-case':{'states':['approved'],'requirements':{'approved':{'needs_approval':[gate]}}}}}
+reg_path=temp/'approval-context-registry.json'; reg_path.write_text(json.dumps(reg)); command=[sys.executable,'-B',str(root/'scripts/checks/artifact-quality.py'),str(repo),'--registry',str(reg_path),'--domain','fixture','--json']
+result=subprocess.run(command,capture_output=True,text=True); assert result.returncode==1,result.stderr; rows=[x for x in json.loads(result.stdout)['results'] if x['check']=='approval-context']; states={x['artifact']:x['reasons'][0] for x in rows}; assert states=={'missing':'missing','invalid':'invalid','untrusted':'untrusted','verified':'verified'},(states,rows)
+print('PASS stub plugin reads Context approval states: missing, invalid, untrusted, verified')
 PY

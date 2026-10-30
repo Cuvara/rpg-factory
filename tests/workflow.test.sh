@@ -43,7 +43,7 @@ cat >"$TMP/domains.json" <<'EOF'
 {"id":"domains","title":"Domains","goal":"Cross domain","targets":[{"id":"design","kind":"feature-spec","sources":[],"acceptance":["A"]},{"id":"ui","kind":"ui-spec","sources":["design"],"acceptance":["B"]},{"id":"art","kind":"art2d-brief","sources":["ui"],"acceptance":["C"]},{"id":"art3d","kind":"art3d-asset","sources":[],"acceptance":["D"]},{"id":"vfx","kind":"vfx-spec","sources":["art3d"],"acceptance":["E"]},{"id":"impl","kind":"implementation","repo":"client","paths":["Assets/Scripts/"],"sources":[],"acceptance":["F"]}],"existing":[]}
 EOF
 python3 -B "$ROOT/scripts/factory-workflow.py" plan "$TMP/domains.json" --registry "$TMP/registry.json" --json >"$TMP/out"
-python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["waves"]==[["art3d","design"],["ui","vfx"],["art"],["impl"]]' "$TMP/out" || exit 1
+python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["waves"]==[["design"],["art3d","ui"],["art","vfx"],["impl"]]' "$TMP/out" || exit 1
 echo 'PASS handoff graph produces ordered waves with parallel siblings'
 cat >"$TMP/art2d.json" <<'EOF'
 {"id":"art2d","title":"Art","goal":"Art","targets":[{"id":"art","kind":"art2d-brief","sources":[],"acceptance":["Brief"]}],"existing":[]}
@@ -62,8 +62,14 @@ cat >"$TMP/fullchain.json" <<'EOF'
 {"id":"chain","title":"Chain","goal":"Full chain","targets":[{"id":"design","kind":"feature-spec","sources":[],"acceptance":["A"]},{"id":"ui","kind":"ui-spec","sources":["design"],"acceptance":["B"]},{"id":"art2d","kind":"art2d-brief","sources":["ui"],"acceptance":["C"]},{"id":"impl","kind":"implementation","repo":"client","paths":["Assets/Scripts/"],"sources":["art2d"],"acceptance":["D"]},{"id":"vfx","kind":"vfx-spec","sources":["art2d"],"acceptance":["E"]}],"existing":[]}
 EOF
 python3 -B "$ROOT/scripts/factory-workflow.py" plan "$TMP/fullchain.json" --registry "$TMP/registry.json" --json >"$TMP/out" || exit 1
-python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); expected={("art2d","impl"),("art2d","vfx"),("design","impl"),("design","ui"),("ui","art2d"),("ui","impl"),("upstream-art3d-asset-to-vfx","impl"),("upstream-art3d-asset-to-vfx","vfx"),("vfx","impl")}; actual={(e["from"],e["to"]) for e in p["edges"]}; assert actual==expected,(actual,expected); assert p["waves"]==[["design","upstream-art3d-asset-to-vfx"],["ui"],["art2d"],["vfx"],["impl"]]; assert p["nodes"]["impl"]["domain"]=="engineering"; assert ("upstream-art3d-asset-to-vfx","vfx") in actual' "$TMP/out" || exit 1
+python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); expected={("art2d","impl"),("art2d","vfx"),("design","art2d"),("design","impl"),("design","ui"),("design","vfx"),("design","upstream-art3d-asset-to-vfx"),("ui","art2d"),("ui","impl"),("upstream-art3d-asset-to-vfx","impl"),("upstream-art3d-asset-to-vfx","vfx"),("vfx","impl")}; actual={(e["from"],e["to"]) for e in p["edges"]}; assert actual==expected,(actual,expected); assert p["waves"]==[["design"],["ui","upstream-art3d-asset-to-vfx"],["art2d"],["vfx"],["impl"]]; assert p["nodes"]["impl"]["domain"]=="engineering"; assert ("upstream-art3d-asset-to-vfx","vfx") in actual' "$TMP/out" || exit 1
 echo 'PASS multi-domain workflow orders registered dependencies with parallel roots'
+cat >"$TMP/new-kinds.json" <<'EOF'
+{"id":"new-kinds","title":"New kinds","goal":"Route every production discipline","targets":[{"id":"ds-system","kind":"gameplay-system"},{"id":"ds-handoff","kind":"technical-handoff"},{"id":"ui-screen","kind":"screen-spec"},{"id":"a2-concept","kind":"concept-2d"},{"id":"a2-export","kind":"runtime-export-2d"},{"id":"a3-model","kind":"model-spec"},{"id":"fx-spec","kind":"vfx-spec"}],"existing":[]}
+EOF
+python3 -B "$ROOT/scripts/factory-workflow.py" plan "$TMP/new-kinds.json" --registry "$TMP/registry.json" --json >"$TMP/new-kinds-plan" || exit 1
+python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); n=p["nodes"]; expected={"ds-system":("design","game-design"),"ds-handoff":("design","game-design"),"ui-screen":("ui","ui-ux"),"a2-concept":("art2d","art-2d"),"a2-export":("art2d","art-2d"),"a3-model":("art3d","art-3d"),"fx-spec":("vfx","vfx")}; assert all((n[k]["domain"],n[k]["lead_skill"])==v for k,v in expected.items()),[(k,n[k]["domain"],n[k]["lead_skill"]) for k in expected]; assert "sync_links" in p and all(not x["ordering"] for x in p["sync_links"])' "$TMP/new-kinds-plan" || exit 1
+echo 'PASS new artifact kinds route to every registered production domain and lead'
 python3 -B "$ROOT/scripts/factory-workflow.py" status "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" --json >"$TMP/status" || exit 1
 python3 -B "$ROOT/scripts/factory-workflow.py" dispatch "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" --node design --json >"$TMP/dispatch" || exit 1
 python3 -B "$ROOT/scripts/factory-workflow.py" report "$TMP/design.json" --registry "$TMP/registry.json" --authoring "$TMP/authoring" --json >"$TMP/report" || exit 1
@@ -115,7 +121,7 @@ assert status['states']['ui']=='stale' and status['stale_upstream']==[{'node':'u
 author=t/'authoring-recovery'; (author/'design/features').mkdir(parents=True); (author/'ui/specs').mkdir(parents=True)
 parent_id='DS-recovery-001'; child_id='UI-recovery-001'; parent_path='design/features/DS-recovery-001.artifact.json'; child_path='ui/specs/UI-recovery-001.artifact.json'
 parent={'schema_version':1,'id':parent_id,'kind':'feature-spec','domain':'design','status':'rejected','title':'Recovery parent','upstream':[],'acceptance':[{'id':'A1','text':'Feature works','verify':'test'}],'trace':[],'rejection':{'reason':'Original design failed review','by':'reviewer@example.com','date':'2026-10-30T00:00:00Z'},'spec':{'summary':'Recovery parent','goals':['Recover'],'requirements':[{'id':'A1','description':'Feature works'}]}}
-child={'schema_version':1,'id':child_id,'kind':'ui-spec','domain':'ui','status':'draft','title':'Dependent UI','upstream':[],'acceptance':[{'id':'U1','text':'UI follows design','verify':'review'}],'trace':[],'spec':{}}
+child={'schema_version':1,'id':child_id,'kind':'ui-spec','domain':'ui','status':'draft','title':'Dependent UI','upstream':[],'acceptance':[{'id':'U1','text':'UI follows design','verify':'review'}],'trace':[],'spec':{'screen_id':'screen-recovery'}}
 pp=author/parent_path; cp=author/child_path; pp.write_text(json.dumps(parent)); cp.write_text(json.dumps(child))
 subprocess.run(['git','init','-q','-b','main',str(author)],check=True); subprocess.run(['git','-C',str(author),'config','user.email','author@example.com'],check=True); subprocess.run(['git','-C',str(author),'config','user.name','Author'],check=True); subprocess.run(['git','-C',str(author),'add','.'],check=True); subprocess.run(['git','-C',str(author),'commit','-qm','rejected artifact with record'],check=True)
 def blob(): return subprocess.run(['git','-C',str(author),'rev-parse',f'HEAD:{parent_path}'],capture_output=True,text=True,check=True).stdout.strip()
@@ -157,4 +163,17 @@ for mode,fragment in [('exit','exited 23'),('invalid','invalid JSON'),('missing'
 print('PASS workflow fails closed for nonzero, invalid JSON, and missing quality results; approved front matter cannot ready dependent dispatch')
 PY
 [ "$?" -eq 0 ] || exit 1
-echo 'workflow tests: 12 run, 12 passed, 0 failed'
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); author=t/'sync-authoring'; (author/'ui/specs').mkdir(parents=True); (author/'vfx/specs').mkdir(parents=True)
+vfx={'id':'VFX-sync-001','kind':'vfx-spec','domain':'vfx','status':'draft','title':'Cue effect','upstream':[],'acceptance':[],'trace':[],'spec':{}}
+ui={'id':'UI-sync-001','kind':'screen-spec','domain':'ui','status':'draft','title':'Cue screen','upstream':[{'id':vfx['id'],'rev':'old-revision'}],'acceptance':[],'trace':[],'spec':{}}
+(author/'vfx/specs/VFX-sync-001.artifact.json').write_text(json.dumps(vfx)); (author/'ui/specs/UI-sync-001.artifact.json').write_text(json.dumps(ui))
+spec=t/'sync-status.json'; spec.write_text(json.dumps({'id':'sync-status','title':'Sync status','goal':'Revalidate synchronized cue peers','targets':[{'id':ui['id'],'kind':'screen-spec'},{'id':vfx['id'],'kind':'vfx-spec'}],'existing':[]}))
+p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'status',str(spec),'--registry',str(root/'registry.json'),'--authoring',str(author),'--json'],capture_output=True,text=True,check=True); status=json.loads(p.stdout)
+assert status['states'][ui['id']]=='stale',status
+assert any(x['contract']=='ui-vfx-sync' and ui['id'] in x['changed'] and vfx['id'] in x['needs_revalidation'] for x in status['sync_revalidation']),status
+print('PASS sync contract reports the opposite side for revalidation without an ordering edge')
+PY
+[ "$?" -eq 0 ] || exit 1
+echo 'workflow tests: 14 run, 14 passed, 0 failed'

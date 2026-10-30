@@ -458,6 +458,11 @@
           "evidence": {
             "type": "string"
           },
+          "ordering": {
+            "enum": ["ordered", "none"],
+            "default": "ordered",
+            "description": "none registers a routable synchronization contract for follow-ups and trace evidence without adding a workflow wave edge."
+          },
           "domain": {
             "type": "string",
             "description": "Owning domain; defaults to engineering."

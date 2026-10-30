@@ -3,6 +3,15 @@
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Orca Windows worktrees may store a Windows absolute gitdir in the .git file;
+# POSIX shells need its native path when running the archive proofs.
+if [[ -f "$ROOT/.git" ]] && { command -v cygpath >/dev/null 2>&1 || command -v wslpath >/dev/null 2>&1; }; then
+  WORKTREE_GITDIR=$(sed -n 's/^gitdir: //p' "$ROOT/.git")
+  if [[ "$WORKTREE_GITDIR" =~ ^[A-Za-z]:/ ]]; then
+    if command -v cygpath >/dev/null 2>&1; then export GIT_DIR="$(cygpath -u "$WORKTREE_GITDIR")"; else export GIT_DIR="$(wslpath -u "$WORKTREE_GITDIR")"; fi
+    export GIT_WORK_TREE="$ROOT"
+  fi
+fi
 T="$(mktemp_win)" || exit 1
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/authoring/vfx/specs" "$T/unity/Assets"
@@ -151,9 +160,9 @@ spec={'id':'workflow','title':'VFX task','goal':'Author production effect','targ
 (t/'workflow.json').write_text(json.dumps(spec))
 PY
 python3 -B "$ROOT/scripts/factory-workflow.py" plan "$T/workflow.json" --json > "$T/plan.json"
-jq -e '.nodes.effect.domain == "vfx" and .nodes.effect.lead_skill == "vfx" and (.waves|length) == 2 and (.nodes|keys|length) == 3' "$T/plan.json" >/dev/null
+jq -e '.nodes.effect.domain == "vfx" and .nodes.effect.lead_skill == "vfx" and (.waves|length) == 3 and (.nodes|keys|length) == 3' "$T/plan.json" >/dev/null
 python3 -B "$ROOT/scripts/factory-workflow.py" status "$T/workflow.json" --json > "$T/status.json"
-jq -e '.states.effect == "blocked" and (.waves|length) == 2' "$T/status.json" >/dev/null
+jq -e '.states.effect == "blocked" and (.waves|length) == 3' "$T/status.json" >/dev/null
 # A changed upstream blob revision marks an existing VFX artifact stale.
 python3 -B - "$T/authoring" "$T/workflow.json" <<'PY'
 import json,pathlib,sys

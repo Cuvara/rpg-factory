@@ -80,11 +80,10 @@ def check(artifact, ctx):
     repo_key=spec.get('repo')
     repo=ctx.registry.get('repos',{}).get(repo_key,{}) if repo_key else {}
     # Repository roots are supplied by the caller's artifact set as optional roots.
-    root=ctx.registry.get('_repo_roots',{}).get(repo_key)
-    if not root and repo_key=='authoring': root=ctx.repo
-    full=Path(root)/Path(path_value) if root and path_value else None
+    full=ctx.resolve_repo_path(repo_key,path_value) if repo_key and path_value else None
     if not path_value or not repo or not full or not full.is_file():
-        results.append(Result('art2d-export-file','FAIL',['runtime export file path/repo is missing, unregistered, or does not exist in the registered repo']))
+        reason='registered repository root is unavailable' if repo_key in ctx.registry.get('repos',{}) and repo_key not in ctx.repo_roots else 'runtime export file path/repo is missing, unregistered, unsafe, or does not exist in the registered repo'
+        results.append(Result('art2d-export-file','FAIL',[reason]))
         return results
     try:
         w,h,fmt,alpha=_dimensions(full)

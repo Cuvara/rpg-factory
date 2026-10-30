@@ -96,7 +96,8 @@ def build(spec, reg, authoring):
     ids = set(spec.get("existing", []))
     nodes = {}
     edges = set()
-    handoffs = [c for c in reg.get("contracts", []) if c.get("kind") == "handoff"]
+    handoffs = [c for c in reg.get("contracts", []) if c.get("kind") == "handoff" and c.get("ordering", "ordered") != "none"]
+    sync_contracts = [c for c in reg.get("contracts", []) if c.get("kind") == "handoff" and c.get("ordering") == "none"]
     def make_node(node_id, kind, domain, title, acceptance, repo="authoring", paths=None, target=False):
         if node_id not in nodes:
             module = path_module(reg, repo, (paths or [""])[0])
@@ -126,6 +127,13 @@ def build(spec, reg, authoring):
             target = dict(target, repo="authoring")
             slug = {"feature-spec": "features"}.get(kind, kind.replace("-", ""))
             module = next((m for m in reg.get("modules", []) if m.get("repo") == "authoring" and m.get("domain") == domain and slug in m.get("id", "").replace("-", "")), None)
+            if not module:
+                defaults={"design":"design/features/","ui":"ui/specs/","art2d":"art2d/specs/","art3d":"art3d/models/","vfx":"vfx/specs/"}
+                domain_modules=[m for m in reg.get("modules",[]) if m.get("repo")=="authoring" and m.get("domain")==domain and m.get("paths")]
+                module=next((m for m in domain_modules if any(any(token in m.get("id","").replace("-","") for token in kind.split("-") if len(token)>3) for _ in [0])),None)
+                if not module:
+                    path=defaults.get(domain,"")
+                    module=next((m for m in domain_modules if path in m.get("paths",[])),None)
             paths = list((module or {}).get("paths", []))[:1]
         node_id = target.get("id") or f"{kind}-{index + 1}"
         make_node(node_id, kind, domain, target.get("title"), target.get("acceptance"), target.get("repo", "authoring"), paths, True)
@@ -235,7 +243,18 @@ def build(spec, reg, authoring):
             if key in seen: serialized.append([nid])
             else: seen.add(key); serialized.append([nid])
         wave[:] = [n for group in serialized for n in group]
-    return {"schema":"rpg-factory.workflow-plan/1","workflow":spec,"nodes":nodes,"edges":[{"from":a,"to":b} for a,b in sorted(edges)],"waves":waves,"existing":existing}
+    sync_links=[]
+    for contract in sync_contracts:
+        ends=[contract.get("source",{})]+contract.get("copies",[])
+        domains=set()
+        for end in ends:
+            module=path_module(reg,end.get("repo"),end.get("path",""))
+            domain=contract.get("domain") if end is ends[0] else None
+            domains.add(domain or (module or {}).get("domain","engineering"))
+        left=[n["id"] for n in nodes.values() if n["domain"] in domains]
+        if len(left)>1:
+            sync_links.append({"contract":contract["id"],"nodes":left,"ordering":False})
+    return {"schema":"rpg-factory.workflow-plan/1","workflow":spec,"nodes":nodes,"edges":[{"from":a,"to":b} for a,b in sorted(edges)],"waves":waves,"sync_links":sync_links,"existing":existing}
 
 
 def quality(authoring, reg_path, repos, involved):
@@ -416,6 +435,12 @@ def main():
         changed=upstream_changes(artifact,plan["existing"])
         if changed:
             states[nid]="stale"; stale_nodes.add(nid); stale_upstream.append({"node":nid,"upstream":changed})
+    sync_revalidation=[]
+    for link in plan.get("sync_links",[]):
+        changed=[nid for nid in link["nodes"] if nid in stale_nodes]
+        if changed:
+            others=[nid for nid in link["nodes"] if nid not in changed]
+            sync_revalidation.append({"contract":link["contract"],"changed":changed,"needs_revalidation":others})
     # Include every transitively downstream node in deterministic topological order.
     affected=set(stale_nodes); queue=list(stale_nodes)
     while queue:
@@ -429,7 +454,7 @@ def main():
     if a.command=="status":
         ready=[nid for nid,n in plan["nodes"].items() if states[nid] in ("missing","draft","rejected") and all(states[e["from"]] in ("approved","in-implementation","verified","released") for e in plan["edges"] if e["to"]==nid) and inputs_ready(n)]
         unavailable={nid:"; ".join(r for row in q.get(art.get("id"),{}).get("results",[]) if row.get("check")=="quality-check-unavailable" for r in row.get("reasons",[])) for nid,node in plan["nodes"].items() if (art:=node_artifact(node,plan)) and any(row.get("check")=="quality-check-unavailable" for row in q.get(art.get("id"),{}).get("results",[]))}
-        out={"schema":"rpg-factory.workflow-status/1","states":states,"ready":ready,"stale_upstream":stale_upstream,"revalidate":revalidate,"waves":plan["waves"],"quality_check_unavailable":unavailable}
+        out={"schema":"rpg-factory.workflow-status/1","states":states,"ready":ready,"stale_upstream":stale_upstream,"revalidate":revalidate,"sync_revalidation":sync_revalidation,"waves":plan["waves"],"quality_check_unavailable":unavailable}
     else:
         node_rows={}
         for nid,n in plan["nodes"].items():

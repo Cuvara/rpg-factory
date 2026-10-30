@@ -66,3 +66,19 @@ untrusted or revoked keys, signature or principal mismatches, stale revisions, c
 clones, and AI agent co-author trailers. Any approval uncertainty prints `HUMAN_REQUIRED`; trace or schema failures
 print `FAIL`. The initial production approver list is empty until the maintainer registers a key from an authorized
 source.
+# Synchronization contracts
+
+Contracts with `kind: "handoff"` may set `ordering: "none"` when two domains must
+coordinate repeatedly (for example, UI cue timing and VFX timing). These contracts
+remain routable and their artifact references remain trace evidence, but they do not
+add a workflow wave edge. Plans expose them as synchronization links; status reports
+the opposite participant as needing revalidation when one side's upstream revision
+changes. Ordered handoff contracts still create wave edges and must form an acyclic graph.
+
+Domain quality plugins receive `Context.repo_roots`, a mapping of registered repo keys to
+caller-supplied roots (`--repos key=path`, plus the current authoring root). Use
+`Context.resolve_repo_path(repo, relative_path)` to resolve an existing repo-relative file;
+absolute paths, traversal, and symlink escapes return `None`.
+`Context.approval(artifact_id)` applies the same immutable SSH signature and trusted-approver
+verification as artifact trace, returning `state` (`verified`, `missing`, `invalid`, or
+`untrusted`) and explanatory `reasons`.
