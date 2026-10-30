@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -15,7 +16,14 @@ def norm(value):
     msys = re.match(r"^/([a-zA-Z])/(.*)$", value)
     if msys:
         value = msys.group(1).upper() + ":/" + msys.group(2)
-    return value.lower().rstrip("/")
+    return posixpath.normpath(value).lower().rstrip("/")
+
+
+def normalized_path(value, root):
+    value = str(value).replace("\\", "/")
+    if not value.startswith("/") and not re.match(r"^[a-zA-Z]:/", value):
+        value = root.rstrip("/") + "/" + value
+    return norm(value)
 
 
 def records(path):
@@ -153,11 +161,11 @@ def main():
     for path in writes:
         if not path:
             failures.append("write tool path missing")
-        elif not norm(path).startswith(base + "/"):
+        elif not normalized_path(path, base).startswith(base + "/"):
             failures.append("write outside scratch workspace: " + path)
     for command in bash_commands:
         for match in re.findall(r"(?:^|\s)(/(?:[A-Za-z0-9_.-]+/)+[^\s;&|]+|[A-Za-z]:\\[^\s;&|]+)", command):
-            if (match.startswith("/") or re.match(r"^[A-Za-z]:\\", match)) and not norm(match).startswith(base + "/") and any(x in match.lower() for x in ("write", "rm ", "mv ", "cp ", ".json", ".md")):
+            if (match.startswith("/") or re.match(r"^[A-Za-z]:\\", match)) and not normalized_path(match, base).startswith(base + "/") and any(x in match.lower() for x in ("write", "rm ", "mv ", "cp ", ".json", ".md")):
                 failures.append("possible write outside scratch workspace: " + match)
     for event in events:
         if event.get("type") == "result" and event.get("subtype") not in (None, "success"):

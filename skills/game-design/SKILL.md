@@ -19,7 +19,7 @@ Use `/rpg-factory:workflow` or `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-conte
 1. Resolve scope and upstream ids/revisions through Core. Record each upstream revision as the Git blob id from `git hash-object <path>` for that source file.
 2. Draft a `game-concept` before systems/content when the project premise is unsettled. Capture audience, pillars, genre, platforms, USP and constraints.
 3. Write one `gameplay-system` per system type. Define core loop, mechanics, progression, interaction/combat, economy sources and sinks, difficulty and meta progression.
-4. Write feature and content specs (`level-spec`, `quest-spec`, `npc-spec`, `item-spec`) against existing concept/system ids. Keep IDs stable.
+4. Write feature and content specs (`feature-spec`, `level-spec`, `quest-spec`, `npc-spec`, `item-spec`) against existing concept/system IDs: record IDs in artifact `sources` and in `spec.game_concept` or `spec.gameplay_systems` as applicable. Store each source's current Git blob revision in `upstream` with `git hash-object <path>`. Keep IDs stable.
 5. Produce a GDD to integrate approved concepts and systems; record decisions as `design-decision` artifacts with alternatives and consequences.
 6. Create `technical-handoff` with gameplay/state/data requirements, events, edge cases, testable acceptance criteria and registered engineering dependencies.
 7. Validate using `artifact-quality.py`; resolve every `FAIL` and rerun until none remain. Route accepted design to UI, engineering, art2d/art3d and VFX through registered contracts.

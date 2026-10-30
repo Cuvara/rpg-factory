@@ -27,6 +27,7 @@ def main():
     seeds = {
         "feature-spec": ("design/features/FD-inventory-001.artifact.json", from_template("design/feature-spec.md", "FD-inventory-001", "Inventory feature", {"summary": "Manage carried items", "requirements": [{"id": "REQ1", "description": "Show item slots"}]})),
         "approved-feature": ("design/features/FD-approved-001.artifact.json", from_template("design/feature-spec.md", "FD-approved-001", "Feature brief: craft a field tool", {"summary": "Craft a field tool", "requirements": [{"id": "REQ1", "description": "Show recipe and result"}]})),
+        "field-tool-system": ("design/systems/GS-field-tool-001.artifact.json", from_template("design/gameplay-system.md", "GS-field-tool-001", "Field tool crafting system", {"core_loop": "Select a recipe, provide ingredients, and receive a crafted tool", "mechanics": ["Show recipe and result"]})),
         "design-event": ("design/features/GS-craft-complete-001.artifact.json", from_template("design/gameplay-system.md", "GS-craft-complete-001", "Craft completion gameplay system", {"system_type": "combat", "core_loop": "Crafting completes and presents a result", "mechanics": ["Emit a completion event"], "progression": ["TBD"], "combat_interaction": ["TBD"], "economy": {"currencies": ["TBD"], "sources": ["TBD"], "sinks": ["TBD"]}, "difficulty_balancing": ["TBD"], "meta_progression": ["TBD"]})),
         "asset-3d": ("art3d/assets/ARTD-workstation-001.artifact.json", from_template("art3d/asset-3d.md", "ARTD-workstation-001", "Workstation asset")),
     }
@@ -35,7 +36,14 @@ def main():
         stale_vfx = from_template("vfx/vfx-spec.md", "VFX-craft-complete-001", "Crafting completion effect", {"purpose": "TBD: crafting completion effect", "triggers": ["GS-stale-001"]})
         stale_vfx["upstream"] = [{"id": "GS-stale-001", "rev": "0000000000000000000000000000000000000000"}]
         seeds["stale-downstream"] = ("vfx/specs/VFX-craft-complete-001.artifact.json", stale_vfx)
-    selected = ("stale-upstream", "stale-downstream") if seed == "stale-pair" else ((seed,) if seed in seeds else ())
+    if seed == "asset-3d-vfx":
+        selected = ("asset-3d", "design-event")
+    elif seed == "stale-pair":
+        selected = ("stale-upstream", "stale-downstream")
+    elif seed == "approved-feature":
+        selected = ("approved-feature", "field-tool-system")
+    else:
+        selected = (seed,) if seed in seeds else ()
     for key in selected:
         rel, value = seeds[key]
         if value.get("status") == "approved":

@@ -36,6 +36,7 @@ Task: $ARGUMENTS
 - Deliver outputs as stable UI artifact IDs/revisions. Design inputs arrive from `feature-spec`; engineering receives `ui-handoff` and screen specs; art2d receives visual briefs; VFX dependencies remain explicit in both directions.
 - Do not invent binding data, identifiers, or paths. For unknown gameplay values, state that the value is unresolved or label it as a proposal pending design approval. Mark concept and production readiness explicitly in the artifact status/title when relevant.
 - `spec.data_bindings` is an array of objects shaped as `{"source_artifact_id":"<artifact-id>","field":"<dot.path>"}`. The source ID must also appear in `sources` or `upstream`, and `field` must resolve inside that artifact's `spec`; do not use bare strings, alternate keys, or embedded values.
+- Keep workflow references acyclic: a screen spec depends on its design feature spec; a technical handoff can depend on the completed screen. Do not make the screen depend on its own downstream technical handoff.
 - Figma is optional. Checks never call network APIs. A Figma reference requires a file key and node ID; visual verification remains `HUMAN_REQUIRED` without attached screenshot/export evidence. Structured specs work without Figma.
 
 ## Validation delta

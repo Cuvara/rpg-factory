@@ -28,7 +28,7 @@ PY
 }
 seed_lifecycle() {
   local seed; mkdir -p "$T/seeds"
-  for seed in feature-spec design-event asset-3d approved-feature stale-pair; do
+  for seed in feature-spec design-event asset-3d approved-feature field-tool-system asset-3d-vfx stale-pair; do
     mkdir -p "$T/seeds/$seed"
     python3 -B "$ROOT/tests/dogfood/write-setup.py" "$ROOT" "$T/seeds/$seed" "$seed" || return 1
     python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T/seeds/$seed" --registry "$ROOT/registry.json" || return 1
