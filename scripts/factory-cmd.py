@@ -8,6 +8,13 @@
                                           against the current tree without running anything
   doctor                                  install state, registry, state paths, tools,
                                           dev tools (MCP servers, plugins, binaries) per skill
+  ui [--json] [--project DIR] [--uitoolkit-ref REF] <request...>
+                                          scripts/ui/ui_plan.py: UI plan - intent, ONLY the UI skills
+                                          needed, lead route, missing context, components (exit 3 =
+                                          NEEDS_CONTEXT)
+  ui-figma | ui-components | ui-screen | ui-review  [same options] <request...>
+                                          the same plan with the intent family forced (Figma import,
+                                          component selection, screen implementation, review)
 
 Read-only except `check` without --status, which runs the fast checks (builds/tests) exactly like
 run-checks.py. Exit code = the underlying script's; 2 = usage error.
@@ -142,9 +149,41 @@ def cmd_doctor(args):
     return rc
 
 
+UI_VERBS = ("ui", "ui-figma", "ui-components", "ui-screen", "ui-review")
+
+
+def cmd_ui(verb, raw):
+    """UI verbs keep the request text intact (no comma splitting); one quoted string is split on blanks."""
+    tokens = raw[0].split() if len(raw) == 1 else list(raw)
+    opts, words, i = [], [], 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "--json":
+            opts.append(t)
+        elif t in ("--project", "--uitoolkit-ref"):
+            if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
+                raise ValueError(f"{verb} {t} needs a value")
+            opts += [t, tokens[i + 1]]
+            i += 1
+        elif t:
+            words.append(t)
+        i += 1
+    text = " ".join(words).strip()
+    if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()  # "$ARGUMENTS" quoted once more by the caller
+    if not text:
+        raise ValueError(f"{verb} needs a request, e.g. {verb} Create an inventory screen")
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "ui", "ui_plan.py"), "--verb", verb, *opts, text])
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         return usage()
+    if argv[0] in UI_VERBS:
+        try:
+            return cmd_ui(argv[0], argv[1:])
+        except ValueError as e:
+            return usage(str(e))
     verb, args = argv[0], split_args(argv[1:])
     fn = {"status": cmd_status, "route": cmd_route, "check": cmd_check, "doctor": cmd_doctor}.get(verb)
     if not fn:

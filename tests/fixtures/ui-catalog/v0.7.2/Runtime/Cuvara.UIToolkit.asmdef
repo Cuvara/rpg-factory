@@ -1,0 +1,6 @@
+{
+  "name": "Cuvara.UIToolkit",
+  "rootNamespace": "Cuvara.UIToolkit",
+  "references": ["UniTask", "VContainer"],
+  "autoReferenced": true
+}

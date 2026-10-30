@@ -1,0 +1,6 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="settings-popup">
+        <ui:Slider name="music-volume" label="Music" low-value="0" high-value="1" />
+        <ui:Button name="close" text="Close" />
+    </ui:VisualElement>
+</ui:UXML>
