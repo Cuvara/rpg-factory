@@ -18,19 +18,35 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Workflow readiness now blocks artifacts when artifact-quality cannot produce lifecycle results, and reports the unavailable-check reason.
 - Added lifecycle v2 metadata and quality result contracts, per-kind schema registration, review records, adapter tool discovery and domain quality plugin interfaces.
 - Added contained registered repo roots and trusted approval-state access to the domain plugin context, plus name-only optional provider discovery.
+- Added real write sessions to `tests/dogfood.sh --write` for every production domain and three cross-domain workflows, graded from the files on disk (routed artifact kinds, zero FAIL rows, no approvals, no writes outside the scratch workspace, wave order, stale status), with an offline grader test.
+- Added the private `game-authoring` repository layout, generated from the registry authoring modules and contract paths, with CI that runs the artifact checks at a pinned plugin release.
+- Added a Windows (Git Bash) CI job beside Linux.
 
 ### Changed
 
+- Workflow waves follow artifact-level `upstream`/`sources` references when artifacts exist; domain handoff contracts only order planned nodes without references, so a design technical handoff written after a UI screen is no longer a `CYCLE`.
+- Factory Core loads every routed domain lead through the Skill tool in multi-domain tasks and never substitutes reading a SKILL.md.
+- An asset-spec-2d no longer needs a runtime export while it is a draft; the export is required once implementation is claimed.
 - Replaced foundation guidance with production workflows, valid drafts, quality rules, and domain handoff requirements.
 - Routed workflow planning from registered artifact kinds and ordered waves from handoff contracts; synchronization contracts trigger revalidation without imposing wave order.
 - Documented registry-derived repository roots, safe path resolution, provider discovery, and the shared `Context.approval` contract.
 - Artifact reviews bind to git author identities, expose process or signed assurance, and support registry-required signed reviews.
-- Workflow planning routes all registered artifact kinds; synchronization contracts provide revalidation without adding wave order.
 - Unity and Blender availability detection is path-only so quality checks never launch editor processes.
-
 - Extended artifact quality checks with structured results while preserving version 1 artifacts and signed approval verification.
 - Artifact quality, lint, and trace now fail closed on malformed files; lifecycle requirements and artifact grades follow registry data, and active design kinds validate their structured spec payloads.
 - Artifact check grading treats unavailable evidence as human-required, and adapter tool overrides run portable Python fakes consistently on Windows and Linux.
+
+### Fixed
+
+- Binding gameplay numbers pass only with a verified current-revision approval; a missing approval is HUMAN_REQUIRED, an invalid or untrusted one FAILs.
+- UI quality validates numeric ordered breakpoints, data bindings against known source artifacts, component specs, and handoff screen ids.
+- 2D art parses lossy, lossless and extended WebP headers and rejects truncated images; optional palette validation runs when Pillow is present.
+- VFX budgets cover every ParticleSystem in a prefab, and Unity detection never runs the Editor.
+- artifact-quality `--domain`/`--kind` select what is reported but still resolve cross-domain sources and upstream artifacts.
+- artifact-quality attributes artifact-trace rows to their subject artifact instead of failing every artifact when one is stale.
+- Editing an artifact without changing its status is not an illegal lifecycle transition (artifact-lint and artifact-quality).
+- On Windows, `/rpg-factory:route` and run-checks launch the Git for Windows bash instead of the System32 WSL launcher.
+- Tests: the dir_readonly ACL check reports SKIP when the token has SeRestorePrivilege enabled (hosted Windows runners), and the testlab host-guard CPU budget is printed instead of asserted on hosted CI runners.
 
 ## [1.2.0] - 2026-10-30
 
