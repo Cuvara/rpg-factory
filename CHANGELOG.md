@@ -5,25 +5,12 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ## [Unreleased]
 
 ### Added
+
 - Added foundation plans and readiness status for UI/UX, 2D Art, 3D Art and VFX.
-
 - Registered foundation domains for UI/UX, 2D Art, 3D Art and VFX with handoffs, lead skills and shared quality checks. Added asset manifest validation for license, provenance and safe registered-repository delivery paths. New lead skill scaffolding now allocates unique orders beyond the legacy lead-order range.
-
-### Added
 - Added the `feature-spec-to-impl` handoff contract and registry checks for cross-domain path conflicts, artifact-kind uniqueness, and handoff driver ownership.
 - Added domain dependency graph routing, cross-domain path ambiguity reporting, and downstream stale-implementation detection.
 - Documented routing entry points, dependency graphs, ownership conflicts and downstream invalidation; updated the Game Design handoff workflow.
-
-### Changed
-
-- `run-checks.py` now honors `RPG_FACTORY_REGISTRY`, allowing isolated fixture registries to exercise real PASS, FAIL and HUMAN_REQUIRED grading.
-- Replaced the blanket feature-registry ban and plumbing-only rule with domain-scoped feature-state ownership and phase-scope policy; non-owning modules cannot claim feature-state paths.
-- Made artifact lint validate against the published JSON Schema and bind immutable IDs and lifecycle transitions to each artifact path; added JSON history and schema regressions.
-- Made artifact trace and approval gates follow lifecycle requirements, with regression coverage for draft, verified, and binding-value cases.
-- Made Factory Core discipline-neutral by moving Engineering reference material into `engineering.md`; English-only policy is now enforced by the skill lint and full test runner.
-
-### Added
-
 - Added `docs/architecture/domains.md` with the domain ownership table and Game Design contract.
 - Added the native `game-design` lead skill, domain routing touchpoints and a `--domain` option in the skill scaffolder.
 - Added the optional authoring repository, Game Design modules, artifact lifecycles, human review gate, and phase-scoped design permissions.
@@ -37,6 +24,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `docs/architecture/`: architecture index, accepted multi-discipline factory architecture, and the domains ADR.
 - `registry.json` now defines engineering domain ownership; the schema and `check-registry.sh` validate artifact domains, roles, leads, repos, gates and optional repositories. `tests/check-registry.test.sh` covers these rules.
 - `scripts/checks/english-only.py`: report-only Unicode language check with optional enforcement and allowlisting.
+
+### Changed
+
+- `run-checks.py` now honors `RPG_FACTORY_REGISTRY`, allowing isolated fixture registries to exercise real PASS, FAIL and HUMAN_REQUIRED grading.
+- Replaced the blanket feature-registry ban and plumbing-only rule with domain-scoped feature-state ownership and phase-scope policy; non-owning modules cannot claim feature-state paths.
+- Made artifact lint validate against the published JSON Schema and bind immutable IDs and lifecycle transitions to each artifact path; added JSON history and schema regressions.
+- Made artifact trace and approval gates follow lifecycle requirements, with regression coverage for draft, verified, and binding-value cases.
+- Made Factory Core discipline-neutral by moving Engineering reference material into `engineering.md`; English-only policy is now enforced by the skill lint and full test runner.
 
 ### Fixed
 
