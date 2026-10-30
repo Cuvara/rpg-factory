@@ -29,6 +29,6 @@
       }
     }
   },
-  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/art-direction-3d-v1.schema.json",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/art3d-brief-v1.schema.json",
   "title": "art-direction-3d specification schema v1"
 }

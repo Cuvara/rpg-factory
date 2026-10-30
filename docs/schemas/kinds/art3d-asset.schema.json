@@ -110,6 +110,6 @@
       "type": "boolean"
     }
   },
-  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/asset-3d-v1.schema.json",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/art3d-asset-v1.schema.json",
   "title": "asset-3d specification schema v1"
 }
