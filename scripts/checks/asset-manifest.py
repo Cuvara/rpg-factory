@@ -3,11 +3,6 @@
 import argparse, json, re, sys
 from pathlib import Path
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8")
-
 def validate(obj, repos):
     errors=[]
     required=('id','kind','domain','status','source_uri','license','provenance','delivery')
@@ -25,6 +20,9 @@ def validate(obj, repos):
     return errors
 
 def main():
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
     ap=argparse.ArgumentParser(); ap.add_argument('target',type=Path); ap.add_argument('--registry',type=Path); args=ap.parse_args()
     reg=json.loads(args.registry.read_text(encoding='utf-8')) if args.registry else {'repos':{'authoring':{},'client':{},'server':{}}}
     paths=[args.target] if args.target.is_file() else sorted(args.target.rglob('*.asset.json'))
