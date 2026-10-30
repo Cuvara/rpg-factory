@@ -3832,16 +3832,15 @@
       "docs": []
     },
     {
-      "id": "authoring.design-concepts",
+      "id": "authoring.design-game-concept",
       "repo": "authoring",
-      "domain": "design",
       "paths": [
         "design/concepts/"
       ],
-      "responsibility": "Game concepts and GDDs.",
+      "responsibility": "Game concepts.",
       "depends_on": [],
       "rules": [
-        "Gameplay numbers remain TBD or labelled proposals until approved."
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
       ],
       "generated": [],
       "tools": [],
@@ -3868,19 +3867,19 @@
         "gameplay-rules"
       ],
       "obligations": [],
+      "domain": "design",
       "docs": []
     },
     {
-      "id": "authoring.design-systems",
+      "id": "authoring.design-gameplay-system",
       "repo": "authoring",
-      "domain": "design",
       "paths": [
         "design/systems/"
       ],
-      "responsibility": "Gameplay systems and features.",
+      "responsibility": "Gameplay systems.",
       "depends_on": [],
       "rules": [
-        "Gameplay numbers remain TBD or labelled proposals until approved."
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
       ],
       "generated": [],
       "tools": [],
@@ -3907,6 +3906,202 @@
         "gameplay-rules"
       ],
       "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-level-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/levels/"
+      ],
+      "responsibility": "Level specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-quest-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/quests/"
+      ],
+      "responsibility": "Quest specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-npc-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/npcs/"
+      ],
+      "responsibility": "NPC specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-item-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/items/"
+      ],
+      "responsibility": "Item specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-technical-handoff",
+      "repo": "authoring",
+      "paths": [
+        "design/handoffs/"
+      ],
+      "responsibility": "Technical handoffs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
       "docs": []
     },
     {
@@ -3916,10 +4111,10 @@
       "paths": [
         "design/content/"
       ],
-      "responsibility": "Level, quest, NPC and item specifications.",
+      "responsibility": "Cross-discipline content brief source area.",
       "depends_on": [],
       "rules": [
-        "Gameplay numbers remain TBD or labelled proposals until approved."
+        "Handoff inputs cite approved source artifact ids and revisions."
       ],
       "generated": [],
       "tools": [],
@@ -3949,16 +4144,16 @@
       "docs": []
     },
     {
-      "id": "authoring.design-handoffs",
+      "id": "authoring.design-events",
       "repo": "authoring",
       "domain": "design",
       "paths": [
-        "design/handoffs/"
+        "design/events/"
       ],
-      "responsibility": "Technical handoffs.",
+      "responsibility": "Gameplay event handoff source area.",
       "depends_on": [],
       "rules": [
-        "Gameplay numbers remain TBD or labelled proposals until approved."
+        "Handoff inputs cite approved source artifact ids and revisions."
       ],
       "generated": [],
       "tools": [],
@@ -4982,12 +5177,12 @@
       "summary": "An approved gameplay system informs UI flows and interface specifications.",
       "source": {
         "repo": "authoring",
-        "path": "design/systems/"
+        "path": "design/events/"
       },
       "copies": [
         {
           "repo": "authoring",
-          "path": "ui/"
+          "path": "ui/specs/"
         }
       ],
       "driver": "game-design",
@@ -5024,12 +5219,12 @@
       "summary": "Design content informs 2D briefs.",
       "source": {
         "repo": "authoring",
-        "path": "design/content/"
+        "path": "design/features/"
       },
       "copies": [
         {
           "repo": "authoring",
-          "path": "art2d/"
+          "path": "art2d/briefs/"
         }
       ],
       "driver": "game-design",
@@ -5043,12 +5238,12 @@
       "summary": "Design content informs 3D briefs.",
       "source": {
         "repo": "authoring",
-        "path": "design/content/"
+        "path": "design/features/"
       },
       "copies": [
         {
           "repo": "authoring",
-          "path": "art3d/"
+          "path": "art3d/briefs/"
         }
       ],
       "driver": "game-design",
@@ -5062,12 +5257,12 @@
       "summary": "Gameplay events inform VFX specifications.",
       "source": {
         "repo": "authoring",
-        "path": "design/systems/"
+        "path": "design/events/"
       },
       "copies": [
         {
           "repo": "authoring",
-          "path": "vfx/"
+          "path": "vfx/specs/"
         }
       ],
       "driver": "game-design",

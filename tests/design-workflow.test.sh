@@ -50,4 +50,15 @@ print('PASS full artifact-quality workflow accepts linked production artifacts')
 
 PY
 [ "$?" -eq 0 ] || exit 1
-echo 'design-workflow: 24 run, 24 passed, 0 failed'
+python3 - "$ROOT" "$T" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); temp=pathlib.Path(sys.argv[2]); spec=temp/'workflow.json'
+spec.write_text(json.dumps({'id':'design-production','title':'Design production','goal':'Produce system and handoff','targets':[{'id':'concept','kind':'game-concept','sources':[],'acceptance':['Concept ready']},{'id':'system','kind':'gameplay-system','sources':['concept'],'acceptance':['System ready']},{'id':'handoff','kind':'technical-handoff','sources':['system'],'acceptance':['Handoff ready']}],'existing':[]}))
+plan=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'plan',str(spec),'--json'],capture_output=True,text=True,check=True); plan=json.loads(plan.stdout)
+assert plan['waves']==[['concept'],['system'],['handoff']],plan['waves']
+status=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'status',str(spec),'--json'],capture_output=True,text=True,check=True); states=json.loads(status.stdout)['states']
+assert states=={'concept':'missing','system':'blocked','handoff':'blocked'},states
+print('PASS workflow plan waves and missing/blocked statuses across design production nodes')
+PY
+[ "$?" -eq 0 ] || exit 1
+echo 'design-workflow: 26 run, 26 passed, 0 failed'
