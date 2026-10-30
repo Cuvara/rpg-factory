@@ -58,27 +58,40 @@ print('PASS malformed artifacts fail closed with path and parse reason')
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,json,os,pathlib,subprocess,sys
-root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); exe=t/'fake-tool.py'; exe.write_text('print("fake 1.0")\n'); os.environ['RPG_FACTORY_TOOL_NODE']=str(exe)
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts/checks')); exe=t/'fake-tool.py'; exe.write_text('print("fake 1.0")\n'); os.environ['RPG_FACTORY_TOOL_NODE']=str(exe)
 s=importlib.util.spec_from_file_location('tools',root/'scripts/lib/tools.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); found=m.find_tool('node'); assert found and found['path']==str(exe.resolve()) and 'fake' in found['version']
 print('PASS tool override discovery')
+clean_settings=t/'clean-settings.json'; clean_settings.write_text('{}')
+for env_name in ('RPG_FACTORY_CLAUDE_SETTINGS','RPG_FACTORY_PROJECT_SETTINGS','RPG_FACTORY_PROJECT_SETTINGS_LOCAL','RPG_FACTORY_USER_MCP_FILE','RPG_FACTORY_MCP_FILE','RPG_FACTORY_INSTALLED_PLUGINS'):
+    os.environ[env_name]=str(clean_settings)
 for name in ('game-art-mcp','ai-pixel-art-image-generation','figma'):
     os.environ.pop('RPG_FACTORY_TOOL_'+name.upper().replace('-','_'),None)
     assert m.find_tool(name) is None, name
-provider='game-art-mcp'; secret='fixture-never-print-this-secret'; settings=t/'mcp-fixture.json'; settings.write_text(json.dumps({'mcpServers':{provider:{'command':'hidden-command','env':{'TOKEN':secret}}}}))
-os.environ['RPG_FACTORY_MCP_FILE']=str(settings); found=m.find_tool(provider); assert found=={'name':provider,'source':'mcp'},found
-os.environ['RPG_FACTORY_TOOL_'+provider.upper().replace('-','_')]='configured-value'; assert m.find_tool(provider)=={'name':provider,'source':'environment override'}
-result=subprocess.run([sys.executable,str(root/'scripts/lib/tools.py'),provider],capture_output=True,text=True,env=os.environ.copy()); assert result.returncode==0 and secret not in result.stdout+result.stderr and 'configured-value' not in result.stdout+result.stderr
-plugins=t/'plugin-settings.json'; plugins.write_text(json.dumps({'enabledPlugins':{'figma@fixture-market':True,'other@fixture-market':True},'apiKey':secret})); os.environ['RPG_FACTORY_PROJECT_SETTINGS']=str(plugins); os.environ.pop('RPG_FACTORY_TOOL_FIGMA',None); assert m.find_tool('figma')=={'name':'figma','source':'plugin'}
-print('PASS optional MCP provider absent/present discovery reports names only')
+print('PASS optional MCP providers are absent by default')
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,json,os,pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); marker=t/'unity-invoked.log'; fake=t/'unity.py'; fake.write_text(f"import pathlib; pathlib.Path({str(marker)!r}).write_text('invoked')\n")
-os.environ['RPG_FACTORY_TOOL_UNITY']=str(fake); spec=importlib.util.spec_from_file_location('tools_safe',root/'scripts/lib/tools.py'); tools=importlib.util.module_from_spec(spec); spec.loader.exec_module(tools); found=tools.find_tool('unity'); assert found and found['path']==str(fake.resolve()) and not marker.exists(),found
+os.environ['RPG_FACTORY_TOOL_UNITY']=str(fake); spec=importlib.util.spec_from_file_location('tools_safe',root/'scripts/lib/tools.py'); tools=importlib.util.module_from_spec(spec); spec.loader.exec_module(tools); found=tools.find_tool('unity'); direct_invoked=marker.exists(); marker.unlink(missing_ok=True)
 repo=t/'vfx-tool-fixture'; (repo/'specs').mkdir(parents=True); (repo/'specs/asset.artifact.json').write_text(json.dumps({'schema_version':1,'id':'VFX-tool-001','kind':'vfx-asset','domain':'vfx','status':'draft','title':'Tool probe','upstream':[],'acceptance':[],'trace':[],'spec':{'summary':'No launch'}}))
 registry={'repos':{},'domains':{'vfx':{'artifact_kinds':['vfx-asset'],'quality_plugin':'scripts/checks/domains/vfx.py'}},'artifact_lifecycles':{}}
-reg=t/'vfx-tool-registry.json'; reg.write_text(json.dumps(registry)); result=subprocess.run([sys.executable,'-B',str(root/'scripts/checks/artifact-quality.py'),str(repo),'--registry',str(reg),'--domain','vfx','--json'],capture_output=True,text=True,env=os.environ.copy()); data=json.loads(result.stdout); assert not marker.exists(),result.stdout; assert any(x['check']=='unity-editor-availability' and x['state']=='WARN' for x in data['results']),data
+reg=t/'vfx-tool-registry.json'; reg.write_text(json.dumps(registry)); result=subprocess.run([sys.executable,'-B',str(root/'scripts/checks/artifact-quality.py'),str(repo),'--registry',str(reg),'--domain','vfx','--json'],capture_output=True,text=True,env=os.environ.copy()); data=json.loads(result.stdout); quality_invoked=marker.exists(); assert any(x['check']=='unity-editor-availability' and x['state']=='WARN' for x in data['results']),data; assert not direct_invoked and not quality_invoked,{'direct_invoked':direct_invoked,'quality_invoked':quality_invoked}
 print('PASS Unity tool detection is path-only in direct and artifact-quality calls')
+PY
+python3 -B - "$ROOT" "$T" <<'PY'
+import importlib.util,json,os,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts/checks')); spec=importlib.util.spec_from_file_location('tools_provider',root/'scripts/lib/tools.py'); tools=importlib.util.module_from_spec(spec); spec.loader.exec_module(tools)
+provider='game-art-mcp'; secret='fixture-never-print-this-secret'; clean=t/'clean-settings.json'; clean.write_text('{}')
+for env_name in ('RPG_FACTORY_CLAUDE_SETTINGS','RPG_FACTORY_PROJECT_SETTINGS','RPG_FACTORY_PROJECT_SETTINGS_LOCAL','RPG_FACTORY_USER_MCP_FILE','RPG_FACTORY_MCP_FILE','RPG_FACTORY_INSTALLED_PLUGINS'): os.environ[env_name]=str(clean)
+settings=t/'mcp-fixture.json'; settings.write_text(json.dumps({'mcpServers':{provider:{'command':'hidden-command','env':{'TOKEN':secret}}}})); os.environ['RPG_FACTORY_MCP_FILE']=str(settings); assert tools.find_tool(provider)=={'name':provider,'source':'mcp'}
+os.environ['RPG_FACTORY_TOOL_'+provider.upper().replace('-','_')]='configured-value'; assert tools.find_tool(provider)=={'name':provider,'source':'environment override'}
+result=subprocess.run([sys.executable,str(root/'scripts/lib/tools.py'),provider],capture_output=True,text=True,env=os.environ.copy()); assert result.returncode==0 and secret not in result.stdout+result.stderr and 'configured-value' not in result.stdout+result.stderr
+os.environ['RPG_FACTORY_MCP_FILE']=str(clean); os.environ['RPG_FACTORY_PROJECT_SETTINGS']=str(clean); os.environ['RPG_FACTORY_INSTALLED_PLUGINS']=str(clean); from domains._api import Context; from domains import ui as ui_plugin
+screen={'id':'UI-provider-001','kind':'screen-spec','spec':{'states':{},'elements':[],'components':[],'tokens':[],'platforms':['desktop']}}; ctx=Context(str(t),{},'',{},tools.find_tool,{})
+missing=next(x for x in ui_plugin.check(screen,ctx) if x.check=='ui-figma-adapter'); assert missing.state=='NOT_AVAILABLE' and 'not available' in ' '.join(missing.reasons).lower(),missing
+plugins=t/'plugin-settings.json'; plugins.write_text(json.dumps({'enabledPlugins':{'figma@fixture-market':True,'other@fixture-market':True},'apiKey':secret})); os.environ['RPG_FACTORY_PROJECT_SETTINGS']=str(plugins); os.environ.pop('RPG_FACTORY_TOOL_FIGMA',None); assert tools.find_tool('figma')=={'name':'figma','source':'plugin'}
+installed=t/'installed-plugins.json'; installed.write_text(json.dumps({'plugins':{'ai-pixel-art-image-generation@custom-market':{'installPath':secret}}})); os.environ['RPG_FACTORY_INSTALLED_PLUGINS']=str(installed); assert tools.find_tool('ai-pixel-art-image-generation')=={'name':'ai-pixel-art-image-generation','source':'plugin'}
+print('PASS optional provider absence, MCP/plugin/override detection and name-only reporting')
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import pathlib,sys

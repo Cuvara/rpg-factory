@@ -64,6 +64,22 @@ def path_module(reg, repo, path):
     return max(choices, key=lambda x: x[0])[1] if choices else None
 
 
+def authoring_module(reg, domain, kind):
+    """Choose the closest registered authoring module and path for an artifact kind."""
+    modules=[m for m in reg.get("modules",[]) if m.get("repo")=="authoring" and m.get("domain")==domain and m.get("paths")]
+    if not modules: return None, []
+    normalized=kind.replace("-","").lower()
+    exact=next((m for m in modules if normalized in m.get("id","").replace("-","").lower()),None)
+    tokens={x.lower() for x in re.split(r"[-/._]+",kind) if x}
+    def wordset(value):
+        words={x.lower() for x in re.split(r"[-/._]+",value) if x}
+        return words | {x[:-1] for x in words if len(x)>3 and x.endswith("s")}
+    def score(value): return len(tokens & wordset(value))
+    module=exact or max(modules,key=lambda m:max((score(m.get("id","")),*(score(p) for p in m.get("paths",[])))))
+    path=max(module.get("paths",[]),key=score)
+    return module,[path]
+
+
 def artifacts(authoring):
     found = {}
     if not authoring or not Path(authoring).is_dir():
@@ -125,16 +141,7 @@ def build(spec, reg, authoring):
                 die(f"artifact kind '{kind}' is {'unknown' if not candidates else 'ambiguous'}; candidates: {', '.join(candidates) or 'none'}", 3)
             domain = candidates[0]
             target = dict(target, repo="authoring")
-            slug = {"feature-spec": "features"}.get(kind, kind.replace("-", ""))
-            module = next((m for m in reg.get("modules", []) if m.get("repo") == "authoring" and m.get("domain") == domain and slug in m.get("id", "").replace("-", "")), None)
-            if not module:
-                defaults={"design":"design/features/","ui":"ui/specs/","art2d":"art2d/specs/","art3d":"art3d/models/","vfx":"vfx/specs/"}
-                domain_modules=[m for m in reg.get("modules",[]) if m.get("repo")=="authoring" and m.get("domain")==domain and m.get("paths")]
-                module=next((m for m in domain_modules if any(any(token in m.get("id","").replace("-","") for token in kind.split("-") if len(token)>3) for _ in [0])),None)
-                if not module:
-                    path=defaults.get(domain,"")
-                    module=next((m for m in domain_modules if path in m.get("paths",[])),None)
-            paths = list((module or {}).get("paths", []))[:1]
+            module, paths = authoring_module(reg,domain,kind)
         node_id = target.get("id") or f"{kind}-{index + 1}"
         make_node(node_id, kind, domain, target.get("title"), target.get("acceptance"), target.get("repo", "authoring"), paths, True)
         nodes[node_id]["sources"] = target.get("sources", [])

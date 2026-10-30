@@ -5659,6 +5659,44 @@
       "driver": "art-3d",
       "gate": "art3d-visual-review",
       "evidence": "artifact-trace"
+    },
+    {
+      "id": "asset-3d-to-vfx",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Production 3D asset handoff to VFX.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/deliveries/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": "art3d-visual-review",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "asset-3d-to-impl",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Production 3D asset delivery to Engineering for client import.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/deliveries/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": "art3d-visual-review",
+      "evidence": "artifact-trace"
     }
   ],
   "facts": [
@@ -5972,7 +6010,9 @@
       ],
       "handoffs": [
         "art3d-asset-to-vfx",
-        "art3d-asset-to-impl"
+        "art3d-asset-to-impl",
+        "asset-3d-to-vfx",
+        "asset-3d-to-impl"
       ],
       "may_own_feature_state": false,
       "approvers": [],
