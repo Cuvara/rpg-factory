@@ -204,3 +204,19 @@ out=$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "
 jq -e '[.results[] | select(.artifact=="DS-up-001" and .check=="lifecycle")][0].state == "PASS"' <<<"$out" >/dev/null \
   || { echo "FAIL edited draft graded as a transition: $(jq -c '[.results[]|select(.artifact=="DS-up-001" and .check=="lifecycle")]' <<<"$out")"; exit 1; }
 echo "PASS an artifact edited without a status change has no lifecycle transition"
+# upstream revisions are the blob a downstream author reads (git hash-object), committed or not
+python3 -B - "$T/xd/design/DS-up-001.artifact.json" <<'PY'
+import json, sys
+p = sys.argv[1]; o = json.load(open(p, encoding="utf-8")); o["title"] = "t uncommitted edit"
+open(p, "w", encoding="utf-8", newline="\n").write(json.dumps(o))
+PY
+rev=$(git -C "$T/xd" hash-object design/DS-up-001.artifact.json)
+python3 -B - "$T/xd/ui/UI-down-001.artifact.json" "$rev" <<'PY'
+import json, sys
+p = sys.argv[1]; o = json.load(open(p, encoding="utf-8")); o["upstream"] = [{"id": "DS-up-001", "rev": sys.argv[2]}]
+open(p, "w", encoding="utf-8", newline="\n").write(json.dumps(o))
+PY
+out=$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "$T/reg-xd.json" --json || true)
+jq -e '[.results[] | select(.artifact=="UI-down-001" and .check=="trace-approval")][0].state == "PASS"' <<<"$out" >/dev/null \
+  || { echo "FAIL uncommitted upstream graded stale: $(jq -c '[.results[]|select(.artifact=="UI-down-001" and .check=="trace-approval")]' <<<"$out")"; exit 1; }
+echo "PASS a downstream citing the working-tree blob of an uncommitted upstream is current"

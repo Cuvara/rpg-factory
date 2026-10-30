@@ -175,8 +175,11 @@ def main():
         elif not normalized_path(path, base).startswith(base + "/"):
             failures.append("write outside scratch workspace: " + path)
     for command in bash_commands:
+        # relative output paths resolve against a leading `cd <dir> &&`, else the workspace root
+        lead = re.match(r'\s*cd\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))\s*&&', command)
+        cwd = normalized_path(next(g for g in lead.groups() if g), base) if lead else base
         for path in shell_output_paths(command):
-            if norm(path) != "/dev/null" and not normalized_path(path, base).startswith(base + "/"):
+            if norm(path) != "/dev/null" and not normalized_path(path, cwd).startswith(base + "/"):
                 failures.append("possible write outside scratch workspace: " + path)
     for event in events:
         if event.get("type") == "result" and event.get("subtype") not in (None, "success"):

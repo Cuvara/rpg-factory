@@ -79,6 +79,10 @@ newcase bash-output
 check 'command -o output outside workspace fails' fail outside_shell "$T/bash-output" 'tool -o /tmp/q'
 newcase bash-null
 check 'discarded output to /dev/null is allowed' pass outside_shell "$T/bash-null" 'printf test > /dev/null'
+newcase bash-cd-inside
+check 'relative output inside the workspace after cd is allowed' pass outside_shell "$T/bash-cd-inside" "cd \"$(cygpath -m "$T/bash-cd-inside" 2>/dev/null || echo "$T/bash-cd-inside")/game-authoring\" && printf x > ../workflow.json"
+newcase bash-cd-outside
+check 'relative output escaping the workspace after cd fails' fail outside_shell "$T/bash-cd-outside" "cd \"$(cygpath -m "$T/bash-cd-outside" 2>/dev/null || echo "$T/bash-cd-outside")/game-authoring\" && printf x > ../../escaped.json"
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
 import json,sys
 p=sys.argv[1]; d=[json.loads(x) for x in open(p,encoding='utf-8')]; d[2]['message']['content'][0]['input']['command']='python scripts/factory-workflow.py status x; # wrong order engineering design ui'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in d))

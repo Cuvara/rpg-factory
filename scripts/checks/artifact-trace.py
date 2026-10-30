@@ -39,6 +39,16 @@ def git_blob(root, path):
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
+def current_blob(root, path):
+    """Blob id of the upstream as a downstream author reads it (`git hash-object`, committed or not); approvals and
+    reviews stay bound to the committed blob (git_blob)."""
+    if os.path.isfile(os.path.join(root, path)):
+        r = run(root, "hash-object", "--", path)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return git_blob(root, path)
+
+
 def spec_payload(raw):
     """Compare the implemented specification while ignoring lifecycle and trace bookkeeping."""
     try:
@@ -219,7 +229,7 @@ def main():
                                 )
                         except Exception:
                             pass
-                if not candidates or up.get("rev") != git_blob(root, candidates[0]):
+                if not candidates or up.get("rev") != current_blob(root, candidates[0]):
                     reason = f"upstream-changed {up.get('id')}"
                     break
             if reason is None:
