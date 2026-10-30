@@ -5,6 +5,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp_win)" || exit 1
 trap 'rm -rf "$T"' EXIT
+base_failures=0
+if [[ ! -f "$ROOT/scripts/adapters/vfx/unity.py" ]]; then
+  echo 'FAIL missing-budget-adapter: cannot reject a Unity PASS without a spec budget'
+  base_failures=$((base_failures + 1))
+fi
+if [[ ! -f "$ROOT/scripts/checks/domains/vfx.py" ]] || ! grep -q 'production-complete asset requires measured or declared stats' "$ROOT/scripts/checks/domains/vfx.py"; then
+  echo 'FAIL missing-asset-stats-rule: empty delivery stats cannot be rejected as production-incomplete'
+  base_failures=$((base_failures + 1))
+fi
+if (( base_failures > 0 )); then exit 1; fi
 mkdir -p "$T/authoring/vfx/specs" "$T/unity/Assets"
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,json,pathlib,re,sys
@@ -115,6 +125,7 @@ mkdir -p "$T/base"
 git -C "$ROOT" archive "$BASE" | tar -x -C "$T/base"
 cp "$ROOT/tests/vfx-workflow.test.sh" "$T/base/tests/vfx-workflow.test.sh"
 if (cd "$T/base" && bash tests/vfx-workflow.test.sh) > "$T/base-proof.log" 2>&1; then echo 'Base proof unexpectedly passed' >&2; exit 1; fi
-grep -Eq 'FileNotFoundError|No such file|cannot open' "$T/base-proof.log"
-echo 'Base proof: updated test over git archive acec916 failed because VFX production rules were absent'
+grep -q 'FAIL missing-budget-adapter:' "$T/base-proof.log"
+grep -q 'FAIL missing-asset-stats-rule:' "$T/base-proof.log"
+echo 'Base proof: missing-budget-adapter and missing-asset-stats-rule both failed on git archive acec916'
 echo 'vfx workflow: PASS'
