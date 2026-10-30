@@ -6,8 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; }
 T="$(mktemp_win)" || exit 1; [ -d "$T" ] || exit 1; trap 'rm -rf "$T"' EXIT
 P="$T/plugin"; FW="$T/workspace"; FA="$FW/game-authoring"
 mkdir -p "$P" "$FA/design/features" "$FW/rpg-mmo-server/backend" "$FW/IndieRPGMMOAdventure/ProjectSettings"
-(cd "$ROOT" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
-  [ -f "$f" ] && mkdir -p "$P/$(dirname "$f")" && cp "$f" "$P/$f"; done)
+cp -R "$ROOT/." "$P/"
+rm -rf "$P/.git"
 # Workspace markers and a stand-in authoring checkout; no external design plugin is installed or needed.
 touch "$FW/rpg-mmo-server/backend/TEAM.md" "$FW/IndieRPGMMOAdventure/ProjectSettings/ProjectVersion.txt"
 echo 'fixture artifact' > "$FA/design/features/crafting.md"
@@ -45,18 +45,21 @@ out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry.sh" --structure-on
 [ $rc -ne 0 ] && grep -q 'cannot own feature-state path docs/features/' <<<"$out" \
   && ok 'check-registry rejects non-design docs/features ownership' || no 'check-registry feature-state path rule' "$out"
 
-# Base proof: P4's checker accepts the same non-design path in a P4-compatible registry.
-git show d63e768aff4f440d745fa54cbb5334ab7797fd8b:scripts/check-registry.sh > "$P/scripts/check-registry-base.sh"
-jq 'del(.domains.design) | .repos |= del(.authoring) | .contracts |= map(select(.id != "feature-spec-to-impl")) | .modules = [.modules[] | select(.repo != "authoring")] | .skills |= with_entries(select(.value.domain != "design")) | .human_gates |= map(select(.id != "design-review")) | (.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' "$P/registry.json" > "$T/base-mutated.json"
-out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry-base.sh" --structure-only --registry "$T/base-mutated.json" 2>&1); rc=$?
-[ $rc -eq 0 ] && grep -q '^OK:' <<<"$out" \
-  && ok 'base P4 checker accepts the path (regression proof)' || no 'base P4 regression proof' "$out"
+# Base proof uses the base registry's known rule set when the source commit is readable.
+# The fixture avoids depending on git metadata inside the isolated plugin copy.
+if git -C "$ROOT" show d63e768aff4f440d745fa54cbb5334ab7797fd8b:scripts/check-registry.sh > "$P/scripts/check-registry-base.sh" 2>/dev/null; then
+  jq 'del(.domains.design) | .repos |= del(.authoring) | .contracts |= map(select(.id != "feature-spec-to-impl")) | .modules = [.modules[] | select(.repo != "authoring")] | .skills |= with_entries(select(.value.domain != "design")) | .human_gates |= map(select(.id != "design-review")) | (.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' "$P/registry.json" > "$T/base-mutated.json"
+  out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry-base.sh" --structure-only --registry "$T/base-mutated.json" 2>&1); rc=$?
+  [ $rc -eq 0 ] && grep -q '^OK:' <<<"$out" && ok 'base P4 checker accepts the path (regression proof)' || no 'base P4 regression proof' "$out"
+else
+  no 'base P4 regression proof unavailable: source commit cannot be read from this worktree'
+fi
 
 # No runtime dependency on the former external plugin; only the architecture coexistence note may name it.
-if rg -n 'game-ai-workflows' "$P/scripts" "$P/hooks" >/dev/null || jq -r '.. | strings' "$P/registry.json" | rg -n 'game-ai-workflows' >/dev/null; then
+if grep -R -n 'game-ai-workflows' "$P/scripts" "$P/hooks" >/dev/null || jq -r '.. | strings' "$P/registry.json" | grep -n 'game-ai-workflows' >/dev/null; then
   no 'standalone runtime/configuration references absent external plugin'
 else ok 'scripts, hooks and registry values have no external plugin dependency'; fi
-other=$(rg -n 'game-ai-workflows' "$P/skills" | grep -v 'skill-contract.md:.*independent' || true)
+other=$(grep -R -n 'game-ai-workflows' "$P/skills" | grep -v 'skill-contract.md:.*independent' || true)
 [ -z "$other" ] && ok 'skill references are absent except the coexistence note' || no 'unexpected skill dependency reference' "$other"
 # The route above executes against the fixture with no external plugin installation.
 [ -d "$FA/.git" ] && ok 'domain runs with only the authoring fixture installed' || no 'authoring fixture missing'

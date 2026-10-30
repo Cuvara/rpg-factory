@@ -15,11 +15,9 @@ The Factory workflow for every discipline domain. Engineering is the first domai
 !`bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh`
 
 Domain-specific artifact knowledge belongs to the registered domain lead; Factory Core coordinates the shared workflow.
-
 Module rules, docs, changelogs, generated paths, dependencies, checks, contracts and facts live
 in `${CLAUDE_PLUGIN_ROOT}/registry.json`; read them through the scripts, never guess them. If the
 header says the install state is not CURRENT, tell the user (this session may run an old copy).
-
 ## Mode (decide first, declare it, and keep to it)
 
 | Mode | When the user... | Does | Never |
@@ -30,18 +28,14 @@ header says the install state is not CURRENT, tell the user (this session may ru
 | `validate` | asks to test / verify existing changes | `run-checks.py --status`, then run the checks, report | change files |
 | `review` | asks to review a diff / branch | lead skill's review checklist + registry rules | change files |
 | `resume` | asks to continue interrupted work | `factory-status.py`, then continue at the first incomplete step (implement rules) | redo finished legs |
-
 Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill arguments) and in the Route call
 (`factory-context.sh --mode <mode> ...`). The hooks then **flag** departures (advisory only, they never block):
 in analyze/plan/review every file write and mutating command gets a `high` advisory; validate flags anything but
 `run-checks.py`. Respect the mode yourself. Switch mode only when the user asks for it (e.g. "now implement it").
 Every mode except validate/resume invokes the lead skill: its workflow is where the plan comes from.
 Parallel work: the main session leads and integrates; delegate in worktrees and follow `references/parallel-work.md`.
-
 ## Workflow
-
 Steps are **M** mandatory, **O** optional, **H** need the user.
-
 1. **Resume (M for cross-repo or interrupted work).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`
    lists pending work derived from the repos (wire rollout stage, READY_TO_TAG packages,
    released-but-unpinned, in-flight `<type>/<area>/<topic>` branches) with the owning skill.
@@ -86,7 +80,6 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
     file of every `routing.tech` skill that has one (e.g. the `unity-dots` ECS review checklist).
 12. **Report (M).** `references/report.md`, including the runner table and routing. A release
     ends at **READY_TO_TAG** - the lead creates the tag, unless the user explicitly authorized the release in this task.
-
 ## Validation states (from run-checks.py)
 
 | State | Meaning | Done? |
@@ -99,7 +92,6 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 | SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`) | n/a |
 | NOT_RUN | (`--status`) declared for this change, never executed | no - run it |
 | STALE | (`--status`) ran, but the tree changed since (HEAD, diff, untracked, check definition) | no - rerun |
-
 Never write PASS yourself; never convert NOT_AVAILABLE / HUMAN_REQUIRED into success. Details and
 per-tool evidence: `references/validation.md`.
 
@@ -134,6 +126,10 @@ Engineering leads (the registry remains authoritative); supporting Engineering s
 | Situation | Lead skill |
 |---|---|
 | Game concepts, mechanics, GDDs, feature specs and design decisions | `game-design` (optional authoring repo) |
+| UI flows and interface specifications | `ui-ux` (optional authoring repo) |
+| 2D art briefs and delivery manifests | `art-2d` (optional authoring repo) |
+| 3D art briefs and delivery manifests | `art-3d` (optional authoring repo) |
+| VFX specifications and delivery manifests | `vfx` (optional authoring repo) |
 | UI flows and interface specifications | `ui-ux` (optional authoring repo) |
 | 2D art briefs and delivery manifests | `art-2d` (optional authoring repo) |
 | 3D art briefs and delivery manifests | `art-3d` (optional authoring repo) |

@@ -1,6 +1,6 @@
 ---
 name: ui-ux
-description: Foundation-only ui/ux foundation authoring. Use for routing and drafting registered domain artifacts. Not for production execution or tooling.
+description: Foundation-only ui/ux foundation authoring. Use when routing and drafting registered domain artifacts. Not for production execution or tooling.
 argument-hint: "[task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 ---

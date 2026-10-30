@@ -7,8 +7,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"
-(cd "$ROOT" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
-  [ -f "$f" ] && mkdir -p "$P/$(dirname "$f")" && cp "$f" "$P/$f"; done)
+cp -R "$ROOT/." "$P/"
+rm -rf "$P/.git"
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -15 | sed 's/^/      /'; }
@@ -70,12 +70,12 @@ out=$(ns --name demo-lead --kind repo --repos server --owns-modules server.loadt
 o=$(jq -r '.skills["demo-lead"].order' "$P/registry.json")
 [ $rc -eq 0 ] && [ "$(jq -r '.modules[] | select(.id == "server.loadtest") | .skills[0]' "$P/registry.json")" = demo-lead ] \
   && ! jq -e --argjson o "$o" '[.skills[] | select(.order == $o)] | length > 1' "$P/registry.json" >/dev/null \
-  && [ "$o" = 86 ] && ok "lead scaffolded: primary owner of server.loadtest, order $o (after every existing lead)" || no "scaffold lead (rc=$rc)" "$out"
+  && [ "$o" = 96 ] && ok "lead scaffolded: primary owner of server.loadtest, order $o (after every existing lead)" || no "scaffold lead (rc=$rc)" "$out"
 out=$(creg); [ $? -eq 0 ] && ok "check-registry accepts the scaffolded lead" || no "check-registry after lead scaffold" "$out"
 out=$(ns --name demo-domain --kind repo --repos authoring --summary "Demo design lead" --owns-modules authoring.root --domain design); rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.skills["demo-domain"].domain' "$P/registry.json")" = design ] && ok "--domain assigns a registered domain to the scaffolded skill" || no "--domain assignment (rc=$rc)" "$out"
 out=$(tp demo-lead); grep -q "factory-core SKILL.md 'Skills' table has no row for this lead" <<<"$out" && grep -q 'README skill map table has no row' <<<"$out" \
-  && grep -q 'plugin.json description says 9 specialised skills, the registry has 11' <<<"$out" \
+  && grep -q 'description says 13 specialised skills, the registry has 15' <<<"$out" \
   && ok "touchpoints for a lead: Skills table row, README skill map, plugin.json lead count" || no "touchpoints after lead scaffold" "$out"
 
 echo "new-skill tests: $((pass + fail)) run, $pass passed, $fail failed"

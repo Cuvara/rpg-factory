@@ -1,6 +1,6 @@
 ---
 name: art-3d
-description: Foundation-only 3d art foundation authoring. Use for routing and drafting registered domain artifacts. Not for production execution or tooling.
+description: Foundation-only 3d art foundation authoring. Use when routing and drafting registered domain artifacts. Not for production execution or tooling.
 argument-hint: "[task]"
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
 ---

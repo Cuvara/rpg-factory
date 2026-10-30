@@ -7,7 +7,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Added
 - Added foundation plans and readiness status for UI/UX, 2D Art, 3D Art and VFX.
 
-- Registered foundation domains for UI/UX, 2D Art, 3D Art and VFX with handoffs, lead skills and shared quality checks. Added asset manifest validation for license, provenance and safe registered-repository delivery paths.
+- Registered foundation domains for UI/UX, 2D Art, 3D Art and VFX with handoffs, lead skills and shared quality checks. Added asset manifest validation for license, provenance and safe registered-repository delivery paths. New lead skill scaffolding now allocates unique orders beyond the legacy lead-order range.
 
 ### Added
 - Added the `feature-spec-to-impl` handoff contract and registry checks for cross-domain path conflicts, artifact-kind uniqueness, and handoff driver ownership.

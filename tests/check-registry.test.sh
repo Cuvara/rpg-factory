@@ -55,7 +55,7 @@ expect_fail duplicate-domain-artifact-kind '.domains.engineering.artifact_kinds 
 expect_fail cross-domain-path-overlap '(.domains.design.repos += ["server"]) | (.modules |= map(if .id == "authoring.design-features" then .repo = "server" | .paths = ["backend/shared/proto/"] else . end))' 'domain path conflict'
 # g: absent optional repository paths are skipped and reported in a stand-in workspace.
 G="$TMP/optional.json"
-jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server, authoring:.repos.authoring}) | (.domains.engineering.repos = ["server"]) | (.domains.design.handoffs = []) | (.modules = [.modules[] | select((.repo == "server" and (.fallback == true or .id == "server.proto")) or .repo == "authoring")]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
+jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server, authoring:.repos.authoring}) | (.domains.engineering.repos = ["server"]) | (.domains |= with_entries(.value.handoffs = [])) | (.modules = [.modules[] | select((.repo == "server" and (.fallback == true or .id == "server.proto")) or .repo == "authoring")]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
 mkdir -p "$TMP/workspace"; touch "$TMP/workspace/marker"
 if out=$(RPG_FACTORY_WORKSPACE="$TMP/workspace" "$CHECKER" --registry "$G" 2>&1); then
   if grep -Fq 'optional repo server absent (not checked)' <<<"$out"; then echo "PASS g-optional-repo-absent"; pass=$((pass + 1));
