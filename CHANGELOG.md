@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-30
+
+Feature release: rpg-factory becomes a multi-discipline factory with a discipline-neutral core. A `domains` registry
+section adds Game Design (native; no game-ai-workflows dependency) and foundation domains for UI/UX, 2D Art, 3D Art
+and VFX next to Engineering. `--domain` / `--kind` route tasks without file paths and `--graph` shows the handoff
+order. A shared artifact contract (schema, lifecycle, trace links to implementation, test and release commits,
+SSH-signed immutable approvals) is checked by `artifact-lint` and `artifact-trace`; results a human must judge grade
+HUMAN_REQUIRED. Handoffs mark downstream work stale when a design changes. Engineering routing is unchanged (golden
+test over 59 scenarios). `feature-state-ownership` and `phase-scope` replace `no-feature-registry` and
+`phase-plumbing-only`. The English-only documentation check is enforced. Foundation domains have no production
+workflows yet; no approver signing key is registered, so design approvals stay HUMAN_REQUIRED, and the optional
+`game-authoring` repo is not created. Update with `claude plugin marketplace update rpg-factory && claude plugin
+update rpg-factory@rpg-factory`, then start a new session.
+
 ### Added
 
 - Added foundation plans and readiness status for UI/UX, 2D Art, 3D Art and VFX.
@@ -23,7 +37,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   check ids (`tests/fixtures/routing-golden.json`, recorded before domain metadata). Added fields are ignored.
 - `docs/architecture/`: architecture index, accepted multi-discipline factory architecture, and the domains ADR.
 - `registry.json` now defines engineering domain ownership; the schema and `check-registry.sh` validate artifact domains, roles, leads, repos, gates and optional repositories. `tests/check-registry.test.sh` covers these rules.
-- `scripts/checks/english-only.py`: report-only Unicode language check with optional enforcement and allowlisting.
+- `scripts/checks/english-only.py`: Unicode language check (report or enforce, with an allowlist); skills-lint and run-all enforce it.
 
 ### Changed
 
