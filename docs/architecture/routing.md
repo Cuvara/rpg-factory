@@ -8,7 +8,7 @@ Factory Core accepts three routing entry points:
 
 For planned work spanning one or more domains, `/rpg-factory:workflow` uses the same registry ownership and handoff graph to build explicit dispatch contracts. Artifact kinds resolve through `domains.*.artifact_kinds`; unknown or ambiguous kinds are errors. Engineering implementation targets use registered repository paths and existing path routing.
 
-Artifact targets of every registered kind resolve to the owning domain's lead skill. Ordered handoffs add workflow edges; `ordering: "none"` contracts appear as synchronization links and trigger revalidation notices without affecting wave order.
+Artifact targets of every registered kind resolve to the owning domain's lead skill. For written artifacts, `upstream` and `sources` references define workflow edges and take precedence over domain-level handoff order. Ordered handoff contracts provide fallback edges for planned nodes without artifact-level relationships; a real artifact cycle or a cycle among contract-ordered planned nodes is reported as `CYCLE`. `ordering: "none"` contracts appear as synchronization links and trigger revalidation notices without affecting wave order.
 
 ## Dependency graph
 

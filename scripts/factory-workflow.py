@@ -179,7 +179,14 @@ def build(spec, reg, authoring):
           break
     # Resolve explicit sources as ids. Existing ids are carried by reference, never copied.
     for node in list(nodes.values()):
-        for source in node.get("sources", []):
+        artifact = existing.get(node.get("artifact_id") or node["id"], {})
+        references = list(node.get("sources", []))
+        for key in ("upstream", "sources"):
+            for ref in artifact.get(key, []):
+                ref_id = ref.get("id") if isinstance(ref, dict) else ref
+                if ref_id and ref_id not in references:
+                    references.append(ref_id)
+        for source in references:
             if source in nodes:
                 edges.add((source, node["id"]))
             elif source not in ids and source not in existing:
@@ -198,6 +205,18 @@ def build(spec, reg, authoring):
                 if not candidates:
                     continue
                 for dst in candidates:
+                    # Written artifacts carry the authoritative order. A domain contract
+                    # supplies fallback ordering only when neither artifact references the other.
+                    src_artifact = existing.get(source.get("artifact_id") or source["id"])
+                    dst_artifact = existing.get(dst.get("artifact_id") or dst["id"])
+                    if src_artifact and dst_artifact:
+                        def refs(artifact):
+                            return {ref.get("id") if isinstance(ref, dict) else ref
+                                    for key in ("upstream", "sources")
+                                    for ref in artifact.get(key, [])}
+                        if ((source.get("artifact_id") or source["id"]) in refs(dst_artifact)
+                                or (dst.get("artifact_id") or dst["id"]) in refs(src_artifact)):
+                            continue
                     edges.add((source["id"], dst["id"]))
                     if source["artifact_id"]:
                         dst["inputs"].append({"id": source["artifact_id"], "rev": source.get("rev")})

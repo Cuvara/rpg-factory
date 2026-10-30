@@ -14,6 +14,8 @@ python3 -B scripts/factory-workflow.py plan workflow.json --authoring /path/to/g
 
 Dispatch nodes in wave order; independent nodes in a wave can run in parallel. Dispatch refuses a node with exit 2 until its dependencies are usable. The `print`, `orca`, and `agent` runners all include only artifact IDs and current blob revisions, output paths, allowed paths, checks, and acceptance criteria; they never paste artifact contents. Add `--json` to emit the dispatch contract as JSON. Contracts identify artifacts by ID and current working-tree blob revision. Run status as artifacts land, then produce the integrated report:
 
+When artifacts already exist, their `upstream` and `sources` artifact IDs determine the wave order. Ordered domain handoff contracts provide fallback ordering for planned nodes without artifact references; they do not override the order recorded by written artifacts. A cycle in artifact references, or among contract-ordered planned nodes, is reported as `CYCLE`. Contracts with `ordering: "none"` remain synchronization links and never order waves.
+
 ```sh
 python3 -B scripts/factory-workflow.py status workflow.json --authoring /path/to/game-authoring
 python3 -B scripts/factory-workflow.py dispatch workflow.json --node design --authoring /path/to/game-authoring
