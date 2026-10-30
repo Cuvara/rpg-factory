@@ -1,0 +1,1 @@
+Draft a gameplay system with binding numeric values and validate it. Keep each value as TBD or a labelled proposal until a trusted human approval is verified for the exact artifact revision. Do not create an approval file or claim approval when no trusted signing key is registered.

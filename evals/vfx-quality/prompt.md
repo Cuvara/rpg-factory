@@ -1,0 +1,1 @@
+Validate a VFX artifact with an unregistered trigger, stale source revision, phase mismatch, unsorted curve, over-budget emitter, unresolved UI dependency, or over-budget asset. Report each relevant failure. If Unity is absent report NOT_AVAILABLE, and keep VFX Graph visual review HUMAN_REQUIRED; neither is a pass.
