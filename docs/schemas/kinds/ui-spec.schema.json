@@ -1,1 +1,18 @@
-{"type":"object"}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/ui-spec.schema.json",
+  "title": "ui-spec",
+  "type": "object",
+  "required": [
+    "screen_id"
+  ],
+  "properties": {
+    "screen_id": {
+      "type": "string"
+    },
+    "spec": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

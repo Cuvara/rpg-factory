@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/ia-map.schema.json",
+  "title": "ia-map",
+  "type": "object",
+  "required": [
+    "entry_screen",
+    "screens",
+    "navigation"
+  ],
+  "properties": {
+    "entry_screen": {
+      "type": "string"
+    },
+    "screens": {
+      "type": "array"
+    },
+    "navigation": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
+}

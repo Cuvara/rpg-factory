@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/component-spec.schema.json",
+  "title": "component-spec",
+  "type": "object",
+  "required": [
+    "component_id",
+    "variants",
+    "props",
+    "states",
+    "tokens",
+    "accessibility"
+  ],
+  "properties": {
+    "component_id": {
+      "type": "string"
+    },
+    "variants": {
+      "type": "array"
+    },
+    "props": {
+      "type": "array"
+    },
+    "states": {
+      "type": "array"
+    },
+    "tokens": {
+      "type": "array"
+    },
+    "accessibility": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}
