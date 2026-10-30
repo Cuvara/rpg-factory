@@ -55,12 +55,19 @@ for changed_model,changed_spec,needle in [
     (lambda x:x,dict(base_spec,rig_required=True),'skin/rig missing'),
     (lambda x:x,dict(base_spec,animation_required=True),'animations missing'),
     (lambda x:x,dict(base_spec,export_settings={'scale':2,'units':'meters','up_axis':'Y'}),'scale mismatch'),
-    (lambda x:x,dict(base_spec,lods=['LOD1']),'required LOD missing')]:
+    (lambda x:x,dict(base_spec,lods=['LOD1']),'required LOD missing'),
+    (lambda x:x['meshes'].clear(),base_spec,'asset contains no meshes'),
+    (lambda x:x['scenes'][0].update(nodes=[99]),dict(base_spec,root_required=True),'scene/root structure missing or invalid')]:
     data=copy.deepcopy(model); changed_model(data)
     errs=plugin.gltf_errors(data,repo,changed_spec)
     assert any(needle in e for e in errs),(needle,errs)
     domain_cases.append(needle)
 print(f'PASS glTF domain rule failures ({len(domain_cases)} cases)')
+strip=copy.deepcopy(model); strip['meshes'][0]['primitives'][0]['mode']=5; strip['accessors'][0]['count']=5
+fan=copy.deepcopy(model); fan['meshes'][0]['primitives'][0]['mode']=6; fan['accessors'][0]['count']=5
+assert plugin.triangles(strip,strip['meshes'][0]['primitives'][0])==3
+assert plugin.triangles(fan,fan['meshes'][0]['primitives'][0])==3
+print('PASS glTF triangle strip and fan counts')
 missing=dict(asset); missing['spec']=dict(asset['spec'],file='missing.glb')
 assert plugin.check(missing,ctx)[0]['state']=='FAIL'
 fake=dict(asset); fake['spec']=dict(asset['spec'],file='asset.fbx',format='fbx')

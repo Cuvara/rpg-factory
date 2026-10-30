@@ -31,7 +31,7 @@ def gltf_data(path):
 
 def triangles(gltf, primitive):
     mode = primitive.get("mode", 4)
-    if mode != 4:
+    if mode not in (4, 5, 6):
         return 0
     accessor = primitive.get("indices")
     if accessor is not None:
@@ -40,7 +40,9 @@ def triangles(gltf, primitive):
     else:
         position = primitive.get("attributes", {}).get("POSITION")
         count = gltf.get("accessors", [])[position].get("count", 0) if position is not None else 0
-    return count // 3
+    if mode == 4:
+        return count // 3
+    return max(0, count - 2)
 
 
 def gltf_check(path, spec):
@@ -51,6 +53,8 @@ def gltf_check(path, spec):
 def gltf_errors(data, folder, spec):
     errors = []
     meshes = data.get("meshes", [])
+    if not meshes:
+        errors.append("asset contains no meshes")
     budgets = spec.get("polygon_budget_by_lod", {})
     lods = spec.get("lods", [])
     total = sum(triangles(data, p) for mesh in meshes for p in mesh.get("primitives", []))
@@ -77,7 +81,7 @@ def gltf_errors(data, folder, spec):
                 errors.append("primitive material index out of range")
     for image in data.get("images", []):
         uri = image.get("uri")
-        if uri and not (folder / uri).is_file():
+        if uri and not uri.startswith("data:") and not (folder / uri).is_file():
             errors.append("texture image missing: " + uri)
     if spec.get("materials_required") and not data.get("materials"):
         errors.append("materials required but none found")
@@ -87,8 +91,15 @@ def gltf_errors(data, folder, spec):
         for node in nodes:
             if not re.fullmatch(spec["node_naming_pattern"], node.get("name", "")):
                 errors.append("node naming convention failed: " + node.get("name", "<unnamed>"))
-    if spec.get("root_required") and not data.get("scenes"):
-        errors.append("scene/root structure missing")
+    if spec.get("root_required"):
+        scenes = data.get("scenes", [])
+        scene_index = data.get("scene", 0)
+        if not scenes or not isinstance(scene_index, int) or not 0 <= scene_index < len(scenes):
+            errors.append("scene/root structure missing")
+        else:
+            roots = scenes[scene_index].get("nodes", [])
+            if not roots or any(not isinstance(i, int) or not 0 <= i < len(nodes) for i in roots):
+                errors.append("scene/root structure missing or invalid")
     if spec.get("rig_required") and not data.get("skins"):
         errors.append("required skin/rig missing")
     if spec.get("animation_required") and not data.get("animations"):
