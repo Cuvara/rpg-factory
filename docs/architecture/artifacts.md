@@ -21,7 +21,9 @@ terminal states where appropriate. Legacy `review` means proposed and emits a de
 | blocked | Non-empty `blocked_by` and reason |
 
 Review JSON identifies artifact and blob revision, reviewer `{kind,id}`, verdict, findings and date.
-Reviewer identity must differ from all artifact authors. Reviews never substitute for signed approvals.
+Review identity is derived from git: artifact authors are the commit author emails of every commit that touched the artifact (following renames), union the declared `authors[].id` values. A review counts only when the single commit that added its file has a different author email and `reviewer.id` exactly matches that email; later edits, renames or deletions invalidate it. The default `process` assurance relies on commit identities and the factory's dispatch discipline. An actor who controls git identities can bypass it. Binding decisions always need signed approvals; reviews never substitute for those approvals.
+
+Lifecycle requirements default to `review_assurance: process`. Set `requirements.<state>.review_assurance` to `signed` for a state or kind that needs cryptographic reviewer identity. Signed reviews must verify with a key in that artifact domain's `reviewers` registry list; an empty list or untrusted signature yields `HUMAN_REQUIRED`, never `PASS`. Review assurance is reported as `process` or `signed`.
 `artifact-quality.py` reports schema, lifecycle, dependencies, staleness, review/approval, and plugin
 results as `rpg-factory.validation/1` JSON (`docs/schemas/validation-result.schema.json`). Domain
 plugins are registered by `domains.<domain>.quality_plugin`, live under `scripts/checks/domains/`,

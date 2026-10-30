@@ -4993,7 +4993,8 @@
       "human_gates": [],
       "handoffs": [],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     },
     "design": {
       "summary": "Game design artifacts, feature lifecycle and traceability.",
@@ -5020,7 +5021,8 @@
         "feature-spec-to-ui-spec"
       ],
       "may_own_feature_state": true,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     },
     "ui": {
       "summary": "UI/UX flows and interface specifications.",
@@ -5044,7 +5046,8 @@
         "ui-spec-to-client"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     },
     "art2d": {
       "summary": "2D art briefs and asset delivery records.",
@@ -5068,7 +5071,8 @@
         "art2d-asset-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     },
     "art3d": {
       "summary": "3D art briefs and asset delivery records.",
@@ -5092,7 +5096,8 @@
         "art3d-asset-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     },
     "vfx": {
       "summary": "VFX specifications and asset delivery records.",
@@ -5116,7 +5121,8 @@
         "vfx-spec-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     }
   },
   "artifact_lifecycles": {

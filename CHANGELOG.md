@@ -12,6 +12,8 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Changed
 
+- Artifact reviews bind to git author identities, expose process or signed assurance, and support registry-required signed reviews.
+
 - Extended artifact quality checks with structured results while preserving version 1 artifacts and signed approval verification.
 - Artifact quality, lint, and trace now fail closed on malformed files; lifecycle requirements and artifact grades follow registry data, and active design kinds validate their structured spec payloads.
 - Artifact check grading treats unavailable evidence as human-required, and adapter tool overrides run portable Python fakes consistently on Windows and Linux.
