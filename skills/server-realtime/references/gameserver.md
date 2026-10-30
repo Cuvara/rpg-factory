@@ -40,7 +40,7 @@ ADR-19 d4), `GoldenVectors/` (aoi, combat, movement, snapshot_merger, validation
   `ReadAll`.
 - `ServerOptions.SimulationPhaseFactory` (`Server/GameServer.cs:428`) is invoked in the host
   constructor (`Invoke`, `:1009`) with `(world, loggerFactory, onGroupRan)`.
-- `Program.cs` picks the factory (`SimulationPhaseFactory` `Program.cs:1136`). `LoadTestSpawner` is used when `loadTestEntities > 0` (it never
+- `Program.cs` picks the factory (`SimulationPhaseFactory` `Program.cs:1143`). `LoadTestSpawner` is used when `loadTestEntities > 0` (it never
   composes: its entities are tagged `EnemyAi`). Otherwise `EnemySpawner` and/or `BotPlayerSpawner`
   are used, with enemies first and the two wrapped in `CompositeSimulationPhase` when both are on.
   Otherwise the factory is `null`.

@@ -145,6 +145,7 @@ def cmd_run(args) -> int:
                              keep_clients=args.keep_clients,
                              require_clean_host=getattr(args, "require_clean_host", False),
                              allow_agents=tuple(getattr(args, "allow_agent", None) or ()),
+                             allow_dispatches=tuple(getattr(args, "allow_dispatch", None) or ()),
                              expect_player_sha=getattr(args, "expect_player_sha", None),
                              expect_server_sha=getattr(args, "expect_server_sha", None))
             outcomes.append(res["outcome"])
@@ -158,7 +159,8 @@ def cmd_preflight_soak(args) -> int:
     AnyDesk, Orca and WSL state. Read-only; prints one PASS/FAIL row each and writes nothing unless
     --out is given. Exit 0 when every row passes, 2 otherwise."""
     result = hostguard.preflight(window_min=args.window_min, announced=args.window_announced,
-                                 sample_s=args.sample_s, allow_agents=tuple(args.allow_agent or ()))
+                                 sample_s=args.sample_s, allow_agents=tuple(args.allow_agent or ()),
+                                 allow_dispatches=tuple(args.allow_dispatch or ()))
     if args.out:
         util.write_json(_path(args.out), result)
     if args.json:
@@ -449,7 +451,8 @@ def main(argv=None) -> int:
                                                     "client commit (7+ hex digits; testlab-build.json)")
         sp.add_argument("--expect-server-sha", help="soak-class scenarios: refuse to start unless --server-repo is at this commit")
         sp.add_argument("--allow-agent", action="append",
-                        help="Orca worktree name or path whose working agent P3 may ignore (the soak runner, the Lead)")
+                        help="P3 exception by normalized absolute path, worktreeId, or unique displayName; ambiguous names fail")
+        sp.add_argument("--allow-dispatch", action="append", help="P3 exception for this exact supervised dispatch id (repeatable)")
     r.set_defaults(fn=cmd_run)
     s.set_defaults(fn=cmd_suite)
     w.set_defaults(fn=cmd_sweep)
@@ -484,7 +487,9 @@ def main(argv=None) -> int:
     pf.add_argument("--window-min", type=float, default=90.0)
     pf.add_argument("--window-announced", help='the window the user named, e.g. "18:30Z 90min" (P7)')
     pf.add_argument("--sample-s", type=float, default=hostguard.PRE_SAMPLE_S, help="passive sample length (default 120)")
-    pf.add_argument("--allow-agent", action="append", help="Orca worktree name or path P3 may ignore")
+    pf.add_argument("--allow-agent", action="append",
+                    help="P3 exception by normalized absolute path, worktreeId, or unique displayName; ambiguous names fail")
+    pf.add_argument("--allow-dispatch", action="append", help="P3 exception for this exact supervised dispatch id (repeatable)")
     pf.add_argument("--out", help="also write the result JSON here")
     pf.add_argument("--json", action="store_true")
     pf.set_defaults(fn=cmd_preflight_soak)

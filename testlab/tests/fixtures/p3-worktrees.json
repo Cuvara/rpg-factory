@@ -1,0 +1,44 @@
+{
+  "result": {
+    "worktrees": [
+      {
+        "repo": "repo-1",
+        "displayName": "main",
+        "path": "C:/fixture/repo-1",
+        "worktreeId": "fixture-id-1",
+        "liveTerminalCount": 1,
+        "terminalVerdict": "live",
+        "hasAttachedPty": true,
+        "isMainWorktree": true,
+        "agents": [
+          {
+            "state": "working",
+            "agentType": "claude"
+          }
+        ]
+      },
+      {
+        "repo": "repo-2",
+        "displayName": "main",
+        "path": "C:/fixture/repo-2",
+        "worktreeId": "fixture-id-2",
+        "liveTerminalCount": 1,
+        "terminalVerdict": "live",
+        "hasAttachedPty": true,
+        "isMainWorktree": true,
+        "agents": []
+      },
+      {
+        "repo": "repo-3",
+        "displayName": "main",
+        "path": "C:/fixture/repo-3",
+        "worktreeId": "fixture-id-3",
+        "liveTerminalCount": 0,
+        "terminalVerdict": "none",
+        "hasAttachedPty": false,
+        "isMainWorktree": true,
+        "agents": []
+      }
+    ]
+  }
+}
