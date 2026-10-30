@@ -50,7 +50,10 @@ Read-only here: `client.packages`, `client.dots-sample`, `client.samples-importe
    `develop`, never edit those clones). A new or changed package API stops the client leg (hand-off below).
 4. **UI work:** run the 10 questions in `docs/UI-ARCHITECTURE.md` "Before implementing
    anything" and follow `references/ui-hud.md`. Edit `.uxml` in a way that regenerates the
-   `Generated/*.uxml.g.cs` (Editor save through the codegen) and commit both.
+   `Generated/*.uxml.g.cs` (Editor save through the codegen) and commit both. Invoke
+   `rpg-factory:ui-orchestrator` for the UI plan, then only the skills it lists, in order:
+   `rpg-factory:ui-component-selection`, `rpg-factory:ui-figma-import`, `rpg-factory:ui-toolkit-screen`,
+   `rpg-factory:ui-validation` (its review checklist applies in review mode).
 5. **Assets.** Scenes, prefabs, `.asset` and `.meta` change in the Editor (Unity MCP), never by
    hand-editing YAML. See *Human gates*.
 6. **Tests.** EditMode in `Assets/Tests/Editor` (`NDC.Tests.Editor`); PlayMode in `Assets/Tests/Runtime`
