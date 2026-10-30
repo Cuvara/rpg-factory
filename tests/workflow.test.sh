@@ -39,6 +39,33 @@ python3 -B "$ROOT/scripts/factory-workflow.py" plan "$TMP/cycle.json" --registry
 rc=$?
 [ "$rc" -eq 3 ] && grep -q 'CYCLE' "$TMP/out" || { echo 'FAIL dependency cycle'; exit 1; }
 echo 'PASS dependency cycle reports exit 3'
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); tmp=pathlib.Path(sys.argv[2]); author=tmp/'artifact-cycle'; (author/'design/features').mkdir(parents=True); (author/'ui/specs').mkdir(parents=True)
+for aid,kind,domain,folder,ref in [('FD-cycle-001','feature-spec','design','design/features','UI-cycle-001'),('UI-cycle-001','ui-spec','ui','ui/specs','FD-cycle-001')]:
+    obj={'schema_version':1,'id':aid,'kind':kind,'domain':domain,'status':'draft','title':aid,'upstream':[{'id':ref,'rev':'recorded'}],'sources':[],'acceptance':[],'trace':[],'spec':{}}
+    (author/folder/f'{aid}.artifact.json').write_text(json.dumps(obj))
+subprocess.run(['git','init','-q',str(author)],check=True); subprocess.run(['git','-C',str(author),'config','user.name','Fixture'],check=True); subprocess.run(['git','-C',str(author),'config','user.email','fixture@example.invalid'],check=True); subprocess.run(['git','-C',str(author),'add','.'],check=True); subprocess.run(['git','-C',str(author),'commit','-qm','seed artifact cycle'],check=True)
+spec=tmp/'artifact-cycle.json'; spec.write_text(json.dumps({'id':'artifact-cycle','title':'Cycle','goal':'Cycle','targets':[{'id':'FD-cycle-001','kind':'feature-spec'},{'id':'UI-cycle-001','kind':'ui-spec'}],'existing':['FD-cycle-001','UI-cycle-001']}))
+p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'plan',str(spec),'--authoring',str(author)],capture_output=True,text=True)
+assert p.returncode==3 and 'CYCLE' in p.stderr,(p.returncode,p.stdout,p.stderr)
+PY
+[ "$?" -eq 0 ] || { echo 'FAIL artifact-level cycle'; exit 1; }
+echo 'PASS artifact-level dependency cycle reports exit 3'
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json,pathlib,subprocess,sys
+root=pathlib.Path(sys.argv[1]); tmp=pathlib.Path(sys.argv[2]); author=tmp/'artifact-order';
+for folder in ('design/features','ui/specs','design/handoffs'): (author/folder).mkdir(parents=True,exist_ok=True)
+rows=[('FD-order-001','feature-spec','design','design/features',[]),('UI-order-001','screen-spec','ui','ui/specs',[{'id':'FD-order-001','rev':'old'}]),('TH-order-001','technical-handoff','design','design/handoffs',[{'id':'UI-order-001','rev':'old'}])]
+for aid,kind,domain,folder,upstream in rows:
+    (author/folder/f'{aid}.artifact.json').write_text(json.dumps({'schema_version':1,'id':aid,'kind':kind,'domain':domain,'status':'draft','title':aid,'upstream':upstream,'sources':[],'acceptance':[],'trace':[],'spec':{}}))
+subprocess.run(['git','init','-q',str(author)],check=True); subprocess.run(['git','-C',str(author),'config','user.name','Fixture'],check=True); subprocess.run(['git','-C',str(author),'config','user.email','fixture@example.invalid'],check=True); subprocess.run(['git','-C',str(author),'add','.'],check=True); subprocess.run(['git','-C',str(author),'commit','-qm','seed artifact order'],check=True)
+spec=tmp/'artifact-order.json'; spec.write_text(json.dumps({'id':'artifact-order','title':'Order','goal':'Order','targets':[{'id':x[0],'kind':x[1]} for x in rows],'existing':[x[0] for x in rows]}))
+p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'plan',str(spec),'--authoring',str(author),'--json'],capture_output=True,text=True,check=True); plan=json.loads(p.stdout); positions={n:i for i,w in enumerate(plan['waves']) for n in w}
+assert positions['FD-order-001']<positions['UI-order-001']<positions['TH-order-001'],plan['waves']
+PY
+[ "$?" -eq 0 ] || { echo 'FAIL artifact references override domain ordering'; exit 1; }
+echo 'PASS artifact references order feature, UI screen, and downstream design handoff'
 cat >"$TMP/domains.json" <<'EOF'
 {"id":"domains","title":"Domains","goal":"Cross domain","targets":[{"id":"design","kind":"feature-spec","sources":[],"acceptance":["A"]},{"id":"ui","kind":"ui-spec","sources":["design"],"acceptance":["B"]},{"id":"art","kind":"art2d-brief","sources":["ui"],"acceptance":["C"]},{"id":"art3d","kind":"art3d-asset","sources":[],"acceptance":["D"]},{"id":"vfx","kind":"vfx-spec","sources":["art3d"],"acceptance":["E"]},{"id":"impl","kind":"implementation","repo":"client","paths":["Assets/Scripts/"],"sources":[],"acceptance":["F"]}],"existing":[]}
 EOF

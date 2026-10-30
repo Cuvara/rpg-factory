@@ -62,6 +62,23 @@ import json,sys
 p=sys.argv[1]; rows=[json.loads(x) for x in open(p,encoding='utf-8')]; rows[1]['message']['content'][0]['input']['file_path']='/tmp/outside-game-authoring/file.artifact.json'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in rows))
 PY
 check 'outside write fails' fail grade "$T/outside"
+outside_shell() {
+  python3 -B - "$1/transcript.jsonl" "$2" <<'PY'
+import json,sys
+p,command=sys.argv[1:]; rows=[json.loads(x) for x in open(p,encoding='utf-8')]
+rows[2]['message']['content'][0]['input']['command']=command
+open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in rows))
+PY
+  python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$1" --scenario fixture --transcript "$1/transcript.jsonl" --expected-skills game-design --expected-kinds game-concept --domain design
+}
+newcase bash-redirect
+check 'Bash redirection outside workspace fails' fail outside_shell "$T/bash-redirect" 'printf test > /tmp/q'
+newcase bash-tee
+check 'tee output outside workspace fails' fail outside_shell "$T/bash-tee" 'printf test | tee /tmp/q'
+newcase bash-output
+check 'command -o output outside workspace fails' fail outside_shell "$T/bash-output" 'tool -o /tmp/q'
+newcase bash-null
+check 'discarded output to /dev/null is allowed' pass outside_shell "$T/bash-null" 'printf test > /dev/null'
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
 import json,sys
 p=sys.argv[1]; d=[json.loads(x) for x in open(p,encoding='utf-8')]; d[2]['message']['content'][0]['input']['command']='python scripts/factory-workflow.py status x; # wrong order engineering design ui'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in d))
@@ -69,5 +86,29 @@ PY
 check 'wrong workflow order fails' fail python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$T/waves" --scenario fixture --transcript "$T/waves/transcript.jsonl" --expected-skills game-design --expected-kinds game-concept --domain design --plan design-ui-eng
 newcase skill; sed -i 's/Launching skill: rpg-factory:game-design/Launching skill: rpg-factory:ui-ux/' "$T/skill/transcript.jsonl"
 check 'missing lead skill fails' fail grade "$T/skill"
+mkdir -p "$T/stale"
+cp -R "$ROOT/tests/fixtures/dogfood/game-authoring" "$T/stale/game-authoring"
+python3 -B "$ROOT/tests/dogfood/write-setup.py" "$ROOT" "$T/stale/game-authoring" stale-pair
+git -C "$T/stale/game-authoring" init -q; git -C "$T/stale/game-authoring" config user.name Fixture; git -C "$T/stale/game-authoring" config user.email fixture@example.invalid; git -C "$T/stale/game-authoring" add -- design ui art2d art3d vfx; git -C "$T/stale/game-authoring" commit -qm seed
+local_stale_native="$(cygpath -m "$T/stale")"
+sed "s|SCRATCH|$local_stale_native|g" "$ROOT/tests/fixtures/dogfood/transcript.jsonl" >"$T/stale/transcript.jsonl"
+python3 -B - "$T/stale/transcript.jsonl" <<'PY'
+import json,sys
+p=sys.argv[1]; rows=[json.loads(x) for x in open(p,encoding='utf-8')]
+rows[0]['message']['content']=[{'type':'tool_result','is_error':False,'content':'Launching skill: rpg-factory:factory-core'},{'type':'tool_result','is_error':False,'content':'Launching skill: rpg-factory:game-design'}]
+rows[-1]['result']='The VFX downstream artifact is stale and needs revalidation.'
+open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in rows))
+PY
+check 'stale workflow expects downstream upstream-changed FAIL and stale status without a VFX lead' pass python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$T/stale" --scenario xdomain-stale --transcript "$T/stale/transcript.jsonl" --expected-skills game-design --expected-kinds 'gameplay-system vfx-spec' --domain vfx --plan stale
+cat >"$T/no-stale-row.py" <<'PY'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1]); rows=[]
+for path in root.rglob('*.artifact.json'):
+    try: obj=json.loads(path.read_text(encoding='utf-8'))
+    except (OSError,ValueError): continue
+    rows.append({'artifact':obj.get('id'),'check':'lifecycle','state':'PASS','reasons':[]})
+print(json.dumps({'results':rows}))
+PY
+check 'stale grader rejects missing upstream-changed quality row' fail env RPG_FACTORY_ARTIFACT_QUALITY="$T/no-stale-row.py" python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$T/stale" --scenario xdomain-stale --transcript "$T/stale/transcript.jsonl" --expected-skills game-design --expected-kinds 'gameplay-system vfx-spec' --domain vfx --plan stale
 echo "dogfood grader: $((ok+bad)) run, $ok passed, $bad failed"
 [ "$bad" -eq 0 ]

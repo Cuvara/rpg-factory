@@ -52,7 +52,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    The bare snapshot never routes uncommitted baseline paths; only this call (or branch commits) routes the task.
    Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -
    also when the user only wants a plan or a review; naming the lead is not enough, its workflow,
-   validation and gates are in that skill. The lead runs its **legs**. A task spanning repos has
+   validation and gates are in that skill. For multi-domain work, invoke each routed domain lead
+   with the Skill tool before writing its artifacts; never read a `SKILL.md` as a substitute. The
+   lead runs its **legs**. A task spanning repos has
    **one** lead: the driver of the contract that links them (e.g. a Nakama RPC used by the client →
    `server-services`; a wire field → `wire-contract`), shown as **Cross-repo** in the downstream
    repo's routing; the other repos' skills are its follow-ups. `no specialised lead - factory-core only` means no

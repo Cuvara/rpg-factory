@@ -26,6 +26,17 @@ def normalized_path(value, root):
     return norm(value)
 
 
+def shell_output_paths(command):
+    """Return explicit output paths from common shell redirection/write forms."""
+    token = r'(?P<path>(?:/[^\s|;&<>"\']+|[A-Za-z]:[\\/][^\s|;&<>"\']+|\.\.?/[^\s|;&<>"\']+))'
+    patterns = (
+        r'(?:^|\s)>{1,2}\s*["\']?' + token,
+        r'(?:^|[|]\s*)tee(?:\s+-a)?\s+["\']?' + token,
+        r'(?:^|\s)-o\s+["\']?' + token,
+    )
+    return [match.group("path") for pattern in patterns for match in re.finditer(pattern, command)]
+
+
 def records(path):
     if not path.exists():
         return []
@@ -164,9 +175,9 @@ def main():
         elif not normalized_path(path, base).startswith(base + "/"):
             failures.append("write outside scratch workspace: " + path)
     for command in bash_commands:
-        for match in re.findall(r"(?:^|\s)(/(?:[A-Za-z0-9_.-]+/)+[^\s;&|]+|[A-Za-z]:\\[^\s;&|]+)", command):
-            if (match.startswith("/") or re.match(r"^[A-Za-z]:\\", match)) and not normalized_path(match, base).startswith(base + "/") and any(x in match.lower() for x in ("write", "rm ", "mv ", "cp ", ".json", ".md")):
-                failures.append("possible write outside scratch workspace: " + match)
+        for path in shell_output_paths(command):
+            if norm(path) != "/dev/null" and not normalized_path(path, base).startswith(base + "/"):
+                failures.append("possible write outside scratch workspace: " + path)
     for event in events:
         if event.get("type") == "result" and event.get("subtype") not in (None, "success"):
             failures.append("session did not finish successfully: " + str(event.get("subtype")))
@@ -201,6 +212,17 @@ def main():
                         failures.append("quality FAIL: " + row.get("artifact", "") + "/" + row.get("check", ""))
             except (ValueError, AttributeError):
                 failures.append("artifact-quality returned invalid JSON for " + domain)
+    if a.scenario == "xdomain-stale":
+        downstream_id = "VFX-craft-complete-001"
+        checker = os.environ.get("RPG_FACTORY_ARTIFACT_QUALITY", str(a.root / "scripts/checks/artifact-quality.py"))
+        quality = subprocess.run([sys.executable, "-B", checker, str(authoring), "--registry", str(a.root / "registry.json"), "--domain", "vfx", "--json"], capture_output=True, text=True, encoding="utf-8")
+        try:
+            rows = json.loads(quality.stdout).get("results", [])
+            stale_rows = [row for row in rows if row.get("artifact") == downstream_id and row.get("check") == "trace-approval"]
+            if quality.returncode not in (0, 1) or not any(row.get("state") == "FAIL" and any("upstream-changed" in reason for reason in row.get("reasons", [])) for row in stale_rows):
+                failures.append("stale downstream must have an expected FAIL upstream-changed quality row: " + downstream_id)
+        except (ValueError, AttributeError):
+            failures.append("artifact-quality returned invalid JSON for stale downstream")
     if a.plan:
         def workflow_targets():
             by_id = {obj.get("id"): obj for _, obj in artifacts if obj.get("id")}
@@ -262,7 +284,7 @@ def main():
                 result = subprocess.run([sys.executable, "-B", str(a.root / "scripts/factory-workflow.py"), "status", str(specfile), "--registry", str(a.root / "registry.json"), "--authoring", str(authoring), "--json"], capture_output=True, text=True, encoding="utf-8")
                 try:
                     status = json.loads(result.stdout)
-                    if result.returncode or not any(v == "stale" for v in status.get("states", {}).values()):
+                    if result.returncode or status.get("states", {}).get("VFX-craft-complete-001") != "stale":
                         failures.append("workflow status does not mark downstream artifact stale / needs revalidation")
                 except ValueError:
                     failures.append("workflow status returned invalid JSON")
