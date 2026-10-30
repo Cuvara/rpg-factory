@@ -65,6 +65,7 @@ Patch release. Hardens testlab host guards, native server mode, failure summarie
 
 ### Fixed
 
+- `server-realtime` gameserver reference: `SimulationPhaseFactory` citation follows `Program.cs` on server `origin/develop` (1136 -> 1143).
 - `netcode-headless.sh` now recognizes usable `C:/...` and `C:\\...` `TMPDIR` paths on Windows Git Bash,
   keeping temporary build and TRX data outside the Netcode source tree; candidate checks repeat every TRX
   parser case with a Windows-form temporary directory.
