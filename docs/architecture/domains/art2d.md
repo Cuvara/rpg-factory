@@ -18,4 +18,4 @@ Run shared `artifact-lint`, `artifact-trace`, and `asset-manifest` for asset rec
 
 ## Deliberate exclusions and readiness
 
-This foundation does not include production workflows, art generation, DCC tools, pipelines, or asset creation tooling. Readiness: **foundation**.
+The exact client asset folders are decided by the per-domain production plans. This foundation does not include production workflows, art generation, DCC tools, pipelines, or asset creation tooling. Readiness: **foundation**.

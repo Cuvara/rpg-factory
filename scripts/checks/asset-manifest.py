@@ -3,6 +3,11 @@
 import argparse, json, re, sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 def validate(obj, repos):
     errors=[]
     required=('id','kind','domain','status','source_uri','license','provenance','delivery')

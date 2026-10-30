@@ -18,4 +18,4 @@ Use shared `artifact-lint` and `artifact-trace`; asset delivery checks apply onl
 
 ## Deliberate exclusions and readiness
 
-This foundation does not include production workflows, design or prototyping tools, usability research operations, tooling integrations, or UI/art generation. Readiness: **foundation**.
+The exact client asset folders are decided by the per-domain production plans. This foundation does not include production workflows, design or prototyping tools, usability research operations, tooling integrations, or UI/art generation. Readiness: **foundation**.

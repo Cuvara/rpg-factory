@@ -18,4 +18,4 @@ Run shared `artifact-lint`, `artifact-trace`, and `asset-manifest` for asset rec
 
 ## Deliberate exclusions and readiness
 
-This foundation does not include production workflows, VFX tools, effect generation, implementation pipelines or runtime authoring. Readiness: **foundation**.
+The exact client asset folders are decided by the per-domain production plans. This foundation does not include production workflows, VFX tools, effect generation, implementation pipelines or runtime authoring. Readiness: **foundation**.

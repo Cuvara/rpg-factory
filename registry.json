@@ -4774,7 +4774,7 @@
       "copies": [
         {
           "repo": "client",
-          "path": "Assets/Art/"
+          "path": "Assets/"
         }
       ],
       "driver": "art-3d",
@@ -4793,7 +4793,7 @@
       "copies": [
         {
           "repo": "client",
-          "path": "Assets/VFX/"
+          "path": "Assets/"
         }
       ],
       "driver": "vfx",
@@ -4812,7 +4812,7 @@
       "copies": [
         {
           "repo": "client",
-          "path": "Assets/Art/2D/"
+          "path": "Assets/"
         }
       ],
       "driver": "art-2d",
@@ -5323,4 +5323,4 @@
       "Product-repo TEAM.md phase rules remain authoritative for product code."
     ]
   }
-}
+}\n

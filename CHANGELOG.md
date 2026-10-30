@@ -40,6 +40,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
+- Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and stabilize domain regression fixtures against registry growth.
 - `factory-status.py` and `git-guard.py` accept a registry repo without a `remote` (absent or null); `check-registry.sh` tolerates modules without `docs` and fails when its path query errors instead of silently checking fewer paths.
 
 ## [1.1.1] - 2026-10-29
