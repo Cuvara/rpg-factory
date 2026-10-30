@@ -301,6 +301,25 @@ def engineering_trace(artifact, repos):
     return traces
 
 
+def engineering_trace_for_node(node_id, node, plan, repos):
+    if node.get("domain") != "engineering":
+        artifact=node_artifact(node,plan)
+        return engineering_trace(artifact,repos) if artifact else []
+    parents={nid:[] for nid in plan["nodes"]}
+    for edge in plan["edges"]: parents[edge["to"]].append(edge["from"])
+    ancestors=set(); queue=list(parents.get(node_id,[]))
+    while queue:
+        current=queue.pop(0)
+        if current in ancestors: continue
+        ancestors.add(current); queue.extend(parents.get(current,[]))
+    result=[]
+    for aid in sorted(ancestors):
+        artifact=node_artifact(plan["nodes"][aid],plan)
+        if artifact:
+            result.extend(t for t in engineering_trace(artifact,repos) if t.get("repo")==node.get("repo"))
+    return result
+
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("command",choices=("plan","status","dispatch","report")); ap.add_argument("spec"); ap.add_argument("--registry",default=str(ROOT/"registry.json")); ap.add_argument("--authoring"); ap.add_argument("--repos",nargs="*",default=[]); ap.add_argument("--json",action="store_true"); ap.add_argument("--node"); ap.add_argument("--runner",choices=("orca","agent","print"),default="print")
     a=ap.parse_args(); spec=read_spec(a.spec); reg=load_registry(a.registry); plan=build(spec,reg,a.authoring)
@@ -314,6 +333,24 @@ def main():
     paths=[x["path"] for x in plan["existing"].values()]
     q=quality(a.authoring,a.registry,a.repos,paths)
     states={nid:state_for(n,plan,q) for nid,n in plan["nodes"].items()}
+    for nid,node in plan["nodes"].items():
+        if node.get("domain")!="engineering": continue
+        parents={key:[] for key in plan["nodes"]}
+        for edge in plan["edges"]: parents[edge["to"]].append(edge["from"])
+        ancestor_ids=set(); queue=list(parents[nid])
+        while queue:
+            current=queue.pop(0)
+            if current in ancestor_ids: continue
+            ancestor_ids.add(current); queue.extend(parents[current])
+        upstream_states=[states[x] for x in ancestor_ids if node_artifact(plan["nodes"][x],plan)]
+        traced=engineering_trace_for_node(nid,node,plan,a.repos)
+        valid_trace=any(t.get("commit_valid") for t in traced)
+        if "human-required" in upstream_states: states[nid]="human-required"
+        elif "blocked" in upstream_states: states[nid]="blocked"
+        elif "in-implementation" in upstream_states: states[nid]="in-implementation"
+        elif "released" in upstream_states: states[nid]="released" if valid_trace else "in-implementation"
+        elif "verified" in upstream_states: states[nid]="verified" if valid_trace else "in-implementation"
+        elif "approved" in upstream_states: states[nid]="missing"
     def inputs_ready(node):
         for item in node.get("inputs", []):
             if item["id"] in states:
@@ -329,8 +366,10 @@ def main():
                     return False
         return True
     for nid,node in plan["nodes"].items():
-        if states[nid] in ("missing","draft") and any(item["id"] not in states and not plan["existing"].get(item["id"]) for item in node.get("inputs", [])):
-            states[nid]="blocked"
+        if states[nid] in ("missing","draft","rejected"):
+            missing_input=any(item["id"] not in states and not plan["existing"].get(item["id"]) for item in node.get("inputs", []))
+            dependency_blocked=any(states[e["from"]] not in ("approved","in-implementation","verified","released") for e in plan["edges"] if e["to"]==nid)
+            if missing_input or dependency_blocked or not inputs_ready(node): states[nid]="blocked"
     if a.command=="dispatch":
         if not a.node or a.node not in plan["nodes"]: die("dispatch needs --node <known node id>")
         node=plan["nodes"][a.node]
@@ -371,8 +410,8 @@ def main():
             art=node_artifact(n,plan)
             checks=q.get(art.get("path"),{}).get("results",[]) if art else []
             approval_rows=[r for r in checks if r.get("check")=="trace-approval"]
-            approval_state=(approval_rows[0].get("state") if approval_rows else "HUMAN_REQUIRED")
-            node_rows[nid]={"artifact_id":art.get("id") if art else n.get("artifact_id"),"rev":art.get("rev") if art else None,"status":states[nid],"validation":{"summary":{s:sum(1 for r in checks if r.get("state")==s) for s in ("PASS","FAIL","WARN","HUMAN_REQUIRED","NOT_AVAILABLE","BLOCKED")},"results":checks},"reviews":reviews(a.authoring,art) if art else [],"approvals":{"state":approval_state,"results":approval_rows},"engineering_trace":engineering_trace(art,a.repos) if art else []}
+            approval_state=(approval_rows[0].get("state") if approval_rows else ("HUMAN_REQUIRED" if art else "NOT_APPLICABLE"))
+            node_rows[nid]={"artifact_id":art.get("id") if art else n.get("artifact_id"),"rev":art.get("rev") if art else None,"status":states[nid],"validation":{"summary":{s:sum(1 for r in checks if r.get("state")==s) for s in ("PASS","FAIL","WARN","HUMAN_REQUIRED","NOT_AVAILABLE","BLOCKED")},"results":checks},"reviews":reviews(a.authoring,art) if art else [],"approvals":{"state":approval_state,"results":approval_rows},"engineering_trace":engineering_trace_for_node(nid,n,plan,a.repos)}
         complete_states=("verified","released")
         human=[nid for nid,s in states.items() if s=="human-required"]
         blocked=[nid for nid,s in states.items() if s=="blocked"]
