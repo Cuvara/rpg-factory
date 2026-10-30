@@ -34,3 +34,18 @@ is_abs() {
 # fwd PATH: backslashes to forward slashes, to compare a path Python printed natively with a bash path.
 fwd() { local bs='\'; printf '%s' "${1//"$bs"//}"; }
 
+# dir_readonly DIR / dir_writable DIR: chmod has no effect on NTFS; deny create/delete with an ACL there.
+# Existing entries get an explicit DELETE deny too: MSYS may create them with a protected DACL that does not
+# inherit from the directory, and deleting (or moving out) a file needs only DELETE on the file itself.
+dir_readonly() {
+  if [ -n "$RPGF_WINDOWS" ]; then
+    MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /deny "$USERNAME:(OI)(CI)(WD,AD,DC,DE)" >/dev/null
+    local f; for f in "$1"/* "$1"/.[!.]*; do
+      [ -e "$f" ] && MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$f")" /deny "$USERNAME:(DE)" >/dev/null
+    done; :
+  else chmod 555 "$1"; fi
+}
+dir_writable() {
+  if [ -n "$RPGF_WINDOWS" ]; then MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /remove:d "$USERNAME" /t >/dev/null
+  else chmod 755 "$1"; fi
+}
