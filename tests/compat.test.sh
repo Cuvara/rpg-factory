@@ -34,9 +34,18 @@ fi
 mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho hi\n' > "$TMP/bin/rpgf-probe-tool"; chmod +x "$TMP/bin/rpgf-probe-tool"
 [ "$(PATH="$(path_entry "$TMP/bin"):$PATH" rpgf-probe-tool 2>/dev/null)" = "hi" ] && ok "path_entry dir is found on PATH" || no "path_entry dir not on PATH"
 
-# dir_readonly really blocks creating and removing files (chmod alone does nothing on NTFS)
+# dir_readonly really blocks creating and removing files (chmod alone does nothing on NTFS). A token that bypasses
+# permission checks cannot be held by them: root on POSIX, and on Windows an enabled SeRestorePrivilege (hosted CI
+# runners run elevated with it enabled; NTFS then grants DELETE whatever the DACL says).
 mkdir -p "$TMP/ro"; echo x > "$TMP/ro/a"
-if [ "$(id -u)" != 0 ]; then
+bypass=""
+[ "$(id -u)" = 0 ] && bypass="running as root"
+if [ -n "$RPGF_WINDOWS" ] && MSYS2_ARG_CONV_EXCL='*' "$SYSTEMROOT/System32/whoami.exe" /priv 2>/dev/null | grep -qiE '^SeRestorePrivilege[[:space:]].*Enabled'; then
+  bypass="SeRestorePrivilege is enabled for this token"
+fi
+if [ -n "$bypass" ]; then
+  echo "SKIP  dir_readonly ACL checks: $bypass (permission checks cannot bind this token)"
+else
   dir_readonly "$TMP/ro"
   r=$(python3 -B -c "
 import os, sys
