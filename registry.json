@@ -4299,17 +4299,77 @@
   },
   "artifact_lifecycles": {
     "default": {
-      "states": ["draft", "review", "approved", "in-implementation", "verified", "released", "deprecated"],
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated"
+      ],
       "transitions": {
-        "draft": ["review"], "review": ["approved"], "approved": ["in-implementation"],
-        "in-implementation": ["verified"], "verified": ["released"], "released": ["deprecated"],
-        "deprecated": ["draft"]
+        "draft": [
+          "review"
+        ],
+        "review": [
+          "approved"
+        ],
+        "approved": [
+          "in-implementation"
+        ],
+        "in-implementation": [
+          "verified"
+        ],
+        "verified": [
+          "released"
+        ],
+        "released": [
+          "deprecated"
+        ],
+        "deprecated": [
+          "draft"
+        ]
       },
       "requirements": {
-        "approved": {"needs_approval": ["review"], "approval_when_binding": true},
-        "in-implementation": {"needs_approval": ["review"], "needs_trace": ["impl"], "approval_when_binding": true},
-        "verified": {"needs_approval": ["review"], "needs_trace_for_test": ["impl", "test"], "approval_when_binding": true},
-        "released": {"needs_approval": ["review"], "needs_trace": ["release"], "needs_trace_for_test": ["impl", "test"], "approval_when_binding": true}
+        "approved": {
+          "needs_approval": [
+            "review"
+          ],
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_approval": [
+            "review"
+          ],
+          "needs_trace": [
+            "impl"
+          ],
+          "approval_when_binding": true
+        },
+        "verified": {
+          "needs_approval": [
+            "review"
+          ],
+          "needs_trace_for_test": [
+            "impl",
+            "test"
+          ],
+          "approval_when_binding": true
+        },
+        "released": {
+          "needs_approval": [
+            "review"
+          ],
+          "needs_trace": [
+            "release"
+          ],
+          "needs_trace_for_test": [
+            "impl",
+            "test"
+          ],
+          "approval_when_binding": true
+        }
       }
     }
   }
