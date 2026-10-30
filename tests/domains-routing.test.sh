@@ -28,8 +28,12 @@ pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; }
 ctx() { bash "$ROOT/scripts/factory-context.sh" "$@"; }
+graph_reg="$TMP/graph-registry.json"
+jq '(.domains |= with_entries(select(.key == "engineering" or .key == "design"))) | .contracts |= map(select(.domain == "engineering" or .domain == "design")) | .modules |= map(select((.domain // "engineering") == "engineering" or (.domain // "engineering") == "design")) | .skills |= with_entries(select((.value.domain // "engineering") == "engineering" or (.value.domain // "engineering") == "design"))' "$REG" > "$graph_reg"
+export RPG_FACTORY_REGISTRY="$graph_reg"
 out=$(ctx --domain design --graph 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'Dependency graph: design -> engineering' <<<"$out" && ok "handoff graph topological order" || no "handoff graph (rc=$rc): $out"
+export RPG_FACTORY_REGISTRY="$REG"
 out=$(ctx --repo authoring --json --paths design/features/crafting.md 2>&1); rc=$?
 [ "$rc" -eq 0 ] && jq -e '.repos[0].routing.follow_ups | length > 0' <<<"$out" >/dev/null && ok "authoring source routes downstream follow-ups" || no "authoring follow-ups (rc=$rc)"
 out=$(ctx --repo server --paths backend/content/ backend/shared/proto/wire.proto 2>&1); rc=$?
@@ -37,11 +41,11 @@ out=$(ctx --repo server --paths backend/content/ backend/shared/proto/wire.proto
 out=$(ctx --repo server --lead wire-contract --paths backend/content/ backend/shared/proto/wire.proto 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'wire-contract' <<<"$out" && ok "--lead resolves cross-domain paths" || no "lead override (rc=$rc)"
 cycle_reg="$TMP/cycle-registry.json"
-jq '.contracts += [{id:"reverse-handoff",kind:"handoff",domain:"engineering",summary:"reverse",source:{repo:"server",path:"backend/shared/proto/"},copies:[{repo:"authoring",path:"design/features/"}],driver:"wire-contract",gate:null,evidence:"artifact-trace"}]' "$REG" > "$cycle_reg"
+jq '.contracts += [{id:"reverse-handoff",kind:"handoff",domain:"engineering",summary:"reverse",source:{repo:"server",path:"backend/shared/proto/"},copies:[{repo:"authoring",path:"design/features/"}],driver:"wire-contract",gate:null,evidence:"artifact-trace"}]' "$graph_reg" > "$cycle_reg"
 export RPG_FACTORY_REGISTRY="$cycle_reg"
 out=$(ctx --domain design --graph 2>&1); rc=$?
 [ "$rc" -eq 3 ] && grep -q 'CYCLE: design -> engineering -> design' <<<"$out" && ok "graph cycle exits 3 with cycle" || no "graph cycle (rc=$rc): $out"
-export RPG_FACTORY_REGISTRY="$REG"
+export RPG_FACTORY_REGISTRY="$graph_reg"
 out=$(ctx --domain engineering 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'Domain' <<<"$out" && grep -q 'routes by --repo/--paths (module ownership)' <<<"$out" && ok "--domain engineering text" || no "--domain engineering text (rc=$rc)"
 out=$(ctx --json --domain engineering 2>&1); rc=$?
@@ -50,6 +54,7 @@ out=$(ctx --domain missing 2>&1); rc=$?
 [ "$rc" -eq 2 ] && grep -q 'unknown domain missing; known:' <<<"$out" && ok "unknown domain exits 2" || no "unknown domain (rc=$rc)"
 out=$(ctx --kind absent 2>&1); rc=$?
 [ "$rc" -eq 2 ] && grep -q 'known: shared, spec' <<<"$out" && ok "unknown kind lists known kinds" || no "unknown kind (rc=$rc)"
+export RPG_FACTORY_REGISTRY="$REG"
 out=$(ctx --kind spec 2>&1); rc=$?
 [ "$rc" -eq 0 ] && grep -q 'id: design' <<<"$out" && ok "one-claim kind resolves" || no "one-claim kind (rc=$rc)"
 out=$(ctx --kind shared 2>&1); rc=$?
@@ -81,5 +86,18 @@ out=$(python3 -B "$ROOT/scripts/factory-cmd.py" route --kind shared --lead desig
 [ "$rc" -eq 0 ] && grep -q 'id: design' <<<"$out" && ok "factory-cmd route --kind --lead resolves an ambiguous kind" || no "factory-cmd route --kind --lead (rc=$rc)"
 out=$(python3 -B "$ROOT/scripts/factory-cmd.py" route --kind shared --repo server 2>&1); rc=$?
 [ "$rc" -ne 0 ] && grep -q 'accepts only --domain, --kind and --lead' <<<"$out" && ok "factory-cmd route selector rejects other flags" || no "factory-cmd route selector flag check (rc=$rc)"
+export RPG_FACTORY_REGISTRY="$REG"
+out=$(ctx --domain ui --graph 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+  order=$(sed -n 's/^Dependency graph: //p' <<<"$out")
+  python3 - "$order" <<'PY'
+import sys
+order=sys.argv[1].split(" -> ")
+assert len(order) == len(set(order)), order
+for before, after in (("design","ui"),("ui","art2d"),("art2d","engineering"),("art3d","engineering"),("art3d","vfx"),("vfx","engineering")):
+    assert order.index(before) < order.index(after), (before, after, order)
+PY
+  [ $? -eq 0 ] && ok "live graph is acyclic and honors domain ordering" || no "live graph ordering: $out"
+else no "live graph (rc=$rc): $out"; fi
 total=$((pass + fail)); echo "domains-routing: $total run, $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
