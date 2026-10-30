@@ -153,6 +153,22 @@ ownership_out=$(python3 -B "$(dirname "${BASH_SOURCE[0]}")/checks/registry-owner
 }
 echo "$ownership_out"
 
+python3 -B - "$REGISTRY" "$PLUGIN_ROOT" <<'PY'
+import json, os, sys
+r=json.load(open(sys.argv[1],encoding="utf-8")); root=os.path.abspath(sys.argv[2]); errors=[]
+known={k for d in r.get("domains",{}).values() for k in d.get("artifact_kinds",[])}
+for kind,path in r.get("kind_schemas",{}).items():
+    if kind not in known: errors.append(f"kind schema {kind}: kind is not registered")
+    if not isinstance(path,str) or not path.startswith("docs/schemas/kinds/") or not os.path.isfile(os.path.join(root,path)): errors.append(f"kind schema {kind}: missing or invalid path {path}")
+for domain,data in r.get("domains",{}).items():
+    plugin=data.get("quality_plugin")
+    if plugin and (not plugin.startswith("scripts/checks/domains/") or not plugin.endswith(".py") or not os.path.isfile(os.path.join(root,plugin))): errors.append(f"domain {domain}: invalid quality_plugin {plugin}")
+if errors:
+    print("\n".join("FAIL: "+x for x in errors)); sys.exit(1)
+print(f"PASS: {len(r.get('kind_schemas',{}))} artifact kind schemas checked")
+PY
+if [ "$?" -ne 0 ]; then exit 1; fi
+
 # ---- on-disk paths
 missing=""; path_count=0
 if ! $structure_only; then

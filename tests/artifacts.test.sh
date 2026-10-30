@@ -54,7 +54,7 @@ python3 "$T/make.py" "$R" draft
 git -C "$R" add spec.md; git -C "$R" commit --allow-empty -qm restore
 python3 "$T/make.py" "$R" review
 git -C "$R" add spec.md; git -C "$R" commit -qm review
-got=$(line); [[ "$got" == 'PASS FX-test-001' ]] && ok 'legal transition' || bad "legal transition: $got"
+got=$(line); [[ "$got" == 'WARN deprecated-state review -> proposed FX-test-001' ]] && ok 'legacy review alias warns' || bad "legal transition: $got"
 python3 "$T/make.py" "$R" verified
 got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$R" --registry "$T/reg.json" | head -1); [[ "$got" == 'FAIL FX-test-001 illegal transition'* ]] && ok 'illegal transition rejected' || bad "illegal transition: $got"
 python3 "$T/make.py" "$R" approved
@@ -96,7 +96,7 @@ p=sys.argv[1]; o=json.load(open(p)); o['status']='review'; json.dump(o,open(p,'w
 PY
 git -C "$J" add .; git -C "$J" commit -qm transition
 got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$J" --registry "$T/reg.json" | head -1)
-[[ "$got" == 'PASS FX-json-001' ]] && ok 'JSON artifact legal transition across commits' || bad "JSON legal transition: $got"
+[[ "$got" == 'WARN deprecated-state review -> proposed FX-json-001' ]] && ok 'JSON legacy review alias across commits' || bad "JSON legal transition: $got"
 python3 - "$J/spec.artifact.json" <<'PY'
 import json,sys
 p=sys.argv[1]; o=json.load(open(p)); o.update(id='FX-renamed-001',status='approved'); json.dump(o,open(p,'w'))

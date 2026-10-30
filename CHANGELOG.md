@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- Added lifecycle v2 metadata and quality result contracts, per-kind schema registration, review records, adapter tool discovery and domain quality plugin interfaces.
+
+### Changed
+
+- Extended artifact quality checks with structured results while preserving version 1 artifacts and signed approval verification.
+
 ## [1.2.0] - 2026-10-30
 
 Feature release: rpg-factory becomes a multi-discipline factory with a discipline-neutral core. A `domains` registry

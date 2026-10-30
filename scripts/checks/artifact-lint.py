@@ -145,7 +145,7 @@ def validate(obj, reg, schema):
         life = lifecycle(reg, obj.get("kind"))
         if obj.get("kind") not in dom.get("artifact_kinds", []):
             errors.append("unregistered kind/domain")
-        if not life or obj.get("status") not in life.get("states", []):
+        if not life or (obj.get("status") not in life.get("states", []) and not (obj.get("status") == "review" and "proposed" in life.get("states", []))):
             errors.append("illegal status")
         return errors
     required = (
@@ -170,7 +170,7 @@ def validate(obj, reg, schema):
     life = lifecycle(reg, obj.get("kind"))
     if obj.get("kind") not in dom.get("artifact_kinds", []):
         errors.append("unregistered kind/domain")
-    if not life or obj.get("status") not in life.get("states", []):
+    if not life or (obj.get("status") not in life.get("states", []) and not (obj.get("status") == "review" and "proposed" in life.get("states", []))):
         errors.append("illegal status")
     for item in obj.get("upstream", []):
         if (
@@ -188,7 +188,8 @@ def validate(obj, reg, schema):
         for item in obj["acceptance"]:
             if (
                 not isinstance(item, dict)
-                or set(item) != {"id", "text", "verify"}
+                or not {"id", "text", "verify"}.issubset(item)
+                or set(item) - {"id", "text", "verify", "evidence"}
                 or not all(
                     isinstance(item.get(k), str) and item[k] for k in ("id", "text")
                 )
@@ -216,6 +217,16 @@ def validate(obj, reg, schema):
                 errors.append("bad trace AC")
     if "binding_values" in obj and obj["binding_values"] is not True:
         errors.append("binding_values must be true when present")
+    if obj.get("schema_version", 1) not in (1, 2):
+        errors.append("unsupported schema_version")
+    if "spec" in obj:
+        schema_path = reg.get("kind_schemas", {}).get(obj.get("kind"))
+        if schema_path:
+            try:
+                kind_schema = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", schema_path), encoding="utf-8"))
+                errors.extend(schema_errors(obj["spec"], kind_schema, kind_schema, "$.spec"))
+            except Exception as exc:
+                errors.append("invalid kind schema: " + str(exc))
     return errors
 
 
@@ -278,7 +289,7 @@ def main():
         except Exception as e:
             reasons.append("bad document: " + str(e))
         line = (
-            ("FAIL" if reasons else "PASS")
+            ("FAIL" if reasons else ("WARN deprecated-state review -> proposed" if isinstance(obj, dict) and obj.get("status") == "review" else "PASS"))
             + " "
             + (
                 str(obj.get("id", "unknown"))

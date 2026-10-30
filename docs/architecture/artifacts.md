@@ -1,5 +1,34 @@
 # Shared artifact contract
 
+## Lifecycle v2 and quality results
+
+The common metadata supports `schema_version` 1 (legacy) and 2 (current), `authors`, `sources`,
+`provenance`, `blocked_by`, `rejection`, and kind-specific `spec`. Register each kind schema under
+`kind_schemas`; schemas live in `docs/schemas/kinds/`. Lifecycle requirements are data in
+`artifact_lifecycles`. Canonical states are draft, proposed, reviewed, approved,
+in-implementation, verified, released, rejected and blocked; deprecated and superseded are
+terminal states where appropriate. Legacy `review` means proposed and emits a deprecation warning.
+
+| State | Required evidence |
+|---|---|
+| proposed | Complete schema and acceptance criteria |
+| reviewed | Independent record under `reviews/<id>/<blob-sha>-<reviewer-id>.json` |
+| approved | Existing immutable signed approval gates, including `approval_when_binding` |
+| in-implementation | Implementation trace |
+| verified | Per criterion: tests need implementation and test trace; review needs a review record; measure needs an existing evidence reference |
+| released | Release trace, reached through approved and verified |
+| rejected | `rejection.reason`; recovery only to draft |
+| blocked | Non-empty `blocked_by` and reason |
+
+Review JSON identifies artifact and blob revision, reviewer `{kind,id}`, verdict, findings and date.
+Reviewer identity must differ from all artifact authors. Reviews never substitute for signed approvals.
+`artifact-quality.py` reports schema, lifecycle, dependencies, staleness, review/approval, and plugin
+results as `rpg-factory.validation/1` JSON (`docs/schemas/validation-result.schema.json`). Domain
+plugins are registered by `domains.<domain>.quality_plugin`, live under `scripts/checks/domains/`,
+and expose `check(artifact, ctx) -> list[Result]`; `_api.py` defines the result and context contract.
+To add a kind, add it to the domain `artifact_kinds`, declare its schema in `kind_schemas`, add a
+lifecycle entry if needed, then add a domain plugin rule only when domain-owned quality logic exists.
+
 Artifacts are domain-owned records whose metadata can be checked without embedding discipline rules in Factory Core.
 The JSON Schema is [artifact.schema.json](../artifact.schema.json). Markdown artifact files use strict JSON front matter:
 
