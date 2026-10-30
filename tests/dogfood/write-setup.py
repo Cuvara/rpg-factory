@@ -35,6 +35,7 @@ def main():
         seeds["stale-upstream"] = ("design/features/GS-stale-001.artifact.json", from_template("design/gameplay-system.md", "GS-stale-001", "Changed crafting gameplay system", {"system_type": "combat", "core_loop": "Changed event"}))
         stale_vfx = from_template("vfx/vfx-spec.md", "VFX-craft-complete-001", "Crafting completion effect", {"purpose": "TBD: crafting completion effect", "triggers": ["GS-stale-001"]})
         stale_vfx["upstream"] = [{"id": "GS-stale-001", "rev": "0000000000000000000000000000000000000000"}]
+        seeds["stale-upstream"][1]["sources"] = ["GD-game-concept-001"]
         seeds["stale-downstream"] = ("vfx/specs/VFX-craft-complete-001.artifact.json", stale_vfx)
     if seed == "asset-3d-vfx":
         selected = ("asset-3d", "design-event")
