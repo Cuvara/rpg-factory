@@ -90,6 +90,12 @@ ws=t/'contract.json'; ws.write_text(json.dumps({'id':'contract','title':'Contrac
 for runner in ('print','orca','agent'):
     p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'dispatch',str(ws),'--authoring',str(author),'--node','child','--runner',runner],capture_output=True,text=True)
     assert p.returncode==0,(runner,p.stderr); assert 'DS-test-001' in p.stdout and rev in p.stdout and 'allowed_write_paths' in p.stdout and 'SECRET ARTIFACT BODY' not in p.stdout,(runner,p.stdout)
+approval_repo=t/'authoring-approval'; approval_dir=approval_repo/'design/features'; approval_dir.mkdir(parents=True); approval_art=approval_dir/'DS-approval-001.artifact.json'
+approval_art.write_text(json.dumps({'id':'DS-approval-001','kind':'feature-spec','domain':'design','status':'approved','title':'Needs approval','binding_values':True,'upstream':[],'acceptance':[],'trace':[]}))
+subprocess.run(['git','init','-q','-b','main',str(approval_repo)],check=True); subprocess.run(['git','-C',str(approval_repo),'config','user.email','test@example.com'],check=True); subprocess.run(['git','-C',str(approval_repo),'config','user.name','Test'],check=True); subprocess.run(['git','-C',str(approval_repo),'add','.'],check=True); subprocess.run(['git','-C',str(approval_repo),'commit','-qm','approval fixture'],check=True)
+approval_spec=t/'approval.json'; approval_spec.write_text(json.dumps({'id':'approval','title':'Approval','goal':'Approval required','targets':[{'id':'DS-approval-001','kind':'feature-spec','sources':[],'acceptance':[]}],'existing':[]}))
+status_run=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'status',str(approval_spec),'--authoring',str(approval_repo),'--json'],capture_output=True,text=True,check=True); assert json.loads(status_run.stdout)['states']['DS-approval-001']=='human-required',status_run.stdout
+report_run=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'report',str(approval_spec),'--authoring',str(approval_repo),'--json'],capture_output=True,text=True,check=True); approval_report=json.loads(report_run.stdout); assert approval_report['overall']=='incomplete' and approval_report['human_required']==['DS-approval-001'],approval_report
 PY
 [ "$?" -eq 0 ] || exit 1
 echo 'PASS status, dispatch, report schemas and runner contracts'

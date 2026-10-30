@@ -258,7 +258,7 @@ def state_for(node, plan, quality_map):
         return "missing"
     if artifact["status"] == "rejected": return "rejected"
     if artifact["status"] == "blocked": return "blocked"
-    q=quality_map.get(artifact.get("path"),{})
+    q=quality_map.get(artifact.get("id"),{})
     if any(r.get("state")=="BLOCKED" for r in q.get("results",[])): return "blocked"
     if any(r.get("state")=="HUMAN_REQUIRED" for r in q.get("results",[])): return "human-required"
     if any(r.get("state")=="FAIL" for r in q.get("results",[])): return "blocked"
@@ -330,8 +330,8 @@ def main():
             for i,w in enumerate(plan["waves"],1): print(f"Wave {i}: " + ", ".join(w))
             for n in plan["nodes"].values(): print(f"  {n['id']}: {n['domain']} / {n['kind']} / {n['lead_skill']} -> {n['repo']}:{', '.join(n['paths'])}")
         return
-    paths=[x["path"] for x in plan["existing"].values()]
-    q=quality(a.authoring,a.registry,a.repos,paths)
+    artifact_ids=[x["id"] for x in plan["existing"].values()]
+    q=quality(a.authoring,a.registry,a.repos,artifact_ids)
     states={nid:state_for(n,plan,q) for nid,n in plan["nodes"].items()}
     for nid,node in plan["nodes"].items():
         if node.get("domain")!="engineering": continue
@@ -361,8 +361,7 @@ def main():
                     return False
                 if item.get("rev") and item["rev"] != source.get("rev"):
                     return False
-                source_path=source.get("path")
-                if any(r.get("state") in ("FAIL", "HUMAN_REQUIRED", "BLOCKED") for r in q.get(source_path, {}).get("results", [])):
+                if any(r.get("state") in ("FAIL", "HUMAN_REQUIRED", "BLOCKED") for r in q.get(item["id"], {}).get("results", [])):
                     return False
         return True
     for nid,node in plan["nodes"].items():
@@ -408,7 +407,7 @@ def main():
         node_rows={}
         for nid,n in plan["nodes"].items():
             art=node_artifact(n,plan)
-            checks=q.get(art.get("path"),{}).get("results",[]) if art else []
+            checks=q.get(art.get("id"),{}).get("results",[]) if art else []
             approval_rows=[r for r in checks if r.get("check")=="trace-approval"]
             approval_state=(approval_rows[0].get("state") if approval_rows else ("HUMAN_REQUIRED" if art else "NOT_APPLICABLE"))
             node_rows[nid]={"artifact_id":art.get("id") if art else n.get("artifact_id"),"rev":art.get("rev") if art else None,"status":states[nid],"validation":{"summary":{s:sum(1 for r in checks if r.get("state")==s) for s in ("PASS","FAIL","WARN","HUMAN_REQUIRED","NOT_AVAILABLE","BLOCKED")},"results":checks},"reviews":reviews(a.authoring,art) if art else [],"approvals":{"state":approval_state,"results":approval_rows},"engineering_trace":engineering_trace_for_node(nid,n,plan,a.repos)}
