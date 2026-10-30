@@ -164,3 +164,21 @@ reg_path=temp/'approval-context-registry.json'; reg_path.write_text(json.dumps(r
 result=subprocess.run(command,capture_output=True,text=True); assert result.returncode==1,result.stderr; rows=[x for x in json.loads(result.stdout)['results'] if x['check']=='approval-context']; states={x['artifact']:x['reasons'][0] for x in rows}; assert states=={'missing':'missing','invalid':'invalid','untrusted':'untrusted','verified':'verified'},(states,rows)
 print('PASS stub plugin reads Context approval states: missing, invalid, untrusted, verified')
 PY
+# --domain / --kind select what is reported, never what resolves: a UI artifact citing a design artifact stays valid
+mkdir -p "$T/xd/design" "$T/xd/ui"; git -C "$T/xd" init -q -b main
+cat > "$T/reg-xd.json" <<'JSON'
+{"domains":{"design":{"artifact_kinds":["spec"]},"ui":{"artifact_kinds":["spec"]}},"artifact_lifecycles":{"spec":{"states":["draft"],"transitions":{},"requirements":{}}},"kind_schemas":{"spec":"docs/schemas/kinds/feature-spec.schema.json"}}
+JSON
+for x in design:DS-up-001: ui:UI-down-001:DS-up-001; do
+  IFS=: read -r d id src <<<"$x"
+  printf '{"schema_version":1,"id":"%s","kind":"spec","domain":"%s","status":"draft","title":"t","sources":[%s],"upstream":[],"acceptance":[{"id":"A1","text":"Works","verify":"test"}],"trace":[],"authors":[{"kind":"human","id":"author"}],"spec":{"summary":"s","goals":["g"],"requirements":[{"id":"A1","description":"d"}]}}\n' \
+    "$id" "$d" "${src:+\"$src\"}" > "$T/xd/$d/$id.artifact.json"
+done
+for sel in "--domain ui" "--kind spec"; do
+  out=$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "$T/reg-xd.json" $sel --json || true)
+  jq -e '[.results[] | select(.check=="dependencies")] as $d | ($d | length) > 0 and all($d[]; .state=="PASS")' <<<"$out" >/dev/null \
+    || { echo "FAIL $sel lost the cross-domain source: $(jq -c '[.results[]|select(.check=="dependencies")]' <<<"$out")"; exit 1; }
+done
+jq -e '[.results[].artifact] | unique == ["UI-down-001"]' <<<"$(python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$T/xd" --registry "$T/reg-xd.json" --domain ui --json || true)" >/dev/null \
+  || { echo "FAIL --domain ui reported artifacts of another domain"; exit 1; }
+echo "PASS --domain/--kind report only the selection and still resolve cross-domain sources"

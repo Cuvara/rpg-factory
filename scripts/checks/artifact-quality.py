@@ -65,7 +65,7 @@ def main():
                 try:
                     if p.read_text(encoding='utf-8').startswith('---json'): paths.append(p)
                 except Exception as exc: discovery_errors.append((p, str(exc)))
-    artifacts={}; malformed=[]
+    artifacts={}; selected=[]; malformed=[]
     for p in sorted(paths):
         try:
             obj=read_artifact(p)
@@ -74,8 +74,9 @@ def main():
             if not obj.get('kind'): raise ValueError('missing kind')
         except Exception as exc:
             malformed.append((p, str(exc))); continue
-        if a.kind and obj.get('kind')!=a.kind or a.domain and obj.get('domain')!=a.domain: continue
         rel=p.relative_to(root).as_posix(); artifacts[obj['id']]=(rel,obj)
+        # --kind/--domain select what is reported; every artifact stays resolvable (cross-domain sources, upstream)
+        if not (a.kind and obj.get('kind')!=a.kind or a.domain and obj.get('domain')!=a.domain): selected.append(obj['id'])
     results=[]
     for p, error in malformed + discovery_errors:
         results.append({'artifact':p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p),'kind':'','domain':'','status':'','check':'parse','state':'FAIL','reasons':[error]})
@@ -86,7 +87,8 @@ def main():
             k,v=item.split('=',1); repo_map[k]=os.path.abspath(v)
     repo_roots={k:Path(v).resolve() for k,v in repo_map.items() if k in reg.get('repos',{})}
     repo_roots.setdefault('authoring', root.resolve())
-    for aid,(rel,obj) in artifacts.items():
+    for aid in selected:
+        rel,obj=artifacts[aid]
         life=lint.lifecycle(reg,obj.get('kind')); state=obj.get('status'); errors=lint.validate(obj,reg,schema)
         if state=='review':
             add(aid,obj,rel,'lifecycle','WARN',['deprecated-state review -> proposed']); state='proposed'
