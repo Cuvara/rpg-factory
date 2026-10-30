@@ -1,1 +1,34 @@
-{"type":"object"}
+{
+  "type": "object",
+  "required": [
+    "style",
+    "palette",
+    "references",
+    "constraints"
+  ],
+  "properties": {
+    "style": {
+      "type": "string"
+    },
+    "palette": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/art3d-brief-v1.schema.json",
+  "title": "art-direction-3d specification schema v1"
+}

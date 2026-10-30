@@ -1,21 +1,47 @@
-# 3D Art domain foundation
+# 3D Art production workflow
 
-## Responsibility and boundary
+## Responsibility and readiness
 
-3D Art owns briefs and delivery records for models, materials, rigs and animation. Engineering owns engine import, runtime integration, performance implementation and client repository files; `client-integration` retains `client.unity-assets` until a later ownership plan moves it. External DCC files are referenced through manifests.
+The `art3d` domain owns production specifications and the delivery record for 3D assets. It is production-ready when every required deliverable passes schema, lifecycle, trace, and domain quality checks and an independent human reviewer accepts the visual result. Engineering owns client import settings, runtime integration, and files under the client `Assets/` tree. VFX consumes approved mesh/material references.
 
-## Inputs and outputs
+## Artifact kinds
 
-Inputs are feature/design references and art direction. Outputs are `art3d-brief` and `art3d-asset` artifacts under `art3d/`; asset records use the shared asset-manifest schema and name a delivery path within a registered repository.
+Every artifact uses stable ids, `schema_version: 2`, `sources`, `authors`, upstream id/revision pairs, acceptance criteria, trace, and a kind-specific `spec`. Templates in `templates/art3d/` are schema-valid drafts.
 
-## Artifacts and lifecycle
+| Kind | Payload |
+|---|---|
+| `art3d-brief`, `art-direction-3d` | Visual direction, palette, references, constraints; the first kind remains a compatibility alias. |
+| `model-spec` | Topology, per-LOD polygon budget, UV requirements, naming, scale, units, pivot, scene/rig requirements. |
+| `material-spec` | Material assignments and texture maps, resolution, format, colour space. |
+| `rig-spec` | Skeleton and root-bone naming, units, scale, deformation policy. |
+| `animation-spec` | Clips, fps, looping, root motion and duration. |
+| `asset-3d`, `art3d-asset` | File and SHA-256, format, LODs, collision/physics, textures, export settings, engine constraints and required deliverables. `art3d-asset` remains a compatibility alias. |
 
-Kinds: `art3d-brief`, `art3d-asset`. Both use the shared lifecycle; asset records additionally pass `asset-manifest` validation.
+Each kind uses the shared lifecycle v2 state graph and kind-specific schema-complete proposal requirements. Rejected artifacts recover through a new draft; blocked artifacts require a reason and blocker ids; upstream revision changes require revalidation. No shortcut may skip review, approval, or evidence requirements.
 
-## Quality gates and handoffs
+## Production sequence
 
-Run shared `artifact-lint`, `artifact-trace`, and `asset-manifest` for asset records. Art3D assets hand off to VFX as references and to engineering for import/integration. Human review decides visual acceptance and rights questions.
+1. Start one-domain work with `factory-context.sh --domain art3d`; use `/rpg-factory:workflow` when design, UI, VFX, or Engineering participates.
+2. Resolve required upstream artifacts by id and revision. Author art direction and brief first; unknown gameplay-impacting values remain `TBD` or labelled proposals owned by the design authority.
+3. Author model, material, rig, and animation specs as needed. State measurable technical requirements and mark irrelevant deliverables explicitly.
+4. Create an `asset-3d` record tied to the exported file hash. List every required LOD, collision mesh, texture, and export/integration constraint.
+5. Run shared artifact checks and the `art3d` quality plugin. Fix failures; inspect `HUMAN_REQUIRED` and `NOT_AVAILABLE` reasons and gather human evidence where automation cannot decide.
+6. Obtain independent visual and rights review, then use only registered human approval gates. Hand the approved asset record to VFX and Engineering with current upstream revisions.
 
-## Deliberate exclusions and readiness
+## Quality rules and adapters
 
-The exact client asset folders are decided by the per-domain production plans. This foundation does not include production workflows, modeling or animation tooling, pipelines, or asset generation. Readiness: **foundation**.
+The plugin parses glTF JSON and GLB JSON chunks using Python's standard library. It checks triangle counts against per-LOD budgets, required LODs, material indices and presence, UV sets, texture URI files, node names, scene structure, rig/animation presence, file hash/format, export scale/units/up-axis, and required collision/texture/deliverable files. A file's existence alone never passes.
+
+Blender is optional and detected through `scripts/lib/tools.py`. The headless adapter emits scene object, mesh triangle, material assignment, UV, armature, and action statistics for Blend, FBX, and OBJ. FBX and OBJ are imported into a fresh scene using Blender's import operators. Their export settings are supplied alongside the source as `<file>.rpgfactory.json` under `export_settings`; Blend scenes may store `rpg_factory_export_settings` as scene metadata. All formats use the same LOD budgets, naming, material, UV, rig, animation, export-setting, and required-deliverable checks. Missing Blender is `NOT_AVAILABLE`; timeout or unusable adapter output is `HUMAN_REQUIRED`. The core workflow does not require Blender. Visual quality, rights, and binding gameplay decisions remain human gates.
+
+## Handoffs
+
+`art3d-asset-to-vfx` sends approved mesh and material references from `authoring:art3d/assets/` to `authoring:vfx/specs/`. `art3d-asset-to-impl` sends the approved delivery record from the same source to `client:Assets/`; Engineering owns the import and runtime work. Both require traceable current artifact revisions and the visual review gate.
+
+## Example workflow spec
+
+```json
+{"id":"hero-prop","title":"Hero prop","goal":"Produce a production-ready prop","targets":[{"id":"direction","kind":"art-direction-3d","sources":[],"acceptance":["Style approved"]},{"id":"asset","kind":"asset-3d","sources":["direction"],"acceptance":["All LODs and textures validate"]},{"id":"client-import","kind":"implementation","repo":"client","paths":["Assets/Art3D/"],"sources":["asset"],"acceptance":["Asset imports in client"]}],"existing":[]}
+```
+
+Plan and inspect with `python3 -B scripts/factory-workflow.py plan|status <spec.json> --authoring <repo>`. A completed production handoff has current artifact revisions, passing automatic checks, resolved human decisions, and an Engineering integration result.
