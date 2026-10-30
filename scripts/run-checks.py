@@ -58,6 +58,7 @@ import evidence  # noqa: E402
 import fstate  # noqa: E402
 import context as ctxlib  # noqa: E402
 from context import native_abs  # noqa: E402
+from shells import bash_candidates, find_bash  # noqa: E402
 
 
 def parse_args(argv):
@@ -154,15 +155,7 @@ def select_bash():
     if os.name != "nt":
         _BASH_SELECTION = (shutil.which("bash"), "posix")
         return _BASH_SELECTION
-    candidates = [r"C:\Program Files\Git\bin\bash.exe", shutil.which("bash")]
-    git = shutil.which("git")
-    if git:
-        try:
-            ep = subprocess.run([git, "--exec-path"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
-            if ep.returncode == 0:
-                candidates.insert(0, os.path.abspath(os.path.join(ep.stdout.strip(), "..", "..", "bin", "bash.exe")))
-        except (OSError, subprocess.SubprocessError):
-            pass
+    candidates = bash_candidates()
     bash = next((os.path.abspath(x) for x in candidates if x and os.path.isfile(x)), None)
     if not bash:
         _BASH_SELECTION = (None, "missing")
@@ -554,7 +547,7 @@ def outside_paths(a, repo):
 
 
 def context(a, paths):
-    ctx_cmd = ["bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
+    ctx_cmd = [find_bash() or "bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
     if a["repo_path"]:
         ctx_cmd += ["--repo-path", a["repo_path"]]
     if paths:

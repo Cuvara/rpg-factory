@@ -60,6 +60,17 @@ for t in python3 git jq; do
   [ "$r" = "True True" ] && ok "context.which / devtools.which find $t" || no "which($t): $r"
 done
 
+# scripts launched from native Python run under a real bash, never the System32 WSL launcher (bash.exe in System32
+# wins over PATH for a bare "bash" in CreateProcess)
+b=$(cd "$ROOT/scripts/lib" && python3 -B -c "import shells; print(shells.find_bash() or '')")
+case "$(printf '%s' "$b" | tr 'A-Z\\' 'a-z/')" in
+  "") no "shells.find_bash found no bash";;
+  */windows/system32/*) no "shells.find_bash picked the WSL launcher: $b";;
+  *) ok "shells.find_bash resolves a real bash ($b)";;
+esac
+grep -q 'run(\["bash"' "$ROOT/scripts/factory-cmd.py" "$ROOT/scripts/run-checks.py" \
+  && no "factory-cmd/run-checks still launch a bare \"bash\"" || ok "factory-cmd and run-checks launch the resolved bash"
+
 # Python entry points write UTF-8 even when the inherited stdout encoding is cp1252
 # (a stand-in workspace: empty repos + root markers, so this also runs where no RPG MMO workspace exists, e.g. CI)
 SW="$TMP/sw"

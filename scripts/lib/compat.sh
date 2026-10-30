@@ -36,7 +36,7 @@ fwd() { local bs='\'; printf '%s' "${1//"$bs"//}"; }
 
 # dir_readonly DIR / dir_writable DIR: chmod has no effect on NTFS; deny create/delete with an ACL there.
 dir_readonly() {
-  if [ -n "$RPGF_WINDOWS" ]; then MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /deny "$USERNAME:(OI)(CI)(WD,AD,DC,DE)" >/dev/null
+  if [ -n "$RPGF_WINDOWS" ]; then MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" /deny "$USERNAME:(OI)(CI)(WD,AD,DC,DE)" /t >/dev/null
   else chmod 555 "$1"; fi
 }
 dir_writable() {
