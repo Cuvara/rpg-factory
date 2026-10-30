@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "2D production asset specification v1",
+  "type": "object",
+  "required": [
+    "purpose",
+    "resolution",
+    "format",
+    "transparency",
+    "naming",
+    "export_targets",
+    "art_direction_id"
+  ],
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resolution": {
+      "type": "object",
+      "required": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "type": "string"
+        },
+        "height": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "format": {
+      "type": "string"
+    },
+    "transparency": {
+      "type": "string"
+    },
+    "naming": {
+      "type": "string"
+    },
+    "export_targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "art_direction_id": {
+      "type": "string"
+    },
+    "animation": {
+      "type": "object",
+      "required": [
+        "frame_count",
+        "fps",
+        "frame_width",
+        "frame_height"
+      ],
+      "properties": {
+        "frame_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fps": {
+          "type": "number",
+          "minimum": 0
+        },
+        "frame_width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "frame_height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

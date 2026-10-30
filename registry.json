@@ -3620,9 +3620,13 @@
       "id": "authoring.art2d-brief",
       "repo": "authoring",
       "paths": [
-        "art2d/briefs/"
+        "art2d/briefs/",
+        "art2d/direction/",
+        "art2d/concepts/",
+        "art2d/references/",
+        "art2d/specs/"
       ],
-      "responsibility": "2D art briefs and asset delivery records.",
+      "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
       "rules": [],
       "generated": [],
@@ -3638,6 +3642,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art2d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art2d",
+            "evidence": "2D art production-specific lifecycle and asset integrity rules."
           }
         ],
         "extended": [],
@@ -3655,9 +3664,10 @@
       "id": "authoring.art2d-asset",
       "repo": "authoring",
       "paths": [
-        "art2d/assets/"
+        "art2d/assets/",
+        "art2d/exports/"
       ],
-      "responsibility": "2D art briefs and asset delivery records.",
+      "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
       "rules": [],
       "generated": [],
@@ -3678,6 +3688,11 @@
             "id": "asset-manifest",
             "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
             "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          },
+          {
+            "id": "art2d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art2d",
+            "evidence": "2D art production-specific lifecycle and asset integrity rules."
           }
         ],
         "extended": [],
@@ -5114,7 +5129,7 @@
       "id": "ui-spec-to-art2d-brief",
       "kind": "handoff",
       "domain": "ui",
-      "summary": "UI screens and components provide visual requirements for art briefs.",
+      "summary": "UI/UX hands visual requirements and UI illustration needs to 2D Art by artifact ID and revision.",
       "source": {
         "repo": "authoring",
         "path": "ui/specs/"
@@ -5213,10 +5228,10 @@
       "id": "art2d-asset-to-impl",
       "kind": "handoff",
       "domain": "art2d",
-      "summary": "2D asset delivery handoff for engineering import.",
+      "summary": "Verified 2D runtime export records hand off engine import targets to client engineering.",
       "source": {
         "repo": "authoring",
-        "path": "art2d/assets/"
+        "path": "art2d/exports/"
       },
       "copies": [
         {
@@ -5579,20 +5594,26 @@
       "reviewers": []
     },
     "art2d": {
-      "summary": "2D art briefs and asset delivery records.",
-      "status": "foundation",
+      "summary": "2D art direction, concept, specification, and verified runtime export workflow.",
+      "status": "active",
       "lead": "art-2d",
       "repos": [
         "authoring"
       ],
       "artifact_kinds": [
+        "art-direction-2d",
+        "concept-2d",
+        "asset-spec-2d",
+        "runtime-export-2d",
+        "reference-2d",
         "art2d-brief",
         "art2d-asset"
       ],
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
-        "asset-manifest"
+        "asset-manifest",
+        "art2d-quality"
       ],
       "human_gates": [],
       "handoffs": [
@@ -5601,6 +5622,7 @@
       ],
       "may_own_feature_state": false,
       "approvers": [],
+      "quality_plugin": "scripts/checks/domains/art2d.py",
       "reviewers": []
     },
     "art3d": {
@@ -7501,6 +7523,429 @@
           "blocked_by": true
         }
       }
+    },
+    "concept-2d": {
+      "states": [
+        "draft",
+        "proposed",
+        "reviewed",
+        "rejected",
+        "blocked",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "rejected",
+          "blocked"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "superseded": []
+      },
+      "requirements": {
+        "proposed": {
+          "schema_complete": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "reference-2d": {
+      "states": [
+        "draft",
+        "proposed",
+        "reviewed",
+        "rejected",
+        "blocked",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "rejected",
+          "blocked"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "superseded": []
+      },
+      "requirements": {
+        "proposed": {
+          "schema_complete": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "art-direction-2d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "asset-spec-2d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "runtime-export-2d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
     }
   },
   "phase": {
@@ -7542,6 +7987,11 @@
     "screen-spec": "docs/schemas/kinds/screen-spec.schema.json",
     "component-spec": "docs/schemas/kinds/component-spec.schema.json",
     "design-tokens": "docs/schemas/kinds/design-tokens.schema.json",
-    "ui-handoff": "docs/schemas/kinds/ui-handoff.schema.json"
+    "ui-handoff": "docs/schemas/kinds/ui-handoff.schema.json",
+    "art-direction-2d": "docs/schemas/kinds/art-direction-2d.schema.json",
+    "concept-2d": "docs/schemas/kinds/concept-2d.schema.json",
+    "asset-spec-2d": "docs/schemas/kinds/asset-spec-2d.schema.json",
+    "runtime-export-2d": "docs/schemas/kinds/runtime-export-2d.schema.json",
+    "reference-2d": "docs/schemas/kinds/reference-2d.schema.json"
   }
 }

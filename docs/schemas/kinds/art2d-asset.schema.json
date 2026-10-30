@@ -1,1 +1,17 @@
-{"type":"object"}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "art2d-asset compatibility v1",
+  "type": "object",
+  "required": [
+    "purpose",
+    "delivery"
+  ],
+  "properties": {
+    "purpose": {
+      "type": "string"
+    },
+    "delivery": {
+      "type": "string"
+    }
+  }
+}

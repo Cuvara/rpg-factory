@@ -1,1 +1,17 @@
-{"type":"object"}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "art2d-brief compatibility v1",
+  "type": "object",
+  "required": [
+    "purpose",
+    "visual_requirements"
+  ],
+  "properties": {
+    "purpose": {
+      "type": "string"
+    },
+    "visual_requirements": {
+      "type": "string"
+    }
+  }
+}
