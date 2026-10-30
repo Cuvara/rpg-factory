@@ -2,7 +2,7 @@
 # Game Design domain routing, boundaries and standalone behavior on plugin + authoring fixtures.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp_win)" || exit 1; [ -d "$T" ] || exit 1; trap 'rm -rf "$T"' EXIT
 P="$T/plugin"; FW="$T/workspace"; FA="$FW/game-authoring"
 mkdir -p "$P" "$FA/design/features" "$FW/rpg-mmo-server/backend" "$FW/IndieRPGMMOAdventure/ProjectSettings"
@@ -47,8 +47,9 @@ out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry.sh" --structure-on
 
 # Base proof uses the base registry's known rule set when the source commit is readable.
 # The fixture avoids depending on git metadata inside the isolated plugin copy.
-if git -C "$ROOT" show d63e768aff4f440d745fa54cbb5334ab7797fd8b:scripts/check-registry.sh > "$P/scripts/check-registry-base.sh" 2>/dev/null; then
-  jq 'del(.domains.design) | .repos |= del(.authoring) | .contracts |= map(select(.id != "feature-spec-to-impl")) | .modules = [.modules[] | select(.repo != "authoring")] | .skills |= with_entries(select(.value.domain != "design")) | .human_gates |= map(select(.id != "design-review")) | (.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' "$P/registry.json" > "$T/base-mutated.json"
+if [ -f "$ROOT/tests/fixtures/check-registry-p4.sh" ]; then
+  cp "$ROOT/tests/fixtures/check-registry-p4.sh" "$P/scripts/check-registry-base.sh"
+  jq 'del(.domains.design,.domains.ui,.domains.art2d,.domains.art3d,.domains.vfx) | .repos |= del(.authoring) | .contracts |= map(select(.domain != "ui" and .domain != "art2d" and .domain != "art3d" and .domain != "vfx" and .source.repo != "authoring" and ([.copies[]?.repo,.upstream[]?.repo,.watchers[]?.repo] | all(. != "authoring")))) | .modules = [.modules[] | select(.repo != "authoring" and (.domain // "engineering") != "ui" and (.domain // "engineering") != "art2d" and (.domain // "engineering") != "art3d" and (.domain // "engineering") != "vfx")] | .skills |= with_entries(select((.value.domain // "engineering") != "design" and (.value.domain // "engineering") != "ui" and (.value.domain // "engineering") != "art2d" and (.value.domain // "engineering") != "art3d" and (.value.domain // "engineering") != "vfx")) | .human_gates |= map(select(.id != "design-review")) | (.modules |= map(if .id == "server.proto" then .paths = ["docs/features/"] else . end))' "$P/registry.json" > "$T/base-mutated.json"
   out=$(CLAUDE_PLUGIN_ROOT="$P" bash "$P/scripts/check-registry-base.sh" --structure-only --registry "$T/base-mutated.json" 2>&1); rc=$?
   [ $rc -eq 0 ] && grep -q '^OK:' <<<"$out" && ok 'base P4 checker accepts the path (regression proof)' || no 'base P4 regression proof' "$out"
 else

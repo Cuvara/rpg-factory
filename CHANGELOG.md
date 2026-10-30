@@ -40,7 +40,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ### Fixed
 
-- Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and stabilize domain regression fixtures against registry growth.
+- Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and configure UTF-8 stdio for the executable asset manifest checker.
+- Keep the base P4 checker fixture consistent by removing domains, modules, skills and contracts that depend on the removed authoring repository.
+- Store the P4 checker snapshot used by the base regression proof so the proof works from an Orca worktree without Git metadata reachable in the Linux test shell.
+- Run dependency graph behavior checks on fixed fixtures and assert the live graph remains acyclic with the required domain order.
 - `factory-status.py` and `git-guard.py` accept a registry repo without a `remote` (absent or null); `check-registry.sh` tolerates modules without `docs` and fails when its path query errors instead of silently checking fewer paths.
 
 ## [1.1.1] - 2026-10-29
