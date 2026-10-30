@@ -49,6 +49,10 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
     the same worktree in parallel (or alongside another session working there). Read-only
     investigation (`git status`, `log`, `diff`, `reflog`, `stash list/show`) may run in parallel.
 
+## Process safety
+
+Do not terminate processes by image name or command-line pattern: those selectors can kill unrelated user and agent processes. Stop only PIDs started by your own command, captured with `Start-Process -PassThru` (PowerShell) or `$!` (Bash). The guard raises a high advisory for broad selectors such as `taskkill /IM`, `Stop-Process -Name`, `pkill`, `killall`, and process-query pipelines. It can inspect command text and nested commands the existing `expand()` machinery can see; it cannot inspect a script file merely named on disk, so review script contents before running them.
+
 ## What the guard does
 
 Inside the workspace (any repo or worktree under it, and a linked worktree outside it - e.g. an Orca worktree -

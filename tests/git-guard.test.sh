@@ -23,6 +23,8 @@ SERVER="$WS/rpg-mmo-server"
 CLIENT="$WS/IndieRPGMMOAdventure"
 FEATURE="$TMP/ws/feature-repo"
 git init -q -b feat/gateway/x "$FEATURE"
+LINKED="$TMP/linked-guard-wt"
+git -C "$SERVER" worktree add -q -b feat/guard/linked-check "$LINKED" develop
 
 pass=0; fail=0
 check() { # expected cwd command [env] [tool]
@@ -34,6 +36,40 @@ check() { # expected cwd command [env] [tool]
   if [ "$got" = "$expected" ]; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
 }
+
+# ---- host-wide process termination advisories (regressions; never execute these commands)
+check high "$SERVER" 'taskkill //F //IM powershell.exe >/dev/null 2>&1'
+check high "$SERVER" 'taskkill //F //IM dotnet.exe'
+check high "$SERVER" 'TASKKILL /T /im powershell.exe'
+check high "$SERVER" 'taskkill /IM powershell.exe /F'
+check high "$SERVER" 'Stop-Process -Name dotnet -Force' "" PowerShell
+check high "$SERVER" 'Stop-Process -ProcessName powershell' "" PowerShell
+check high "$SERVER" 'Get-Process dotnet | Stop-Process -Force' "" PowerShell
+check high "$SERVER" 'Get-CimInstance Win32_Process | Where-Object {$_.Name -eq "dotnet.exe"} | ForEach-Object {$_.Terminate()}' "" PowerShell
+check high "$SERVER" 'Get-WmiObject Win32_Process -Filter "Name=dotnet.exe" | Invoke-CimMethod -MethodName Terminate' "" PowerShell
+check high "$SERVER" 'Get-CimInstance Win32_Process -Filter "Name=dotnet.exe" | Where-Object {$_.CommandLine -like "*--filter*"} | % { Stop-Process -Id $_.ProcessId -Force }' "" PowerShell
+check high "$SERVER" 'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { $_.CommandLine -like '*--filter*' } | % { Stop-Process -Id $_.ProcessId -Force }"'
+check high "$SERVER" 'pkill -f dotnet'
+check high "$SERVER" 'killall powershell'
+check high "$SERVER" 'kill $(pgrep -f dotnet)'
+check high "$SERVER" 'pgrep -f dotnet | xargs kill'
+check high "$SERVER" 'wmic process where "name like dotnet" delete'
+check high "$SERVER" 'wmic process where "name like dotnet" call terminate'
+check high "$SERVER" 'bash -c "taskkill //F //IM dotnet.exe"'
+check high "$SERVER" 'powershell -NoProfile -Command "Stop-Process -Name dotnet -Force"' "" PowerShell
+check high "$SERVER" "bash <<'KILL_EOF'
+taskkill /F /IM dotnet.exe
+KILL_EOF"
+check allow "$SERVER" 'taskkill /PID 1234'
+check allow "$SERVER" 'taskkill /T /PID 1234 /F'
+check allow "$SERVER" 'Stop-Process -Id 1234' "" PowerShell
+check allow "$SERVER" 'kill 1234'
+check allow "$SERVER" 'kill $!'
+check allow "$SERVER" 'kill %1'
+
+# Linked Orca worktrees outside the workspace inherit the main checkout's guard scope.
+check high "$LINKED" 'taskkill //F //IM dotnet.exe'
+check allow "$LINKED" 'taskkill /T /PID 1234 /F'
 
 # read-only commands pass through
 check allow "$SERVER" "git status"

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- The Bash and PowerShell guard now raises a high advisory for process termination by image name or command-line pattern.
+
 ## [1.2.0] - 2026-10-30
 
 Feature release: rpg-factory becomes a multi-discipline factory with a discipline-neutral core. A `domains` registry

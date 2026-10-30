@@ -900,6 +900,42 @@ def human_gate_hits(payload, registry):
     return hits
 
 
+PROCESS_TERMINATION_RULE = (
+    "Terminating processes by image name or command-line pattern kills unrelated user and agent processes. "
+    "Stop only PIDs you started (Start-Process -PassThru / $!)."
+)
+
+PROCESS_KILL_PATTERNS = [
+    re.compile(r"(?is)(?:^|[;&|\n])\s*(?:\S*[/\\])?taskkill(?:\.exe)?\b(?:(?![;&|\n]).)*?/{1,2}im(?:\s|$)"),
+    re.compile(r"(?is)(?:^|[;&|\n])\s*stop-process\b(?:(?![;&|\n]).)*?-(?:name|processname)\b"),
+    re.compile(r"(?is)(?:^|[;&|\n])\s*get-process\b[^\n;]*\|\s*stop-process\b"),
+    re.compile(r"(?is)(?:get-ciminstance|get-wmiobject)\b[^\n;]*\bwin32_process\b[^\n;]*\|[^\n;]*(?:stop-process|\.terminate\s*\(|invoke-cimmethod\b[^\n;]*-methodname\s+terminate)"),
+    re.compile(r"(?is)(?:^|[;&|\n])\s*(?:pkill|killall)\b"),
+    re.compile(r"(?is)(?:^|[;&|\n])\s*kill\s+\$\(\s*pgrep\b"),
+    re.compile(r"(?is)(?:^|[;&|\n])\s*pgrep\b[^\n;]*\|\s*xargs\b[^\n;]*\bkill\b"),
+    re.compile(r"(?is)(?:^|[;&|\n])\s*wmic\s+process\b[^\n;]*\bwhere\b[^\n;]*\b(?:delete|call\s+terminate)\b"),
+]
+
+
+def process_kill_hits(payload, registry):
+    """Flag host-wide termination by image/name/query; never execute the command being inspected."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    tool = payload.get("tool_name") or "Bash"
+    cwd = payload.get("cwd") or os.getcwd()
+    workspace = find_workspace(cwd, registry)
+    if not workspace and not outside_workspace(native_path(os.path.expanduser(cwd)), registry, {}):
+        return []
+    shell = "powershell" if tool == "PowerShell" else "bash"
+    candidates = [command]
+    try:
+        candidates.extend(" ".join(argv) for argv in expand(command, shell=shell))
+    except Exception:
+        pass
+    if any(pattern.search(text) for text in candidates for pattern in PROCESS_KILL_PATTERNS):
+        return [("deny", PROCESS_TERMINATION_RULE)]
+    return []
+
+
 def _needs_mode(payload):
     """Cheap file check first - factory_session.py is only imported when a mode exists or the command declares one
     (read-only hook calls stay fast on /mnt/c)."""
@@ -986,7 +1022,7 @@ def main():
         need_mode = _needs_mode(payload)
     except Exception:
         need_mode = True  # cannot tell cheaply: do the full checks
-    parts = (mode_hits, evaluate, human_gate_hits) if need_mode else (evaluate, human_gate_hits)
+    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits) if need_mode else (evaluate, human_gate_hits, process_kill_hits)
     for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)
