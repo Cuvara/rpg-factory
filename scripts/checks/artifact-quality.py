@@ -119,7 +119,7 @@ def main():
                             assurance='signed'
                         candidates.append((rv,assurance))
                 except Exception: pass
-            if not candidates and not reason: reason.append('independent review record required')
+            if not candidates and not any(x.startswith('signed review required:') for x in reason): reason.append('independent review record required')
             elif candidates: add(aid,obj,rel,'review-assurance','PASS',[candidates[0][1]])
         required_traces=requirements.get('needs_trace',[])
         for trace_kind in required_traces:
@@ -145,7 +145,9 @@ def main():
         if requirements.get('requires_approved_verified') and not all(st in history for st in ('approved','verified')): reason.append('release must pass approved and verified')
         if requirements.get('rejection_record') and not (obj.get('rejection') or {}).get('reason'): reason.append('rejection reason required')
         if requirements.get('blocked_by') and (not obj.get('blocked_by') or not obj.get('reason')): reason.append('blocked_by and reason required')
-        if reason: add(aid,obj,rel,'lifecycle','FAIL',reason)
+        if reason:
+            signed_unavailable=any(x.startswith('signed review required: no trusted reviewer keys') or x.startswith('signed review required: review signature untrusted or invalid') for x in reason)
+            add(aid,obj,rel,'lifecycle','HUMAN_REQUIRED' if signed_unavailable else 'FAIL',reason)
         else: add(aid,obj,rel,'lifecycle','PASS')
         deps=[]
         for source in obj.get('sources',[]):

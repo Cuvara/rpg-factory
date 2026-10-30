@@ -16,9 +16,9 @@ def author_emails(root, path):
 
 
 def review_commit(root, path):
-    adds = git(root, "log", "--diff-filter=A", "--format=%H", "--", path).stdout.splitlines()
-    later = git(root, "log", "--diff-filter=MRD", "--format=%H", "--", path).stdout.splitlines()
-    deleted = git(root, "log", "--diff-filter=D", "--", "reviews/").stdout.splitlines()
+    adds = git(root, "log", "--no-renames", "--diff-filter=A", "--format=%H", "--", path).stdout.splitlines()
+    later = git(root, "log", "--no-renames", "--diff-filter=MRD", "--format=%H", "--", path).stdout.splitlines()
+    deleted = git(root, "log", "--no-renames", "--diff-filter=D", "--", "reviews/").stdout.splitlines()
     if len(adds) != 1 or later or deleted:
         return None, "review is not immutable"
     email = git(root, "show", "-s", "--format=%ae", adds[0]).stdout.strip()
