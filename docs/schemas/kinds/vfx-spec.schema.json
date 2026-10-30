@@ -1,1 +1,239 @@
-{"type":"object"}
+{
+  "type": "object",
+  "required": [
+    "purpose",
+    "triggers",
+    "duration_seconds",
+    "phases",
+    "curves",
+    "particle_systems",
+    "materials",
+    "platforms",
+    "platform_constraints",
+    "dependencies"
+  ],
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "minLength": 1
+    },
+    "duration_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "duration_seconds"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration_seconds": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "curves": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "property",
+          "keyframes"
+        ],
+        "properties": {
+          "property": {
+            "type": "string",
+            "minLength": 1
+          },
+          "keyframes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "time",
+                "value"
+              ],
+              "properties": {
+                "time": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "value": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "minItems": 2
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "particle_systems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "max_particles",
+          "lifetime_seconds",
+          "spawn_per_second"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max_particles": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lifetime_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "spawn_per_second": {
+            "type": "number",
+            "minimum": 0
+          },
+          "looping": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "shader"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "shader": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "platforms": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "budget"
+        ],
+        "properties": {
+          "budget": {
+            "type": "object",
+            "required": [
+              "max_particles",
+              "max_overdraw",
+              "max_draw_calls",
+              "max_ms"
+            ],
+            "properties": {
+              "max_particles": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_overdraw": {
+                "type": "number",
+                "minimum": 0
+              },
+              "max_draw_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_ms": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "constraints": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "platform_constraints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "required",
+              "tbd"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ui",
+              "audio",
+              "event",
+              "asset"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

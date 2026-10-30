@@ -3778,6 +3778,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
           }
         ],
         "extended": [],
@@ -3818,6 +3823,41 @@
             "id": "asset-manifest",
             "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
             "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
+    },
+    {
+      "id": "authoring.vfx-direction",
+      "repo": "authoring",
+      "paths": [
+        "vfx/directions/"
+      ],
+      "responsibility": "VFX art direction artifacts.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX-specific art direction quality checks."
           }
         ],
         "extended": [],
@@ -4192,7 +4232,7 @@
       ],
       "domain": "vfx",
       "order": 89,
-      "summary": "VFX foundation artifacts"
+      "summary": "Production VFX direction, effect specification, and asset delivery workflows."
     }
   },
   "human_gates": [
@@ -4763,6 +4803,48 @@
       "evidence": "artifact-trace"
     },
     {
+      "id": "design-event-to-vfx",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "Gameplay event identifiers and timing intent consumed by VFX specifications.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/features/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "ui-vfx-sync",
+      "kind": "handoff",
+      "domain": "vfx",
+      "summary": "VFX specifications declare stable UI cue references and timing so UI and VFX reviews stay synchronized.",
+      "source": {
+        "repo": "authoring",
+        "path": "vfx/specs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "vfx",
+      "gate": null,
+      "evidence": "artifact-trace",
+      "participants": [
+        "ui",
+        "vfx"
+      ]
+    },
+    {
       "id": "art3d-asset-to-impl",
       "kind": "handoff",
       "domain": "art3d",
@@ -4785,7 +4867,7 @@
       "id": "vfx-spec-to-impl",
       "kind": "handoff",
       "domain": "vfx",
-      "summary": "Foundation handoff contract.",
+      "summary": "Approved VFX specifications and delivery records handed to Engineering for runtime integration.",
       "source": {
         "repo": "authoring",
         "path": "vfx/specs/"
@@ -5095,13 +5177,14 @@
       "approvers": []
     },
     "vfx": {
-      "summary": "VFX specifications and asset delivery records.",
-      "status": "foundation",
+      "summary": "Production effect direction, specifications and delivery records.",
+      "status": "active",
       "lead": "vfx",
       "repos": [
         "authoring"
       ],
       "artifact_kinds": [
+        "vfx-direction",
         "vfx-spec",
         "vfx-asset"
       ],
@@ -5112,11 +5195,15 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "design-event-to-vfx",
         "art3d-asset-to-vfx",
+        "ui-vfx-sync",
         "vfx-spec-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/vfx.py",
+      "engineering_event_ids": []
     }
   },
   "artifact_lifecycles": {
@@ -5493,6 +5580,351 @@
           "blocked_by": true
         }
       }
+    },
+    "vfx-direction": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "vfx-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          },
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "vfx-asset": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          },
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
     }
   },
   "phase": {
@@ -5521,6 +5953,7 @@
     "art3d-asset": "docs/schemas/kinds/art3d-asset.schema.json",
     "vfx-spec": "docs/schemas/kinds/vfx-spec.schema.json",
     "vfx-asset": "docs/schemas/kinds/vfx-asset.schema.json",
-    "default": "docs/schemas/kinds/default.schema.json"
+    "default": "docs/schemas/kinds/default.schema.json",
+    "vfx-direction": "docs/schemas/kinds/vfx-direction.schema.json"
   }
 }
