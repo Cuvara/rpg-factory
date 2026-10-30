@@ -38,13 +38,23 @@ jobs:
         with:
           persist-credentials: false
 
+      # A real python3.exe, not a bash shim: native Python subprocess calls (hooks, checks) must be able to run it.
       - name: python3 on PATH (Windows runners ship python only)
         if: runner.os == 'Windows'
         run: |
           if ! command -v python3 >/dev/null 2>&1; then
-            mkdir -p "$HOME/bin" && printf '#!/usr/bin/env bash\nexec python "$@"\n' > "$HOME/bin/python3" && chmod +x "$HOME/bin/python3"
-            echo "$HOME/bin" >> "$GITHUB_PATH"
+            dir=$(dirname "$(command -v python)")
+            cp "$dir/python.exe" "$dir/python3.exe"
           fi
+          python3 -c "import sys; print(sys.executable)"
+
+      # The runner's default TEMP is an 8.3 short path (C:\Users\RUNNER~1\...), which git and Python expand
+      # differently. Use the long-named runner temp directory instead.
+      - name: Long temp path (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          t=$(cygpath -m "$RUNNER_TEMP")
+          { echo "TMPDIR=$t"; echo "TMP=$t"; echo "TEMP=$t"; } >> "$GITHUB_ENV"
 
       - name: Tool versions
         run: |
