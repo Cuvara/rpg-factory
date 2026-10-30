@@ -81,10 +81,10 @@ def artifacts(authoring):
             else:
                 continue
             if isinstance(obj, dict) and obj.get("id"):
-                rev = subprocess.run(["git", "-C", str(authoring), "rev-parse", f"HEAD:{path.relative_to(authoring).as_posix()}"], capture_output=True, text=True, encoding="utf-8").stdout.strip()
+                rev = subprocess.run(["git", "-C", str(authoring), "hash-object", str(path)], capture_output=True, text=True, encoding="utf-8").stdout.strip()
                 if not re.fullmatch(r"[0-9a-f]{40,64}", rev):
                     rev = hashlib.sha1(path.read_bytes()).hexdigest()
-                found[obj["id"]] = {"id": obj["id"], "rev": rev, "status": obj.get("status", "draft"), "domain": obj.get("domain"), "kind": obj.get("kind"), "path": path.relative_to(authoring).as_posix(), "sources": obj.get("sources", []), "upstream": obj.get("upstream", [])}
+                found[obj["id"]] = {"id": obj["id"], "rev": rev, "status": obj.get("status", "draft"), "domain": obj.get("domain"), "kind": obj.get("kind"), "path": path.relative_to(authoring).as_posix(), "sources": obj.get("sources", []), "upstream": obj.get("upstream", []), "trace": obj.get("trace", [])}
         except (OSError, ValueError):
             continue
     return found
@@ -256,17 +256,49 @@ def state_for(node, plan, quality_map):
     artifact=plan["existing"].get(node.get("artifact_id") or node["id"])
     if not artifact:
         return "missing"
-    if artifact["status"] == "rejected": return "draft" # recoverable only by explicit authoring edit
+    if artifact["status"] == "rejected": return "rejected"
     if artifact["status"] == "blocked": return "blocked"
-    upstream=[e["from"] for e in plan["edges"] if e["to"]==node["id"]]
-    stale=[u for u in upstream if plan["nodes"][u].get("rev") and any(i["id"]==plan["nodes"][u].get("artifact_id") and i.get("rev")!=plan["nodes"][u].get("rev") for i in node.get("inputs",[]))]
-    if stale: return "stale"
-    q=quality_map.get(artifact["id"],{})
-    if any(r.get("state")=="FAIL" for r in q.get("results",[])): return "blocked"
+    q=quality_map.get(artifact.get("path"),{})
+    if any(r.get("state")=="BLOCKED" for r in q.get("results",[])): return "blocked"
     if any(r.get("state")=="HUMAN_REQUIRED" for r in q.get("results",[])): return "human-required"
-    if artifact["status"] in ("approved","in-implementation","verified","released"): return "done"
-    if artifact["status"] in ("proposed","reviewed"): return "in-review"
-    return "draft"
+    if any(r.get("state")=="FAIL" for r in q.get("results",[])): return "blocked"
+    return artifact["status"] if artifact["status"] in ("missing","draft","proposed","reviewed","approved","in-implementation","verified","released","rejected","blocked") else "draft"
+
+
+def node_artifact(node, plan):
+    return plan["existing"].get(node.get("artifact_id") or node["id"])
+
+
+def upstream_changes(artifact, all_artifacts):
+    recorded = {}
+    for item in artifact.get("upstream", []):
+        if isinstance(item, dict) and item.get("id"):
+            recorded[item["id"]] = item.get("rev")
+    for item in artifact.get("sources", []):
+        if isinstance(item, dict) and item.get("id"):
+            recorded.setdefault(item["id"], item.get("rev"))
+    return [aid for aid, rev in recorded.items() if aid in all_artifacts and rev != all_artifacts[aid].get("rev")]
+
+
+def reviews(authoring, artifact):
+    found=[]
+    if not authoring: return found
+    folder=Path(authoring)/"reviews"/artifact["id"]
+    for path in sorted(folder.glob("*.json")) if folder.exists() else []:
+        try: found.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError): continue
+    return found
+
+
+def engineering_trace(artifact, repos):
+    traces=[]
+    repo_map={k:os.path.abspath(v) for item in repos if "=" in item for k,v in [item.split("=",1)]}
+    for entry in artifact.get("trace", []):
+        if entry.get("kind") != "impl": continue
+        key=entry.get("repo"); root=repo_map.get(key); ref=entry.get("ref")
+        valid=bool(root and ref and subprocess.run(["git","-C",root,"cat-file","-e",ref+"^{commit}"],capture_output=True).returncode==0)
+        traces.append({**entry,"repo_path":root,"commit_valid":valid})
+    return traces
 
 
 def main():
@@ -279,55 +311,87 @@ def main():
             for i,w in enumerate(plan["waves"],1): print(f"Wave {i}: " + ", ".join(w))
             for n in plan["nodes"].values(): print(f"  {n['id']}: {n['domain']} / {n['kind']} / {n['lead_skill']} -> {n['repo']}:{', '.join(n['paths'])}")
         return
-    ids=[n.get("artifact_id") or n["id"] for n in plan["nodes"].values()]
-    ids.extend(item["id"] for n in plan["nodes"].values() for item in n.get("inputs", []))
-    q=quality(a.authoring,a.registry,a.repos,ids)
+    paths=[x["path"] for x in plan["existing"].values()]
+    q=quality(a.authoring,a.registry,a.repos,paths)
     states={nid:state_for(n,plan,q) for nid,n in plan["nodes"].items()}
     def inputs_ready(node):
         for item in node.get("inputs", []):
             if item["id"] in states:
-                if states[item["id"]] != "done": return False
+                if states[item["id"]] not in ("approved", "in-implementation", "verified", "released"): return False
             else:
                 source=plan["existing"].get(item["id"])
                 if not source or source.get("status") not in ("approved", "in-implementation", "verified", "released"):
                     return False
                 if item.get("rev") and item["rev"] != source.get("rev"):
                     return False
-                if any(r.get("state") in ("FAIL", "HUMAN_REQUIRED") for r in q.get(item["id"], {}).get("results", [])):
+                source_path=source.get("path")
+                if any(r.get("state") in ("FAIL", "HUMAN_REQUIRED", "BLOCKED") for r in q.get(source_path, {}).get("results", [])):
                     return False
         return True
+    for nid,node in plan["nodes"].items():
+        if states[nid] in ("missing","draft") and any(item["id"] not in states and not plan["existing"].get(item["id"]) for item in node.get("inputs", [])):
+            states[nid]="blocked"
     if a.command=="dispatch":
         if not a.node or a.node not in plan["nodes"]: die("dispatch needs --node <known node id>")
         node=plan["nodes"][a.node]
-        blockers=[e["from"] for e in plan["edges"] if e["to"]==a.node and states[e["from"]]!="done"]
+        blockers=[e["from"] for e in plan["edges"] if e["to"]==a.node and states[e["from"]] not in ("approved","in-implementation","verified","released")]
         blockers.extend(i["id"] for i in node.get("inputs", []) if not inputs_ready({"inputs":[i]}))
         if blockers or states[a.node] not in ("missing","draft"):
             die(f"node {a.node} is not ready: " + (", ".join(blockers) if blockers else states[a.node]))
-        contract={"node":node["id"],"domain":node["domain"],"lead_skill":node["lead_skill"],"artifact_kind":node["kind"],"output":node["paths"],"inputs":node["inputs"],"acceptance":node["acceptance"],"allowed_write_paths":node["paths"],"required_checks":node["checks"],"report":"workflow report"}
+        contract={"schema":"rpg-factory.workflow-dispatch/1","node":node["id"],"domain":node["domain"],"lead_skill":node["lead_skill"],"artifact_kind":node["kind"],"output":node["paths"],"inputs":node["inputs"],"acceptance":node["acceptance"],"allowed_write_paths":node["paths"],"required_checks":node["checks"],"report":"workflow report"}
+        if a.json:
+            print(json.dumps(contract,indent=2)); return
         body="Execute workflow node from this contract. Do not approve artifacts.\n"+json.dumps(contract,indent=2)
         if a.runner=="orca": body="orca orchestration worker-start --task " + json.dumps(body)
         elif a.runner=="agent": body="Agent task:\n"+body
         print(body); return
-    revalidate=[]; stale_upstream=[]
+    stale_upstream=[]; stale_nodes=set()
     for nid,node in plan["nodes"].items():
-        artifact=plan["existing"].get(node.get("artifact_id") or nid)
+        artifact=node_artifact(node,plan)
         if not artifact: continue
-        recorded={x.get("id"):x.get("rev") for x in artifact.get("upstream",[]) if isinstance(x,dict)}
-        changed=[up for up,rev in recorded.items() if up in plan["existing"] and rev != plan["existing"][up]["rev"]]
+        changed=upstream_changes(artifact,plan["existing"])
         if changed:
-            states[nid]="stale"; stale_upstream.append({"node":nid,"upstream":changed})
-            queue=[nid]
-            while queue:
-                current=queue.pop(0)
-                for edge in plan["edges"]:
-                    if edge["from"]==current and edge["to"] not in revalidate:
-                        revalidate.append(edge["to"]); queue.append(edge["to"])
+            states[nid]="stale"; stale_nodes.add(nid); stale_upstream.append({"node":nid,"upstream":changed})
+    # Include every transitively downstream node in deterministic topological order.
+    affected=set(stale_nodes); queue=list(stale_nodes)
+    while queue:
+        current=queue.pop(0)
+        for edge in plan["edges"]:
+            if edge["from"]==current and edge["to"] not in affected:
+                affected.add(edge["to"]); queue.append(edge["to"])
+    for nid in affected:
+        if nid not in stale_nodes: states[nid]="stale"
+    revalidate=[nid for wave in plan["waves"] for nid in wave if nid in affected]
     if a.command=="status":
-        out={"schema":"rpg-factory.workflow-status/1","states":states,"ready":[nid for nid,n in plan["nodes"].items() if states[nid] in ("missing","draft") and all(states[e["from"]]=="done" for e in plan["edges"] if e["to"]==nid) and inputs_ready(n)],"stale_upstream":stale_upstream,"revalidate":revalidate}
+        ready=[nid for nid,n in plan["nodes"].items() if states[nid] in ("missing","draft","rejected") and all(states[e["from"]] in ("approved","in-implementation","verified","released") for e in plan["edges"] if e["to"]==nid) and inputs_ready(n)]
+        out={"schema":"rpg-factory.workflow-status/1","states":states,"ready":ready,"stale_upstream":stale_upstream,"revalidate":revalidate,"waves":plan["waves"]}
     else:
-        overall="complete" if all(x=="done" for x in states.values()) and not revalidate else "incomplete"
-        out={"schema":"rpg-factory.workflow-report/1","overall":overall,"nodes":{nid:{"artifact_id":n.get("artifact_id"),"rev":n.get("rev"),"status":states[nid],"quality":q.get(n.get("artifact_id") or nid),"reviews":[],"approvals":"HUMAN_REQUIRED" if states[nid]=="human-required" else "not recorded","engineering_trace":None} for nid,n in plan["nodes"].items()},"stale":revalidate,"blocked":[nid for nid,s in states.items() if s=="blocked"]}
-    print(json.dumps(out,indent=2) if a.json else json.dumps(out,indent=2))
+        node_rows={}
+        for nid,n in plan["nodes"].items():
+            art=node_artifact(n,plan)
+            checks=q.get(art.get("path"),{}).get("results",[]) if art else []
+            approval_rows=[r for r in checks if r.get("check")=="trace-approval"]
+            approval_state=(approval_rows[0].get("state") if approval_rows else "HUMAN_REQUIRED")
+            node_rows[nid]={"artifact_id":art.get("id") if art else n.get("artifact_id"),"rev":art.get("rev") if art else None,"status":states[nid],"validation":{"summary":{s:sum(1 for r in checks if r.get("state")==s) for s in ("PASS","FAIL","WARN","HUMAN_REQUIRED","NOT_AVAILABLE","BLOCKED")},"results":checks},"reviews":reviews(a.authoring,art) if art else [],"approvals":{"state":approval_state,"results":approval_rows},"engineering_trace":engineering_trace(art,a.repos) if art else []}
+        complete_states=("verified","released")
+        human=[nid for nid,s in states.items() if s=="human-required"]
+        blocked=[nid for nid,s in states.items() if s=="blocked"]
+        stale=[nid for nid,s in states.items() if s=="stale"]
+        overall="complete" if all(s in complete_states for s in states.values()) and not (stale or blocked or human) else "incomplete"
+        out={"schema":"rpg-factory.workflow-report/1","overall":overall,"nodes":node_rows,"stale":stale,"blocked":blocked,"human_required":human,"rejected":[nid for nid,s in states.items() if s=="rejected"]}
+    if a.json: print(json.dumps(out,indent=2))
+    else:
+        if a.command=="status":
+            print("Workflow status")
+            for nid,state in states.items(): print(f"{nid}: {state}")
+            print("Ready: " + (", ".join(out["ready"]) or "none"))
+            print("Revalidate: " + (", ".join(revalidate) or "none"))
+        else:
+            print(f"Workflow report: {out['overall']}")
+            for nid,row in node_rows.items(): print(f"{nid}: {row['status']} ({row['artifact_id'] or 'no artifact'})")
+            print("Stale: " + (", ".join(out["stale"]) or "none"))
+            print("Blocked: " + (", ".join(blocked) or "none"))
+            print("Human required: " + (", ".join(human) or "none"))
 
 
 if __name__ == "__main__":
