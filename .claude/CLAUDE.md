@@ -88,6 +88,17 @@ scripts/factory-context.sh --kind <artifact-kind> [--lead <skill>] [--json]
 python3 -B scripts/factory-status.py
 python3 -B scripts/run-checks.py --repo <key> --paths <files> [--status]
 
+# UI plan, catalog and selection (read-only)
+python3 -B scripts/factory-cmd.py ui [--json] [--project DIR] [--uitoolkit-ref REF] <request>   # UI plan (exit 3 = NEEDS_CONTEXT)
+python3 -B scripts/ui/ui_catalog.py [--uitoolkit DIR] [--ref REF] [--kind K]... [--json]       # com.cuvara.uitoolkit catalog at a ref
+python3 -B scripts/ui/ui_select.py (--screen S | --need N...) [--ref REF] [--json]              # reuse > configure > compose > missing
+python3 -B scripts/ui/figma_env.py --project <unity project> [--json] [--probe-pipeline]       # Figma connector environment check
+tests/ui-catalog.test.sh                   # catalog + selection on a UIToolkit git fixture
+tests/ui-commands.test.sh                  # UI plan: schema, intents, skills per verb, NEEDS_CONTEXT
+env -u TMPDIR tests/ui-skill-routing.test.sh  # UI plan golden matrix, selection, path-scoped routing.tech
+env -u TMPDIR tests/ui-figma-env.test.sh   # figma_env.py on fixture Unity projects
+tests/ui-skills.test.sh                    # UI skills content, docs, snapshot Next line for UI paths
+
 tests/dogfood.sh [--installed]      # real headless Claude sessions; spends tokens, not in run-all
 ```
 
@@ -117,12 +128,17 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
     (`updatedInput`, once per session); before one of its `used_by` leads, it runs with a `high` advisory. Each advisory
     is logged to the session's `ADVISORIES` file (tests, dogfood). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
-- **Slash commands** (`commands/*.md`: status, route, check, doctor) call `scripts/factory-cmd.py` and are
-  covered by `tests/commands.test.sh`.
+- **Slash commands** (`commands/*.md`: status, route, check, doctor, ui, ui-figma, ui-components, ui-screen,
+  ui-review) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
+  `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`.
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work) routes to
   13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
-  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 5 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
-  unity-client-tech, unity-dots, netcode-client) own no module, are never routed, and appear as `routing.tech` for their `used_by`.
+  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 10 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
+  unity-client-tech, unity-dots, netcode-client, and the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
+  ui-toolkit-screen, ui-validation) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
+  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders), and the
+  snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
+  (`docs/architecture/ui-skills.md`).
 - **Dev tools:** registry `dev_tools[]` → `lib/devtools.py` probes (PATH, TCP services, MCP server and
   plugin names only - never config values) → snapshot "Tools for this change" and doctor "Dev tools".
   Every non-core skill's `## Tools` names exactly its `used_by` tools (skills-lint).
@@ -130,4 +146,4 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 ## Layout
 
 - `.claude-plugin/` manifests - `skills/` - `commands/` - `scripts/` (+ `lib/`, `checks/` read-only evidence
-  scripts) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`
+  scripts, `ui/` read-only UI plan engine, catalog, selection and Figma environment check) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`

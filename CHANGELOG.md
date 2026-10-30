@@ -4,6 +4,47 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- UI request handling for the Unity client, with progressive skill loading (`docs/architecture/ui-skills.md`):
+  - `/rpg-factory:ui`, `ui-figma`, `ui-components`, `ui-screen` and `ui-review`: a deterministic, read-only UI plan
+    (`scripts/ui/ui_plan.py`, schema `rpg-factory.ui-plan/1`, rules as data in `scripts/ui/data/intents.json`) - intent,
+    only the UI skills the request needs (in order; the rest listed as not loaded), the lead route, Figma URL parsing
+    (file key, `node-id` 1-2 -> 1:2), the target project, and exactly what is missing (NEEDS_CONTEXT, exit 3; NOT_UI
+    for non-UI text).
+  - Five UI tech skills (`domain: ui`, used by `client-integration`): `ui-orchestrator` (entry point: runs the plan,
+    asks for missing context, loads only the listed skills), `ui-component-selection`, `ui-figma-import` (the official
+    UI Toolkit Connector for Figma through the com.cuvara.uitoolkit 0.8 tools: preflight incl. FIG023, environment
+    check, headless import, validator triage, profile, token bridge, mapping preset, mode sheets, ScreenCreator
+    "Existing UXML"), `ui-toolkit-screen` (ScreenCreator, presenters, registration, navigator, codegen, settings,
+    dialogs, theme service) and `ui-validation` (seven review areas graded by artifact, and the `ui-review` checklist).
+    Package facts are cited at UIToolkit v0.8.0.
+  - `scripts/ui/ui_catalog.py`: the com.cuvara.uitoolkit catalog read from git at the client pin (or `--ref`, or the
+    highest tag), each entry with a `path:line@ref` source, plus Unity built-in controls with docs URLs; NOT_AVAILABLE
+    without a readable repository; warns when the client pin is behind the ref used.
+  - `scripts/ui/ui_select.py`: needs and screen archetypes (settings, inventory, popup, hud, quest-panel, shop,
+    confirm) mapped reuse > configure > compose > missing with catalog evidence; nothing is invented.
+  - `scripts/ui/figma_env.py --project <p> [--json] [--probe-pipeline]`: read-only Figma connector environment check
+    (Unity, package, helper, connector, Pipeline port without the token, Allow Browser Clients, validator CLI, dotnet).
+  - Registry: dev tool `figma-mcp` (its `mcp:` probe cannot see claude.ai connector servers; not required),
+    `unity-mcp` and `dotnet` used by the UI skills, and fact `uitoolkit-figma-connector-floor`.
+  - `docs/architecture/ui-skills.md` and `docs/architecture/ui-figma-real-test.md` (the real "Game Settings"
+    Figma-to-Unity procedure; not yet run).
+  - Tests: `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh` (golden plan
+    matrix of 46 cases, selection on a UIToolkit v0.8.0 fixture, path-scoped routing), `tests/ui-figma-env.test.sh`
+    and `tests/ui-skills.test.sh` (skill content, docs, snapshot Next line); evals `ui-settings-screen`,
+    `ui-figma-import` and `ui-not-ui` with a fired grader per UI skill and must-not-invoke graders.
+  - `tests/dogfood.sh`: scenarios `ui-settings`, `ui-figma`, `ui-not-ui` and a `NOTEXPECT` field (skills that must
+    not be invoked).
+
+### Changed
+
+- Tech skills may declare `paths` (registry schema, resolver, `check-registry.sh`): the skill appears in
+  `routing.tech` only when a changed file matches. The golden routing gains the UI tech skills only for UI paths.
+- The snapshot Next line loads the UI skills through `ui-orchestrator`: "invoke `rpg-factory:ui-orchestrator`
+  first; its UI plan names the subset to load", instead of asking for all five.
+- `client-integration` names the five UI skills at its UI step.
+
 ### Fixed
 
 - The Bash and PowerShell guard raises a high advisory for host-wide process termination, in any directory: a kill that names targets by image/filter/pattern (`taskkill /IM|/FI`, `Stop-Process -Name`, `pkill`, `killall`, `kill -1`, `wmic process ... delete`), or a process query by name/pattern (`Win32_Process`, `Get-Process <name>`, `pgrep`, `pidof`, `ps | grep`, `tasklist`) combined with any terminator, including `taskkill //PID $(powershell ... Win32_Process ...)`. It reads the parsed command, so quoted `grep`/`echo`/commit-message text no longer triggers it; raw text is only the fallback for unparseable input.

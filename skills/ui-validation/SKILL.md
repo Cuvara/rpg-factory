@@ -105,7 +105,7 @@ Seven areas, each with the artifact that proves it. No artifact means no PASS.
 
 ## Tools
 
-- Editor, tests, Console and screenshots: no registry dev tool lists this skill in `used_by` yet; it uses the
-  lead's `unity-mcp` (`tests-run`, `console-get-logs`, `screenshot-game-view`). Down: HUMAN_REQUIRED with steps.
-- Drift and validator CLI: the registry tool `dotnet` (probe in the snapshot). Missing: NOT_AVAILABLE locally,
-  CI `uxml-codegen-drift.yml` for the drift check.
+- `unity-mcp`: `tests-run`, `console-get-logs` and `screenshot-game-view` for the test, Console and screenshot
+  rows. Down: HUMAN_REQUIRED with the steps for the user.
+- `dotnet`: the UXML codegen drift check and the Figma validator CLI. Missing: NOT_AVAILABLE locally; CI
+  `uxml-codegen-drift.yml` still runs the drift check.

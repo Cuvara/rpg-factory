@@ -34,9 +34,15 @@ scope and after the release checks pass. The guard's tag/release advisories appl
 | `/rpg-factory:route <repo> <path>... [--lead <skill>]` | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
 | `/rpg-factory:check <repo> [<path>...] [--status]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
 | `/rpg-factory:doctor` | install state (what this session loads), registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
+| `/rpg-factory:ui <request>` | UI plan: intent, only the UI skills the request needs (in order), lead route, missing context, component choices | no |
+| `/rpg-factory:ui-figma <figma url> <request>` | the UI plan for a Figma frame (import, analyze, validate, troubleshoot); asks for the URL or project when missing | no |
+| `/rpg-factory:ui-components <request>` | component selection from the real com.cuvara.uitoolkit catalog and Unity built-ins: reuse > configure > compose > missing | no |
+| `/rpg-factory:ui-screen <request>` | the UI plan for implementing or wiring a screen (including imported UXML) | no |
+| `/rpg-factory:ui-review <request>` | the UI plan for a review, loading only the validation skills | no |
 
 Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
-works too).
+works too). The `ui*` commands only plan; the plan names the route and the UI skills to load
+(`docs/architecture/ui-skills.md`).
 
 ## Execution modes
 
@@ -86,6 +92,9 @@ Game Design may draft and propose gameplay values; binding them requires verifie
                                                   tech skills (never routed; routing line "tech")
                                                   dotnet-gameserver · go-backend · unity-client-tech
                                                   unity-dots · netcode-client
+                                                  UI (paths-scoped, entry ui-orchestrator): ui-orchestrator
+                                                  ui-component-selection · ui-figma-import
+                                                  ui-toolkit-screen · ui-validation
               └────────────────┬─────────────────┘
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
@@ -127,6 +136,11 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `unity-client-tech` | client-integration, unity-package, pin-bump | Entities system install and world lifecycle, UniTask and main thread, VContainer, asmdef/test assemblies, domain reload, WebGL, single Unity tests |
 | `unity-dots` | unity-package, client-integration, measure | ECS or classic C#, system group tree and bootstrap install, `SystemOrderVerifier`, the package ECB singleton, measured Schedule vs ScheduleParallel thresholds, archetype-stable spawning, sync points, allocators, ECS tests |
 | `netcode-client` | unity-package, wire-contract, client-integration, measure | TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning and merge, interpolation clock, prediction and reconciliation, reconnect, current per-packet allocation pitfalls, speed presence, subscriber isolation, headless tests |
+| `ui-orchestrator` | client-integration | entry for UI requests: runs the UI plan, asks for missing context, loads only the UI skills the plan lists |
+| `ui-component-selection` | client-integration | catalog of the real com.cuvara.uitoolkit (at a ref) plus Unity built-ins; selection reuse > configure > compose > missing |
+| `ui-figma-import` | client-integration | Figma frame to UI Toolkit through the official connector and com.cuvara.uitoolkit 0.8: preflight, env check, headless import, validator, diagnostics, profile, bridge, preset |
+| `ui-toolkit-screen` | client-integration | screens and popups on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, registration, navigator, codegen, settings, dialogs, theme service |
+| `ui-validation` | client-integration | UI review and evidence: references, bindings, lifecycle, theme, responsive, runtime, tests; the ui-review checklist |
 
 **Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry
 `dev_tools` it uses (Unity MCP, Go LSP, C# LSP, pg-aiguide, context-mode, codex, dotnet, go, protoc,

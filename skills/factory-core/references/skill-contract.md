@@ -13,7 +13,8 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
      domain + Engineering leads - game-design; ui-ux -> art-2d -> engineering; art-3d -> vfx -> engineering, server-realtime, server-services, server-ops, unity-package, client-integration
               own: implementation + validation inside one repo (one leg)
                    │
-                   └── tech skills - dotnet-gameserver, go-backend, unity-client-tech, unity-dots, netcode-client
+                   └── tech skills - dotnet-gameserver, go-backend, unity-client-tech, unity-dots, netcode-client;
+                            UI: ui-orchestrator, ui-component-selection, ui-figma-import, ui-toolkit-screen, ui-validation
                             own: how a technology works in this workspace (never routed, loaded by
                             the skills in their used_by when the work needs it)
 ```

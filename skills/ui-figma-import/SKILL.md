@@ -133,7 +133,7 @@ Workflow, in order. Each step's result is a state (PASS, FAIL, BLOCKED, NOT_AVAI
 
 ## Tools
 
-- No registry dev tool lists this skill yet (proposed: Figma MCP and the Unity connector, `integration/C.md`).
-  Figma MCP (when connected): scope, screenshots, variables (step 1); fallback: the user's frame URL and screenshot.
-- Unity Editor through the client's MCP server, when open: Console and Play-mode screenshots (step 5); fallback:
-  the user's screenshots and the saved result file.
+- `figma-mcp`: scope, screenshots and variables of the frame (step 1). A claude.ai connector server can show
+  MISSING in the snapshot while it works in the session; fallback: the user's frame URL and a PNG export.
+- `unity-mcp`: Console and Play-mode screenshots (step 5), when the Editor is open; fallback: the user's
+  screenshots and the saved result file. The Unity connector package itself is checked by `figma_env.py`, not a dev tool.

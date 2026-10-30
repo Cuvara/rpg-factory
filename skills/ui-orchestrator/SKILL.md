@@ -93,8 +93,9 @@ UI skills, never scope or validation.
 
 ## Tools
 
-- Plan and routing: plugin scripts only; no registry dev tool lists this skill in `used_by`. The listed skills
-  and the lead name their own tools (`unity-mcp` through the lead).
+- `figma-mcp`: only to read the frame link's metadata when the plan reports Figma context and a detail is
+  missing; fallback: ask the user for the frame URL with `node-id`. The plan and routing are plugin scripts;
+  the listed skills and the lead name their own tools.
 
 ## Report additions
 

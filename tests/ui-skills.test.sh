@@ -2,13 +2,14 @@
 # UI skills content: ui-orchestrator, ui-toolkit-screen and ui-validation are filled (no SCAFFOLD:), keep the
 # tech-skill shape, follow the shared UI plan contract (statuses, intents, only the listed skills), keep the
 # UIToolkit v0.8.0 facts they must preserve, never claim unverified Figma features, and are reachable from
-# client-integration. docs/architecture/ui-skills.md documents the system. Needs no workspace.
+# client-integration. docs/architecture/ui-skills.md documents the system. The snapshot Next line for a UI path sends
+# the agent to ui-orchestrator first (fixture workspace). Needs no real workspace.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export TMPDIR="$TMP" RPG_FACTORY_STATE_DIR="$TMP/state"
-python3 -B - "$ROOT" <<'PY'
+python3 -B - "$ROOT" "$TMP/py.counts" <<'PY'
 import json, os, re, sys
 
 root = sys.argv[1]
@@ -133,6 +134,27 @@ for fact in ("rpg-factory.ui-plan/1", "`paths`", "new-skill.py", "--kind tech", 
     check(fact in doc, f"ui-skills.md mentions {fact}")
 check("ui-skills.md" in read("docs/architecture/README.md"), "docs/architecture/README.md links ui-skills.md")
 
-print(f"ui skills tests: {passed + failed} run, {passed} passed, {failed} failed")
-sys.exit(1 if failed or not passed else 0)
+with open(sys.argv[2], "w", encoding="utf-8") as out:
+    print(passed, failed, file=out)
 PY
+read -r pass fail < <(tr -d '\r' < "$TMP/py.counts" 2>/dev/null) || { pass=0; fail=1; echo "FAIL  content checks crashed"; }
+ok() { pass=$((pass + 1)); echo "PASS  $1"; }
+no() { fail=$((fail + 1)); echo "FAIL  $1"; }
+
+# snapshot Next line: a UI path names the UI skills once and sends the agent to ui-orchestrator first;
+# a non-UI client path has no UI clause (fixture workspace, read-only)
+WS="$TMP/ws"; C="$WS/IndieRPGMMOAdventure"
+mkdir -p "$WS/rpg-mmo-server/backend" "$C/ProjectSettings" "$C/Assets/Scripts/UI/X" "$C/Assets/Scripts/DI"
+touch "$WS/rpg-mmo-server/backend/TEAM.md" "$C/ProjectSettings/ProjectVersion.txt" "$C/Assets/Scripts/UI/X/X.uxml" "$C/Assets/Scripts/DI/Scope.cs"
+git -C "$C" init -q -b develop && git -C "$C" -c user.email=t@t -c user.name=t add -A   && git -C "$C" -c user.email=t@t -c user.name=t commit -qm init
+ui=$(cd "$WS" && RPG_FACTORY_WORKSPACE="$WS" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$ROOT/scripts/factory-context.sh" --repo client --paths Assets/Scripts/UI/X/X.uxml 2>&1)
+nonui=$(cd "$WS" && RPG_FACTORY_WORKSPACE="$WS" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$ROOT/scripts/factory-context.sh" --repo client --paths Assets/Scripts/DI/Scope.cs 2>&1)
+next_ui=$(grep -F '**Next:**' <<<"$ui"); next_nonui=$(grep -F '**Next:**' <<<"$nonui")
+[ -n "$next_ui" ] && [ -n "$next_nonui" ] && ok "Next line printed for a UI and a non-UI client path" || no "no Next line: $(head -c 300 <<<"$ui")"
+grep -qF 'invoke `rpg-factory:ui-orchestrator` first' <<<"$next_ui" && ok "UI path: Next line invokes rpg-factory:ui-orchestrator first"   || no "UI path: Next line lacks 'invoke \`rpg-factory:ui-orchestrator\` first': $(head -c 400 <<<"$next_ui")"
+! grep -qF 'tech skill(s) `rpg-factory:ui-component-selection`' <<<"$next_ui" && ! grep -qE 'tech skill\(s\) [^.]*`rpg-factory:ui-(component-selection|figma-import|toolkit-screen|validation)`' <<<"$next_ui"   && ok "UI path: Next line does not list the UI skills as tech skills to invoke" || no "UI path: Next line asks to invoke UI skills directly"
+! grep -qF 'UI skills (' <<<"$next_nonui" && ok "non-UI path: no 'UI skills (' clause" || no "non-UI path has a UI skills clause"
+[ -z "$(git -C "$C" status --porcelain)" ] && ok "fixture client repo untouched" || no "fixture client repo changed"
+
+echo "ui skills tests: $((pass + fail)) run, $pass passed, $fail failed"
+[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

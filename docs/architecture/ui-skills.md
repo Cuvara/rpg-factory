@@ -13,11 +13,12 @@ Toolkit controls. Skills cite the package at its tag; nothing here restates pack
 |---|---|---|
 | Five UI tech skills, registry entries with `domain: ui` and `paths` | `skills/ui-*/`, `registry.json` | implemented |
 | `routing.tech` scoping by `paths` | `scripts/lib/resolve.jq` | implemented |
-| UI plan engine and the `ui*` verbs of `factory-cmd.py` | `scripts/ui/ui_plan.py`, `scripts/factory-cmd.py` | delivered by a parallel branch; this page describes its shared contract |
-| Component catalog and selection | `scripts/ui/ui_catalog.py`, `scripts/ui/ui_select.py`, `scripts/ui/data/*.json` | delivered by a parallel branch |
-| Real Figma import test record | `docs/architecture/ui-figma-real-test.md` | delivered by a parallel branch |
-
-When a row says "parallel branch", treat the behaviour below as the agreed contract until that branch is merged.
+| Snapshot Next line loads UI skills through `ui-orchestrator` | `scripts/lib/context.py` | implemented |
+| UI plan engine and the `ui*` verbs and commands | `scripts/ui/ui_plan.py`, `scripts/factory-cmd.py`, `commands/ui*.md` | implemented |
+| Component catalog and selection | `scripts/ui/ui_catalog.py`, `scripts/ui/ui_select.py`, `scripts/ui/data/*.json` | implemented |
+| Figma connector environment check | `scripts/ui/figma_env.py` | implemented |
+| Dev tools `figma-mcp`, `unity-mcp`, `dotnet` for the UI skills | `registry.json` `dev_tools[]` | implemented |
+| Real Figma import test | `docs/architecture/ui-figma-real-test.md` | procedure written; **not yet run** (evidence table empty) |
 
 ## Discovery and routing
 
@@ -42,7 +43,11 @@ user request (plain language or /rpg-factory:ui*)
 - **`paths` scoping.** A tech skill with a `paths` list appears in the snapshot's `routing.tech` only when a
   changed file matches it. For the UI skills the list is `**/*.uxml`, `**/*.uss`, `**/*.tss`,
   `Assets/UI Toolkit/`, `Assets/Scripts/UI/` and `Assets/Figma/`. A client change outside those paths lists no
-  UI skill; a change inside lists all five, and the plan's `skills` is the subset to load.
+  UI skill; a change inside lists all five in the routing line.
+- **Next line.** For such a change the snapshot's **Next** line does not tell the agent to invoke all five. It
+  names the other tech skills as usual and adds one clause: `UI skills (...): invoke rpg-factory:ui-orchestrator
+  first; its UI plan names the subset to load - invoke only those, never all of them.` A change without a UI file
+  prints no `UI skills (` clause.
 
 ## Commands
 
@@ -109,7 +114,7 @@ UIToolkit repo the catalog is NOT_AVAILABLE.
 The official connector imports; the package validates and scaffolds. The import folder (`Assets/Figma/<file>/`)
 belongs to the connector; ScreenCreator refuses to write there and generates the screen code in a game-owned
 folder from the "Existing UXML" source. The validator (`UxmlCodegenCli validate` or the Editor API) grades the
-folder with stable `FIG0xx` codes. Procedure: `ui-figma-import`; recorded real-import test:
+folder with stable `FIG0xx` codes. Procedure: `ui-figma-import`; real-import test procedure (not yet run):
 `docs/architecture/ui-figma-real-test.md`.
 
 ## UIToolkit v0.8.0 compatibility and known limitations
@@ -130,7 +135,7 @@ folder with stable `FIG0xx` codes. Procedure: `ui-figma-import`; recorded real-i
 |---|---|
 | plan says `NOT_UI` for a UI request | add a UI term (screen, popup, UXML, Figma, HUD) or use a `ui-*` verb |
 | plan says `NEEDS_CONTEXT` | give exactly the `missing` items: Figma frame URL with `node-id`, `--project` |
-| snapshot lists all five UI skills | expected for UI files; load only the plan's `skills` |
+| snapshot lists all five UI skills | expected for UI files; the Next line says to start with `ui-orchestrator` and load only the plan's `skills` |
 | a UI skill runs with a `high` advisory | the lead was not invoked first; route and invoke it |
 | catalog NOT_AVAILABLE | no UIToolkit repo in the workspace; pass `--uitoolkit-ref` with a reachable repo |
 | `FIG0xx` findings, connector problems | `ui-figma-import` and the package's `TROUBLESHOOTING-FIGMA.md` |

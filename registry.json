@@ -110,7 +110,10 @@
         "pin-bump",
         "unity-client-tech",
         "unity-dots",
-        "netcode-client"
+        "netcode-client",
+        "ui-toolkit-screen",
+        "ui-validation",
+        "ui-figma-import"
       ],
       "required": false,
       "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
@@ -216,7 +219,8 @@
         "measure",
         "unity-package",
         "dotnet-gameserver",
-        "netcode-client"
+        "netcode-client",
+        "ui-validation"
       ],
       "required": true,
       "fallback": "CI ci-dotnet.yml"
@@ -279,6 +283,20 @@
       ],
       "required": false,
       "fallback": "the server's own OTel metrics on /metrics (gameserver.gc.*, gameserver.tick.duration, gameserver.sim.group.duration) and the BENCH_TICK micro-benches; say which was used"
+    },
+    {
+      "id": "figma-mcp",
+      "kind": "mcp",
+      "probes": [
+        "mcp:figma|mcp:claude_ai_Figma|plugin:figma"
+      ],
+      "provides": "Figma file access for UI work: get_metadata (frame tree and node ids), get_screenshot (reference image), get_variable_defs (variable collections and modes). Read-only use in ui-figma-import step 1. The mcp: probe reads only .mcp.json and ~/.claude.json, so a claude.ai connector server (claude_ai_Figma, configured on the account) shows MISSING while it is usable in the session.",
+      "used_by": [
+        "ui-figma-import",
+        "ui-orchestrator"
+      ],
+      "required": false,
+      "fallback": "ask the user for the frame link (Copy link to selection, with node-id=) and a PNG export of the frame; the preflight is then HUMAN_REQUIRED for anything the screenshot cannot show (variable bindings)"
     }
   ],
   "global_rules": [
@@ -5074,6 +5092,13 @@
       "repo": "client",
       "probe": "jq -r '.dependencies[\"com.unity.test-framework.performance\"].version' Packages/packages-lock.json",
       "why": "Unity Performance Testing is resolved transitively (lock depth 1), not a direct manifest dependency; a perf-test asmdef references Unity.PerformanceTesting"
+    },
+    {
+      "id": "uitoolkit-figma-connector-floor",
+      "value": "0.3.0-exp.1",
+      "repo": "uitoolkit",
+      "probe": "git show origin/main:Editor/Figma/Cuvara.UIToolkit.Editor.Figma.asmdef | sed -n 's/.*\"expression\": \"\\(.*\\)\".*/\\1/p'",
+      "why": "com.unity.ui.figma version that opens the gated Cuvara.UIToolkit.Editor.Figma assembly; also the tested connector version (FIGMA-INTEGRATION.md Requirements)"
     }
   ],
   "domains": {

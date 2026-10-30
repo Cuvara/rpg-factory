@@ -6,6 +6,8 @@ Factory Core accepts three routing entry points:
 - `--kind <artifact-kind>` resolves an artifact kind to its owning domain. Use `--lead` when a kind has more than one owner.
 - `--repo <key> --paths <path...>` resolves registered module ownership and contract ends. Paths in an authoring repo show downstream handoff follow-ups from the source contract.
 
+Tech skills are never leads. A tech skill may declare `paths` in the registry (module-style prefixes or `**/*.ext` globs); it then appears in `routing.tech` only when a changed file matches. The five UI skills use this, so a client change outside UXML, USS, TSS and the UI folders lists none of them. When a change lists them, the snapshot's Next line does not ask for all five: it says to invoke `rpg-factory:ui-orchestrator` first and only the subset its UI plan names ([UI skills](ui-skills.md)).
+
 ## Dependency graph
 
 Handoff contracts are entries in `registry.json` with `kind: "handoff"`. Their source belongs to the upstream domain lead; `copies` lists the downstream repository/module or authoring path ends. The owning domain lists the contract id in `domains.<id>.handoffs`. Run `scripts/factory-context.sh --domain <id> --graph` to print a stable topological order. Cycles are reported as a path and exit with status 3.

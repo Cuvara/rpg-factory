@@ -120,7 +120,6 @@ hand-off, never a client copy.
 
 ## Tools
 
-- Editor, tests and console: no registry dev tool lists this skill in `used_by` yet; it works through the lead's
-  `unity-mcp` (ScreenCreator runs in the open Editor, behind the lead's asset-edit gate) and falls back to
-  HUMAN_REQUIRED with the menu path for the user.
+- `unity-mcp`: ScreenCreator and the codegen menu run in the open Editor, behind the lead's asset-edit gate;
+  Console for compile errors. Down: HUMAN_REQUIRED with the menu path for the user.
 - Symbol lookup: the lead's `lsp-csharp`, fallback `git -C UIToolkit grep` at the pinned tag.
