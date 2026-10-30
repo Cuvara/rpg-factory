@@ -56,7 +56,8 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
      | [ $mapped[] as $f | $ends[] | select(path_matches(.path; $f.path) or glob_matches(.path; $f.path))
          | {path: $f.path, role: (if . == $c.source then "source" else "copy" end)} ] as $hits
      | select(($hits | length) > 0)
-     | {id: $c.id, summary: $c.summary, hits: ($hits | unique), driver: ($c.driver // null),
+     | select(($c.kind // "") != "handoff" or any($hits[]; .role == "source"))
+     | {id: $c.id, kind: ($c.kind // null), summary: $c.summary, hits: ($hits | unique), driver: ($c.driver // null),
         gate: ($c.gate // null),
         other_ends: [ ([$c.source] + ($c.copies // []))[] | . as $e
                       | select(($e.repo != $repo) or ([$hits[].path] | any(. as $hp | path_matches($e.path; $hp)) | not))
@@ -108,7 +109,7 @@ def subst($s): reduce ($s | to_entries[]) as $e (.; split($e.key) | join($e.valu
       ([ $contracts[] | select(.driver != null)
           | select(kind(.driver) == "cross-repo" or any(.hits[]; .role == "source")) ] | length > 0) as $driven
       | ([ $contracts[] | select(.driver != null and kind(.driver) == "cross-repo") ] | length > 0) as $cross_driven
-      | [ ($contracts[] | select(.driver != null) | . as $c
+      | [ ($contracts[] | select(.driver != null and ((.kind // "") != "handoff" or any(.hits[]; .role == "source"))) | . as $c
             | {skill: .driver,
                role: (if kind($c.driver) == "cross-repo" or any($c.hits[]; .role == "source") then "lead" else "leg" end),
                class: (if kind($c.driver) == "cross-repo" then 0 else 1 end),
