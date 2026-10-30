@@ -50,6 +50,7 @@ expect_fail g-feature-path '(.modules |= map(if .id == "server.proto" then .path
 expect_fail f-role '.modules[0].role = "observer"' 'role must be orchestrator|implementer|reference'
 expect_fail f-skill-role '.skills["server-realtime"].role = "observer"' 'role must be orchestrator|implementer|reference'
 expect_fail handoff-driver-domain '(.modules |= map(if .id == "authoring.design-features" then .domain = "engineering" else . end))' 'source module domain engineering differs from driver domain design'
+expect_fail handoff-unmapped-copy '(.contracts |= map(if .id == "feature-spec-to-impl" then .copies[0].path = "missing/module/" else . end))' 'path server:missing/module/ does not resolve to a module'
 expect_fail duplicate-domain-artifact-kind '.domains.engineering.artifact_kinds = ["feature-spec"]' 'artifact kind feature-spec is shared by domains engineering, design'
 expect_fail cross-domain-path-overlap '(.domains.design.repos += ["server"]) | (.modules |= map(if .id == "authoring.design-features" then .repo = "server" | .paths = ["backend/shared/proto/"] else . end))' 'domain path conflict'
 # g: absent optional repository paths are skipped and reported in a stand-in workspace.

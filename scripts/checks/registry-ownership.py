@@ -37,6 +37,9 @@ def main(path):
         if contract.get("kind") != "handoff":
             continue
         cid = contract["id"]
+        domain = contract.get("domain")
+        if domain not in domains:
+            errors.append(f"handoff {cid}: unknown or missing domain {domain}")
         driver = contract.get("driver")
         if not isinstance(contract.get("source"), dict) or not isinstance(contract.get("copies"), list):
             errors.append(f"handoff {cid}: source and copies must be registered ends")
@@ -44,6 +47,11 @@ def main(path):
         for end in [contract["source"], *contract["copies"]]:
             if end.get("repo") not in reg.get("repos", {}):
                 errors.append(f"handoff {cid}: unknown repo {end.get('repo')}")
+            elif end.get("path"):
+                matches = [m for m in modules if m["repo"] == end["repo"] and
+                           any(under(end["path"], p) or under(p, end["path"]) for p in m.get("paths", []))]
+                if not matches:
+                    errors.append(f"handoff {cid}: path {end['repo']}:{end['path']} does not resolve to a module")
         if driver not in skills:
             errors.append(f"handoff {cid}: unknown driver skill {driver}")
             continue

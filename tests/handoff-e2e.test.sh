@@ -5,14 +5,15 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 T=$(mktemp_win) || exit 1
 trap 'rm -rf "$T"' EXIT
-export TMPDIR="$T" RPG_FACTORY_STATE_DIR="$T/state"
+export TMPDIR="$T" RPG_FACTORY_STATE_DIR="$T/state" RPG_FACTORY_WORKSPACE="$T" RPG_FACTORY_REGISTRY="$T/registry.json"
 A="$T/authoring"; S="$T/server"; mkdir -p "$A/design/features" "$S/backend"
 for r in "$A" "$S"; do git -C "$r" init -q -b main; git -C "$r" config user.name Fixture; git -C "$r" config user.email fixture@example.test; done
 ssh-keygen -q -t ed25519 -N '' -f "$T/approver" -C p6-approver
 KEY=$(cat "$T/approver.pub")
 cat > "$T/registry.json" <<EOF
-{"repos":{"authoring":{},"server":{}},"domains":{"design":{"artifact_kinds":["feature-spec"],"human_gates":["design-review"],"approvers":[{"principal":"Maintainer","ssh_public_key":"$KEY"}]},"engineering":{"repos":["server"]}},"contracts":[{"id":"feature-spec-to-impl","kind":"handoff","domain":"design","source":{"repo":"authoring","path":"design/features/"},"copies":[{"repo":"server","path":"backend/"}],"driver":"game-design","gate":null,"evidence":"artifact-trace"}],"skills":{"game-design":{"domain":"design"}},"artifact_lifecycles":{"default":{"states":["draft","review","approved","in-implementation","verified","released"],"transitions":{"draft":["review"],"review":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"released":[]},"requirements":{"approved":{"needs_approval":["design-review"]},"in-implementation":{"needs_approval":["design-review"],"needs_trace":["impl"]},"verified":{"needs_approval":["design-review"],"needs_trace_for_test":["impl","test"]},"released":{"needs_approval":["design-review"],"needs_trace":["release"],"needs_trace_for_test":["impl","test"]}}}}}
+{"workspace":{"root_default":"$T","root_env":"RPG_FACTORY_WORKSPACE","root_markers":["marker"]},"repos":{"authoring":{"path":"authoring","default_branch":"main","protected_branches":[]},"server":{"path":"server","default_branch":"main","protected_branches":[]}},"tools":{},"dev_tools":[],"domains":{"design":{"repos":["authoring"],"artifact_kinds":["feature-spec"],"human_gates":["design-review"],"approvers":[{"principal":"Maintainer","ssh_public_key":"$KEY"}]},"engineering":{"repos":["server"]}},"contracts":[{"id":"feature-spec-to-impl","kind":"handoff","domain":"design","source":{"repo":"authoring","path":"design/features/"},"copies":[{"repo":"server","path":"backend/"}],"driver":"game-design","gate":null,"evidence":"artifact-trace"}],"skills":{"game-design":{"kind":"repo","domain":"design","order":1}},"modules":[{"id":"authoring.design-features","repo":"authoring","domain":"design","paths":["design/features/"],"skills":["game-design"],"depends_on":[],"fallback":false,"generated":[],"rules":[],"obligations":[],"checks":{"fast":[{"id":"artifact-trace","run":"python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry $T/registry.json --repos server=$S","evidence":"trace result","parser":"artifact"}],"extended":[],"external":[]},"tools":[]}],"human_gates":[],"global_rules":[],"artifact_lifecycles":{"default":{"states":["draft","review","approved","in-implementation","verified","released"],"transitions":{"draft":["review"],"review":["approved"],"approved":["in-implementation"],"in-implementation":["verified"],"verified":["released"],"released":[]},"requirements":{"approved":{"needs_approval":["design-review"]},"in-implementation":{"needs_approval":["design-review"],"needs_trace":["impl"]},"verified":{"needs_approval":["design-review"],"needs_trace_for_test":["impl","test"]},"released":{"needs_approval":["design-review"],"needs_trace":["release"],"needs_trace_for_test":["impl","test"]}}}}}
 EOF
+touch "$T/marker"
 F="$A/design/features/crafting.md"
 write_artifact() { python3 - "$F" "$1" "$2" <<'PY'
 import json,sys
@@ -33,14 +34,20 @@ PY
   git -C "$A" -c gpg.format=ssh -c user.signingkey="$T/approver" commit -q -S -m "Approve feature revision"
 }
 trace() { python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$A" --registry "$T/registry.json" --repos server="$S"; }
+run_state() {
+  python3 -B "$ROOT/scripts/run-checks.py" --repo authoring --repo-path "$A" --paths design/features/crafting.md --only artifact-trace --json |
+    python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["state"] for x in d["results"] if x["check"]=="artifact-trace"))'
+}
 pass=0; fail=0
 expect() { local label="$1" expected="$2" actual="$3"; if [[ "$actual" == "$expected" ]]; then pass=$((pass+1)); echo "PASS $label: $actual"; else fail=$((fail+1)); echo "FAIL $label: expected [$expected], got [$actual]"; fi; }
 write_artifact draft '[]'; git -C "$A" add design; git -C "$A" commit -q -m draft
 expect draft 'PASS FS-P6-001 trace and approvals verified' "$(trace | head -1)"
+expect run-checks-draft 'PASS' "$(run_state)"
 write_artifact review '[]'; git -C "$A" add design; git -C "$A" commit -q -m review
 expect review 'PASS FS-P6-001 trace and approvals verified' "$(trace | head -1)"
 write_artifact approved '[]'; git -C "$A" add design; git -C "$A" commit -q -m approved
 expect approval-required 'HUMAN_REQUIRED FS-P6-001 missing approval' "$(trace | head -1)"
+expect run-checks-human-required 'HUMAN_REQUIRED' "$(run_state)"
 approve_current
 expect signed-approval 'PASS FS-P6-001 trace and approvals verified' "$(trace | head -1)"
 write_artifact in-implementation '[]'; git -C "$A" add design; git -C "$A" commit -q -m implementation
@@ -54,6 +61,7 @@ TR="[{\"repo\":\"server\",\"ref\":\"$IMPL\",\"kind\":\"impl\",\"ac\":[\"AC1\"],\
 write_artifact verified "$TR"; git -C "$A" add design; git -C "$A" commit -q -m verified
 approve_current
 expect verified 'PASS FS-P6-001 trace and approvals verified' "$(trace | head -1)"
+expect run-checks-verified 'PASS' "$(run_state)"
 git -C "$S" tag v-fixture
 REL=$(git -C "$S" rev-parse HEAD)
 TR="[{\"repo\":\"server\",\"ref\":\"$IMPL\",\"kind\":\"impl\",\"ac\":[\"AC1\"],\"spec_rev\":\"$SPEC_REV\"},{\"repo\":\"server\",\"ref\":\"$TEST\",\"kind\":\"test\",\"ac\":[\"AC1\"]},{\"repo\":\"server\",\"ref\":\"$REL\",\"kind\":\"release\",\"ac\":[\"AC1\"]}]"
@@ -68,6 +76,17 @@ git -C "$A" add design; git -C "$A" commit -q -m "Edit spec after implementation
 out=$(trace)
 expect stale-approval 'HUMAN_REQUIRED FS-P6-001 missing approval' "$(grep '^HUMAN_REQUIRED' <<<"$out" | head -1)"
 expect stale-downstream "FAIL downstream-stale FS-P6-001 impl server@$IMPL" "$(grep '^FAIL downstream-stale' <<<"$out" | head -1)"
+expect run-checks-stale 'FAIL' "$(run_state)"
+CONFLICTS=$(python3 - "$ROOT/scripts/checks/registry-ownership.py" <<'PY'
+import json,subprocess,sys,tempfile,os
+r={"repos":{"server":{}},"domains":{"design":{"artifact_kinds":["feature-spec"]},"engineering":{"artifact_kinds":["feature-spec"]}},"modules":[{"id":"design.mod","repo":"server","domain":"design","paths":["backend/design/"]},{"id":"engineering.mod","repo":"server","domain":"engineering","paths":["backend/"]}],"contracts":[],"skills":{}}
+with tempfile.NamedTemporaryFile("w",encoding="utf-8",delete=False) as f: json.dump(r,f); path=f.name
+try: print(subprocess.run([sys.executable,sys.argv[1],path],text=True,capture_output=True).stdout,end="")
+finally: os.unlink(path)
+PY
+)
+expect conflict-path 'True' "$(grep -q 'domain path conflict: design.mod' <<<"$CONFLICTS" && echo True || echo False)"
+expect conflict-kind 'True' "$(grep -q 'artifact kind feature-spec is shared by domains design, engineering' <<<"$CONFLICTS" && echo True || echo False)"
 graph=$(python3 - "$T/registry.json" "$ROOT/scripts/lib/context.py" <<'PY'
 import importlib.util,json,sys
 spec=importlib.util.spec_from_file_location("context",sys.argv[2]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

@@ -3962,8 +3962,8 @@
       "summary": "An approved design feature specification is implemented and tested by the server and client engineering teams.",
       "source": {"repo": "authoring", "path": "design/features/"},
       "copies": [
-        {"repo": "server", "path": "backend/"},
-        {"repo": "client", "path": "Assets/"}
+        {"repo": "server", "path": "backend/gameserver-dotnet/"},
+        {"repo": "client", "path": "Assets/Scripts/"}
       ],
       "driver": "game-design",
       "gate": null,

@@ -7,9 +7,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 ### Added
 - Added the `feature-spec-to-impl` handoff contract and registry checks for cross-domain path conflicts, artifact-kind uniqueness, and handoff driver ownership.
 - Added domain dependency graph routing, cross-domain path ambiguity reporting, and downstream stale-implementation detection.
+- Documented routing entry points, dependency graphs, ownership conflicts and downstream invalidation; updated the Game Design handoff workflow.
 
 ### Changed
 
+- `run-checks.py` now honors `RPG_FACTORY_REGISTRY`, allowing isolated fixture registries to exercise real PASS, FAIL and HUMAN_REQUIRED grading.
 - Replaced the blanket feature-registry ban and plumbing-only rule with domain-scoped feature-state ownership and phase-scope policy; non-owning modules cannot claim feature-state paths.
 - Made artifact lint validate against the published JSON Schema and bind immutable IDs and lifecycle transitions to each artifact path; added JSON history and schema regressions.
 - Made artifact trace and approval gates follow lifecycle requirements, with regression coverage for draft, verified, and binding-value cases.
