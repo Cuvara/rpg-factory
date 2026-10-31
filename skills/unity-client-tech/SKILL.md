@@ -45,7 +45,7 @@ calling skill keeps validation and reporting.
   (`Assets/Scripts/DI/Dots/DotsWorldBridge.cs:42-46`).
 - **One world:** `World.DefaultGameObjectInjectionWorld`. Scene components reach it in `Update`
   and install once; teardown is `OnDestroy` in reverse install order
-  (`HudWorldBridge.cs:51-105`; `DotsWorldBridge.Update` / `OnDestroy`: `DotsWorldBridge.cs:208-233,594-638`).
+  (`HudWorldBridge.cs:51-105`; `DotsWorldBridge.Update` / `OnDestroy`: `DotsWorldBridge.cs:193-249,311-316`).
 - **ECS -> UI goes through a bridge system.** `HudStateSystem` (unmanaged `ISystem`, Simulation
   group) writes a singleton only when it changed; `HudBridgeSystem` (managed, Presentation group)
   derives the package's `EcsViewModelBridge` (a `SystemBase`, `UIToolkit/Runtime/Ecs/EcsViewModelBridge.cs:62`)
@@ -60,7 +60,7 @@ calling skill keeps validation and reporting.
   returns `Task` (`MainSessionFlow.cs:42-65`).
 - **Composition is VContainer** (scopes and order: `rpg-factory:client-integration`'s
   composition map). Scene components get `[Inject] Construct(...)` from a scope build callback and
-  stay inert without a container (`DotsWorldBridge.cs:190-206`).
+  stay inert without a container (`DotsWorldBridge.cs:174-191`).
 
 ## Idioms
 
@@ -85,7 +85,7 @@ calling skill keeps validation and reporting.
 - Input: `DeviceGameplayInputSource.ReadMove` branches on `#if ENABLE_INPUT_SYSTEM` / `#elif ENABLE_LEGACY_INPUT_MANAGER` / `#else` zero
   (`GameplayInput.cs:116-142`); the project is new-Input-System-only (`activeInputHandler: 1` in
   `ProjectSettings/ProjectSettings.asset`). One component owns input per scene: sampled, sent and
-  recorded on the predictor as one stream (`DotsWorldBridge.driveInput`, `DotsWorldBridge.cs:67-71,238-274`).
+  recorded on the predictor as one stream (`DotsWorldBridge.driveInput`, `DotsWorldBridge.cs:64-68,252-290`).
 - Optional dependency = a gated assembly: `defineConstraints` naming defines that the same asmdef
   sets through `versionDefines` (`Assets/Scripts/UI/Hud/Ecs/NDC.Scripts.UI.Hud.Ecs.asmdef`).
   Defines do not flow between asmdefs; whole-file `#if` guards on the same defines (`CUVARA_DOTS`, ...)
@@ -101,8 +101,8 @@ calling skill keeps validation and reporting.
   (`[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`) - a disabled reload keeps them across
   plays.
 - **World may not exist yet, or be gone.** `HudWorldBridge` keeps polling while the world is null;
-  `DotsWorldBridge.TryInstall` instead warns and disables itself (`DotsWorldBridge.cs:311-319`). Any
-  teardown checks `World.IsCreated` first (`DotsWorldBridge.cs:607`; `HudEcsBootstrap.Uninstall`:
+  `EcsSessionInstallation.TryInstall` instead warns and `DotsWorldBridge` disables itself (`Assets/Scripts/DI/Dots/EcsSessionInstallation.cs:156-170`; its caller `TryInstall`: `DotsWorldBridge.cs:222-226`). Any
+  teardown checks `World.IsCreated` first (`Assets/Scripts/DI/Dots/EcsSessionInstallation.cs:324`; `HudEcsBootstrap.Uninstall`:
   `HudEcsBootstrap.cs:52`).
 - **Sink before systems.** A sink left registered keeps Presenter -> ViewModel -> visual tree
   alive (`HudWorldBridge` remarks and `OnDestroy`: `HudWorldBridge.cs:31-36,95-105`).
