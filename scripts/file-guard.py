@@ -17,6 +17,7 @@ never crashes a session (any error = no opinion).
             imported samples): change it through its generator
           - secrets (.env, kubeconfig.local; case-insensitive)
   warn  a Read of secrets (.env, kubeconfig.local; case-insensitive)
+  warn  a Read of a registered skill's SKILL.md: load it with the Skill tool instead
 
 Not covered (documented limitation): MCP tools that write files (e.g. Unity-MCP asset/scene tools)
 have tool-specific inputs; they are not inspected here. The registry gate `unity-asset-edit` is policy.
@@ -118,6 +119,11 @@ def evaluate(payload, registry):
     if not path:
         return []
     import factory_session as session  # noqa: E402  (shares the workspace and mode model)
+    if tool == "Read":  # wherever the plugin lives (installed cache, directory marketplace, worktree)
+        found = session.SKILL_FILE.search(path.replace("\\", "/"))
+        hint = session.skill_read_hint([found.group(1)], registry) if found and path.replace("\\", "/").endswith("/SKILL.md") else None
+        if hint:
+            return [hint]
     g = session.guard()
     ws = g.find_workspace(os.path.dirname(path), registry)
     shown = None
