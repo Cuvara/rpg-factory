@@ -38,6 +38,10 @@ t warn   Read  "$S/backend/deploy/.env.local"
 t allow Read  "$S/backend/deploy/.env.example"                            # documentation, not a secret
 t allow Edit  "$S/backend/deploy/.env.example"
 t allow Read  "$S/backend/TEAM.md"
+t warn  Read  "$ROOT/skills/game-design/SKILL.md"                      # load it with the Skill tool instead
+t warn  Read  "$TMP/plugin-cache/rpg-factory/1.3.0/skills/art-3d/SKILL.md"  # any plugin location
+t allow Read  "$ROOT/skills/game-design/references/x.md"               # references are plain reads
+t allow Read  "$TMP/elsewhere/skills/nosuch/SKILL.md"                   # not a registered skill
 t allow Read  "$C/Packages/com.cuvara.dots/a.cs"                         # reading user state is fine
 t allow Write "$TMP/outside/file.txt"                                     # outside the workspace
 t allow Edit  "Assets/Scripts/Net/Other.cs"                               # relative path resolved against cwd

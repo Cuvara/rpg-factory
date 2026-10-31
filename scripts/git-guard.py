@@ -1057,6 +1057,25 @@ def process_kill_hits(payload, registry):
     return [("deny", PROCESS_TERMINATION_RULE)] if hit else []
 
 
+def skill_read_hits(payload, registry):
+    """A registered skill's SKILL.md read through the shell (`cat`, `sed -n`, `Get-Content`, ...) is not a loaded
+    skill: point the session at the Skill tool. Parsed argv only; a command that cannot be parsed gets no opinion."""
+    command = (payload.get("tool_input") or {}).get("command") or ""
+    if "skill.md" not in command.lower():
+        return []
+    import factory_session as session  # noqa: E402
+    shell = "powershell" if payload.get("tool_name") == "PowerShell" else "bash"
+    names = []
+    for argv in _process_argvs(command, shell):
+        if argv and prog(argv[0]) in session.SKILL_READERS:
+            for a in argv[1:]:
+                m = session.SKILL_FILE.search(a)
+                if m and a.replace("\\", "/").rstrip("'\"").endswith("/SKILL.md"):
+                    names.append(m.group(1))
+    hint = session.skill_read_hint(names, registry)
+    return [hint] if hint else []
+
+
 def _needs_mode(payload):
     """Cheap file check first - factory_session.py is only imported when a mode exists or the command declares one
     (read-only hook calls stay fast on /mnt/c)."""
@@ -1143,7 +1162,7 @@ def main():
         need_mode = _needs_mode(payload)
     except Exception:
         need_mode = True  # cannot tell cheaply: do the full checks
-    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits) if need_mode else (evaluate, human_gate_hits, process_kill_hits)
+    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits, skill_read_hits) if need_mode else (evaluate, human_gate_hits, process_kill_hits, skill_read_hits)
     for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)
