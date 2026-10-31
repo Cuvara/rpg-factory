@@ -6,7 +6,7 @@ Domains describe who owns a discipline's artifacts, which registry paths route w
 
 | Domain | Lead | Authoring repo | Artifact kinds | Routing |
 |---|---|---|---|---|
-| Game Design | `game-design` | Optional `authoring` (`game-authoring`) | `gdd`, `game-concept`, `gameplay-system`, `feature-spec`, `design-decision`, `level-spec`, `quest-spec`, `npc-spec`, `item-spec`, `technical-handoff`, `content-spec`, `gameplay-event` | `--domain design`, `--kind`, or registered paths under `design/` |
+| Game Design | `game-design` | Optional `authoring` (`game-authoring`) | `gdd`, `game-concept`, `gameplay-system`, `feature-spec`, `design-decision`, `level-spec`, `quest-spec`, `npc-spec`, `item-spec`, `technical-handoff` | `--domain design`, `--kind`, or registered paths under `design/` |
 | UI/UX | `ui-ux` | Optional `authoring` | `ui-flow`, `ui-spec`, `ux-requirements`, `ia-map`, `screen-spec`, `component-spec`, `design-tokens`, `ui-handoff` | `--domain ui`, `--kind`, or `ui/` paths |
 | 2D Art | `art-2d` | Optional `authoring` | `art-direction-2d`, `concept-2d`, `asset-spec-2d`, `runtime-export-2d`, `reference-2d` (plus legacy aliases) | `--domain art2d`, `--kind`, or `art2d/` paths |
 | 3D Art | `art-3d` | Optional `authoring` | `art-direction-3d`, `model-spec`, `material-spec`, `rig-spec`, `animation-spec`, `asset-3d` (plus legacy aliases `art3d-brief`, `art3d-asset`) | `--domain art3d`, `--kind`, or `art3d/` paths |
@@ -17,13 +17,13 @@ Domains describe who owns a discipline's artifacts, which registry paths route w
 
 | Domain | Domain foundation | Production workflow |
 |---|---|---|
-| Game Design | Active; registered, routed, contracted and checked | Existing design workflow |
+| Game Design | Active; registered, routed, contracted and checked | Production game design workflow |
 | UI/UX | Active; registered, routed, contracted and checked | Production UI/UX specification workflow |
 | 2D Art | Active; registered, routed, contracted and checked | Production 2D art and export workflow |
 | 3D Art | Active; registered, routed, contracted and checked | Production 3D art specification and delivery workflow |
 | VFX | Active; registered, routed, contracted and checked | Production VFX specification and delivery workflow |
 
-An active domain has registry ownership, routing, handoff contracts, shared checks and a production workflow. Domain details: [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md).
+An active domain has registry ownership, routing, handoff contracts, shared checks and a production workflow. Domain details: [Game Design](domains/design.md), [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md).
 
 ## Game Design
 
