@@ -16,6 +16,10 @@ Reports, for one Unity project, what the ui-figma-import workflow needs (com.cuv
   pipeline-port      Library/Pipeline/.unity-pipeline-port: present, port, heartbeat age. The evalToken in
                      that file is never printed.
   allow-browser      ProjectSettings/Packages/com.unity.pipeline/EditorPipelineConfig.json m_AllowBrowserClients
+  mapping-asset      the connector's mapping asset (FigmaImportSettings, script GUID 0ced1937e6a344ac0a9f905cc9237a5b):
+                     active one per ProjectSettings/FigmaMappingState.asset, else the first by path; its classPrefix.
+                     Apply Cuvara Mapping Preset needs it (cuvara.mapping.no-asset otherwise); an empty prefix gives
+                     unprefixed classes (FIG010 under --prefix). Text-serialized assets only.
   validator-cli      <package>/Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj (the `validate` verb)
   dotnet             dotnet on PATH (builds and runs the validator CLI)
   figma-plugin       the Figma plugin pairing: never visible from files, always HUMAN_REQUIRED
@@ -47,6 +51,9 @@ PORT_FILE = ("Library", "Pipeline", ".unity-pipeline-port")
 PIPELINE_CONFIG = ("ProjectSettings", "Packages", "com.unity.pipeline", "EditorPipelineConfig.json")
 HELPER = ("Tools~", "FigmaImport", "figma-import.py")
 VALIDATOR = ("Tools~", "UxmlCodegenCli", "UxmlCodegenCli.csproj")
+MAPPING_SCRIPT_GUID = "0ced1937e6a344ac0a9f905cc9237a5b"  # FIGMA-REAL-IMPORT.md "Mapping asset (FigmaImportSettings)"
+MAPPING_STATE = ("ProjectSettings", "FigmaMappingState.asset")
+MAPPING_SCAN_LIMIT = 20000  # .asset files read at most (head only); a bigger project reports a partial scan
 HEARTBEAT_STALE_SECONDS = 60
 PROBE_TIMEOUT_SECONDS = 2.0
 OK, NA, HUMAN = "OK", "NOT_AVAILABLE", "HUMAN_REQUIRED"
@@ -277,6 +284,59 @@ def check_file(ident, folder, parts, required, what):
                 fix=f"use {UITOOLKIT} v{MIN_UITOOLKIT} or later (the file ships under Tools~)"), None
 
 
+def read_head(path, size=4096):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(size).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def meta_guid(asset_path):
+    m = re.search(r"^guid:\s*([0-9a-f]{32})", read_head(asset_path + ".meta", 1024), re.M)
+    return m.group(1) if m else None
+
+
+def check_mapping(project):
+    """The connector's active mapping asset and its class prefix, found the way the connector finds it."""
+    fix_create = ("Edit > Project Settings > UI Toolkit > Connector for Figma design > Create mapping "
+                  "(Apply Cuvara Mapping Preset needs it; it reports cuvara.mapping.no-asset otherwise)")
+    state = read_head(os.path.join(project, *MAPPING_STATE))
+    m = re.search(r"m_ActiveMappingGuid:\s*(\S*)", state)
+    active = m.group(1).strip("'\"") if m else ""
+    if active == "-":
+        return item("mapping-asset", HUMAN, False, "the connector mapping was cleared on purpose (FigmaMappingState '-')",
+                    fix="select an Active mapping on Edit > Project Settings > UI Toolkit > Connector for Figma design")
+    found, scanned, partial = [], 0, False
+    for root, dirs, files in os.walk(os.path.join(project, "Assets")):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(files):
+            if not name.endswith(".asset"):
+                continue
+            scanned += 1
+            if scanned > MAPPING_SCAN_LIMIT:
+                partial = True
+                break
+            path = os.path.join(root, name)
+            if re.search(r"m_Script:\s*\{[^}]*guid:\s*" + MAPPING_SCRIPT_GUID, read_head(path)):
+                found.append(path)
+        if partial:
+            break
+    if not found:
+        why = "no connector mapping asset (FigmaImportSettings) under Assets/"
+        if partial:
+            why += f" in the first {MAPPING_SCAN_LIMIT} .asset files"
+        return item("mapping-asset", HUMAN, False, why, fix=fix_create)
+    found.sort(key=lambda p: os.path.relpath(p, project).replace(os.sep, "/"))
+    chosen = next((p for p in found if active and meta_guid(p) == active), found[0])
+    rel = os.path.relpath(chosen, project).replace(os.sep, "/")
+    m = re.search(r"^\s*classPrefix:[ \t]*(.*)$", read_head(chosen, 65536), re.M)
+    prefix = m.group(1).strip().strip("'\"") if m else ""
+    note = f"class prefix '{prefix}'" if prefix else \
+        "class prefix empty: classes import unprefixed (FIG010 under --prefix); the mapping preset fills it from the profile"
+    return item("mapping-asset", OK, False, f"{rel} ({note})", value=rel, class_prefix=prefix)
+
+
 def check_dotnet():
     found = shutil.which("dotnet")
     if found:
@@ -324,6 +384,7 @@ def inspect(project, probe=False):
     items.append(check_allow_browser(root))
     validator, validator_path = check_file("validator-cli", folder, VALIDATOR, False, "validator CLI project")
     items.append(validator)
+    items.append(check_mapping(root))
     items.append(check_dotnet())
     items.append(item("figma-plugin", HUMAN, False, "the Figma plugin pairing is not visible from files",
                       fix="in Figma run the Unity UI Toolkit Connector plugin on the file; in Unity open Window > UI Toolkit > "
