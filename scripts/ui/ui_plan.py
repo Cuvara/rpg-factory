@@ -9,7 +9,10 @@ text refines it. Rules (signals, intent order, intent -> skills, screen archetyp
 are data in data/intents.json. Output: Markdown, or with --json the rpg-factory.ui-plan/1 object
 {schema, request, verb, status: PLAN|NEEDS_CONTEXT|NOT_UI, intent, skills, not_loaded, lead, context,
 missing, components, next}. Never guesses a Figma file key, node id or project: a required item that is
-absent is listed in `missing` (status NEEDS_CONTEXT).
+absent is listed in `missing` (status NEEDS_CONTEXT). An explicit import verb with a Figma URL is figma-import
+even when the text also asks to validate. The lead is client-integration for work that consumes
+com.cuvara.uitoolkit, unity-package only when the request changes the package; a --project (or path) outside
+the workspace client repo keeps client-integration and `next` says the routed paths are advisory there.
 Exit 0 = PLAN or NOT_UI, 3 = NEEDS_CONTEXT, 2 = usage. Writes nothing.
 """
 import json
@@ -59,6 +62,8 @@ def classify(verb, words, figma, r):
             continue
         if it["figma"] and not has_figma:
             continue
+        if it.get("url") and not figma:  # an explicit import verb counts only with a Figma URL
+            continue
         if not it["patterns"] or any_match(it["patterns"], words):
             return it["id"], has_figma
     return (family or ["screen"])[-1], has_figma
@@ -106,6 +111,11 @@ def build(request, verb="ui", project=None, uitoolkit_ref=None):
     if not project and ws_client:
         project, proj_src = ws_client, "workspace"
     plan["context"]["project"] = project
+    client_repo = ui_catalog.locate()[1]
+    same = lambda a, b: os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    outside = bool(project) and proj_src in ("arg", "text") and not (
+        client_repo and (same(project, client_repo) or os.path.normcase(os.path.abspath(project)).startswith(
+            os.path.normcase(os.path.abspath(client_repo)) + os.sep)))
     if cat_repo:
         try:
             u = ui_catalog.resolve_ref(cat_repo, uitoolkit_ref, project)
@@ -158,6 +168,10 @@ def build(request, verb="ui", project=None, uitoolkit_ref=None):
                     + (", then, in order: " + ", ".join(f"rpg-factory:{s}" for s in skills) if skills else "")
                     + (" (load no other UI skill: " + ", ".join(plan["not_loaded"]) + ")" if plan["not_loaded"] else ""),
                     "report only what has evidence (PASS, FAIL, BLOCKED, NOT_AVAILABLE, HUMAN_REQUIRED, SKIPPED, NOT_RUN, STALE)"]
+    if outside:
+        plan["next"].insert(1, f"the target project {project} is outside the registry (not the workspace client repo "
+                               f"{client_repo or '- none found'}): the routed paths, checks and gates are advisory there; "
+                               "write only inside that project")
     return plan
 
 
