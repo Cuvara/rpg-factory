@@ -76,14 +76,15 @@ Do not create ECS components only to feed UI, and do not read ECS from a present
 ## VContainer
 
 - **Scopes:** `GameLifetimeScope` (root, outlives scenes; networking, Nakama, content, DOTS,
-  `Assets/Scripts/DI/GameLifetimeScope.cs:18-90`), `MainSceneScope` (entry points `MainSessionDriver`,
-  `GameplayPanelDriver`, `Assets/Scripts/DI/MainSceneScope.cs:18-31`). Map: client-integration
+  `Assets/Scripts/DI/GameLifetimeScope.cs:7-34`, registrations in `ClientRootInstaller.Install`,
+  `Assets/Scripts/DI/ClientRootInstaller.cs:23-110`), `MainSceneScope` (`Assets/Scripts/DI/MainSceneScope.cs:6-13`; entry points
+  `MainSessionDriver`, `GameplayPanelDriver` in `MainSceneInstaller.Install`, `Assets/Scripts/DI/MainSceneInstaller.cs:16-24`). Map: client-integration
   `references/composition.md`.
 - **Lifetimes in use:** client Singleton x9, no Scoped/Transient; UIToolkit Singleton for flow services and
   `Scoped` presenters (`ScreenFlowRegistration.cs:30-53,78`). A new stateful service is a Singleton in the
   narrowest scope that outlives its users; a per-screen object is Scoped through `RegisterScreen`.
 - **Scene objects** that a scene may lack are injected from a build callback
-  (`RegisterBuildCallback` + `FindAnyObjectByType` + `container.Inject`, `GameLifetimeScope.cs:103-110`) - the
+  (`RegisterBuildCallback` + `FindAnyObjectByType` + `container.Inject`, `Assets/Scripts/DI/ClientRootInstaller.cs:102-108`) - the
   one sanctioned lookup, at composition time only. `RegisterComponentInHierarchy` only where the component
   is guaranteed (`Assets/Scripts/Benchmark/Workload/BenchmarkLifetimeScope.cs:40`).
 - **Entry points:** `IStartable` + owned CTS + `async UniTaskVoid ... .Forget()`, cancelled in `Dispose`
