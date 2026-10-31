@@ -40,6 +40,7 @@ update rpg-factory && claude plugin update rpg-factory@rpg-factory`, then start 
 
 ### Changed
 
+- The Bash/PowerShell and file guards warn when a registered skill's `SKILL.md` is read as a file (`cat`, `sed`, `Get-Content`, the Read tool) and point the session at the Skill tool; installed dogfood found a cross-domain session doing this instead of loading its leads.
 - Workflow waves follow artifact-level `upstream`/`sources` references when artifacts exist; domain handoff contracts only order planned nodes without references, so a design technical handoff written after a UI screen is no longer a `CYCLE`.
 - Factory Core loads every routed domain lead through the Skill tool in multi-domain tasks and never substitutes reading a SKILL.md.
 - An asset-spec-2d no longer needs a runtime export while it is a draft; the export is required once implementation is claimed.
