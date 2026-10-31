@@ -31,13 +31,14 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Routed workflow planning from registered artifact kinds and ordered waves from handoff contracts; synchronization contracts trigger revalidation without imposing wave order.
 - Documented registry-derived repository roots, safe path resolution, provider discovery, and the shared `Context.approval` contract.
 - Artifact reviews bind to git author identities, expose process or signed assurance, and support registry-required signed reviews.
-- Unity and Blender availability detection is path-only so quality checks never launch editor processes.
+- Unity and Blender availability detection is path-only: Unity is never launched, and only the optional 3D DCC inspection runs the detected Blender in background mode (missing Blender is NOT_AVAILABLE).
 - Extended artifact quality checks with structured results while preserving version 1 artifacts and signed approval verification.
 - Artifact quality, lint, and trace now fail closed on malformed files; lifecycle requirements and artifact grades follow registry data, and active design kinds validate their structured spec payloads.
 - Artifact check grading treats unavailable evidence as human-required, and adapter tool overrides run portable Python fakes consistently on Windows and Linux.
 
 ### Fixed
 
+- The Bash and PowerShell guard raises a high advisory for host-wide process termination, in any directory: a kill that names targets by image/filter/pattern (`taskkill /IM|/FI`, `Stop-Process -Name`, `pkill`, `killall`, `kill -1`, `wmic process ... delete`), or a process query by name/pattern (`Win32_Process`, `Get-Process <name>`, `pgrep`, `pidof`, `ps | grep`, `tasklist`) combined with any terminator, including `taskkill //PID $(powershell ... Win32_Process ...)`. It reads the parsed command, so quoted `grep`/`echo`/commit-message text no longer triggers it; raw text is only the fallback for unparseable input.
 - Binding gameplay numbers pass only with a verified current-revision approval; a missing approval is HUMAN_REQUIRED, an invalid or untrusted one FAILs.
 - UI quality validates numeric ordered breakpoints, data bindings against known source artifacts, component specs, and handoff screen ids.
 - 2D art parses lossy, lossless and extended WebP headers and rejects truncated images; optional palette validation runs when Pillow is present.

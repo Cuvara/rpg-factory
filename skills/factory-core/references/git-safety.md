@@ -49,6 +49,10 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
     the same worktree in parallel (or alongside another session working there). Read-only
     investigation (`git status`, `log`, `diff`, `reflog`, `stash list/show`) may run in parallel.
 
+## Process safety
+
+Do not terminate processes by image name or command-line pattern: those selectors can kill unrelated user and agent processes. Stop only PIDs started by your own command, captured with `Start-Process -PassThru` (PowerShell) or `$!` (Bash). This is host safety, not repo policy: the check runs in every directory, inside the workspace or not, and does not need `RPG_FACTORY_WORKSPACE`. It reads the parsed command (nested `bash -c`, `powershell -Command`, `$(...)`, backticks, `wsl -e`, `Start-Process taskkill`), never raw text, so a quoted `grep`/`echo`/commit-message argument is ignored. Raw text is used only when a command cannot be parsed at all. A command is **high** when it either (a) names its targets host-wide: `taskkill` with `/IM` or `/FI`, `Stop-Process`/`spps`/`kill` with `-Name`, `pkill`, `killall`, `kill -1`, `wmic process ... delete` that is not by `processid`; or (b) selects processes by name or pattern (`Get-CimInstance`/`gcim`/`Get-WmiObject` on `Win32_Process`, `Get-Process`/`gps` without `-Id`, `ps <name>`, `ps ... | grep`, `pgrep`, `pidof`, `tasklist`) and contains any terminator (`taskkill`, `Stop-Process`, `kill`, `.Kill()`, `.Terminate()`, `Invoke-CimMethod ... Terminate`, `xargs kill`), whatever separates them (`;`, `|`, loops, `$(...)`, variables). PID-scoped kills (`taskkill /PID`, `Stop-Process -Id`, `kill 1234`, `kill $!`) and `docker kill <name>` stay quiet. The guard cannot inspect a script file merely named on disk, an encoded PowerShell command, or a kill whose terminator the parser does not see; review script contents before running them.
+
 ## What the guard does
 
 Inside the workspace (any repo or worktree under it, and a linked worktree outside it - e.g. an Orca worktree -
@@ -77,6 +81,7 @@ quoting (`` ` `` escape, `&` call operator, `git.exe`).
 | `submodule update/deinit/sync/foreach/add/set-url` | warn | changes submodule checkouts or sources |
 | `worktree remove/prune --force` | warn | deletes a worktree with its changes |
 | git run through an interpreter one-liner, or a program that is `$VAR` / `$(...)` / backticks | warn | the guard cannot see what runs |
+| a process kill by image name or pattern, or a process query by name/pattern together with any terminator (see Process safety); any directory | **high** | kills unrelated user and agent processes; stop only PIDs you started |
 | any command matching `registry.json` `human_gates[].match` (kubectl/helm/k3d/ssh/scp/rsync, `gh workflow run`, `gh pr create/merge`, `kubeconfig.local`/`.env`, `toggle-packages.sh`, `make up/flow-up/reset/down`, `stack.sh up`, `run-clients.sh`, ...) | warn (`high` when the gate's `decision` is `deny`); a read-only command (`cat`, `grep`, `sed -n 10,40p`, `git log`) that only names a gated script passes when the gate is `read_only_exempt` (every matching gate except `secrets`) | human gate |
 
 The guard ignores quoted text and heredoc bodies (a commit message mentioning `git tag` is fine),
