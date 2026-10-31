@@ -62,20 +62,23 @@ Workflow, in order. Each step's result is a state (PASS, FAIL, BLOCKED, NOT_AVAI
 
 1. **Scope.** Need a frame link with `node-id=` (Copy link to selection). With Figma MCP: `create_session` for the file
    key, then `get_metadata` (frame tree, node ids), `get_screenshot` (the reference image), `get_variable_defs`
-   (collections, modes, COLOR/FLOAT). Without it: ask the user for the frame URL and a screenshot (HUMAN_REQUIRED). Import
-   ONE frame (or a small set); list its components, variables per collection and mode, text styles, fonts, images.
+   (collections, modes, COLOR/FLOAT). Without it, or on "no edit access" (the MCP account is not the browser's Figma
+   account): ask for the frame URL and a PNG export, or a file the MCP account can read; the preflight is then
+   HUMAN_REQUIRED - say so. Import ONE frame (or a small set); list components, variables per mode, fonts, images.
 2. **Designer preflight - report violations BEFORE any import** (FIGMA-INTEGRATION.md "Supported and unsupported
    Figma features"): variables bound only on component roots and single-text `<Role>/Label` components (a binding on a
    plain layer or as an instance override becomes inline `var()`, FIG023); the screen root's fill stays a literal;
    no auto-layout gap, grid, gradient, frame shadow, background blur or blend mode on the project's Unity (fact `unity-editor-version`; dropped or
    degraded); fonts present in the project or the connector's font map; vectors and icons become PNG (one per
-   component); STRING/BOOLEAN variables never arrive; one USS class prefix per project; multiple modes need a paid plan.
+   component); STRING/BOOLEAN variables never arrive; one USS class prefix per project; multiple modes need a paid plan;
+   control components single-purpose and named exactly like the control (`references/connector-mapping.md`).
 3. **Environment:** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ui/figma_env.py --project <unity project> [--json]`. It
    reports Unity, package version and source, helper, connector, Pipeline, port file (never the token), Allow
-   Browser Clients, validator CLI and dotnet, each OK / NOT_AVAILABLE / HUMAN_REQUIRED with the exact fix. Add
+   Browser Clients, `mapping-asset` (needed by the preset; its class prefix), validator CLI and dotnet, each OK / NOT_AVAILABLE / HUMAN_REQUIRED with the exact fix. Add
    `--probe-pipeline` only to test the port (one localhost request). Stop on any required item that is not OK.
 4. **Import** (writes into the user's project: get an explicit yes first). Headless:
-   `python3 <pkg>/Tools~/FigmaImport/figma-import.py "<frame link>" --project <p> --validate --prefix <prefix> --json --cli dotnet <built>/UxmlCodegenCli.dll`,
+   `python3 <pkg>/Tools~/FigmaImport/figma-import.py "<frame link>" --project <p> --output-folder Assets/Figma/<Name> --max-wait 400 --validate --json --cli dotnet <built>/UxmlCodegenCli.dll`
+   (the flags of the real run; `--prefix` only once the connector prefix is set, else FIG010 on every class),
    or the user pushes from the plugin (Push selection). Exit 0 done and clean, 1 failed/expired/validator errors, 2
    port/connection/usage. Never fake an import by writing UXML/USS.
 5. **Validate:** the helper's `--validate`, or the CLI on `Assets/Figma/<file>`; read Window > Cuvara > Figma
@@ -99,7 +102,11 @@ Workflow, in order. Each step's result is a state (PASS, FAIL, BLOCKED, NOT_AVAI
 | FIG001-007, FIG050/051 | manifest, files or sheets missing or malformed | restore from version control or push again |
 | FIG030-032 | inline-style or absolute-position budget | turn repeated parts into components, use auto layout |
 | FIG040 / FIG041 | unresolved `url()` / folder outside a project | push again (moved folder) / validate inside the project |
-| `cuvara.import.fact.*` | connector finding (`MissingFonts`, `DroppedGap`, ...) | report it; fix fonts or design |
+| `cuvara.import.fact.*` | connector finding (`MissingFonts`, `MultiMode`, ...) | report it; fix fonts or design |
+| `DroppedGap` | auto layout gap dropped on 6000.3 | spacing in a game-owned sheet, never in the connector file |
+| `DiscardedLayers` | a leaf control dropped non-decoration layers | keep control components single-purpose; re-push |
+| `NearMissNames` | names with a control word that mapped to no control | advisory: compare with the UXML element counts |
+| `ui:Tab` without `ui:TabView` | tabs not grouped (no fact may say so) | plain buttons in code, or a game-owned wrapper UXML |
 | request `expired`, `file_not_open`, `ambiguous_file` | plugin not open on that file, stale slug, duplicate names | user action in Figma |
 
 ## Pitfalls
@@ -119,8 +126,12 @@ Workflow, in order. Each step's result is a state (PASS, FAIL, BLOCKED, NOT_AVAI
   (`UIToolkit/Editor/ScreenCreator/ScreenCreatorPlan.cs:115`) walks up looking for `.figma-manifest.json`.
 - **Plugin pushes leave no saved result:** only the helper writes `Library/CuvaraFigma/`; for a push, the
   connector window's Last import section is the only record (`TROUBLESHOOTING-FIGMA.md` "The saved import result reports a problem").
-- **No element names:** imported UXML has no `name` attributes, so `Require<T>("name")` finds nothing
-  (`TROUBLESHOOTING-FIGMA.md` "The imported screen has no element names"); wrap it in a game-owned UXML.
+- **No element names:** connector output has no `name` attributes (0 in the real import), so `Require<T>("name")`
+  finds nothing (`TROUBLESHOOTING-FIGMA.md` "The imported screen has no element names"). Bind by type and order or
+  by component class in a game-owned presenter (`rpg-factory:ui-toolkit-screen`); never add names to the connector file.
+- **Tabs lose their TabView** unless every meaningful child of the tray is tab-like: `IsTabGroup` in
+  `com.unity.ui.figma/Editor/Mapping/ControlMap.cs` (0.3.0-exp.1); real import: 3 `ui:Tab` in a plain row
+  (`docs/architecture/ui-figma-real-test.md` "Evidence"). Details: `references/connector-mapping.md`.
 
 ## Testing
 

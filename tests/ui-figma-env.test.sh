@@ -221,6 +221,48 @@ EOF
 out=$(run --project "$FILE" --json --probe-pipeline)
 [ "$(state "$out" pipeline-probe)" = HUMAN_REQUIRED ] && ok "probe without a port file: HUMAN_REQUIRED, no crash" || no "probe no port: $(state "$out" pipeline-probe)"
 
+# -- connector mapping asset (FigmaImportSettings, script GUID 0ced1937...): the real lab run hit
+#    cuvara.mapping.no-asset (preset BLOCKED) and FIG010 x11 from an empty connector prefix
+MGUID=0ced1937e6a344ac0a9f905cc9237a5b
+mapping() { # mapping FILE PREFIX META-GUID
+  mkdir -p "$(dirname "$1")"
+  printf '%%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: %s, type: 3}\n  m_Name: %s\n  fontMap: []\n  classPrefix: %s\n  controlMap: []\n' \
+    "$MGUID" "$(basename "$1" .asset)" "$2" > "$1"
+  printf 'fileFormatVersion: 2\nguid: %s\n' "$3" > "$1.meta"
+}
+[ "$(state "$(run --project "$GIT" --json)" mapping-asset)" = HUMAN_REQUIRED ] && ok "no mapping asset: HUMAN_REQUIRED" || no "no mapping asset: state"
+grep -q 'Create mapping' <<<"$(run --project "$GIT")" && ok "no mapping asset: fix names Create mapping" || no "no mapping asset: fix"
+[ "$(field "$(run --project "$GIT" --json)" 'next(i for i in r["items"] if i["id"]=="mapping-asset")["required"]')" = False ] && ok "mapping-asset is optional (exit stays 0)" || no "mapping-asset required"
+MAPP="$TMP/mapping"; cp -r "$GIT" "$MAPP"
+mkdir -p "$MAPP/Assets/Other"; printf 'MonoBehaviour:\n  m_Script: {fileID: 11500000, guid: ffffffffffffffffffffffffffffffff, type: 3}\n' > "$MAPP/Assets/Other/NotMapping.asset"
+mapping "$MAPP/Assets/A/FigmaMapping.asset" "" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+mapping "$MAPP/Assets/B/FigmaMapping.asset" rpg bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+out=$(run --project "$MAPP" --json)
+[ "$(field "$out" 'next(i for i in r["items"] if i["id"]=="mapping-asset")["value"]')" = Assets/A/FigmaMapping.asset ] \
+  && ok "no active selection: first mapping asset by path (as the connector)" || no "mapping first: $(field "$out" 'next(i for i in r["items"] if i["id"]=="mapping-asset")')"
+grep -q 'class prefix empty' <<<"$out" && ok "empty class prefix reported (FIG010 hint)" || no "empty prefix note"
+printf '%%YAML 1.1\n--- !u!114 &1\nMonoBehaviour:\n  m_ActiveMappingGuid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > "$MAPP/ProjectSettings/FigmaMappingState.asset"
+out=$(run --project "$MAPP" --json)
+[ "$(field "$out" 'next(i for i in r["items"] if i["id"]=="mapping-asset")["value"]')" = Assets/B/FigmaMapping.asset ] && [ "$(state "$out" mapping-asset)" = OK ] \
+  && ok "FigmaMappingState selects the active asset" || no "active mapping: $(field "$out" 'next(i for i in r["items"] if i["id"]=="mapping-asset")')"
+[ "$(field "$out" 'next(i for i in r["items"] if i["id"]=="mapping-asset")["class_prefix"]')" = rpg ] && ok "class prefix read from the active asset" || no "class prefix value"
+printf 'MonoBehaviour:\n  m_ActiveMappingGuid: -\n' > "$MAPP/ProjectSettings/FigmaMappingState.asset"
+out=$(run --project "$MAPP" --json)
+[ "$(state "$out" mapping-asset)" = HUMAN_REQUIRED ] && grep -q 'cleared on purpose' <<<"$out" && ok "cleared mapping ('-'): HUMAN_REQUIRED" || no "cleared mapping: $(state "$out" mapping-asset)"
+
+# -- ui-figma-import carries the facts the real lab import verified (round 3)
+SK="$ROOT/skills/ui-figma-import"
+skill_text=$(cat "$SK/SKILL.md" "$SK"/references/*.md 2>/dev/null)
+for fact in DiscardedLayers NearMissNames DroppedGap 'no `name` attributes' 'ui:TabView' 'edit access' '--output-folder' \
+            '--cli dotnet' 'single-purpose' 'rpg-factory:ui-toolkit-screen' 'MeaningfulChildCount' 'mapping-asset'; do
+  grep -qF -- "$fact" <<<"$skill_text" && ok "ui-figma-import names: $fact" || no "ui-figma-import misses: $fact"
+done
+REAL="$ROOT/docs/architecture/ui-figma-real-test.md"
+for fact in 'r-e91f7030' '116 nodes' 'FIG020 x7' 'NearMissNames x14' 'DiscardedLayers x4' 'DroppedGap x11'; do
+  grep -qF -- "$fact" "$REAL" && ok "real-test evidence records: $fact" || no "real-test evidence misses: $fact"
+done
+grep -qE '^\| 1[2-4] .*NOT_RUN' "$REAL" && ok "Unity Play-mode rows stay NOT_RUN" || no "Play-mode rows no longer NOT_RUN"
+
 # -- read-only: no file written into any fixture project
 before=$(cd "$TMP" && find git-pinned file-pinned no-connector no-package old-pin unresolved not-unity checkout -type f | sort | md5sum)
 for p in "$GIT" "$FILE" "$NOCONN" "$NOPKG" "$OLD" "$UNRES" "$NOTU"; do run --project "$p" --json >/dev/null; done
