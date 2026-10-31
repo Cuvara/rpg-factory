@@ -77,20 +77,19 @@ Do not create ECS components only to feed UI, and do not read ECS from a present
 
 - **Scopes:** `GameLifetimeScope` (root, outlives scenes; networking, Nakama, content, DOTS,
   `Assets/Scripts/DI/GameLifetimeScope.cs:7-34`, registrations in `ClientRootInstaller.Install`,
-  `Assets/Scripts/DI/ClientRootInstaller.cs:23-110`), `MainSceneScope` (`Assets/Scripts/DI/MainSceneScope.cs:6-13`; entry points
+  `Assets/Scripts/DI/ClientRootInstaller.cs:24-118`), `MainSceneScope` (`Assets/Scripts/DI/MainSceneScope.cs:6-13`; entry points
   `MainSessionDriver`, `GameplayPanelDriver` in `MainSceneInstaller.Install`, `Assets/Scripts/DI/MainSceneInstaller.cs:16-24`). Map: client-integration
   `references/composition.md`.
 - **Lifetimes in use:** client Singleton x9, no Scoped/Transient; UIToolkit Singleton for flow services and
   `Scoped` presenters (`ScreenFlowRegistration.cs:30-53,78`). A new stateful service is a Singleton in the
   narrowest scope that outlives its users; a per-screen object is Scoped through `RegisterScreen`.
 - **Scene objects** that a scene may lack are injected from a build callback
-  (`RegisterBuildCallback` + `FindAnyObjectByType` + `container.Inject`, `Assets/Scripts/DI/ClientRootInstaller.cs:102-108`) - the
+  (`RegisterBuildCallback` + `FindAnyObjectByType` + `container.Inject`, `Assets/Scripts/DI/ClientRootInstaller.cs:110-117`) - the
   one sanctioned lookup, at composition time only. `RegisterComponentInHierarchy` only where the component
   is guaranteed (`Assets/Scripts/Benchmark/Workload/BenchmarkLifetimeScope.cs:40`).
 - **Entry points:** `IStartable` + owned CTS + `async UniTaskVoid ... .Forget()`, cancelled in `Dispose`
   (`MainSessionDriver.Start` / `RunAsync` / `Dispose`: `Assets/Scripts/DI/MainSessionDriver.cs:85-149`).
 - **MessagePipe:** exactly one `RegisterMessagePipe()` (`Assets/Scripts/DI/Dots/DotsRegistration.cs:81-89`);
   new messages add a `RegisterMessageBroker<T>` there.
-- **Never:** a static container or `LifetimeScope` cache (`Assets/Scripts/Extensions/DIExtensions.cs:10-14`
-  is dead code), `Resolve` from a MonoBehaviour's `Update`, injection into an ECS system (systems get
+- **Never:** a static container or `LifetimeScope` cache (the client deleted its unused `DIExtensions` locator), `Resolve` from a MonoBehaviour's `Update`, injection into an ECS system (systems get
   managed state through singletons set by a bootstrap, `rpg-factory:unity-dots`).
