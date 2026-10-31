@@ -19,8 +19,8 @@ no() { fail=$((fail + 1)); echo "FAIL  $1"; }
 gitq() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 
 # -- fixture workspaces: full (server + client pinned to the UIToolkit fixture's v0.8.0 tag) and no-client
-WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; U="$WS/UIToolkit"; WS2="$TMP/ws-no-client"
-mkdir -p "$S/backend/gateway/server" "$C/ProjectSettings" "$C/Packages" "$WS2/rpg-mmo-server/backend"
+WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; U="$WS/UIToolkit"; WS2="$TMP/ws-no-client"; LAB="$TMP/lab-project"  # LAB: a Unity project outside the workspace (golden {outside})
+mkdir -p "$LAB/Packages" "$S/backend/gateway/server" "$C/ProjectSettings" "$C/Packages" "$WS2/rpg-mmo-server/backend"
 touch "$S/backend/TEAM.md" "$S/backend/gateway/server/server.go" "$WS2/rpg-mmo-server/backend/TEAM.md"
 printf 'm_EditorVersion: 6000.3.9f1\n' > "$C/ProjectSettings/ProjectVersion.txt"
 printf '{\n  "dependencies": {\n    "com.cuvara.uitoolkit": "https://github.com/Cuvara/UIToolkit.git#v0.8.0"\n  }\n}\n' > "$C/Packages/manifest.json"
@@ -63,10 +63,10 @@ missing_engine=()
 if [ ${#missing_engine[@]} -gt 0 ]; then
   no "engine missing: ${missing_engine[*]} (plan and selection cases NOT_RUN)"
 else
-  python3 -B - "$ROOT" "$CMD" "$SELECT" "$WS" "$WS2" "$C" "$TMP/counts" <<'PY'
+  python3 -B - "$ROOT" "$CMD" "$SELECT" "$WS" "$WS2" "$C" "$TMP/counts" "$LAB" <<'PY'
 import json, os, re, subprocess, sys
 
-root, cmd, select, ws, ws2, client, counts = sys.argv[1:8]
+root, cmd, select, ws, ws2, client, counts, outside = sys.argv[1:9]
 reg = json.load(open(os.path.join(root, "registry.json"), encoding="utf-8"))
 UI = sorted(k for k, v in reg["skills"].items() if v.get("kind") == "tech" and v.get("domain") == "ui")
 ENTRY = "ui-orchestrator"
@@ -101,8 +101,9 @@ seen = {"verbs": set(), "intents": set(), "not_ui": 0}
 for c in cases:
     e = c["expect"]
     cwd = ws2 if c.get("workspace") == "no-client" else ws
-    args = [a.replace("{client}", client) for a in c.get("args", [])]
-    rc, out, err = plan(c["verb"], c["request"], args, cwd)
+    sub = lambda t: t.replace("{client}", client).replace("{outside}", outside)
+    args = [sub(a) for a in c.get("args", [])]
+    rc, out, err = plan(c["verb"], sub(c["request"]), args, cwd)
     errs = []
     try:
         p = json.loads(out)
@@ -169,6 +170,15 @@ for c in cases:
         errs.append(f"node_id={fig.get('node_id')!r} want {e['figma_node_id']}")
     if "figma_file_key" in e and fig.get("file_key") != e["figma_file_key"]:
         errs.append(f"file_key={fig.get('file_key')!r} want {e['figma_file_key']}")
+    nxt = " ".join(p.get("next") or [])
+    for t in e.get("next_contains", []):
+        if t not in nxt:
+            errs.append(f"next lacks {t!r}")
+    for t in e.get("next_excludes", []):
+        if t in nxt:
+            errs.append(f"next contains {t!r}")
+    if "lead_route" in e and (p.get("lead") or {}).get("route") != e["lead_route"]:
+        errs.append(f"route={(p.get('lead') or {}).get('route')} want {e['lead_route']}")
     if e["status"] == "PLAN" and "factory-core" not in ((p.get("next") or [""])[0]):
         errs.append("next[0] is not the factory-core step")
     report(f"plan {c['id']} [{c['verb']}] {c['request'][:60]!r}", errs)
