@@ -37,6 +37,15 @@ check() { # expected cwd command [env] [tool]
   else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
 }
 
+# ---- a registered skill read as a file instead of loaded with the Skill tool: warn (dogfood found sessions doing it)
+check warn  "$SERVER" "cat $ROOT/skills/game-design/SKILL.md"
+check warn  "$SERVER" 'cd /tmp && sed -n 1,80p skills/ui-ux/SKILL.md; ls'
+check warn  "$SERVER" 'Get-Content C:\plugins\rpg-factory\skills\vfx\SKILL.md' "" PowerShell
+check allow "$SERVER" 'git add skills/ui-ux/SKILL.md'        # editing the plugin is not following a skill
+check allow "$SERVER" 'grep -n Tools skills/vfx/SKILL.md'      # searching is not loading
+check allow "$SERVER" 'cat skills/nosuch/SKILL.md'             # not a registered skill
+check allow "$SERVER" 'echo "see skills/art-2d/SKILL.md"'      # quoted text is data
+
 # ---- host-wide process termination advisories (regressions; never execute these commands)
 check high "$SERVER" 'taskkill //F //IM powershell.exe >/dev/null 2>&1'
 check high "$SERVER" 'taskkill //F //IM dotnet.exe'

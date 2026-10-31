@@ -138,6 +138,22 @@ def load_registry():
     return _REGISTRY
 
 
+# A skill read as a file (Read tool, `cat skills/<name>/SKILL.md`) is not a loaded skill: its Skill-hook mode record,
+# tech-skill ordering and routing advisories never ran. Both guards point the session at the Skill tool (warn only).
+SKILL_FILE = re.compile(r"(?:^|[\\/])skills[\\/]([a-z0-9][a-z0-9-]*)[\\/]SKILL\.md\b", re.IGNORECASE)
+SKILL_READERS = {"cat", "head", "tail", "less", "more", "sed", "awk", "bat", "type", "get-content", "gc"}
+
+
+def skill_read_hint(names, registry):
+    """('ask', text) for registered skills read as files, else None."""
+    known = [n for n in dict.fromkeys(names) if n in ((registry or {}).get("skills") or {})]
+    if not known:
+        return None
+    loads = ", ".join(f"`rpg-factory:{n}`" for n in known)
+    return ("ask", f"load {loads} with the Skill tool when you follow it for a task - reading its SKILL.md does not "
+                   f"apply its routing, mode or gates")
+
+
 MODES = ("analyze", "plan", "implement", "validate", "review", "resume")
 READ_ONLY_MODES = {"analyze", "plan", "review"}
 

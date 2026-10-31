@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lab import analyze, failsum, report  # noqa: E402
 from test_lab import _ev  # noqa: E402
+from test_framegc import NewColumnsTests, OldRunTests  # noqa: E402,F401  (run with this suite: tests/run-all.sh lists test_failsum.py)
 
 ROOT = Path(__file__).resolve().parent / "fixtures" / "failsum"
 

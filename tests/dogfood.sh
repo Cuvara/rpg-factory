@@ -125,7 +125,7 @@ if $write_mode; then
     case "$ws" in "$out_abs"/ws-*) ;; *) echo "unsafe write workspace: $ws" >&2; exit 2;; esac
     rm -rf -- "$ws"; mkdir -p "$ws/game-authoring"
     python3 -B "$ROOT/tests/dogfood/write-setup.py" "$ROOT" "$ws/game-authoring" "${W_SEEDS[$n]:-}"
-    ws_native="$(cygpath -m "$ws")"
+    ws_native="$(cygpath -m "$ws" 2>/dev/null || printf '%s' "$ws")"
     git -C "$ws/game-authoring" init -q
     git -C "$ws/game-authoring" config user.name "Factory Dogfood"
     git -C "$ws/game-authoring" config user.email "dogfood@example.invalid"
@@ -134,9 +134,12 @@ if $write_mode; then
     pd=(); $installed || pd=(--plugin-dir "$ROOT")
     (cd "$ws" && RPG_FACTORY_WORKSPACE="$ws_native" timeout 900 claude "${pd[@]}" -p "$local_prompt" --model "$model" --output-format stream-json --verbose --allowedTools "Skill,Read,Grep,Glob,Write,Edit,Bash" </dev/null > "$OUT/$n.jsonl" 2>/dev/null) || true
     grade_args=(); $installed && grade_args+=(--installed --version "$VERSION" --loads "$LOADS")
+    write_run=$(( ${write_run:-0} + 1 ))
     python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$ws" --scenario "$n" --transcript "$OUT/$n.jsonl" --expected-skills "${W_EXPECT[$n]}" --expected-kinds "${W_KINDS[$n]}" --domain "${W_DOMAIN[$n]}" --plan "${W_PLAN[$n]:-}" "${grade_args[@]}" || fail=$(( ${fail:-0} + 1 ))
   done
-  if ! $all_mode; then exit $(( ${fail:-0} > 0 ? 1 : 0 )); fi
+  write_fail=${fail:-0}; write_run=${write_run:-0}
+  echo "dogfood write: $write_run run, $((write_run - write_fail)) passed, $write_fail failed"
+  if ! $all_mode; then exit $(( write_fail > 0 || write_run == 0 ? 1 : 0 )); fi
   scenarios=()
 fi
 
@@ -237,4 +240,5 @@ print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/li
   printf '%-20s | %-26s | %-28s | %-40s | %s\n' "$n" "${lv:-?} ${src:-?}" "${EXPECT[$n]}${HANDOFF[$n]:+ > ${HANDOFF[$n]:-}}" "${used:-none}" "$r"
 done
 echo "dogfood: $((pass + fail)) run, $pass passed, $fail failed (model $model; $($installed && echo "installed $VERSION" || echo plugin-dir); ${elapsed}s wall, parallel; transcripts in $OUT)"
-[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
+# --all: the read-only result and the write result must both pass
+[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && [ "${write_fail:-0}" -eq 0 ]

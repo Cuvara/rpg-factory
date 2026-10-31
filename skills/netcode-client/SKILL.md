@@ -36,8 +36,8 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
   0.47.0 (`KcpTransport`, `CHANGELOG.md` section `[0.47.0]`). A join reply naming `tcp` or empty is refused (`TransportKinds.ParseGameplay`, `Runtime/Transport/TransportKinds.cs:29-52`); only KCP passes (`TransportKinds.RequireGameplay`, `Runtime/Transport/TransportKinds.cs:62-70`). No WebGL gameplay: the constructor throws `NotSupportedException`
   (`Runtime/Transport/KcpTransport.cs:43-44`).
 - **Pump.** `KcpTransport` reads with `UniTask.Delay(1, Realtime, PlayerLoopTiming.Update)`
-  (`Runtime/Transport/KcpTransport.cs:248`) and runs the KCP update timer on the PlayerLoop too
-  (`KcpClientSession.TuningInterval`, `:388`): frame rate bounds receive latency and ARQ timing.
+  (`Runtime/Transport/KcpTransport.cs:266`) and runs the KCP update timer on the PlayerLoop too
+  (`KcpClientSession.TuningInterval`, `:406`): frame rate bounds receive latency and ARQ timing.
   `KcpClientSession` is Unity-free and takes one lock per public member (`KcpClientSession.cs:16-32`);
   its tuning must equal the server's `KcpTuning` (`:34-42`). `Kcp` is a byte-compatible port of kcp-go
   (`Runtime/Transport/Kcp.cs:6-22`).
@@ -71,7 +71,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
   (`:183-239`): `SetServerSpeed`, `PredictionClockSteering.SampleTickRate`/`OnSnapshot`, and
   `Reconcile` (3D or 2D motor, `:208-242`), then `Advance` every frame (`:269`).
 - **Input.** One component owns input per scene: it samples, sends, and records the same tick on the
-  predictor (`RecordInput`, `client:DI/Dots/DotsWorldBridge.cs:67-71,233-269`).
+  predictor (`RecordInput`, `client:DI/Dots/InputEgress.cs:86-124`).
 - **Reconnect.** `ReconnectPolicy` decides Never / Reconnect / ReconnectAfterDelay from the close reason
   (`Runtime/Client/ReconnectPolicy.cs:9-60`); a reconnect is a new session generation everywhere downstream.
 
@@ -96,7 +96,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
   (`KcpClientSession.cs:422-424,465-466,491-492`); `Segment` data and
   datagrams (`Kcp.cs:248-249,405-407,482,488,639`); frame bodies (`Buffer.BlockCopy`, `FrameBuffer.cs:107`);
   lists, stat arrays and `ToArray` (`SnapshotResolver.cs:85,240,250,267-269`); a new `InputMessage` per
-  send (`client:DI/Dots/DotsWorldBridge.cs:259`). Re-check every allocation claim against the current
+  send (`client:DI/Dots/InputEgress.cs:114`). Re-check every allocation claim against the current
   Netcode release and re-point citations before treating it as a live pitfall. Fixing remaining cases is
   a package change measured before and after (`measure`, GC alloc per frame).
 - **Subscriber isolation.** `SubscriberInvoker` invokes public event handlers independently; one throwing
@@ -106,7 +106,7 @@ Repos `netcode`, `unitydots`, `client`. Owns no module, contract or check.
   On field-delta partials, `changed_fields` bit `0x0020` governs speed in both encodings; ignore a present
   speed if that bit is clear (`DecodeSpeed`, `Runtime/Codec/ProtobufWireCodec.cs:459`; server `backend/gameserver-dotnet/docs/API.md`,
   "Snapshot speed").
-- **Frame-rate-bound receive** (`UniTask.Delay`, `KcpTransport.cs:248,378`): a client at 20 fps adds up to 50 ms before a
+- **Frame-rate-bound receive** (`UniTask.Delay`, `KcpTransport.cs:266,406`): a client at 20 fps adds up to 50 ms before a
   snapshot is even read. Do not "fix" lag in interpolation/prediction tuning before ruling this out.
 - **Hidden hard dependency:** the Runtime asmdef references `Shared.GameLogic` unconditionally
   (`Runtime/Cuvara.Netcode.Runtime.asmdef:6`) while `package.json` lists it only under

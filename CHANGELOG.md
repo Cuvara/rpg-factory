@@ -37,6 +37,15 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - `tests/dogfood.sh`: scenarios `ui-settings`, `ui-figma`, `ui-not-ui` and a `NOTEXPECT` field (skills that must
     not be invoked).
 
+- **testlab: per-frame GC, main-thread and memory columns in the analysis (UCF F-21, step 1).** The client's
+  `frames.csv` gains `gc_alloc_b,gc_count,main_ms,used_mb` (client PR "GC, main-thread and memory columns").
+  New `lab/framegc.py` reads them by header name and tolerantly. `report.md` gets a "Frame budget" section with
+  per-client GC allocation p50/p95/max, gen0 collections and stall frames (>= 250 ms) set against collections,
+  `results.json` gets a `frame_gc` key, and `failure-summary.json` gets a `notes` entry ("stall frame coincided
+  with gen0 GC") on `frame_time`, `snapshot_cadence` and `snapshot_update_gap` failures when that is true. Runs
+  whose `frames.csv` has only the four old columns analyze exactly as before (no section, no key, no note);
+  `testlab/tests/test_framegc.py` proves it on a fixture. No threshold or verdict changed.
+
 ### Changed
 
 - Tech skills may declare `paths` (registry schema, resolver, `check-registry.sh`): the skill appears in
@@ -81,6 +90,7 @@ update rpg-factory && claude plugin update rpg-factory@rpg-factory`, then start 
 
 ### Changed
 
+- The Bash/PowerShell and file guards warn when a registered skill's `SKILL.md` is read as a file (`cat`, `sed`, `Get-Content`, the Read tool) and point the session at the Skill tool; installed dogfood found a cross-domain session doing this instead of loading its leads.
 - Workflow waves follow artifact-level `upstream`/`sources` references when artifacts exist; domain handoff contracts only order planned nodes without references, so a design technical handoff written after a UI screen is no longer a `CYCLE`.
 - Factory Core loads every routed domain lead through the Skill tool in multi-domain tasks and never substitutes reading a SKILL.md.
 - An asset-spec-2d no longer needs a runtime export while it is a draft; the export is required once implementation is claimed.
@@ -95,7 +105,8 @@ update rpg-factory && claude plugin update rpg-factory@rpg-factory`, then start 
 
 ### Fixed
 
-- Skill citations follow the client's DI refactor (`ClientRootInstaller`, `MainSceneInstaller`) and the moved `DotsWorldBridge` lines on client develop.
+- `tests/dogfood.sh --all` fails when a write scenario fails, and the write grader tracks `cd` (after `&&`, `;` or a newline, across Bash calls) when it resolves relative output paths.
+- Skill citations follow the client's DI and input refactors on develop (`ClientRootInstaller`, `MainSceneInstaller`, injected `GameplayInputRouter`, the deleted `DIExtensions` locator, moved `DotsWorldBridge` lines, session installation moved to `EcsSessionInstallation`, input send extracted to `InputEgress`) and the Netcode `KcpTransport` line drift.
 - The Bash and PowerShell guard raises a high advisory for host-wide process termination, in any directory: a kill that names targets by image/filter/pattern (`taskkill /IM|/FI`, `Stop-Process -Name`, `pkill`, `killall`, `kill -1`, `wmic process ... delete`), or a process query by name/pattern (`Win32_Process`, `Get-Process <name>`, `pgrep`, `pidof`, `ps | grep`, `tasklist`) combined with any terminator, including `taskkill //PID $(powershell ... Win32_Process ...)`. It reads the parsed command, so quoted `grep`/`echo`/commit-message text no longer triggers it; raw text is only the fallback for unparseable input.
 - Binding gameplay numbers pass only with a verified current-revision approval; a missing approval is HUMAN_REQUIRED, an invalid or untrusted one FAILs.
 - UI quality validates numeric ordered breakpoints, data bindings against known source artifacts, component specs, and handoff screen ids.
