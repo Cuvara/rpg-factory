@@ -109,6 +109,24 @@
     {"id": "r3-outside-project-arg", "verb": "ui-screen", "request": "Implement a settings screen.", "args": ["--project", "{outside}"],
      "expect": {"status": "PLAN", "intent": "screen", "lead_skill": "client-integration", "next_contains": ["outside the registry"]}},
     {"id": "r3-client-project-arg-not-outside", "verb": "ui-screen", "request": "Implement a settings screen.", "args": ["--project", "{client}"],
-     "expect": {"status": "PLAN", "intent": "screen", "lead_skill": "client-integration", "next_excludes": ["outside the registry"]}}
+     "expect": {"status": "PLAN", "intent": "screen", "lead_skill": "client-integration", "next_excludes": ["outside the registry"]}},
+    {"id": "r4-components-for-settings", "verb": "ui", "request": "What components for settings?",
+     "expect": {"status": "PLAN", "intent": "components", "skills": ["ui-component-selection"], "lead_skill": "client-integration", "screen": "settings"}},
+    {"id": "r4-controls-inventory-grid", "verb": "ui", "request": "Which controls do we reuse for the inventory grid?",
+     "expect": {"status": "PLAN", "intent": "components", "skills": ["ui-component-selection"], "lead_skill": "client-integration"}},
+    {"id": "r4-components-shop", "verb": "ui", "request": "List the components a shop needs.",
+     "expect": {"status": "PLAN", "intent": "components", "skills": ["ui-component-selection"], "lead_skill": "client-integration"}},
+    {"id": "not-ui-go-components", "verb": "ui", "request": "Which Go components does the gateway use?",
+     "expect": {"status": "NOT_UI", "skills": []}},
+    {"id": "not-ui-ecs-components", "verb": "ui", "request": "Which ECS components does the server tick read?",
+     "expect": {"status": "NOT_UI", "skills": []}},
+    {"id": "not-ui-add-package-dependency", "verb": "ui", "request": "Add com.cuvara.uitoolkit to the client project",
+     "expect": {"status": "NOT_UI", "skills": [], "next_contains": ["factory-core", "pin-bump"]}},
+    {"id": "not-ui-bump-package-pin", "verb": "ui", "request": "Bump com.cuvara.uitoolkit to v0.8.0 in the client manifest.",
+     "expect": {"status": "NOT_UI", "skills": [], "next_contains": ["pin-bump"]}},
+    {"id": "not-ui-install-uitoolkit", "verb": "ui", "request": "Install the UIToolkit package in Packages/manifest.json",
+     "expect": {"status": "NOT_UI", "skills": [], "next_contains": ["pin-bump"]}},
+    {"id": "r4-add-package-and-build-screen", "verb": "ui", "request": "Add com.cuvara.uitoolkit to the client project and build a settings screen with it.",
+     "expect": {"status": "PLAN", "intent": "screen", "lead_skill": "client-integration", "screen": "settings"}}
   ]
 }

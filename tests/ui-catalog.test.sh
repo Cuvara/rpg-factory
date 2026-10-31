@@ -99,9 +99,9 @@ cat_json --ref v9.9.9 > "$TMP/c2.json"; rc=$?
 cat_json --uitoolkit "$TMP/no-repo" > "$TMP/c2.json"; rc=$?
 [ $rc -eq 1 ] && [ "$(jq -r .status "$TMP/c2.json")" = NOT_AVAILABLE ] && jq -r .reason "$TMP/c2.json" | grep -q "no UIToolkit git repository" \
   && ok "no repository -> NOT_AVAILABLE with the reason" || no "no repo: rc=$rc $(jq -c '{status,reason}' "$TMP/c2.json")"
-(cd "$TMP" && env -u RPG_FACTORY_WORKSPACE python3 -B "$CAT" --json > "$TMP/c2.json" 2>/dev/null); rc=$?
-if [ -d /mnt/c/Workspaces/UnityIndie/UIToolkit ]; then echo "SKIP  no-workspace case (default workspace exists on this host)"
-else [ $rc -eq 1 ] && [ "$(jq -r .status "$TMP/c2.json")" = NOT_AVAILABLE ] && ok "no workspace -> NOT_AVAILABLE" || no "no workspace: rc=$rc"; fi
+mkdir -p "$TMP/empty-ws"   # explicit workspace without markers: no fallback to the cwd (inside the fixture) or the host default
+(cd "$U" && RPG_FACTORY_WORKSPACE="$TMP/empty-ws" python3 -B "$CAT" --json > "$TMP/c2.json" 2>/dev/null); rc=$?
+[ $rc -eq 1 ] && [ "$(jq -r .status "$TMP/c2.json")" = NOT_AVAILABLE ] && ok "explicit workspace without markers -> NOT_AVAILABLE, even from inside a workspace" || no "no workspace: rc=$rc $(jq -c '{status,reason}' "$TMP/c2.json")"
 python3 -B "$CAT" --ref >/dev/null 2>&1; [ $? -eq 2 ] && ok "catalog usage error -> exit 2" || no "catalog usage exit"
 out=$(python3 -B "$CAT" --ref v0.8.0); grep -q '^| `pkg:ConfirmDialog` | package-service | Runtime/Flow/ConfirmDialog.cs:' <<<"$out" && ok "Markdown table output" || no "markdown: $(head -c 300 <<<"$out")"
 

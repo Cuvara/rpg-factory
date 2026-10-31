@@ -68,6 +68,13 @@ def registry():
 
 
 def workspace(reg):
+    """The RPG MMO workspace. An explicit RPG_FACTORY_WORKSPACE is authoritative: if it lacks the markers there is
+    no workspace (no fallback to the cwd or the default root), so a test or a user pointing it elsewhere never
+    picks up a real workspace on the host."""
+    env = os.environ.get(reg["workspace"]["root_env"])
+    if env:
+        ok = all(os.path.exists(os.path.join(env, m)) for m in reg["workspace"]["root_markers"])
+        return os.path.abspath(env) if ok else None
     try:
         import context
         return context.find_workspace(reg)
