@@ -29,7 +29,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   - Registry: dev tool `figma-mcp` (its `mcp:` probe cannot see claude.ai connector servers; not required),
     `unity-mcp` and `dotnet` used by the UI skills, and fact `uitoolkit-figma-connector-floor`.
   - `docs/architecture/ui-skills.md` and `docs/architecture/ui-figma-real-test.md` (the real "Game Settings"
-    Figma-to-Unity procedure; not yet run).
+    Figma-to-Unity procedure and the report of two real runs, with their limitations).
   - Tests: `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh` (golden plan
     matrix of 46 cases, selection on a UIToolkit v0.8.0 fixture, path-scoped routing), `tests/ui-figma-env.test.sh`
     and `tests/ui-skills.test.sh` (skill content, docs, snapshot Next line); evals `ui-settings-screen`,

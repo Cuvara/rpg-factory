@@ -77,11 +77,13 @@ Capture: `Copy link to selection` on the frame (with `node-id=`) and a PNG expor
 The lab script takes a package **checkout** and writes `file:<abspath>` (`Tools~/FigmaLab/create-lab-project.py`,
 `build_manifest`); it does not accept a git URL. Export the tag read-only, then create the lab:
 
+`$UITOOLKIT` is a local clone of Cuvara/UIToolkit and `$SCRATCH` any empty scratch folder.
+
 ```bash
-mkdir -p C:/tmp/rpgf-ui/lab/uitoolkit-v0.8.0
-git -C C:/Workspaces/UnityIndie/UIToolkit archive v0.8.0 | tar -x -C C:/tmp/rpgf-ui/lab/uitoolkit-v0.8.0
-python3 C:/tmp/rpgf-ui/lab/uitoolkit-v0.8.0/Tools~/FigmaLab/create-lab-project.py C:/tmp/rpgf-ui/lab/project \
-  --package C:/tmp/rpgf-ui/lab/uitoolkit-v0.8.0
+mkdir -p $SCRATCH/uitoolkit-v0.8.0
+git -C $UITOOLKIT archive v0.8.0 | tar -x -C $SCRATCH/uitoolkit-v0.8.0
+python3 $SCRATCH/uitoolkit-v0.8.0/Tools~/FigmaLab/create-lab-project.py $SCRATCH/project \
+  --package $SCRATCH/uitoolkit-v0.8.0
 ```
 
 To test the git pin instead, edit the lab's `Packages/manifest.json` afterwards to
@@ -90,7 +92,7 @@ To test the git pin instead, edit the lab's `Packages/manifest.json` afterwards 
 Build the validator CLI once, outside any package folder (`dotnet run` in the package would write `obj/` and `bin/` there):
 
 ```bash
-dotnet build C:/tmp/rpgf-ui/lab/uitoolkit-v0.8.0/Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj -o C:/tmp/rpgf-ui/lab/cli
+dotnet build $SCRATCH/uitoolkit-v0.8.0/Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj -o $SCRATCH/cli
 ```
 
 (The build writes `obj/` into the exported copy, never into the UIToolkit repo.)
@@ -105,7 +107,7 @@ Project Settings > UI Toolkit > Connector for Figma design, **Create mapping**.
 Run each command from the lab folder with this plugin checkout loaded. Record each session's stream to a file.
 
 ```bash
-P=<this plugin checkout>; L=C:/tmp/rpgf-ui/lab/project; E=C:/tmp/rpgf-ui/lab/evidence; mkdir -p "$E"
+P=<this plugin checkout>; L=$SCRATCH/project; E=$SCRATCH/evidence; mkdir -p "$E"
 python3 -B "$P/scripts/ui/figma_env.py" --project "$L" --json --probe-pipeline > "$E/01-figma-env.json"
 cd "$L" && claude --plugin-dir "$P" -p "/rpg-factory:ui-figma import <frame link> into the Unity project $L, prefix rpg" \
   --output-format stream-json --verbose > "$E/02-session-import.jsonl"
@@ -116,7 +118,7 @@ cd "$L" && claude --plugin-dir "$P" -p "/rpg-factory:ui-review review the import
 Expected agent behaviour (graded from the stream): the UI plan lists `ui-figma-import`, `ui-component-selection`,
 `ui-toolkit-screen`, `ui-validation` in that order and no other UI skill; factory-core runs first; the designer
 preflight is reported before the import; figma_env runs; the import uses
-`Tools~/FigmaImport/figma-import.py ... --validate --prefix rpg --json --cli dotnet C:/tmp/rpgf-ui/lab/cli/UxmlCodegenCli.dll`;
+`Tools~/FigmaImport/figma-import.py ... --validate --prefix rpg --json --cli dotnet $SCRATCH/cli/UxmlCodegenCli.dll`;
 the agent asks before writing into the project; no UXML or USS is written by hand; the report names states with evidence.
 
 Then, in the Editor (by the agent through the Unity MCP server when available, else by hand):
@@ -134,12 +136,12 @@ Then, in the Editor (by the agent through the Unity MCP server when available, e
 
 ## 4. Evidence to capture
 
-Store everything under `C:/tmp/rpgf-ui/lab/evidence/` and list the paths in the Evidence table.
+Store everything under `$SCRATCH/evidence/` and list the paths in the Evidence table.
 
 - `figma-frame.png` (Figma export) and the frame link (file key, node id).
 - `01-figma-env.json` and the two session streams.
 - The saved import result `Library/CuvaraFigma/last-import-RpgFactory-GameSettings.json` (copy) and the helper's stdout JSON.
-- Validator JSON: `dotnet C:/tmp/rpgf-ui/lab/cli/UxmlCodegenCli.dll validate <lab>/Assets/Figma/RpgFactory-GameSettings --prefix rpg --json`.
+- Validator JSON: `dotnet $SCRATCH/cli/UxmlCodegenCli.dll validate <lab>/Assets/Figma/RpgFactory-GameSettings --prefix rpg --json`.
 - Figma Diagnostics window screenshot (versions, mapping, profile, token coverage, bridge freshness, last import result).
 - Console log after import and after Play (no error expected; any warning listed).
 - Play-mode screenshots: light, dark, dark with ConfirmDialog.
@@ -148,7 +150,7 @@ Store everything under `C:/tmp/rpgf-ui/lab/evidence/` and list the paths in the 
 
 ## Evidence
 
-Evidence files are in `C:/tmp/rpgf-ui/evidence/run2/` (Lead machine, not committed) unless the path is `images/`.
+Provenance (the run host, not committed): evidence files are in `C:/tmp/rpgf-ui/evidence/run2/` unless the path is `images/`.
 Transcripts: `C:/tmp/rpgf-ui/real/session-import.jsonl` (run 1) and `session-import2.jsonl` (run 2). Both runs used
 the lab `C:/tmp/rpgf-ui-lab`, not the paths in section 3, and the prompt `/rpg-factory:ui-figma Import the Game Settings
 screen from <frame link> into the Unity project C:/tmp/rpgf-ui-lab and integrate it ...`.
