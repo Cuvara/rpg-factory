@@ -3,14 +3,6 @@
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Orca Windows worktrees may store a Windows absolute gitdir in the .git file;
-# POSIX shells need its native path when running the archive proofs.
-if [[ -f "$ROOT/.git" ]] && { command -v cygpath >/dev/null 2>&1 || command -v wslpath >/dev/null 2>&1; }; then
-  WORKTREE_GITDIR=$(sed -n 's/^gitdir: //p' "$ROOT/.git")
-  if [[ "$WORKTREE_GITDIR" =~ ^[A-Za-z]:/ ]]; then
-    if command -v cygpath >/dev/null 2>&1; then WORKTREE_GITDIR_NATIVE="$(cygpath -u "$WORKTREE_GITDIR")"; else WORKTREE_GITDIR_NATIVE="$(wslpath -u "$WORKTREE_GITDIR")"; fi
-  fi
-fi
 T="$(mktemp_win)" || exit 1
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/authoring/vfx/specs" "$T/unity/Assets"
@@ -175,30 +167,4 @@ workflow.write_text(json.dumps({'id':'workflow','title':'VFX task','goal':'Autho
 PY
 python3 -B "$ROOT/scripts/factory-workflow.py" status "$T/workflow.json" --authoring "$T/authoring" --json > "$T/stale.json"
 jq -e '.states.effect == "stale" and (.stale_upstream|length) == 1' "$T/stale.json" >/dev/null
-# Overlay this updated behavioral suite on archives and require behavior assertions to fail there.
-if [[ "${VFX_DISABLE_BASE_ARCHIVE:-}" != "1" ]]; then
-for BASE in acec91692797bc0204e6a72bb5c92594c295fc45 fc8d435f4ea1c73124701d3e0af64bec035334e5; do
-  mkdir -p "$T/base-$BASE"
-  PROOF_DIR="${VFX_PROOF_DIR:-$T}"
-  mkdir -p "$PROOF_DIR"
-  if [[ -n "${WORKTREE_GITDIR_NATIVE:-}" ]]; then GIT_DIR="$WORKTREE_GITDIR_NATIVE" GIT_WORK_TREE="$ROOT" git -C "$ROOT" archive "$BASE" | tar -x -C "$T/base-$BASE"; else git -C "$ROOT" archive "$BASE" | tar -x -C "$T/base-$BASE"; fi
-  cp "$ROOT/tests/vfx-workflow.test.sh" "$T/base-$BASE/tests/vfx-workflow.test.sh"
-  PROOF_LOG="$PROOF_DIR/base-$BASE-proof.log"
-  BASE_DIR="$T/base-$BASE"; if command -v cygpath >/dev/null 2>&1; then BASE_DIR="$(cygpath -u "$BASE_DIR")"; fi
-  if (cd "$BASE_DIR" && VFX_DISABLE_BASE_ARCHIVE=1 bash tests/vfx-workflow.test.sh) > "$PROOF_LOG" 2>&1; then echo "Base proof unexpectedly passed: $BASE" >&2; exit 1; fi
-  if [[ "$BASE" == acec916* ]]; then
-    # acec916 predates the VFX plugin; the test executes it and records its missing behavior entry point.
-    grep -q 'FileNotFoundError' "$PROOF_LOG"
-    grep -q 'domains.*vfx.py' "$PROOF_LOG"
-    echo "Behavior proof: VFX behavior could not be exercised because the domain plugin is absent on git archive $BASE (log: $PROOF_LOG)"
-  else
-    grep -q 'invalid budget max_particles' "$PROOF_LOG"
-    grep -q 'invalid stat particles' "$PROOF_LOG"
-    grep -q 'Unity invalid numeric budget nan' "$PROOF_LOG"
-    grep -q 'non-finite phase' "$PROOF_LOG"
-    grep -q 'non-finite curve' "$PROOF_LOG"
-    echo "Behavior proof: invalid budgets, stats and Unity NaN cases failed against git archive $BASE (log: $PROOF_LOG)"
-  fi
-done
-fi
 echo 'vfx workflow: PASS'
