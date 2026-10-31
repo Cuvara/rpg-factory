@@ -288,6 +288,21 @@ report("selection evidence cites Runtime/Flow/ConfirmDialog.cs at v0.8.0",
 rc, obj, raw = select_run("--need", "toast", cwd=ws2)
 report("no UIToolkit repo: NOT_AVAILABLE, no invented selection",
        [] if "NOT_AVAILABLE" in raw and not [s for s in selections(obj or {}) if s["status"] != "missing"] else [raw[:200]])
+# host isolation: a real workspace reachable from the cwd (or the registry default root on a dev host) must not be
+# discovered when RPG_FACTORY_WORKSPACE names a directory without the markers - here the cwd is the full fixture
+def run_env(argv, cwd, ws_env):
+    p = subprocess.run(argv, cwd=cwd, env=dict(os.environ, RPG_FACTORY_WORKSPACE=ws_env),
+                       capture_output=True, encoding="utf-8", errors="replace")
+    return p.returncode, p.stdout
+
+
+rc, raw = run_env([sys.executable, "-B", select, "--need", "toast", "--json"], os.path.join(ws, "UIToolkit"), ws2)
+report("isolation: explicit RPG_FACTORY_WORKSPACE without markers -> NOT_AVAILABLE even from inside a workspace",
+       [] if rc == 1 and '"NOT_AVAILABLE"' in raw else [f"exit {rc}", raw[:200]])
+rc, raw = run_env([sys.executable, "-B", cmd, "ui-figma", "--json",
+                   "Import https://www.figma.com/design/AbC123xyz/Game-UI?node-id=12-34"], os.path.join(ws, "UIToolkit"), ws2)
+report("isolation: no client repo through an explicit empty workspace -> NEEDS_CONTEXT target-project",
+       [] if rc == 3 and '"target-project"' in raw else [f"exit {rc}", raw[:200]])
 
 with open(counts, "w", encoding="utf-8", newline="\n") as f:
     f.write(f"{res['pass']} {res['fail']}\n")

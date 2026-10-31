@@ -13,6 +13,8 @@ absent is listed in `missing` (status NEEDS_CONTEXT). An explicit import verb wi
 even when the text also asks to validate. The lead is client-integration for work that consumes
 com.cuvara.uitoolkit, unity-package only when the request changes the package; a --project (or path) outside
 the workspace client repo keeps client-integration and `next` says the routed paths are advisory there.
+Component/control phrasing next to a UI noun counts as a UI signal (not next to ECS, Go or server terms); adding or
+bumping a package dependency with no UI work is NOT_UI (factory-core routes pins to pin-bump).
 Exit 0 = PLAN or NOT_UI, 3 = NEEDS_CONTEXT, 2 = usage. Writes nothing.
 """
 import json
@@ -54,6 +56,22 @@ def ui_skill_names(reg):
             if v.get("kind") == "tech" and v.get("domain") == "ui" and s != "ui-orchestrator"]
 
 
+def ui_signal(words, r):
+    """A UI signal, or component/control phrasing next to a UI noun that is not about ECS, Go or server parts."""
+    return any_match(r["ui_signals"], words) or (
+        any_match(r["component_signals"], words) and not any_match(r["component_guard"], words))
+
+
+def dependency_only(words, r):
+    """A package dependency change with no UI work left once the package names are removed."""
+    if not any_match(r["dependency_signals"], words):
+        return False
+    rest = words
+    for pat in r["dependency_names"]:
+        rest = re.sub(pat, " ", rest, flags=re.I)
+    return not ui_signal(rest, r)
+
+
 def classify(verb, words, figma, r):
     family = r["verbs"][verb]
     has_figma = bool(figma) or any_match(r["figma_terms"], words) or verb == "ui-figma"
@@ -79,10 +97,17 @@ def build(request, verb="ui", project=None, uitoolkit_ref=None):
             "not_loaded": [], "lead": None,
             "context": {"figma": figma, "project": None, "uitoolkit": None, "screen": None},
             "missing": [], "components": None, "next": []}
-    if verb == "ui" and not figma and not any_match(r["ui_signals"], words):
+    if verb == "ui" and not figma and not ui_signal(words, r):
         plan["status"] = "NOT_UI"
         plan["not_loaded"] = ui_skill_names(reg)
         plan["next"] = ["not a UI request: use rpg-factory:factory-core directly"]
+        return plan
+    if verb == "ui" and not figma and dependency_only(words, r):
+        plan["status"] = "NOT_UI"
+        plan["not_loaded"] = ui_skill_names(reg)
+        plan["next"] = ["not a UI request: use rpg-factory:factory-core directly",
+                        "a package dependency change (add, install or bump com.cuvara.* in Packages/manifest.json): "
+                        "factory-core routes it to pin-bump (client.packages); ask for UI work separately"]
         return plan
     intent, has_figma = classify(verb, words, figma, r)
     plan["intent"] = intent
@@ -180,6 +205,7 @@ def markdown(plan):
            f"**Status: {plan['status']}**" + (f" - intent `{plan['intent']}`" if plan["intent"] else "")]
     if plan["status"] == "NOT_UI":
         out += ["", "Not a UI request: use rpg-factory:factory-core directly. No UI skill is loaded."]
+        out += [f"- {n}" for n in plan["next"][1:]]
         return "\n".join(out)
     c = plan["context"]
     out += ["", "### Skills to load (in order)"]

@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.ui-intents/1",
- "note": "Deterministic UI request classification. Patterns are Python regexes matched case-insensitively against the request with URLs removed. Intents are tried in order; the first whose patterns match wins (an empty list matches anything). figma: true means the intent needs Figma context (a Figma URL or a Figma/connector term), unless the verb is ui-figma. An intent id may appear twice (figma-validate also matches 'validate imported UXML/USS' without a Figma term: imported UXML/USS is connector output). An entry with url: true needs a Figma URL in the request: an explicit import verb with a URL means figma-import even when the text also asks to validate. package_signals pick lead unity-package only when the request changes the package itself; consuming com.cuvara.uitoolkit in a game is client work (client-integration).",
+ "note": "Deterministic UI request classification. Patterns are Python regexes matched case-insensitively against the request with URLs removed. Intents are tried in order; the first whose patterns match wins (an empty list matches anything). figma: true means the intent needs Figma context (a Figma URL or a Figma/connector term), unless the verb is ui-figma. An intent id may appear twice (figma-validate also matches 'validate imported UXML/USS' without a Figma term: imported UXML/USS is connector output). An entry with url: true needs a Figma URL in the request: an explicit import verb with a URL means figma-import even when the text also asks to validate. package_signals pick lead unity-package only when the request changes the package itself; consuming com.cuvara.uitoolkit in a game is client work (client-integration). component_signals count as a UI signal unless component_guard matches (ECS, Go, server ... components are not UI). dependency_signals with no UI signal left after removing dependency_names make a `ui` request NOT_UI: adding or bumping a package dependency is factory-core work (pins route to pin-bump), not a screen.",
  "ui_signals": [
   "\\bui\\b",
   "\\bux\\b",
@@ -318,5 +318,24 @@
     "\\bdialog\\b"
    ]
   }
+ ],
+ "component_signals": [
+  "\\b(components?|controls?|widgets?)\\b.{0,60}\\b(settings|options|inventory|shop|store|vendor|hud|quests?|journal|pop-?ups?|dialogs?|modals?|menus?|screens?|toolbar|tabs?|tooltips?)\\b",
+  "\\b(settings|options|inventory|shop|store|vendor|hud|quests?|journal|pop-?ups?|dialogs?|modals?|menus?)\\b.{0,40}\\b(components?|controls?|widgets?)\\b"
+ ],
+ "component_guard": [
+  "\\b(ecs|dots|entities|go|golang|server|gateway|nakama|backend|database|sql|redis|proto(buf)?)\\b"
+ ],
+ "dependency_signals": [
+  "\\b(add|install|bump|upgrade|update|pin|re-?pin|move|remove|uninstall|downgrade)\\b.{0,60}\\b(com\\.cuvara\\.[\\w.]+|ui ?toolkit( package)?|package|dependency)\\b.{0,60}\\b(to|in|into|from|on)\\b.{0,40}\\b(client|project|manifest|packages|v\\d+\\.\\d+)",
+  "\\b(bump|upgrade|downgrade|re-?pin)\\b.{0,40}\\b(com\\.cuvara\\.[\\w.]+|ui ?toolkit|package|pin)\\b",
+  "\\bmanifest\\.json\\b",
+  "\\bpackages-lock\\.json\\b",
+  "\\bpackage (pin|dependency|version)\\b"
+ ],
+ "dependency_names": [
+  "com\\.cuvara\\.[\\w.]*\\w",
+  "\\bui ?toolkit( package)?\\b",
+  "\\bpackages/manifest\\.json\\b"
  ]
 }

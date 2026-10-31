@@ -93,6 +93,15 @@ expect "not a UI request -> NOT_UI, exit 0, no skills" 0 NOT_UI null "" -- ui "A
 [ "$(q '.next[0]')" = "not a UI request: use rpg-factory:factory-core directly" ] && [ "$(q .lead)" = null ] && ok "NOT_UI message, no lead" || no "NOT_UI next: $(q .next)"
 expect "forced verb is never NOT_UI" 0 PLAN components "ui-component-selection" -- ui-components "health field"
 
+# -- component phrasing and dependency changes (Codex review 2)
+expect "component phrasing + archetype is UI" 0 PLAN components "ui-component-selection" -- ui "What components for settings?"
+[ "$(q .lead.skill)" = client-integration ] && ok "components for settings -> lead client-integration" || no "lead: $(q .lead)"
+expect "Go components are not UI" 0 NOT_UI null "" -- ui "Which Go components does the gateway use?"
+expect "adding the package dependency is not UI" 0 NOT_UI null "" -- ui "Add com.cuvara.uitoolkit to the client project"
+q '.next[1]' | grep -q "pin-bump" && [ "$(q '.next[0]')" = "not a UI request: use rpg-factory:factory-core directly" ] && ok "dependency NOT_UI names factory-core and pin-bump" || no "dep next: $(q .next)"
+md=$(cd "$WS" && python3 -B "$CMD" ui "Add com.cuvara.uitoolkit to the client project"); grep -q "pin-bump" <<<"$md" && ok "Markdown dependency NOT_UI names pin-bump" || no "dep markdown"
+expect "dependency + UI work stays a UI plan" 0 PLAN screen "ui-component-selection,ui-toolkit-screen,ui-validation" -- ui "Add com.cuvara.uitoolkit to the client project and build a settings screen"
+
 # -- NEEDS_CONTEXT (exit 3), exact missing items, never a guess
 expect "ui-figma without URL -> NEEDS_CONTEXT" 3 NEEDS_CONTEXT figma-import "ui-figma-import,ui-component-selection,ui-toolkit-screen,ui-validation" -- ui-figma "Import this Figma frame into Unity"
 [ "$(q '[.missing[].item] | join(",")')" = figma-frame-url ] && q '.missing[0].how' | grep -q "node-id" && [ "$(q .context.figma)" = null ] \
@@ -103,9 +112,8 @@ expect "ui-figma analyze without URL -> NEEDS_CONTEXT" 3 NEEDS_CONTEXT figma-ana
 plan ui-figma "https://www.figma.com/design/AbC123xyz/Shop-Demo import"; rc=$?
 [ $rc -eq 3 ] && [ "$(q '[.missing[].item] | join(",")')" = figma-node-id ] && ok "URL without node-id -> missing figma-node-id" || no "node-id missing: rc=$rc $(q .missing)"
 NOWS="$TMP/nows"; mkdir -p "$NOWS"
-out=$(cd "$NOWS" && RPG_FACTORY_WORKSPACE="$NOWS" python3 -B "$CMD" ui-figma "$URL" --json); rc=$?
-if [ -d /mnt/c/Workspaces/UnityIndie/IndieRPGMMOAdventure ]; then echo "SKIP  no-client case (default workspace exists on this host)"
-else [ $rc -eq 3 ] && [ "$(jq -r '[.missing[].item] | join(",")' <<<"$out")" = target-project ] && ok "no client repo, no --project -> missing target-project" || no "target-project: rc=$rc $(jq -c .missing <<<"$out")"; fi
+out=$(cd "$WS" && RPG_FACTORY_WORKSPACE="$NOWS" python3 -B "$CMD" ui-figma "$URL" --json); rc=$?   # cwd is a workspace: must not be used
+[ $rc -eq 3 ] && [ "$(jq -r '[.missing[].item] | join(",")' <<<"$out")" = target-project ] && ok "no client repo (explicit empty workspace), no --project -> missing target-project" || no "target-project: rc=$rc $(jq -c .missing <<<"$out")"
 P="$TMP/MyGame"; mkdir -p "$P/Packages"
 out=$(cd "$NOWS" && RPG_FACTORY_WORKSPACE="$NOWS" python3 -B "$CMD" ui-figma --project "$P" "$URL" --json); rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r .status <<<"$out")" = PLAN ] && [ "$(fwd "$(jq -r .context.project <<<"$out")")" = "$(fwd "$P")" ] && ok "--project satisfies the target project" || no "--project: rc=$rc $(jq -c '{status,missing}' <<<"$out")"
