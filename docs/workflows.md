@@ -4,7 +4,7 @@ Production workflows use the shared artifact envelope, lifecycle, domain quality
 
 ## Lifecycle and validation
 
-Artifacts progress from `draft` to `proposed`, `reviewed`, `approved`, `verified`, and `released` as their registered requirements are met. Rejected and blocked artifacts recover by creating a new draft revision; blocked records identify the blocker. Reviews record an independent review and are distinct from approvals. Approvals are human decisions tied to the exact artifact blob revision. Binding gameplay values remain `HUMAN_REQUIRED` until a trusted signing key is registered. Validation results are `PASS`, `FAIL`, `HUMAN_REQUIRED`, or `NOT_AVAILABLE`; unavailable tools never produce a pass.
+Artifacts progress from `draft` to `proposed`, `reviewed`, `approved`, `in-implementation`, `verified`, and `released` as their registered requirements are met. Rejected and blocked artifacts recover by creating a new draft revision; blocked records identify the blocker. Reviews record an independent review and are distinct from approvals. Approvals are human decisions tied to the exact artifact blob revision. Binding gameplay values remain `HUMAN_REQUIRED` until a trusted signing key is registered. Validation results are `PASS`, `FAIL`, `WARN`, `HUMAN_REQUIRED`, `NOT_AVAILABLE` and `BLOCKED`; unavailable tools never produce a pass.
 
 ## Plan, dispatch, and report
 

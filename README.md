@@ -57,7 +57,7 @@ python3 -B scripts/factory-workflow.py status workflow.json --authoring <authori
 python3 -B scripts/factory-workflow.py report workflow.json --authoring <authoring-repo>
 ```
 
-Plans order work from registered handoff contracts. Artifacts move through draft, proposed, reviewed, approved, verified, and released states; rejected and blocked artifacts recover through a new draft. Reviews record independent human assessment. Binding approvals require a trusted registered signing key and remain `HUMAN_REQUIRED` until one exists. Validation outcomes are `PASS`, `FAIL`, `HUMAN_REQUIRED`, and `NOT_AVAILABLE`; reports preserve these results and identify stale upstream revisions.
+Plans order work from registered handoff contracts. Artifacts move through draft, proposed, reviewed, approved, in-implementation, verified, and released states; rejected and blocked artifacts recover through a new draft. Reviews record independent human assessment. Binding approvals require a trusted registered signing key and remain `HUMAN_REQUIRED` until one exists. Validation outcomes are `PASS`, `FAIL`, `WARN`, `HUMAN_REQUIRED`, `NOT_AVAILABLE` and `BLOCKED`; reports preserve these results and identify stale upstream revisions.
 
 Optional tools are detected without launching applications or making provider requests during validation:
 

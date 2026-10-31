@@ -8,7 +8,7 @@ Register the kind with its domain, schema path, lifecycle and quality requiremen
 
 ## Add a domain quality plugin
 
-Implement `check(artifact, ctx)` under `scripts/checks/domains/`. The Context API provides `repo`, `registry`, `artifacts`, registry-derived `repo_roots`, safe `resolve_repo_path`, name-only optional `tools`, and `approval` state access. Return structured results with `PASS`, `FAIL`, `HUMAN_REQUIRED`, or `NOT_AVAILABLE` and a reason. Do not write to repositories, launch optional tools during detection, print secrets, or treat unavailable evidence as a pass. Add plugin unit/integration cases through `artifact-quality.py`, including absent-tool and human-gate outcomes.
+Implement `check(artifact, ctx)` under `scripts/checks/domains/`. The Context API provides `repo`, `registry`, `artifacts`, registry-derived `repo_roots`, safe `resolve_repo_path`, name-only optional `tools`, and `approval` state access. Return structured results with one of `PASS`, `FAIL`, `WARN`, `HUMAN_REQUIRED`, `NOT_AVAILABLE` and `BLOCKED` and a reason. Do not write to repositories, launch optional tools during detection, print secrets, or treat unavailable evidence as a pass. Add plugin unit/integration cases through `artifact-quality.py`, including absent-tool and human-gate outcomes.
 
 ## Add an adapter
 
@@ -20,4 +20,4 @@ Register a handoff for an actual ownership transfer; this creates a planning dep
 
 ## Add a domain lead skill
 
-Create the skill with `python3 -B scripts/new-skill.py --name <skill> --kind domain` and follow the `skill-touchpoints` list. Document owned kinds, quality checks, lifecycle, recovery, optional tools, and handoffs; add its row to the Factory Core skill map and required Claude Code skill inventory. Add domain workflow and eval cases, then run `python3 -B scripts/skill-touchpoints.py <skill>`, `tests/skills-lint.sh`, and the relevant registry, workflow, and routing suites.
+Create the skill with `python3 -B scripts/new-skill.py --name <skill> --kind repo --domain <domain> --repos authoring --summary "<text>" --owns-modules <module> --dry-run` (drop `--dry-run` to write; a lead must own a module or drive a contract) and follow the `skill-touchpoints` list. Document owned kinds, quality checks, lifecycle, recovery, optional tools, and handoffs; add its row to the Factory Core skill map and required Claude Code skill inventory. Add domain workflow and eval cases, then run `python3 -B scripts/skill-touchpoints.py <skill>`, `tests/skills-lint.sh`, and the relevant registry, workflow, and routing suites.

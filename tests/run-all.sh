@@ -143,6 +143,7 @@ run "repos without a remote do not crash status or the git guard" env -u TMPDIR 
   run "domain and artifact-kind routing (stand-in workspace)" env -u TMPDIR tests/domains-routing.test.sh
   run "Game Design domain: routing, feature-state ownership, standalone (no game-ai-workflows)" env -u TMPDIR tests/domains.test.sh
 run "Game Design production workflow" tests/design-workflow.test.sh
+run "dogfood write grader (offline, recorded transcripts)" tests/dogfood-grader.test.sh
 run "UI/UX production workflow" tests/ui-workflow.test.sh
 run "2D Art production workflow" tests/art2d-workflow.test.sh
 run "3D Art production workflow" tests/art3d-workflow.test.sh

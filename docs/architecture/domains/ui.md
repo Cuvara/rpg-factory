@@ -14,7 +14,7 @@ All production kinds reuse lifecycle v2. Drafts may be proposed only with comple
 
 ## Handoffs and workflow
 
-Design `feature-spec` records provide user goals and constraints. UI sends illustration/icon briefs to art2d, screen acceptance and UI handoffs to registered client UI paths, and UI effect dependencies may reference VFX artifact IDs/revisions in `sources` and `upstream`; an executable reciprocal contract awaits a CORE workflow edge type that preserves the existing DAG. Use `/rpg-factory:workflow` to plan multi-domain work or `factory-context.sh --domain ui` for UI-only work, then validate with CORE artifact checks and `artifact-quality.py`.
+Design `feature-spec` records provide user goals and constraints. UI sends illustration/icon briefs to art2d, screen acceptance and UI handoffs to registered client UI paths, and UI effect dependencies reference VFX artifact IDs/revisions in `sources` and `upstream` through the registered `ui-vfx-sync` contract (`ordering: "none"`): a change on either side marks the other for revalidation without ordering workflow waves. Use `/rpg-factory:workflow` to plan multi-domain work or `factory-context.sh --domain ui` for UI-only work, then validate with CORE artifact checks and `artifact-quality.py`.
 
 ## Example
 

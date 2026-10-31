@@ -4,10 +4,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 ok=0; bad=0
+native_path() { cygpath -m "$1" 2>/dev/null || printf '%s' "$1"; }  # Windows: C:/...; POSIX: unchanged
 check() { local name="$1" expected="$2"; shift 2; local rc=0; "$@" >"$T/out" 2>&1 || rc=$?; if [ "$expected" = pass ] && [ "$rc" -eq 0 ]; then ok=$((ok+1)); echo "ok $name"; elif [ "$expected" = fail ] && [ "$rc" -ne 0 ]; then ok=$((ok+1)); echo "ok $name rejected"; else bad=$((bad+1)); echo "not ok $name (exit $rc; expected $expected)"; cat "$T/out"; fi; }
 newcase() {
   local name="$1"; mkdir -p "$T/$name"; cp -R "$ROOT/tests/fixtures/dogfood/game-authoring" "$T/$name/game-authoring"; git -C "$T/$name/game-authoring" init -q; git -C "$T/$name/game-authoring" config user.name Fixture; git -C "$T/$name/game-authoring" config user.email fixture@example.invalid; git -C "$T/$name/game-authoring" add -- design; git -C "$T/$name/game-authoring" commit -qm seed; mkdir -p "$T/$name/game-authoring/approvals"
-  local native; native="$(cygpath -m "$T/$name")"
+  local native; native="$(native_path "$T/$name")"
   sed "s|SCRATCH|$native|g" "$ROOT/tests/fixtures/dogfood/transcript.jsonl" >"$T/$name/transcript.jsonl"
 }
 grade() { python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$1" --scenario fixture --transcript "$1/transcript.jsonl" --expected-skills game-design --expected-kinds game-concept --domain design; }
@@ -80,9 +81,9 @@ check 'command -o output outside workspace fails' fail outside_shell "$T/bash-ou
 newcase bash-null
 check 'discarded output to /dev/null is allowed' pass outside_shell "$T/bash-null" 'printf test > /dev/null'
 newcase bash-cd-inside
-check 'relative output inside the workspace after cd is allowed' pass outside_shell "$T/bash-cd-inside" "cd \"$(cygpath -m "$T/bash-cd-inside" 2>/dev/null || echo "$T/bash-cd-inside")/game-authoring\" && printf x > ../workflow.json"
+check 'relative output inside the workspace after cd is allowed' pass outside_shell "$T/bash-cd-inside" "cd \"$(native_path "$T/bash-cd-inside")/game-authoring\" && printf x > ../workflow.json"
 newcase bash-cd-outside
-check 'relative output escaping the workspace after cd fails' fail outside_shell "$T/bash-cd-outside" "cd \"$(cygpath -m "$T/bash-cd-outside" 2>/dev/null || echo "$T/bash-cd-outside")/game-authoring\" && printf x > ../../escaped.json"
+check 'relative output escaping the workspace after cd fails' fail outside_shell "$T/bash-cd-outside" "cd \"$(native_path "$T/bash-cd-outside")/game-authoring\" && printf x > ../../escaped.json"
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
 import json,sys
 p=sys.argv[1]; d=[json.loads(x) for x in open(p,encoding='utf-8')]; d[2]['message']['content'][0]['input']['command']='python scripts/factory-workflow.py status x; # wrong order engineering design ui'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in d))
@@ -94,7 +95,7 @@ mkdir -p "$T/stale"
 cp -R "$ROOT/tests/fixtures/dogfood/game-authoring" "$T/stale/game-authoring"
 python3 -B "$ROOT/tests/dogfood/write-setup.py" "$ROOT" "$T/stale/game-authoring" stale-pair
 git -C "$T/stale/game-authoring" init -q; git -C "$T/stale/game-authoring" config user.name Fixture; git -C "$T/stale/game-authoring" config user.email fixture@example.invalid; git -C "$T/stale/game-authoring" add -- design ui art2d art3d vfx; git -C "$T/stale/game-authoring" commit -qm seed
-local_stale_native="$(cygpath -m "$T/stale")"
+local_stale_native="$(native_path "$T/stale")"
 sed "s|SCRATCH|$local_stale_native|g" "$ROOT/tests/fixtures/dogfood/transcript.jsonl" >"$T/stale/transcript.jsonl"
 python3 -B - "$T/stale/transcript.jsonl" <<'PY'
 import json,sys
