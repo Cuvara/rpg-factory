@@ -66,7 +66,8 @@ UI skills, never scope or validation.
 2. **Route.** Follow `next`: factory-core Route with the plan's `lead.route` and the declared mode, then invoke
    the lead (`rpg-factory:client-integration`, `rpg-factory:unity-package` or `rpg-factory:ui-ux`).
 3. **Load only the listed skills, in order.** For any UI file the snapshot's `tech` list names all five `ui-*`
-   skills; the plan's `skills` is the subset to invoke. Never invoke a `not_loaded` skill. If the task changes (new
+   skills; the plan's `skills` is the subset to invoke. Never invoke a `not_loaded` skill. Invoke them in
+   every mode, `plan` and `analyze` included: they hold the facts the plan or analysis needs. If the task changes (new
    Figma link, "now implement it", a review becomes a fix), re-run the plan instead of loading more.
 4. **Select before creating.** When `ui-component-selection` is listed it runs before any file is created;
    a component graded reuse or configure is used, never rebuilt. `missing` goes to its owner as a hand-off.

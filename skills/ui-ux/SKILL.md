@@ -26,6 +26,7 @@ Repo `authoring`; registered authoring paths under `ui/specs/`. Foundation only.
 2. Draft the registered artifact using the `---json` front matter defined by `docs/artifacts.md`; do not create approval records.
 3. Run the registry shared checks for the artifact.
 4. Hand off through: `feature-spec-to-ui-spec, ui-spec-to-art2d-brief, ui-spec-to-client`.
+5. Engine-side UI work that follows the spec (Unity UI Toolkit screens, Figma import, component choice, UI review) is planned by `rpg-factory:ui-orchestrator`; invoke it only for that part.
 
 ## Rules
 

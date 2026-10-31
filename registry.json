@@ -4220,7 +4220,8 @@
       "domain": "ui",
       "order": 95,
       "used_by": [
-        "client-integration"
+        "client-integration",
+        "ui-ux"
       ],
       "summary": "Entry point for UI requests: deterministic UI plan, intent, minimal skill set, missing context",
       "paths": [

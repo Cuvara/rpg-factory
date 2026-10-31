@@ -36,8 +36,8 @@ reg=$(jq -c '[.skills | to_entries[] | select(.value.kind == "tech" and .value.d
 [ "$reg" = '["ui-component-selection","ui-figma-import","ui-orchestrator","ui-toolkit-screen","ui-validation"]' ] \
   && ok "registry: the five UI tech skills (domain ui)" || no "registry UI tech skills: $reg"
 jq -e '[.skills | to_entries[] | select(.value.domain == "ui" and .value.kind == "tech") | .value]
-  | all(.used_by == ["client-integration"] and (.paths | length > 0) and .repos == ["client"])' "$ROOT/registry.json" >/dev/null \
-  && ok "registry: UI tech skills used_by client-integration, repo client, path-scoped" || no "registry UI tech skill fields"
+  | all((.used_by | index("client-integration")) != null and (.used_by - ["client-integration","ui-ux"] | length == 0) and (.paths | length > 0) and .repos == ["client"])' "$ROOT/registry.json" >/dev/null \
+  && ok "registry: UI tech skills used_by client-integration (orchestrator also ui-ux), repo client, path-scoped" || no "registry UI tech skill fields"
 for s in ui-orchestrator ui-component-selection ui-figma-import ui-toolkit-screen ui-validation; do
   [ -f "$ROOT/skills/$s/SKILL.md" ] || no "skills/$s/SKILL.md missing"
 done
