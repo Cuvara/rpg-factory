@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-31
+
+Feature release: UI skills and commands. `/rpg-factory:ui`, `ui-figma`, `ui-components`, `ui-screen` and
+`ui-review` run a deterministic, read-only UI plan that loads only the UI skills a request needs (five new tech
+skills: ui-orchestrator, ui-component-selection, ui-figma-import, ui-toolkit-screen, ui-validation), selects
+components from the real com.cuvara.uitoolkit source (reuse, configure, compose, missing), and drives the official
+Unity UI Toolkit Figma connector through the package's v0.8.0 tools. Validated with a real Figma-to-Unity import
+(`docs/architecture/ui-figma-real-test.md`). Engineering routing is unchanged except that UI files now list the
+UI tech skills. Update with `claude plugin marketplace update rpg-factory && claude plugin update
+rpg-factory@rpg-factory`, then start a new session.
+
 ### Added
 
 - UI request handling for the Unity client, with progressive skill loading (`docs/architecture/ui-skills.md`):

@@ -32,7 +32,7 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 1.3.0 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
+Version 1.4.0 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
 current task, an agent stops at **READY_TO_TAG** and the maintainer tags; when the user explicitly authorizes the
 release in that task, the agent performs the authorized merge, version, tag and release steps itself, within that
 scope and after the release checks pass. The guard's tag/release advisories apply either way.
