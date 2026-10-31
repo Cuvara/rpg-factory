@@ -64,7 +64,9 @@ UI skills, never scope or validation.
    `ui-screen` for implementing or wiring) and use that plan. If no verb gives a plan that covers the request, stop
    and tell the user which part the plan leaves out. Never silently do less than asked.
 2. **Route.** Follow `next`: factory-core Route with the plan's `lead.route` and the declared mode, then invoke
-   the lead (`rpg-factory:client-integration`, `rpg-factory:unity-package` or `rpg-factory:ui-ux`).
+   the lead (`rpg-factory:client-integration`, `rpg-factory:unity-package` or `rpg-factory:ui-ux`), then
+   invoke every skill in `skills`, in order, right away - also in `plan` and `analyze` mode. Listing them is not
+   loading them.
 3. **Load only the listed skills, in order.** For any UI file the snapshot's `tech` list names all five `ui-*`
    skills; the plan's `skills` is the subset to invoke. Never invoke a `not_loaded` skill. Invoke them in
    every mode, `plan` and `analyze` included: they hold the facts the plan or analysis needs. If the task changes (new

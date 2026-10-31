@@ -191,7 +191,8 @@ def build(request, verb="ui", project=None, uitoolkit_ref=None):
     plan["next"] = [f"invoke rpg-factory:factory-core (mode {mode}) and Route with: factory-context.sh {route}",
                     f"then invoke the lead rpg-factory:{plan['lead']['skill']}"
                     + (", then, in order: " + ", ".join(f"rpg-factory:{s}" for s in skills) if skills else "")
-                    + (" (load no other UI skill: " + ", ".join(plan["not_loaded"]) + ")" if plan["not_loaded"] else ""),
+                    + (" (load no other UI skill: " + ", ".join(plan["not_loaded"]) + ")" if plan["not_loaded"] else "")
+                    + ("; invoke them in every mode, plan and analyze included: they hold the facts the answer needs" if skills else ""),
                     "report only what has evidence (PASS, FAIL, BLOCKED, NOT_AVAILABLE, HUMAN_REQUIRED, SKIPPED, NOT_RUN, STALE)"]
     if outside:
         plan["next"].insert(1, f"the target project {project} is outside the registry (not the workspace client repo "
