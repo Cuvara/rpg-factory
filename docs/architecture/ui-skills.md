@@ -18,7 +18,7 @@ Toolkit controls. Skills cite the package at its tag; nothing here restates pack
 | Component catalog and selection | `scripts/ui/ui_catalog.py`, `scripts/ui/ui_select.py`, `scripts/ui/data/*.json` | implemented |
 | Figma connector environment check | `scripts/ui/figma_env.py` | implemented |
 | Dev tools `figma-mcp`, `unity-mcp`, `dotnet` for the UI skills | `registry.json` `dev_tools[]` | implemented |
-| Real Figma import test | `docs/architecture/ui-figma-real-test.md` | procedure written; **not yet run** (evidence table empty) |
+| Real Figma import test | `docs/architecture/ui-figma-real-test.md` | import and validator run ("Game Settings": import succeeded, validator 0 errors); Unity runtime rows **not yet run** |
 
 ## Discovery and routing
 
@@ -79,6 +79,14 @@ Options: `--json`, `--project <Unity project path>`, `--uitoolkit-ref <ref>`.
 `NEEDS_CONTEXT` is returned for figma-import and figma-analyze without a Figma frame URL, and for
 figma-import without a target project when no client repo is in the workspace and none is given.
 
+**When the plan does less than asked.** The real Figma run showed it: "import ... integrate ... run the package
+validator" was planned as `figma-validate`, so `ui-toolkit-screen` never loaded and the screen was not integrated.
+`ui-orchestrator` therefore checks the plan's intent and skills against everything the user asked for; when they
+fall short it re-plans with the explicit verb (`ui-figma` for an import, `ui-screen` for implementing or wiring) or
+stops and says which part is left out. It never silently does less than asked. The engine fix for this request
+(an import verb with a Figma URL wins over validate wording) is tracked with the golden cases of
+`tests/fixtures/ui-plan-cases.json`.
+
 ## The five skills
 
 | Skill | Owns the "how" of | Never |
@@ -114,8 +122,16 @@ UIToolkit repo the catalog is NOT_AVAILABLE.
 The official connector imports; the package validates and scaffolds. The import folder (`Assets/Figma/<file>/`)
 belongs to the connector; ScreenCreator refuses to write there and generates the screen code in a game-owned
 folder from the "Existing UXML" source. The validator (`UxmlCodegenCli validate` or the Editor API) grades the
-folder with stable `FIG0xx` codes. Procedure: `ui-figma-import`; real-import test procedure (not yet run):
+folder with stable `FIG0xx` codes. Procedure: `ui-figma-import`; real-import test and its evidence:
 `docs/architecture/ui-figma-real-test.md`.
+
+Integrating the output (`ui-toolkit-screen`, `references/imported-uxml.md`): the connector UXML carries **no
+`name` attributes**, so a game-owned view binds by type and document order or by the component class
+(`toggle`, `button-close`, ...), once, and throws when a count changes; nothing is added to the connector file.
+Controls arrive without a value range or choices. Settings map only to members `SettingsModel` has (volumes,
+graphics quality, fullscreen, VSync, language); a music or sound on/off toggle is game-owned state. The UXML links
+`light.uss` itself, so light and dark need `RegisterModeSheets` plus `AttachScreen` on the open screen.
+`ui-validation` accepts such a binding only with a PlayMode test on the real imported file.
 
 ## UIToolkit v0.8.0 compatibility and known limitations
 
@@ -139,6 +155,9 @@ folder with stable `FIG0xx` codes. Procedure: `ui-figma-import`; real-import tes
 | a UI skill runs with a `high` advisory | the lead was not invoked first; route and invoke it |
 | catalog NOT_AVAILABLE | no UIToolkit repo in the workspace; pass `--uitoolkit-ref` with a reachable repo |
 | `FIG0xx` findings, connector problems | `ui-figma-import` and the package's `TROUBLESHOOTING-FIGMA.md` |
+| plan intent covers less than the request (e.g. `figma-validate` for an import) | re-run with `ui-figma` or `ui-screen`; otherwise say what is left out |
+| `Require<T>` finds nothing in an imported screen | connector output has no names: bind by type, order or class (`ui-toolkit-screen`) |
+| imported screen stays light after a mode switch | register both mode sheets and `AttachScreen` the open screen |
 
 ## Adding a UI skill
 

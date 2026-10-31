@@ -22,6 +22,10 @@ the file and line. Paths starting `UIToolkit/` are the package repo at the tag t
   hand-edited; the namespace matches `.uxml-namespace` (`UIToolkit/Documentation~/UXML-CODEGEN.md`).
 - No element name PascalCases to the class name, and no two names collide (codegen hard failures, same page,
   "Rules and conventions").
+- Connector output (no `name` attributes): the game-owned view binds by type, document order or component class,
+  once, and throws with the expected and found counts when the shape changes; nothing was added to the connector
+  file. A PlayMode test clones the real imported UXML, builds the view and asserts every bound control; its result
+  file is the evidence, re-run after each re-push (`skills/ui-toolkit-screen/references/imported-uxml.md`).
 
 ## 3. Lifecycle
 

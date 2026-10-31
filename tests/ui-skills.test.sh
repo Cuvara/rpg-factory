@@ -134,6 +134,27 @@ for fact in ("rpg-factory.ui-plan/1", "`paths`", "new-skill.py", "--kind tech", 
     check(fact in doc, f"ui-skills.md mentions {fact}")
 check("ui-skills.md" in read("docs/architecture/README.md"), "docs/architecture/README.md links ui-skills.md")
 
+# connector output (real Figma import): no names, bind by type/order/class, real SettingsModel members only
+imp = read("skills/ui-toolkit-screen/references/imported-uxml.md")
+check(imp != "", "ui-toolkit-screen: references/imported-uxml.md exists")
+check("references/imported-uxml.md" in scr, "ui-toolkit-screen: links references/imported-uxml.md")
+check(re.search(r"no `name` attributes", scr) and re.search(r"[Nn]ever add names", scr), "ui-toolkit-screen: connector output has no names; never add names")
+for fact in ("Query<Toggle>().ToList()", 'className: "button-close"', "re-push", "InvalidOperationException",
+             "RegisterModeSheets", "AttachScreen", "SyncScreen", "ConfirmDialog.ShowAsync", "OnBindAsync",
+             "no music or sound on/off flag"):
+    check(fact in imp, f"imported-uxml.md: names {fact}")
+real = {"MasterVolume", "MusicVolume", "SfxVolume", "GraphicsQuality", "Fullscreen", "VSync", "Language", "Load", "Save",
+        "Apply", "Changed", "SetMasterVolume", "SetMusicVolume", "SetSfxVolume", "SetGraphicsQuality", "SetFullscreen",
+        "SetVSync", "SetLanguage"}
+used = set(re.findall(r"\bsettings\.(\w+)", imp))
+check(used and used <= real, f"imported-uxml.md: only real SettingsModel members ({sorted(used - real)})")
+check("never add names" in imp.lower(), "imported-uxml.md: never add names to the connector file")
+check(re.search(r"\*\*Intent check\.\*\*", orch) and "Never silently do less than asked" in orch
+      and "ui-figma" in orch and "ui-screen" in orch, "ui-orchestrator: intent check re-plans with ui-figma / ui-screen")
+check(re.search(r"^\| Imported bindings \|[^\n]*PlayMode test", val, re.M) is not None, "ui-validation: imported bindings row needs a PlayMode test")
+check("no `name` attributes" in review, "ui-review.md: checks connector output bindings")
+check("`name` attributes" in doc and "does less than asked" in doc, "ui-skills.md: connector names and intent check documented")
+
 with open(sys.argv[2], "w", encoding="utf-8") as out:
     print(passed, failed, file=out)
 PY
