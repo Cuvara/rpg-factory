@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C.UTF-8  # printf %b only expands \uXXXX in a UTF-8 locale (CI runners default to C/POSIX)
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d "${RPG_FACTORY_STATE_DIR:-${TMPDIR:-/tmp}}/english-only.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT

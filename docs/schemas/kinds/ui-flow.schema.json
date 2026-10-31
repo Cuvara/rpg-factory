@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/ui-flow.schema.json",
+  "title": "ui-flow",
+  "type": "object",
+  "required": [
+    "flow_id"
+  ],
+  "properties": {
+    "flow_id": {
+      "type": "string"
+    },
+    "spec": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

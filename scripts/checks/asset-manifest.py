@@ -8,7 +8,9 @@ def validate(obj, repos):
     required=('id','kind','domain','status','source_uri','license','provenance','delivery')
     for key in required:
         if key not in obj: errors.append(f'missing required field {key}')
-    if obj.get('provenance') not in ('authored','library','generated'): errors.append('provenance must be authored, library, or generated')
+    provenance=obj.get('provenance')
+    if provenance not in ('authored','library','generated'):
+        if not isinstance(provenance,dict) or any(k not in ('generated_by','tool','model') or not isinstance(v,str) for k,v in provenance.items()): errors.append('provenance must be authored, library, generated, or a structured provenance object')
     if not str(obj.get('license','')).strip(): errors.append('license must be non-empty')
     if not (obj.get('source_rev') or obj.get('hash')): errors.append('source_rev or hash is required')
     delivery=obj.get('delivery')

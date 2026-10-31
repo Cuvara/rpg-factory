@@ -54,7 +54,7 @@ python3 "$T/make.py" "$R" draft
 git -C "$R" add spec.md; git -C "$R" commit --allow-empty -qm restore
 python3 "$T/make.py" "$R" review
 git -C "$R" add spec.md; git -C "$R" commit -qm review
-got=$(line); [[ "$got" == 'PASS FX-test-001' ]] && ok 'legal transition' || bad "legal transition: $got"
+got=$(line); [[ "$got" == 'WARN deprecated-state review -> proposed FX-test-001' ]] && ok 'legacy review alias warns' || bad "legal transition: $got"
 python3 "$T/make.py" "$R" verified
 got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$R" --registry "$T/reg.json" | head -1); [[ "$got" == 'FAIL FX-test-001 illegal transition'* ]] && ok 'illegal transition rejected' || bad "illegal transition: $got"
 python3 "$T/make.py" "$R" approved
@@ -96,7 +96,7 @@ p=sys.argv[1]; o=json.load(open(p)); o['status']='review'; json.dump(o,open(p,'w
 PY
 git -C "$J" add .; git -C "$J" commit -qm transition
 got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$J" --registry "$T/reg.json" | head -1)
-[[ "$got" == 'PASS FX-json-001' ]] && ok 'JSON artifact legal transition across commits' || bad "JSON legal transition: $got"
+[[ "$got" == 'WARN deprecated-state review -> proposed FX-json-001' ]] && ok 'JSON legacy review alias across commits' || bad "JSON legal transition: $got"
 python3 - "$J/spec.artifact.json" <<'PY'
 import json,sys
 p=sys.argv[1]; o=json.load(open(p)); o.update(id='FX-renamed-001',status='approved'); json.dump(o,open(p,'w'))
@@ -206,8 +206,19 @@ PY2
   python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$A" --registry "$T/reg.json" | head -1
 }
 got=$(asset valid '{}'); [[ "$got" == 'PASS FX-asset-001' ]] && ok 'valid asset record' || bad "valid asset: $got"
+got=$(asset structured-provenance '{"schema_version":2,"provenance":{"generated_by":"asset-import","tool":"fixture"},"authors":[{"kind":"human","id":"artist"}]}'); [[ "$got" == 'PASS FX-asset-001' ]] && ok 'version 2 asset metadata accepted' || bad "structured asset provenance: $got"
 got=$(asset unknown '{"hash":"abc","mystery":true}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset unknown key rejected (anyOf does not short-circuit)' || bad "asset unknown key: $got"
 got=$(asset wrongtype '{"license":5}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset wrong type rejected' || bad "asset wrong type: $got"
 got=$(asset nosource '{"source_rev":null}'); [[ "$got" == 'FAIL FX-asset-001'* ]] && ok 'asset without source_rev or hash rejected' || bad "asset no source: $got"
+# editing an artifact without changing its status is not a transition (a draft edited twice stays legal)
+K="$T/same-status"; mkdir -p "$K"; git -C "$K" init -q -b main; git -C "$K" config user.email t@example.com; git -C "$K" config user.name t
+python3 "$T/make.py" "$K" draft; git -C "$K" add spec.md; git -C "$K" commit -qm one
+python3 - "$K/spec.md" <<'PY3'
+import json, sys
+p = sys.argv[1]; s = open(p, encoding="utf-8").read(); o = json.loads(s.split("\n", 1)[1].split("\n---", 1)[0]); o["title"] = o["title"] + " revised"
+open(p, "w", encoding="utf-8", newline="\n").write("---json\n" + json.dumps(o) + "\n---\n")
+PY3
+git -C "$K" add spec.md; git -C "$K" commit -qm two
+got=$(python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$K" --registry "$T/reg.json" | head -1); [[ "$got" == 'PASS FX-test-001' ]] && ok 'unchanged status across commits is not a transition' || bad "draft edited twice: $got"
 echo "artifacts: $((pass+fail+skip)) run, $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

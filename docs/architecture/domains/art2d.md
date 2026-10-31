@@ -1,21 +1,37 @@
-# 2D Art domain foundation
+# 2D Art production workflow
 
-## Responsibility and boundary
+## Boundary and readiness
 
-2D Art owns briefs and delivery records for sprites, illustrations, textures and 2D animation. Engineering owns engine import, runtime integration and client repository files; `client-integration` retains `client.unity-assets` until a later ownership plan moves it. Art artifacts reference external source files rather than routing to them.
+The `art2d` domain owns style direction, nonbinding concepts, production specifications, reference records, and verifiable runtime export records. Readiness is **production** when runtime exports match their asset specifications and pass the domain plugin; visual quality, rights, and binding gameplay decisions remain human gates. Engineering owns engine import and all product-repository writes.
 
-## Inputs and outputs
+## Kinds and lifecycle
 
-Inputs are approved or draft `ui-spec` artifacts and art direction supplied by a human or existing artifacts. Outputs are `art2d-brief` and `art2d-asset` artifacts under `art2d/`; asset records use the shared asset-manifest schema and identify delivery paths inside registered repos.
+| Kind | Purpose | Production state |
+|---|---|---|
+| `art-direction-2d` | Palette, line, shading, proportions, references, naming rules | Shared lifecycle v2 |
+| `concept-2d` | Character, environment, prop/item, UI illustration exploration | Draft/proposed/reviewed only |
+| `asset-spec-2d` | Purpose, resolution, format, transparency, animation, naming, export targets | Shared lifecycle v2 |
+| `runtime-export-2d` | Repo path, SHA-256, dimensions, format, alpha, atlas record | Shared lifecycle v2 |
+| `reference-2d` | Source, rights/license, relevance | Draft/proposed/reviewed only |
 
-## Artifacts and lifecycle
+Legacy `art2d-brief` and `art2d-asset` stay registered and valid. Every record uses stable IDs, schema version 2, source and author metadata, and a kind-specific `spec` validated by its versioned schema under `docs/schemas/kinds/`.
 
-Kinds: `art2d-brief`, `art2d-asset`. Both use the shared lifecycle; asset records additionally pass `asset-manifest` validation.
+## Workflow and quality
 
-## Quality gates and handoffs
+Create direction first, then concepts and specifications. Each asset spec cites an art-direction ID. A runtime export must cite its spec and point to a file in a registered repository. `scripts/checks/domains/art2d.py` rejects concept/reference promotion, requires specs to have runtime exports, verifies PNG/JPEG/WebP headers, SHA-256, dimensions, format, alpha and naming, and checks sprite dimensions and declared atlas constraints. Pillow is optional; unavailable palette inspection returns `NOT_AVAILABLE`. Checks are read-only and never write product repos.
 
-Run shared `artifact-lint`, `artifact-trace`, and `asset-manifest` for asset records. UI/UX hands visual requirements to 2D Art; engineering receives delivery/import paths. Human review is responsible for artistic acceptance and rights questions.
+Optional image generation is a concept-only exploration step. Record `{generated_by, tool, model}` provenance and keep generated imagery at draft; availability never gates the normal authoring workflow. References require a rights basis and never qualify as deliverables.
 
-## Deliberate exclusions and readiness
+## Handoffs
 
-The exact client asset folders are decided by the per-domain production plans. This foundation does not include production workflows, art generation, DCC tools, pipelines, or asset creation tooling. Readiness: **foundation**.
+- UI/UX → 2D Art: `ui-spec` ID/revision through `ui-spec-to-art2d-brief`.
+- 2D Art → UI/UX: illustration/icon runtime export IDs and usage constraints through `art2d-illustration-to-ui`.
+- 2D Art → Engineering: runtime export IDs, asset spec revisions, and paths under client `Assets/` using `art2d-asset-to-impl` and registered `client.unity-assets` routing. Checks only inspect; engineering performs imports.
+
+## Example workflow spec
+
+```json
+{"id":"inventory-icon","title":"Inventory icon","goal":"Produce a verified icon export","targets":[{"id":"direction","kind":"art-direction-2d","sources":[],"acceptance":["Palette follows UI direction"]},{"id":"spec","kind":"asset-spec-2d","sources":["direction"],"acceptance":["Export dimensions and format are fixed"]},{"id":"export","kind":"runtime-export-2d","sources":["spec"],"acceptance":["Hash and image metadata match"]}],"existing":[]}
+```
+
+The `/rpg-factory:workflow` plan carries each kind to lead `art-2d`; dependency waves order direction before specification and export. Quality failures block downstream use, changed upstream revisions mark dependents stale, and rejected artifacts recover through a new draft revision. Human review owns artistic acceptance, rights, and binding values.

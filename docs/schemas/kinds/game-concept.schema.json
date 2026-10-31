@@ -1,0 +1,65 @@
+{
+  "type": "object",
+  "required": [
+    "concept",
+    "target_audience",
+    "pillars",
+    "genre",
+    "platforms",
+    "usp",
+    "design_constraints"
+  ],
+  "properties": {
+    "concept": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_audience": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pillars": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "genre": {
+      "type": "string",
+      "minLength": 1
+    },
+    "platforms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "usp": {
+      "type": "string",
+      "minLength": 1
+    },
+    "design_constraints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "binding_values": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

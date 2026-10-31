@@ -38,8 +38,8 @@ ADR-19 d4), `GoldenVectors/` (aoi, combat, movement, snapshot_merger, validation
 - `ISimulationPhase` (`Server/ISimulationPhase.cs:27`) has one member, `Tick(ulong)`. It runs after
   input and before snapshots, and takes its own write scope through `EcsWorld.UpdateComponents` or
   `ReadAll`.
-- `ServerOptions.SimulationPhaseFactory` (`Server/GameServer.cs:428`) is invoked in the host
-  constructor (`Invoke`, `:1009`) with `(world, loggerFactory, onGroupRan)`.
+- `ServerOptions.SimulationPhaseFactory` (`Server/GameServer.cs:439`) is invoked in the host
+  constructor (`Invoke`, `:1020`) with `(world, loggerFactory, onGroupRan)`.
 - `Program.cs` picks the factory (`SimulationPhaseFactory` `Program.cs:1143`). `LoadTestSpawner` is used when `loadTestEntities > 0` (it never
   composes: its entities are tagged `EnemyAi`). Otherwise `EnemySpawner` and/or `BotPlayerSpawner`
   are used, with enemies first and the two wrapped in `CompositeSimulationPhase` when both are on.

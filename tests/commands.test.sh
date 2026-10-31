@@ -20,7 +20,7 @@ for f in "$ROOT"/commands/*.md; do
   pat=$(sed -n 's/^allowed-tools: Bash(\(.*\):\*)$/\1/p' "$f"); line=$(sed -n 's/^!`\(.*\)`$/\1/p' "$f")
   [ -n "$pat" ] && [ "${line#"$pat"}" != "$line" ] && ok "commands/$n.md ! line matches its allowed-tools prefix" || no "commands/$n.md: '$line' does not start with allowed '$pat'"
 done
-[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 9 ] && ok "exactly 9 commands (status, route, check, doctor, ui, ui-figma, ui-components, ui-screen, ui-review)" || no "command count"
+[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 10 ] && ok "exactly 10 commands (status, route, check, doctor, workflow, ui, ui-figma, ui-components, ui-screen, ui-review)" || no "command count"
 # the usage text documents every command's verb
 python3 -B "$CMD" --help 2>"$TMP/usage"
 for f in "$ROOT"/commands/*.md; do
@@ -29,7 +29,7 @@ for f in "$ROOT"/commands/*.md; do
 done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -51,5 +51,10 @@ grep -q "# Factory status" <<<"$out" && grep -q "## Freshness" <<<"$out" && [ $r
 out=$(cd "$WS" && python3 -B "$CMD" doctor 2>&1)
 grep -q "## Install" <<<"$out" && ! grep -qE "## Tripwire|--ack" <<<"$out" && grep -q "persistent state: $TMP/state" <<<"$out" && ok "doctor: install, state paths, no tripwire section" || no "doctor: $(tail -c 300 <<<"$out")"
 [ -z "$(git -C "$S" status --porcelain)" ] && ok "read-only commands left the fixture repo untouched" || no "fixture repo changed"
+cat >"$TMP/workflow.json" <<'EOF'
+{"id":"demo","title":"Demo","goal":"Demo","targets":[{"kind":"feature-spec","sources":[],"acceptance":["Works"]}],"existing":[]}
+EOF
+out=$(cd "$WS" && python3 -B "$CMD" workflow plan "$TMP/workflow.json" --json 2>&1); rc=$?
+[ "$rc" -eq 0 ] && python3 -c 'import json,sys; assert json.load(sys.stdin)["nodes"]' <<<"$out" && ok "workflow entry point dispatches plan" || no "workflow entry point rc=$rc: $(head -c 300 <<<"$out")"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

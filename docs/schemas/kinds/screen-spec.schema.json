@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/screen-spec.schema.json",
+  "title": "screen-spec",
+  "type": "object",
+  "required": [
+    "screen_id",
+    "purpose",
+    "layout_regions",
+    "components",
+    "tokens",
+    "navigation_in",
+    "navigation_out",
+    "platforms",
+    "breakpoints",
+    "states",
+    "elements",
+    "data_bindings"
+  ],
+  "properties": {
+    "screen_id": {
+      "type": "string"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "layout_regions": {
+      "type": "array"
+    },
+    "components": {
+      "type": "array"
+    },
+    "tokens": {
+      "type": "array"
+    },
+    "navigation_in": {
+      "type": "array"
+    },
+    "navigation_out": {
+      "type": "array"
+    },
+    "platforms": {
+      "type": "array"
+    },
+    "breakpoints": {
+      "type": "array",
+      "items": {"type": "number", "exclusiveMinimum": 0}
+    },
+    "states": {
+      "type": "object"
+    },
+    "elements": {
+      "type": "array"
+    },
+    "data_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_artifact_id", "field"],
+        "properties": {
+          "source_artifact_id": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "field": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "element_id": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        }
+      }
+    },
+    "figma": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

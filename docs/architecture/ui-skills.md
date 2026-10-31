@@ -99,7 +99,9 @@ stops and says which part is left out. It never silently does less than asked. T
 
 ## Boundaries with the neighbouring skills
 
-- **`ui-ux`** (lead, domain `ui`, authoring repo) owns design artifacts: UI flows and interface specifications.
+- **`ui-ux`** (lead, domain `ui`, authoring repo) owns the design artifacts (ux-requirements, ia-map,
+  design-tokens, component-spec, screen-spec, ui-handoff). A `ui-handoff` or screen spec is the design input for
+  the engine-side work the UI skills plan; `ui-ux` names `rpg-factory:ui-orchestrator` for that part.
   A request for a spec, not code, routes there with `--domain ui`.
 - **`client-integration`** (lead, client repo) owns where client changes go, its rules, validation, gates and
   report. Every UI code change in `IndieRPGMMOAdventure` runs inside its workflow.

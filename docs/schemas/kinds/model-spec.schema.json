@@ -1,0 +1,76 @@
+{
+  "type": "object",
+  "required": [
+    "topology",
+    "polygon_budget_by_lod",
+    "lods",
+    "uv_required",
+    "naming_pattern",
+    "scale",
+    "units",
+    "pivot"
+  ],
+  "properties": {
+    "topology": {
+      "type": "string",
+      "minLength": 1
+    },
+    "polygon_budget_by_lod": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "lods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "distance"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "distance": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "uv_required": {
+      "type": "boolean"
+    },
+    "naming_pattern": {
+      "type": "string"
+    },
+    "node_naming_pattern": {
+      "type": "string"
+    },
+    "scale": {
+      "type": "number"
+    },
+    "units": {
+      "type": "string"
+    },
+    "pivot": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3
+    },
+    "root_required": {
+      "type": "boolean"
+    },
+    "rig_required": {
+      "type": "boolean"
+    },
+    "animation_required": {
+      "type": "boolean"
+    }
+  },
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/model-spec-v1.schema.json",
+  "title": "model-spec specification schema v1"
+}

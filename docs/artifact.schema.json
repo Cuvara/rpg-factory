@@ -3,23 +3,419 @@
   "$id": "https://github.com/Cuvara/rpg-factory/docs/artifact.schema.json",
   "title": "Factory artifact contract",
   "oneOf": [
-    {"$ref": "#/$defs/artifact"},
-    {"$ref": "#/$defs/asset"},
-    {"$ref": "#/$defs/approval"}
+    {
+      "$ref": "#/$defs/artifact"
+    },
+    {
+      "$ref": "#/$defs/asset"
+    },
+    {
+      "$ref": "#/$defs/approval"
+    }
   ],
   "$defs": {
     "artifact": {
-      "type": "object", "required": ["id", "kind", "domain", "status", "title", "upstream", "acceptance", "trace"],
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "domain",
+        "status",
+        "title",
+        "upstream",
+        "acceptance",
+        "trace"
+      ],
       "properties": {
-        "id": {"type": "string", "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"}, "kind": {"type": "string"},
-        "domain": {"type": "string"}, "status": {"type": "string"}, "title": {"type": "string", "minLength": 1},
-        "upstream": {"type": "array", "items": {"type": "object", "required": ["id", "rev"], "properties": {"id": {"type": "string"}, "rev": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}, "additionalProperties": false}},
-        "acceptance": {"type": "array", "items": {"type": "object", "required": ["id", "text", "verify"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "verify": {"enum": ["test", "review", "measure"]}}, "additionalProperties": false}},
-        "trace": {"type": "array", "items": {"type": "object", "required": ["repo", "ref", "kind", "ac"], "properties": {"repo": {"type": "string"}, "ref": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "kind": {"enum": ["impl", "test", "release"]}, "ac": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false}},
-        "binding_values": {"type": "boolean", "const": true}
-      }, "additionalProperties": false
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "upstream": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "rev"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "rev": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "text",
+              "verify"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verify": {
+                "enum": [
+                  "test",
+                  "review",
+                  "measure"
+                ]
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "repo",
+              "ref",
+              "kind",
+              "ac"
+            ],
+            "properties": {
+              "repo": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              },
+              "kind": {
+                "enum": [
+                  "impl",
+                  "test",
+                  "release"
+                ]
+              },
+              "ac": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "agent",
+                  "human"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "generated_by": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejection": {
+          "type": "object",
+          "required": [
+            "reason",
+            "by",
+            "date"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "by": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "spec": {
+          "type": "object"
+        },
+        "binding_values": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "additionalProperties": false
     },
-    "asset": {"type": "object", "required": ["id", "kind", "domain", "status", "source_uri", "license", "provenance", "delivery"], "properties": {"id": {"type": "string", "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"}, "kind": {"type": "string"}, "domain": {"type": "string"}, "status": {"type": "string"}, "source_uri": {"type": "string"}, "source_rev": {"type": "string"}, "hash": {"type": "string"}, "license": {"type": "string"}, "provenance": {"enum": ["authored", "library", "generated"]}, "delivery": {"type": "object", "required": ["repo", "path"], "properties": {"repo": {"type": "string"}, "path": {"type": "string"}}, "additionalProperties": false}}, "anyOf": [{"required": ["source_rev"]}, {"required": ["hash"]}], "additionalProperties": false},
-    "approval": {"type": "object", "required": ["artifact", "gate", "scope", "rev", "by", "date"], "properties": {"artifact": {"type": "string"}, "gate": {"type": "string"}, "scope": {"type": "string"}, "rev": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "by": {"type": "string"}, "date": {"type": "string", "format": "date-time"}}, "additionalProperties": false}
+    "asset": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "domain",
+        "status",
+        "source_uri",
+        "license",
+        "provenance",
+        "delivery"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,5}-[a-z0-9-]+-[0-9]{3}$"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "source_uri": {
+          "type": "string"
+        },
+        "source_rev": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "enum": [
+                "authored",
+                "library",
+                "generated"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "generated_by": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "delivery": {
+          "type": "object",
+          "required": [
+            "repo",
+            "path"
+          ],
+          "properties": {
+            "repo": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "schema_version": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "agent",
+                  "human"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rejection": {
+          "type": "object",
+          "required": [
+            "reason",
+            "by",
+            "date"
+          ],
+          "properties": {
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "by": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "spec": {
+          "type": "object"
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "source_rev"
+          ]
+        },
+        {
+          "required": [
+            "hash"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "gate",
+        "scope",
+        "rev",
+        "by",
+        "date"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string"
+        },
+        "gate": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "rev": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "by": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
   }
 }

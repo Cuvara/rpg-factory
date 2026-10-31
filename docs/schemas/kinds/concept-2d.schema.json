@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "2D concept v1",
+  "type": "object",
+  "required": [
+    "subject_type",
+    "description",
+    "stage"
+  ],
+  "properties": {
+    "subject_type": {
+      "enum": [
+        "character",
+        "environment",
+        "prop-item",
+        "ui-illustration"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage": {
+      "const": "concept"
+    },
+    "image": {
+      "type": "string"
+    },
+    "generated_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_on": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "additionalProperties": false
+}

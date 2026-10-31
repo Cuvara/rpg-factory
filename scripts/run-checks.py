@@ -58,6 +58,7 @@ import evidence  # noqa: E402
 import fstate  # noqa: E402
 import context as ctxlib  # noqa: E402
 from context import native_abs  # noqa: E402
+from shells import bash_candidates, find_bash  # noqa: E402
 
 
 def parse_args(argv):
@@ -154,15 +155,7 @@ def select_bash():
     if os.name != "nt":
         _BASH_SELECTION = (shutil.which("bash"), "posix")
         return _BASH_SELECTION
-    candidates = [r"C:\Program Files\Git\bin\bash.exe", shutil.which("bash")]
-    git = shutil.which("git")
-    if git:
-        try:
-            ep = subprocess.run([git, "--exec-path"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
-            if ep.returncode == 0:
-                candidates.insert(0, os.path.abspath(os.path.join(ep.stdout.strip(), "..", "..", "bin", "bash.exe")))
-        except (OSError, subprocess.SubprocessError):
-            pass
+    candidates = bash_candidates()
     bash = next((os.path.abspath(x) for x in candidates if x and os.path.isfile(x)), None)
     if not bash:
         _BASH_SELECTION = (None, "missing")
@@ -445,17 +438,23 @@ def grade(parser, code, out):
     """(state, counts, reason)"""
     counts = {}
     if parser == "artifact":
-        lines = [line for line in out.splitlines() if re.match(r"^(PASS|FAIL|HUMAN_REQUIRED) ", line)]
+        lines = [line for line in out.splitlines() if re.match(r"^(PASS|FAIL|HUMAN_REQUIRED|NOT_AVAILABLE) ", line)]
         counts = {"passed": sum(line.startswith("PASS ") for line in lines),
                   "failed": sum(line.startswith("FAIL ") for line in lines),
                   "human_required": sum(line.startswith("HUMAN_REQUIRED ") for line in lines),
+                  "not_available": sum(line.startswith("NOT_AVAILABLE ") for line in lines),
                   "discovered": len(lines)}
         if code != 0 or counts["failed"]:
             return "FAIL", counts, f"exit {code}, {counts['failed']} artifact failures"
         if not lines:
             return "FAIL", counts, "no artifact result lines"
-        if counts["human_required"]:
-            return "HUMAN_REQUIRED", counts, f"{counts['human_required']} artifact(s) need human approval"
+        if counts["human_required"] or counts["not_available"]:
+            reasons = []
+            if counts["human_required"]: reasons.append(f"{counts['human_required']} artifact(s) need human approval")
+            reasons.extend(line[len("NOT_AVAILABLE "):] for line in lines if line.startswith("NOT_AVAILABLE "))
+            return "HUMAN_REQUIRED", counts, "; ".join(reasons)
+        if counts["passed"] == 0:
+            return "FAIL", counts, "no artifact PASS result lines"
         return "PASS", counts, None
     if parser == "go-test":
         counts = {"passed": len(re.findall(r"^\s*--- PASS", out, re.M)), "failed": len(re.findall(r"^\s*--- FAIL", out, re.M)),
@@ -548,7 +547,7 @@ def outside_paths(a, repo):
 
 
 def context(a, paths):
-    ctx_cmd = ["bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
+    ctx_cmd = [find_bash() or "bash", os.path.join(PLUGIN_ROOT, "scripts", "factory-context.sh"), "--repo", a["repo"], "--json"]
     if a["repo_path"]:
         ctx_cmd += ["--repo-path", a["repo_path"]]
     if paths:

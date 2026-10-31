@@ -158,6 +158,7 @@ class BuildTests(unittest.TestCase):
             failed = subprocess.CompletedProcess([], 1, "x.cs(1,1): error CS1002: ; expected\n", "")
             with mock.patch.object(native, "dotnet_version", return_value="10.0.400"), \
                     mock.patch.object(native.util, "IS_WINDOWS", True), \
+                    mock.patch.object(native, "build_kind", return_value="r2r"), \
                     mock.patch.object(native.subprocess, "run", side_effect=[
                         subprocess.CompletedProcess([], 0, "", ""),      # git rev-parse
                         subprocess.CompletedProcess([], 0, "", ""),      # git status

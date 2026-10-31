@@ -5,6 +5,17 @@ Shared artifact metadata, lifecycle transitions, trace requirements and signed a
 
 `rpg-factory` is a Claude Code plugin that organises development work across the UnityIndie RPG MMO workspace. Engineering work spans five product repos; Game Design artifacts live in the optional `game-authoring` repo:
 
+## Installation
+
+Add the marketplace once, then install the plugin and update it when a new version is available:
+
+```text
+/plugin marketplace add CuongDuyNguyen/rpg-factory
+/plugin install rpg-factory@rpg-factory
+/plugin marketplace update rpg-factory
+/plugin update rpg-factory@rpg-factory
+```
+
 | Repo key | Directory | Contents |
 |---|---|---|
 | `server` | `rpg-mmo-server` | Go gateway, Nakama plugin, C# realtime game server, Shared.GameLogic, deploy |
@@ -21,12 +32,55 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 1.2.0 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
+Version 1.3.0 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
 current task, an agent stops at **READY_TO_TAG** and the maintainer tags; when the user explicitly authorizes the
 release in that task, the agent performs the authorized merge, version, tag and release steps itself, within that
 scope and after the release checks pass. The guard's tag/release advisories apply either way.
 
 ## Commands
+
+## Production workflows
+
+Use the domain lead skill to author one discipline's artifacts. The optional private `game-authoring` repository follows the authoring layout declared in `registry.json`; it is not created or published by this plugin. Without it, the lead returns the artifact content in its response.
+
+- Game Design: “Draft a combat gameplay system and mark unapproved damage values as proposals.”
+- UI/UX: “Create an inventory screen specification with states, accessibility, and testable acceptance criteria.”
+- 2D Art: “Specify an inventory icon and record its verified runtime export.”
+- 3D Art: “Write a hero prop model and material specification, then prepare its delivery record.”
+- VFX: “Specify a combat impact effect with event trigger, timing, and platform budgets.”
+
+For cross-domain work, create a workflow spec with target IDs, kinds, sources, and acceptance criteria, then run:
+
+```bash
+python3 -B scripts/factory-workflow.py plan workflow.json --authoring <authoring-repo>
+python3 -B scripts/factory-workflow.py status workflow.json --authoring <authoring-repo>
+python3 -B scripts/factory-workflow.py report workflow.json --authoring <authoring-repo>
+```
+
+Plans order work from registered handoff contracts. Artifacts move through draft, proposed, reviewed, approved, in-implementation, verified, and released states; rejected and blocked artifacts recover through a new draft. Reviews record independent human assessment. Binding approvals require a trusted registered signing key and remain `HUMAN_REQUIRED` until one exists. Validation outcomes are `PASS`, `FAIL`, `WARN`, `HUMAN_REQUIRED`, `NOT_AVAILABLE` and `BLOCKED`; reports preserve these results and identify stale upstream revisions.
+
+Optional tools are detected without launching applications or making provider requests during validation:
+
+| Tool | When available | When absent |
+|---|---|---|
+| Pillow | Optional 2D palette/image inspection | `NOT_AVAILABLE`; structural image checks continue |
+| Blender | Optional 3D DCC scene statistics | `NOT_AVAILABLE`; standard glTF/GLB checks continue |
+| Unity | Optional prefab inspection | `NOT_AVAILABLE`; visual/runtime review remains human |
+| Figma | Format-checked UI references | `NOT_AVAILABLE`; visual review remains human |
+| ffmpeg | Optional media conversion when a workflow requests it | No conversion is attempted; provide a supported source/export |
+| game-art-mcp | Optional concept exploration provider | `NOT_AVAILABLE`; author concepts manually |
+| ai-pixel-art-image-generation | Optional concept exploration provider | `NOT_AVAILABLE`; author concepts manually |
+
+## Skill map
+
+| Request | Lead |
+|---|---|
+| Game concepts, mechanics, specifications or design decisions | `game-design` |
+| UI/UX production requirements, screens or handoffs | `ui-ux` |
+| 2D art direction, concepts, asset specifications or runtime exports | `art-2d` |
+| 3D art specifications or delivery records | `art-3d` |
+| VFX direction, specifications, budgets or delivery records | `vfx` |
+
 
 | Command | What you get | Changes anything? |
 |---|---|---|
@@ -80,7 +134,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
      cross-repo drivers                     domain + repo leads
      game-design                            GDD, feature specs, design decisions
      ui-ux                                  UI flows and interface specifications
-     art-2d                                 2D art briefs and delivery manifests
+     art-2d                                 2D art direction, concepts, production specifications and runtime exports
      art-3d                                 3D art briefs and delivery manifests
      vfx                                    VFX specifications and delivery manifests
      wire-contract  server → Netcode → client     server-realtime   (C# game server, SGL)
@@ -112,7 +166,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
 |---|---|---|---|
 | Game concepts, mechanics, progression, GDD, feature spec or design decision | `game-design` | optional `authoring` | `artifact-lint`, `artifact-trace`, human gates |
 | UI flow or interface specification | `ui-ux` | optional `authoring` | `artifact-lint`, `artifact-trace` |
-| 2D art brief or asset manifest | `art-2d` | optional `authoring` | shared artifact checks, `asset-manifest` |
+| 2D art direction, concepts, asset specifications or runtime exports | `art-2d` | optional `authoring` | `artifact-lint`, `artifact-trace`, `art2d-quality` |
 | 3D art brief or asset manifest | `art-3d` | optional `authoring` | shared artifact checks, `asset-manifest` |
 | VFX specification or asset manifest | `vfx` | optional `authoring` | shared artifact checks, `asset-manifest` |
 | Add a message or field to the wire protocol, change the protocol version, JoinToken claims, or the Redis `servers:id` hash | `wire-contract` | server → netcode → client | `generate.sh` (protoc 29.3), `wire-parity.sh`, TestDotnetInterop, Netcode headless tests, pin-bump |

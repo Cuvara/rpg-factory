@@ -1,0 +1,1 @@
+Validate a draft asset-3d whose GLB exceeds its per-LOD triangle budget and omits a required texture. Report both concrete quality failures with the artifact ID and revision; schema validity does not make the delivery production-ready.

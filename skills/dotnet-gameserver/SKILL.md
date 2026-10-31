@@ -76,7 +76,7 @@ knobs, metrics, golden vectors and the AOT warning baseline:
 - **Unknown post-join message types.** They are ignored for forward compatibility, counted in
   `gameserver_messages_rejected_total{reason="unknown_type"}`, and leave the session open
   when `RecordUnknownMessageType` records the bounded counter
-  (`backend/gameserver-dotnet/GameServer/Server/GameServer.cs:2247`); S16 requires the counter to rise for its unknown-type case.
+  (`backend/gameserver-dotnet/GameServer/Server/GameServer.cs:2259`); S16 requires the counter to rise for its unknown-type case.
 
 ## Idioms
 

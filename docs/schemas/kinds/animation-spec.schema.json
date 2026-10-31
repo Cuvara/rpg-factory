@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "required": [
+    "clips"
+  ],
+  "properties": {
+    "clips": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "fps",
+          "loop",
+          "root_motion"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "loop": {
+            "type": "boolean"
+          },
+          "root_motion": {
+            "type": "boolean"
+          },
+          "duration_frames": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/animation-spec-v1.schema.json",
+  "title": "animation-spec specification schema v1"
+}

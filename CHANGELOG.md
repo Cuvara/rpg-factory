@@ -45,9 +45,66 @@ All notable changes to this project are documented here. Format: [Keep a Changel
   first; its UI plan names the subset to load", instead of asking for all five.
 - `client-integration` names the five UI skills at its UI step.
 
+## [1.3.0] - 2026-10-31
+
+Feature release: production workflows for Game Design, UI/UX, 2D Art, 3D Art and VFX. Each domain has production
+artifact kinds with versioned schemas and draft templates, a domain quality plugin (gameplay-number and approval rules,
+UI states/bindings/components/handoffs, 2D image integrity, glTF/GLB and optional Blender inspection, VFX timing and
+platform budgets with optional Unity prefab inspection) and a lead skill with handoffs. `/rpg-factory:workflow`
+plans dependency waves from artifact references (domain contracts order planned nodes; sync contracts such as
+`ui-vfx-sync` only trigger revalidation), reports stale upstream revisions, and writes integrated reports. Shared
+validation states are PASS, FAIL, WARN, HUMAN_REQUIRED, NOT_AVAILABLE and BLOCKED; lifecycle states are draft,
+proposed, reviewed, approved, in-implementation, verified, released, rejected and blocked. Optional tools (Pillow,
+Blender, Unity, Figma, image providers) are detected by name or path and degrade to NOT_AVAILABLE. No approver signing
+key is registered, so binding approvals stay HUMAN_REQUIRED. The private `game-authoring` repo holds the authoring
+layout generated from the registry. `tests/dogfood.sh --write` runs real write sessions graded from the files on disk;
+CI runs on Linux and Windows. Engineering routing is unchanged (golden test). Update with `claude plugin marketplace
+update rpg-factory && claude plugin update rpg-factory@rpg-factory`, then start a new session.
+
+### Added
+
+- Added production Game Design artifacts, schemas, templates, gameplay-number checks, and design-to-UI, art, VFX, and Engineering contracts.
+- Added production UI/UX artifact schemas, draft templates, quality rules, workflow guidance, and registry handoffs.
+- Added production 2D art direction, concepts, asset specifications, runtime export records, references, schemas, and image integrity quality rules.
+- Added 3D art artifact kinds, per-kind schemas and draft templates for direction, models, materials, rigs, animation, and delivery.
+- Added standard-library glTF/GLB production validation and optional Blender scene-statistics inspection for DCC formats.
+- Added production VFX direction, specification, and delivery workflows, domain quality rules, and optional Unity prefab inspection.
+- Added the `/rpg-factory:workflow` production workflow for planning, status, and integrated reports across domains.
+- Added dependency-aware workflow planning, status, dispatch, and integrated reports through the factory entry point.
+- Added lifecycle-aware workflow status, signed approval grading, upstream blob invalidation, ordered revalidation, engineering traces, and schemas for every workflow output.
+- Workflow readiness now blocks artifacts when artifact-quality cannot produce lifecycle results, and reports the unavailable-check reason.
+- Added lifecycle v2 metadata and quality result contracts, per-kind schema registration, review records, adapter tool discovery and domain quality plugin interfaces.
+- Added contained registered repo roots and trusted approval-state access to the domain plugin context, plus name-only optional provider discovery.
+- Added real write sessions to `tests/dogfood.sh --write` for every production domain and three cross-domain workflows, graded from the files on disk (routed artifact kinds, zero FAIL rows, no approvals, no writes outside the scratch workspace, wave order, stale status), with an offline grader test.
+- Added the private `game-authoring` repository layout, generated from the registry authoring modules and contract paths, with CI that runs the artifact checks at a pinned plugin release.
+- Added a Windows (Git Bash) CI job beside Linux.
+
+### Changed
+
+- Workflow waves follow artifact-level `upstream`/`sources` references when artifacts exist; domain handoff contracts only order planned nodes without references, so a design technical handoff written after a UI screen is no longer a `CYCLE`.
+- Factory Core loads every routed domain lead through the Skill tool in multi-domain tasks and never substitutes reading a SKILL.md.
+- An asset-spec-2d no longer needs a runtime export while it is a draft; the export is required once implementation is claimed.
+- Replaced foundation guidance with production workflows, valid drafts, quality rules, and domain handoff requirements.
+- Routed workflow planning from registered artifact kinds and ordered waves from handoff contracts; synchronization contracts trigger revalidation without imposing wave order.
+- Documented registry-derived repository roots, safe path resolution, provider discovery, and the shared `Context.approval` contract.
+- Artifact reviews bind to git author identities, expose process or signed assurance, and support registry-required signed reviews.
+- Unity and Blender availability detection is path-only: Unity is never launched, and only the optional 3D DCC inspection runs the detected Blender in background mode (missing Blender is NOT_AVAILABLE).
+- Extended artifact quality checks with structured results while preserving version 1 artifacts and signed approval verification.
+- Artifact quality, lint, and trace now fail closed on malformed files; lifecycle requirements and artifact grades follow registry data, and active design kinds validate their structured spec payloads.
+- Artifact check grading treats unavailable evidence as human-required, and adapter tool overrides run portable Python fakes consistently on Windows and Linux.
+
 ### Fixed
 
 - The Bash and PowerShell guard raises a high advisory for host-wide process termination, in any directory: a kill that names targets by image/filter/pattern (`taskkill /IM|/FI`, `Stop-Process -Name`, `pkill`, `killall`, `kill -1`, `wmic process ... delete`), or a process query by name/pattern (`Win32_Process`, `Get-Process <name>`, `pgrep`, `pidof`, `ps | grep`, `tasklist`) combined with any terminator, including `taskkill //PID $(powershell ... Win32_Process ...)`. It reads the parsed command, so quoted `grep`/`echo`/commit-message text no longer triggers it; raw text is only the fallback for unparseable input.
+- Binding gameplay numbers pass only with a verified current-revision approval; a missing approval is HUMAN_REQUIRED, an invalid or untrusted one FAILs.
+- UI quality validates numeric ordered breakpoints, data bindings against known source artifacts, component specs, and handoff screen ids.
+- 2D art parses lossy, lossless and extended WebP headers and rejects truncated images; optional palette validation runs when Pillow is present.
+- VFX budgets cover every ParticleSystem in a prefab, and Unity detection never runs the Editor.
+- artifact-quality `--domain`/`--kind` select what is reported but still resolve cross-domain sources and upstream artifacts.
+- artifact-quality attributes artifact-trace rows to their subject artifact instead of failing every artifact when one is stale.
+- Editing an artifact without changing its status is not an illegal lifecycle transition (artifact-lint and artifact-quality).
+- On Windows, `/rpg-factory:route` and run-checks launch the Git for Windows bash instead of the System32 WSL launcher.
+- Tests: the dir_readonly ACL check reports SKIP when the token has SeRestorePrivilege enabled (hosted Windows runners), and the testlab host-guard CPU budget is printed instead of asserted on hosted CI runners.
 
 ## [1.2.0] - 2026-10-30
 
@@ -94,6 +151,12 @@ update rpg-factory@rpg-factory`, then start a new session.
 
 ### Fixed
 
+- Deduplicated equivalent handoff contracts while retaining distinct Art3D source and delivery paths.
+- Kept binding gameplay approvals `HUMAN_REQUIRED` until a trusted signing key is registered; verified approvals bind to the artifact revision.
+- Enforced UI production quality rules for breakpoints, source-backed data bindings, components, and uniquely resolved handoff screens.
+- Validated WebP headers and palette constraints, and made optional 2D art providers report availability without network calls.
+- Made tool detection side-effect-free; Windows tool discovery uses Git Bash instead of the System32 WSL launcher.
+- Added a Windows CI job for the shared workflow test suites.
 - `tests/routing-golden.test.sh` and `tests/registry-nulls.test.sh` are host-independent (Linux CI without a workspace): host path-form scenarios stay out of the golden, and the guard is compared with itself on the real registry.
 - Point art and VFX implementation handoffs at the existing client `Assets/` root, document production-plan folder selection, and configure UTF-8 stdio for the executable asset manifest checker.
 - Keep the base P4 checker fixture consistent by removing domains, modules, skills and contracts that depend on the removed authoring repository.

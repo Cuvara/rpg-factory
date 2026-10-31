@@ -283,9 +283,20 @@ grep -q "none registered" <<<"$o" && okk "--status: no check registered says so"
 python3 - "$ROOT/scripts/run-checks.py" <<'PY'
 import importlib.util,sys
 s=importlib.util.spec_from_file_location("runner",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-state,_,_=m.grade("artifact",0,"HUMAN_REQUIRED FX-one-001 missing approval\n")
-raise SystemExit(0 if state=="HUMAN_REQUIRED" else 1)
+cases=[
+ ("FAIL FX-one-001 invalid schema\nPASS FX-two-001 valid schema\n", "FAIL"),
+ ("HUMAN_REQUIRED FX-one-001 missing approval\n", "HUMAN_REQUIRED"),
+ ("NOT_AVAILABLE FX-one-001 missing tool\n", "HUMAN_REQUIRED"),
+ ("PASS FX-one-001 valid\nNOT_AVAILABLE FX-two-001 missing plugin\n", "HUMAN_REQUIRED"),
+ ("PASS FX-one-001 valid\n", "PASS"),
+ ("", "FAIL"),
+]
+for output,expected in cases:
+ state,counts,reason=m.grade("artifact",0,output)
+ assert state==expected,(output,state,expected)
+ if "NOT_AVAILABLE" in output: assert "missing" in reason and counts["not_available"]==output.count("NOT_AVAILABLE")
+print("PASS artifact result grading: fail dominance, human, unavailable, pass, and empty")
 PY
-if [ $? -eq 0 ]; then okk "artifact parser grades HUMAN_REQUIRED"; else nok "artifact parser HUMAN_REQUIRED grading"; fi
+if [ $? -eq 0 ]; then okk "artifact parser grades all result combinations"; else nok "artifact parser result grading"; fi
 total=$((pass + fail)); echo "run-checks tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

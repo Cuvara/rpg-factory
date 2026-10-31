@@ -122,7 +122,8 @@ def validate(obj, reg, schema):
                 errors.append("missing " + k)
         if not isinstance(obj.get("id"), str) or not ID.fullmatch(obj.get("id", "")):
             errors.append("bad id")
-        if obj.get("provenance") not in ("authored", "library", "generated"):
+        provenance = obj.get("provenance")
+        if provenance not in ("authored", "library", "generated") and not isinstance(provenance, dict):
             errors.append("bad provenance")
         if not (
             isinstance(obj.get("source_rev"), str)
@@ -145,7 +146,7 @@ def validate(obj, reg, schema):
         life = lifecycle(reg, obj.get("kind"))
         if obj.get("kind") not in dom.get("artifact_kinds", []):
             errors.append("unregistered kind/domain")
-        if not life or obj.get("status") not in life.get("states", []):
+        if not life or (obj.get("status") not in life.get("states", []) and not (obj.get("status") == "review" and "proposed" in life.get("states", []))):
             errors.append("illegal status")
         return errors
     required = (
@@ -170,7 +171,7 @@ def validate(obj, reg, schema):
     life = lifecycle(reg, obj.get("kind"))
     if obj.get("kind") not in dom.get("artifact_kinds", []):
         errors.append("unregistered kind/domain")
-    if not life or obj.get("status") not in life.get("states", []):
+    if not life or (obj.get("status") not in life.get("states", []) and not (obj.get("status") == "review" and "proposed" in life.get("states", []))):
         errors.append("illegal status")
     for item in obj.get("upstream", []):
         if (
@@ -188,7 +189,8 @@ def validate(obj, reg, schema):
         for item in obj["acceptance"]:
             if (
                 not isinstance(item, dict)
-                or set(item) != {"id", "text", "verify"}
+                or not {"id", "text", "verify"}.issubset(item)
+                or set(item) - {"id", "text", "verify", "evidence"}
                 or not all(
                     isinstance(item.get(k), str) and item[k] for k in ("id", "text")
                 )
@@ -216,13 +218,23 @@ def validate(obj, reg, schema):
                 errors.append("bad trace AC")
     if "binding_values" in obj and obj["binding_values"] is not True:
         errors.append("binding_values must be true when present")
+    if obj.get("schema_version", 1) not in (1, 2):
+        errors.append("unsupported schema_version")
+    if "spec" in obj:
+        schema_path = reg.get("kind_schemas", {}).get(obj.get("kind"), reg.get("kind_schemas", {}).get("default"))
+        if schema_path:
+            try:
+                kind_schema = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", schema_path), encoding="utf-8"))
+                errors.extend(schema_errors(obj["spec"], kind_schema, kind_schema, "$.spec"))
+            except Exception as exc:
+                errors.append("invalid kind schema: " + str(exc))
     return errors
 
 
 def main():
     for _stream in (sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
-            _stream.reconfigure(encoding="utf-8")
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
     p.add_argument("repo_dir")
     p.add_argument(
@@ -249,6 +261,9 @@ def main():
         reasons = []
         try:
             obj = load_file(f)
+            if not isinstance(obj, dict): raise ValueError("artifact document must be a JSON object")
+            if not obj.get("id"): raise ValueError("missing id")
+            if not obj.get("kind"): raise ValueError("missing kind")
             reasons.extend(validate(obj, reg, schema))
             ident = obj.get("id")
             if ident in seen:
@@ -269,7 +284,8 @@ def main():
                     )
                     if old.get("id") != ident:
                         reasons.append(f"id changed {old.get('id')} -> {ident}")
-                    if obj.get("status") not in lifecycle(
+                    # an unchanged status is no transition (editing a draft keeps it a draft)
+                    if obj.get("status") != old.get("status") and obj.get("status") not in lifecycle(
                         reg, obj.get("kind")
                     ).get("transitions", {}).get(old.get("status"), []):
                         reasons.append("illegal transition")
@@ -278,7 +294,7 @@ def main():
         except Exception as e:
             reasons.append("bad document: " + str(e))
         line = (
-            ("FAIL" if reasons else "PASS")
+            ("FAIL" if reasons else ("WARN deprecated-state review -> proposed" if isinstance(obj, dict) and obj.get("status") == "review" else "PASS"))
             + " "
             + (
                 str(obj.get("id", "unknown"))

@@ -67,6 +67,11 @@ problems=$(jq -r '
         | select(($r.domains[$d] // null) == null) | "\($id): unknown domain \($d)"),
       (($r.contracts // [])[] | .id as $id | (.domain // "engineering") as $d
         | select(($r.domains[$d] // null) == null) | "contract \($id): unknown domain \($d)"),
+      (($r.contracts // [])[] | select(.kind == "handoff") | .id as $id
+        | select([($r.domains // {})[].handoffs[]?] | index($id) == null)
+        | "handoff contract \($id): not listed by an owning domain"),
+      (($r.contracts // [])[] | select(.ordering != null and (.ordering | IN("ordered","none") | not))
+        | "contract \(.id): ordering must be ordered|none"),
       ($r.modules[] as $m | ($m.domain // "engineering") as $d
         | select(($r.domains[$d].repos // []) | index($m.repo) == null)
         | "\($m.id): repo \($m.repo) is not in domain \($d)"),
@@ -154,6 +159,57 @@ ownership_out=$(python3 -B "$(dirname "${BASH_SOURCE[0]}")/checks/registry-owner
   exit 1
 }
 echo "$ownership_out"
+
+python3 -B - "$REGISTRY" "$PLUGIN_ROOT" <<'PY'
+import json, os, sys
+r=json.load(open(sys.argv[1],encoding="utf-8")); root=os.path.abspath(sys.argv[2]); errors=[]
+graph={}
+def domain_for(repo, path, fallback):
+    path=path.strip("/")
+    choices=[]
+    for module in r.get("modules",[]):
+        if module.get("repo")!=repo: continue
+        for prefix in module.get("paths",[]):
+            prefix=prefix.strip("/")
+            if not prefix or path==prefix or path.startswith(prefix+"/"): choices.append((len(prefix),module.get("domain","engineering")))
+    return max(choices,default=(0,fallback))[1]
+for c in r.get("contracts",[]):
+    if c.get("kind")!="handoff" or c.get("ordering")=="none": continue
+    source=c.get("source",{}).get("path",""); source_repo=c.get("source",{}).get("repo","")
+    src=domain_for(source_repo,source,c.get("domain","engineering"))
+    for end in c.get("copies",[]):
+        dest=domain_for(end.get("repo"),end.get("path",""),"engineering")
+        if src!=dest: graph.setdefault(src,set()).add(dest)
+def visit(node, stack, done):
+    if node in stack: return True
+    if node in done: return False
+    stack.add(node)
+    cycle=any(visit(child,stack,done) for child in graph.get(node,()))
+    stack.remove(node); done.add(node); return cycle
+if any(visit(n,set(),set()) for n in graph): errors.append("ordered handoff contracts contain a cycle")
+known={k for d in r.get("domains",{}).values() for k in d.get("artifact_kinds",[])}
+for kind,path in r.get("kind_schemas",{}).items():
+    if kind != "default" and kind not in known: errors.append(f"kind schema {kind}: kind is not registered")
+    if not isinstance(path,str) or not path.startswith("docs/schemas/kinds/") or not os.path.isfile(os.path.join(root,path)):
+        errors.append(f"kind schema {kind}: missing or invalid path {path}"); continue
+    try: schema=json.load(open(os.path.join(root,path),encoding="utf-8"))
+    except Exception as exc: errors.append(f"kind schema {kind}: invalid JSON: {exc}"); continue
+    if kind == "default" or any(kind in d.get("artifact_kinds",[]) and d.get("status") in ("active","production") for d in r.get("domains",{}).values()):
+        if "required" not in schema or not isinstance(schema.get("required"),list) or not schema["required"]:
+            errors.append(f"kind schema {kind}: spec schema must declare non-empty required")
+        props=schema.get("properties")
+        if not isinstance(props,dict) or not props:
+            errors.append(f"kind schema {kind}: spec schema must declare properties")
+        elif not any(isinstance(v,dict) and (v.get("type") or v.get("enum") or v.get("const") or v.get("$ref")) for v in props.values()):
+            errors.append(f"kind schema {kind}: spec properties must constrain at least one field")
+for domain,data in r.get("domains",{}).items():
+    plugin=data.get("quality_plugin")
+    if plugin and (not plugin.startswith("scripts/checks/domains/") or not plugin.endswith(".py") or not os.path.isfile(os.path.join(root,plugin))): errors.append(f"domain {domain}: invalid quality_plugin {plugin}")
+if errors:
+    print("\n".join("FAIL: "+x for x in errors)); sys.exit(1)
+print(f"PASS: {len(r.get('kind_schemas',{}))} artifact kind schemas checked")
+PY
+if [ "$?" -ne 0 ]; then exit 1; fi
 
 # ---- on-disk paths
 missing=""; path_count=0

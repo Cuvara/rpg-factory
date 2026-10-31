@@ -34,9 +34,18 @@ fi
 mkdir -p "$TMP/bin"; printf '#!/bin/sh\necho hi\n' > "$TMP/bin/rpgf-probe-tool"; chmod +x "$TMP/bin/rpgf-probe-tool"
 [ "$(PATH="$(path_entry "$TMP/bin"):$PATH" rpgf-probe-tool 2>/dev/null)" = "hi" ] && ok "path_entry dir is found on PATH" || no "path_entry dir not on PATH"
 
-# dir_readonly really blocks creating and removing files (chmod alone does nothing on NTFS)
+# dir_readonly really blocks creating and removing files (chmod alone does nothing on NTFS). A token that bypasses
+# permission checks cannot be held by them: root on POSIX, and on Windows an enabled SeRestorePrivilege (hosted CI
+# runners run elevated with it enabled; NTFS then grants DELETE whatever the DACL says).
 mkdir -p "$TMP/ro"; echo x > "$TMP/ro/a"
-if [ "$(id -u)" != 0 ]; then
+bypass=""
+[ "$(id -u)" = 0 ] && bypass="running as root"
+if [ -n "$RPGF_WINDOWS" ] && MSYS2_ARG_CONV_EXCL='*' "$SYSTEMROOT/System32/whoami.exe" /priv 2>/dev/null | grep -qiE '^SeRestorePrivilege[[:space:]].*Enabled'; then
+  bypass="SeRestorePrivilege is enabled for this token"
+fi
+if [ -n "$bypass" ]; then
+  echo "SKIP  dir_readonly ACL checks: $bypass (permission checks cannot bind this token)"
+else
   dir_readonly "$TMP/ro"
   r=$(python3 -B -c "
 import os, sys
@@ -48,8 +57,13 @@ except OSError:
         os.replace(os.path.join(d, 'a'), os.path.join(d, '..', 'moved')); print('moved')
     except OSError:
         print('blocked')" "$TMP/ro")
+  diag=""  # on failure, show the ACLs and the token so a runner-specific bypass can be diagnosed
+  if [ "$r" != blocked ] && [ -n "$RPGF_WINDOWS" ]; then
+    diag=$(MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$TMP/ro")" 2>&1; [ -e "$TMP/ro/a" ] && MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$TMP/ro/a")" 2>&1
+      [ -e "$TMP/moved" ] && MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$TMP/moved")" 2>&1; echo "USERNAME=$USERNAME"; MSYS2_ARG_CONV_EXCL='*' "$SYSTEMROOT/System32/whoami.exe" /priv 2>&1 | tr -s ' ')
+  fi
   dir_writable "$TMP/ro"
-  [ "$r" = "blocked" ] && ok "dir_readonly blocks create and move-out" || no "dir_readonly: $r"
+  [ "$r" = "blocked" ] && ok "dir_readonly blocks create and move-out" || no "dir_readonly: $r $diag"
   echo y > "$TMP/ro/b" 2>/dev/null && ok "dir_writable restores writes" || no "dir_writable did not restore writes"
 fi
 
@@ -59,6 +73,17 @@ for t in python3 git jq; do
   r=$(cd "$ROOT/scripts/lib" && python3 -B -c "import sys, context, devtools; print(bool(context.which([sys.argv[1]])), bool(devtools.which(sys.argv[1])))" "$t")
   [ "$r" = "True True" ] && ok "context.which / devtools.which find $t" || no "which($t): $r"
 done
+
+# scripts launched from native Python run under a real bash, never the System32 WSL launcher (bash.exe in System32
+# wins over PATH for a bare "bash" in CreateProcess)
+b=$(cd "$ROOT/scripts/lib" && python3 -B -c "import shells; print(shells.find_bash() or '')")
+case "$(printf '%s' "$b" | tr 'A-Z\\' 'a-z/')" in
+  "") no "shells.find_bash found no bash";;
+  */windows/system32/*) no "shells.find_bash picked the WSL launcher: $b";;
+  *) ok "shells.find_bash resolves a real bash ($b)";;
+esac
+grep -q 'run(\["bash"' "$ROOT/scripts/factory-cmd.py" "$ROOT/scripts/run-checks.py" \
+  && no "factory-cmd/run-checks still launch a bare \"bash\"" || ok "factory-cmd and run-checks launch the resolved bash"
 
 # Python entry points write UTF-8 even when the inherited stdout encoding is cp1252
 # (a stand-in workspace: empty repos + root markers, so this also runs where no RPG MMO workspace exists, e.g. CI)
