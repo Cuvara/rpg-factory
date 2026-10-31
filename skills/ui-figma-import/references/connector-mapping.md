@@ -68,3 +68,26 @@ python3 <pkg>/Tools~/FigmaImport/figma-import.py "<frame link with node-id=>" --
 The validator CLI was built once from a scratch copy: `Tools~/UxmlCodegenCli` (without `Fixtures`), `Editor/FigmaCore`
 and `Editor/Codegen/Core`, then `dotnet build <copy>/Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj -o <scratch>/cli-bin`.
 `--output-folder` applies only to the file's first import. `--cli` must come last.
+
+## Editor steps through Pipeline (run 2)
+
+These steps are for when the agent has no Editor UI. They go through the open Editor's Pipeline `POST /api/exec`: read
+the port and token from `Library/Pipeline/.unity-pipeline-port` and never print the token. The command names are from
+`com.unity.pipeline` 0.9.1-exp.1 `Documentation~/commands/`. Run 2 used every step below.
+
+- **Mapping preset:** it needs the connector mapping asset first. Without it, `FigmaMappingPresetCommand.Apply` returns
+  `cuvara.mapping.no-asset` and adds 0 rows (run 2 `preset-bridge.txt`). `figma_env.py` reports the asset as item
+  `mapping-asset`. Creating it is a Project Settings action: HUMAN_REQUIRED.
+- **ScreenCreator without its window:** `ScreenCreatorPlan.Build(ScreenCreatorRequest)` is public in the ungated
+  `Cuvara.UIToolkit.Editor` assembly (v0.8.0). It returns the files (for `ExistingUxml`, only `<Name>Screen.cs`) and
+  writes nothing. Run it through `script eval`, then write the returned files into a game-owned folder. `Build` does not
+  check the folder; the wizard does. Call `ScreenCreatorPlan.IsInsideConnectorImportFolder(folder, projectRoot)` first.
+- **PlayMode tests with an unfocused Editor:**
+  1. Run `editor.playmode set_run_in_background --enable true` first. Without it, the player loop stops at the first
+     frame while the Editor reports playing.
+  2. Run `test run --mode playmode ... --async_tests true` and poll `test status`. In run 2 a synchronous request was
+     dropped by the domain reload.
+  3. Afterwards, run `editor.playmode set_run_in_background --enable false`. This restores the project's own value
+     (the command is documented in `editor-lifecycle-and-observability.md`).
+- **Screenshots:** `capture game_view --save_path` writes under `Assets/`. Move the PNG out and delete its `.meta`;
+  otherwise the Console gets orphan-meta warnings (run 2: 2 warnings).

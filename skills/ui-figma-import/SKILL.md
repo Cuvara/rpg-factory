@@ -84,10 +84,13 @@ Workflow, in order. Each step's result is a state (PASS, FAIL, BLOCKED, NOT_AVAI
 5. **Validate:** the helper's `--validate`, or the CLI on `Assets/Figma/<file>`; read Window > Cuvara > Figma
    Diagnostics and the saved result. Triage with the table below; fix the design in Figma and push again.
 6. **Integrate:** one `FigmaProfile` per game or Figma file (connector folder, prefix, token roles, bridge folder and
-   screens folder outside the connector folder, mode sheets); Apply Cuvara Mapping Preset (needs the connector's
-   mapping asset); Regenerate Token Bridges; mode sheets through `RegisterModeSheets`/`AttachScreen`; Assets > Cuvara >
+   screens folder outside the connector folder, mode sheets); Apply Cuvara Mapping Preset only after the connector's
+   mapping asset exists (figma_env `mapping-asset`; otherwise `cuvara.mapping.no-asset`, 0 rows); Regenerate Token Bridges; mode sheets through `RegisterModeSheets`/`AttachScreen`; Assets > Cuvara >
    Create Screen with Source `SourceExistingUxml` (`UIToolkit/Editor/ScreenCreator/ScreenCreatorWizard.cs:28`) into a
-   game-owned folder. Then hand off to `rpg-factory:ui-toolkit-screen` and `rpg-factory:ui-validation`.
+   game-owned folder. Without the Editor UI, `ScreenCreatorPlan.Build` (`UIToolkit/Editor/ScreenCreator/ScreenCreatorPlan.cs:53`)
+   is public in the ungated Editor assembly, writes nothing and runs through Pipeline `script eval`
+   (`references/connector-mapping.md` "Editor steps through Pipeline"). Hand off to `rpg-factory:ui-toolkit-screen`
+   and `rpg-factory:ui-validation`.
 7. **Report:** file key, node ids, Unity / connector / Pipeline / package versions (diagnostics window or figma_env),
    import state and code, validator counts by code, connector facts, what rendered and what did not, each with its
    evidence (saved result path, validator JSON, screenshots). Never claim SafeArea emission, shadow or gradient as
@@ -137,8 +140,10 @@ Workflow, in order. Each step's result is a state (PASS, FAIL, BLOCKED, NOT_AVAI
 
 - Plugin side: `env -u TMPDIR tests/ui-figma-env.test.sh` (fixture projects, no Unity, no network).
 - Package side, no Unity: `python3 Tools~/FigmaImport/test_figma_import.py` (mock Pipeline) and the validator fixtures
-  `Tools~/UxmlCodegenCli/Fixtures/figma/{good,bad}` with `--prefix rpg --max-inline 5 --max-absolute 1`: good 0 errors,
-  bad 7 errors 8 warnings (FIGMA-VALIDATION.md "Fixtures and CI"). Run them from an exported copy, not in the repo.
+  `Tools~/UxmlCodegenCli/Fixtures/figma/{good,bad}`. The package CI gate runs them with `OPTS`
+  (`UIToolkit/.github/workflows/ci.yml:108-113`), `--prefix rpg --max-inline 5 --max-absolute 1`: good exits 0, bad
+  exits 1 with exactly 10 errors and 8 warnings. Quote counts only with those flags. The FIGMA-VALIDATION.md table
+  "Fixtures and CI" still says 7 errors at v0.8.0; the CI assertion wins. Run them from an exported copy, not in the repo.
 - Real import: `docs/architecture/ui-figma-real-test.md` (Unity, Figma and the plugin: HUMAN_REQUIRED until the user
   has them open).
 
