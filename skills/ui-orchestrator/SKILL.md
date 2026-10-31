@@ -57,7 +57,12 @@ UI skills, never scope or validation.
    - `NOT_UI`: stop using UI skills; continue with factory-core alone.
    - `NEEDS_CONTEXT`: ask for exactly the `missing` items (each has `why` and `how`); never guess a Figma file
      key, node id or project path. Re-run the plan with the answer.
-   - `PLAN`: continue.
+   - `PLAN`: check the plan against the request before continuing (below).
+   **Intent check.** Compare `intent` and `skills` with every outcome the user asked for. When they do less (the
+   user asked to import and integrate, the plan says `figma-validate`; the user asked for a working screen, the plan
+   has no `ui-toolkit-screen`), re-run with the explicit verb (`factory-cmd.py ui-figma ...` for an import,
+   `ui-screen` for implementing or wiring) and use that plan. If no verb gives a plan that covers the request, stop
+   and tell the user which part the plan leaves out. Never silently do less than asked.
 2. **Route.** Follow `next`: factory-core Route with the plan's `lead.route` and the declared mode, then invoke
    the lead (`rpg-factory:client-integration`, `rpg-factory:unity-package` or `rpg-factory:ui-ux`).
 3. **Load only the listed skills, in order.** For any UI file the snapshot's `tech` list names all five `ui-*`
@@ -72,6 +77,9 @@ UI skills, never scope or validation.
 
 ## Pitfalls
 
+- **A plan can under-serve the request.** In the real Figma run, "import ... and integrate ... run the package
+  validator" was planned as `figma-validate`, so `ui-toolkit-screen` was never loaded and the screen was not
+  integrated (regression case in `tests/fixtures/ui-plan-cases.json`). Apply the intent check in step 1.
 - **A tech skill requested first is redirected.** Before factory-core the Skill hook loads factory-core instead;
   before the lead it runs with a `high` advisory (PreToolUse Skill hook, `hooks/hooks.json`). Plan, then route, then load.
 - **The client pin can lag the package.** 0.8.0-only APIs (theme service, ScreenCreator "Existing UXML") need a

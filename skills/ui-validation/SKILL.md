@@ -35,12 +35,13 @@ this skill adds the UI-specific evidence and how to read it.
 
 ## Architecture
 
-Seven areas, each with the artifact that proves it. No artifact means no PASS.
+Seven areas (bindings split into named and imported), each with the artifact that proves it. No artifact means no PASS.
 
 | Area | What is checked | Evidence artifact |
 |---|---|---|
 | References | `<Style src>`, `<Template src>`, USS `url()`, `project://` paths resolve | Editor import with an empty Console, or validator JSON (import folders) |
 | Bindings | every `Require<T>` name exists with that type; generated bindings match the UXML | Play Mode open without exception; drift CLI exit 0 |
+| Imported bindings | connector output has no `name` attributes: the view binds by type, document order or component class and throws on a count change | PlayMode test that clones the imported UXML, builds the view and asserts each control; test result file |
 | Lifecycle | subscriptions released, Show/Hide and close order legal | EditMode test result file |
 | Theme | base, overrides and mode sheets attached; imported screens attached; no literal colour where a token exists | screenshot per mode; validator `FIG020` count |
 | Responsive | PanelSettings scale mode and reference resolution; safe area where needed; two aspect ratios | two screenshots, resolutions named |
@@ -91,6 +92,9 @@ Seven areas, each with the artifact that proves it. No artifact means no PASS.
 - **PanelSettings is a shared project asset:** writing `match` at runtime edits it on disk in the Editor;
   `CloneSettings` (`UIToolkit/Runtime/Utilities/PanelScaleRatio.cs:85`) exists for that. A diff on the asset after a
   Play Mode run is a finding.
+- **Connector output has no element names,** so `Require` and codegen cannot vouch for it; a view that binds by
+  type and order is only proven by a PlayMode test on the real imported file, re-run after every re-push
+  (`skills/ui-toolkit-screen/SKILL.md`, connector output idiom).
 - **SafeArea mapping, shadows and gradients from a real Figma import are not verified;** never grade them PASS
   from the import alone (`UIToolkit/Documentation~/FIGMA-REAL-IMPORT.md`, "Unsupported constructs").
 - **A docs-only client PR runs no-op "Unity Tests"** (`.github/workflows/01-ci-docs.yml`); it is not test evidence.

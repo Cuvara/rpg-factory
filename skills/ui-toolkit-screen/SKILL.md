@@ -88,6 +88,10 @@ hand-off, never a client copy.
   cancel or a cancelled token; `ToastService` (`UIToolkit/Runtime/Flow/ToastService.cs:33`) takes a parent element and
   `Show` (`:57`) a message, duration and `ToastType`. Parent both into `RootUIOverlayElement`, as
   `ConfirmDialog.ShowAsync` in `UIToolkit/Samples~/FigmaImport/ShopCardScreen.cs:135-140` does.
+- **Connector output (imported UXML) has no `name` attributes:** bind by type and document order or by the
+  component class (`root.Query<Toggle>().ToList()`, `root.Q<Button>(className: "button-close")`), once, in the
+  view the presenter's bind step receives, and throw when a count changes (a re-push may reorder). Never add names
+  to the connector file. View, settings mapping, `ConfirmDialog` and light/dark pattern: `references/imported-uxml.md`.
 - An imported screen that links its own mode sheet stays on the current mode with
   `subs.Add(theme.AttachScreen(View.Root))`; the sample wraps it in `Track` (`UIToolkit/Samples~/FigmaImport/ShopCardScreen.cs:118`).
 
@@ -105,6 +109,11 @@ hand-off, never a client copy.
   (`UIToolkit/Documentation~/MIGRATION-0.8.md`, "1. Theme contract for the built-in UI").
 - **Batchmode with compile errors never regenerates bindings** and still exits 0
   (`UIToolkit/Documentation~/UXML-CODEGEN.md`, "Known limitation").
+- **`SettingsModel` has no music or sound on/off flag** - only volumes, `GraphicsQuality`, `Fullscreen`, `VSync`
+  and `Language` (`UIToolkit/Runtime/Flow/SettingsModel.cs`); a mute toggle maps to game-owned state, never to an
+  invented member.
+- **Imported controls carry no range or choices:** set `Slider` range and `DropdownField` choices in code; the real
+  "Game Settings" import carried neither (`references/imported-uxml.md`).
 - **Wrong view type** in a registration fails at attach with both types named, `AttachViewCore`
   (`UIToolkit/Runtime/Flow/BaseUIToolkitScreenPresenter.cs:100-110`).
 
