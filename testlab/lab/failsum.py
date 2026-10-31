@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import analyze, util
+from . import analyze, framegc, util
 
 SCHEMA = "rpg.testlab.failure-summary.v1"
 RULES_VERSION = 1
@@ -28,6 +28,8 @@ GUARD_WINDOW_S = 10.0
 # scenario time -> wall time is the scheduled start plus st, accurate to about 5 s (the guard sampling
 # interval; analyze._long_frames_with_guard_events uses the same mapping).
 MAX_EVIDENCE = 8
+# Checks whose failure summary carries a "stall frame coincided with gen0 GC" note when the frames.csv GC columns say so.
+GC_NOTE_CHECKS = ("frame_time", "snapshot_cadence", "snapshot_update_gap")
 
 LAYERS = ("environment", "harness", "server", "netcode", "client", "unknown")
 
@@ -461,7 +463,7 @@ def _failure(ev, r, outcome, s0) -> dict:
             break
         if not any(e["file"] == rel for e in evidence):
             evidence.append({"file": rel, "line": None, "find": None, "client": None, "note": "artifact named by the check"})
-    return {
+    out = {
         "id": r.get("id"), "check": check, "status": r.get("status"),
         "informational_breach": r.get("status") == analyze.INFO,
         "measured": r.get("measured"), "threshold": r.get("threshold"),
@@ -476,6 +478,12 @@ def _failure(ev, r, outcome, s0) -> dict:
         "next_action": NEXT_ACTIONS_BY_CHECK.get(check) if layer == LAYER_BY_CHECK.get(check) and check in NEXT_ACTIONS_BY_CHECK
         else NEXT_ACTIONS_BY_LAYER[layer],
     }
+    if check in GC_NOTE_CHECKS:
+        # Only when the client wrote the GC columns and a stall frame really coincided with a collection.
+        note = framegc.stall_note(ev, None if check == "frame_time" or earliest is None else earliest["st"])
+        if note:
+            out["notes"] = [note]
+    return out
 
 
 # --------------------------------------------------------------------------- the summary

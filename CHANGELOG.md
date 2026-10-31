@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- **testlab: per-frame GC, main-thread and memory columns in the analysis (UCF F-21, step 1).** The client's
+  `frames.csv` gains `gc_alloc_b,gc_count,main_ms,used_mb` (client PR "GC, main-thread and memory columns").
+  New `lab/framegc.py` reads them by header name and tolerantly. `report.md` gets a "Frame budget" section with
+  per-client GC allocation p50/p95/max, gen0 collections and stall frames (>= 250 ms) set against collections,
+  `results.json` gets a `frame_gc` key, and `failure-summary.json` gets a `notes` entry ("stall frame coincided
+  with gen0 GC") on `frame_time`, `snapshot_cadence` and `snapshot_update_gap` failures when that is true. Runs
+  whose `frames.csv` has only the four old columns analyze exactly as before (no section, no key, no note);
+  `testlab/tests/test_framegc.py` proves it on a fixture. No threshold or verdict changed.
+
 ## [1.3.0] - 2026-10-31
 
 Feature release: production workflows for Game Design, UI/UX, 2D Art, 3D Art and VFX. Each domain has production
