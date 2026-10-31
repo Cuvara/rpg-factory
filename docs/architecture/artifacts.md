@@ -1,5 +1,36 @@
 # Shared artifact contract
 
+## Lifecycle v2 and quality results
+
+The common metadata supports `schema_version` 1 (legacy) and 2 (current), `authors`, `sources`,
+`provenance`, `blocked_by`, `rejection`, and kind-specific `spec`. Register each kind schema under
+`kind_schemas`; schemas live in `docs/schemas/kinds/`. Lifecycle requirements are data in
+`artifact_lifecycles`. Canonical states are draft, proposed, reviewed, approved,
+in-implementation, verified, released, rejected and blocked; deprecated and superseded are
+terminal states where appropriate. Legacy `review` means proposed and emits a deprecation warning.
+
+| State | Required evidence |
+|---|---|
+| proposed | Complete schema and acceptance criteria |
+| reviewed | Independent record under `reviews/<id>/<blob-sha>-<reviewer-id>.json` |
+| approved | Existing immutable signed approval gates, including `approval_when_binding` |
+| in-implementation | Implementation trace |
+| verified | Per criterion: tests need implementation and test trace; review needs a review record; measure needs an existing evidence reference |
+| released | Release trace, reached through approved and verified |
+| rejected | `rejection.reason`; recovery only to draft |
+| blocked | Non-empty `blocked_by` and reason |
+
+Review JSON identifies artifact and blob revision, reviewer `{kind,id}`, verdict, findings and date.
+Review identity is derived from git: artifact authors are the commit author emails of every commit that touched the artifact (following renames), union the declared `authors[].id` values. A review counts only when the single commit that added its file has a different author email and `reviewer.id` exactly matches that email; later edits, renames or deletions invalidate it. The default `process` assurance relies on commit identities and the factory's dispatch discipline. An actor who controls git identities can bypass it. Binding decisions always need signed approvals; reviews never substitute for those approvals.
+
+Lifecycle requirements default to `review_assurance: process`. Set `requirements.<state>.review_assurance` to `signed` for a state or kind that needs cryptographic reviewer identity. Signed reviews must verify with a key in that artifact domain's `reviewers` registry list; an empty list or untrusted signature yields `HUMAN_REQUIRED`, never `PASS`. Review assurance is reported as `process` or `signed`.
+`artifact-quality.py` reports schema, lifecycle, dependencies, staleness, review/approval, and plugin
+results as `rpg-factory.validation/1` JSON (`docs/schemas/validation-result.schema.json`). Domain
+plugins are registered by `domains.<domain>.quality_plugin`, live under `scripts/checks/domains/`,
+and expose `check(artifact, ctx) -> list[Result]`; `_api.py` defines the result and context contract.
+To add a kind, add it to the domain `artifact_kinds`, declare its schema in `kind_schemas`, add a
+lifecycle entry if needed, then add a domain plugin rule only when domain-owned quality logic exists.
+
 Artifacts are domain-owned records whose metadata can be checked without embedding discipline rules in Factory Core.
 The JSON Schema is [artifact.schema.json](../artifact.schema.json). Markdown artifact files use strict JSON front matter:
 
@@ -35,3 +66,19 @@ untrusted or revoked keys, signature or principal mismatches, stale revisions, c
 clones, and AI agent co-author trailers. Any approval uncertainty prints `HUMAN_REQUIRED`; trace or schema failures
 print `FAIL`. The initial production approver list is empty until the maintainer registers a key from an authorized
 source.
+# Synchronization contracts
+
+Contracts with `kind: "handoff"` may set `ordering: "none"` when two domains must
+coordinate repeatedly (for example, UI cue timing and VFX timing). These contracts
+remain routable and their artifact references remain trace evidence, but they do not
+add a workflow wave edge. Plans expose them as synchronization links; status reports
+the opposite participant as needing revalidation when one side's upstream revision
+changes. Ordered handoff contracts still create wave edges and must form an acyclic graph.
+
+Domain quality plugins receive `Context.repo_roots`, a mapping of registered repo keys to
+caller-supplied roots (`--repos key=path`, plus the current authoring root). Use
+`Context.resolve_repo_path(repo, relative_path)` to resolve an existing repo-relative file;
+absolute paths, traversal, and symlink escapes return `None`.
+`Context.approval(artifact_id)` applies the same immutable SSH signature and trusted-approver
+verification as artifact trace, returning `state` (`verified`, `missing`, `invalid`, or
+`untrusted`) and explanatory `reasons`.

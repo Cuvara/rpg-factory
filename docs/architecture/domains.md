@@ -6,24 +6,24 @@ Domains describe who owns a discipline's artifacts, which registry paths route w
 
 | Domain | Lead | Authoring repo | Artifact kinds | Routing |
 |---|---|---|---|---|
-| Game Design | `game-design` | Optional `authoring` (`game-authoring`) | `gdd`, `feature-spec`, `design-decision` | `--domain design`, `--kind`, or registered paths under `design/` |
-| UI/UX | `ui-ux` | Optional `authoring` | `ui-flow`, `ui-spec` | `--domain ui`, `--kind`, or `ui/` paths |
-| 2D Art | `art-2d` | Optional `authoring` | `art2d-brief`, `art2d-asset` | `--domain art2d`, `--kind`, or `art2d/` paths |
-| 3D Art | `art-3d` | Optional `authoring` | `art3d-brief`, `art3d-asset` | `--domain art3d`, `--kind`, or `art3d/` paths |
-| VFX | `vfx` | Optional `authoring` | `vfx-spec`, `vfx-asset` | `--domain vfx`, `--kind`, or `vfx/` paths |
+| Game Design | `game-design` | Optional `authoring` (`game-authoring`) | `gdd`, `game-concept`, `gameplay-system`, `feature-spec`, `design-decision`, `level-spec`, `quest-spec`, `npc-spec`, `item-spec`, `technical-handoff` | `--domain design`, `--kind`, or registered paths under `design/` |
+| UI/UX | `ui-ux` | Optional `authoring` | `ui-flow`, `ui-spec`, `ux-requirements`, `ia-map`, `screen-spec`, `component-spec`, `design-tokens`, `ui-handoff` | `--domain ui`, `--kind`, or `ui/` paths |
+| 2D Art | `art-2d` | Optional `authoring` | `art-direction-2d`, `concept-2d`, `asset-spec-2d`, `runtime-export-2d`, `reference-2d` (plus legacy aliases) | `--domain art2d`, `--kind`, or `art2d/` paths |
+| 3D Art | `art-3d` | Optional `authoring` | `art-direction-3d`, `model-spec`, `material-spec`, `rig-spec`, `animation-spec`, `asset-3d` (plus legacy aliases `art3d-brief`, `art3d-asset`) | `--domain art3d`, `--kind`, or `art3d/` paths |
+| VFX | `vfx` | Optional `authoring` | `vfx-direction`, `vfx-spec`, `vfx-asset` | `--domain vfx`, `--kind`, or `vfx/` paths |
 | Engineering | Existing Engineering leads | Product repos | Code, tests, packages and deployment outputs | Existing `--repo` / `--paths` routing |
 
 ## Readiness
 
 | Domain | Domain foundation | Production workflow |
 |---|---|---|
-| Game Design | Active; registered, routed, contracted and checked | Existing design workflow |
-| UI/UX | Foundation; registered, routed, contracted and checked | Not implemented |
-| 2D Art | Foundation; registered, routed, contracted and checked | Not implemented |
-| 3D Art | Foundation; registered, routed, contracted and checked | Not implemented |
-| VFX | Foundation; registered, routed, contracted and checked | Not implemented |
+| Game Design | Active; registered, routed, contracted and checked | Production game design workflow |
+| UI/UX | Active; registered, routed, contracted and checked | Production UI/UX specification workflow |
+| 2D Art | Active; registered, routed, contracted and checked | Production 2D art and export workflow |
+| 3D Art | Active; registered, routed, contracted and checked | Production 3D art specification and delivery workflow |
+| VFX | Active; registered, routed, contracted and checked | Production VFX specification and delivery workflow |
 
-A foundation means registry ownership, routing, handoff contracts, shared checks and a scope-limited lead skill exist. It does not mean production workflows or discipline tooling exist. Domain plans: [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md).
+An active domain has registry ownership, routing, handoff contracts, shared checks and a production workflow. Domain details: [Game Design](domains/design.md), [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md).
 
 ## Game Design
 
@@ -42,3 +42,10 @@ The registered quality gates are `artifact-lint` and `artifact-trace`. `design-r
 During `core-plumbing`, design may draft content and propose values, but numbers remain `TBD` or labelled proposals until verified approval. Engineering may use approved artifacts or existing code, subject to product-repo `TEAM.md` phase rules. Read [artifact lifecycles and approvals](artifacts.md) for schema, trace and trust details.
 
 Feature state may live only in registered authoring paths of a domain with `may_own_feature_state: true`. Product-repo `.ai/`, `docs/registry/` and `docs/features/` remain forbidden, and `.ai/` is never read as configuration. P6 registers engineering handoffs and implementation revision traces.
+# Optional production providers
+
+Domain plugins can discover these optional provider names through `ctx.tools(name)`:
+`game-art-mcp`, `ai-pixel-art-image-generation`, `figma`, `blender`, and `unity`.
+Discovery reads names from Claude Code MCP settings, `.mcp.json`, installed plugin
+records, or `RPG_FACTORY_TOOL_<NAME>` overrides. Configuration values and credentials
+are never returned or printed. Missing providers produce explicit `NOT_AVAILABLE` results.

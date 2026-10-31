@@ -1,4 +1,4 @@
-# Plugin test suite on a clean runner. The RPG MMO workspace (server, client, Netcode, UnityDots,
+# Plugin test suite on clean Linux and Windows (Git Bash) runners. The RPG MMO workspace (server, client, Netcode, UnityDots,
 # UIToolkit) is not available here, so this runs `tests/run-all.sh --no-workspace --no-claude`: every
 # check that needs those repos on disk (registry paths, facts, pin-status, wire-parity, package-ready,
 # netcode headless, live context/status) is reported as SKIP, never as PASS. Those still have to be run
@@ -20,13 +20,41 @@ concurrency:
 
 jobs:
   run-all:
-    name: run-all (no workspace)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    name: run-all (no workspace, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: LF checkout (shell scripts must not get CRLF on Windows)
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # A real python3.exe, not a bash shim: native Python subprocess calls (hooks, checks) must be able to run it.
+      - name: python3 on PATH (Windows runners ship python only)
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            dir=$(dirname "$(command -v python)")
+            cp "$dir/python.exe" "$dir/python3.exe"
+          fi
+          python3 -c "import sys; print(sys.executable)"
+
+      # The runner's default TEMP is an 8.3 short path (C:\Users\RUNNER~1\...), which git and Python expand
+      # differently. Use the long-named runner temp directory instead.
+      - name: Long temp path (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          t=$(cygpath -m "$RUNNER_TEMP")
+          { echo "TMPDIR=$t"; echo "TMP=$t"; echo "TEMP=$t"; } >> "$GITHUB_ENV"
 
       - name: Tool versions
         run: |
@@ -59,7 +87,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: run-all-log
+          name: run-all-log-${{ matrix.os }}
           path: run-all.log
           retention-days: 14
           if-no-files-found: warn

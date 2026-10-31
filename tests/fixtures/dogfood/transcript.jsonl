@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":"Launching skill: rpg-factory:factory-core"},{"type":"tool_result","is_error":false,"content":"Launching skill: rpg-factory:game-design"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"SCRATCH/game-authoring/design/concepts/GD-game-concept-001.artifact.json"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"python3 scripts/checks/artifact-lint.py game-authoring && python3 scripts/checks/artifact-quality.py game-authoring --domain design --json"}}]}}
+{"type":"result","subtype":"success","result":"The draft remains a proposal and awaits human review."}

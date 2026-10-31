@@ -1,64 +1,50 @@
 ---
 name: game-design
-description: Native Game Design lead for mechanics, loops, progression, balance, systems, GDDs, feature specs and design decisions. Use when authoring or reviewing those concepts and artifacts. Not for engineering code, UI layout specifications (ui-ux), or asset production.
+description: Use when authoring production game concepts, gameplay systems, features, content, GDDs, decisions and engineering handoffs. Not for code, interface specifications or asset production.
 argument-hint: "[task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*) Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py:*)
 ---
-
 # Game Design
-
 > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
 
 Task: $ARGUMENTS
 
 ## Applies when / Not when
-
-- **Applies:** game concepts, mechanics, loops, progression, balance, systems, GDDs, feature specifications and design decisions.
-- **Not when:** engineering code, UI layout or interaction specifications (`ui-ux`, when available), and asset production.
+Applies to design concepts and production artifacts in the design domain. Route UI behavior to `ui-ux`, assets to art leads, and implementation to engineering.
 
 ## Scope
-
-Owns the Game Design domain in the optional `authoring` repo, in its registered design modules. Route by `--domain design`, `--kind <artifact-kind>`, or paths. If the authoring repo is absent, work fixture-free: provide the artifact text in the response and state that the repo is absent. Never create or publish the repo.
+Use `/rpg-factory:workflow` or `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --domain design`. Author only in registered authoring modules. Inputs are upstream artifact ids and revisions; outputs are versioned design artifacts and named handoffs. If authoring is absent, return artifact text and report checks as not run.
 
 ## Workflow delta
-
-1. Route through Factory Core with `--domain design`, `--kind`, or authoring paths; read module rules and gates from the snapshot.
-2. Draft the artifact with the shared front matter and lifecycle from `docs/architecture/artifacts.md`. Mark numbers `TBD` or as labelled proposals; binding values need verified approval.
-3. Never write or edit `approvals/`. Run the registered `artifact-lint` and `artifact-trace` checks when the authoring repo exists.
-4. Prepare engineering handoff through the registered contracts; for feature specs, route the server and client follow-ups through `feature-spec-to-impl`, and record each implementation trace's `spec_rev` and commit ref.
+1. Resolve scope and upstream ids/revisions through Core. Record each upstream revision as the Git blob id from `git hash-object <path>` for that source file.
+2. Draft a `game-concept` before systems/content when the project premise is unsettled. Capture audience, pillars, genre, platforms, USP and constraints.
+3. Write one `gameplay-system` per system type. Define core loop, mechanics, progression, interaction/combat, economy sources and sinks, difficulty and meta progression.
+4. Write feature and content specs (`feature-spec`, `level-spec`, `quest-spec`, `npc-spec`, `item-spec`) against existing concept/system IDs: record IDs in artifact `sources` and in `spec.game_concept` or `spec.gameplay_systems` as applicable. Store each source's current Git blob revision in `upstream` with `git hash-object <path>`. Keep IDs stable.
+5. Produce a GDD to integrate approved concepts and systems; record decisions as `design-decision` artifacts with alternatives and consequences.
+6. Create `technical-handoff` with gameplay/state/data requirements, events, edge cases, testable acceptance criteria and registered engineering dependencies.
+7. Validate using `artifact-quality.py`; resolve every `FAIL` and rerun until none remain. Route accepted design to UI, engineering, art2d/art3d and VFX through registered contracts.
 
 ## Rules
-
-- This domain owns GDDs, feature specifications, design decisions and feature state only in its registered authoring paths. See `docs/architecture/multi-discipline-factory.md`, sections 5, 8.1-8.4.
-- Product-repo phase rules remain authoritative for product code. The shared artifact and approval contract is in `docs/architecture/artifacts.md`.
+Use schema version 2, stable ids, authors, sources and spec payloads. Gameplay numbers are explicitly unresolved (`TBD`) or `{value, status: proposal, rationale}` unless the artifact declares `binding_values: true` and the shared verifier reports approval as `verified` for its current revision. Missing approval is `HUMAN_REQUIRED`; invalid or untrusted approval fails with verifier reasons. A source id must resolve. Economy systems declare currencies, sources and sinks. Difficulty curves are monotonic when declared. Never write approval records.
 
 ## Generated & protected paths
-
-- `approvals/` contains immutable, human-only approval records. Agents never write, edit, move or delete these files.
-- No generated paths are registered for this domain.
+Approvals are immutable human records; agents never write or edit them. No generated paths.
 
 ## Validation delta
-
-- Core runs registered fast checks. `artifact-lint` validates metadata and lifecycle; `artifact-trace` validates upstream revisions, implementation coverage and approvals.
-- A missing or unverifiable approval is `HUMAN_REQUIRED`; schema and trace failures are `FAIL`. If the authoring repo is absent, include the artifact text and report the checks as not run.
+Core checks metadata, lifecycle, dependencies, trace and approvals. The design plugin checks numbers against verified approval for the current artifact revision, source resolution, economy balance declarations, content ids, difficulty curves and handoff completeness. Plugin `FAIL` blocks readiness; missing gameplay-rules approval reports `HUMAN_REQUIRED`; missing optional balancing tools report `NOT_AVAILABLE` or `HUMAN_REQUIRED`, never PASS. There is no required external tool.
 
 ## Human gates
-
-- `design-review`: a maintainer reviews and accepts an artifact before approval; agents never approve their own proposals.
-- `gameplay-rules`: verified human approval is required before binding gameplay values or rules.
+`design-review` for independent review and `gameplay-rules` before binding values. Report open gates; agents do not approve.
 
 ## Review checklist
-
-- [ ] Goals, player-facing behavior and acceptance criteria are clear and testable.
-- [ ] Numbers are `TBD` or labelled proposals unless the artifact has verified approval.
-- [ ] Lifecycle, upstream revisions, trace entries and human gates match the registry.
-- [ ] No approval record was created or changed by an agent.
-- [ ] Any engineering handoff names artifact ids and revisions.
+- [ ] Each artifact has stable identity, version, authors, sources and required payload.
+- [ ] Gameplay values are unresolved or justified proposals, or binding values have verified current-revision gameplay-rules approval.
+- [ ] Source ids resolve and upstream revisions are current.
+- [ ] Handoff acceptance criteria are testable and engineering dependencies are routed.
+- [ ] Required human gates are complete before binding.
 
 ## Report additions
-
-State the artifact id, lifecycle status, whether values are proposals or binding, check results, open human gates, authoring-repo availability and any P6 handoff.
+List artifact ids/revisions, lifecycle and validation results, number status, unresolved inputs, human gates, handoff destinations and authoring availability.
 
 ## Tools
-
-No registry dev tools are required for this skill.
+No registry dev tools required. Optional spreadsheet/CSV balancing is not required; use the standard-library CSV path when provided.

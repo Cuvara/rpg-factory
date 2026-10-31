@@ -1,21 +1,21 @@
-# UI/UX domain foundation
+# UI/UX production workflow
 
-## Responsibility and boundary
+## Ownership and artifacts
 
-UI/UX owns information architecture, user flows, interaction behavior, accessibility criteria and interface specifications. Engineering (`client-integration`) implements UI in the Unity client and owns `client.unity-assets` and its engine-ready files until a later plan explicitly moves that ownership. UI/UX describes intended behavior; it does not implement UI code or change client assets.
+UI/UX owns `ui-flow`, `ui-spec` and production kinds `ux-requirements`, `ia-map`, `screen-spec`, `component-spec`, `design-tokens`, and `ui-handoff`. Each production kind uses schema version 2, stable artifact metadata (`id`, `sources`, `authors`, `upstream`) and a kind-specific `spec`. The `templates/ui/` skeletons are valid starting drafts.
 
-## Inputs and outputs
+## Lifecycle
 
-Inputs are approved or draft design `feature-spec` artifacts and relevant constraints. Outputs are `ui-flow` and `ui-spec` artifacts under `ui/`. A UI specification may hand visual requirements to `art2d-brief` and client implementation paths to engineering.
+All production kinds reuse lifecycle v2. Drafts may be proposed only with complete schemas and acceptance criteria; reviewed requires an independent review record; approvals are immutable human gates; verified/released need trace evidence. Rejected artifacts recover to draft. UI artifacts do not bypass lifecycle checks.
 
-## Artifacts and lifecycle
+## Quality rules
 
-Kinds: `ui-flow`, `ui-spec`. Both use the shared artifact front matter and default lifecycle (`draft`, `review`, `approved`, `superseded`). No domain-specific lifecycle or approval evidence is introduced here.
+`scripts/checks/domains/ui.py` implements CORE's `check(artifact, ctx)` interface. It checks five screen states, interaction and accessibility contracts, known component/token references, reachable navigation, declared platform/breakpoint behavior, testable handoff acceptance, and token formats. Figma references are format-checked; visual verification is `HUMAN_REQUIRED` without human inspection. Missing Figma reports `NOT_AVAILABLE` with an explicit explanation; checks perform no network calls.
 
-## Quality gates and handoffs
+## Handoffs and workflow
 
-Use shared `artifact-lint` and `artifact-trace`; asset delivery checks apply only to registered asset manifests. The feature-spec-to-ui-spec contract feeds UI/UX; `ui-spec-to-art2d-brief` and `ui-spec-to-client` describe downstream work. Maintainer acceptance remains a human decision where required by lifecycle policy.
+Design `feature-spec` records provide user goals and constraints. UI sends illustration/icon briefs to art2d, screen acceptance and UI handoffs to registered client UI paths, and UI effect dependencies reference VFX artifact IDs/revisions in `sources` and `upstream` through the registered `ui-vfx-sync` contract (`ordering: "none"`): a change on either side marks the other for revalidation without ordering workflow waves. Use `/rpg-factory:workflow` to plan multi-domain work or `factory-context.sh --domain ui` for UI-only work, then validate with CORE artifact checks and `artifact-quality.py`.
 
-## Deliberate exclusions and readiness
+## Example
 
-The exact client asset folders are decided by the per-domain production plans. This foundation does not include production workflows, design or prototyping tools, usability research operations, tooling integrations, or UI/art generation. Readiness: **foundation**.
+A production `screen-spec` names `screen_id: inventory`, layout regions, component/token IDs, navigation in/out, platforms or breakpoints, all five states, element interaction/accessibility contracts, and data bindings to existing IDs. Its `ui-handoff` entry names that same screen ID, exact target engine paths, and measurable acceptance tests. Readiness: **production**.

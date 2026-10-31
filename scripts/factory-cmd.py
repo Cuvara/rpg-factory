@@ -8,6 +8,7 @@
                                           against the current tree without running anything
   doctor                                  install state, registry, state paths, tools,
                                           dev tools (MCP servers, plugins, binaries) per skill
+  workflow plan|status|dispatch|report     dependency-aware artifact workflow entry point
 
 Read-only except `check` without --status, which runs the fast checks (builds/tests) exactly like
 run-checks.py. Exit code = the underlying script's; 2 = usage error.
@@ -21,6 +22,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+from shells import find_bash  # noqa: E402
+
+BASH = find_bash() or "bash"  # never the System32 WSL launcher on Windows
 
 
 def usage(msg=None):
@@ -72,7 +76,7 @@ def cmd_route(args):
         for flag, value in zip(args[::2], args[1::2]):
             if flag not in ("--domain", "--kind", "--lead") or value.startswith("--"):
                 raise ValueError(f"route {args[0]} accepts only --domain, --kind and --lead with one value each")
-        return run(["bash", os.path.join(ROOT, "scripts", "factory-context.sh"), *args])
+        return run([BASH, os.path.join(ROOT, "scripts", "factory-context.sh"), *args])
     lead = None
     if "--lead" in args:
         i = args.index("--lead")
@@ -82,7 +86,7 @@ def cmd_route(args):
     repo, paths = repo_and_paths(args, "route")
     if not paths:
         raise ValueError("route needs at least one repo-relative path (the files the task will write)")
-    argv = ["bash", os.path.join(ROOT, "scripts", "factory-context.sh"), "--repo", repo, "--explain"]
+    argv = [BASH, os.path.join(ROOT, "scripts", "factory-context.sh"), "--repo", repo, "--explain"]
     if lead:
         argv += ["--lead", lead]
     return run(argv + ["--paths", *paths])
@@ -109,7 +113,7 @@ def cmd_doctor(args):
     print("## Install")
     rc |= run([sys.executable, "-B", os.path.join(ROOT, "scripts", "install-status.py")])
     print("\n## Registry")
-    rc |= run(["bash", os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only"])
+    rc |= run([BASH, os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only"])
     print("\n## Workspace and state")
     ws = os.environ.get(reg["workspace"]["root_env"]) or reg["workspace"]["root_default"]
     ok_ws = all(os.path.exists(os.path.join(ws, m)) for m in reg["workspace"]["root_markers"])
@@ -142,11 +146,17 @@ def cmd_doctor(args):
     return rc
 
 
+def cmd_workflow(args):
+    if not args or args[0] not in ("plan", "status", "dispatch", "report"):
+        raise ValueError("workflow needs plan|status|dispatch|report followed by a spec")
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-workflow.py"), *args])
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         return usage()
     verb, args = argv[0], split_args(argv[1:])
-    fn = {"status": cmd_status, "route": cmd_route, "check": cmd_check, "doctor": cmd_doctor}.get(verb)
+    fn = {"status": cmd_status, "route": cmd_route, "check": cmd_check, "doctor": cmd_doctor, "workflow": cmd_workflow}.get(verb)
     if not fn:
         return usage(f"unknown command '{verb}'")
     try:

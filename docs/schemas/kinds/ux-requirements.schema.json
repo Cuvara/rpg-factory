@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/ux-requirements.schema.json",
+  "title": "ux-requirements",
+  "type": "object",
+  "required": [
+    "users",
+    "goals",
+    "user_flows"
+  ],
+  "properties": {
+    "users": {
+      "type": "array"
+    },
+    "goals": {
+      "type": "array"
+    },
+    "user_flows": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
+}

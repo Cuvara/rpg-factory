@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Cuvara/rpg-factory/docs/schemas/kinds/component-spec.schema.json",
+  "title": "component-spec",
+  "type": "object",
+  "required": [
+    "component_id",
+    "variants",
+    "props",
+    "states",
+    "tokens",
+    "accessibility"
+  ],
+  "properties": {
+    "component_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "description"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "description": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        }
+      }
+    },
+    "props": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "description"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "type": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "description": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        }
+      }
+    },
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "description"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "description": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        }
+      }
+    },
+    "tokens": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+    },
+    "accessibility": {
+      "type": "object",
+      "required": ["label", "focus_order", "contrast_target", "input_methods"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "focus_order": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "contrast_target": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "input_methods": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1, "pattern": "\\S"}}
+      }
+    }
+  },
+  "additionalProperties": true
+}

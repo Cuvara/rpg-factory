@@ -3542,7 +3542,7 @@
       "paths": [
         "ui/flows/"
       ],
-      "responsibility": "UI/UX flows and interface specifications.",
+      "responsibility": "UI/UX production artifacts, flows and specifications.",
       "depends_on": [],
       "rules": [],
       "generated": [],
@@ -3558,6 +3558,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "ui-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain ui",
+            "evidence": "UI production quality plugin."
           }
         ],
         "extended": [],
@@ -3577,7 +3582,7 @@
       "paths": [
         "ui/specs/"
       ],
-      "responsibility": "UI/UX flows and interface specifications.",
+      "responsibility": "UI/UX production artifacts, flows and specifications.",
       "depends_on": [],
       "rules": [],
       "generated": [],
@@ -3593,6 +3598,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "ui-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain ui",
+            "evidence": "UI production quality plugin."
           }
         ],
         "extended": [],
@@ -3610,9 +3620,13 @@
       "id": "authoring.art2d-brief",
       "repo": "authoring",
       "paths": [
-        "art2d/briefs/"
+        "art2d/briefs/",
+        "art2d/direction/",
+        "art2d/concepts/",
+        "art2d/references/",
+        "art2d/specs/"
       ],
-      "responsibility": "2D art briefs and asset delivery records.",
+      "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
       "rules": [],
       "generated": [],
@@ -3628,6 +3642,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art2d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art2d",
+            "evidence": "2D art production-specific lifecycle and asset integrity rules."
           }
         ],
         "extended": [],
@@ -3645,9 +3664,10 @@
       "id": "authoring.art2d-asset",
       "repo": "authoring",
       "paths": [
-        "art2d/assets/"
+        "art2d/assets/",
+        "art2d/exports/"
       ],
-      "responsibility": "2D art briefs and asset delivery records.",
+      "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
       "rules": [],
       "generated": [],
@@ -3668,6 +3688,11 @@
             "id": "asset-manifest",
             "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
             "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          },
+          {
+            "id": "art2d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art2d",
+            "evidence": "2D art production-specific lifecycle and asset integrity rules."
           }
         ],
         "extended": [],
@@ -3703,6 +3728,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
           }
         ],
         "extended": [],
@@ -3743,6 +3773,642 @@
             "id": "asset-manifest",
             "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
             "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-game-concept",
+      "repo": "authoring",
+      "paths": [
+        "design/concepts/"
+      ],
+      "responsibility": "Game concepts.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-gameplay-system",
+      "repo": "authoring",
+      "paths": [
+        "design/systems/"
+      ],
+      "responsibility": "Gameplay systems.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-level-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/levels/"
+      ],
+      "responsibility": "Level specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-quest-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/quests/"
+      ],
+      "responsibility": "Quest specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-npc-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/npcs/"
+      ],
+      "responsibility": "NPC specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-item-spec",
+      "repo": "authoring",
+      "paths": [
+        "design/items/"
+      ],
+      "responsibility": "Item specs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-technical-handoff",
+      "repo": "authoring",
+      "paths": [
+        "design/handoffs/"
+      ],
+      "responsibility": "Technical handoffs.",
+      "depends_on": [],
+      "rules": [
+        "Gameplay numbers remain unresolved or labelled proposals until approved."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "domain": "design",
+      "docs": []
+    },
+    {
+      "id": "authoring.design-content",
+      "repo": "authoring",
+      "domain": "design",
+      "paths": [
+        "design/content/"
+      ],
+      "responsibility": "Cross-discipline content brief source area.",
+      "depends_on": [],
+      "rules": [
+        "Handoff inputs cite approved source artifact ids and revisions."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "docs": []
+    },
+    {
+      "id": "authoring.design-events",
+      "repo": "authoring",
+      "domain": "design",
+      "paths": [
+        "design/events/"
+      ],
+      "responsibility": "Gameplay event handoff source area.",
+      "depends_on": [],
+      "rules": [
+        "Handoff inputs cite approved source artifact ids and revisions."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "game-design"
+      ],
+      "gates": [
+        "gameplay-rules"
+      ],
+      "obligations": [],
+      "docs": []
+    },
+    {
+      "id": "authoring.ui-production",
+      "repo": "authoring",
+      "paths": [
+        "ui/"
+      ],
+      "responsibility": "Production UI/UX artifact paths.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "ui-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain ui",
+            "evidence": "UI production quality plugin."
+          },
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "ui-ux"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "ui",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-art-direction-3d",
+      "repo": "authoring",
+      "paths": [
+        "art3d/direction/"
+      ],
+      "responsibility": "art-direction-3d production artifacts",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-model-spec",
+      "repo": "authoring",
+      "paths": [
+        "art3d/models/"
+      ],
+      "responsibility": "model-spec production artifacts",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-material-spec",
+      "repo": "authoring",
+      "paths": [
+        "art3d/materials/"
+      ],
+      "responsibility": "material-spec production artifacts",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-rig-spec",
+      "repo": "authoring",
+      "paths": [
+        "art3d/rigs/"
+      ],
+      "responsibility": "rig-spec production artifacts",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-animation-spec",
+      "repo": "authoring",
+      "paths": [
+        "art3d/animations/"
+      ],
+      "responsibility": "animation-spec production artifacts",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "art-3d"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.art3d-asset3d",
+      "repo": "authoring",
+      "paths": [
+        "art3d/deliveries/"
+      ],
+      "responsibility": "Production 3D asset delivery records.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "art3d-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain art3d",
+            "evidence": "3D art production quality and deliverable validation."
           }
         ],
         "extended": [],
@@ -3778,6 +4444,11 @@
             "id": "artifact-trace",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
             "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
           }
         ],
         "extended": [],
@@ -3818,6 +4489,41 @@
             "id": "asset-manifest",
             "run": "python3 -B {plugin_root}/scripts/checks/asset-manifest.py . --registry {plugin_root}/registry.json",
             "evidence": "Asset manifest fields, rights, provenance and delivery paths."
+          },
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX domain triggers, timings, curves, platform budgets and delivery measurements."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "vfx"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "vfx",
+      "docs": []
+    },
+    {
+      "id": "authoring.vfx-direction",
+      "repo": "authoring",
+      "paths": [
+        "vfx/directions/"
+      ],
+      "responsibility": "VFX art direction artifacts.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-quality-vfx",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain vfx",
+            "evidence": "VFX-specific art direction quality checks."
           }
         ],
         "extended": [],
@@ -4156,7 +4862,7 @@
       ],
       "domain": "design",
       "order": 85,
-      "summary": "Design GDDs, feature specifications and decisions for the Game Design domain"
+      "summary": "Production workflow for concepts, systems, features, content specs, GDDs, decisions and technical handoffs."
     },
     "ui-ux": {
       "kind": "repo",
@@ -4183,7 +4889,7 @@
       ],
       "domain": "art3d",
       "order": 88,
-      "summary": "3D art foundation artifacts"
+      "summary": "Production 3D art authoring, quality and delivery workflow"
     },
     "vfx": {
       "kind": "repo",
@@ -4192,7 +4898,7 @@
       ],
       "domain": "vfx",
       "order": 89,
-      "summary": "VFX foundation artifacts"
+      "summary": "Production VFX direction, effect specification, and asset delivery workflows."
     }
   },
   "human_gates": [
@@ -4283,6 +4989,10 @@
     {
       "id": "design-review",
       "rule": "A maintainer reviews and accepts a design artifact before it becomes approved; agents never approve their own proposals."
+    },
+    {
+      "id": "art3d-visual-review",
+      "rule": "3D visual acceptance, rights and final production review are human decisions."
     }
   ],
   "contracts": [
@@ -4690,7 +5400,7 @@
       "id": "feature-spec-to-ui-spec",
       "kind": "handoff",
       "domain": "design",
-      "summary": "Foundation handoff contract.",
+      "summary": "Design feature specification sources goals and constraints for UI requirements.",
       "source": {
         "repo": "authoring",
         "path": "design/features/"
@@ -4699,6 +5409,10 @@
         {
           "repo": "authoring",
           "path": "ui/specs/"
+        },
+        {
+          "repo": "authoring",
+          "path": "ui/requirements/"
         }
       ],
       "driver": "game-design",
@@ -4709,7 +5423,7 @@
       "id": "ui-spec-to-art2d-brief",
       "kind": "handoff",
       "domain": "ui",
-      "summary": "Foundation handoff contract.",
+      "summary": "UI/UX hands visual requirements and UI illustration needs to 2D Art by artifact ID and revision.",
       "source": {
         "repo": "authoring",
         "path": "ui/specs/"
@@ -4728,12 +5442,16 @@
       "id": "ui-spec-to-client",
       "kind": "handoff",
       "domain": "ui",
-      "summary": "Foundation handoff contract.",
+      "summary": "UI handoff routes screen acceptance to client UI implementation.",
       "source": {
         "repo": "authoring",
         "path": "ui/specs/"
       },
       "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/UI/"
+        },
         {
           "repo": "client",
           "path": "Assets/Scripts/"
@@ -4744,48 +5462,10 @@
       "evidence": "artifact-trace"
     },
     {
-      "id": "art3d-asset-to-vfx",
-      "kind": "handoff",
-      "domain": "art3d",
-      "summary": "Foundation handoff contract.",
-      "source": {
-        "repo": "authoring",
-        "path": "art3d/assets/"
-      },
-      "copies": [
-        {
-          "repo": "authoring",
-          "path": "vfx/specs/"
-        }
-      ],
-      "driver": "art-3d",
-      "gate": null,
-      "evidence": "artifact-trace"
-    },
-    {
-      "id": "art3d-asset-to-impl",
-      "kind": "handoff",
-      "domain": "art3d",
-      "summary": "Foundation handoff contract.",
-      "source": {
-        "repo": "authoring",
-        "path": "art3d/assets/"
-      },
-      "copies": [
-        {
-          "repo": "client",
-          "path": "Assets/"
-        }
-      ],
-      "driver": "art-3d",
-      "gate": null,
-      "evidence": "artifact-trace"
-    },
-    {
       "id": "vfx-spec-to-impl",
       "kind": "handoff",
       "domain": "vfx",
-      "summary": "Foundation handoff contract.",
+      "summary": "Approved VFX specifications and delivery records handed to Engineering for runtime integration.",
       "source": {
         "repo": "authoring",
         "path": "vfx/specs/"
@@ -4804,10 +5484,10 @@
       "id": "art2d-asset-to-impl",
       "kind": "handoff",
       "domain": "art2d",
-      "summary": "2D asset delivery handoff for engineering import.",
+      "summary": "Verified 2D runtime export records hand off engine import targets to client engineering.",
       "source": {
         "repo": "authoring",
-        "path": "art2d/assets/"
+        "path": "art2d/exports/"
       },
       "copies": [
         {
@@ -4817,6 +5497,205 @@
       ],
       "driver": "art-2d",
       "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "gameplay-system-to-ui",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "An approved gameplay system informs UI flows and interface specifications.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/events/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "ui/specs/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-quality"
+    },
+    {
+      "id": "technical-handoff-to-engineering",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "An approved technical handoff is implemented and tested by engineering.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/handoffs/"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-quality"
+    },
+    {
+      "id": "design-to-art2d",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "Design content informs 2D briefs.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/features/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art2d/briefs/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-quality"
+    },
+    {
+      "id": "design-to-art3d",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "Design content informs 3D briefs.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/features/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art3d/briefs/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-quality"
+    },
+    {
+      "id": "gameplay-event-to-vfx",
+      "kind": "handoff",
+      "domain": "design",
+      "summary": "Gameplay events inform VFX specifications.",
+      "source": {
+        "repo": "authoring",
+        "path": "design/events/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "game-design",
+      "gate": null,
+      "evidence": "artifact-quality"
+    },
+    {
+      "id": "art3d-asset-to-vfx",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Production 3D mesh and material references for VFX authoring.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/assets/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": "art3d-visual-review",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "ui-vfx-sync",
+      "kind": "handoff",
+      "domain": "ui",
+      "summary": "UI cue timing and VFX effect timing stay synchronized through stable artifact references.",
+      "source": {
+        "repo": "authoring",
+        "path": "ui/specs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "ui-ux",
+      "gate": null,
+      "evidence": "artifact-trace",
+      "participants": [
+        "ui",
+        "vfx"
+      ],
+      "ordering": "none"
+    },
+    {
+      "id": "art3d-asset-to-impl",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Approved 3D asset delivery into the client Assets tree for Engineering import and integration.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/assets/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": "art3d-visual-review",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "asset-3d-to-vfx",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Production 3D asset handoff to VFX.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/deliveries/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": "art3d-visual-review",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "asset-3d-to-impl",
+      "kind": "handoff",
+      "domain": "art3d",
+      "summary": "Production 3D asset delivery to Engineering for client import.",
+      "source": {
+        "repo": "authoring",
+        "path": "art3d/deliveries/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/"
+        }
+      ],
+      "driver": "art-3d",
+      "gate": "art3d-visual-review",
       "evidence": "artifact-trace"
     }
   ],
@@ -4993,10 +5872,11 @@
       "human_gates": [],
       "handoffs": [],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "reviewers": []
     },
     "design": {
-      "summary": "Game design artifacts, feature lifecycle and traceability.",
+      "summary": "Production game design artifacts, gameplay systems, content specifications, technical handoffs, lifecycle and traceability.",
       "status": "active",
       "lead": "game-design",
       "repos": [
@@ -5005,7 +5885,14 @@
       "artifact_kinds": [
         "gdd",
         "feature-spec",
-        "design-decision"
+        "design-decision",
+        "game-concept",
+        "gameplay-system",
+        "level-spec",
+        "quest-spec",
+        "npc-spec",
+        "item-spec",
+        "technical-handoff"
       ],
       "quality_gates": [
         "artifact-lint",
@@ -5017,50 +5904,73 @@
       ],
       "handoffs": [
         "feature-spec-to-impl",
-        "feature-spec-to-ui-spec"
+        "feature-spec-to-ui-spec",
+        "gameplay-system-to-ui",
+        "technical-handoff-to-engineering",
+        "design-to-art2d",
+        "design-to-art3d",
+        "gameplay-event-to-vfx"
       ],
       "may_own_feature_state": true,
-      "approvers": []
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/design.py",
+      "reviewers": []
     },
     "ui": {
-      "summary": "UI/UX flows and interface specifications.",
-      "status": "foundation",
+      "summary": "Production UI/UX requirements, architecture, screens, components, tokens and handoffs.",
+      "status": "active",
       "lead": "ui-ux",
       "repos": [
         "authoring"
       ],
       "artifact_kinds": [
         "ui-flow",
-        "ui-spec"
+        "ui-spec",
+        "ux-requirements",
+        "ia-map",
+        "screen-spec",
+        "component-spec",
+        "design-tokens",
+        "ui-handoff"
       ],
       "quality_gates": [
         "artifact-lint",
-        "artifact-trace"
+        "artifact-trace",
+        "ui-quality"
       ],
       "human_gates": [],
       "handoffs": [
         "feature-spec-to-ui-spec",
         "ui-spec-to-art2d-brief",
-        "ui-spec-to-client"
+        "ui-spec-to-client",
+        "ui-vfx-sync"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/ui.py",
+      "reviewers": []
     },
     "art2d": {
-      "summary": "2D art briefs and asset delivery records.",
-      "status": "foundation",
+      "summary": "2D art direction, concept, specification, and verified runtime export workflow.",
+      "status": "active",
       "lead": "art-2d",
       "repos": [
         "authoring"
       ],
       "artifact_kinds": [
+        "art-direction-2d",
+        "concept-2d",
+        "asset-spec-2d",
+        "runtime-export-2d",
+        "reference-2d",
         "art2d-brief",
         "art2d-asset"
       ],
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
-        "asset-manifest"
+        "asset-manifest",
+        "art2d-quality"
       ],
       "human_gates": [],
       "handoffs": [
@@ -5068,40 +5978,56 @@
         "art2d-asset-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/art2d.py",
+      "reviewers": []
     },
     "art3d": {
-      "summary": "3D art briefs and asset delivery records.",
-      "status": "foundation",
+      "summary": "Production 3D art specification, asset creation and engine-ready delivery.",
+      "status": "active",
       "lead": "art-3d",
       "repos": [
         "authoring"
       ],
       "artifact_kinds": [
         "art3d-brief",
+        "art-direction-3d",
+        "model-spec",
+        "material-spec",
+        "rig-spec",
+        "animation-spec",
+        "asset-3d",
         "art3d-asset"
       ],
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
-        "asset-manifest"
+        "asset-manifest",
+        "art3d-quality"
       ],
-      "human_gates": [],
+      "human_gates": [
+        "art3d-visual-review"
+      ],
       "handoffs": [
         "art3d-asset-to-vfx",
-        "art3d-asset-to-impl"
+        "art3d-asset-to-impl",
+        "asset-3d-to-vfx",
+        "asset-3d-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/art3d.py",
+      "reviewers": []
     },
     "vfx": {
-      "summary": "VFX specifications and asset delivery records.",
-      "status": "foundation",
+      "summary": "Production effect direction, specifications and delivery records.",
+      "status": "active",
       "lead": "vfx",
       "repos": [
         "authoring"
       ],
       "artifact_kinds": [
+        "vfx-direction",
         "vfx-spec",
         "vfx-asset"
       ],
@@ -5112,11 +6038,16 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "gameplay-event-to-vfx",
         "art3d-asset-to-vfx",
+        "ui-vfx-sync",
         "vfx-spec-to-impl"
       ],
       "may_own_feature_state": false,
-      "approvers": []
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/vfx.py",
+      "engineering_event_ids": [],
+      "reviewers": []
     }
   },
   "artifact_lifecycles": {
@@ -5128,69 +6059,108 @@
         "in-implementation",
         "verified",
         "released",
-        "deprecated"
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
       ],
       "transitions": {
         "draft": [
+          "proposed",
           "review"
         ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
         "review": [
-          "approved"
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
         ],
         "approved": [
-          "in-implementation"
+          "in-implementation",
+          "draft",
+          "blocked"
         ],
         "in-implementation": [
-          "verified"
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
         ],
         "verified": [
-          "released"
+          "released",
+          "draft",
+          "blocked"
         ],
         "released": [
-          "deprecated"
+          "deprecated",
+          "superseded"
         ],
-        "deprecated": [
+        "rejected": [
           "draft"
-        ]
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
       },
       "requirements": {
         "approved": {
-          "needs_approval": [
-            "review"
-          ],
           "approval_when_binding": true
         },
         "in-implementation": {
-          "needs_approval": [
-            "review"
-          ],
           "needs_trace": [
             "impl"
-          ],
-          "approval_when_binding": true
+          ]
         },
         "verified": {
-          "needs_approval": [
-            "review"
-          ],
-          "needs_trace_for_test": [
-            "impl",
-            "test"
-          ],
-          "approval_when_binding": true
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
         },
         "released": {
-          "needs_approval": [
-            "review"
-          ],
           "needs_trace": [
             "release"
           ],
-          "needs_trace_for_test": [
-            "impl",
-            "test"
-          ],
-          "approval_when_binding": true
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
         }
       }
     },
@@ -5207,16 +6177,59 @@
         "approved": [
           "superseded"
         ],
-        "superseded": []
+        "superseded": [],
+        "proposed": [],
+        "reviewed": [],
+        "in-implementation": [],
+        "verified": [],
+        "released": [],
+        "rejected": [],
+        "blocked": []
       },
       "requirements": {
         "approved": {
-          "needs_approval": [
-            "design-review"
-          ],
-          "approval_when_binding": [
-            "gameplay-rules"
+          "approval_when_binding": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
           ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
         }
       }
     },
@@ -5228,60 +6241,114 @@
         "in-implementation",
         "verified",
         "released",
-        "deprecated"
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
       ],
       "transitions": {
         "draft": [
+          "proposed",
           "review"
         ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
         "review": [
-          "approved"
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
         ],
         "approved": [
           "in-implementation",
-          "draft"
+          "draft",
+          "blocked"
         ],
         "in-implementation": [
           "verified",
-          "draft"
+          "draft",
+          "blocked",
+          "rejected"
         ],
         "verified": [
           "released",
-          "draft"
+          "draft",
+          "blocked"
         ],
         "released": [
           "deprecated",
+          "superseded"
+        ],
+        "rejected": [
           "draft"
         ],
-        "deprecated": [
+        "blocked": [
           "draft"
-        ]
+        ],
+        "deprecated": [],
+        "superseded": []
       },
       "requirements": {
         "approved": {
-          "approval_when_binding": [
-            "gameplay-rules"
-          ]
+          "approval_when_binding": true
         },
         "verified": {
-          "needs_trace_for_test": [
-            "impl",
-            "test"
-          ]
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
         },
         "released": {
           "needs_trace": [
             "release"
           ],
-          "needs_trace_for_test": [
-            "impl",
-            "test"
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
           ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
         }
       }
     },
     "design-decision": {
       "states": [
+        "draft",
         "proposed",
         "accepted",
         "rejected",
@@ -5290,7 +6357,8 @@
       "transitions": {
         "proposed": [
           "accepted",
-          "rejected"
+          "rejected",
+          "draft"
         ],
         "accepted": [
           "superseded"
@@ -5298,13 +6366,3207 @@
         "rejected": [
           "superseded"
         ],
-        "superseded": []
+        "superseded": [],
+        "draft": [
+          "proposed"
+        ],
+        "reviewed": [],
+        "approved": [],
+        "in-implementation": [],
+        "verified": [],
+        "released": [],
+        "blocked": []
       },
       "requirements": {
         "accepted": {
           "approval_when_binding": [
             "gameplay-rules"
           ]
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "game-concept": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "gameplay-system": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "level-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "quest-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "npc-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "item-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "technical-handoff": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "ux-requirements": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "ia-map": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "screen-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "component-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "design-tokens": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "ui-handoff": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "concept-2d": {
+      "states": [
+        "draft",
+        "proposed",
+        "reviewed",
+        "rejected",
+        "blocked",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "rejected",
+          "blocked"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "superseded": []
+      },
+      "requirements": {
+        "proposed": {
+          "schema_complete": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "reference-2d": {
+      "states": [
+        "draft",
+        "proposed",
+        "reviewed",
+        "rejected",
+        "blocked",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "rejected",
+          "blocked"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "superseded": []
+      },
+      "requirements": {
+        "proposed": {
+          "schema_complete": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "art-direction-2d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "asset-spec-2d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "runtime-export-2d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "art3d-brief": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "art-direction-3d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "model-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "material-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "rig-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "animation-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "asset-3d": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "art3d-asset": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "vfx-direction": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "vfx-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          },
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "vfx-asset": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          },
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
         }
       }
     }
@@ -5322,5 +9584,44 @@
     "acceptance": [
       "Product-repo TEAM.md phase rules remain authoritative for product code."
     ]
+  },
+  "kind_schemas": {
+    "gdd": "docs/schemas/kinds/gdd.schema.json",
+    "feature-spec": "docs/schemas/kinds/feature-spec.schema.json",
+    "design-decision": "docs/schemas/kinds/design-decision.schema.json",
+    "ui-flow": "docs/schemas/kinds/ui-flow.schema.json",
+    "ui-spec": "docs/schemas/kinds/ui-spec.schema.json",
+    "art2d-brief": "docs/schemas/kinds/art2d-brief.schema.json",
+    "art2d-asset": "docs/schemas/kinds/art2d-asset.schema.json",
+    "art3d-brief": "docs/schemas/kinds/art3d-brief.schema.json",
+    "art3d-asset": "docs/schemas/kinds/art3d-asset.schema.json",
+    "vfx-spec": "docs/schemas/kinds/vfx-spec.schema.json",
+    "vfx-asset": "docs/schemas/kinds/vfx-asset.schema.json",
+    "default": "docs/schemas/kinds/default.schema.json",
+    "game-concept": "docs/schemas/kinds/game-concept.schema.json",
+    "gameplay-system": "docs/schemas/kinds/gameplay-system.schema.json",
+    "level-spec": "docs/schemas/kinds/level-spec.schema.json",
+    "quest-spec": "docs/schemas/kinds/quest-spec.schema.json",
+    "npc-spec": "docs/schemas/kinds/npc-spec.schema.json",
+    "item-spec": "docs/schemas/kinds/item-spec.schema.json",
+    "technical-handoff": "docs/schemas/kinds/technical-handoff.schema.json",
+    "ux-requirements": "docs/schemas/kinds/ux-requirements.schema.json",
+    "ia-map": "docs/schemas/kinds/ia-map.schema.json",
+    "screen-spec": "docs/schemas/kinds/screen-spec.schema.json",
+    "component-spec": "docs/schemas/kinds/component-spec.schema.json",
+    "design-tokens": "docs/schemas/kinds/design-tokens.schema.json",
+    "ui-handoff": "docs/schemas/kinds/ui-handoff.schema.json",
+    "art-direction-2d": "docs/schemas/kinds/art-direction-2d.schema.json",
+    "concept-2d": "docs/schemas/kinds/concept-2d.schema.json",
+    "asset-spec-2d": "docs/schemas/kinds/asset-spec-2d.schema.json",
+    "runtime-export-2d": "docs/schemas/kinds/runtime-export-2d.schema.json",
+    "reference-2d": "docs/schemas/kinds/reference-2d.schema.json",
+    "art-direction-3d": "docs/schemas/kinds/art-direction-3d.schema.json",
+    "model-spec": "docs/schemas/kinds/model-spec.schema.json",
+    "material-spec": "docs/schemas/kinds/material-spec.schema.json",
+    "rig-spec": "docs/schemas/kinds/rig-spec.schema.json",
+    "animation-spec": "docs/schemas/kinds/animation-spec.schema.json",
+    "asset-3d": "docs/schemas/kinds/asset-3d.schema.json",
+    "vfx-direction": "docs/schemas/kinds/vfx-direction.schema.json"
   }
 }

@@ -142,6 +142,12 @@ run "engineering routing contract unchanged (golden, stand-in workspace)" env -u
 run "repos without a remote do not crash status or the git guard" env -u TMPDIR tests/registry-nulls.test.sh
   run "domain and artifact-kind routing (stand-in workspace)" env -u TMPDIR tests/domains-routing.test.sh
   run "Game Design domain: routing, feature-state ownership, standalone (no game-ai-workflows)" env -u TMPDIR tests/domains.test.sh
+run "Game Design production workflow" tests/design-workflow.test.sh
+run "dogfood write grader (offline, recorded transcripts)" tests/dogfood-grader.test.sh
+run "UI/UX production workflow" tests/ui-workflow.test.sh
+run "2D Art production workflow" tests/art2d-workflow.test.sh
+run "3D Art production workflow" tests/art3d-workflow.test.sh
+run "VFX production workflow" tests/vfx-workflow.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh

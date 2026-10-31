@@ -204,7 +204,10 @@
             "description": "Relative to the workspace root."
           },
           "remote": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "default_branch": {
             "type": "string"
@@ -454,6 +457,11 @@
           },
           "evidence": {
             "type": "string"
+          },
+          "ordering": {
+            "enum": ["ordered", "none"],
+            "default": "ordered",
+            "description": "none registers a routable synchronization contract for follow-ups and trace evidence without adding a workflow wave edge."
           },
           "domain": {
             "type": "string",
@@ -755,6 +763,13 @@
           "items": {
             "type": "string",
             "description": "Revoked SSH key fingerprints."
+          }
+        },
+        "reviewers": {
+          "type": "array",
+          "description": "SSH principals and public keys trusted for signed artifact reviews.",
+          "items": {
+            "$ref": "#/$defs/domain_approver"
           }
         }
       }

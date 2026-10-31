@@ -9,6 +9,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import importlib.util
+
+_review_spec = importlib.util.spec_from_file_location("artifact_review", os.path.join(os.path.dirname(__file__), "artifact-review.py"))
+_review = importlib.util.module_from_spec(_review_spec)
+_review_spec.loader.exec_module(_review)
 
 
 def run(cwd, *args):
@@ -32,6 +37,16 @@ def front(path):
 def git_blob(root, path):
     r = run(root, "rev-parse", f"HEAD:{path}")
     return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def current_blob(root, path):
+    """Blob id of the upstream as a downstream author reads it (`git hash-object`, committed or not); approvals and
+    reviews stay bound to the committed blob (git_blob)."""
+    if os.path.isfile(os.path.join(root, path)):
+        r = run(root, "hash-object", "--", path)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return git_blob(root, path)
 
 
 def spec_payload(raw):
@@ -158,7 +173,7 @@ def approval(root, artifact_path, obj, gate, reg):
 def main():
     for _stream in (sys.stdout, sys.stderr):
         if hasattr(_stream, "reconfigure"):
-            _stream.reconfigure(encoding="utf-8")
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
     p.add_argument("repo_dir")
     p.add_argument("--registry", required=True)
@@ -176,15 +191,27 @@ def main():
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in (".git", "approvals")]
         for name in sorted(names):
-            if not (name.endswith(".md") or name.endswith(".artifact.json")):
-                continue
             path = os.path.join(base, name)
+            if name.endswith(".md"):
+                try:
+                    if open(path, encoding="utf-8").read(7) != "---json": continue
+                except Exception as exc:
+                    print(f"FAIL {os.path.relpath(path, root).replace(os.sep, '/')} {exc}")
+                    fails += 1
+                    continue
+            elif not name.endswith(".artifact.json"):
+                continue
             rel = os.path.relpath(path, root).replace(os.sep, "/")
             try:
                 obj = front(path)
-            except Exception:
-                obj = None
-            if not isinstance(obj, dict) or "id" not in obj:
+                if not isinstance(obj, dict): raise ValueError("artifact document must be a JSON object")
+                if not obj.get("id"): raise ValueError("missing id")
+                if not obj.get("kind"): raise ValueError("missing kind")
+            except Exception as exc:
+                print(f"FAIL {rel} {exc}")
+                fails += 1
+                continue
+            if not isinstance(obj, dict):
                 continue
             aid = obj["id"]
             reason = None
@@ -202,7 +229,7 @@ def main():
                                 )
                         except Exception:
                             pass
-                if not candidates or up.get("rev") != git_blob(root, candidates[0]):
+                if not candidates or up.get("rev") != current_blob(root, candidates[0]):
                     reason = f"upstream-changed {up.get('id')}"
                     break
             if reason is None:
@@ -247,6 +274,10 @@ def main():
                 obj.get("kind"), reg.get("artifact_lifecycles", {}).get("default", {})
             )
             req = life.get("requirements", {}).get(obj.get("status"), {})
+            for trace_kind in req.get("needs_trace", []):
+                if not any(t.get("kind") == trace_kind for t in obj.get("trace", [])):
+                    reason = f"missing {trace_kind} trace"
+                    break
             if reason is None:
                 coverage = {
                     (trace.get("kind"), ac_id)
@@ -254,8 +285,10 @@ def main():
                     for ac_id in trace.get("ac", [])
                 }
                 for criterion in obj.get("acceptance", []):
-                    criterion_required = set(req.get("needs_trace", []))
-                    if criterion.get("verify") == "test":
+                    criterion_required = set()
+                    coverage_rule = req.get("verify_type_coverage", {}).get(criterion.get("verify"), {})
+                    criterion_required.update(coverage_rule.get("needs_trace", []))
+                    if criterion.get("verify") == "test" and not coverage_rule:
                         criterion_required.update(req.get("needs_trace_for_test", []))
                     if any(
                         (kind, criterion.get("id")) not in coverage
@@ -263,6 +296,42 @@ def main():
                     ):
                         reason = "missing AC coverage"
                         break
+            review_required = req.get("independent_review") or req.get("needs_review") or any(
+                rule.get("needs_review") for rule in req.get("verify_type_coverage", {}).values()
+            )
+            if reason is None and review_required:
+                current_rev = git_blob(root, rel)
+                review_dir = os.path.join(root, "reviews", obj["id"])
+                valid = False
+                assurance = "process"
+                required_assurance = req.get("review_assurance", life.get("review_assurance", reg.get("artifact_lifecycles", {}).get("default", {}).get("review_assurance", "process")))
+                for review_name in os.listdir(review_dir) if os.path.isdir(review_dir) else []:
+                    try:
+                        review = json.load(open(os.path.join(review_dir, review_name), encoding="utf-8"))
+                        reviewer = review.get("reviewer", {})
+                        review_path = "reviews/" + obj["id"] + "/" + review_name
+                        identity, immutable_error = _review.review_commit(root, review_path)
+                        author_ids = {x.get("id") for x in obj.get("authors", []) if isinstance(x, dict)} | _review.author_emails(root, rel)
+                        if (identity and review.get("artifact") == obj["id"] and review.get("rev") == current_rev
+                                and reviewer.get("id") and reviewer.get("id") != identity[1]):
+                            reason = "review identity mismatch"
+                            continue
+                        if (review.get("artifact") == obj["id"] and review.get("rev") == current_rev
+                                and identity and reviewer.get("id") == identity[1] and identity[1] not in author_ids
+                                and review.get("verdict") in ("approve", "changes-requested", "reject")
+                                and isinstance(review.get("findings"), list)):
+                            if required_assurance == "signed":
+                                signed_state, signed_reason = _review.signed(root, identity[0], reg.get("domains", {}).get(obj.get("domain"), {}))
+                                if signed_state != "PASS":
+                                    reason = "signed review required: " + signed_reason
+                                    continue
+                                assurance = "signed"
+                            valid = True; break
+                    except Exception:
+                        continue
+                if not valid and reason is None: reason = "review evidence required"
+                if valid:
+                    print(f"PASS {aid} review-assurance {assurance}")
             if reason is None:
                 gates = list(req.get("needs_approval", []))
                 conditional = req.get("approval_when_binding")

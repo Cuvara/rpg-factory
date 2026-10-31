@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "2D runtime export record v1",
+  "type": "object",
+  "required": [
+    "asset_spec_id",
+    "repo",
+    "file_path",
+    "sha256",
+    "dimensions",
+    "format",
+    "alpha"
+  ],
+  "properties": {
+    "asset_spec_id": {
+      "type": "string"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "file_path": {
+      "type": "string"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dimensions": {
+      "type": "object",
+      "required": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "format": {
+      "enum": [
+        "png",
+        "jpeg",
+        "webp"
+      ]
+    },
+    "alpha": {
+      "type": "boolean"
+    },
+    "atlas": {
+      "type": "object",
+      "properties": {
+        "power_of_two": {
+          "type": "boolean"
+        },
+        "max_width": {
+          "type": "integer"
+        },
+        "max_height": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
