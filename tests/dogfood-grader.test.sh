@@ -84,6 +84,12 @@ newcase bash-cd-inside
 check 'relative output inside the workspace after cd is allowed' pass outside_shell "$T/bash-cd-inside" "cd \"$(native_path "$T/bash-cd-inside")/game-authoring\" && printf x > ../workflow.json"
 newcase bash-cd-outside
 check 'relative output escaping the workspace after cd fails' fail outside_shell "$T/bash-cd-outside" "cd \"$(native_path "$T/bash-cd-outside")/game-authoring\" && printf x > ../../escaped.json"
+newcase bash-cd-semicolon
+check 'relative output after `cd dir;` inside the workspace is allowed' pass outside_shell "$T/bash-cd-semicolon" "cd \"$(native_path "$T/bash-cd-semicolon")\"; cd game-authoring; cat > ../wf-tmp.json <<EOF
+{}
+EOF"
+newcase bash-cd-semicolon-out
+check 'relative output after `cd dir;` escaping the workspace fails' fail outside_shell "$T/bash-cd-semicolon-out" "cd \"$(native_path "$T/bash-cd-semicolon-out")\"; cd game-authoring; printf x > ../../escaped.json"
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
 import json,sys
 p=sys.argv[1]; d=[json.loads(x) for x in open(p,encoding='utf-8')]; d[2]['message']['content'][0]['input']['command']='python scripts/factory-workflow.py status x; # wrong order engineering design ui'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in d))
@@ -115,5 +121,7 @@ for path in root.rglob('*.artifact.json'):
 print(json.dumps({'results':rows}))
 PY
 check 'stale grader rejects missing upstream-changed quality row' fail env RPG_FACTORY_ARTIFACT_QUALITY="$T/no-stale-row.py" python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$T/stale" --scenario xdomain-stale --transcript "$T/stale/transcript.jsonl" --expected-skills game-design --expected-kinds 'gameplay-system vfx-spec' --domain vfx --plan stale
+# --all must fail when a write scenario failed (the read-only pass/fail counters are reset before the table)
+check 'dogfood --all exit includes write failures' pass grep -q '"${write_fail:-0}" -eq 0 \]$' "$ROOT/tests/dogfood.sh"
 echo "dogfood grader: $((ok+bad)) run, $ok passed, $bad failed"
 [ "$bad" -eq 0 ]
