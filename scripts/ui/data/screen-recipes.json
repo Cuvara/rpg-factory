@@ -1,0 +1,732 @@
+{
+ "schema": "rpg-factory.ui-recipes/1",
+ "note": "Need -> selection rules. choice: required catalog ids (pkg:<Type> matches every generic arity); optional: ids that only add value when present (absent ones are a note, never 'missing'). A required choice absent from the catalog at the resolved ref makes the need missing; nothing is invented. A --need is resolved by id, then by alias (exact, normalized), then by keyword (whole words).",
+ "needs": {
+  "screen-container": {
+   "status": "reuse",
+   "choice": [
+    "pkg:BaseUIToolkitScreenPresenter",
+    "pkg:BaseUIToolkitView"
+   ],
+   "optional": [
+    "editor:Assets/Cuvara/Create Screen"
+   ],
+   "aliases": [
+    "screen container",
+    "screen base",
+    "screen presenter",
+    "screen view",
+    "presenter base"
+   ],
+   "keywords": [],
+   "notes": "Scaffold View, presenter and UXML with ScreenCreator (Assets/Cuvara/Create Screen); push it with IScreenNavigator.",
+   "owner_if_missing": "unity-package"
+  },
+  "popup-container": {
+   "status": "reuse",
+   "choice": [
+    "pkg:BaseUIToolkitPopupPresenter",
+    "pkg:BaseUIToolkitView"
+   ],
+   "optional": [
+    "pkg:ScreenOptions"
+   ],
+   "aliases": [
+    "popup container",
+    "popup presenter",
+    "modal container",
+    "popup base"
+   ],
+   "keywords": [
+    "popup",
+    "pop-up",
+    "modal"
+   ],
+   "notes": "Configure ScreenOptions (Modal, DimsBelow, CloseOnTapOutside) when pushing.",
+   "owner_if_missing": "unity-package"
+  },
+  "hud-view": {
+   "status": "reuse",
+   "choice": [
+    "pkg:BaseUIToolkitView"
+   ],
+   "optional": [
+    "pkg:RootUIDocument"
+   ],
+   "aliases": [
+    "hud view",
+    "hud container",
+    "hud layer"
+   ],
+   "keywords": [
+    "hud"
+   ],
+   "notes": "A HUD is a view parented into a RootUIDocument layer, not a navigator screen.",
+   "owner_if_missing": "unity-package"
+  },
+  "settings-data": {
+   "status": "reuse",
+   "choice": [
+    "pkg:SettingsModel"
+   ],
+   "optional": [],
+   "aliases": [
+    "settings data",
+    "settings model",
+    "game settings",
+    "settings storage",
+    "player settings"
+   ],
+   "keywords": [
+    "settings",
+    "options",
+    "preferences"
+   ],
+   "notes": "SettingsModel holds volumes, quality, fullscreen, vsync and language with Load/Save/Apply; do not write a second model.",
+   "owner_if_missing": "unity-package"
+  },
+  "audio-toggle": {
+   "status": "compose",
+   "choice": [
+    "unity:Toggle"
+   ],
+   "optional": [
+    "token:--cuvara-color-primary"
+   ],
+   "aliases": [
+    "music toggle",
+    "sound toggle",
+    "audio toggle",
+    "mute toggle",
+    "sfx toggle",
+    "toggle"
+   ],
+   "keywords": [
+    "mute",
+    "music toggle",
+    "sound toggle",
+    "toggle"
+   ],
+   "notes": "Style with --cuvara-* tokens; no custom toggle control.",
+   "owner_if_missing": "client-integration"
+  },
+  "volume-slider": {
+   "status": "compose",
+   "choice": [
+    "unity:Slider",
+    "pkg:SettingsModel"
+   ],
+   "optional": [],
+   "aliases": [
+    "volume slider",
+    "volume",
+    "music volume",
+    "sfx volume",
+    "master volume"
+   ],
+   "keywords": [
+    "volume",
+    "slider"
+   ],
+   "notes": "Bind to SettingsModel.SetMasterVolume/SetMusicVolume/SetSfxVolume (0-1).",
+   "owner_if_missing": "client-integration"
+  },
+  "graphics-quality": {
+   "status": "compose",
+   "choice": [
+    "unity:DropdownField",
+    "pkg:SettingsModel"
+   ],
+   "optional": [],
+   "aliases": [
+    "graphics quality",
+    "quality dropdown",
+    "graphics dropdown",
+    "quality setting"
+   ],
+   "keywords": [
+    "graphics",
+    "quality"
+   ],
+   "notes": "Choices map to SettingsModel.GraphicsQuality (0-3).",
+   "owner_if_missing": "client-integration"
+  },
+  "language-select": {
+   "status": "compose",
+   "choice": [
+    "unity:DropdownField",
+    "pkg:SettingsModel"
+   ],
+   "optional": [],
+   "aliases": [
+    "language select",
+    "language dropdown",
+    "language picker",
+    "language"
+   ],
+   "keywords": [
+    "language",
+    "locale"
+   ],
+   "notes": "SettingsModel.SetLanguage stores the code.",
+   "owner_if_missing": "client-integration"
+  },
+  "tabs": {
+   "status": "compose",
+   "choice": [
+    "unity:TabView",
+    "unity:Tab"
+   ],
+   "optional": [],
+   "aliases": [
+    "tab view",
+    "tab bar",
+    "tabs"
+   ],
+   "keywords": [
+    "tab",
+    "tabs",
+    "categories"
+   ],
+   "notes": "Built-in TabView; style headers with tokens.",
+   "owner_if_missing": "client-integration"
+  },
+  "scroll": {
+   "status": "compose",
+   "choice": [
+    "unity:ScrollView"
+   ],
+   "optional": [],
+   "aliases": [
+    "scroll view",
+    "scrolling",
+    "scroll"
+   ],
+   "keywords": [
+    "scroll"
+   ],
+   "notes": "Built-in ScrollView.",
+   "owner_if_missing": "client-integration"
+  },
+  "sections": {
+   "status": "compose",
+   "choice": [
+    "unity:Foldout"
+   ],
+   "optional": [],
+   "aliases": [
+    "foldout",
+    "collapsible section",
+    "sections"
+   ],
+   "keywords": [
+    "foldout",
+    "collapsible"
+   ],
+   "notes": "Built-in Foldout.",
+   "owner_if_missing": "client-integration"
+  },
+  "buttons": {
+   "status": "compose",
+   "choice": [
+    "unity:Button"
+   ],
+   "optional": [
+    "token:--cuvara-color-primary",
+    "token:--cuvara-color-on-primary"
+   ],
+   "aliases": [
+    "button",
+    "buttons"
+   ],
+   "keywords": [
+    "button",
+    "buttons"
+   ],
+   "notes": "Built-in Button styled with tokens.",
+   "owner_if_missing": "client-integration"
+  },
+  "choice-group": {
+   "status": "compose",
+   "choice": [
+    "unity:RadioButtonGroup"
+   ],
+   "optional": [],
+   "aliases": [
+    "radio buttons",
+    "radio group",
+    "choice group"
+   ],
+   "keywords": [
+    "radio",
+    "difficulty"
+   ],
+   "notes": "Built-in RadioButtonGroup.",
+   "owner_if_missing": "client-integration"
+  },
+  "text-input": {
+   "status": "compose",
+   "choice": [
+    "unity:TextField"
+   ],
+   "optional": [],
+   "aliases": [
+    "text input",
+    "text field",
+    "name input",
+    "search field"
+   ],
+   "keywords": [
+    "text input",
+    "name input",
+    "text field"
+   ],
+   "notes": "Built-in TextField.",
+   "owner_if_missing": "client-integration"
+  },
+  "confirm-popup": {
+   "status": "reuse",
+   "choice": [
+    "pkg:ConfirmDialog"
+   ],
+   "optional": [],
+   "aliases": [
+    "confirmation popup",
+    "confirm popup",
+    "confirm dialog",
+    "confirmation dialog",
+    "yes no dialog",
+    "are you sure dialog"
+   ],
+   "keywords": [
+    "confirm",
+    "confirmation",
+    "are you sure"
+   ],
+   "notes": "await ConfirmDialog.ShowAsync(parent, message, confirmLabel, cancelLabel).",
+   "owner_if_missing": "unity-package"
+  },
+  "toast": {
+   "status": "reuse",
+   "choice": [
+    "pkg:ToastService"
+   ],
+   "optional": [],
+   "aliases": [
+    "toast",
+    "toast notification",
+    "snackbar",
+    "notification toast"
+   ],
+   "keywords": [
+    "toast",
+    "notification",
+    "snackbar"
+   ],
+   "notes": "ToastService.Show(message, duration, ToastType).",
+   "owner_if_missing": "unity-package"
+  },
+  "back-close": {
+   "status": "reuse",
+   "choice": [
+    "pkg:IScreenNavigator"
+   ],
+   "optional": [
+    "pkg:BackNavigationSource"
+   ],
+   "aliases": [
+    "back navigation",
+    "back button",
+    "close button",
+    "back",
+    "close",
+    "navigation back"
+   ],
+   "keywords": [],
+   "notes": "Close with IScreenNavigator.PopAsync; Back/Escape arrives through BackNavigationSource.",
+   "owner_if_missing": "unity-package"
+  },
+  "theme": {
+   "status": "reuse",
+   "choice": [
+    "pkg:ICuvaraThemeService"
+   ],
+   "optional": [
+    "token:--cuvara-color-surface"
+   ],
+   "aliases": [
+    "theme",
+    "theming",
+    "dark mode",
+    "light mode",
+    "theme service"
+   ],
+   "keywords": [
+    "theme",
+    "dark mode",
+    "light mode"
+   ],
+   "notes": "Apply the theme through ICuvaraThemeService; override --cuvara-* variables, not component rules.",
+   "owner_if_missing": "unity-package"
+  },
+  "safe-area": {
+   "status": "configure",
+   "choice": [
+    "pkg:SafeAreaElement"
+   ],
+   "optional": [],
+   "aliases": [
+    "safe area",
+    "notch"
+   ],
+   "keywords": [
+    "safe area",
+    "notch"
+   ],
+   "notes": "Configure conform-x, conform-y and apply-mode in UXML.",
+   "owner_if_missing": "unity-package"
+  },
+  "item-list": {
+   "status": "configure",
+   "choice": [
+    "pkg:UIToolkitListAdapter",
+    "unity:ListView"
+   ],
+   "optional": [],
+   "aliases": [
+    "item list",
+    "list view",
+    "list"
+   ],
+   "keywords": [],
+   "notes": "Adapter over a ListView with an item template; presenters per item.",
+   "owner_if_missing": "unity-package"
+  },
+  "item-grid": {
+   "status": "configure",
+   "choice": [
+    "pkg:UIToolkitGridAdapter",
+    "unity:ListView"
+   ],
+   "optional": [],
+   "aliases": [
+    "item grid",
+    "inventory grid",
+    "grid",
+    "slot grid"
+   ],
+   "keywords": [
+    "grid",
+    "inventory"
+   ],
+   "notes": "Grid adapter: ListView rows with cellsPerRow cells.",
+   "owner_if_missing": "unity-package"
+  },
+  "item-cell": {
+   "status": "reuse",
+   "choice": [
+    "pkg:BaseUIToolkitItemPresenter",
+    "pkg:BaseUIToolkitItemView"
+   ],
+   "optional": [],
+   "aliases": [
+    "item cell",
+    "item slot",
+    "slot",
+    "inventory slot"
+   ],
+   "keywords": [
+    "slot"
+   ],
+   "notes": "One presenter/view pair per item template.",
+   "owner_if_missing": "unity-package"
+  },
+  "currency-display": {
+   "status": "compose",
+   "choice": [
+    "unity:Label",
+    "unity:Image"
+   ],
+   "optional": [],
+   "aliases": [
+    "currency display",
+    "currency",
+    "gold display",
+    "coins",
+    "price label"
+   ],
+   "keywords": [
+    "currency",
+    "gold",
+    "coins",
+    "price"
+   ],
+   "notes": "Label plus icon, styled with tokens.",
+   "owner_if_missing": "client-integration"
+  },
+  "health-bar": {
+   "status": "compose",
+   "choice": [
+    "unity:ProgressBar"
+   ],
+   "optional": [],
+   "aliases": [
+    "health bar",
+    "hp bar",
+    "mana bar",
+    "progress bar"
+   ],
+   "keywords": [
+    "health",
+    "hp",
+    "mana"
+   ],
+   "notes": "Built-in ProgressBar styled with tokens.",
+   "owner_if_missing": "client-integration"
+  },
+  "ecs-binding": {
+   "status": "reuse",
+   "choice": [
+    "pkg:EcsViewModelBridge",
+    "pkg:IViewModelSink"
+   ],
+   "optional": [],
+   "aliases": [
+    "ecs binding",
+    "ecs bridge",
+    "dots binding"
+   ],
+   "keywords": [
+    "ecs",
+    "entities"
+   ],
+   "notes": "Needs com.unity.entities (Cuvara.UIToolkit.Ecs assembly).",
+   "owner_if_missing": "unity-package"
+  },
+  "data-binding": {
+   "status": "reuse",
+   "choice": [
+    "pkg:BindableViewModel"
+   ],
+   "optional": [],
+   "aliases": [
+    "data binding",
+    "view model",
+    "viewmodel"
+   ],
+   "keywords": [
+    "binding",
+    "view model",
+    "viewmodel"
+   ],
+   "notes": "Runtime data binding behind the view interfaces.",
+   "owner_if_missing": "unity-package"
+  },
+  "typed-queries": {
+   "status": "reuse",
+   "choice": [
+    "pkg:VisualElementQueryExtensions"
+   ],
+   "optional": [
+    "editor:Assets/Cuvara/Generate UXML Bindings"
+   ],
+   "aliases": [
+    "typed queries",
+    "typed query",
+    "uxml bindings",
+    "require"
+   ],
+   "keywords": [
+    "codegen"
+   ],
+   "notes": "Require<T> and generated UXML bindings instead of string Q<T> calls.",
+   "owner_if_missing": "unity-package"
+  },
+  "loading-progress": {
+   "status": "reuse",
+   "choice": [
+    "pkg:LoadingProgressTracker",
+    "unity:ProgressBar"
+   ],
+   "optional": [],
+   "aliases": [
+    "loading progress",
+    "loading bar",
+    "loading screen progress"
+   ],
+   "keywords": [
+    "loading",
+    "progress"
+   ],
+   "notes": "Weighted steps drive a ProgressBar.",
+   "owner_if_missing": "unity-package"
+  },
+  "screen-transition": {
+   "status": "configure",
+   "choice": [
+    "pkg:FadeTransition",
+    "pkg:SlideTransition"
+   ],
+   "optional": [],
+   "aliases": [
+    "screen transition",
+    "transition",
+    "fade",
+    "slide transition"
+   ],
+   "keywords": [
+    "transition",
+    "fade",
+    "slide"
+   ],
+   "notes": "Pick a transition per screen.",
+   "owner_if_missing": "unity-package"
+  },
+  "quest-list": {
+   "status": "configure",
+   "choice": [
+    "pkg:UIToolkitListAdapter",
+    "unity:ListView"
+   ],
+   "optional": [],
+   "aliases": [
+    "quest list",
+    "quest log",
+    "journal list"
+   ],
+   "keywords": [
+    "quest",
+    "quests",
+    "journal"
+   ],
+   "notes": "Quest rows through the list adapter.",
+   "owner_if_missing": "client-integration"
+  },
+  "quest-detail": {
+   "status": "compose",
+   "choice": [
+    "unity:Label",
+    "unity:ScrollView"
+   ],
+   "optional": [],
+   "aliases": [
+    "quest detail",
+    "quest details",
+    "quest description"
+   ],
+   "keywords": [
+    "objectives"
+   ],
+   "notes": "Built-in Label and ScrollView.",
+   "owner_if_missing": "client-integration"
+  },
+  "item-tooltip": {
+   "status": "missing",
+   "choice": [],
+   "optional": [],
+   "aliases": [
+    "tooltip",
+    "item tooltip"
+   ],
+   "keywords": [
+    "tooltip"
+   ],
+   "notes": "No runtime tooltip control in the catalog; decide reusable (unity-package) or game-specific (client-integration) before creating.",
+   "owner_if_missing": "unity-package"
+  },
+  "drag-drop": {
+   "status": "missing",
+   "choice": [],
+   "optional": [],
+   "aliases": [
+    "drag and drop",
+    "drag drop",
+    "drag"
+   ],
+   "keywords": [
+    "drag",
+    "drop"
+   ],
+   "notes": "No drag-and-drop control in the catalog; decide the owner before creating.",
+   "owner_if_missing": "unity-package"
+  },
+  "minimap": {
+   "status": "missing",
+   "choice": [],
+   "optional": [],
+   "aliases": [
+    "minimap",
+    "radar",
+    "mini map"
+   ],
+   "keywords": [
+    "minimap",
+    "radar"
+   ],
+   "notes": "No minimap control in the catalog; game-specific.",
+   "owner_if_missing": "client-integration"
+  }
+ },
+ "screens": {
+  "settings": [
+   "screen-container",
+   "settings-data",
+   "audio-toggle",
+   "volume-slider",
+   "graphics-quality",
+   "tabs",
+   "scroll",
+   "confirm-popup",
+   "toast",
+   "back-close",
+   "theme"
+  ],
+  "inventory": [
+   "screen-container",
+   "item-grid",
+   "item-cell",
+   "currency-display",
+   "item-tooltip",
+   "confirm-popup",
+   "back-close",
+   "theme"
+  ],
+  "popup": [
+   "popup-container",
+   "buttons",
+   "confirm-popup",
+   "back-close",
+   "theme"
+  ],
+  "confirm": [
+   "confirm-popup"
+  ],
+  "hud": [
+   "hud-view",
+   "health-bar",
+   "currency-display",
+   "ecs-binding",
+   "safe-area",
+   "theme"
+  ],
+  "quest-panel": [
+   "screen-container",
+   "quest-list",
+   "quest-detail",
+   "tabs",
+   "back-close",
+   "theme"
+  ],
+  "shop": [
+   "screen-container",
+   "tabs",
+   "item-grid",
+   "item-cell",
+   "currency-display",
+   "confirm-popup",
+   "toast",
+   "back-close",
+   "theme"
+  ]
+ }
+}

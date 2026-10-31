@@ -1,0 +1,21 @@
+{
+  "about": "Component-selection cases for scripts/ui/ui_select.py, run by tests/ui-skill-routing.test.sh against the tests/fixtures/ui-select-repo UIToolkit fixture (tag v0.8.0, client pinned to #v0.8.0). Each case runs `ui_select.py --json` with `--need <need>` or `--screen <screen>`. status_in: allowed statuses; choice_contains: regexes (re.search) the JSON of the choice must match; owner_in: allowed owner_if_missing. A screen case asserts the choices_contain regexes over all of its selections and that none of its needs is missing.",
+  "needs": [
+    {"id": "confirm-popup", "need": "confirmation popup", "status_in": ["reuse"], "choice_contains": ["ConfirmDialog"]},
+    {"id": "settings-data", "need": "settings data", "status_in": ["reuse", "configure"], "choice_contains": ["SettingsModel"]},
+    {"id": "toggle", "need": "music toggle", "status_in": ["compose"], "choice_contains": ["Toggle"]},
+    {"id": "volume", "need": "volume slider", "status_in": ["compose"], "choice_contains": ["Slider"]},
+    {"id": "graphics-quality", "need": "graphics quality", "status_in": ["compose", "configure"], "choice_contains": ["DropdownField"]},
+    {"id": "tabs", "need": "tabs", "status_in": ["compose"], "choice_contains": ["TabView"]},
+    {"id": "toast", "need": "toast", "status_in": ["reuse"], "choice_contains": ["ToastService"]},
+    {"id": "back", "need": "back navigation", "status_in": ["reuse"], "choice_contains": ["PopAsync|BackNavigationSource|IScreenNavigator"]},
+    {"id": "theme", "need": "theme", "status_in": ["reuse"], "choice_contains": ["CuvaraThemeService"]},
+    {"id": "invented-wheel", "need": "radial weapon wheel", "status_in": ["missing"], "owner_in": ["unity-package", "client-integration"]},
+    {"id": "invented-minimap", "need": "holographic minimap projector", "status_in": ["missing"], "owner_in": ["unity-package", "client-integration"]}
+  ],
+  "screens": [
+    {"id": "settings-screen", "screen": "settings", "choices_contain": ["SettingsModel", "Toggle", "Slider", "DropdownField", "TabView"]},
+    {"id": "popup-screen", "screen": "popup", "choices_contain": ["ConfirmDialog"]}
+  ],
+  "never_missing": ["confirmation popup", "settings data", "toast", "theme", "back navigation", "screen container"]
+}

@@ -1,0 +1,14 @@
+:root {
+    /* Colour roles */
+    --cuvara-color-surface: rgba(38.25, 38.25, 38.25, 1);
+    --cuvara-color-on-surface: rgba(255, 255, 255, 1);
+    --cuvara-color-primary: rgba(51, 127.5, 229.5, 1);
+    --cuvara-color-on-primary: rgba(255, 255, 255, 1);
+
+    /* Spacing scale */
+    --cuvara-space-md: 15px;
+}
+
+.cuvara-confirm-dialog {
+    background-color: var(--cuvara-color-surface, rgba(38.25, 38.25, 38.25, 1));
+}

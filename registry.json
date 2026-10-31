@@ -110,7 +110,10 @@
         "pin-bump",
         "unity-client-tech",
         "unity-dots",
-        "netcode-client"
+        "netcode-client",
+        "ui-toolkit-screen",
+        "ui-validation",
+        "ui-figma-import"
       ],
       "required": false,
       "fallback": "Unity tests stay HUMAN_REQUIRED (Editor) or CI; never hand-edit scene/prefab YAML"
@@ -216,7 +219,8 @@
         "measure",
         "unity-package",
         "dotnet-gameserver",
-        "netcode-client"
+        "netcode-client",
+        "ui-validation"
       ],
       "required": true,
       "fallback": "CI ci-dotnet.yml"
@@ -279,6 +283,20 @@
       ],
       "required": false,
       "fallback": "the server's own OTel metrics on /metrics (gameserver.gc.*, gameserver.tick.duration, gameserver.sim.group.duration) and the BENCH_TICK micro-benches; say which was used"
+    },
+    {
+      "id": "figma-mcp",
+      "kind": "mcp",
+      "probes": [
+        "mcp:figma|mcp:claude_ai_Figma|plugin:figma"
+      ],
+      "provides": "Figma file access for UI work: get_metadata (frame tree and node ids), get_screenshot (reference image), get_variable_defs (variable collections and modes). Read-only use in ui-figma-import step 1. The mcp: probe reads only .mcp.json and ~/.claude.json, so a claude.ai connector server (claude_ai_Figma, configured on the account) shows MISSING while it is usable in the session.",
+      "used_by": [
+        "ui-figma-import",
+        "ui-orchestrator"
+      ],
+      "required": false,
+      "fallback": "ask the user for the frame link (Copy link to selection, with node-id=) and a PNG export of the frame; the preflight is then HUMAN_REQUIRED for anything the screenshot cannot show (variable bindings)"
     }
   ],
   "global_rules": [
@@ -4899,6 +4917,107 @@
       "domain": "vfx",
       "order": 89,
       "summary": "Production VFX direction, effect specification, and asset delivery workflows."
+    },
+    "ui-orchestrator": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 95,
+      "used_by": [
+        "client-integration",
+        "ui-ux"
+      ],
+      "summary": "Entry point for UI requests: deterministic UI plan, intent, minimal skill set, missing context",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-component-selection": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 96,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Component discovery and selection against the real com.cuvara.uitoolkit catalog plus Unity built-in controls: reuse, configure, compose or missing",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-figma-import": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 97,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Figma to Unity through the official UI Toolkit Figma connector and the com.cuvara.uitoolkit 0.8 Figma integration: scope, import, validator, diagnostics",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-toolkit-screen": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 98,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Screen implementation on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, navigator, theme service, typed queries",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-validation": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 99,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "UI integration review and validation: references, theme light/dark, responsive layout, Play mode, tests, evidence",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
     }
   },
   "human_gates": [
@@ -5853,6 +5972,13 @@
       "repo": "client",
       "probe": "jq -r '.dependencies[\"com.unity.test-framework.performance\"].version' Packages/packages-lock.json",
       "why": "Unity Performance Testing is resolved transitively (lock depth 1), not a direct manifest dependency; a perf-test asmdef references Unity.PerformanceTesting"
+    },
+    {
+      "id": "uitoolkit-figma-connector-floor",
+      "value": "0.3.0-exp.1",
+      "repo": "uitoolkit",
+      "probe": "git show origin/main:Editor/Figma/Cuvara.UIToolkit.Editor.Figma.asmdef | sed -n 's/.*\"expression\": \"\\(.*\\)\".*/\\1/p'",
+      "why": "com.unity.ui.figma version that opens the gated Cuvara.UIToolkit.Editor.Figma assembly; also the tested connector version (FIGMA-INTEGRATION.md Requirements)"
     }
   ],
   "domains": {

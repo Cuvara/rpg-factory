@@ -36,7 +36,8 @@ LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r 
 # MODE:    the Factory mode the session must declare (factory-context.sh --mode <m>), if set.
 # TOOLRUN: a script the session must run (e.g. run-checks.py), if set.
 # SHOWS:   text the transcript must contain (command output), if set; RAW scenarios send the prompt as-is.
-declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW CORRECTS
+# NOTEXPECT: skills that must NOT be invoked (space = none of), if set.
+declare -A PROMPT EXPECT HANDOFF MODE TOOLRUN SHOWS RAW CORRECTS NOTEXPECT
 PROMPT[design-feature-spec]="Draft a feature spec for a crafting system with --domain design. Do not create files in product repos; the authoring repo may be absent."
 PROMPT[ui-foundation]="Plan a settings screen flow for a crafting feature; route and draft only a UI flow artifact, with no production tooling."
 PROMPT[art2d-foundation]="Draft a 2D art brief for an icon set referenced by a UI spec; include delivery metadata and no generated art."
@@ -88,6 +89,12 @@ PROMPT[tech-first]="Your very first action: invoke the Skill tool with skill rpg
 EXPECT[tech-first]="server-services go-backend"; HANDOFF[tech-first]=""; CORRECTS[tech-first]="go-backend"; SHOWS[tech-first]="-race"
 PROMPT[cmd-status]="/rpg-factory:status"; RAW[cmd-status]=1; EXPECT[cmd-status]=""; SHOWS[cmd-status]="[unity-package]|unity-package"
 PROMPT[cmd-route]="/rpg-factory:route server backend/deploy/k8s/app/40-gateway.yaml"; RAW[cmd-route]=1; EXPECT[cmd-route]=""; SHOWS[cmd-route]="transport-security"
+PROMPT[ui-settings]="Plan only, do not edit anything: which existing components and steps would you use to create a settings screen (music and sound toggles, master volume, graphics quality, a confirm popup on reset) for the Unity client IndieRPGMMOAdventure using the existing com.cuvara.uitoolkit components."
+EXPECT[ui-settings]="factory-core client-integration ui-orchestrator ui-component-selection ui-toolkit-screen ui-validation"; HANDOFF[ui-settings]=""; SHOWS[ui-settings]="ConfirmDialog|SettingsModel"; NOTEXPECT[ui-settings]="ui-figma-import"
+PROMPT[ui-figma]="Plan only, do not edit anything: how would you import this Figma screen into the Unity client IndieRPGMMOAdventure and fit it into our existing UI architecture: https://www.figma.com/design/AbC123xyz/Game-UI?node-id=12-34"
+EXPECT[ui-figma]="factory-core client-integration ui-orchestrator ui-figma-import ui-component-selection ui-toolkit-screen ui-validation"; HANDOFF[ui-figma]=""; SHOWS[ui-figma]="FIG023|HUMAN_REQUIRED|NOT_RUN"
+PROMPT[ui-not-ui]="Change the Go gateway in rpg-mmo-server so its TLS listener accepts TLS 1.3 only."
+EXPECT[ui-not-ui]="factory-core server-services"; HANDOFF[ui-not-ui]=""; NOTEXPECT[ui-not-ui]="ui-orchestrator ui-component-selection ui-figma-import ui-toolkit-screen ui-validation"
 
 # WRITE scenarios use an isolated game-authoring repository per session. The helper creates
 # registry-routed folders, commits the empty layout, and grades disk state plus transcript.
@@ -136,7 +143,7 @@ if $write_mode; then
   scenarios=()
 fi
 
-[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
@@ -204,6 +211,7 @@ print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/li
     for a in "${alts[@]}"; do grep -qw "$a" <<<"$used" && hit=true; done
     $hit || why+="expected $e not invoked; "
   done
+  for x in ${NOTEXPECT[$n]:-}; do grep -qw -- "$x" <<<"$used" && why+="$x invoked but must not be; "; done
   # a tech skill is supporting context. Hooks never block (1.0.3), so a tech skill that loads before any
   # owning skill passes only if the Skill hook warned the session about it, one of its used_by leads loaded
   # later, and the session finished; otherwise the lead's rules and gates never applied

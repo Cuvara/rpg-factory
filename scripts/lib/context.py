@@ -595,13 +595,18 @@ def render(snap, reg, args, views):
                 + (f" · tech {', '.join(rt['tech'])}" if rt.get("tech") else "")
                 + (" · **AMBIGUOUS** (same precedence class and order) - ask the user or pass --lead" if rt["ambiguous"] else "")
                 + (" · (override)" if rt.get("override") else ""))
+            # UI tech skills load progressively: the orchestrator's plan picks the subset (docs/architecture/ui-skills.md).
+            ui_tech = [s for s in rt.get("tech") or [] if (reg["skills"].get(s) or {}).get("domain") == "ui"]
+            other_tech = [s for s in rt.get("tech") or [] if s not in ui_tech]
             if rt["lead"] and not rt["ambiguous"]:
                 add(f"  **Next:** invoke the Skill tool with {code('rpg-factory:' + rt['lead'])} now - also for plan-only or "
                     "read-only requests; it owns this change's workflow, validation and gates"
                     + (f", then {', '.join(code('rpg-factory:' + c) for c in rt['co_leads'])}" if rt["co_leads"] else "") + "."
-                    + (f" Then invoke the tech skill(s) {', '.join(code('rpg-factory:' + t) for t in rt['tech'])} (supporting context, "
+                    + (f" Then invoke the tech skill(s) {', '.join(code('rpg-factory:' + t) for t in other_tech)} (supporting context, "
                        "not a follow-up) before implementing, debugging, reviewing, or answering how the code works or how to "
-                       "run a test - in every mode." if rt.get("tech") else ""))
+                       "run a test - in every mode." if other_tech else "")
+                    + (f" UI skills ({', '.join(ui_tech)}): invoke {code('rpg-factory:ui-orchestrator')} first; its UI plan "
+                       "names the subset to load - invoke only those, never all of them." if ui_tech else ""))
             regc = {c["id"]: c for c in reg.get("contracts", [])}
             for c in r["contracts"]:
                 src_repo = (regc.get(c["id"], {}).get("source") or {}).get("repo")

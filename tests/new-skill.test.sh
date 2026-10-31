@@ -44,11 +44,13 @@ out=$(ns --name x-tech --kind tech --repos server --summary s --used-by server-s
 cp "$TMP/reg.bak" "$P/registry.json"
 
 # scaffold a tech skill: registry entry exactly as asked, structure lint clean, author's work listed
+# orders and counts come from the registry under test, so adding skills does not break this suite
+next_order=$(jq '[.skills[].order] | max + 1' "$TMP/reg.bak"); tech_n=$(jq '[.skills[] | select(.kind == "tech")] | length' "$TMP/reg.bak")
 out=$(ns --name demo-tech --kind tech --repos server --used-by server-services,wire-contract --tools go,lsp-go \
         --summary "How the demo Go code works" --cite-root "=server:backend/gateway"); rc=$?
-[ $rc -eq 0 ] && grep -q 'wrote skills/demo-tech/SKILL.md and registry skills.demo-tech (order 95)' <<<"$out" && ok "tech skill scaffolded with the next tech order" || no "scaffold tech (rc=$rc)" "$out"
+[ $rc -eq 0 ] && grep -qF "wrote skills/demo-tech/SKILL.md and registry skills.demo-tech (order $next_order)" <<<"$out" && ok "tech skill scaffolded with the next tech order" || no "scaffold tech (rc=$rc)" "$out"
 d=$(jq -c '.skills["demo-tech"]' "$P/registry.json")
-[ "$d" = '{"kind":"tech","repos":["server"],"order":95,"used_by":["server-services","wire-contract"],"summary":"How the demo Go code works","cite_roots":{"":"server:backend/gateway"}}' ] \
+[ "$d" = '{"kind":"tech","repos":["server"],"order":'"$next_order"',"used_by":["server-services","wire-contract"],"summary":"How the demo Go code works","cite_roots":{"":"server:backend/gateway"}}' ] \
   && ok "registry entry is exactly kind/repos/order/used_by/summary/cite_roots" || no "registry entry" "$d"
 jq -e '[.dev_tools[] | select(.id == "go" or .id == "lsp-go") | .used_by | index("demo-tech")] | all' "$P/registry.json" >/dev/null \
   && ok "dev_tools go and lsp-go list it in used_by" || no "dev_tools used_by"
@@ -62,7 +64,7 @@ grep -q 'demo-tech/SKILL.md:[0-9]* still has a SCAFFOLD: marker' <<<"$fails" && 
   && ok "lint fails only on SCAFFOLD markers and the leads that must name it, not on structure" || no "lint after tech scaffold" "$fails"
 out=$(tp demo-tech); [ $? -eq 1 ] && grep -q "factory-core SKILL.md 'Skills' section does not name this tech skill" <<<"$out" \
   && grep -q 'tests/routing.test.sh has no scenario asserting $(tech demo-tech)' <<<"$out" && grep -q 'no eval grader evals/\*/graders/demo-tech-fired.md' <<<"$out" \
-  && grep -q "'Skills:' says 5 tech skills, the registry has 6" <<<"$out" \
+  && grep -qF "'Skills:' says $tech_n tech skills, the registry has $((tech_n + 1))" <<<"$out" \
   && ok "touchpoints list the author's remaining places (factory-core, routing, evals, CLAUDE.md count, ...)" || no "touchpoints after tech scaffold" "$out"
 
 # scaffold a lead that takes over a module
@@ -70,7 +72,7 @@ out=$(ns --name demo-lead --kind repo --repos server --owns-modules server.loadt
 o=$(jq -r '.skills["demo-lead"].order' "$P/registry.json")
 [ $rc -eq 0 ] && [ "$(jq -r '.modules[] | select(.id == "server.loadtest") | .skills[0]' "$P/registry.json")" = demo-lead ] \
   && ! jq -e --argjson o "$o" '[.skills[] | select(.order == $o)] | length > 1' "$P/registry.json" >/dev/null \
-  && [ "$o" = 96 ] && ok "lead scaffolded: primary owner of server.loadtest, order $o (after every existing lead)" || no "scaffold lead (rc=$rc)" "$out"
+  && [ "$o" = "$((next_order + 1))" ] && ok "lead scaffolded: primary owner of server.loadtest, order $o (after every existing lead)" || no "scaffold lead (rc=$rc)" "$out"
 out=$(creg); [ $? -eq 0 ] && ok "check-registry accepts the scaffolded lead" || no "check-registry after lead scaffold" "$out"
 out=$(ns --name demo-domain --kind repo --repos authoring --summary "Demo design lead" --owns-modules authoring.root --domain design); rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.skills["demo-domain"].domain' "$P/registry.json")" = design ] && ok "--domain assigns a registered domain to the scaffolded skill" || no "--domain assignment (rc=$rc)" "$out"

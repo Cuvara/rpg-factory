@@ -1,0 +1,294 @@
+{
+ "schema": "rpg-factory.ui-builtins/1",
+ "note": "Unity 6 (6000.3) built-in UI Toolkit controls in UnityEngine.UIElements. Facts only: names, purpose, common UXML attributes; each docs URL was checked to resolve.",
+ "entries": [
+  {
+   "id": "unity:Button",
+   "kind": "unity-builtin",
+   "name": "ui:Button",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/button",
+   "purpose": "A clickable control with text or an image; raises clicked.",
+   "config": [
+    "text"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:Label",
+   "kind": "unity-builtin",
+   "name": "ui:Label",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/label",
+   "purpose": "Displays non-editable text.",
+   "config": [
+    "text"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:Toggle",
+   "kind": "unity-builtin",
+   "name": "ui:Toggle",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/toggle",
+   "purpose": "A boolean on/off field with an optional label.",
+   "config": [
+    "label",
+    "value",
+    "text"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:Slider",
+   "kind": "unity-builtin",
+   "name": "ui:Slider",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/slider",
+   "purpose": "A float slider between low and high values.",
+   "config": [
+    "label",
+    "low-value",
+    "high-value",
+    "value",
+    "direction",
+    "show-input-field"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:SliderInt",
+   "kind": "unity-builtin",
+   "name": "ui:SliderInt",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/sliderint",
+   "purpose": "An integer slider between low and high values.",
+   "config": [
+    "label",
+    "low-value",
+    "high-value",
+    "value",
+    "direction",
+    "show-input-field"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:DropdownField",
+   "kind": "unity-builtin",
+   "name": "ui:DropdownField",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/dropdownfield",
+   "purpose": "Picks one string from a list of choices.",
+   "config": [
+    "label",
+    "choices",
+    "index"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:TextField",
+   "kind": "unity-builtin",
+   "name": "ui:TextField",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/textfield",
+   "purpose": "Editable single- or multi-line text input.",
+   "config": [
+    "label",
+    "value",
+    "max-length",
+    "multiline",
+    "password"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:ScrollView",
+   "kind": "unity-builtin",
+   "name": "ui:ScrollView",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/scrollview",
+   "purpose": "Scrollable container for content larger than its viewport.",
+   "config": [
+    "mode",
+    "horizontal-scroller-visibility",
+    "vertical-scroller-visibility"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:ListView",
+   "kind": "unity-builtin",
+   "name": "ui:ListView",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/listview",
+   "purpose": "Virtualized list that binds item elements on demand.",
+   "config": [
+    "fixed-item-height",
+    "virtualization-method",
+    "selection-type",
+    "reorderable",
+    "show-border"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:TabView",
+   "kind": "unity-builtin",
+   "name": "ui:TabView",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/tabview",
+   "purpose": "Container that shows one Tab at a time with a tab header row.",
+   "config": [
+    "reorderable"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:Tab",
+   "kind": "unity-builtin",
+   "name": "ui:Tab",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/tab",
+   "purpose": "One page of a TabView, with its header label.",
+   "config": [
+    "label",
+    "closeable"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:Foldout",
+   "kind": "unity-builtin",
+   "name": "ui:Foldout",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/foldout",
+   "purpose": "Collapsible section with a toggle header.",
+   "config": [
+    "text",
+    "value"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:ProgressBar",
+   "kind": "unity-builtin",
+   "name": "ui:ProgressBar",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/progressbar",
+   "purpose": "Read-only bar showing a value between low and high values.",
+   "config": [
+    "low-value",
+    "high-value",
+    "value",
+    "title"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:RadioButtonGroup",
+   "kind": "unity-builtin",
+   "name": "ui:RadioButtonGroup",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/radiobuttongroup",
+   "purpose": "Group of mutually exclusive choices.",
+   "config": [
+    "label",
+    "choices",
+    "value"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:Image",
+   "kind": "unity-builtin",
+   "name": "ui:Image",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/image",
+   "purpose": "Displays a texture, sprite or vector image (set from C# or USS background).",
+   "config": [],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  },
+  {
+   "id": "unity:VisualElement",
+   "kind": "unity-builtin",
+   "name": "ui:VisualElement",
+   "namespace": "UnityEngine.UIElements",
+   "source": "https://docs.unity.com/en-us/engine/6000.3/script-reference/unityengine/uielements/visualelement",
+   "purpose": "The base element and generic layout container.",
+   "config": [
+    "name",
+    "class",
+    "style",
+    "picking-mode"
+   ],
+   "requires": [],
+   "related_skills": [
+    "ui-component-selection",
+    "ui-toolkit-screen"
+   ]
+  }
+ ]
+}

@@ -30,6 +30,7 @@ Task: $ARGUMENTS
 4. `component-spec`: describe component variants, props, states, accessibility, and token references.
 5. `screen-spec`: describe purpose, layout regions, components, navigation, platforms or breakpoints, bindings by known design/engineering IDs, five required states, and per-element interaction and accessibility contracts. Mark a state not applicable only with a reason.
 6. `ui-handoff`: map screen IDs to testable acceptance criteria and exact registered client engine paths. Send illustrations/icons to art2d and effect dependencies to VFX through registered contracts.
+7. Engine-side work that implements a `ui-handoff` or screen spec (Unity UI Toolkit screens, Figma import, component choice, UI review) is planned by `rpg-factory:ui-orchestrator`; invoke it only for that part.
 
 ## Rules and handoffs
 

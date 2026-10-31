@@ -20,9 +20,16 @@ for f in "$ROOT"/commands/*.md; do
   pat=$(sed -n 's/^allowed-tools: Bash(\(.*\):\*)$/\1/p' "$f"); line=$(sed -n 's/^!`\(.*\)`$/\1/p' "$f")
   [ -n "$pat" ] && [ "${line#"$pat"}" != "$line" ] && ok "commands/$n.md ! line matches its allowed-tools prefix" || no "commands/$n.md: '$line' does not start with allowed '$pat'"
 done
-[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 5 ] && ok "exactly 5 commands (status, route, check, doctor, workflow)" || no "command count"
+[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 10 ] && ok "exactly 10 commands (status, route, check, doctor, workflow, ui, ui-figma, ui-components, ui-screen, ui-review)" || no "command count"
+# the usage text documents every command's verb
+python3 -B "$CMD" --help 2>"$TMP/usage"
+for f in "$ROOT"/commands/*.md; do
+  n=$(basename "$f" .md)
+  grep -qE "^  ([a-z-]+ [|] )*$n( |$)" "$TMP/usage" && ok "usage text documents '$n'" || no "usage text lacks '$n'"
+done
 # -- argument validation (exit 2, no script run)
-for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" "workflow" "workflow bogus spec.json"; do
+for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done

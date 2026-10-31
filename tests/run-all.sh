@@ -124,7 +124,12 @@ run "English-only enforcement (report available)" python3 -B scripts/checks/engl
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
 run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.test.sh
+run "UI component catalog + selection (UIToolkit git fixture, refs, NOT_AVAILABLE)" env -u TMPDIR tests/ui-catalog.test.sh
+run "UI plan commands (intent, skills per verb, NOT_UI, NEEDS_CONTEXT, Figma URL)" env -u TMPDIR tests/ui-commands.test.sh
+run "UI plan routing, golden matrix, component selection (fixture workspace)" env -u TMPDIR tests/ui-skill-routing.test.sh
+run "UI skills content, docs, snapshot Next line for UI paths (fixture workspace)" env -u TMPDIR tests/ui-skills.test.sh
 run "dev tools + services (probes, snapshot, doctor, no secrets, registry checks)" env -u TMPDIR tests/devtools.test.sh
+run "Figma connector environment check (fixture Unity projects, no network)" env -u TMPDIR tests/ui-figma-env.test.sh
 run "worktree-aware context" tests/worktree.test.sh
 run "check runner state model" tests/run-checks.test.sh
 run "artifact contract, lifecycle, trace and approval fixtures" tests/artifacts.test.sh

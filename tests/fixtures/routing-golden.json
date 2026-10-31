@@ -911,7 +911,12 @@
         "tech": [
           "unity-client-tech",
           "unity-dots",
-          "netcode-client"
+          "netcode-client",
+          "ui-orchestrator",
+          "ui-component-selection",
+          "ui-figma-import",
+          "ui-toolkit-screen",
+          "ui-validation"
         ]
       },
       "touched": [
@@ -938,7 +943,44 @@
         "tech": [
           "unity-client-tech",
           "unity-dots",
-          "netcode-client"
+          "netcode-client",
+          "ui-orchestrator",
+          "ui-component-selection",
+          "ui-figma-import",
+          "ui-toolkit-screen",
+          "ui-validation"
+        ]
+      },
+      "touched": [
+        "client.scripts"
+      ]
+    }
+  ],
+  "client UXML screen -> UI tech skills listed (scoped by paths), never routed": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client",
+          "ui-orchestrator",
+          "ui-component-selection",
+          "ui-figma-import",
+          "ui-toolkit-screen",
+          "ui-validation"
         ]
       },
       "touched": [
@@ -1045,6 +1087,33 @@
       },
       "touched": [
         "client.tools"
+      ]
+    }
+  ],
+  "client non-UI code -> no UI tech skills": [
+    {
+      "checks": [
+        "unity-test-runner",
+        "ci-unity",
+        "ci-uxml-drift",
+        "unity-test-runner",
+        "ci-unity"
+      ],
+      "repo": "client",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": "client-integration",
+        "legs": [],
+        "tech": [
+          "unity-client-tech",
+          "unity-dots",
+          "netcode-client"
+        ]
+      },
+      "touched": [
+        "client.scripts"
       ]
     }
   ],
