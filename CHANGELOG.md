@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-31
+
+Feature release: production workflows for Game Design, UI/UX, 2D Art, 3D Art and VFX. Each domain has production
+artifact kinds with versioned schemas and draft templates, a domain quality plugin (gameplay-number and approval rules,
+UI states/bindings/components/handoffs, 2D image integrity, glTF/GLB and optional Blender inspection, VFX timing and
+platform budgets with optional Unity prefab inspection) and a lead skill with handoffs. `/rpg-factory:workflow`
+plans dependency waves from artifact references (domain contracts order planned nodes; sync contracts such as
+`ui-vfx-sync` only trigger revalidation), reports stale upstream revisions, and writes integrated reports. Shared
+validation states are PASS, FAIL, WARN, HUMAN_REQUIRED, NOT_AVAILABLE and BLOCKED; lifecycle states are draft,
+proposed, reviewed, approved, in-implementation, verified, released, rejected and blocked. Optional tools (Pillow,
+Blender, Unity, Figma, image providers) are detected by name or path and degrade to NOT_AVAILABLE. No approver signing
+key is registered, so binding approvals stay HUMAN_REQUIRED. The private `game-authoring` repo holds the authoring
+layout generated from the registry. `tests/dogfood.sh --write` runs real write sessions graded from the files on disk;
+CI runs on Linux and Windows. Engineering routing is unchanged (golden test). Update with `claude plugin marketplace
+update rpg-factory && claude plugin update rpg-factory@rpg-factory`, then start a new session.
+
 ### Added
 
 - Added production Game Design artifacts, schemas, templates, gameplay-number checks, and design-to-UI, art, VFX, and Engineering contracts.
