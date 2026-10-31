@@ -22,6 +22,7 @@ and bump `RULES_VERSION`.
 | `failures[]` | one per FAIL / INVALID / INCONCLUSIVE check, per informational check that would have failed, and a `harness_error` entry |
 | `failures[].earliest_event` | `scenario_s`, `wall_utc`, `client`, `what`; `null` when the check cannot be placed in time (two-scrape counters, no counted event) |
 | `failures[].evidence[]` | `file` (relative to the run directory), `line` (1-based line of an ndjson/txt file, or `null`), `find` (key to look up when no line is known), `note` |
+| `failures[].notes` | optional; present only for `frame_time`, `snapshot_cadence`, `snapshot_update_gap` when a stall frame (>= 250 ms) coincided with a gen0 GC collection in the client `frames.csv` GC columns ("stall frame coincided with gen0 GC: ..."); absent otherwise and for runs without those columns |
 | `failures[].suspected_layer`, `layer_rule`, `alternative_layer` | layer by the rule below; `alternative_layer` is the check's default layer when L3 overrides it |
 | `failures[].confidence` | `high` / `medium` / `low` by the rule below |
 | `failures[].guard_events_within_10s` | host guard events within +-10 s of the earliest event: AnyDesk log events, an AnyDesk session active at that instant, guard samples over the G3 CPU limit; `offset_s` is event minus instant |

@@ -6,7 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_RESULT, analyze, failsum, util
+from . import SCHEMA_RESULT, analyze, failsum, framegc, util
 
 # INVALID (contaminated host) is not clean: it exits with the INCONCLUSIVE code, never 0.
 EXIT_CODES = {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 2, "INVALID": 2, "PASS_WITH_WARNINGS": 4}
@@ -50,6 +50,9 @@ def write(run_dir: Path, ev: dict, results: list[dict], outcome: str, harness_er
             for c in ev["clients"]
         ],
     }
+    frame_gc = framegc.summarize(ev)
+    if frame_gc:
+        doc["frame_gc"] = {str(k): v for k, v in frame_gc.items()}
     out_dir.mkdir(parents=True, exist_ok=True)
     util.write_json(out_dir / "results.json", doc)
     with open(out_dir / "report.md", "w", encoding="utf-8", newline="\n") as fh:
@@ -158,6 +161,9 @@ def _markdown(doc: dict, ev: dict) -> str:
         lines.append(f"| {c['index']} | `{c.get('user_id')}` | {c.get('outcome')} | {_r(f.get('p50_ms'))}/{_r(f.get('p95_ms'))}/{_r(f.get('p99_ms'))} | "
                      f"{n.get('snapshots')} | {_r(n.get('max_snapshot_gap_ms'))} | {rd.get('jumps')} (local {rd.get('local_jumps')}) | "
                      f"{pr.get('snaps')} | {len(c.get('screenshots') or [])} |")
+    frame_gc = framegc.summarize(ev)
+    if frame_gc:
+        lines += [""] + framegc.markdown(frame_gc)
     lines += ["", "Raw evidence: `client-*/` (status, summary, events, inputs, snapshots, samples, frames.csv, shots/), "
               "`server/` (entities, status, container, metrics-start/end), `redis.json`, `run.json`, `orchestrator.log`.", ""]
     return "\n".join(lines)
