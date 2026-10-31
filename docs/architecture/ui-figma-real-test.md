@@ -1,9 +1,9 @@
 # Real Figma-to-Unity integration test: "Game Settings"
 
-> **Status: PARTLY RUN (run 1, 2026-10-31).** Only the environment, import and validator rows hold evidence, taken
-> from the run's session transcript and saved import result. Every Unity runtime row (Play mode, theme switch,
-> ConfirmDialog, tests, re-push) is NOT YET RUN. Do not quote a result from this page unless its row has a state
-> (PASS, FAIL, BLOCKED, NOT_AVAILABLE, HUMAN_REQUIRED, SKIPPED, NOT_RUN) and the evidence path behind it.
+> **Status: RUN (2026-10-31, runs 1 and 2).** Run 1 imported and validated the frame. It exposed two plan defects,
+> fixed in round 3: intent `figma-validate` instead of `figma-import`, and lead `unity-package` instead of
+> `client-integration`. Run 2 went end to end: import, validation, integration, Play mode, and tests. Rows that are
+> not verified say so (see "Not verified"). Every state below names its evidence file.
 
 This procedure proves the rpg-factory UI path end to end on real tools: a Figma frame built to the
 com.cuvara.uitoolkit 0.8 designer rule goes through Unity's official UI Toolkit Connector for Figma
@@ -148,49 +148,56 @@ Store everything under `C:/tmp/rpgf-ui/lab/evidence/` and list the paths in the 
 
 ## Evidence
 
-> Run 1: rows 1, 4, 5, 6 and 8 come from the transcript (`C:/tmp/rpgf-ui/real/session-import.jsonl`) and the
-> saved result (`<lab>/Library/CuvaraFigma/last-import-rpg-factory-UI-Skills-Lab---Game-Settings.json`). Every other
-> row is NOT_RUN and is for the Lead to fill. The run used the lab `C:/tmp/rpgf-ui-lab`, not the paths in section 3.
-
-Run date: `2026-10-31` (result `savedAt` 2026-10-31T01:46:25Z) - Lead: `<name>` - plugin commit: `<sha>`
+Evidence files are in `C:/tmp/rpgf-ui/evidence/run2/` (Lead machine, not committed) unless the path is `images/`.
+Transcripts: `C:/tmp/rpgf-ui/real/session-import.jsonl` (run 1) and `session-import2.jsonl` (run 2). Both runs used
+the lab `C:/tmp/rpgf-ui-lab`, not the paths in section 3, and the prompt `/rpg-factory:ui-figma Import the Game Settings
+screen from <frame link> into the Unity project C:/tmp/rpgf-ui-lab and integrate it ...`.
 
 | Item | Value |
 |---|---|
-| Unity version | `6000.3.9f1` (figma_env) |
-| `com.unity.ui.figma` / `com.unity.pipeline` | `0.3.0-exp.1` / `0.9.1-exp.1` (figma_env) |
-| `com.cuvara.uitoolkit` (source: file export or git `#v0.8.0`) | `0.8.0`, git `#v0.8.0` (`Library/PackageCache/com.cuvara.uitoolkit@99daab92fa6a`) |
-| Figma plugin version | `<fill>` (not recorded in run 1) |
-| Figma file key / frame node id | `fHYY12QeVytCKZr8WfGp2P` ("rpg-factory UI Skills Lab - Game Settings") / `3:59` |
+| Run dates | run 1: 2026-10-31 (result `savedAt` 01:46:25Z); run 2: 2026-10-31 |
+| Unity version | `6000.3.9f1` |
+| `com.unity.ui.figma` / `com.unity.pipeline` | `0.3.0-exp.1` / `0.9.1-exp.1`, Pipeline port 7800 |
+| `com.cuvara.uitoolkit` | `0.8.0`, git `#v0.8.0` (`Library/PackageCache/com.cuvara.uitoolkit@99daab92fa6a`) |
+| Figma plugin version | not recorded |
+| Figma file / frame | design source `ueBJbugEygxaayXY564FjK` node `3:59`, created through the Figma MCP. Lab copy `fHYY12QeVytCKZr8WfGp2P` ("rpg-factory UI Skills Lab - Game Settings") node `3:59`, duplicated into the browser account because the MCP account and the browser account differ |
 
-| # | Check | Expected | Evidence path | State |
-|---|---|---|---|---|
-| 1 | figma_env | status OK (figma-plugin HUMAN_REQUIRED is informational) | transcript: `figma_env.py --project C:/tmp/rpgf-ui-lab --probe-pipeline`: Unity, package, connector, Pipeline OK; port 7800 reachable; figma-plugin HUMAN_REQUIRED (informational) | PASS |
-| 2 | UI plan | skills in order, no extra UI skill, lead `client-integration` | `02-session-import.jsonl` | NOT_RUN |
-| 3 | Preflight before import | designer-rule findings reported first | `02-session-import.jsonl` | NOT_RUN |
-| 4 | Import | state `done`, `ok` true; files listed | saved result: request `r-e91f7030`, state `done`, `ok` true, 116 nodes, 0 templates, `ussErrors` false, 3437 ms; files `GameSettings.uxml`, `GameSettings.uss`, `tokens.uss`, `light.uss`, `dark.uss` (+ `.figma-manifest.json`), no `images/`; helper exit 0 | PASS |
-| 5 | Validator | 0 errors, no `FIG023`; `FIG020` x1 for the literal background | helper `--validate` (built CLI dll, no `--prefix`): 0 errors, 7 warnings, 2 infos = FIG020 x7, FIG021 x1, FIG031 x1 (31 inline-styled, 0 absolute); no FIG023. Re-run with `--prefix cuvara`: also FIG010 x11 (grep count in the transcript; the connector prefix was empty). FIG020 x7, not x1: the design has 6 more literal colours than the spec | FAIL (non-blocking: 0 errors) |
-| 6 | Connector facts | every dropped or degraded feature listed (`DroppedGap`, `MissingFonts`, ...) | saved result facts: NearMissNames x14 (10 items stored), DiscardedLayers x4 (`Knob` x2, `Fill, Thumb`, `High ▾`), MissingFonts x1 (Inter), DroppedGap x11, MultiMode x2 (Light, Dark). No `TabsOutsideTabView` although the 3 tabs have no TabView parent (row 8) | FAIL (an ungrouped-tabs finding is missing) |
-| 7 | Hierarchy | header, tabs, panel controls, footer in Figma order | `.uxml`, UI Toolkit Debugger | NOT_RUN |
-| 8 | Control mapping | Button, Toggle, Slider, Label, tabs, dropdown: what each became | `GameSettings.uxml`: 3 `ui:Button`, 2 `ui:Toggle`, 1 `ui:Slider`, 1 `ui:DropdownField` (component `Dropdown`), 3 `ui:Tab` in a plain `ui:VisualElement` (no `ui:TabView`), 6 `ui:Label`; 0 `name` attributes | PASS (tabs need wrapping, see the skill's `references/connector-mapping.md`) |
-| 9 | Reusable instance | `Button` template used by close, Apply and Cancel with the `rpg-` class | `.uxml`/`.uss` | NOT_RUN |
-| 10 | Tokens and bridge | `tokens.uss`, `light.uss`, `dark.uss`; bridge fresh; no unknown token | bridge file, diagnostics | NOT_RUN |
-| 11 | ScreenCreator | View and Presenter in `Assets/Game/UI/Screens`, no UXML/USS written | generated files | NOT_RUN |
-| 12 | Play mode light | screen renders, no exception | screenshot, Console | NOT_RUN |
-| 13 | Play mode dark | imported screen and ConfirmDialog switch | screenshots | NOT_RUN |
-| 14 | ConfirmDialog | package dialog, themed by the bridge | screenshot | NOT_RUN |
-| 15 | Tests | EditMode package tests pass (count) | results | NOT_RUN |
-| 16 | Re-push | only connector files rewritten; profile, bridge and screens untouched | `git status` / file times | NOT_RUN |
-| 17 | Not claimed | SafeArea emission, shadows, gradients, typed node-id bindings: not verified here | - | NOT_RUN |
+![Figma design: Game Settings, frame 3:59](images/ui-figma-real-test/01-figma-gamesettings.png)
 
-Limitations found during the run (run 1):
+| # | Check | Result and evidence | State |
+|---|---|---|---|
+| 1 | figma_env | Unity, package, connector and Pipeline OK; port 7800 reachable (`--probe-pipeline`); figma-plugin HUMAN_REQUIRED (informational). Transcript run 1 | PASS |
+| 2 | UI plan | run 1: `figma-validate`, lead `unity-package`, 2 skills: FAIL (fixed in round 3). Run 2: PLAN `figma-import`, lead `client-integration`, skills `ui-figma-import`, `ui-component-selection`, `ui-toolkit-screen`, `ui-validation` in order (`agent-report.md`) | PASS (run 2) |
+| 3 | Preflight before import | Figma MCP calls on the lab copy failed with "you don't have edit access to this file" (both runs). No variable-binding preflight; the validator on the output stood in | HUMAN_REQUIRED |
+| 4 | Import | run 1 `r-e91f7030`: `done`, 116 nodes, 0 templates, `ussErrors` false, 3437 ms, 5 files + `.figma-manifest.json`, no `images/`. Run 2 re-push `r-0173d530`: `done`, 116 nodes, files byte-identical to run 1 (`import-run.txt`, `pre-import-md5.txt`) | PASS |
+| 5 | Validator | 0 errors, 7 warnings, 2 infos: FIG020 x7 (6 literal colours in `GameSettings.uss` + the root `background-color: #101420` inline), FIG021 x1, FIG031 x1 (31 inline-styled, 0 absolute); no FIG023 (`validator.json`). With a prefix, FIG010 x11 on top (`--prefix cuvara` in run 1; 18 warnings with `--prefix lab` in run 2): the connector prefix is empty. The spec expected FIG020 x1 | FAIL (non-blocking: 0 errors) |
+| 6 | Connector facts | NearMissNames x14 (10 items stored), DiscardedLayers x4 (`Knob` x2, `Fill, Thumb`, `High ▾`), MissingFonts x1 (Inter), DroppedGap x11, MultiMode x2 (Light, Dark). No `TabsOutsideTabView` although the 3 tabs have no TabView parent | FAIL (ungrouped tabs not reported) |
+| 7 | Hierarchy | `GameSettings.uxml` order: title, Close, 3 tabs, Music, Sound, Volume and Graphics Quality rows, note, Cancel, Apply, as in Figma. Checked in the UXML, not in the UI Toolkit Debugger | PASS |
+| 8 | Control mapping | 3 `ui:Button`, 2 `ui:Toggle`, 1 `ui:Slider`, 1 `ui:DropdownField` (component `Dropdown`), 3 `ui:Tab` in a plain `ui:VisualElement` (no `ui:TabView`), 6 `ui:Label`; 0 `name` attributes | PASS |
+| 9 | Reusable instance | 0 templates; the three buttons carry three classes (`button-close`, `button-primary`, `button-secondary`): the design used three Button components, not one used three times | FAIL (design deviation) |
+| 10 | Tokens and bridge | `tokens.uss`, `light.uss`, `dark.uss` imported; bridge `Assets/Games/Lab/UI/Theme/cuvara-theme-bridge.uss`: 8 roles mapped, 12 `role-unmapped` infos, no unknown token, run 2 `wrote=False` (fresh). Mapping preset: `cuvara.mapping.no-asset`, 0 rows (`preset-bridge.txt`) | PASS (bridge); preset HUMAN_REQUIRED |
+| 11 | ScreenCreator | `ScreenCreatorPlan.Build` (Popup, Existing UXML), run through Pipeline `script eval` (transcript run 2), produced the view and presenter, now `Assets/Games/Lab/UI/Screens/GameSettingsScreen.cs`; no UXML or USS written; connector files md5 10/10 unchanged (`agent-report.md`) | PASS |
+| 12 | Play mode light | screen open (`top=Lab.UI.Screens.GameSettingsPresenter`), panel background `RGBA(1,1,1,1)`, 966x1246 (`playmode-state.txt`) | PASS |
+| 13 | Play mode dark | panel background `RGBA(0.169,0.192,0.267,1)` after the mode switch, screen attached with `AttachScreen` (`playmode-state.txt`) | PASS |
+| 14 | ConfirmDialog | the package `ConfirmDialog.ShowAsync` on Apply, themed dark (screenshot below); confirm and cancel both covered by the PlayMode test | PASS |
+| 15 | Tests | lab EditMode 3/3 (`tests-editmode.json`), lab PlayMode 1/1 (`tests-playmode.json`: controls, Apply with confirm and cancel, layout bounds, light/dark resolved colour, Close). Negative control: with the layout fix off, the bounds assertion fails (`tests-playmode-control.json`: panel x 359.72, width 560.11, in a 777.39-wide layer). All tests in the lab Editor (Lead): EditMode 463/463 (package 460 + lab 3, `lead-tests-editmode-all.txt`), PlayMode 348/348 (package 347 + lab 1, `lead-tests-playmode-all.json`) | PASS |
+| 16 | Re-push | run 2 re-push wrote the same bytes (md5 identical); bridge not rewritten (`wrote=False`). The screens did not exist before the re-push, so "screens untouched" was not tested | PASS (partial) |
+| 17 | Console | 0 errors. 2 warnings in the buffer, both orphan `.meta` files from moving screenshots (`console-playmode.json`); the Editor counted 4 warnings, 2 not read | PASS |
 
-- The UI plan classified the request as `figma-validate` with lead `unity-package`, so `ui-component-selection` and
-  `ui-toolkit-screen` were not loaded and the screen was not integrated (rows 2, 11 and later). This is fixed in the
-  plan engine in round 3; re-run before you grade row 2.
-- Figma MCP: `get_metadata`, `get_screenshot` and `get_variable_defs` failed with "you don't have edit access to this
-  file". The MCP account is not the browser account, so the preflight (row 3) could not run from MCP.
-- Mapping preset BLOCKED (`cuvara.mapping.no-asset`): the lab had no connector mapping asset. `figma_env.py` now
-  reports this before an import, as item `mapping-asset`.
-- Observed but outside rows 1-8, from the transcript: profile and token bridge written (8 roles mapped, no unknown
-  token), and `Instantiate()` of the imported UXML gave 59 elements with no exception, through Pipeline `script eval`.
-  These are not graded here; row 10 and rows 12-14 need the Lead's run.
+![Unity Play mode, light](images/ui-figma-real-test/playmode-light.png)
+![Unity Play mode, dark](images/ui-figma-real-test/playmode-dark.png)
+![Unity Play mode, dark, with the package ConfirmDialog](images/ui-figma-real-test/playmode-dark-confirmdialog.png)
+
+### Not verified
+
+- **Tabs:** the 3 `ui:Tab` have no `TabView`. They render as plain tab headers and switch nothing.
+- **Discarded layers:** the toggle knob, slider fill and thumb, and dropdown arrow were discarded (`DiscardedLayers`), so these controls use Unity's default look, not the Figma design.
+- **Spacing:** `DroppedGap` x11. Auto layout gaps are missing; no game-owned spacing sheet was added.
+- **Font:** Inter is not in the project (`MissingFonts`). Text uses the default font.
+- **Mapping preset:** not applied. It needs the connector mapping asset first (Project Settings > UI Toolkit > Connector for Figma design > Create mapping); `figma_env.py` reports it as `mapping-asset`.
+- **Aspect ratio:** only one, 966x1246, was captured. The Figma frame root carries an inline 1280x720 size, which the view stretches at runtime.
+- **Back, Escape and Cancel:** Back/Escape (`OnBackRequested`) and the Cancel button are implemented but not tested.
+- **Music and Sound flags:** these are game-owned (`LabAudioSettings`), because `SettingsModel` has no such members. The mapping is a design decision. `SettingsModel` clamps `GraphicsQuality` to 0-3 while the project has 6 quality levels.
+- **Figma MCP preflight:** unavailable on the browser account's copy.
+- **Not exercised:** SafeArea emission, shadows, gradients, typed node-id bindings (G4).
+- **Not run:** `run-checks.py` and UXML codegen drift; the lab is outside the registry.

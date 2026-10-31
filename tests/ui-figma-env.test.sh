@@ -261,7 +261,31 @@ REAL="$ROOT/docs/architecture/ui-figma-real-test.md"
 for fact in 'r-e91f7030' '116 nodes' 'FIG020 x7' 'NearMissNames x14' 'DiscardedLayers x4' 'DroppedGap x11'; do
   grep -qF -- "$fact" "$REAL" && ok "real-test evidence records: $fact" || no "real-test evidence misses: $fact"
 done
-grep -qE '^\| 1[2-4] .*NOT_RUN' "$REAL" && ok "Unity Play-mode rows stay NOT_RUN" || no "Play-mode rows no longer NOT_RUN"
+# round 4: run 2 completed the Unity rows; every evidence row carries a state and its numbers, nothing is a placeholder
+for fact in 'r-0173d530' 'EditMode 463/463' 'PlayMode 348/348' 'lab EditMode 3/3' 'lab PlayMode 1/1' 'byte-identical' \
+            'RGBA(0.169,0.192,0.267,1)' '966x1246' 'ueBJbugEygxaayXY564FjK' 'cuvara.mapping.no-asset'; do
+  grep -qF -- "$fact" "$REAL" && ok "real-test evidence records: $fact" || no "real-test evidence misses: $fact"
+done
+rows=$(grep -cE '^\| ([1-9]|1[0-7]) \| .*\| (PASS|FAIL|HUMAN_REQUIRED|BLOCKED|NOT_AVAILABLE|SKIPPED|NOT_RUN)[^|]*\|$' "$REAL")
+[ "$rows" -eq 17 ] && ok "all 17 evidence rows carry a state" || no "evidence rows with a state: $rows of 17"
+grep -qE '<fill>|NOT YET RUN|NOT_RUN \|$' "$REAL" && no "real-test doc still has placeholders" || ok "no <fill> / NOT YET RUN placeholders left"
+for rule in 'switch nothing' 'default look' 'DroppedGap' 'Inter' 'mapping asset' 'only one, 966x1246' 'not tested' \
+            'browser account' 'SafeArea'; do
+  sed -n '/^### Not verified/,$p' "$REAL" | grep -qF -- "$rule" && ok "Not verified lists: $rule" || no "Not verified misses: $rule"
+done
+for img in 01-figma-gamesettings playmode-light playmode-dark playmode-dark-confirmdialog; do
+  f="$ROOT/docs/architecture/images/ui-figma-real-test/$img.png"
+  { [ -s "$f" ] && [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ]; } && grep -qF "(images/ui-figma-real-test/$img.png)" "$REAL" \
+    && ok "image $img.png committed (PNG) and referenced" || no "image $img.png missing, not a PNG or not referenced"
+done
+# round 4: the bad-fixture count only with the CI flags (v0.8.0 ci.yml asserts 10 errors / 8 warnings); run-2 lessons
+grep -qF 'bad 7 errors' "$SK/SKILL.md" && no "skill still quotes the stale 7-error bad-fixture count" || ok "no stale 7-error bad-fixture count"
+grep -qF 'exactly 10 errors and 8 warnings' "$SK/SKILL.md" && grep -qF -- '--prefix rpg --max-inline 5 --max-absolute 1' "$SK/SKILL.md" \
+  && ok "bad-fixture count stated with its flags" || no "bad-fixture count without its flags"
+for fact in 'set_run_in_background --enable true' 'set_run_in_background --enable false' '--async_tests true' \
+            'ScreenCreatorPlan.Build' 'script eval' 'IsInsideConnectorImportFolder' 'only after the connector'; do
+  grep -qF -- "$fact" <<<"$skill_text$(cat "$SK/SKILL.md")" && ok "ui-figma-import names: $fact" || no "ui-figma-import misses: $fact"
+done
 
 # -- read-only: no file written into any fixture project
 before=$(cd "$TMP" && find git-pinned file-pinned no-connector no-package old-pin unresolved not-unity checkout -type f | sort | md5sum)
