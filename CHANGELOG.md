@@ -55,7 +55,7 @@ update rpg-factory && claude plugin update rpg-factory@rpg-factory`, then start 
 ### Fixed
 
 - `tests/dogfood.sh --all` fails when a write scenario fails, and the write grader tracks `cd` (after `&&`, `;` or a newline, across Bash calls) when it resolves relative output paths.
-- Skill citations follow the client's DI and input refactors on develop (`ClientRootInstaller`, `MainSceneInstaller`, injected `GameplayInputRouter`, the deleted `DIExtensions` locator, moved `DotsWorldBridge` lines).
+- Skill citations follow the client's DI and input refactors on develop (`ClientRootInstaller`, `MainSceneInstaller`, injected `GameplayInputRouter`, the deleted `DIExtensions` locator, moved `DotsWorldBridge` lines, session installation moved to `EcsSessionInstallation`, input send extracted to `InputEgress`) and the Netcode `KcpTransport` line drift.
 - The Bash and PowerShell guard raises a high advisory for host-wide process termination, in any directory: a kill that names targets by image/filter/pattern (`taskkill /IM|/FI`, `Stop-Process -Name`, `pkill`, `killall`, `kill -1`, `wmic process ... delete`), or a process query by name/pattern (`Win32_Process`, `Get-Process <name>`, `pgrep`, `pidof`, `ps | grep`, `tasklist`) combined with any terminator, including `taskkill //PID $(powershell ... Win32_Process ...)`. It reads the parsed command, so quoted `grep`/`echo`/commit-message text no longer triggers it; raw text is only the fallback for unparseable input.
 - Binding gameplay numbers pass only with a verified current-revision approval; a missing approval is HUMAN_REQUIRED, an invalid or untrusted one FAILs.
 - UI quality validates numeric ordered breakpoints, data bindings against known source artifacts, component specs, and handoff screen ids.
