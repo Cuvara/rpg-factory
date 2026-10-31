@@ -198,7 +198,7 @@ report("Markdown NEEDS_CONTEXT: exit 3, names figma-frame-url",
        [] if rc == 3 and "figma-frame-url" in out else [f"exit {rc}", out[:200]])
 rc, out, _ = plan("ui", "Rotate the gateway TLS certificate.", as_json=False)
 report("Markdown NOT_UI: exit 0, sends to factory-core directly",
-       [] if rc == 0 and "not a UI request" in out and "factory-core" in out else [f"exit {rc}", out[:200]])
+       [] if rc == 0 and "not a ui request" in out.lower() and "factory-core" in out else [f"exit {rc}", out[:200]])
 for verb in VERBS:
     rc, _, err = plan(verb, "")
     report(f"usage error: {verb} without a request -> exit 2", [] if rc == 2 else [f"exit {rc}"])

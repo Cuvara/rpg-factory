@@ -123,15 +123,36 @@ sel --screen settings
   && [ "$(s theme | jq -r .owner_if_missing)" = unity-package ] && ok "theme at the v0.7.2 pin -> missing, pin-bump note, owner unity-package" || no "theme@0.7.2: $(s theme)"
 [ "$(s audio-toggle | jq -r '.status + " " + (.choice | join(","))')" = "compose unity:Toggle" ] && s audio-toggle | jq -r .notes | grep -q "game USS" \
   && ok "toggle still composes at v0.7.2; absent tokens are a styling note" || no "toggle@0.7.2: $(s audio-toggle)"
-sel --need item-grid --need radar-scanner --need item-tooltip --ref v0.8.0
+sel --need item-grid --need hologram-gizmo --need item-tooltip --ref v0.8.0
 [ "$(s item-grid | jq -r '.status + " " + .choice[0]')" = "configure pkg:UIToolkitGridAdapter<TModel,TView,TPresenter>" ] && ok "item-grid -> configure the grid adapter" || no "item-grid: $(s item-grid)"
-[ "$(s radar-scanner | jq -r '.status + " " + (.choice | length | tostring) + " " + .owner_if_missing')" = "missing 0 client-integration" ] \
-  && s radar-scanner | jq -r .notes | grep -q "stop for that decision" && ok "unknown need -> missing, no invented choice, stop for a decision" || no "unknown need: $(s radar-scanner)"
+[ "$(s hologram-gizmo | jq -r '.status + " " + (.choice | length | tostring) + " " + .owner_if_missing')" = "missing 0 client-integration" ] \
+  && s hologram-gizmo | jq -r .notes | grep -q "stop for that decision" && ok "unknown need -> missing, no invented choice, stop for a decision" || no "unknown need: $(s hologram-gizmo)"
 [ "$(s item-tooltip | jq -r '.status + " " + (.choice | length | tostring)')" = "missing 0" ] && ok "tooltip (no catalog control) -> missing" || no "tooltip: $(s item-tooltip)"
 [ "$(jq -r '.summary.missing' "$TMP/s.json")" = 2 ] && ok "summary counts missing" || no "summary: $(jq -c .summary "$TMP/s.json")"
 sel --screen settings --uitoolkit "$TMP/no-repo"; rc=$?
-[ $rc -eq 1 ] && [ "$(s settings-data | jq -r .status)" = NOT_AVAILABLE ] && [ "$(s volume-slider | jq -r '.status + " " + (.choice | length | tostring)')" = "NOT_AVAILABLE 0" ] \
-  && [ "$(s tabs | jq -r .status)" = compose ] && ok "no repo: needs on the package NOT_AVAILABLE (no choice), built-in-only needs still compose" || no "no-repo select: rc=$rc $(s settings-data)"
+na() { jq -c --arg n "$1" '.not_available[] | select(.need == $n)' "$TMP/s.json"; }
+[ $rc -eq 1 ] && [ "$(jq -r .status "$TMP/s.json")" = NOT_AVAILABLE ] && [ -z "$(s settings-data)" ] && [ -z "$(s volume-slider)" ] \
+  && na settings-data | jq -e '.requires == ["pkg:SettingsModel"] and (has("status") | not)' >/dev/null && [ -n "$(na volume-slider)" ] \
+  && [ "$(jq '[.selections[] | select(.status != "compose")] | length' "$TMP/s.json")" = 0 ] \
+  && [ "$(s tabs | jq -r .status)" = compose ] && ok "no repo: package needs listed under not_available (no status, no choice), built-in-only needs still compose" || no "no-repo select: rc=$rc $(jq -c '{status,not_available}' "$TMP/s.json" | head -c 300)"
+# natural-language needs resolve deterministically (id, exact alias, longest whole-word match); optional ids never make a need missing
+for pair in "confirmation popup=confirm-popup" "settings data=settings-data" "music toggle=audio-toggle" "volume slider=volume-slider" \
+            "graphics quality=graphics-quality" "back navigation=back-close" "screen container=screen-container" "Popup-Container=popup-container" \
+            "a big inventory grid please=item-grid"; do
+  sel --need "${pair%%=*}" --ref v0.8.0
+  [ "$(jq -r '.selections | length' "$TMP/s.json")" = 1 ] && [ "$(jq -r '.selections[0].recipe' "$TMP/s.json")" = "${pair#*=}" ] \
+    && [ "$(jq -r '.selections[0].need' "$TMP/s.json")" = "${pair%%=*}" ] && ok "need '${pair%%=*}' -> recipe ${pair#*=}" || no "need '${pair%%=*}': $(jq -c '.selections' "$TMP/s.json" | head -c 200)"
+done
+sel --need "confirmation popup" --ref v0.8.0
+[ "$(jq -r '.selections[0].status + " " + .selections[0].choice[0]' "$TMP/s.json")" = "reuse pkg:ConfirmDialog" ] && jq -r '.selections[0].evidence[0]' "$TMP/s.json" | grep -q "ConfirmDialog.cs:.*@v0.8.0" \
+  && ok "'confirmation popup' reuses ConfirmDialog with evidence" || no "confirmation popup: $(jq -c .selections "$TMP/s.json")"
+git -C "$U" rm -q -r Editor/ScreenCreator; git -C "$U" "${G[@]}" commit -qm "no screen creator"; git -C "$U" "${G[@]}" tag v0.8.1
+sel --need screen-container --ref v0.8.1
+[ "$(s screen-container | jq -r '.status + " " + (.choice | join(","))')" = "reuse pkg:BaseUIToolkitScreenPresenter<TView>,pkg:BaseUIToolkitView" ] \
+  && s screen-container | jq -r .notes | grep -q "Optional editor:Assets/Cuvara/Create Screen not in the catalog at v0.8.1" \
+  && ok "absent optional id (ScreenCreator menu) is a note; the existing presenter/view are still reused" || no "optional: $(s screen-container)"
+sel --screen popup --ref v0.8.0
+s confirm-popup | jq -e '.status == "reuse"' >/dev/null && ok "popup recipe includes ConfirmDialog" || no "popup recipe: $(jq -c '[.selections[].need]' "$TMP/s.json")"
 python3 -B "$SEL" --screen nosuch >/dev/null 2>&1; [ $? -eq 2 ] && ok "unknown archetype -> exit 2" || no "unknown archetype exit"
 python3 -B "$SEL" >/dev/null 2>&1; [ $? -eq 2 ] && ok "no --screen/--need -> exit 2" || no "select usage exit"
 for a in settings inventory popup hud quest-panel shop confirm; do
