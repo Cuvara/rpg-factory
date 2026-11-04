@@ -47,6 +47,30 @@ expect "no ## [2.1.0] section" 1 "FAIL +CHANGELOG has a non-empty ## \[2.1.0\] s
 sed -i 's/^## \[2.0.5\]/## [2.1.0]/' "$R/CHANGELOG.md"; gc commit -qam cl3; gc push -q origin main 2>/dev/null; gc fetch -q origin
 expect "fixed again" 0 - --no-remote
 
+echo "-- Codex packaging (only when present)"
+sync() { gc add -A; gc commit -qm "$1"; gc push -q origin main 2>/dev/null; gc fetch -q origin; }
+expect "no Codex files: not part of the version check" 0 "OK +version 2.1.0: VERSION == plugin.json == marketplace.json == README$" --no-remote
+mkdir -p "$R/.codex-plugin" "$R/.agents/plugins"
+echo '{"name":"rpg-factory","version":"2.1.0","skills":"./skills/"}' > "$R/.codex-plugin/plugin.json"; sync codex
+expect "Codex manifest agrees: named in the version check" 0 "OK +version 2.1.0: .*README == codex plugin.json$" --no-remote
+echo '{"name":"rpg-factory","version":"2.0.9","skills":"./skills/"}' > "$R/.codex-plugin/plugin.json"; sync codex2
+expect "Codex manifest version differs" 1 "FAIL +version 2.1.0: .*codex plugin.json=2.0.9" --no-remote
+echo '{"name":"rpg-factory","skills":"./skills/"}' > "$R/.codex-plugin/plugin.json"; sync codex3
+expect "Codex manifest without a version" 1 "FAIL +version 2.1.0: .*codex plugin.json=None" --no-remote
+echo '{"name":"rpg-factory",' > "$R/.codex-plugin/plugin.json"; sync codex4
+expect "Codex manifest is not JSON" 1 "FAIL +version 2.1.0: .*codex plugin.json=None" --no-remote
+echo '{"name":"rpg-factory","version":"2.1.0","skills":"./skills/"}' > "$R/.codex-plugin/plugin.json"
+echo '{"name":"rpg-factory","plugins":[{"name":"rpg-factory","source":{"source":"local","path":"./"}}]}' > "$R/.agents/plugins/marketplace.json"; sync codex5
+expect "Codex marketplace without a version: not part of the check" 0 "OK +version 2.1.0: .*README == codex plugin.json$" --no-remote
+echo '{"name":"rpg-factory","plugins":[{"name":"rpg-factory","source":{"source":"local","path":"./"},"version":"2.0.0"}]}' > "$R/.agents/plugins/marketplace.json"; sync codex6
+expect "Codex marketplace entry version differs" 1 "FAIL +version 2.1.0: .*codex marketplace.json=2.0.0" --no-remote
+echo '{"name":"rpg-factory","version":"2.1.0","plugins":[{"name":"rpg-factory","source":{"source":"local","path":"./"},"version":"2.1.0"}]}' > "$R/.agents/plugins/marketplace.json"; sync codex7
+expect "Codex manifest + marketplace agree" 0 "OK +version 2.1.0: .*codex plugin.json == codex marketplace.json$" --no-remote
+echo '{"name":"rpg-factory","version":"2.0.0","plugins":[{"name":"rpg-factory","source":{"source":"local","path":"./"},"version":"2.1.0"}]}' > "$R/.agents/plugins/marketplace.json"; sync codex8
+expect "Codex marketplace top-level version differs from its entry" 1 "FAIL +version 2.1.0: .*codex marketplace.json=2.0.0,2.1.0" --no-remote
+echo '{"name":"rpg-factory","plugins":[{"name":"rpg-factory","source":{"source":"local","path":"./"},"version":"2.1.0"}]}' > "$R/.agents/plugins/marketplace.json"; sync codex9
+expect "Codex packaging agrees again" 0 "release-check v2.1.0: PASS" --no-remote
+
 echo x > "$R/stray.txt"; expect "untracked file: tree not clean" 1 "FAIL +working tree clean" --no-remote; rm "$R/stray.txt"
 echo y >> "$R/README.md"; expect "modified file: tree not clean" 1 "FAIL +working tree clean" --no-remote; gc checkout -q -- README.md
 gc checkout -q -b feat/x; expect "feature branch is not main" 1 "FAIL +HEAD is main" --no-remote; gc checkout -q main; gc branch -q -D feat/x

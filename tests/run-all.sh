@@ -54,9 +54,14 @@ msrc=$(jq -r '.plugins[0].source' .claude-plugin/marketplace.json)
 ver=$(jq -r .version .claude-plugin/plugin.json); mver=$(jq -r '.plugins[0].version // empty' .claude-plugin/marketplace.json)
 fver=$(tr -d '[:space:]' < VERSION 2>/dev/null)
 rver=$(sed -n 's/^Version \([0-9][0-9.]*\) (see `VERSION`).*/\1/p' README.md)
-{ [ "$ver" = "$fver" ] && [ -z "$mver" -o "$mver" = "$ver" ] && grep -q "^## \[$ver\]" CHANGELOG.md && [ "$rver" = "$ver" ]; } \
-  && ok "version: VERSION == plugin.json == marketplace == CHANGELOG section == README ($ver)" \
-  || bad "version consistency" "VERSION=$fver plugin=$ver marketplace=$mver README=${rver:-none} changelog section missing?"
+# Codex packaging, when present: .codex-plugin/plugin.json must carry the version; the Codex marketplace only if it has one
+cver=$ver; [ -f .codex-plugin/plugin.json ] && cver=$(jq -r '.version // "none"' .codex-plugin/plugin.json 2>/dev/null || echo invalid)
+cmver=""; [ -f .agents/plugins/marketplace.json ] && cmver=$(jq -r '[.version?, (.plugins[]? | select(.name == "rpg-factory") | .version?)]
+  | map(select(. != null)) | unique | join(",")' .agents/plugins/marketplace.json 2>/dev/null || echo invalid)
+{ [ "$ver" = "$fver" ] && [ -z "$mver" -o "$mver" = "$ver" ] && grep -q "^## \[$ver\]" CHANGELOG.md && [ "$rver" = "$ver" ] \
+  && [ "$cver" = "$ver" ] && [ -z "$cmver" -o "$cmver" = "$ver" ]; } \
+  && ok "version: VERSION == plugin.json == marketplace == CHANGELOG section == README == Codex manifest/marketplace when present ($ver)" \
+  || bad "version consistency" "VERSION=$fver plugin=$ver marketplace=$mver README=${rver:-none} codex=$cver codex-marketplace=${cmver:-none} changelog section missing?"
 # release policy wording: tags and releases are the lead's by default and the agent's only with explicit release
 # authorization in the current task - no authoritative text may state the absolute "agents never tag" rule again
 policy_files=(.claude/CLAUDE.md README.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
@@ -138,6 +143,12 @@ run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
+# Codex packaging (.codex-plugin, .agents/plugins, scripts/codex_hook.py): its checks SKIP while those files are absent
+cx=$(env -u TMPDIR tests/codex-plugin.test.sh 2>&1); cxrc=$?; cxsum=$(tail -1 <<<"$cx")
+cxpass=$(sed -n 's/.*, \([0-9]*\) passed,.*/\1/p' <<<"$cxsum")
+if [ $cxrc -ne 0 ]; then bad "Codex plugin: manifest, marketplace, hook config, adapter" "$cx"
+elif [ "${cxpass:-0}" -eq 0 ]; then skp "Codex plugin: manifest, marketplace, hook config, adapter" "${cxsum#codex-plugin tests: }: Codex packaging files absent"
+else ok "Codex plugin: manifest, marketplace, hook config, adapter (${cxsum#codex-plugin tests: })"; fi
 if $use_ws; then run "routing properties over real history" python3 -B tests/routing-properties.test.py
 else skp "routing properties over real history" "--no-workspace"; fi
 if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh

@@ -3,6 +3,7 @@
 
 Before tagging (default):
   - VERSION == .claude-plugin/plugin.json == marketplace.json plugin entry == README "Version X (see `VERSION`)"
+    (+ .codex-plugin/plugin.json when present, + .agents/plugins/marketplace.json when it carries a version)
   - CHANGELOG.md has a `## [X.Y.Z]` section and `## [Unreleased]` is empty
   - tag vX.Y.Z does not exist locally, nor on origin (`git ls-remote --tags`, skipped with --no-remote)
   - HEAD is main (on branch main, or detached at the merge commit) and equals origin/main
@@ -70,6 +71,24 @@ def versions(repo):
         v["marketplace.json"] = None
     m = re.search(r"^Version ([0-9][0-9A-Za-z.+-]*) \(see `VERSION`\)", read(os.path.join(repo, "README.md")) or "", re.M)
     v["README"] = m.group(1) if m else None
+    # Codex packaging, only when present: the Codex manifest must carry the version; the Codex marketplace only
+    # takes part when it carries one (top level or the rpg-factory entry)
+    codex = read(os.path.join(repo, ".codex-plugin", "plugin.json"))
+    if codex is not None:
+        try:
+            v["codex plugin.json"] = json.loads(codex).get("version")
+        except (ValueError, AttributeError):
+            v["codex plugin.json"] = None
+    cmk = read(os.path.join(repo, ".agents", "plugins", "marketplace.json"))
+    if cmk is not None:
+        try:
+            mk = json.loads(cmk)
+            found = [mk.get("version")] + [p.get("version") for p in mk.get("plugins", []) if p.get("name") == "rpg-factory"]
+            found = sorted({x for x in found if x is not None}, key=str)
+            if found:
+                v["codex marketplace.json"] = ",".join(map(str, found))
+        except (ValueError, AttributeError, TypeError):
+            v["codex marketplace.json"] = None
     return v
 
 
@@ -107,7 +126,7 @@ def main(argv):
     v = versions(repo)
     ver = v["VERSION"]
     check(bool(ver) and all(x == ver for x in v.values()),
-          f"version {ver}: VERSION == plugin.json == marketplace.json == README",
+          f"version {ver}: " + " == ".join(v),
           ", ".join(f"{k}={x}" for k, x in v.items()))
     cl = read(os.path.join(repo, "CHANGELOG.md")) or ""
     section = changelog_section(cl, ver) if ver else None
