@@ -1,0 +1,9 @@
+{
+  "session_id": "codex-fixture-session",
+  "transcript_path": "/codex-fixture/session.jsonl",
+  "cwd": "/codex-fixture/workspace/rpg-mmo-server",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "source": "startup"
+}

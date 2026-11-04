@@ -78,7 +78,9 @@ def native_path(p, nt=None):
     m = re.match(r"^/mnt/([A-Za-z])(/|$)", p) or re.match(r"^/([A-Za-z])(/|$)", p)
     return f"{m.group(1).upper()}:/{p[m.end():]}" if m else p
 
-PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from pluginroot import plugin_root
+PLUGIN_ROOT = plugin_root()
 
 
 def load_registry():
@@ -1060,6 +1062,8 @@ def process_kill_hits(payload, registry):
 def skill_read_hits(payload, registry):
     """A registered skill's SKILL.md read through the shell (`cat`, `sed -n`, `Get-Content`, ...) is not a loaded
     skill: point the session at the Skill tool. Parsed argv only; a command that cannot be parsed gets no opinion."""
+    if payload.get("_rpg_factory_codex"):
+        return []  # Codex loads skills by reading SKILL.md; there is no Claude Skill tool.
     command = (payload.get("tool_input") or {}).get("command") or ""
     if "skill.md" not in command.lower():
         return []
