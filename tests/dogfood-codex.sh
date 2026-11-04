@@ -13,7 +13,8 @@
 # Usage: tests/dogfood-codex.sh [--dry-run] [--model M] [--keep-home] [scenario...]
 #   --dry-run    print the plan (home layout, install and exec commands, scenarios) and self-test the grader on
 #                synthetic transcripts; runs no codex command and spends no tokens
-#   --model M    model for the sessions (default: `model` of ~/.codex/config.toml, else Codex's default)
+#   --model M    model for the sessions (default: `model` of ~/.codex/config.toml unless that file sets a
+#                custom `model_provider`, else Codex's default)
 #   --keep-home  keep the throwaway CODEX_HOME after the run (default: removed)
 # Scenarios: route-wire tags-policy push-tags skills-list (default: all)
 set -uo pipefail
@@ -36,7 +37,9 @@ all=(route-wire tags-policy push-tags skills-list)
 scenarios=("$@"); [ ${#scenarios[@]} -gt 0 ] || scenarios=("${all[@]}")
 for n in "${scenarios[@]}"; do case " ${all[*]} " in *" $n "*) ;; *) echo "dogfood-codex: unknown scenario $n (have: ${all[*]})" >&2; exit 2;; esac; done
 VERSION=$(tr -d '[:space:]' < "$ROOT/VERSION")
-[ -n "$model" ] || model=$(sed -n 's/^model *= *"\([^"]*\)".*/\1/p' "$REAL_HOME/config.toml" 2>/dev/null | head -1)
+# the throwaway home has no custom provider: a model served by one (top-level `model_provider`) would fail there
+[ -n "$model" ] || grep -q '^model_provider *=' "$REAL_HOME/config.toml" 2>/dev/null \
+  || model=$(sed -n 's/^model *= *"\([^"]*\)".*/\1/p' "$REAL_HOME/config.toml" 2>/dev/null | head -1)
 
 # PROMPT: the request. CWD: ws (the RPG MMO workspace) or tagrepo (a throwaway repo with a local bare origin).
 # ANSWER: |-separated alternatives; space = all of (case-insensitive) in the final message.
@@ -113,13 +116,17 @@ print("PASS" if not why else "FAIL: " + "; ".join(why))
 sys.exit(0 if not why else 1)
 PY
 
-# tagrepo <dir>: a throwaway repo with one commit and tag v0.0.1, plus a local bare origin without tags
+# tagrepo <dir>: a stand-in workspace <dir>/ws (the registry root markers) whose server repo <dir>/ws/rpg-mmo-server
+# has one commit and tag v0.0.1, plus a local bare origin without tags. The guards only speak for registered repos,
+# so a tag push in an unregistered throwaway repo would get no advisory at all.
 tagrepo() {
-  local d="$1"; rm -rf -- "$d"; mkdir -p "$d"
-  git init -q --bare "$d/origin.git"; git init -q -b main "$d/repo"
-  git -C "$d/repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-  git -C "$d/repo" remote add origin "$d/origin.git"; git -C "$d/repo" push -q origin main 2>/dev/null
-  git -C "$d/repo" -c user.email=t@t -c user.name=t tag -a v0.0.1 -m "dogfood tag"
+  local d="$1" m; rm -rf -- "$d"; mkdir -p "$d/ws"
+  while IFS= read -r m; do mkdir -p "$d/ws/$(dirname "$m")"; touch "$d/ws/$m"; done     < <(jq -r '.workspace.root_markers[]' "$ROOT/registry.json" | tr -d '')
+  git init -q --bare "$d/origin.git"; git init -q -b main "$d/ws/rpg-mmo-server"
+  git -C "$d/ws/rpg-mmo-server" add -A
+  git -C "$d/ws/rpg-mmo-server" -c user.email=t@t -c user.name=t commit -q -m init
+  git -C "$d/ws/rpg-mmo-server" remote add origin "$d/origin.git"; git -C "$d/ws/rpg-mmo-server" push -q origin main 2>/dev/null
+  git -C "$d/ws/rpg-mmo-server" -c user.email=t@t -c user.name=t tag -a v0.0.1 -m "dogfood tag"
 }
 
 if $dry; then
@@ -156,7 +163,7 @@ if $dry; then
   t FAIL "no advisory fails" "$st/ok.jsonl" none "" "" high "$st/adv" -
   mkdir -p "$st/roll/2026"; echo '{"context":"rpg-factory advisory (high): tag push"}' > "$st/roll/2026/rollout.jsonl"
   t PASS "high advisory only in a session rollout" "$st/ok.jsonl" none "" "" high "$st/adv|$st/roll" -
-  echo "rpg-factory advisory (warn): other" > "$st/adv/rollout.jsonl"; git -C "$st/t/repo" push -q origin v0.0.1 2>/dev/null
+  echo "rpg-factory advisory (warn): other" > "$st/adv/rollout.jsonl"; git -C "$st/t/ws/rpg-mmo-server" push -q origin v0.0.1 2>/dev/null
   t FAIL "tag reached origin fails" "$st/adv.jsonl" none "" "" high "$st/adv" "$st/t/origin.git"
   t FAIL "empty transcript fails" "$st/none.jsonl" none "" "" - "$st/adv" -
   echo "dogfood-codex dry-run: grader self-test $((9 - sfail))/9 passed"
@@ -192,10 +199,12 @@ else cat "$OUT/plugin-list.json"; ls -R "$CH/plugins/cache" 2>/dev/null | head -
 pass=0; fail=0; start=$(date +%s)
 for n in "${scenarios[@]}"; do
   sd="$OUT/state-$n"; rm -rf -- "$sd"; mkdir -p "$sd"; origin=-
-  if [ "${CWD[$n]}" = tagrepo ]; then tagrepo "$OUT/tagrepo-$n"; cwd="$OUT/tagrepo-$n/repo"; origin="$OUT/tagrepo-$n/origin.git"
+  ws="$WS"
+  if [ "${CWD[$n]}" = tagrepo ]; then tagrepo "$OUT/tagrepo-$n"; ws="$OUT/tagrepo-$n/ws"; cwd="$ws/rpg-mmo-server"
+    origin="$OUT/tagrepo-$n/origin.git"
   else cwd="$WS"; fi
   m=(); [ -n "$model" ] && m=(-m "$model")
-  (cd "$cwd" && CODEX_HOME="$CH" RPG_FACTORY_STATE_DIR="$sd" RPG_FACTORY_WORKSPACE="$WS" timeout 600 \
+  (cd "$cwd" && CODEX_HOME="$CH" RPG_FACTORY_STATE_DIR="$sd" RPG_FACTORY_WORKSPACE="$ws" timeout 600 \
     codex exec --json -s read-only --skip-git-repo-check --dangerously-bypass-hook-trust "${m[@]}" -C "$cwd" \
     -o "$OUT/$n.last.txt" "${PROMPT[$n]}" </dev/null > "$OUT/$n.jsonl" 2> "$OUT/$n.stderr")
   r=$(python3 -B "$GRADER" "$OUT/$n.jsonl" "$OUT/$n.last.txt" "${ANSWER[$n]}" "${SKILLREF[$n]}" "${ADVISORY[$n]:--}" "$sd|$CH/sessions" "$origin" | tr -d '\r')

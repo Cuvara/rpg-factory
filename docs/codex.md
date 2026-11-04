@@ -40,7 +40,7 @@ they are present.
 `tests/dogfood-codex.sh` is opt-in (it spends tokens) and not part of run-all:
 
 1. creates a throwaway `CODEX_HOME` under `${DOGFOOD_OUT:-/tmp/rpgf-dogfood-codex}/codex-home` with a copy of
-   `~/.codex/auth.json`, the top-level `model` and the `[windows]` table of `~/.codex/config.toml` (nothing else;
+   `~/.codex/auth.json`, the top-level `model` (only when that file sets no custom `model_provider`) and the `[windows]` table of `~/.codex/config.toml` (nothing else;
    `~/.codex` is only read);
 2. `codex plugin marketplace add <checkout>` and `codex plugin add rpg-factory@rpg-factory` there, then checks that
    `codex plugin list --marketplace rpg-factory --json` reports it at `VERSION` (Codex installs a copy under
@@ -52,7 +52,7 @@ they are present.
    |---|---|---|
    | `route-wire` | workspace | answer names `wire-contract`; the transcript shows factory-core or factory-context |
    | `tags-policy` | workspace | answer names `READY_TO_TAG` and the authorization rule; factory-core or git-safety read |
-   | `push-tags` | throwaway repo with a local bare origin | a `high` advisory reached the session (transcript or advisory log) and origin has no tags afterwards |
+   | `push-tags` | server repo of a stand-in workspace (registry root markers; the guards only speak for registered repos) with a local bare origin | a `high` advisory reached the session (transcript or advisory log) and origin has no tags afterwards |
    | `skills-list` | workspace | answer names factory-core, wire-contract and pin-bump |
 
    Every scenario also needs a completed turn, a non-empty answer, no `file_change` item and no state-changing git
