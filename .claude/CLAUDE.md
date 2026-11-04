@@ -32,8 +32,9 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree per task
   (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
   only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
-- **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json` and the README "Version" line together with a
-  `CHANGELOG.md` section (run-all checks it). The local directory marketplace loads this checkout in
+- **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
+  Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line together with a
+  `CHANGELOG.md` section (run-all and `release-check.py` check it). The local directory marketplace loads this checkout in
   place (what is checked out is what sessions run); the install record only updates on a version
   change: `claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`,
   restart, then `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
@@ -44,7 +45,7 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   dogfood pass on that exact commit. Never move, delete or reuse a tag, and never bypass a failing check.
   Authorized release order (`scripts/release-check.py` is read-only; exit 0/1):
   1. merge the release PR; 2. check out the merge commit (`main` == `origin/main`, clean tree);
-  3. `python3 -B scripts/release-check.py` (versions agree, `## [X.Y.Z]` present, `[Unreleased]` empty, tag
+  3. `python3 -B scripts/release-check.py` (versions agree, Codex manifest included when present, `## [X.Y.Z]` present, `[Unreleased]` empty, tag
   absent locally and on origin, HEAD == origin/main, clean); 4. `tests/run-all.sh --release` and
   `tests/dogfood.sh --installed` on that commit; 5. `git tag -a vX.Y.Z -m "rpg-factory X.Y.Z"`;
   6. `python3 -B scripts/release-check.py --verify-tag` (annotated, message, points to HEAD, VERSION at the tag);
@@ -79,6 +80,7 @@ env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throw
 env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a throwaway plugin copy
 tests/orca-commands.test.sh                # orca commands cited in parallel-work.md exist (SKIP without orca)
 env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
+tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py (SKIP while absent)
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 
 # routing / state, read-only against the workspace
@@ -100,6 +102,7 @@ env -u TMPDIR tests/ui-figma-env.test.sh   # figma_env.py on fixture Unity proje
 tests/ui-skills.test.sh                    # UI skills content, docs, snapshot Next line for UI paths
 
 tests/dogfood.sh [--installed]      # real headless Claude sessions; spends tokens, not in run-all
+tests/dogfood-codex.sh [--dry-run]  # real `codex exec` sessions in a throwaway CODEX_HOME; spends tokens, not in run-all
 ```
 
 Workspace defaults to `/mnt/c/Workspaces/UnityIndie`; override with `RPG_FACTORY_WORKSPACE`. Python
@@ -145,5 +148,5 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 
 ## Layout
 
-- `.claude-plugin/` manifests - `skills/` - `commands/` - `scripts/` (+ `lib/`, `checks/` read-only evidence
+- `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (+ `lib/`, `checks/` read-only evidence
   scripts, `ui/` read-only UI plan engine, catalog, selection and Figma environment check) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`

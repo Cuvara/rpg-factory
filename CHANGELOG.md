@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- **Codex CLI plugin.** The same checkout installs into Codex CLI (`docs/codex.md`, README "Codex CLI"):
+  - `.codex-plugin/plugin.json` (same name, version and `./skills/` as the Claude manifest) and a repo-local Codex
+    marketplace `.agents/plugins/marketplace.json` (`codex plugin marketplace add <checkout>`,
+    `codex plugin add rpg-factory@rpg-factory`).
+  - Codex hooks (`hooks/codex-hooks.json`) through the adapter `scripts/codex_hook.py` (`session-start`, and
+    `pre-tool-use` for `Bash` and `apply_patch`): the same advisory git and file guards, `rpg-factory advisory
+    (high|warn): ...` context only; exit 0 on any input, never a deny or block decision, no `CLAUDE_*` dependency. Hook fixtures with expected levels in `tests/fixtures/codex-hooks/`.
+  - `tests/codex-plugin.test.sh` (in run-all): manifest and marketplace validity, version agreement, every Codex
+    hook command runs an existing script and ends with `; exit 0`, adapter robustness (empty, malformed, huge, deeply
+    nested and binary stdin; unknown or missing event), every fixture replayed in a stand-in workspace with a fresh
+    `CODEX_HOME` at the level its README names and in the documented output shape, the same levels with every
+    `CLAUDE_*` variable and `PLUGIN_ROOT` unset, and the same skill set as the Claude manifest. Each check reports
+    SKIP while its Codex file is absent.
+  - `tests/dogfood-codex.sh` (opt-in, spends tokens): installs the plugin into a throwaway `CODEX_HOME` (only
+    `auth.json`, `model` and `[windows]` copied; `~/.codex` is never modified) and grades four real `codex exec`
+    sessions (wire.proto routing, the tag policy, a `git push --tags` request that must get the `high` advisory and
+    leave origin without tags, the skill list); `--dry-run` self-tests the grader on nine synthetic transcripts.
+- **Release gate covers the Codex files.** `scripts/release-check.py` ("versions agree") and the run-all version
+  line include `.codex-plugin/plugin.json` when present, and the Codex marketplace when it carries a version;
+  `tests/release-check.test.sh` has cases for agreeing, differing, missing and malformed Codex versions.
+
 ## [1.4.0] - 2026-10-31
 
 Feature release: UI skills and commands. `/rpg-factory:ui`, `ui-figma`, `ui-components`, `ui-screen` and
