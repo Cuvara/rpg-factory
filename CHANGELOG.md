@@ -17,8 +17,15 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     hook command runs an existing script and ends with `; exit 0`, adapter robustness (empty, malformed, huge, deeply
     nested and binary stdin; unknown or missing event), every fixture replayed in a stand-in workspace with a fresh
     `CODEX_HOME` at the level its README names and in the documented output shape, the same levels with every
-    `CLAUDE_*` variable and `PLUGIN_ROOT` unset, and the same skill set as the Claude manifest. Each check reports
-    SKIP while its Codex file is absent.
+    `CLAUDE_*` variable and `PLUGIN_ROOT` unset, the same skill set as the Claude manifest, the hook wiring
+    (SessionStart and PreToolUse for both `Bash` and `apply_patch` reach the adapter), PowerShell-only commands
+    reported as `Bash` (Windows), and Claude Code with an inherited `CODEX_HOME` staying on the Claude install check.
+    A missing Codex file fails.
+  - Codex reports every shell as `Bash`, PowerShell included: on Windows the adapter evaluates a command in both
+    dialects (`scripts/git-guard.py` `collect()`), so native `C:\` paths and backtick escapes still reach the guard.
+  - Codex runtime detection (`scripts/lib/pluginroot.py` `is_codex()`): `CODEX_THREAD_ID` or `PLUGIN_ROOT`, never
+    under Claude Code (`CLAUDECODE`); `CODEX_HOME` alone is configuration, not a runtime. The skill-read advisory is
+    dropped for Codex by an argument of `collect()`, not by a payload field.
   - `tests/dogfood-codex.sh` (opt-in, spends tokens): installs the plugin into a throwaway `CODEX_HOME` (only
     `auth.json`, `model` and `[windows]` copied; `~/.codex` is never modified) and grades four real `codex exec`
     sessions (wire.proto routing, the tag policy, a `git push --tags` request that must get the `high` advisory and

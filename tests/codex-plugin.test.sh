@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Codex CLI packaging of the plugin: .codex-plugin/plugin.json, the repo-local Codex marketplace
 # (.agents/plugins/marketplace.json), the Codex hook config and the hook adapter scripts/codex_hook.py.
-# Each part is checked strictly once its file exists; while a file is absent its checks SKIP with the reason
-# (never FAIL). The adapter must stay advisory: exit 0 always, stdout empty or exactly one JSON object, never a
+# Every part is required: a missing file, a manifest without hooks or a hook config that no longer wires
+# SessionStart and PreToolUse (Bash, apply_patch) to the adapter FAILS. The adapter must stay advisory: exit 0 always, stdout empty or exactly one JSON object, never a
 # deny/block decision, no traceback, the advisory level each fixture's README row names, with or without CLAUDE_* env.
 #
 # Usage: tests/codex-plugin.test.sh     (standalone; own temp TMPDIR / RPG_FACTORY_STATE_DIR; no network, no codex CLI)
@@ -81,8 +81,8 @@ run_adapter() {
 
 echo "-- Codex manifest (.codex-plugin/plugin.json)"
 if [ ! -f "$CM" ]; then
-  skp "Codex manifest: valid JSON, name, version, skills" ".codex-plugin/plugin.json absent"
-  skp "Codex manifest exposes the same skill set as the Claude manifest" ".codex-plugin/plugin.json absent"
+  no "Codex manifest: valid JSON, name, version, skills" ".codex-plugin/plugin.json absent"
+  no "Codex manifest exposes the same skill set as the Claude manifest" ".codex-plugin/plugin.json absent"
 else
   if jq -e . "$CM" >/dev/null 2>&1; then ok "Codex manifest is valid JSON"; else no "Codex manifest is valid JSON" "$(jq . "$CM" 2>&1 | tail -2)"; fi
   n=$(jq -r '.name // empty' "$CM" 2>/dev/null); v=$(jq -r '.version // empty' "$CM" 2>/dev/null); s=$(jq -r '.skills // empty' "$CM" 2>/dev/null)
@@ -98,7 +98,7 @@ fi
 
 echo "-- Codex marketplace (.agents/plugins/marketplace.json)"
 if [ ! -f "$MK" ]; then
-  skp "Codex marketplace: valid JSON, name, plugin entry, local source, version" ".agents/plugins/marketplace.json absent"
+  no "Codex marketplace: valid JSON, name, plugin entry, local source, version" ".agents/plugins/marketplace.json absent"
 else
   if jq -e . "$MK" >/dev/null 2>&1; then ok "Codex marketplace is valid JSON"; else no "Codex marketplace is valid JSON" "$(jq . "$MK" 2>&1 | tail -2)"; fi
   [ "$(jq -r '.name // empty' "$MK")" = rpg-factory ] && ok "Codex marketplace name rpg-factory" || no "Codex marketplace name" "$(jq -c .name "$MK")"
@@ -124,8 +124,8 @@ if [ -f "$CM" ]; then
   while IFS= read -r p; do [ -n "$p" ] && hook_cfgs+=("$ROOT/${p#./}"); done < <(jq -r '.hooks | if type == "string" then . elif type == "array" then .[] else empty end' "$CM" 2>/dev/null)
   if jq -e '.hooks | type == "object"' "$CM" >/dev/null 2>&1; then jq '{hooks: .hooks}' "$CM" > "$TMP/inline-hooks.json"; hook_cfgs+=("$TMP/inline-hooks.json"); fi
 fi
-if [ ! -f "$CM" ]; then skp "Codex hook commands: existing script, fail-safe '; exit 0'" ".codex-plugin/plugin.json absent"
-elif [ ${#hook_cfgs[@]} -eq 0 ]; then skp "Codex hook commands: existing script, fail-safe '; exit 0'" "the Codex manifest declares no hooks"
+if [ ! -f "$CM" ]; then no "Codex hook commands: existing script, fail-safe '; exit 0'" ".codex-plugin/plugin.json absent"
+elif [ ${#hook_cfgs[@]} -eq 0 ]; then no "Codex hook commands: existing script, fail-safe '; exit 0'" "the Codex manifest declares no hooks"
 else
   hbad=""; hn=0
   for cfg in "${hook_cfgs[@]}"; do
@@ -140,6 +140,19 @@ else
   done
   [ "$hn" -gt 0 ] || hbad+="no command hooks found in: ${hook_cfgs[*]}"$'\n'
   [ -z "$hbad" ] && ok "Codex hook commands ($hn): each runs an existing script and ends with '; exit 0'" || no "Codex hook commands" "$hbad"
+  # the wiring itself: SessionStart runs the adapter's session-start, and PreToolUse entries whose matchers cover
+  # both Codex tool names (Bash for every shell, apply_patch for edits) run its pre-tool-use
+  wbad=$(jq -rs '
+    def cmds: [.hooks[]? | objects | .command? | strings];
+    def adapter($arg): any(.[]; test("scripts/codex_hook\\.py\"? +" + $arg + "\\b"));
+    [.[] | .hooks // {}] as $h
+    | ([$h[] | .SessionStart[]? | cmds | adapter("session-start")] | any | if . then empty else "SessionStart does not run codex_hook.py session-start" end),
+      ([$h[] | .PreToolUse[]? | select(cmds | adapter("pre-tool-use")) | (.matcher // ".*")] as $m
+       | ("Bash", "apply_patch") as $t
+       | if any($m[]; . as $re | $t | test("^(?:" + $re + ")$")) then empty
+         else "no PreToolUse entry running codex_hook.py pre-tool-use matches tool " + $t end)' "${hook_cfgs[@]}" 2>&1)
+  [ -z "$wbad" ] && ok "Codex hook wiring: SessionStart -> session-start; PreToolUse Bash and apply_patch -> pre-tool-use" \
+    || no "Codex hook wiring" "$wbad"
   # advisory only: no hook config may carry a blocking decision of its own
   if jq -se '[.[] | .. | objects | select(has("permissionDecision") or ((.decision? // "") | tostring | test("^(block|deny)$"; "i")))] | length == 0' "${hook_cfgs[@]}" >/dev/null 2>&1; then
     ok "Codex hook config carries no permissionDecision / block / deny"
@@ -148,7 +161,7 @@ fi
 
 echo "-- hook adapter (scripts/codex_hook.py): robustness"
 if [ ! -f "$AD" ]; then
-  skp "adapter: exit 0, one JSON object or nothing, never deny/block, no traceback (empty/malformed/huge/binary stdin)" "scripts/codex_hook.py absent"
+  no "adapter: exit 0, one JSON object or nothing, never deny/block, no traceback (empty/malformed/huge/binary stdin)" "scripts/codex_hook.py absent"
 else
   : > "$TMP/in-empty"
   printf '{"hook_event_name": "PreToolUse", "tool_input": {' > "$TMP/in-malformed"
@@ -174,8 +187,8 @@ fi
 echo "-- hook adapter: fixtures (tests/fixtures/codex-hooks, levels from its README.md)"
 if [ ! -f "$AD" ] || [ ! -d "$FX" ]; then
   why=$({ [ -f "$AD" ] || echo "scripts/codex_hook.py absent"; [ -d "$FX" ] || echo "tests/fixtures/codex-hooks absent"; } | paste -sd, - | sed 's/,/, /g')
-  skp "adapter fixtures: advisory level per README row" "$why"
-  skp "adapter fixtures with every CLAUDE_* variable unset" "fixtures or adapter absent"
+  no "adapter fixtures: advisory level per README row" "$why"
+  no "adapter fixtures with every CLAUDE_* variable unset" "fixtures or adapter absent"
 elif [ ! -f "$FX/README.md" ]; then
   no "adapter fixtures: README.md lists the expected level per fixture" "tests/fixtures/codex-hooks/README.md missing"
 else
@@ -235,6 +248,40 @@ PY
   # the fixture set must exercise the adapter's advisories, not only the silent path
   grep -qw high "$TMP/levels" && ok "fixture set includes a high advisory case" || no "fixture set has no high case (e.g. git push --tags)"
   grep -qw none "$TMP/levels" && ok "fixture set includes a silent (none) case" || no "fixture set has no none case"
+fi
+
+echo "-- hook adapter: Codex names every shell Bash (PowerShell included)"
+# On Windows Codex runs PowerShell but reports tool_name Bash: commands that only parse as PowerShell (native
+# backslash paths, backtick escapes) must still reach the guard, from a cwd outside the workspace too.
+if [ -z "${RPGF_WINDOWS:-}" ]; then skp "PowerShell-dialect commands under tool_name Bash" "not Windows: Codex shells are POSIX"
+elif [ ! -f "$AD" ]; then no "PowerShell-dialect commands under tool_name Bash" "scripts/codex_hook.py absent"
+else
+  srv="$(cd "$WS/rpg-mmo-server" && pwd -W)"; srv="${srv//\//\\}"
+  ps_case() {  # ps_case <want> <label> <command>
+    jq -n --arg cwd "$TMP/elsewhere" --arg c "$3" '{session_id:"s",cwd:$cwd,hook_event_name:"PreToolUse",tool_name:"Bash",
+      tool_input:{command:$c},transcript_path:"",model:"m",permission_mode:"default",turn_id:"t",tool_use_id:"u"}' > "$TMP/in-ps"
+    run_adapter pre-tool-use "$TMP/in-ps"
+    if [ "$RC" -eq 0 ] && [ -z "$PROBS" ] && [ "$LEVEL" = "$1" ]; then ok "adapter Bash/PowerShell: $2 -> $1"
+    else no "adapter Bash/PowerShell: $2" "want $1, got $LEVEL rc=$RC ${PROBS}"; fi
+  }
+  ps_case high "native path: git -C <server> tag v1" "git -C $srv tag v1"
+  ps_case high "backtick escape: g\`it -C <server> tag v1" "g\`it -C $srv tag v1"
+  ps_case none "native path, read-only: git -C <server> status" "git -C $srv status"
+fi
+
+echo "-- runtime detection: Claude Code with an inherited CODEX_HOME stays Claude"
+if [ ! -f "$AD" ]; then no "runtime detection" "scripts/codex_hook.py absent"
+else
+  det() { env "$@" python3 -B -c "import sys; sys.path.insert(0, r'$ROOT/scripts/lib'); import pluginroot; print(pluginroot.is_codex())" | tr -d '\r'; }
+  [ "$(det -u PLUGIN_ROOT -u CODEX_THREAD_ID CLAUDECODE=1 CODEX_HOME="$CODEX_HOME" CLAUDE_PLUGIN_ROOT="$ROOT")" = False ] \
+    && ok "is_codex: Claude Code (CLAUDECODE) with CODEX_HOME exported -> False" || no "is_codex under Claude with CODEX_HOME"
+  [ "$(det -u CLAUDECODE -u PLUGIN_ROOT CODEX_THREAD_ID=t)" = True ] \
+    && ok "is_codex: Codex shell (CODEX_THREAD_ID) -> True" || no "is_codex in a Codex shell"
+  [ "$(det -u CLAUDECODE -u CODEX_THREAD_ID PLUGIN_ROOT="$ROOT" CLAUDE_PLUGIN_ROOT="$ROOT")" = True ] \
+    && ok "is_codex: Codex hook (PLUGIN_ROOT + compat CLAUDE_PLUGIN_ROOT) -> True" || no "is_codex in a Codex hook"
+  out=$(env -u PLUGIN_ROOT -u CODEX_THREAD_ID CLAUDECODE=1 CODEX_HOME="$CODEX_HOME" python3 -B "$ROOT/scripts/install-status.py" --session 2>&1)
+  grep -q 'codex plugin' <<<"$out" && no "install-status --session under Claude with CODEX_HOME gives Claude advice" "$out" \
+    || ok "install-status --session under Claude with CODEX_HOME: no Codex advice"
 fi
 
 total=$((pass + fail + skip))

@@ -67,11 +67,12 @@ def main():
                 return
             if tool == "Bash":
                 guard = factory_session.guard()
-                # Reuse the guard entry point, including its independent fail-safe rules.
-                with stdin(dict(payload, _rpg_factory_codex=True)):
-                    guard.main()
-                advisory = json.loads(captured.getvalue()) if captured.getvalue() else {}
-                message = advisory.get("hookSpecificOutput", {}).get("additionalContext")
+                # Codex names every shell `Bash`, PowerShell included: on Windows the command may be either dialect,
+                # so evaluate both (native `C:\` paths and backtick escapes only parse as PowerShell) and merge.
+                reasons = []
+                for dialect in (("Bash", "PowerShell") if os.name == "nt" else ("Bash",)):
+                    reasons += guard.collect(dict(payload, tool_name=dialect), registry, skill_tool=False)
+                message = guard.advisory("rpg-factory guard", reasons)["hookSpecificOutput"]["additionalContext"] if reasons else None
             elif tool == "apply_patch":
                 guard = load("codex_file_guard", "file-guard.py")
                 reasons = []
@@ -85,16 +86,6 @@ def main():
                 return
     if message:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}))
-
-
-@contextlib.contextmanager
-def stdin(payload):
-    original = sys.stdin
-    try:
-        sys.stdin = io.StringIO(json.dumps(payload))
-        yield
-    finally:
-        sys.stdin = original
 
 
 if __name__ == "__main__":

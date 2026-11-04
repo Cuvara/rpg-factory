@@ -22,7 +22,8 @@ from the source), NOT_INSTALLED.
 Notes (informational, never a state change): the source HEAD is not the commit of tag v<VERSION>, e.g.
 "source 1.0.4 + 3 commits past v1.0.4" - directory mode then runs unreleased code under the release label.
 
-Codex: --codex (or the Codex runtime environment) reads CODEX_HOME config and
+Codex: --codex (or a Codex session: CODEX_THREAD_ID / PLUGIN_ROOT, never under Claude Code's CLAUDECODE) reads
+CODEX_HOME config and
 the installed plugin cache, comparing its version with the source VERSION.
 
 Usage: install-status.py [--json] [--session] [--source DIR] [--codex]
@@ -38,6 +39,12 @@ import sys
 
 PLUGIN_KEY = "rpg-factory@rpg-factory"
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(HERE, "scripts", "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+try:
+    from pluginroot import is_codex  # noqa: E402
+except ImportError:  # a copied script without lib/ (tests, partial installs): Claude Code, never a traceback
+    def is_codex():
+        return False
 
 
 def git(repo, *args):
@@ -187,9 +194,7 @@ def main():
             print("install-status: --source needs a directory", file=sys.stderr)
             return 2
         source = sys.argv[i]
-    if ("--codex" in sys.argv or os.environ.get("CODEX_HOME") or os.environ.get("PLUGIN_ROOT")
-            or (os.environ.get("CODEX_THREAD_ID") and os.path.isfile(os.path.join(HERE, ".codex-plugin", "plugin.json"))
-                and not os.environ.get("CLAUDE_PLUGIN_ROOT"))):
+    if "--codex" in sys.argv or is_codex():
         return codex_main(source, as_json, session)
     entry = None
     installed_all = load_json(os.path.join(home, ".claude/plugins/installed_plugins.json"))

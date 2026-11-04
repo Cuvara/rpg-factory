@@ -25,8 +25,13 @@ The adapter follows the same rules as the Claude hooks (`.claude/CLAUDE.md`, "Ru
 - It does not depend on any `CLAUDE_*` variable and resolves the plugin root itself (any cwd).
 - Every Codex hook command runs an existing script and ends with `; exit 0`.
 
-`tests/codex-plugin.test.sh` checks all of this (run-all runs it). While the Codex files are absent, each of its
-checks reports SKIP with the reason; once a file exists its checks are strict.
+`tests/codex-plugin.test.sh` checks all of this (run-all runs it), plus the hook wiring (SessionStart and PreToolUse
+for both `Bash` and `apply_patch` reach the adapter). A missing Codex file fails.
+
+Codex reports every shell as `Bash`, PowerShell included. On Windows the adapter therefore evaluates each command in
+both dialects and merges the reasons, so native `C:\` paths and backtick escapes still reach the guard. Runtime
+detection (`scripts/lib/pluginroot.py` `is_codex()`) uses `CODEX_THREAD_ID` or `PLUGIN_ROOT` and is always false
+under Claude Code (`CLAUDECODE`): a Claude session that inherits `CODEX_HOME` keeps the Claude install check.
 
 ## Versions
 

@@ -80,7 +80,7 @@ env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throw
 env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a throwaway plugin copy
 tests/orca-commands.test.sh                # orca commands cited in parallel-work.md exist (SKIP without orca)
 env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
-tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py (SKIP while absent)
+tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 
 # routing / state, read-only against the workspace
