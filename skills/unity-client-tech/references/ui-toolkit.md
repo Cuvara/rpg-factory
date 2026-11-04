@@ -89,7 +89,7 @@ Do not create ECS components only to feed UI, and do not read ECS from a present
   is guaranteed (`Assets/Scripts/Benchmark/Workload/BenchmarkLifetimeScope.cs:40`).
 - **Entry points:** `IStartable` + owned CTS + `async UniTaskVoid ... .Forget()`, cancelled in `Dispose`
   (`MainSessionDriver.Start` / `RunAsync` / `Dispose`: `Assets/Scripts/DI/MainSessionDriver.cs:85-149`).
-- **MessagePipe:** exactly one `RegisterMessagePipe()` (`Assets/Scripts/DI/Dots/DotsRegistration.cs:81-89`);
+- **MessagePipe:** exactly one `RegisterMessagePipe()` (`Assets/Scripts/DI/DotsRegistration.cs:89-98`);
   new messages add a `RegisterMessageBroker<T>` there.
 - **Never:** a static container or `LifetimeScope` cache (the client deleted its unused `DIExtensions` locator), `Resolve` from a MonoBehaviour's `Update`, injection into an ECS system (systems get
   managed state through singletons set by a bootstrap, `rpg-factory:unity-dots`).
