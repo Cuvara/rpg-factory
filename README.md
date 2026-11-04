@@ -450,12 +450,10 @@ codex plugin add rpg-factory@rpg-factory
 codex plugin list --marketplace rpg-factory --json  # rpg-factory installed and enabled at the source version
 # then start Codex and review + trust the rpg-factory hooks: until they are trusted they do not run
 
-# update: Codex installs a COPY ($CODEX_HOME/plugins/cache/rpg-factory/rpg-factory/<version>/) and re-adding the
-# same version is a no-op - a new version needs the marketplace refreshed and the plugin added again
-codex plugin marketplace upgrade rpg-factory        # Git marketplaces; a local one reads the checkout
-codex plugin add rpg-factory@rpg-factory            # then start a new Codex session
-# same version, new content (e.g. a local checkout between releases): remove and add
-codex plugin remove rpg-factory@rpg-factory && codex plugin add rpg-factory@rpg-factory   # then restart the session
+# update: Codex installs a COPY ($CODEX_HOME/plugins/cache/rpg-factory/rpg-factory/<version>/); `plugin add`
+# refreshes that copy from the source, also at an unchanged version (no remove, no version bump needed)
+codex plugin marketplace upgrade rpg-factory        # Git marketplaces only; a local one reads the checkout
+codex plugin add rpg-factory@rpg-factory            # after a new version or edits in the checkout; then restart the session
 ```
 
 What works the same: the skills (factory-core and every specialised and tech skill, namespaced
@@ -469,7 +467,8 @@ blocks, never asks, exits 0 on any input, and resolves the plugin root itself (C
 What differs:
 
 - **Copy, not in place.** Unlike the Claude directory marketplace, a Codex session runs the installed copy, not
-  the checkout: edits reach Codex sessions only after a version bump or remove + add (see above).
+  the checkout: edits reach Codex sessions only after `codex plugin add rpg-factory@rpg-factory` again and a
+  session restart (see above).
 - **No slash commands.** Codex's install-time command migration skips the Factory command templates (they use
   `$ARGUMENTS` and inline shell), so the Codex manifest has no `commands`. Run the script behind them from the
   plugin root instead: `python3 -B <plugin root>/scripts/factory-cmd.py status` (`route`, `check`, `doctor`,
