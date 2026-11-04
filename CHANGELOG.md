@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-05
+
+Feature release: Codex CLI plugin. The same checkout installs into Codex CLI with the same skills, scripts and
+advisory guards.
+
 ### Added
 
 - **Codex CLI plugin.** The same checkout installs into Codex CLI (`docs/codex.md`, README "Codex CLI"):
@@ -34,6 +39,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - **Release gate covers the Codex files.** `scripts/release-check.py` ("versions agree") and the run-all version
   line include `.codex-plugin/plugin.json` when present, and the Codex marketplace when it carries a version;
   `tests/release-check.test.sh` has cases for agreeing, differing, missing and malformed Codex versions.
+
+### Fixed
+
+- Skills: the unity-client-tech MessagePipe citation follows the client's move of `DotsRegistration.cs` out of
+  `Assets/Scripts/DI/Dots/`.
 
 ## [1.4.0] - 2026-10-31
 
