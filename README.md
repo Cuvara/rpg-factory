@@ -448,13 +448,14 @@ codex plugin marketplace add /mnt/c/Workspaces/UnityIndie/rpg-factory
 codex plugin marketplace add Cuvara/rpg-factory
 codex plugin add rpg-factory@rpg-factory
 codex plugin list --marketplace rpg-factory --json  # rpg-factory installed and enabled at the source version
+# then start Codex and review + trust the rpg-factory hooks: until they are trusted they do not run
 
 # update: Codex installs a COPY ($CODEX_HOME/plugins/cache/rpg-factory/rpg-factory/<version>/) and re-adding the
 # same version is a no-op - a new version needs the marketplace refreshed and the plugin added again
 codex plugin marketplace upgrade rpg-factory        # Git marketplaces; a local one reads the checkout
 codex plugin add rpg-factory@rpg-factory            # then start a new Codex session
 # same version, new content (e.g. a local checkout between releases): remove and add
-codex plugin remove rpg-factory@rpg-factory && codex plugin add rpg-factory@rpg-factory
+codex plugin remove rpg-factory@rpg-factory && codex plugin add rpg-factory@rpg-factory   # then restart the session
 ```
 
 What works the same: the skills (factory-core and every specialised and tech skill, namespaced
@@ -478,7 +479,8 @@ What differs:
   not apply; the session follows factory-core's routing text instead.
 - **Install state.** The Codex SessionStart hook warns when it cannot find a current Codex install; for details run
   `codex plugin list --marketplace rpg-factory --json`.
-- **Hook trust.** Codex asks once to trust a plugin's hooks; until they are trusted the guards do not run.
+- **Hook trust.** Codex requires a trust review before plugin hooks run: after installing, review and trust the
+  rpg-factory hooks; until then no guard advisory appears.
 
 Details and the dogfood procedure: [docs/codex.md](docs/codex.md).
 
