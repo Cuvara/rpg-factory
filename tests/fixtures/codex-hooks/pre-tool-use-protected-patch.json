@@ -1,0 +1,14 @@
+{
+  "session_id": "codex-fixture-session",
+  "turn_id": "codex-fixture-turn",
+  "transcript_path": "/codex-fixture/session.jsonl",
+  "cwd": "/codex-fixture/workspace/rpg-mmo-server",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: .env\n@@\n-OLD=1\n+OLD=2\n*** End Patch"
+  },
+  "tool_use_id": "codex-fixture-tool"
+}

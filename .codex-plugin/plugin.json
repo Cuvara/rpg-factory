@@ -1,0 +1,35 @@
+{
+  "name": "rpg-factory",
+  "version": "1.4.0",
+  "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 13 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
+  "author": {
+    "name": "Cuvara",
+    "url": "https://github.com/Cuvara"
+  },
+  "homepage": "https://github.com/Cuvara/rpg-factory",
+  "repository": "https://github.com/Cuvara/rpg-factory",
+  "keywords": [
+    "factory",
+    "workflow",
+    "validation",
+    "git-safety",
+    "rpg-mmo"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "RPG Factory",
+    "shortDescription": "Route, validate, and review RPG workspace changes",
+    "longDescription": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 13 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
+    "developerName": "Cuvara",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Cuvara/rpg-factory",
+    "defaultPrompt": [
+      "Use factory-core to route and validate this change."
+    ]
+  }
+}

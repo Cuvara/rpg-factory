@@ -51,7 +51,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
+sys.path.append(os.path.join(HERE, "lib"))
+from pluginroot import plugin_root
+PLUGIN_ROOT = plugin_root()
 REG = json.load(open(os.environ.get("RPG_FACTORY_REGISTRY", os.path.join(PLUGIN_ROOT, "registry.json")), encoding="utf-8"))
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import evidence  # noqa: E402

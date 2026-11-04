@@ -6,6 +6,12 @@ OPTIONAL_PROVIDERS={'game-art-mcp','ai-pixel-art-image-generation','figma'}
 
 def _provider_config_names(name):
     """Discover configured MCP/plugin names without returning configuration values."""
+    try:
+        from . import codexconfig
+    except ImportError:
+        import codexconfig
+    if name in codexconfig.enabled_plugins(): return 'plugin'
+    if name in codexconfig.mcp_servers(): return 'mcp'
     home=Path.home(); cwd=Path.cwd()
     settings=[]
     for env_name, default in (('RPG_FACTORY_CLAUDE_SETTINGS',home/'.claude'/'settings.json'),
