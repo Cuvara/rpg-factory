@@ -21,8 +21,9 @@ All notable changes to this project are documented here. Format: [Keep a Changel
     (SessionStart and PreToolUse for both `Bash` and `apply_patch` reach the adapter), PowerShell-only commands
     reported as `Bash` (Windows), and Claude Code with an inherited `CODEX_HOME` staying on the Claude install check.
     A missing Codex file fails.
-  - Codex reports every shell as `Bash`, PowerShell included: on Windows the adapter evaluates a command in both
-    dialects (`scripts/git-guard.py` `collect()`), so native `C:\` paths and backtick escapes still reach the guard.
+  - Codex reports every shell as `Bash`, but on Windows runs it with PowerShell: there the adapter parses the
+    command as PowerShell (`scripts/git-guard.py` `collect()`), so native `C:\` paths and backtick escapes reach the
+    guard and a backtick-escaped `;` is not taken for a separator.
   - Codex runtime detection (`scripts/lib/pluginroot.py` `is_codex()`): `CODEX_THREAD_ID` or `PLUGIN_ROOT`, never
     under Claude Code (`CLAUDECODE`); `CODEX_HOME` alone is configuration, not a runtime. The skill-read advisory is
     dropped for Codex by an argument of `collect()`, not by a payload field.

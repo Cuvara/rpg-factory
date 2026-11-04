@@ -67,11 +67,11 @@ def main():
                 return
             if tool == "Bash":
                 guard = factory_session.guard()
-                # Codex names every shell `Bash`, PowerShell included: on Windows the command may be either dialect,
-                # so evaluate both (native `C:\` paths and backtick escapes only parse as PowerShell) and merge.
-                reasons = []
-                for dialect in (("Bash", "PowerShell") if os.name == "nt" else ("Bash",)):
-                    reasons += guard.collect(dict(payload, tool_name=dialect), registry, skill_tool=False)
+                # Codex names every shell `Bash`, but on Windows it runs the command with PowerShell (verified: the
+                # exec item is `powershell.exe -Command ...`). Parse it as the shell that runs it: native `C:\` paths and
+                # backtick escapes, and no false reasons from POSIX-only escapes such as `\;`.
+                dialect = "PowerShell" if os.name == "nt" else "Bash"
+                reasons = guard.collect(dict(payload, tool_name=dialect), registry, skill_tool=False)
                 message = guard.advisory("rpg-factory guard", reasons)["hookSpecificOutput"]["additionalContext"] if reasons else None
             elif tool == "apply_patch":
                 guard = load("codex_file_guard", "file-guard.py")

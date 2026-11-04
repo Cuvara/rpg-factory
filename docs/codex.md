@@ -28,8 +28,9 @@ The adapter follows the same rules as the Claude hooks (`.claude/CLAUDE.md`, "Ru
 `tests/codex-plugin.test.sh` checks all of this (run-all runs it), plus the hook wiring (SessionStart and PreToolUse
 for both `Bash` and `apply_patch` reach the adapter). A missing Codex file fails.
 
-Codex reports every shell as `Bash`, PowerShell included. On Windows the adapter therefore evaluates each command in
-both dialects and merges the reasons, so native `C:\` paths and backtick escapes still reach the guard. Runtime
+Codex reports every shell as `Bash`, but on Windows it runs the command with PowerShell (`powershell.exe -Command`).
+The adapter therefore parses it as PowerShell there (Bash elsewhere), so native `C:\` paths and backtick escapes
+reach the guard and a backtick-escaped `;` is not taken for a separator. Runtime
 detection (`scripts/lib/pluginroot.py` `is_codex()`) uses `CODEX_THREAD_ID` or `PLUGIN_ROOT` and is always false
 under Claude Code (`CLAUDECODE`): a Claude session that inherits `CODEX_HOME` keeps the Claude install check.
 

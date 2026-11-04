@@ -250,7 +250,7 @@ PY
   grep -qw none "$TMP/levels" && ok "fixture set includes a silent (none) case" || no "fixture set has no none case"
 fi
 
-echo "-- hook adapter: Codex names every shell Bash (PowerShell included)"
+echo "-- hook adapter: Codex names every shell Bash (Windows: run by PowerShell)"
 # On Windows Codex runs PowerShell but reports tool_name Bash: commands that only parse as PowerShell (native
 # backslash paths, backtick escapes) must still reach the guard, from a cwd outside the workspace too.
 if [ -z "${RPGF_WINDOWS:-}" ]; then skp "PowerShell-dialect commands under tool_name Bash" "not Windows: Codex shells are POSIX"
@@ -267,6 +267,9 @@ else
   ps_case high "native path: git -C <server> tag v1" "git -C $srv tag v1"
   ps_case high "backtick escape: g\`it -C <server> tag v1" "g\`it -C $srv tag v1"
   ps_case none "native path, read-only: git -C <server> status" "git -C $srv status"
+  # parsed as PowerShell only: a backtick-escaped `;` is text, not a separator (a POSIX parse would see `git tag`)
+  ps_case none "escaped separator: Write-Output hello\`;git -C <server> tag v1" "Write-Output hello\`;git -C $srv tag v1"
+  ps_case high "plain separator: Write-Output hello;git -C <server> tag v1" "Write-Output hello;git -C $srv tag v1"
 fi
 
 echo "-- runtime detection: Claude Code with an inherited CODEX_HOME stays Claude"
