@@ -69,11 +69,11 @@ expect "unregistered repo with ProjectVersion.txt is a no-worktree repo" 0 "No w
 echo "-- dispatch"
 expect "server implement: new worktree from the base" 0 "--worktree new-top-level .*--base-branch develop --name feat/core/demo-gw" dispatch "$OK" --task gw --phase implement --runner orca
 refute "orca command never passes a spec to --task" "worker-start --task" dispatch "$OK" --task gw --phase implement --runner orca
-expect "client implement: main checkout, no new worktree" 0 "--agent claude --worktree 'path:[^']*IndieRPGMMOAdventure'" dispatch "$OK" --task c1 --phase implement --runner orca
+expect "client implement: main checkout, no new worktree" 0 "--agent claude --worktree '?path:[^' ]*IndieRPGMMOAdventure'?" dispatch "$OK" --task c1 --phase implement --runner orca
 refute "client implement has no creation flags" "new-top-level|--base-branch" dispatch "$OK" --task c1 --phase implement --runner orca
 expect "next Unity task warns until the previous task has QA PASS" 0 "task c1 has no QA PASS yet" dispatch "$OK" --task c2 --phase implement
 expect "review of claude's code goes to codex" 0 "--agent codex .*--base-branch abc1234" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
-expect "review of codex's code goes to claude, read-only in the main checkout" 0 "--agent claude --worktree 'path:" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
+expect "review of codex's code goes to claude, read-only in the main checkout" 0 "--agent claude --worktree '?path:" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 expect "review needs a candidate SHA" 2 "review needs --sha" dispatch "$OK" --task gw --phase review
 expect "per-task qa only in a no-worktree repo" 2 "per-task qa is for no-worktree repos" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "per-task qa in the Unity project" 0 "task c1" dispatch "$OK" --task c1 --phase qa --sha abc1234
