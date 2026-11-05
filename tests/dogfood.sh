@@ -331,4 +331,4 @@ print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/li
 done
 echo "dogfood: $((pass + fail)) run, $pass passed, $fail failed (model $model; $($installed && echo "installed $VERSION" || echo plugin-dir); ${elapsed}s wall, parallel; transcripts in $OUT)"
 # --all: the read-only, write and two-level results must all pass
-[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && [ "${write_fail:-0}" -eq 0 ] && [ "${tl_fail:-0}" -eq 0 ]
+[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && [ "${tl_fail:-0}" -eq 0 ] && [ "${write_fail:-0}" -eq 0 ]

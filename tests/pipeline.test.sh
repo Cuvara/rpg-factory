@@ -659,6 +659,8 @@ grade "grader: run lead edits skills/factory-core/SKILL.md: FAIL" 1 "FAIL: run l
 tl_transcript "$TMP/tl-orca.jsonl" "python3 -B scripts/factory-pipeline.py dispatch plan.json --task t --phase lead --runner orca" "orca worktree create --name feat/x --prompt 'Read your task spec at /s/t.md and follow it.' --json"
 grade "grader: --runner orca dispatch: FAIL" 1 "FAIL: no successful factory-pipeline.py dispatch --phase lead" "$TMP/tl-orca.jsonl"
 grade "grader: missing transcript: FAIL" 1 "FAIL: no transcript" "$TMP/tl-none.jsonl"
+if tail -n 1 "$ROOT/tests/dogfood.sh" | grep -qF '"${tl_fail:-0}" -eq 0'; then pass=$((pass + 1)); echo "PASS  dogfood --all exit status includes the two-level result"
+else fail=$((fail + 1)); echo "FAIL  dogfood --all exit status includes the two-level result (last line of tests/dogfood.sh)"; fi
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
