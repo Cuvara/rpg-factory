@@ -18,6 +18,8 @@ python3 -B scripts/factory-workflow.py report workflow.json --authoring <authori
 
 Dispatch ready targets wave by wave. A changed upstream payload revision makes dependent artifacts stale; lifecycle bookkeeping does not change the payload revision. Revalidate stale targets and their sync partners before handing them onward. The integrated report collects planned targets, artifact revisions, quality results, human gates, handoffs, and stale reasons.
 
+`/rpg-factory:status` (or `python3 -B scripts/factory-status.py`) also summarizes registered domains with artifacts when the optional authoring repository is present. Its Domains section shows lifecycle counts, artifacts with stale upstream revisions, and FAIL/HUMAN_REQUIRED quality counts; Pending routes each affected artifact to its domain lead. Quality counts describe check results, while pending items and stale lists identify artifacts. JSON includes a `domains` object keyed by domain, and `--strict` exits 1 when domain follow-ups are pending. The command is read-only and omits Domains when authoring is absent.
+
 ## Domain handoffs
 
 Each domain lead authors its registered kinds and prepares the next registered handoff. Game Design's `game-design` hands feature and system artifacts to UI, 2D/3D Art, VFX, and Engineering. `ui-ux` hands screen and UI records to Engineering and illustration briefs to `art-2d`; UI/VFX sync references use the non-ordering `ui-vfx-sync` contract. `art-2d` hands runtime export paths, hashes, and asset-spec revisions to Engineering. `art-3d` hands delivery records to VFX and Engineering. `vfx` hands approved specs and delivery records to Engineering. Engineering owns product-repository implementation and import work.

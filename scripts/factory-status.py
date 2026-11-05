@@ -23,6 +23,7 @@ Sections
   Evidence    stored check results per repo, graded against the current tree (STALE = outdated)
   Freshness   age of each repo's last fetch: origin/* conclusions are only as new as that fetch.
               Nothing is fetched here; run the printed `git fetch` yourself when it matters.
+  Domains     authoring lifecycle counts, stale upstreams, quality failures and human gates
   Pending     ordered follow-ups with the owning skill
 
 Usage: factory-status.py [--json] [--strict] [--remote]
@@ -45,6 +46,7 @@ REG = json.load(open(os.path.join(PLUGIN_ROOT, "registry.json"), encoding="utf-8
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
 import evidence  # noqa: E402
 import fstate  # noqa: E402
+from artifacts import domain_summary  # noqa: E402
 WS = fstate.workspace(REG)  # same rule as run-checks.py: both read the same evidence
 
 
@@ -397,6 +399,23 @@ def main():
                     pend.append({"skill": "wire-contract", "repo": ",".join(missing),
                                  "what": f"topic '{topic}' changes the wire in {', '.join(sorted(repos))} but has no branch in {', '.join(missing)} yet"})
 
+    # ---- optional authoring domains (working-tree revisions, read-only quality checks)
+    authoring = REG.get("repos", {}).get("authoring")
+    authoring_dir = os.path.join(WS, authoring["path"]) if authoring else None
+    if authoring_dir and os.path.isdir(authoring_dir):
+        st["domains"] = {}
+        for domain in REG.get("domains", {}):
+            if domain == "engineering":
+                continue
+            summary = domain_summary(REG, os.path.join(PLUGIN_ROOT, "registry.json"), authoring_dir, domain)
+            if not summary["artifacts"]:
+                continue
+            st["domains"][domain] = summary
+            for field, reason in (("stale", "stale upstream revision"), ("failing", "FAIL or BLOCKED quality checks"),
+                                  ("human_required", "HUMAN_REQUIRED approval or quality gate")):
+                for aid in summary[field]:
+                    pend.append({"skill": summary["lead"], "repo": "authoring", "what": f"{aid} {reason}"})
+
     # ---- render
     if as_json:
         print(json.dumps(st, indent=2))
@@ -444,6 +463,16 @@ def main():
             print(f"- {t['topic']}: " + "; ".join(f"{b['repo']} {b['branch']} +{b['ahead']}" + (" (wire)" if b["touches_wire"] else "") for b in t["branches"]))
         if not st["in_flight"]:
             print("- none")
+        if "domains" in st:
+            print("\n## Domains")
+            if not st["domains"]:
+                print("- no authoring artifacts yet")
+            for domain, summary in st["domains"].items():
+                counts = ", ".join(f"{status} {count}" for status, count in sorted(summary["artifacts"].items()))
+                stale = ", ".join(summary["stale"]) or "none"
+                print(f"- {domain} [{summary['lead']}]: {counts}; stale upstream: {stale}; "
+                      f"FAIL {summary['quality']['FAIL']}; HUMAN_REQUIRED {summary['quality']['HUMAN_REQUIRED']}"
+                      + (f"; BLOCKED {summary['quality']['BLOCKED']}" if summary['quality']['BLOCKED'] else ""))
         print("\n## Pending (resume here; owning skill in brackets)")
         for p in pend:
             print(f"- [{p['skill']}] {p['repo']}: {p['what']}")
