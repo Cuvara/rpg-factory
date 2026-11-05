@@ -46,6 +46,12 @@
 - **Parallel-policy test.** `tests/parallel-policy.test.sh` makes its plugin copy writable (tar kept read-only modes,
   so `echo >> file` mutations silently did nothing and their cases failed) and reports a FAIL when a mutation command
   itself fails; a regression case copies a read-only source file and mutates it.
-- **S-tier regression guard.** `tests/parallel-policy.test.sh` checks that `parallel-work.md` keeps the two-level rule
-  at S tier (the run lead never edits or implements a task itself; an S task is a one-task plan with its own task
-  lead) and that restoring the run-lead shortcut, in the old or a reworded form, or dropping either sentence fails.
+- **Two-level policy guard.** `parallel-work.md` states its two-level rules as canonical sentences, each under a
+  marker comment (`<!-- policy:run-lead-never-implements -->`, `policy:only-task-lead-commits`,
+  `policy:no-worktree-repo`). `tests/parallel-policy.test.sh` no longer matches free prose: each marker must appear
+  exactly once with its exact canonical sentence on the next non-empty line, and no line may carry a retired
+  shortcut phrasing (fixed-string denylist). Mutations (marker deleted or duplicated, sentence changed, old shortcut
+  re-added) fail; a rewording outside the markers passes.
+- **Task-lead prompt.** `dispatch --phase lead --report-to` accepts `<id>` and `run:<id>` (no more `--to run:run:<id>`);
+  in a no-worktree repo rule 9 no longer mentions removing a worktree; a registry `worktrees_reason` ending in a period
+  no longer prints a double period.

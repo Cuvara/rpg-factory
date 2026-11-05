@@ -174,6 +174,8 @@ refute "the task lead is no nested Orca worker (no worker-start)" "^orca orchest
 expect "task lead runs the planned implementer" 0 "--no-parent --agent claude --prompt " dispatch "$OK" --task gw --phase lead --runner orca
 expect "task lead creates its own Orca Run" 0 "Create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
+expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
+refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
 expect "--report-to goes only with the lead" 2 "--report-to .* goes with --phase lead" dispatch "$OK" --task gw --phase implement --report-to R42
 for pat in '"owned_paths": \[' '"backend/gateway/"' '"branch": "feat/core/demo-gw"' '"acceptance": \[' "subplan validate <subplan.json>" \
   "ONE fresh Claude or Codex session in this task worktree" "--phase implement --paths <subtask paths>" "do NOT commit \(one shared index\)" \
@@ -189,6 +191,9 @@ expect "Unity task lead runs subtasks one after another" 0 "Subtasks run one aft
 refute "Unity review never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 refute "Unity per-task qa never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase qa --sha abc1234 --runner orca
 expect "Unity task lead works on the integration branch in the main checkout" 0 "No worktree: .*on branch feat/core/demo;" dispatch "$OK" --task c1 --phase lead
+refute "Unity task lead rule 9 never mentions removing a worktree" "^9\..*remove(s)? the worktree" dispatch "$OK" --task c1 --phase lead
+expect "Unity task lead rule 9: the main checkout is never removed" 0 "^9\. Never push, merge or tag: .*main checkout, which is never removed" dispatch "$OK" --task c1 --phase lead
+refute "Unity task lead prompt has no double period after the reason" "\.\. " dispatch "$OK" --task c1 --phase lead
 # no_new_worktree <name> <args...>: exit 1, names the branch and `--phase lead`, and `git worktree list` is unchanged
 no_new_worktree() {
   local name="$1"; shift; local before after out rc

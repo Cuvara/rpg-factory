@@ -97,52 +97,78 @@ mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops:
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 grade
 
-# Two-level rule at S tier (parallel-work.md is its only copy): the run lead never edits or implements a task itself,
-# an S task is a one-task plan with its own task lead. Prose-tolerant: any clause (split on . ; and line breaks are
-# joined) where a lead implements/edits/codes in its own session, itself or directly without a negation, or an
-# S-tier clause where a lead implements without one, is the restored shortcut. Prints the offending text; rc 1.
-s_tier_policy() {
-  python3 -B - "$1" <<'PY'
-import re, sys
-text = re.sub(r"\s+", " ", open(sys.argv[1], encoding="utf-8").read())
-clauses = [c.strip() for c in re.split(r"(?<=[.;])\s+", text) if c.strip()]
-verb = re.compile(r"\b(implement(s|ed|ing)?|edit(s|ed|ing)?|code(s|d)?|coding|writes? the code|makes? the change)\b", re.I)
-lead = re.compile(r"\blead\b", re.I)
-neg = re.compile(r"\b(never|not|no|nor|cannot)\b|n't", re.I)
-self_ = re.compile(r"\b(own session|itself|himself|directly|in place)\b", re.I)
-s_tier = re.compile(r"(^|[\s(])S( tier)?\s*[:)]|\bS[- ]tier\b|\b[Ss]mall\b")
-errs = []
-for c in clauses:
-    if lead.search(c) and verb.search(c) and not neg.search(c) and (self_.search(c) or s_tier.search(c)):
-        errs.append("run lead implements a task itself: " + c[:160])
-if not any(lead.search(c) and neg.search(c) and verb.search(c) for c in clauses):
-    errs.append("missing: the run lead never edits/implements a task's files itself")
-if not any(s_tier.search(c) and re.search(r"\bone task\b", c, re.I) and re.search(r"\btask lead\b", c, re.I) for c in clauses):
-    errs.append("missing: an S-tier task is a one-task plan with its own task lead")
-print("\n".join(errs))
-sys.exit(1 if errs else 0)
-PY
+# Two-level rules (parallel-work.md is their only copy) are machine-checkable, not matched in free prose: each rule
+# is a marker comment `<!-- policy:<id> -->` on its own line, present exactly once, whose next non-empty line is the
+# canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
+# Prints each problem; rc 1.
+POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo)
+declare -A POLICY_SENTENCE=(
+  [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
+  [only-task-lead-commits]='Sub-sessions never commit, stage or stash; only the task lead commits, with explicit paths.'
+  [no-worktree-repo]='A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.'
+)
+RETIRED_PHRASES=(
+  'the lead implements in its own session'
+  'lead implements in-session'
+  'the run lead implements'
+  'the run lead writes the code'
+  'the run lead edits'
+  'the lead edits the files directly'
+  'implements in its own session, then the review'
+)
+policy_markers() {
+  local f="$1" id n got errs=() p hits
+  for id in "${POLICY_IDS[@]}"; do
+    n=$(grep -cxF -- "<!-- policy:$id -->" "$f")
+    if [ "$n" -eq 0 ]; then errs+=("marker missing: policy:$id"); continue; fi
+    if [ "$n" -gt 1 ]; then errs+=("marker duplicated: policy:$id appears $n times"); continue; fi
+    got=$(awk -v m="<!-- policy:$id -->" 'f && NF { print; exit } $0 == m { f = 1 }' "$f")
+    [ "$got" = "${POLICY_SENTENCE[$id]}" ] || errs+=("sentence changed under policy:$id: '$got'")
+  done
+  for p in "${RETIRED_PHRASES[@]}"; do
+    hits=$(grep -niF -- "$p" "$f" | head -1)
+    [ -z "$hits" ] || errs+=("retired shortcut phrasing '$p': $hits")
+  done
+  [ ${#errs[@]} -eq 0 ] && return 0
+  printf '%s\n' "${errs[@]}"; return 1
 }
-s_out=$(s_tier_policy "$ROOT/$PW" 2>&1); s_rc=$?
-[ $s_rc -eq 0 ] && ok "S tier keeps the two-level rule in $PW" || no "S tier two-level rule broken in $PW (rc=$s_rc)" "$s_out"
-# s_mutate <name> <expected text> <commands in a copy of the policy file $F>: the checker must FAIL with that text
+s_out=$(policy_markers "$ROOT/$PW" 2>&1); s_rc=$?
+[ $s_rc -eq 0 ] && ok "two-level policy markers intact in $PW" || no "two-level policy markers broken in $PW (rc=$s_rc)" "$s_out"
+# s_mutate <name> <expected text|PASS> <commands in a copy of the policy file $F>: the checker must FAIL with that
+# text (PASS: must still pass). A mutation command that fails or changes nothing is a FAIL.
 s_mutate() {
   local F="$TMP/pw-mut.md" merr out rc
   cp "$ROOT/$PW" "$F" && chmod u+w "$F"
   if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
   if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
-  out=$(s_tier_policy "$F" 2>&1); rc=$?
-  if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> S-tier check FAIL: $2"
-  else no "$1: S-tier check did not fail with '$2' (rc=$rc)" "$out"; fi
+  out=$(policy_markers "$F" 2>&1); rc=$?
+  if [ "$2" = PASS ]; then
+    [ $rc -eq 0 ] && ok "$1 -> policy markers still PASS" || no "$1: policy markers did not pass (rc=$rc)" "$out"
+  elif [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> policy markers FAIL: $2"
+  else no "$1: policy markers did not fail with '$2' (rc=$rc)" "$out"; fi
 }
-s_mutate "S-tier shortcut restored (old wording)" "run lead implements a task itself" \
+for id in "${POLICY_IDS[@]}"; do
+  s_mutate "marker policy:$id deleted" "marker missing: policy:$id" \
+    "sed -i '/^<!-- policy:$id -->\$/d' \"\$F\""
+  s_mutate "marker policy:$id duplicated" "marker duplicated: policy:$id appears 2 times" \
+    "printf '\n<!-- policy:$id -->\n%s\n' '${POLICY_SENTENCE[$id]}' >> \"\$F\""
+done
+s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence changed under policy:run-lead-never-implements" \
+  'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
+s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \
+  'sed -i "s/^Sub-sessions never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
+s_mutate "canonical sentence moved off its marker" "sentence changed under policy:no-worktree-repo" \
+  'sed -i "/^<!-- policy:no-worktree-repo -->$/a Unity projects are special." "$F"'
+s_mutate "old S-tier shortcut re-added" "retired shortcut phrasing 'the run lead implements'" \
   'sed -i "s/^   S: the run lead writes/   S: the run lead implements in its own session, then the review, QA and gate steps below with one plan task. The run lead writes/" "$F"'
-s_mutate "S-tier shortcut reworded (lead does it directly)" "run lead implements a task itself" \
+s_mutate "reworded shortcut re-added" "retired shortcut phrasing 'the lead edits the files directly'" \
   'printf "\nFor an S task the lead edits the files directly.\n" >> "$F"'
-s_mutate "never-implements negation dropped" "missing: the run lead never edits/implements" \
-  'sed -i -e "s/ and never edits a task.s files itself//" -e "s/; the run lead never implements it in its own session//" "$F"'
-s_mutate "one-task plan with its task lead dropped" "missing: an S-tier task is a one-task plan" \
-  'sed -i -e "s/A small (S tier) change is a plan with one task and still gets one task lead\.//" -e "s/S: the run lead writes a .plan\.json. with one task and dispatches its task lead/S: the run lead writes a plan/" "$F"'
+s_mutate "shortcut re-added in another case" "retired shortcut phrasing 'lead implements in-session'" \
+  'printf "\nAt S tier the Lead Implements In-Session.\n" >> "$F"'
+s_mutate "harmless rewording outside a marker" PASS \
+  'sed -i "s/^It never pushes, merges, tags or removes its worktree\.$/It never pushes, merges or tags, and it never removes its worktree./" "$F"'
+s_mutate "harmless S-tier sentence about the task lead" PASS \
+  'printf "\nFor an S-tier task the task lead reviews the code directly; one task lead per task.\n" >> "$F"'
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

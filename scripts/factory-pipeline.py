@@ -24,7 +24,7 @@ docs/schemas/pipeline-plan.schema.json.
         no-worktree repo (Unity project). Exit 0 OK, 1 errors, 2 usage.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
-  dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID] [--runner orca|agent|print] [--agent ID]
+  dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
         the run lead starts ONE task-lead session per task. In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (or resumed when that branch is already checked out); in a
         no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
@@ -243,6 +243,7 @@ def repo_info(plan, reg, key):
         path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(plan["_path"])), path))
     base = own.get("base") or (rreg or {}).get("default_branch")
     allowed, reason = orca_cmd.allows_worktree(reg, own.get("registry", key) if rreg else None, path)
+    reason = reason.rstrip(". ") if reason else reason  # printed as "No worktree: <reason>." (no double period)
     ident = os.path.normcase(os.path.realpath(path)) if path else f"?{key}"
     return {"key": key, "registry": own.get("registry", key) if rreg else None, "path": path, "base": base,
             "base_sha": own.get("base_sha"), "worktrees": allowed, "reason": reason, "identity": ident}
@@ -667,6 +668,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
     """The task-lead spec: the task spec plus the rules of the second level (references/parallel-work.md)."""
     me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
     d = f"{me} dispatch {orca_cmd.quote([os.path.abspath(plan['_path'])])} --task {task['id']}"
+    run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     rules = [
         "0. Orca: you are not a worker of the run lead (Orca allows no nested workers). Create your OWN Run "
         f"(`orca orchestration run-create --objective \"task {task['id']}\"`); your sub-sessions, review and QA are workers of "
@@ -695,10 +697,12 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
         f"8. Report to the run lead: branch {spec['branch']}, HEAD SHA, each subtask with its commit, the "
         "review and QA verdicts (state, SHA, model), each check with exact counts (or NOT_RUN with command and reason), "
         "limitations and out-of-scope findings. With Orca: `orca orchestration send --to "
-        f"run:{report_to or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <that report>`; "
+        f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <that report>`; "
         "record the review and QA verdicts with `factory-pipeline.py verdict` (the run lead follows `status`).",
-        "9. Never push, merge, tag or remove the worktree: the run lead integrates and removes the worktree after review "
-        "PASS and integration.",
+        ("9. Never push, merge, tag or remove the worktree: the run lead integrates and removes the worktree after review "
+         "PASS and integration." if info["worktrees"] else
+         "9. Never push, merge or tag: the run lead integrates after review PASS and integration; you work in the main "
+         "checkout, which is never removed."),
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/parallel-work.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"

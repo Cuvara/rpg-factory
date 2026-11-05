@@ -25,6 +25,9 @@ lead, which integrates and cleans up.
 It does not start a task's sub-sessions and never edits a task's files itself: that is the task lead's job, for
 every tier. A small (S tier) change is a plan with one task and still gets one task lead.
 
+<!-- policy:run-lead-never-implements -->
+The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.
+
 **Task lead** - one fresh session per plan task, in that task's worktree (a no-worktree repo: its main checkout,
 section 4). It is not an Orca worker of the run lead (section 5): it creates its own Orca Run. It:
 1. plans its task and splits it into subtasks with disjoint paths inside the task's owned paths; subtasks with
@@ -40,6 +43,10 @@ It never pushes, merges, tags or removes its worktree.
 **Implementation sub-session** - edits only its subtask's paths in the task worktree, runs the targeted checks
 from its spec, and reports to the task lead. It does not commit, stage or stash: the worktree has one shared
 index and the task lead commits.
+
+<!-- policy:only-task-lead-commits -->
+Sub-sessions never commit, stage or stash; only the task lead commits, with explicit paths.
+
 **QA worker** - checks acceptance criteria, test coverage, regressions, edge and failure cases on a recorded
 candidate SHA. Read-only unless its spec says otherwise.
 **Review worker** - checks architecture, scope isolation, safety rules and conventions. Read-only.
@@ -227,6 +234,9 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py` turns sections 1-8 into commands. Tier thresholds, agents,
 review pairing and exclusive resources live in registry `pipeline`; the plan format is
 `docs/schemas/pipeline-plan.schema.json`. The pipeline only prints commands and grades state; the leads run them.
+
+<!-- policy:no-worktree-repo -->
+A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.
 
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L and the flow.
    S: the run lead writes a `plan.json` with one task and dispatches its task lead (step 3; the task worktree, or
