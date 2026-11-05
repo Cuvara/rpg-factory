@@ -134,7 +134,18 @@ EOF
 out=$(cd "$WS" && python3 -B "$CMD" workflow plan "$TMP/workflow.json" --json 2>&1); rc=$?
 [ "$rc" -eq 0 ] && python3 -c 'import json,sys; assert json.load(sys.stdin)["nodes"]' <<<"$out" && ok "workflow entry point dispatches plan" || no "workflow entry point rc=$rc: $(head -c 300 <<<"$out")"
 out=$(python3 -B "$CMD" pipeline "planner --request 'add a crafting screen, then wire it' --runner orca" 2>/dev/null); rc=$?
-[ "$rc" -eq 0 ] && grep -q "add a crafting screen, then wire it" <<<"$out" && grep -q -- "--worktree current" <<<"$out" && ok "pipeline entry point keeps the request text (one quoted string)" || no "pipeline entry point rc=$rc: $(head -c 300 <<<"$out")"
+# the Orca --spec is one line naming the spec file (under the test state dir), which holds the request verbatim
+spec=$(python3 -c 'import os,pathlib,shlex,sys
+args=shlex.split(sys.argv[1], posix=True); prompt=args[args.index("--spec")+1]
+assert not any(c in prompt for c in "\r\n"), "multi-line --spec"
+head, tail = "Read your task spec at ", " and follow it."
+assert prompt.startswith(head) and tail in prompt, prompt
+path = pathlib.Path(prompt[len(head):prompt.index(tail)])
+state = pathlib.Path(os.environ["RPG_FACTORY_STATE_DIR"]).resolve()
+assert state in path.resolve().parents, f"spec outside state dir: {path}"
+print(path.read_text(encoding="utf-8"))' "$out" 2>&1)
+[ "$rc" -eq 0 ] && [ "$(grep -c -- "--spec" <<<"$out")" -eq 1 ] && grep -qF "add a crafting screen, then wire it" <<<"$spec" && grep -q -- "--worktree current" <<<"$out" \
+  && ok "pipeline entry point keeps the request text (one-line --spec, request verbatim in the spec file)" || no "pipeline entry point rc=$rc: $(head -c 300 <<<"$out") | $(head -c 300 <<<"$spec")"
 printf '%s
 ' '{"schema":"rpg-factory.pipeline-plan/1","id":"cmd","title":"T","topic":"feat/core/cmd","tasks":[{"id":"a","repo":"nope","objective":"o","paths":["x/"],"acceptance":["a"]}]}' > "$TMP/pipeline-plan.json"
 out=$(python3 -B "$CMD" pipeline status "$TMP/pipeline-plan.json" 2>&1); rc=$?
