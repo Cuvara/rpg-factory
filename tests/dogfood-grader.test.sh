@@ -90,6 +90,22 @@ check 'relative output after `cd dir;` inside the workspace is allowed' pass out
 EOF"
 newcase bash-cd-semicolon-out
 check 'relative output after `cd dir;` escaping the workspace fails' fail outside_shell "$T/bash-cd-semicolon-out" "cd \"$(native_path "$T/bash-cd-semicolon-out")\"; cd game-authoring; printf x > ../../escaped.json"
+# Claude Code resets the shell to the project directory after a command that leaves it: the next command's
+# relative paths resolve against the workspace again (dogfood 1.5.0: `cd game-authoring && cat > ../wf.json`)
+two_shell() {
+  python3 -B - "$1/transcript.jsonl" "$2" "$3" <<'PY'
+import copy,json,sys
+p,first,second=sys.argv[1:]; rows=[json.loads(x) for x in open(p,encoding='utf-8')]
+extra=copy.deepcopy(rows[2]); extra['message']['content'][0]['input']['command']=first
+rows[2]['message']['content'][0]['input']['command']=second; rows.insert(2,extra)
+open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in rows))
+PY
+  python3 -B "$ROOT/tests/dogfood/write-grade.py" --root "$ROOT" --workspace "$1" --scenario fixture --transcript "$1/transcript.jsonl" --expected-skills game-design --expected-kinds game-concept --domain design
+}
+newcase bash-cd-reset
+check 'cwd resets to the workspace after a command that left it' pass two_shell "$T/bash-cd-reset" "cd \"$(native_path "$T")\"; ls" "cd game-authoring && printf x > ../wf-reset.json"
+newcase bash-cd-reset-same
+check 'leaving the workspace inside one command still counts' fail two_shell "$T/bash-cd-reset-same" "ls" "cd \"$(native_path "$T")\" && cd x && printf x > ../escaped.json"
 newcase waves; python3 -B - "$T/waves/transcript.jsonl" <<'PY'
 import json,sys
 p=sys.argv[1]; d=[json.loads(x) for x in open(p,encoding='utf-8')]; d[2]['message']['content'][0]['input']['command']='python scripts/factory-workflow.py status x; # wrong order engineering design ui'; open(p,'w',encoding='utf-8').write(''.join(json.dumps(x)+'\n' for x in d))
