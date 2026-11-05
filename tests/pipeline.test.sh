@@ -37,6 +37,19 @@ print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")
   if [ "$rc" = 0 ] && grep -qE -- "$pat" <<<"$spec"; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, pattern '$pat')"; head -20 <<<"$spec"; fi
 }
+# refute_spec <name> <grep-regex> <args...>: the persisted Orca spec must NOT contain the pattern (exit 0, spec read)
+refute_spec() {
+  local name="$1" pat="$2"; shift 2
+  local out rc spec src
+  out=$(python3 -B "$P" "$@" 2>&1); rc=$?
+  spec=$(python3 -c 'import pathlib,shlex,sys
+args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"
+prompt=args[args.index(flag)+1]
+assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
+print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$out" 2>&1); src=$?
+  if [ "$rc" = 0 ] && [ "$src" = 0 ] && [ -n "$spec" ] && ! grep -qE -- "$pat" <<<"$spec"; then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, spec rc=$src, found or no spec '$pat')"; head -20 <<<"$spec"; fi
+}
 gi() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
 plan() { printf '%s\n' "$2" > "$TMP/$1.json"; echo "$TMP/$1.json"; }
 
@@ -227,9 +240,11 @@ expect "Unity implement without --paths is a sub-session that does not commit" 0
 refute "Unity implement never prints a committing worker" "commit explicit|Implementation worker \(" dispatch "$OK" --task c1 --phase implement
 refute "Unity implement in the agent fallback never commits or creates a worktree" "commit explicit|isolation|Create your own worktree" dispatch "$OK" --task c1 --phase implement --runner agent
 expect_spec "registry worktrees=false: implement does not commit" "Do NOT commit, stage or stash" --registry "$TMP/reg-nowt.json" dispatch "$OK" --task gw --phase implement --runner orca
-refute "registry worktrees=false: implement never commits or creates a worktree" "commit explicit|new-top-level|--base-branch|worktree create" --registry "$TMP/reg-nowt.json" dispatch "$OK" --task gw --phase implement --runner orca
+refute "registry worktrees=false: implement never creates a worktree" "new-top-level|--base-branch|worktree create" --registry "$TMP/reg-nowt.json" dispatch "$OK" --task gw --phase implement --runner orca
+refute_spec "registry worktrees=false: the implement spec never commits" "commit explicit" --registry "$TMP/reg-nowt.json" dispatch "$OK" --task gw --phase implement --runner orca
 expect_spec "Unity marker (unregistered repo): implement does not commit" "Do NOT commit, stage or stash" dispatch "$TOOL" --task t --phase implement --runner orca
-refute "Unity marker: implement never commits or creates a worktree" "commit explicit|new-top-level|--base-branch|worktree create" dispatch "$TOOL" --task t --phase implement --runner orca
+refute "Unity marker: implement never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$TOOL" --task t --phase implement --runner orca
+refute_spec "Unity marker: the implement spec never commits" "commit explicit" dispatch "$TOOL" --task t --phase implement --runner orca
 expect "next Unity task warns until the previous task has QA PASS" 0 "task c1 has no QA PASS yet" dispatch "$OK" --task c2 --phase implement
 expect "review of codex's code goes to claude, read-only in the main checkout" 0 "--agent claude --worktree '?path:" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 expect "review needs a candidate SHA" 2 "review needs --sha" dispatch "$OK" --task gw --phase review
@@ -554,7 +569,8 @@ if grep -qE "^orca agent launch --agent claude --worktree '?path:[^' ]*IndieRPGM
   pass=$((pass + 1)); echo "PASS  Unity review FAIL: status.next launches the task lead in the main checkout"
 else fail=$((fail + 1)); echo "FAIL  Unity review FAIL: status.next"; sed 's/^/      /' <<<"$out" | head -10; fi
 expect_spec "Unity fix session after the FAIL does not commit" "Do NOT commit, stage or stash" dispatch "$ST" --task c1 --phase implement --runner orca
-refute "Unity fix session after the FAIL has no committing prompt and no worktree" "commit explicit|new-top-level|--base-branch|worktree create" dispatch "$ST" --task c1 --phase implement --runner orca
+refute "Unity fix session after the FAIL creates no worktree" "new-top-level|--base-branch|worktree create" dispatch "$ST" --task c1 --phase implement --runner orca
+refute_spec "Unity fix session after the FAIL: the spec never commits" "commit explicit" dispatch "$ST" --task c1 --phase implement --runner orca
 sv --task c1 --phase review --sha "$SC" --by codex --state PASS
 st_phase "Unity review PASS is integrated at once; next is the per-task QA" c1 integrated "--task c1 --phase qa --sha $SC"
 sv --task c1 --phase qa --sha "$SC" --by codex --state PASS
@@ -605,6 +621,44 @@ X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":
 expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
 gi "$C" checkout -q feat/core/demo
 git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
+
+echo "-- dogfood two-level grader (offline, synthetic transcripts)"
+# tl_transcript <file> <bash command> <its result text> [extra tool_use json]: a stream-json run lead transcript that
+# loads factory-core, runs one Bash command (is_error false, as a pipe reports) and finishes with success
+tl_transcript() {
+  local f="$1" cmd="$2" res="$3" extra="${4:-}"
+  {
+    jq -nc '{type:"assistant",message:{content:[{type:"tool_use",id:"s1",name:"Skill",input:{skill:"rpg-factory:factory-core"}}]}}'
+    jq -nc '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"s1",content:"Launching skill: rpg-factory:factory-core"}]}}'
+    jq -nc --arg c "$cmd" '{type:"assistant",message:{content:[{type:"tool_use",id:"b1",name:"Bash",input:{command:$c}}]}}'
+    jq -nc --arg r "$res" '{type:"user",message:{content:[{type:"tool_result",tool_use_id:"b1",content:$r,is_error:false}]}}'
+    [ -z "$extra" ] || jq -nc --argjson u "$extra" '{type:"assistant",message:{content:[$u]}}'
+    jq -nc '{type:"result",subtype:"success",is_error:false}'
+  } > "$f"
+}
+# grade <name> <rc> <grep-regex> <transcript>: tests/dogfood.sh --grade-two-level exit code and result line
+grade() {
+  local name="$1" want="$2" pat="$3" out rc; out=$(bash "$ROOT/tests/dogfood.sh" --grade-two-level "$4" 2>&1); rc=$?
+  if [ "$rc" = "$want" ] && grep -qE -- "$pat" <<<"$out"; then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, want $want, pattern '$pat')"; sed 's/^/      /' <<<"$out" | head -10; fi
+}
+LEAD_CMD='python3 -B scripts/factory-pipeline.py dispatch plan.json --task t --phase lead --runner print 2>&1 | head -60'
+LEAD_OUT=$'# agent: claude   worktree: new-top-level   base: main\nTask lead for task t of plan p (Demo), references/parallel-work.md. You own this task and this task worktree.\n{\n  "plan": "p"\n}'
+tl_transcript "$TMP/tl-pass.jsonl" "$LEAD_CMD" "$LEAD_OUT"
+grade "grader: factory-core + successful print-runner lead dispatch: PASS" 0 "dispatch tool_use: b1 \| PASS$" "$TMP/tl-pass.jsonl"
+tl_transcript "$TMP/tl-warn.jsonl" "$LEAD_CMD" "$LEAD_OUT"$'\nfactory-pipeline: `codex` is not on PATH here: the codex task lead may be unavailable'
+grade "grader: a not-on-PATH warning next to the printed spec still passes" 0 "\| PASS$" "$TMP/tl-warn.jsonl"
+tl_transcript "$TMP/tl-masked.jsonl" "$LEAD_CMD" "factory-pipeline: cannot read plan plan.json: [Errno 2] No such file or directory"
+grade "grader: failed dispatch masked by a pipe (is_error false): FAIL" 1 "FAIL: no successful factory-pipeline.py dispatch --phase lead" "$TMP/tl-masked.jsonl"
+tl_transcript "$TMP/tl-trace.jsonl" "$LEAD_CMD" "$LEAD_OUT"$'\nTraceback (most recent call last):\n  File "x", line 1'
+grade "grader: a traceback in the dispatch output: FAIL" 1 "FAIL: no successful factory-pipeline.py dispatch" "$TMP/tl-trace.jsonl"
+tl_transcript "$TMP/tl-tier.jsonl" "python3 -B scripts/factory-pipeline.py tier -- --repo plugin --paths scripts/factory-cmd.py" "Tier M"
+grade "grader: tier only: FAIL" 1 "FAIL: no successful factory-pipeline.py dispatch --phase lead" "$TMP/tl-tier.jsonl"
+tl_transcript "$TMP/tl-edit.jsonl" "$LEAD_CMD" "$LEAD_OUT" '{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"C:\\w\\rpg-factory\\skills\\factory-core\\SKILL.md","old_string":"a","new_string":"b"}}'
+grade "grader: run lead edits skills/factory-core/SKILL.md: FAIL" 1 "FAIL: run lead edited task files with file tools: .*skills/factory-core/SKILL\.md" "$TMP/tl-edit.jsonl"
+tl_transcript "$TMP/tl-orca.jsonl" "python3 -B scripts/factory-pipeline.py dispatch plan.json --task t --phase lead --runner orca" "orca worktree create --name feat/x --prompt 'Read your task spec at /s/t.md and follow it.' --json"
+grade "grader: --runner orca dispatch: FAIL" 1 "FAIL: no successful factory-pipeline.py dispatch --phase lead" "$TMP/tl-orca.jsonl"
+grade "grader: missing transcript: FAIL" 1 "FAIL: no transcript" "$TMP/tl-none.jsonl"
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
