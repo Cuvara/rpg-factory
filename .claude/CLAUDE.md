@@ -39,6 +39,10 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree per task
   (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
   only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
+- **Developing this plugin:** every plugin task (new or split skill, core change) runs through `factory-pipeline.py`
+  with a `plan.json` whose `repos` entry names this checkout (`"plugin": {"path": "<this checkout>"}`), small tasks
+  with disjoint owned paths, and cross-model review. How: `parallel-work.md` section 10 and section 8
+  "Session lifecycle".
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
   Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line, and gather the
   fragments into the `CHANGELOG.md` section with `python3 -B scripts/changelog.py release X.Y.Z [--summary TEXT]` (run-all and
