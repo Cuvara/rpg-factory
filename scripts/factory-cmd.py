@@ -13,6 +13,9 @@
   domain [<id>] [--json]                  registry domains: lead, repos, artifact kinds, gates, handoffs,
                                           authoring artifact counts, stale/FAIL/HUMAN_REQUIRED, next steps
   workflow plan|status|dispatch|report     dependency-aware artifact workflow entry point
+  pipeline tier|validate|planner|dispatch|verdict|gate|cleanup [args]
+                                          factory-pipeline.py: task tier, plan validation, worker dispatch
+                                          commands, review/QA verdicts and the READY_FOR_PR gate
   ui [--json] [--project DIR] [--uitoolkit-ref REF] <request...>
                                           scripts/ui/ui_plan.py: UI plan - intent, ONLY the UI skills
                                           needed, lead route, missing context, components (exit 3 =
@@ -28,6 +31,7 @@ run-checks.py (`workflow dispatch` only prints a contract). Exit code = the unde
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -203,6 +207,17 @@ def cmd_workflow(args):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-workflow.py"), *args])
 
 
+PIPELINE_VERBS = ("tier", "validate", "planner", "dispatch", "verdict", "gate", "cleanup")
+
+
+def cmd_pipeline(raw):
+    """Arguments keep their text (a planner request has blanks and commas); one quoted string is split shell-style."""
+    args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
+    if not args or args[0] not in PIPELINE_VERBS:
+        raise ValueError("pipeline needs " + "|".join(PIPELINE_VERBS))
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-pipeline.py"), *args])
+
+
 UI_VERBS = ("ui", "ui-figma", "ui-components", "ui-screen", "ui-review")
 
 
@@ -357,6 +372,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "registry domains: lead, repos, kinds, gates, handoffs, artifact counts, stale/FAIL/HUMAN_REQUIRED, next steps"},
     {"verb": "workflow", "args": "plan|status|dispatch|report <spec> [--json]", "read_only": True,
      "example": "workflow plan spec.json --json", "summary": "dependency-aware artifact workflow (dispatch only prints a contract)"},
+    {"verb": "pipeline", "args": "tier|validate|planner|dispatch|verdict|gate|cleanup [args]", "read_only": False,
+     "example": "pipeline tier -- --repo server --paths backend/shared/proto/wire.proto",
+     "summary": "delivery pipeline: task tier, plan validation, worker dispatch, review/QA verdicts, READY_FOR_PR gate, cleanup"},
     {"verb": "ui", "args": "[--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>", "read_only": True,
      "example": "ui Create an inventory screen", "summary": "UI plan: intent, ONLY the UI skills needed, lead route, missing context"},
     {"verb": "ui-figma", "args": "[ui options] <request>", "read_only": True, "example": "ui-figma Import the shop frame",
@@ -397,6 +415,11 @@ def cmd_help(args):
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         return usage()
+    if argv[0] == "pipeline":
+        try:
+            return cmd_pipeline(argv[1:])
+        except ValueError as e:
+            return usage(str(e))
     if argv[0] in UI_VERBS:
         try:
             return cmd_ui(argv[0], argv[1:])

@@ -25,7 +25,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   in `scripts/file-guard.py`; both guards raise mode advisories (never a block). Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a changelog fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`
   sections; `changelog.d/README.md`). Never edit `CHANGELOG.md` `[Unreleased]` directly: it stays empty (run-all checks it).
-- Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count. CI
+- While iterating: `tests/run-all.sh --affected` (only the suites the change touches). Before opening a PR (and
+  for releases): the full `tests/run-all.sh` must report 0 failed. Report the pass count. CI
   (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
@@ -33,6 +34,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   from `scripts/new-skill.py` and are done when `scripts/skill-touchpoints.py <s>` is OK (`.claude/skills/skill-author`).
 - A skill's `path:line` citation names the symbol it shows (anchor) and must pass
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
+  A citation whose anchor moved to a unique line is MOVED (warning; FAIL under `--strict` / `run-all --release`):
+  `--fix` rewrites its line spec in place.
 - Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree per task
   (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
   only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
@@ -67,6 +70,7 @@ tests/run-all.sh                    # every local suite; must end with 0 failed
 tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace on disk
 tests/run-all.sh --no-claude        # skip `claude plugin validate`
 tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh
+tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base (tests/affected.py); not the PR gate
 
 # single suites (each standalone; sets its own temp TMPDIR / RPG_FACTORY_STATE_DIR)
 tests/git-guard.test.sh
@@ -78,7 +82,7 @@ env -u TMPDIR tests/devtools.test.sh       # dev tool probes, snapshot/doctor li
 scripts/check-registry.sh [--structure-only]
 env -u TMPDIR tests/skill-citations.test.sh  # citation checker on fixture repos
 env -u TMPDIR tests/netcode-headless.test.sh  # netcode-headless.sh server resolution (--server, worktrees)
-python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill path:line vs integration branches
+python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest] [--strict] [--fix]   # skill path:line vs integration branches
 python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
 python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
 env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
@@ -91,6 +95,8 @@ python3 -B scripts/build-registry.py [--check|--split]   # registry.json from re
 python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   # changelog.d fragments
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
+env -u TMPDIR tests/pipeline.test.sh       # delivery pipeline on a throwaway workspace (server + Unity client)
+python3 -B scripts/factory-pipeline.py tier|validate|planner|dispatch|verdict|gate ...  # delivery pipeline (parallel-work.md section 10)
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--domain <id>] [--explain] [--json]
@@ -140,10 +146,10 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
     (`updatedInput`, once per session); before one of its `used_by` leads, it runs with a `high` advisory. Each advisory
     is logged to the session's `ADVISORIES` file (tests, dogfood). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
-- **Slash commands** (`commands/*.md`: status, route, check, doctor, ui, ui-figma, ui-components, ui-screen,
+- **Slash commands** (`commands/*.md`: status, route, check, doctor, workflow, pipeline, ui, ui-figma, ui-components, ui-screen,
   ui-review) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
   `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`.
-- **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work) routes to
+- **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work, engineering, workflows) routes to
   13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
   unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 10 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
   unity-client-tech, unity-dots, netcode-client, and the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
@@ -151,11 +157,15 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders), and the
   snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
   (`docs/architecture/ui-skills.md`).
+- **Delivery pipeline:** `factory-pipeline.py` (settings: registry `pipeline`; plan schema
+  `docs/schemas/pipeline-plan.schema.json`; verdicts under the persistent state dir `pipeline/<plan id>/`) prints Orca
+  or Agent dispatch commands and grades READY_FOR_PR; it never runs agents, pushes or creates worktrees. A repo with
+  `worktrees: false` (Unity project) never gets a worktree: tasks run in sequence in the main checkout.
 - **Dev tools:** registry `dev_tools[]` → `lib/devtools.py` probes (PATH, TCP services, MCP server and
   plugin names only - never config values) → snapshot "Tools for this change" and doctor "Dev tools".
   Every non-core skill's `## Tools` names exactly its `used_by` tools (skills-lint).
 
 ## Layout
 
-- `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (+ `lib/`, `checks/` read-only evidence
+- `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
   scripts, `ui/` read-only UI plan engine, catalog, selection and Figma environment check) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`

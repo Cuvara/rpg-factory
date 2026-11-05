@@ -90,6 +90,7 @@ Optional tools are detected without launching applications or making provider re
 | `/rpg-factory:doctor [--json]` | install state (what this session loads), registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
 | `/rpg-factory:domain [<id>] [--json]` | every registry domain with its lead, repos and artifact counts; for one domain: artifact kinds, quality and human gates, handoffs, artifacts by status, stale upstreams, FAIL and HUMAN_REQUIRED artifacts, next steps | no |
 | `/rpg-factory:workflow plan\|status\|dispatch\|report <spec>` | dependency-aware artifact workflow: plan, node states, a dispatch contract (printed only), report | no |
+| `/rpg-factory:pipeline tier\|validate\|planner\|dispatch\|verdict\|gate\|cleanup [args]` | delivery pipeline: task tier, plan validation, worker dispatch, review/QA verdicts, the READY_FOR_PR gate and cleanup | `verdict` records a verdict |
 | `/rpg-factory:ui <request>` | UI plan: intent, only the UI skills the request needs (in order), lead route, missing context, component choices | no |
 | `/rpg-factory:ui-figma <figma url> <request>` | the UI plan for a Figma frame (import, analyze, validate, troubleshoot); asks for the URL or project when missing | no |
 | `/rpg-factory:ui-components <request>` | component selection from the real com.cuvara.uitoolkit catalog and Unity built-ins: reuse > configure > compose > missing | no |
@@ -487,6 +488,7 @@ What differs:
   | doctor | `/rpg-factory:doctor [--json]` | `doctor [--json]` | yes |
   | domain | `/rpg-factory:domain [<id>] [--json]` | `domain [<id>] [--json]` | yes |
   | workflow | `/rpg-factory:workflow ...` | `workflow plan\|status\|dispatch\|report <spec> [--json]` | yes |
+  | pipeline | `/rpg-factory:pipeline ...` | `pipeline tier\|validate\|planner\|dispatch\|verdict\|gate\|cleanup [args]` | no (`verdict`, `cleanup` record state) |
   | ui, ui-figma, ui-components, ui-screen, ui-review | `/rpg-factory:ui <request>` ... | `ui [--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>` | yes |
   | help | none | `help [--json]` | yes |
 - **No Skill tool event.** Codex loads skills without a hookable tool call, so the Skill-hook behaviour (execution

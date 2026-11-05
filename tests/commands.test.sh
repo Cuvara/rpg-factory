@@ -20,7 +20,7 @@ for f in "$ROOT"/commands/*.md; do
   pat=$(sed -n 's/^allowed-tools: Bash(\(.*\):\*)$/\1/p' "$f"); line=$(sed -n 's/^!`\(.*\)`$/\1/p' "$f")
   [ -n "$pat" ] && [ "${line#"$pat"}" != "$line" ] && ok "commands/$n.md ! line matches its allowed-tools prefix" || no "commands/$n.md: '$line' does not start with allowed '$pat'"
 done
-[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 11 ] && ok "exactly 11 commands (status, route, check, doctor, domain, workflow, ui, ui-figma, ui-components, ui-screen, ui-review)" || no "command count"
+[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 12 ] && ok "exactly 12 commands (status, route, check, doctor, domain, workflow, pipeline, ui, ui-figma, ui-components, ui-screen, ui-review)" || no "command count"
 # the usage text documents every command's verb
 python3 -B "$CMD" --help 2>"$TMP/usage"
 for f in "$ROOT"/commands/*.md; do
@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -41,10 +41,10 @@ out=$(python3 -B "$CMD" help); rc=$?
 [ $rc -eq 0 ] && grep -q '^- domain \[<id>\] \[--json\]' <<<"$out" && grep -q 'e.g. /rpg-factory:domain design  |  python3 -B .*/scripts/factory-cmd.py domain design' <<<"$out" \
   && ok "help: text lists verbs with Claude and Codex forms (exit 0)" || no "help text rc=$rc: $(head -c 300 <<<"$out")"
 python3 -B "$CMD" help --json >"$TMP/help.json"; rc=$?
-[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.commands/1" and (.commands | length) == 12
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.commands/1" and (.commands | length) == 13
   and all(.commands[]; .verb as $v | (.args | type) == "string" and (.read_only | type) == "boolean" and (.example | startswith($v))
           and (.codex | test("^python3 -B .*/scripts/factory-cmd.py " + $v + "$")))
-  and ([.commands[] | select(.read_only | not) | .verb] == ["check"])
+  and ([.commands[] | select(.read_only | not) | .verb] == ["check", "pipeline"])
   and ([.commands[] | select(.claude == null) | .verb] == ["help"])' "$TMP/help.json" >/dev/null \
   && ok "help --json: rpg-factory.commands/1, every verb with args, read-only flag, example, both forms" || no "help --json: $(head -c 300 "$TMP/help.json")"
 for f in "$ROOT"/commands/*.md; do
@@ -133,5 +133,7 @@ cat >"$TMP/workflow.json" <<'EOF'
 EOF
 out=$(cd "$WS" && python3 -B "$CMD" workflow plan "$TMP/workflow.json" --json 2>&1); rc=$?
 [ "$rc" -eq 0 ] && python3 -c 'import json,sys; assert json.load(sys.stdin)["nodes"]' <<<"$out" && ok "workflow entry point dispatches plan" || no "workflow entry point rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" pipeline "planner --request 'add a crafting screen, then wire it' --runner orca" 2>/dev/null); rc=$?
+[ "$rc" -eq 0 ] && grep -q "add a crafting screen, then wire it" <<<"$out" && grep -q -- "--worktree current" <<<"$out" && ok "pipeline entry point keeps the request text (one quoted string)" || no "pipeline entry point rc=$rc: $(head -c 300 <<<"$out")"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

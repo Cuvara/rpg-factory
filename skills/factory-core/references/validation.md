@@ -81,5 +81,6 @@ Product-repo scripts are run with `PYTHONDONTWRITEBYTECODE=1` (UnityDots tracks 
 | `STALE` | (`--status`) executed, but the tree or the check changed since | no - rerun |
 
 No registered check for the touched modules is reported as "none registered", not as PASS.
+Never write PASS yourself; never convert NOT_AVAILABLE / HUMAN_REQUIRED into success.
 
 Engineering tool evidence, WSL environment notes and CI coverage facts: see [engineering.md](engineering.md).

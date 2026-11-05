@@ -29,6 +29,7 @@ installed plugin root (the directory that holds `skills/`). `python3 -B <plugin 
 | doctor | `/rpg-factory:doctor [--json]` | `doctor [--json]` | yes |
 | domain | `/rpg-factory:domain [<id>] [--json]` | `domain [<id>] [--json]` | yes |
 | workflow | `/rpg-factory:workflow ...` | `workflow plan\|status\|dispatch\|report <spec> [--json]` | yes |
+| pipeline | `/rpg-factory:pipeline ...` | `pipeline tier\|validate\|planner\|dispatch\|verdict\|gate\|cleanup [args]` | no (`verdict`, `cleanup` record state) |
 | ui, ui-figma, ui-components, ui-screen, ui-review | `/rpg-factory:ui <request>` ... | `ui [--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>` | yes |
 | help | none | `help [--json]` | yes |
 

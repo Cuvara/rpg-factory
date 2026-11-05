@@ -166,6 +166,132 @@
         }
       }
     },
+    "pipeline": {
+      "type": "object",
+      "description": "Delivery pipeline settings read by scripts/factory-pipeline.py (policy: skills/factory-core/references/parallel-work.md).",
+      "required": [
+        "tiers",
+        "agents",
+        "review_pairing",
+        "default_implementer",
+        "verdict_states"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "tiers": {
+          "type": "object",
+          "required": [
+            "S",
+            "M",
+            "L"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "max_repos": {
+                "type": "integer"
+              },
+              "max_modules": {
+                "type": "integer"
+              },
+              "max_files": {
+                "type": "integer"
+              },
+              "contracts": {
+                "type": "boolean",
+                "description": "false: a task that touches a contract is above this tier"
+              },
+              "generated": {
+                "type": "boolean",
+                "description": "false: a task that touches a generated path is above this tier"
+              },
+              "flow": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "orca_agent",
+              "bin",
+              "agent_runner"
+            ],
+            "properties": {
+              "orca_agent": {
+                "type": "string",
+                "description": "Orca agent id for worker-start --agent"
+              },
+              "bin": {
+                "type": "string",
+                "description": "CLI on PATH that proves the agent is installed"
+              },
+              "agent_runner": {
+                "type": "string",
+                "description": "Claude Code Agent subagent_type used when Orca is unavailable"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "review_pairing": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "implementer agent -> reviewer agent (always another model)"
+        },
+        "default_implementer": {
+          "type": "string"
+        },
+        "verdict_states": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclusive_resources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "repos",
+              "rule"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "repos": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rule": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "no_worktree_markers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "A repo whose root holds one of these files is treated as worktrees: false even when unregistered."
+        }
+      },
+      "additionalProperties": false
+    },
     "global_rules": {
       "type": "array",
       "items": {
@@ -266,6 +392,13 @@
           "optional": {
             "type": "boolean",
             "description": "When true, the repo may be absent from the workspace; paths are skipped only while absent."
+          },
+          "worktrees": {
+            "type": "boolean",
+            "description": "false: never create a worktree of this repo for any pipeline role (Unity projects: each worktree needs its own Library/ import). Tasks run one after another in the main checkout. Default true."
+          },
+          "worktrees_reason": {
+            "type": "string"
           }
         }
       }
