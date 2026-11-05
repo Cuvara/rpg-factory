@@ -13,6 +13,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE / "lib"))
 from context import handoff_graph
+import orca_cmd
 
 
 def die(message, code=2):
@@ -445,8 +446,16 @@ def main():
         if a.json:
             print(json.dumps(contract,indent=2)); return
         body="Execute workflow node from this contract. Do not approve artifacts.\n"+json.dumps(contract,indent=2)
-        if a.runner=="orca": body="orca orchestration worker-start --task " + json.dumps(body)
-        elif a.runner=="agent": body="Agent task:\n"+body
+        if a.runner in ("orca","agent"):
+            # Orca --task takes a task id; a spec text goes to --spec, and every start needs --agent.
+            agent=reg.get("pipeline",{}).get("default_implementer","claude")
+            chosen=dict(x.split("=",1) for x in a.repos if "=" in x)  # the checkouts this run inspected
+            place=orca_cmd.placement(reg,node.get("repo"),chosen.get(node.get("repo")))
+            if a.runner=="orca":
+                orca_agent=reg.get("pipeline",{}).get("agents",{}).get(agent,{}).get("orca_agent",agent)
+                body=orca_cmd.quote(orca_cmd.worker_start(body,orca_agent,place,title=f"workflow node {node['id']}"))
+            else:
+                body="Agent task:\n"+json.dumps(orca_cmd.agent_task(reg,agent,body,place,f"workflow node {node['id']}"),indent=2)
         print(body); return
     stale_upstream=[]; stale_nodes=set()
     for nid,node in plan["nodes"].items():
