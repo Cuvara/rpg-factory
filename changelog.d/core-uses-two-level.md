@@ -1,9 +1,15 @@
 ### Added
 
 - **Two-level eval.** `evals/pipeline-two-level/` asks for a multi-file plugin change and grades the tool transcript:
-  the session acts as the run lead and actually runs `factory-pipeline.py tier`, writes a `plan.json` naming this
-  checkout or runs `dispatch --phase lead`, and never edits the requested task files itself (implementing in the run
-  lead's own session fails, even with a correct final report).
+  the session acts as the run lead and must run a successful `factory-pipeline.py dispatch --phase lead` with
+  `--runner print` (running `tier` or writing a plan alone fails), and never edits the requested task files itself
+  (implementing in the run lead's own session fails, even with a correct final report).
+- **Two-level dogfood scenario.** The opt-in `tests/dogfood.sh --two-level` runs a real headless session on a throwaway
+  clone of the plugin with a multi-file plugin task and passes only when the session dispatches a task lead
+  (`factory-pipeline.py dispatch --phase lead --runner print`) and edits none of the task files.
+- **Cleanup names the dispatch specs.** `factory-pipeline.py cleanup` lists the plan's spec files under
+  `<state dir>/pipeline/<plan id>/specs/` (count and directory) as kept state; it never deletes them and they do not
+  affect CLEAN.
 
 ### Changed
 
@@ -28,3 +34,10 @@
 - **Pending status for unstarted tasks.** `factory-pipeline.py status` keeps a task with no branch, worktree or review
   pending: commits on the integration branch from an earlier task with the same owned paths no longer make it a
   `candidate` at the integration HEAD.
+- **Planner specs in a reserved directory.** Planner specs moved from `pipeline/planner/` (which a plan with id
+  `planner` would share) to `pipeline/_planner/`; `validate` rejects a plan id whose state directory is `_planner`.
+- **Spec path test on short Windows paths.** `tests/pipeline.test.sh` compares spec directories by real, case-folded
+  path, so an 8.3 short `TEMP` (Windows CI runners) no longer fails the check.
+- **Note for unreviewed integration commits.** `status` keeps an unstarted task pending but notes when its owned paths
+  already have commits on the integration branch and no review record exists ("integrated earlier? check before
+  dispatching again").

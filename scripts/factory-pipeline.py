@@ -24,7 +24,7 @@ docs/schemas/pipeline-plan.schema.json.
         no-worktree repo (Unity project). Exit 0 OK, 1 errors, 2 usage.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
-        Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: planner)
+        Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
         and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
         planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
@@ -352,6 +352,8 @@ def validate(plan, reg):
     for k in ("id", "title", "topic", "tasks"):
         if not plan.get(k):
             errors.append(f"missing `{k}`")
+    if plan.get("id") and plan_dir_name(plan["id"]) == PLANNER_DIR:
+        errors.append(f"plan id `{plan['id']}` is reserved: its state directory `{PLANNER_DIR}` holds the planner's specs")
     if plan.get("tier") and plan["tier"] not in ("S", "M", "L"):
         errors.append("tier must be S, M or L")
     if plan.get("deliver", "none") not in ("pr", "none"):
@@ -580,7 +582,7 @@ AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions o
 def orca_prompt(a, prompt, plan=None, note=None):
     """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state.
     `note` is appended after the pointer with every whitespace run collapsed to one space."""
-    root = verdict_dir(plan or {"id": "planner"})
+    root = os.path.join(fstate.persistent(), "pipeline", PLANNER_DIR) if plan is None else verdict_dir(plan)
     task = fstate.session_key(getattr(a, "task", None) or "planner")
     phase = getattr(a, "phase", None) or "plan"
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
@@ -872,9 +874,15 @@ def cmd_dispatch(a, reg):
 
 # ---------------------------------------------------------------- verdicts
 
+PLANNER_DIR = "_planner"  # the planner's specs: reserved, `validate` rejects a plan id that maps to it
+
+
+def plan_dir_name(plan_id):
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in str(plan_id))
+
+
 def verdict_dir(plan):
-    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in plan["id"])
-    return os.path.join(fstate.persistent(), "pipeline", safe)
+    return os.path.join(fstate.persistent(), "pipeline", plan_dir_name(plan["id"]))
 
 
 def verdict_file(plan, task, phase):
@@ -1127,7 +1135,10 @@ def cleanup(plan, reg):
             else:
                 left.append(br)
                 kept.append(f"{key}: branch {br} is not in {topic} - not deleted (integrate it or name it in the report)")
-    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept,
+    specs_dir = os.path.join(verdict_dir(plan), "specs")
+    n_specs = len([f for f in os.listdir(specs_dir) if f.endswith(".md")]) if os.path.isdir(specs_dir) else 0
+    specs_kept = [f"{n_specs} spec file(s) in {specs_dir} (dispatch specs, kept as the run's record; delete by hand)"] if n_specs else []
+    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"}
 
@@ -1144,6 +1155,8 @@ def cmd_cleanup(a, reg):
             print("  " + c)
         for k in out["kept"]:
             print("  KEPT  " + k)
+        for k in out["state_kept"]:
+            print("  STATE " + k)
         print("Sessions: " + out["sessions"])
     return 0 if out["state"] == "CLEAN" else 1
 
@@ -1214,6 +1227,9 @@ def task_status(plan, reg, task, n_in_repo):
         ok = rv and rv.get("state") == "PASS" and is_ancestor(path, rv["sha"], topic_head)
         row["sha"] = rv["sha"] if ok else topic_head
         row["phase"] = "candidate"
+    elif not rv and not rv_stale and topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *paths)[0] not in (None, "", "0"):
+        row["notes"].append(f"commits in owned paths on {topic} but no review record: integrated earlier? check before "
+                            "dispatching again")
     if row["phase"] != "candidate" or not rv:
         return row, info
     if row["sha"] != rv["sha"] and (not is_ancestor(path, rv["sha"], row["sha"]) or changed_since(path, rv["sha"], row["sha"], paths)):

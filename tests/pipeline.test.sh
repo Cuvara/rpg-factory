@@ -52,6 +52,8 @@ OK=$(plan ok "{$HEAD,\"tasks\":[
  {\"id\":\"c1\",\"repo\":\"client\",\"objective\":\"o\",\"paths\":[\"Assets/A/\"],\"acceptance\":[\"a\"]},
  {\"id\":\"c2\",\"repo\":\"client\",\"objective\":\"o\",\"paths\":[\"Assets/B/\"],\"acceptance\":[\"a\"],\"implementer\":\"codex\"}]}")
 expect "valid plan: OK, waves printed" 0 "^OK$" validate "$OK"
+X=$(plan x "{$(sed 's/"id":"demo"/"id":"_planner"/' <<<"$HEAD"),\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]}]}")
+expect "plan id _planner is reserved for the planner's specs" 1 "ERROR plan id ._planner. is reserved" validate "$X"
 expect "two tasks of a Unity project never share a wave" 0 "^Wave 2: c2$" validate "$OK"
 expect "the Unity project is named as no-worktree" 0 "No worktree .*: client" validate "$OK"
 X=$(plan overlap "{$HEAD,\"tasks\":[
@@ -267,7 +269,9 @@ expect "agent fallback names the existing task worktree" 0 "Placement: work in t
 if python3 -B - "$P" "$OK" "$TMP" <<'PY'
 import json, os, pathlib, shlex, subprocess, sys
 p, plan, tmp = sys.argv[1:]
-root = pathlib.Path(os.environ["RPG_FACTORY_STATE_DIR"]).resolve()
+root = pathlib.Path(os.environ["RPG_FACTORY_STATE_DIR"])
+def same(a, b):  # TEMP may be an 8.3 short path (windows CI: RUNNER~1); compare real, case-folded paths
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 saved = {}
 def check(args, key="demo", note=""):
     def run(runner):
@@ -283,7 +287,7 @@ def check(args, key="demo", note=""):
     prefix, suffix = "Read your task spec at ", " and follow it." + note
     assert prompt.startswith(prefix) and prompt.endswith(suffix), prompt
     path = pathlib.Path(prompt[len(prefix):-len(suffix)])
-    assert path.is_absolute() and path.parent == root / "pipeline" / key / "specs", path
+    assert path.is_absolute() and same(path.parent, root / "pipeline" / key / "specs"), path
     full = path.read_text(encoding="utf-8")
     assert "\n" in full and full == run("print").split("\n", 1)[1][:-1], full  # remove only print()'s newline
     saved[str(path)] = full
@@ -306,7 +310,7 @@ check(["dispatch", str(fresh), "--task", "gw", "--phase", "lead"])  # no task br
 check(["dispatch", str(fresh), "--task", "integration:server", "--phase", "qa", "--sha", "abc1234"])
 # the planner's one line also names the request, whitespace runs collapsed; the spec keeps it verbatim
 request = "add a thing\n  with a\tsecond requirement\n"
-spec = check(["planner", "--request", request], "planner", " Request: add a thing with a second requirement")
+spec = check(["planner", "--request", request], "_planner", " Request: add a thing with a second requirement")
 assert f"Request: {request}" in spec.read_text(encoding="utf-8")
 # A second prompt must never alter a spec an already-launched session has yet to read.
 assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full in saved.items())
@@ -412,6 +416,10 @@ expect "an unintegrated task branch is kept, not deleted" 1 "KEPT  srv: branch f
 refute "an unintegrated task branch gets no branch -d" "branch -d feat/core/demo-x" cleanup "$G"
 gi "$S" branch -q -D feat/core/demo-x
 expect "after removal: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+specs="$RPG_FACTORY_STATE_DIR/pipeline/demo/specs"; n=$(ls "$specs"/*.md 2>/dev/null | wc -l)
+expect "cleanup names the plan's dispatch specs as kept state, still CLEAN" 0 "STATE $n spec file\(s\) in .*demo.specs .*delete by hand" cleanup "$G"
+if [ "$n" -gt 0 ] && [ "$(ls "$specs"/*.md | wc -l)" = "$n" ]; then pass=$((pass + 1)); echo "PASS  cleanup never deletes the spec files"
+else fail=$((fail + 1)); echo "FAIL  cleanup spec files ($n before)"; fi
 
 echo "-- review findings"
 expect "--agent cannot swap the planned implementer" 2 "is planned for claude; set .implementer: codex." dispatch "$OK" --task gw --phase implement --agent codex
@@ -477,6 +485,7 @@ assert not sys.argv[4] or re.search(sys.argv[4], r["next"] or ""), r' "$out" "$i
 st_phase "nothing started in a worktree repo: pending, next starts the task lead" a pending "dispatch .* --task a --phase lead --runner orca"
 st_phase "nothing started in the Unity project: next starts its task lead in the main checkout" c1 pending "dispatch .* --task c1 --phase lead --runner orca"
 st_phase "a dependent task waits (no next command)" b pending '^$'
+refute "no integration commits in owned paths: no \"integrated earlier\" note" "no review record: integrated earlier" status "$ST"
 expect "the first Unity task is ready, the second waits for its QA" 0 "note: waits for c1" status "$ST"
 expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
 git -C "$S" worktree add -q "$TMP/st-a" -b feat/core/st-a develop 2>/dev/null
@@ -510,6 +519,7 @@ assert r.returncode == 0, r.stderr
 row = next(t for t in json.loads(r.stdout)["tasks"] if t["id"] == "unstarted")
 assert row["phase"] == "pending" and row["sha"] is None and row["worktree"] is None, row
 assert "--task unstarted --phase lead --runner orca" in row["next"], row
+assert any("commits in owned paths on feat/core/st but no review record: integrated earlier?" in n for n in row["notes"]), row
 PY
 then pass=$((pass + 1)); echo "PASS  task without branch/worktree stays pending despite earlier integration commits in its paths"
 else fail=$((fail + 1)); echo "FAIL  unstarted task inherits an integration candidate"; fi
