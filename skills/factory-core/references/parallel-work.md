@@ -129,6 +129,24 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    plan) and prints the commands; it must report CLEAN before the final report. The report's Cleanup column
    names what was removed and what was kept and why.
 
+### Session lifecycle
+
+- **One task, one fresh worker session.** Every dispatch starts a new worker session (Orca worker or Agent-tool
+  worker) for exactly one task. A worker session is never reused for another task, another phase or a later wave.
+  A scoped fix after a FAIL is a new dispatch in a new session, on the same task branch and worktree.
+- **Settle in the same turn.** In the turn a worker reports done (`worker_done`, or the agent's final report), the
+  lead reviews the diff, releases that worker's session (`orca orchestration worker-release`, or stops the agent)
+  and, once the task's review verdict is recorded, integrates it (section 7) and removes its worktree (step 1 above)
+  in that same turn. A settled worker never waits for a later turn or wave.
+- **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in the
+  implementer's session, never in the lead's session, and never reused across tasks or candidate SHAs.
+- **The lead keeps only the plan and the integration state:** `plan.json`, the integration branch, the recorded
+  SHAs and the verdicts in the pipeline state dir. It does not carry worker transcripts forward.
+- **Handoff.** After each wave, or earlier when its context grows long, the lead hands off: it ends its session
+  with every worker of the wave settled, and the next lead session resumes from
+  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py status plan.json`, which re-derives where the plan stands.
+  Nothing else carries over. A handoff adds no gate and no confirmation step.
+
 ## 9. Not authorized by this policy
 
 - Tags and releases: only with explicit release authorization from the user in the current task
@@ -157,8 +175,8 @@ review pairing and exclusive resources live in registry `pipeline`; the plan for
 4. **Cross-model review.** Code written by Claude is reviewed by Codex and code written by Codex by Claude
    (registry `pipeline.review_pairing`). On the task's stable candidate commit:
    `dispatch ... --phase review --sha <sha>`. Record the result: `factory-pipeline.py verdict plan.json --task <id>
-   --phase review --sha <sha> --by <agent> --state PASS|FAIL --report <file>`. A FAIL goes back to the implementer
-   as a scoped fix and a new candidate SHA. When the paired model is unavailable, a fresh session of the same
+   --phase review --sha <sha> --by <agent> --state PASS|FAIL --report <file>`. A FAIL goes back to the task as a
+   scoped fix in a fresh implementer session (section 8, "Session lifecycle") and a new candidate SHA. When the paired model is unavailable, a fresh session of the same
    model reviews, the report names it SAME_MODEL, and the gate accepts it only with `--allow-same-model`.
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`.
 6. **QA.** Once per repo on the integration HEAD: `dispatch ... --task integration:<repo> --phase qa --sha <head>`;
