@@ -7,8 +7,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"
-cp -R "$ROOT/." "$P/"
-rm -rf "$P/.git"
+# the tracked and untracked files minus what neither the scaffolder, the touchpoints nor the lints read
+(cd "$ROOT" && git ls-files -co --exclude-standard | grep -vE '^(testlab|templates|\.github|changelog\.d)/|^CHANGELOG\.md$' \
+  | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | tar -cf - -T - | tar -xf - -C "$P")
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -15 | sed 's/^/      /'; }

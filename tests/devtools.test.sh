@@ -49,7 +49,9 @@ p = devtools.Prober(ws, reg)
 for t in ({"id": "a", "probes": ["mcp:lsp", "bin:gopls"]},
           {"id": "b", "probes": ["mcp:ai-game-developer", "service:svc"]},
           {"id": "c", "probes": ["bin:no-such-binary-xyz|plugin:codex"]},
-          {"id": "d", "probes": ["plugin:context-mode"]}):
+          {"id": "d", "probes": ["plugin:context-mode"]},
+          {"id": "e", "probes": ["plugin-file:testlab/testlab.py"]},
+          {"id": "f", "probes": ["plugin-file:testlab/no-such-entry.py"]}):
     r = p.tool(t); print("state", t["id"], r["state"], "|", "; ".join(r["detail"]))
 EOF
 )
@@ -61,6 +63,8 @@ grep -q "^state a OK" <<<"$out" && ok "tool state OK when every probe passes" ||
 grep -q "^state b DOWN .*svc not reachable" <<<"$out" && ok "tool state DOWN when only a service probe fails" || no "state b: $out"
 grep -q "^state c MISSING .*plugin codex not enabled" <<<"$out" && ok "tool state MISSING when no alternative passes" || no "state c: $out"
 grep -q "^state d OK" <<<"$out" && ok "plugin probe passes for an enabled plugin" || no "state d: $out"
+grep -q "^state e OK | testlab/testlab.py$" <<<"$out" && grep -q "^state f MISSING | testlab/no-such-entry.py not in the plugin$" <<<"$out"   && ok "plugin-file probe: a file of this plugin passes, an absent one is MISSING" || no "plugin-file probe: $out"
+jq -e '.dev_tools[] | select(.id == "testlab") | .probes == ["plugin-file:testlab/testlab.py"] and .used_by == ["measure"]' "$ROOT/registry.json" >/dev/null   && ok "registry: testlab is a dev tool of measure, probed by its entry script" || no "registry testlab dev tool"
 grep -qE "$SECRET1|$SECRET2" <<<"$out" && no "probe output leaks a planted secret" || ok "probe output carries no config values"
 
 # -- scenarios over the REAL registry in a controlled environment (fake PATH, config, Editor port)

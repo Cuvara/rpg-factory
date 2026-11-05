@@ -3,13 +3,17 @@
 # copy passes the lint, and each mutation (lost link, copied policy text, blocking wording variants, gate-create, a
 # dropped safety rule, a missing policy file) makes the copy's own lint FAIL with the expected message. The same
 # harness proves the allowed-tools coverage lint bites (a script use the skill's allowed-tools does not grant).
+# One minimal copy (the tracked and untracked files minus what neither the lint nor its tools read), one cheap copy
+# of it per mutation, and the mutations' lints run concurrently (PARALLEL_POLICY_JOBS, default 4); results print in
+# the order below.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"
-(cd "$ROOT" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
-  [ -f "$f" ] && mkdir -p "$P/$(dirname "$f")" && cp "$f" "$P/$f"; done)
+# not read by tests/skills-lint.sh or the scripts it runs (touchpoints, citations --offline, english-only, check-registry)
+(cd "$ROOT" && git ls-files -co --exclude-standard | grep -vE '^(testlab|templates|\.github|changelog\.d)/|^CHANGELOG\.md$' \
+  | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | tar -cf - -T - | tar -xf - -C "$P")
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -15 | sed 's/^/      /'; }
@@ -19,14 +23,26 @@ PW=skills/factory-core/references/parallel-work.md
 out=$(lint "$P"); rc=$?
 [ $rc -eq 0 ] && ! grep -q 'parallel-work' <<<"$(grep '^FAIL' <<<"$out")" && ok "pristine copy passes the lint" || no "pristine copy (rc=$rc)" "$(grep '^FAIL' <<<"$out")"
 
-# mutate <name> <expected FAIL text> <shell commands run inside a fresh copy>
-mutate() {
-  local name="$1" expect="$2" cmd="$3" M="$TMP/m" out rc
-  rm -rf "$M"; cp -r "$P" "$M"
-  (cd "$M" && eval "$cmd")
-  out=$(lint "$M"); rc=$?
-  if [ $rc -ne 0 ] && grep '^FAIL' <<<"$out" | grep -qF -- "$expect"; then ok "$name -> lint FAIL: $expect"
-  else no "$name: lint did not fail with '$expect' (rc=$rc)" "$(grep '^FAIL' <<<"$out")"; fi
+# mutate <name> <expected FAIL text> <shell commands run inside a fresh copy>: queued; `grade` runs and checks them
+MN=(); ME=(); MC=()
+mutate() { MN+=("$1"); ME+=("$2"); MC+=("$3"); }
+lint_one() { # index: fresh copy, mutation, lint -> $TMP/r<i>.rc / .out
+  local M="$TMP/m$1"; rm -rf "$M"; cp -r "$P" "$M"
+  (cd "$M" && eval "${MC[$1]}")
+  lint "$M" > "$TMP/r$1.out"; echo $? > "$TMP/r$1.rc"; rm -rf "$M"
+}
+grade() {
+  local i out rc jobs="${PARALLEL_POLICY_JOBS:-4}"
+  for i in "${!MN[@]}"; do
+    while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do wait -n 2>/dev/null || wait; done
+    lint_one "$i" &
+  done
+  wait
+  for i in "${!MN[@]}"; do
+    out=$(cat "$TMP/r$i.out"); rc=$(cat "$TMP/r$i.rc")
+    if [ "$rc" -ne 0 ] && grep '^FAIL' <<<"$out" | grep -qF -- "${ME[i]}"; then ok "${MN[i]} -> lint FAIL: ${ME[i]}"
+    else no "${MN[i]}: lint did not fail with '${ME[i]}' (rc=$rc)" "$(grep '^FAIL' <<<"$out")"; fi
+  done
 }
 
 mutate "factory-core SKILL.md link removed" "skills/factory-core/SKILL.md does not link parallel-work.md" \
@@ -62,6 +78,7 @@ mutate "interpreter differs from the entry" "runs python3 -B scripts/factory-sta
 mutate "allowed-tools lint crashes (unreadable SKILL.md)" "allowed-tools coverage: lint crashed"   "mkdir -p skills/zz-broken/SKILL.md"
 mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops: skills/server-ops/references/zz.md:"   "mkdir -p skills/server-ops/references && printf 'K\xc5\x8d: run \x60pin-plan.py\x60 first.\n' > skills/server-ops/references/zz.md"
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
+grade
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

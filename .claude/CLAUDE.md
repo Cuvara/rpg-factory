@@ -71,6 +71,9 @@ tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace 
 tests/run-all.sh --no-claude        # skip `claude plugin validate`
 tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh
 tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base (tests/affected.py); not the PR gate
+tests/run-all.sh -j 4               # up to 4 suites at once; same lines, order, count and exit code as -j 1 (default);
+                                    # live-workspace checks one at a time, run1 suites alone; CI uses -j 4
+tests/run-all-parallel.test.sh      # run-all -j scheduler on stand-in suites (order, counts, cap, live lane, run1)
 
 # single suites (each standalone; sets its own temp TMPDIR / RPG_FACTORY_STATE_DIR)
 tests/git-guard.test.sh

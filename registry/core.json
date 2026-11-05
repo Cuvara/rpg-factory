@@ -297,6 +297,19 @@
       ],
       "required": false,
       "fallback": "ask the user for the frame link (Copy link to selection, with node-id=) and a PNG export of the frame; the preflight is then HUMAN_REQUIRED for anything the screenshot cannot show (variable bindings)"
+    },
+    {
+      "id": "testlab",
+      "kind": "binary",
+      "probes": [
+        "plugin-file:testlab/testlab.py"
+      ],
+      "provides": "rpg-factory testlab (testlab/testlab.py, bundled with this plugin): autonomous multi-client runs with real rendered Unity clients against a local stack - scenarios S01.., suites, sweeps, and re-analysis of a stored run's evidence (analyze, replay-trace, thresholds, leak-check).",
+      "used_by": [
+        "measure"
+      ],
+      "required": false,
+      "fallback": "the hand-walked multi-client steps in measure references/legs.md; a claim the run did not produce stays NOT_RUN"
     }
   ],
   "pipeline": {

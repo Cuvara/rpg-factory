@@ -11,6 +11,7 @@ alternatives separated by `|` (any one passes). Probe kinds:
   mcp:<server>     an MCP server with that name is configured: workspace or repo `.mcp.json`,
                    `~/.claude.json` (top level or the workspace/repo project entry)
   plugin:<name>    a Claude Code plugin `<name>@<marketplace>` is enabled in a settings file
+  plugin-file:<p>  the file <p> (relative to this plugin's root) exists, e.g. a bundled tool's entry script
 
 The config files are parsed in memory (JSON has to be parsed whole), but only server and plugin NAMES
 leave this module. Commands, args, env, headers and URLs are never returned, printed, logged or stored:
@@ -22,6 +23,7 @@ import os
 import socket
 
 TCP_TIMEOUT = 0.3
+PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _load(path):
@@ -145,6 +147,8 @@ class Prober:
             if self._plugins is None:
                 self._plugins = enabled_plugins(self.ws)
             return (True, f"plugin {name}") if name in self._plugins else (False, f"plugin {name} not enabled")
+        if kind == "plugin-file":
+            return (True, name) if os.path.isfile(os.path.join(PLUGIN_ROOT, name)) else (False, f"{name} not in the plugin")
         return False, f"unknown probe {p}"
 
     def tool(self, t):

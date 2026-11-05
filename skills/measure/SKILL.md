@@ -116,6 +116,8 @@ reported HUMAN_REQUIRED (external) with the exact command when not run.
   (stack start/stop stays a human gate). Missing either: that leg is NOT_AVAILABLE, not estimated.
 - `dotnet-diagnostics`: `dotnet-counters`/`dotnet-trace` against the server under a load leg (attribution of
   GC and CPU); MISSING: quote the server's `/metrics` GC and tick instruments instead and say so.
+- `testlab`: the plugin's `testlab/testlab.py` for autonomous multi-client runs and re-analysis of a stored run
+  (references/legs.md); MISSING: walk the multi-client steps by hand and say so.
 - `context-mode`: run long bench/load logs through it so only the summary lines and the record's numbers
   enter the conversation (fallback: `tail` / `grep` the summary lines; the raw log stays in the results dir).
 
