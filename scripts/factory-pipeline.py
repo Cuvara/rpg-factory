@@ -25,7 +25,8 @@ docs/schemas/pipeline-plan.schema.json.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: planner)
-        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec.
+        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
+        planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
         the run lead starts ONE task-lead session per task. In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (or resumed when that branch is already checked out); in a
@@ -576,21 +577,22 @@ def task_branch(plan, info, task):
 AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
 
 
-def orca_prompt(a, prompt, plan=None):
-    """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state."""
+def orca_prompt(a, prompt, plan=None, note=None):
+    """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state.
+    `note` is appended after the pointer with every whitespace run collapsed to one space."""
     root = verdict_dir(plan or {"id": "planner"})
     task = fstate.session_key(getattr(a, "task", None) or "planner")
     phase = getattr(a, "phase", None) or "plan"
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
     path = os.path.abspath(os.path.join(root, "specs", f"{task}-{phase}-{digest}.md"))
     fstate.write_text(path, prompt)
-    return f"Read your task spec at {path} and follow it."
+    return f"Read your task spec at {path} and follow it." + (f" {' '.join(note.split())}" if note else "")
 
 
-def emit(a, reg, agent, prompt, place, title, plan=None):
+def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
     pipe = settings(reg)
     if a.runner == "orca":
-        argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan), pipe["agents"][agent]["orca_agent"], place, title=title)
+        argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place, title=title)
         print(orca_cmd.quote(argv))
     elif a.runner == "agent":
         # the Agent-tool fallback (no Orca) is Claude only: a fresh Claude session, whatever model the plan names;
@@ -625,7 +627,7 @@ def cmd_planner(a, reg):
               "   `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py validate plan.json` until it prints OK.\n"
               "4. Report the plan path, waves and any open question. Do not implement.")
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
-    emit(a, reg, agent, prompt, place, "pipeline planner")
+    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}")
     return 0
 
 

@@ -269,7 +269,7 @@ import json, os, pathlib, shlex, subprocess, sys
 p, plan, tmp = sys.argv[1:]
 root = pathlib.Path(os.environ["RPG_FACTORY_STATE_DIR"]).resolve()
 saved = {}
-def check(args, key="demo"):
+def check(args, key="demo", note=""):
     def run(runner):
         r = subprocess.run([sys.executable, "-B", p, *args, "--runner", runner], capture_output=True, text=True)
         assert r.returncode == 0, (args, r.stderr)
@@ -280,7 +280,7 @@ def check(args, key="demo"):
     assert all("\n" not in arg and "\r" not in arg for arg in argv), argv
     flag = "--prompt" if "--prompt" in argv else "--spec"
     prompt = argv[argv.index(flag) + 1]
-    prefix, suffix = "Read your task spec at ", " and follow it."
+    prefix, suffix = "Read your task spec at ", " and follow it." + note
     assert prompt.startswith(prefix) and prompt.endswith(suffix), prompt
     path = pathlib.Path(prompt[len(prefix):-len(suffix)])
     assert path.is_absolute() and path.parent == root / "pipeline" / key / "specs", path
@@ -304,7 +304,10 @@ value["tasks"] = [value["tasks"][0]]
 fresh.write_text(json.dumps(value), encoding="utf-8")
 check(["dispatch", str(fresh), "--task", "gw", "--phase", "lead"])  # no task branch/worktree yet
 check(["dispatch", str(fresh), "--task", "integration:server", "--phase", "qa", "--sha", "abc1234"])
-check(["planner", "--request", "add a thing\nwith a second requirement"], "planner")
+# the planner's one line also names the request, whitespace runs collapsed; the spec keeps it verbatim
+request = "add a thing\n  with a\tsecond requirement\n"
+spec = check(["planner", "--request", request], "planner", " Request: add a thing with a second requirement")
+assert f"Request: {request}" in spec.read_text(encoding="utf-8")
 # A second prompt must never alter a spec an already-launched session has yet to read.
 assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full in saved.items())
 PY
