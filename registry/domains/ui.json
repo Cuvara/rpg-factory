@@ -1,0 +1,1030 @@
+{
+  "modules": [
+    {
+      "id": "authoring.ui-flow",
+      "repo": "authoring",
+      "paths": [
+        "ui/flows/"
+      ],
+      "responsibility": "UI/UX production artifacts, flows and specifications.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "ui-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain ui",
+            "evidence": "UI production quality plugin."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "ui-ux"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "ui",
+      "docs": []
+    },
+    {
+      "id": "authoring.ui-spec",
+      "repo": "authoring",
+      "paths": [
+        "ui/specs/"
+      ],
+      "responsibility": "UI/UX production artifacts, flows and specifications.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "ui-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain ui",
+            "evidence": "UI production quality plugin."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "ui-ux"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "ui",
+      "docs": []
+    },
+    {
+      "id": "authoring.ui-production",
+      "repo": "authoring",
+      "paths": [
+        "ui/"
+      ],
+      "responsibility": "Production UI/UX artifact paths.",
+      "depends_on": [],
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "ui-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain ui",
+            "evidence": "UI production quality plugin."
+          },
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "ui-ux"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "ui",
+      "docs": []
+    }
+  ],
+  "skills": {
+    "ui-ux": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "ui",
+      "order": 86,
+      "summary": "UI and UX foundation artifacts"
+    },
+    "ui-orchestrator": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 95,
+      "used_by": [
+        "client-integration",
+        "ui-ux"
+      ],
+      "summary": "Entry point for UI requests: deterministic UI plan, intent, minimal skill set, missing context",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-component-selection": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 96,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Component discovery and selection against the real com.cuvara.uitoolkit catalog plus Unity built-in controls: reuse, configure, compose or missing",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-figma-import": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 97,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Figma to Unity through the official UI Toolkit Figma connector and the com.cuvara.uitoolkit 0.8 Figma integration: scope, import, validator, diagnostics",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-toolkit-screen": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 98,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "Screen implementation on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, navigator, theme service, typed queries",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    },
+    "ui-validation": {
+      "kind": "tech",
+      "repos": [
+        "client"
+      ],
+      "domain": "ui",
+      "order": 99,
+      "used_by": [
+        "client-integration"
+      ],
+      "summary": "UI integration review and validation: references, theme light/dark, responsive layout, Play mode, tests, evidence",
+      "paths": [
+        "**/*.uxml",
+        "**/*.uss",
+        "**/*.tss",
+        "Assets/UI Toolkit/",
+        "Assets/Scripts/UI/",
+        "Assets/Figma/"
+      ]
+    }
+  },
+  "contracts": [
+    {
+      "id": "ui-spec-to-art2d-brief",
+      "kind": "handoff",
+      "domain": "ui",
+      "summary": "UI/UX hands visual requirements and UI illustration needs to 2D Art by artifact ID and revision.",
+      "source": {
+        "repo": "authoring",
+        "path": "ui/specs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art2d/briefs/"
+        }
+      ],
+      "driver": "ui-ux",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "ui-spec-to-client",
+      "kind": "handoff",
+      "domain": "ui",
+      "summary": "UI handoff routes screen acceptance to client UI implementation.",
+      "source": {
+        "repo": "authoring",
+        "path": "ui/specs/"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/UI/"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/"
+        }
+      ],
+      "driver": "ui-ux",
+      "gate": null,
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "ui-vfx-sync",
+      "kind": "handoff",
+      "domain": "ui",
+      "summary": "UI cue timing and VFX effect timing stay synchronized through stable artifact references.",
+      "source": {
+        "repo": "authoring",
+        "path": "ui/specs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/specs/"
+        }
+      ],
+      "driver": "ui-ux",
+      "gate": null,
+      "evidence": "artifact-trace",
+      "participants": [
+        "ui",
+        "vfx"
+      ],
+      "ordering": "none"
+    }
+  ],
+  "domains": {
+    "ui": {
+      "summary": "Production UI/UX requirements, architecture, screens, components, tokens and handoffs.",
+      "status": "active",
+      "lead": "ui-ux",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "ui-flow",
+        "ui-spec",
+        "ux-requirements",
+        "ia-map",
+        "screen-spec",
+        "component-spec",
+        "design-tokens",
+        "ui-handoff"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace",
+        "ui-quality"
+      ],
+      "human_gates": [],
+      "handoffs": [
+        "feature-spec-to-ui-spec",
+        "ui-spec-to-art2d-brief",
+        "ui-spec-to-client",
+        "ui-vfx-sync"
+      ],
+      "may_own_feature_state": false,
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/ui.py",
+      "reviewers": []
+    }
+  },
+  "artifact_lifecycles": {
+    "ux-requirements": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "ia-map": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "screen-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "component-spec": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "design-tokens": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "ui-handoff": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    }
+  },
+  "kind_schemas": {
+    "ui-flow": "docs/schemas/kinds/ui-flow.schema.json",
+    "ui-spec": "docs/schemas/kinds/ui-spec.schema.json",
+    "ux-requirements": "docs/schemas/kinds/ux-requirements.schema.json",
+    "ia-map": "docs/schemas/kinds/ia-map.schema.json",
+    "screen-spec": "docs/schemas/kinds/screen-spec.schema.json",
+    "component-spec": "docs/schemas/kinds/component-spec.schema.json",
+    "design-tokens": "docs/schemas/kinds/design-tokens.schema.json",
+    "ui-handoff": "docs/schemas/kinds/ui-handoff.schema.json"
+  }
+}

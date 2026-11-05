@@ -26,7 +26,7 @@ else echo "FAIL unmodified registry"; cat "$TMP/clean.out"; fail=$((fail + 1)); 
 
 # a: domain assignment on skills/modules/contracts must resolve, and engineering is mandatory.
 expect_fail a-unknown-skill-domain '.skills["server-realtime"].domain = "missing-domain"' 'skill server-realtime: unknown domain missing-domain'
-expect_fail a-unknown-module-domain '.modules[0].domain = "missing-domain"' 'unknown domain missing-domain'
+expect_fail a-unknown-module-domain '(.modules[] | select(.id == "authoring.root")).domain = "missing-domain"' 'unknown domain missing-domain'
 expect_fail a-unknown-contract-domain '(.contracts |= map(if .id == "wire-generated" then .domain = "missing-domain" else . end))' 'contract wire-generated: unknown domain missing-domain'
 expect_fail a-engineering-required 'del(.domains.engineering)' 'missing domain: engineering'
 # b: ids follow the domain slug grammar; status is one of active/planned/foundation.

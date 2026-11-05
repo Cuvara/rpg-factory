@@ -525,7 +525,9 @@ with the scratch-stack hooks. See `testlab/README.md`.
 Architecture documentation and decision records are indexed in `docs/architecture/`.
 
 - `registry.json` (schema v3) is the source of truth for module knowledge: modules, contracts,
-  checks with parsers, human gates, `facts[]` with probe commands. Schema in
+  checks with parsers, human gates, `facts[]` with probe commands. It is built from fragments under `registry/`
+  (`core.json`; `engineering/` by repo, skills, contracts; `domains/<domain>.json`) by `scripts/build-registry.py`,
+  so parallel domain work edits different files; edit the fragments, rebuild, and commit both. Schema in
   `docs/registry.schema.json`; validated by `scripts/check-registry.sh` (paths exist, unique skill
   order, no duplicate module paths, one fallback per repo).
 - Skills follow `skills/factory-core/references/skill-contract.md` and are linted by

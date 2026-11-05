@@ -1,0 +1,173 @@
+{
+  "skills": {
+    "factory-core": {
+      "kind": "core",
+      "repos": [
+        "*"
+      ],
+      "summary": "Workflow contract, snapshot, validation, git safety, report. Always first.",
+      "order": 0
+    },
+    "pin-bump": {
+      "kind": "cross-repo",
+      "repos": [
+        "client",
+        "server",
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "summary": "Move a client pin (manifest+lock, DOTS Sample) to a released sgl-v or package v* tag.",
+      "order": 20
+    },
+    "wire-contract": {
+      "kind": "cross-repo",
+      "repos": [
+        "server",
+        "netcode",
+        "client"
+      ],
+      "summary": "Drive a wire/protocol/cross-language contract change: server -> Netcode -> ready to tag -> pin-bump.",
+      "order": 10
+    },
+    "measure": {
+      "kind": "cross-repo",
+      "repos": [
+        "server",
+        "client"
+      ],
+      "summary": "Benchmarks, encoding sweeps, re-baselining and multi-client verification with expected value, control and run id.",
+      "order": 80
+    },
+    "server-realtime": {
+      "kind": "repo",
+      "repos": [
+        "server"
+      ],
+      "summary": "C# game server + Shared.GameLogic: ECS systems, phases, replication, knobs, metrics, golden vectors, AOT.",
+      "order": 30,
+      "cite_roots": {
+        "": "server:backend/gameserver-dotnet",
+        "backend/": "server:backend"
+      }
+    },
+    "server-services": {
+      "kind": "repo",
+      "repos": [
+        "server"
+      ],
+      "summary": "Go gateway, Nakama RPCs, shared Redis store, persistence and migrations.",
+      "order": 40
+    },
+    "server-ops": {
+      "kind": "repo",
+      "repos": [
+        "server"
+      ],
+      "summary": "Docker, compose, k3s/k8s/Agones, monitoring, backups, CD workflows.",
+      "order": 70
+    },
+    "unity-package": {
+      "kind": "repo",
+      "repos": [
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "summary": "Development inside Netcode, UnityDots, UIToolkit up to ready-to-tag.",
+      "order": 50
+    },
+    "client-integration": {
+      "kind": "repo",
+      "repos": [
+        "client"
+      ],
+      "summary": "Unity client glue: VContainer scopes, Nakama/session, HUD/UI, DotsViews, build scripts.",
+      "order": 60
+    },
+    "dotnet-gameserver": {
+      "kind": "tech",
+      "repos": [
+        "server"
+      ],
+      "order": 90,
+      "cite_roots": {
+        "": "server:backend/gameserver-dotnet",
+        "backend/": "server:backend"
+      },
+      "used_by": [
+        "server-realtime",
+        "wire-contract",
+        "measure"
+      ],
+      "summary": "How the C# .NET 10 game server and Shared.GameLogic work: tick order, rates, ECS world and locking, zero-alloc idioms, SGL C# limits, Net layer, xUnit idioms and single-test filters, AOT."
+    },
+    "go-backend": {
+      "kind": "tech",
+      "repos": [
+        "server"
+      ],
+      "order": 91,
+      "used_by": [
+        "server-services",
+        "wire-contract"
+      ],
+      "summary": "How the Go gateway, shared and Nakama plugin modules work: module wiring without go.work, entry points, storage seams, test doubles (miniredis, httptest, Nakama mocks), single-test commands, integration-test pitfalls."
+    },
+    "unity-client-tech": {
+      "kind": "tech",
+      "repos": [
+        "client",
+        "netcode",
+        "unitydots",
+        "uitoolkit"
+      ],
+      "order": 92,
+      "used_by": [
+        "client-integration",
+        "unity-package",
+        "pin-bump"
+      ],
+      "summary": "How the Unity 6 client code works: Entities system install and world lifecycle, UniTask and main-thread rules, VContainer, asmdef and test-assembly rules, domain reload, WebGL limits, single-test runs through Unity MCP or batchmode."
+    },
+    "unity-dots": {
+      "kind": "tech",
+      "repos": [
+        "unitydots",
+        "client"
+      ],
+      "order": 93,
+      "cite_roots": {
+        "": "unitydots:",
+        "client:": "client:"
+      },
+      "used_by": [
+        "unity-package",
+        "client-integration",
+        "measure"
+      ],
+      "summary": "How Entities/Burst/Jobs code works in UnityDots and the client: ECS-vs-classic decision, group tree and bootstrap install, SystemOrderVerifier, the package ECB singleton, measured Schedule vs ScheduleParallel thresholds, archetype-stable spawn, sync points, allocators, change filters, ECS tests."
+    },
+    "netcode-client": {
+      "kind": "tech",
+      "repos": [
+        "netcode",
+        "unitydots",
+        "client"
+      ],
+      "order": 94,
+      "cite_roots": {
+        "": "netcode:",
+        "dots:": "unitydots:",
+        "client:": "client:Assets/Scripts"
+      },
+      "used_by": [
+        "unity-package",
+        "wire-contract",
+        "client-integration",
+        "measure"
+      ],
+      "summary": "How com.cuvara.netcode works on the client: TCP gateway hop and KCP-only gameplay transport and their PlayerLoop pump, KcpCrypto vs the sealed session, codecs, snapshot interning/merge, interpolation clock, movement prediction and reconciliation, reconnect policy, current per-packet allocation pitfalls, speed presence, subscriber isolation, headless tests."
+    }
+  }
+}

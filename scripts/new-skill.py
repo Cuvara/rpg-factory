@@ -25,6 +25,8 @@ import sys
 
 ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REG = os.path.join(ROOT, "registry.json")
+sys.path.append(os.path.join(ROOT, "scripts", "lib"))
+import registry_src  # noqa: E402  registry.json is built from the registry/ fragments
 PREREQ = ("> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, "
           "invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's "
           "workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` "
@@ -240,7 +242,6 @@ def main():
         known_tools[t]["used_by"] = list(known_tools[t].get("used_by", [])) + [name]
     what = a["summary"].rstrip(".")
     body = FRONT.format(name=name, what=what) + "\n" + (tech_body(name, spec, tools) if kind == "tech" else lead_body(name, spec, tools))
-    out = json.dumps(reg, indent=2, ensure_ascii=False) + "\n"
     path = os.path.join(ROOT, "skills", name, "SKILL.md")
     if a.get("dry_run"):
         print(f"--- would write skills/{name}/SKILL.md ({body.count(chr(10))} lines) and registry skills.{name}:")
@@ -249,8 +250,13 @@ def main():
     os.makedirs(os.path.dirname(path))
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(body)
+    # the edit lands in the fragments (registry/); registry.json is rebuilt from them
+    registry_src.write_fragments(ROOT, registry_src.split(reg))
+    merged, problems = registry_src.build(ROOT)
+    if problems:
+        return refuse("registry fragments do not build: " + "; ".join(problems))
     with open(REG, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(out)
+        fh.write(registry_src.render(merged))
     print(f"wrote skills/{name}/SKILL.md and registry skills.{name} (order {spec['order']})")
     if mods or contracts or tools:
         print(f"  registry also: {'primary owner of ' + ', '.join(mods) + '; ' if mods else ''}"

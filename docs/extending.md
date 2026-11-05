@@ -1,6 +1,6 @@
 # Extending production workflows
 
-Registry data is the source of truth for domains, kinds, repositories, tools, and contracts. Keep the registry canonical JSON and run the registry checks after changes.
+Registry data is the source of truth for domains, kinds, repositories, tools, and contracts. Edit the fragment that owns the entry (`registry/domains/<domain>.json` for a domain's modules, contracts, skills, kinds and lifecycles; `registry/engineering/` for engineering; `registry/core.json` for shared sections), run `python3 -B scripts/build-registry.py`, and run the registry checks after changes.
 
 ## Add an artifact kind
 
