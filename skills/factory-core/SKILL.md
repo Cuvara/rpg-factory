@@ -19,21 +19,17 @@ Domain-specific artifact knowledge belongs to the registered domain lead; Factor
 Module rules, docs, changelogs, generated paths, dependencies, checks, contracts and facts live
 in `${CLAUDE_PLUGIN_ROOT}/registry.json`; read them through the scripts, never guess them. If the
 header says the install state is not CURRENT, tell the user (this session may run an old copy).
-## Mode (decide first, declare it, and keep to it)
 
-| Mode | When the user... | Does | Never |
-|---|---|---|---|
-| `analyze` | asks what exists, what a change would touch, "look into" | route, invoke the lead, explain | change files or git state |
-| `plan` | asks for a plan / approach / "don't implement yet" | route, **invoke the lead**, produce its plan (files, legs, obligations, checks, gates) | change files or git state |
-| `implement` | asks for the change (default when they ask to build/fix/add) | the full workflow below | skip validation |
-| `validate` | asks to test / verify existing changes | `run-checks.py --status`, then run the checks, report | change files |
-| `review` | asks to review a diff / branch | lead skill's review checklist + registry rules | change files |
-| `resume` | asks to continue interrupted work | `factory-status.py`, then continue at the first incomplete step (implement rules) | redo finished legs |
-Declare it when you invoke a Factory skill (put `mode: <mode>` in the skill arguments) and in the Route call
-(`factory-context.sh --mode <mode> ...`). The hooks then **flag** departures (advisory only, they never block):
-in analyze/plan/review every file write and mutating command gets a `high` advisory; validate flags anything but
-`run-checks.py`. Respect the mode yourself. Switch mode only when the user asks for it (e.g. "now implement it").
-Every mode except validate/resume invokes the lead skill (its workflow is the plan's source). Parallel work: the main session leads and integrates (`references/parallel-work.md`).
+## Mode (decide first, declare it, and keep to it)
+`analyze` (what exists, what a change would touch) and `plan` ("don't implement yet"): route, **invoke the lead**,
+explain or produce its plan; change nothing. `implement` (build/fix/add; the default): the full workflow below.
+`validate`: `run-checks.py --status`, then run the checks; change no files. `review` (a diff or branch): the lead's
+review checklist + registry rules; change nothing. `resume`: `factory-status.py`, then the first incomplete step.
+Declare it in the skill arguments (`mode: <mode>`) and the Route call (`factory-context.sh --mode <mode> ...`); the
+snapshot then prints its contract. The hooks **flag** departures (advisory only, they never block); respect the mode
+yourself and switch only when the user asks (e.g. "now implement it").
+Parallel work: the main session leads and integrates; delegate in worktrees and follow `references/parallel-work.md`.
+
 ## Workflow
 Steps are **M** mandatory, **O** optional, **H** need the user.
 1. **Resume (M for cross-repo or interrupted work).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py`
@@ -44,28 +40,14 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 3. **Baseline (M).** Snapshot paths are the user's; never modify, stage, stash, clean, reset or
    commit them unless named. Submodule contents are user state unless the task is about them.
 4. **Route (M).** `bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh --mode <mode> --repo <key> --paths <files the task will write>`
-   If routing selects a non-engineering domain or spans domains, write a workflow spec and use `factory-workflow.py plan`, then dispatch ready nodes by wave; use `status` while work lands and `report` for delivery. See `references/workflows.md`.
-   - run Factory scripts with the **absolute path exactly as printed here** (the permission allowlist matches
-     it; a shortened relative path needs manual approval and stalls unattended sessions)
-   (repo-relative; for a benchmark or measurement that is the bench harness / `docs/BENCHMARK.md` /
-   results, not the code being measured).
-   The bare snapshot never routes uncommitted baseline paths; only this call (or branch commits) routes the task.
-   Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing -
-   also when the user only wants a plan or a review; naming the lead is not enough, its workflow,
-   validation and gates are in that skill. For multi-domain work, invoke each routed domain lead
-   with the Skill tool before writing its artifacts; never read a `SKILL.md` as a substitute. The
-   lead runs its **legs**. A task spanning repos has
-   **one** lead: the driver of the contract that links them (e.g. a Nakama RPC used by the client →
-   `server-services`; a wire field → `wire-contract`), shown as **Cross-repo** in the downstream
-   repo's routing; the other repos' skills are its follow-ups. `no specialised lead - factory-core only` means no
-   Skill call: follow the named CLAUDE.md with this workflow. A `Warning: not routed` path needs its own `--repo`.
-   **Co-leads** run after the lead in the order shown (code before deploy before measurement).
-   **Tech** skills (routing `tech`) are never leads, legs or follow-ups. The lead invokes them (Skill
-   tool) before implementing, debugging or reviewing code, or answering how it works or how to test it -
-   in every mode. A tool in "Tools for this change" that is not OK means its fallback applies; say which.
-   **Follow-ups** are later work in other repos - name them in the report. **AMBIGUOUS** means the
-   registry cannot decide: ask the user, or pass `--lead <skill>` (validated). `--explain` shows
-   why every skill was or was not selected.
+   (repo-relative; for a benchmark: the bench harness / `docs/BENCHMARK.md` / results, not the measured code). Run Factory
+   scripts with the **absolute path exactly as printed here** (the permission allowlist matches it). Only this call (or
+   branch commits) routes the task; the bare snapshot never routes uncommitted baseline paths.
+   Then **call the Skill tool with the lead** (`rpg-factory:<lead>`) before planning or editing, in every mode - naming
+   it is not enough and reading its `SKILL.md` is no substitute; invoke each routed domain lead for multi-domain work.
+   `no specialised lead - factory-core only` means no Skill call. Cross-repo lead, co-leads, legs, follow-ups, tech
+   skills, tools, AMBIGUOUS, `--lead`, `--explain`: `references/skill-contract.md` "Routing". Non-engineering or
+   cross-domain routes: `references/workflows.md`.
 5. **Branch (M).** On a protected branch, create `<type>/<area>/<topic>` from the default branch
    before committing; reuse the **same topic** in every repo of a cross-repo task (factory-status
    links them). Commit, push, PR, merge are **H** (only on request); tags and releases only with the user's
@@ -86,18 +68,8 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
     worktrees and release its Claude/Codex sessions (`cleanup` CLEAN); report (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
 ## Validation states (from run-checks.py)
 
-| State | Meaning | Done? |
-|---|---|---|
-| PASS | ran, exit 0, evidence found (tests executed > 0, expected line present) | yes |
-| FAIL | failed, no evidence (0 tests / all skipped), or left files in a product repo | no - fix |
-| BLOCKED | a needed check did not PASS in this run, or its directory is missing | no |
-| NOT_AVAILABLE | a required tool is missing here | no - say so |
-| HUMAN_REQUIRED | extended check not approved, or external (CI, Unity Editor, cluster, Docker stack) | report as open |
-| SKIPPED | excluded on purpose (`--only`, `--tier`, `--dry-run`) | n/a |
-| NOT_RUN | (`--status`) declared for this change, never executed | no - run it |
-| STALE | (`--status`) ran, but the tree changed since (HEAD, diff, untracked, check definition) | no - rerun |
-Never write PASS yourself; never convert NOT_AVAILABLE / HUMAN_REQUIRED into success. Details and
-per-tool evidence: `references/validation.md`.
+PASS / FAIL / BLOCKED / NOT_AVAILABLE / HUMAN_REQUIRED / SKIPPED / NOT_RUN / STALE - meanings and when each is done:
+`references/validation.md`. Never write PASS yourself; never convert NOT_AVAILABLE / HUMAN_REQUIRED into success.
 
 ## verify-a-result (non-negotiable)
 
@@ -107,16 +79,9 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
 
 ## Git safety and human gates
 
-- The hooks are **advisory only** (1.0.3): they never ask the user and never block. A tool call that
-  matches a rule runs, and you receive `rpg-factory advisory (high|warn): <rule>` as context - weigh it
-  and follow the policy in `references/git-safety.md`.
-- `high` (Bash **and** PowerShell): tag creation/deletion/push, `gh api` tag refs, `gh release create`,
-  repository deletion; `warn`: destructive git, any push, `add -A`, commits/merges/cherry-picks/reverts
-  on protected branches, ref rewrites, submodule updates, commands the guard cannot see through
-  (interpreters, `$VAR`/`$(...)` as the program), other remote `gh` mutations and registry `human_gates`.
-- File tools (Write/Edit/MultiEdit/NotebookEdit) get a `warn` advisory for embedded clones
-  (`Packages/com.cuvara.*`), submodule content, generated paths or secrets.
-- Stage explicit paths only. Policy: `references/git-safety.md`.
+The hooks are **advisory only**: a matching call runs and you receive `rpg-factory advisory (high|warn): <rule>` -
+weigh it. `high`: tags, releases, repository deletion; `warn`: destructive or protected-branch git, pushes, `add -A`,
+registry `human_gates`, risky file writes. Stage explicit paths only. Policy and full list: `references/git-safety.md`.
 
 ## Commands (the user types these; they are read-only except `check`)
 `/rpg-factory:status` · `/rpg-factory:route <repo> <paths>` · `/rpg-factory:check <repo> [paths] [--status]` ·

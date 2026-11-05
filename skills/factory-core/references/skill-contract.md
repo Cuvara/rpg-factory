@@ -167,6 +167,20 @@ always name a skill explicitly (`/rpg-factory:<skill>`). `tests/routing.test.sh`
 `tests/routing-properties.test.py` (real history: one lead, order-independent, no lead that is
 also a follow-up) pin this behaviour.
 
+Applying the route (factory-core workflow step 4):
+
+- **One lead across repos.** A task spanning repos has one lead: the driver of the contract that links them
+  (a Nakama RPC used by the client → `server-services`; a wire field → `wire-contract`), shown as
+  **Cross-repo** in the downstream repo's routing. The other repos' skills are its follow-ups.
+- **Legs** run inside the lead's workflow. **Co-leads** run after the lead in the order shown (code before
+  deploy before measurement). **Follow-ups** are later work in other repos - name them in the report.
+- `no specialised lead - factory-core only` means no Skill call: follow the named CLAUDE.md with the
+  factory-core workflow. A `Warning: not routed` path needs its own `--repo` call.
+- **Tech** skills (routing `tech`) are never leads, legs or follow-ups. The lead invokes them (Skill tool)
+  before implementing, debugging or reviewing code, or answering how it works or how to test it - in every
+  mode. A tool in "Tools for this change" that is not OK means its fallback applies; say which.
+- **AMBIGUOUS:** ask the user, or pass `--lead <skill>`. `--explain` shows why every skill was or was not selected.
+
 ## Composition (driver → legs)
 
 - The driver plans the legs in contract order, for example server → netcode → client.
