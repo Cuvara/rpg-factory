@@ -42,6 +42,9 @@ advisory guards.
 
 ### Fixed
 
+- Dogfood write grader: after a command that leaves the scratch workspace, the next command starts in the workspace
+  again, as Claude Code resets the shell ("Shell cwd was reset"); a relative write such as
+  `cd game-authoring && cat > ../wf.json` was flagged as outside the workspace (`tests/dogfood-grader.test.sh`).
 - Skills: the unity-client-tech MessagePipe citation follows the client's move of `DotsRegistration.cs` out of
   `Assets/Scripts/DI/Dots/`.
 

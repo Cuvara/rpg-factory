@@ -187,6 +187,10 @@ def main():
             for path in shell_output_paths(segment):
                 if norm(path) != "/dev/null" and not normalized_path(path, cwd).startswith(base + "/"):
                     failures.append("possible write outside scratch workspace: " + path)
+        # Claude Code resets the shell to the project directory after a command that leaves it
+        # ("Shell cwd was reset to ..."), so the next command starts in the workspace again
+        if cwd != base and not cwd.startswith(base + "/"):
+            cwd = base
     for event in events:
         if event.get("type") == "result" and event.get("subtype") not in (None, "success"):
             failures.append("session did not finish successfully: " + str(event.get("subtype")))
