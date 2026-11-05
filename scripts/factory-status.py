@@ -465,6 +465,8 @@ def main():
             print("- none")
         if "domains" in st:
             print("\n## Domains")
+            if not st["domains"]:
+                print("- no authoring artifacts yet")
             for domain, summary in st["domains"].items():
                 counts = ", ".join(f"{status} {count}" for status, count in sorted(summary["artifacts"].items()))
                 stale = ", ".join(summary["stale"]) or "none"

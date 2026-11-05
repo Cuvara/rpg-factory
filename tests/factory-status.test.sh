@@ -167,7 +167,11 @@ text=$(python3 -B "$ROOT/scripts/factory-status.py")
 if ! grep -q '^## Domains$' <<<"$text"; then pass=$((pass + 1)); echo "PASS  absent authoring omits Domains section"; else fail=$((fail + 1)); echo "FAIL  unexpected Domains section"; fi
 export RPG_FACTORY_WORKSPACE="$TMP/domain-ws"
 A="$RPG_FACTORY_WORKSPACE/game-authoring"
-mkdir -p "$A"
+mkdir -p "$A/design"; git -C "$A" init -q -b main
+text=$(python3 -B "$ROOT/scripts/factory-status.py")
+if grep -A1 '^## Domains$' <<<"$text" | grep -q '^- no authoring artifacts yet$'; then pass=$((pass + 1)); echo "PASS  empty authoring repo: Domains says no artifacts yet"
+else fail=$((fail + 1)); echo "FAIL  empty authoring Domains text: $(grep -A1 '^## Domains' <<<"$text")"; fi
+rm -rf "$A"; mkdir -p "$A"
 cp -R "$ROOT/tests/fixtures/dogfood/game-authoring/." "$A/"
 git -C "$A" init -q -b main; gc "$A" add .; gc "$A" commit -qm "fixture: draft concept"
 s=$(status)
