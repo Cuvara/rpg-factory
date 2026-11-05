@@ -19,7 +19,9 @@ docs/schemas/pipeline-plan.schema.json.
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
         paths or inside its exclusions, overlapping paths of subtasks not ordered by deps, unknown deps or a cycle, an
         implementer that is no pipeline agent and a reviewer of the implementer's model (registry
-        pipeline.review_pairing) are errors. Prints the waves. Exit 0 OK, 1 errors, 2 usage.
+        pipeline.review_pairing) are errors; so are absolute or `..` paths and malformed subtasks (not an object, a
+        non-string id, paths or deps that are not lists of strings). Prints the waves: one subtask per wave in a
+        no-worktree repo (Unity project). Exit 0 OK, 1 errors, 2 usage.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID] [--runner orca|agent|print] [--agent ID]
@@ -43,7 +45,10 @@ docs/schemas/pipeline-plan.schema.json.
         model) unless --agent overrides it. Per-task qa runs in the task worktree (a no-worktree repo: main checkout).
         No-worktree repo without --paths: an implement worker that commits on the task branch in the main checkout.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
-        QA of the integrated tree: a new worktree at SHA (a no-worktree repo: the main checkout).
+        QA of the integrated tree, in the existing checkout of the integration branch (plan.topic, found in `git
+        worktree list`); none is an error (exit 1, no worktree created). A no-worktree repo: the main checkout.
+        --runner agent is the Claude Code Agent-tool fallback (Claude only): a session planned for codex starts a
+        fresh Claude session whose prompt and report say SAME_MODEL.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
         records a review or QA verdict (the only write: <state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
@@ -248,11 +253,26 @@ def same_repo(plan, reg, x, y):
 
 
 def norm_path(p):
-    """Repo-relative owned path in one spelling: forward slashes, no leading ./, case-folded where the file system is."""
-    p = str(p).replace("\\", "/")
-    while p.startswith("./"):
-        p = p[2:]
+    """Repo-relative owned path in one spelling: forward slashes, no `.` or empty segments (a trailing / is kept),
+    case-folded where the file system is. `..` is not resolved here: path_problem() rejects it before any comparison."""
+    s = str(p).replace("\\", "/")
+    p = "/".join(x for x in s.split("/") if x not in ("", "."))
+    if p and s.endswith("/"):
+        p += "/"
     return p.lower() if os.name == "nt" else p  # not normcase: it turns / into \ on Windows
+
+
+def path_problem(p):
+    """Why an owned path cannot be compared by prefix (absolute, or a `..` segment that leaves its directory), or None.
+    Containment, exclusion and overlap checks compare spellings, so `Assets/../../x` must never reach them."""
+    if not isinstance(p, str) or not p.strip():
+        return "is not a non-empty string"
+    s = p.replace("\\", "/")
+    if s.startswith("/") or (len(s) > 1 and s[1] == ":") or s.startswith("~"):
+        return "is absolute; owned paths are repo-relative"
+    if ".." in s.split("/"):
+        return "has a `..` segment; owned paths are repo-relative without `..`"
+    return None
 
 
 def task_fingerprint(task, pipe):
@@ -358,6 +378,11 @@ def validate(plan, reg):
         for d in t.get("deps", []):
             if d not in ids:
                 errors.append(f"task {tid}: unknown dependency {d}")
+        for k in ("paths", "exclusions"):
+            for p in t.get(k) or []:
+                why = path_problem(p)
+                if why:
+                    errors.append(f"task {tid}: {k[:-1]} {p} {why}")
     by_id = {t["id"]: t for t in tasks if t.get("id")}
     for i, t in enumerate(tasks):
         for u in tasks[i + 1:]:
@@ -418,6 +443,9 @@ def validate_subplan(sub, plan, reg):
     if sub.get("schema") != SUBPLAN_SCHEMA:
         errors.append(f"schema must be {SUBPLAN_SCHEMA}")
     tid = sub.get("task")
+    if tid is not None and not isinstance(tid, str):
+        errors.append(f"`task` must be a string, got {json.dumps(tid)}")
+        tid = None
     task = next((t for t in plan.get("tasks", []) if t.get("id") == tid), None) if tid else None
     if not tid:
         errors.append("missing `task`")
@@ -426,13 +454,28 @@ def validate_subplan(sub, plan, reg):
                       f"{', '.join(str(t.get('id')) for t in plan.get('tasks', [])) or 'no task'}")
     owned = (task or {}).get("paths") or []
     excluded = (task or {}).get("exclusions") or []
-    subs = sub.get("subtasks")
-    if not isinstance(subs, list) or not subs:
-        errors.append("missing `subtasks`")
-        subs = []
-    subs = [s for s in subs if isinstance(s, dict)]
+    raw = sub.get("subtasks")
+    if not isinstance(raw, list) or not raw:
+        errors.append("missing `subtasks`" if raw is None else "`subtasks` must be a non-empty list of objects")
+        raw = []
+    subs = []
+    for n, s in enumerate(raw, 1):  # a malformed item is an error, never silently dropped
+        if not isinstance(s, dict):
+            errors.append(f"subtask #{n}: must be an object, got {json.dumps(s)}")
+            continue
+        sid = s.get("id") if isinstance(s.get("id"), str) and s.get("id") else f"#{n}"
+        clean = dict(s)
+        for k in ("id", "task", "objective", "implementer", "reviewer"):
+            if k in s and not isinstance(s[k], str):
+                errors.append(f"subtask {sid}: `{k}` must be a string, got {json.dumps(s[k])}")
+                clean.pop(k)
+        for k in ("paths", "deps", "checks", "acceptance"):
+            if k in s and not (isinstance(s[k], list) and all(isinstance(x, str) for x in s[k])):
+                errors.append(f"subtask {sid}: `{k}` must be a list of strings, got {json.dumps(s[k])}")
+                clean[k] = []
+        subs.append(clean)
     ids = [s.get("id") for s in subs]
-    for dup in sorted({str(i) for i in ids if ids.count(i) > 1}):
+    for dup in sorted({str(i) for i in ids if i is not None and ids.count(i) > 1}):
         errors.append(f"duplicate subtask id {dup}")
     for s in subs:
         sid = s.get("id", "?")
@@ -441,8 +484,12 @@ def validate_subplan(sub, plan, reg):
                 errors.append(f"subtask {sid}: missing `{k}`")
         if s.get("task") not in (None, tid):
             errors.append(f"subtask {sid}: belongs to task {s['task']}, not {tid}: one subplan splits one task")
+        bad = [p for p in s.get("paths") or [] if path_problem(p)]
+        for p in bad:
+            errors.append(f"subtask {sid}: path {p} {path_problem(p)}")
+        s["paths"] = [p for p in s.get("paths") or [] if p not in bad]  # overlap and waves see only safe paths
         if task is not None:
-            for p in s.get("paths") or []:
+            for p in s["paths"]:
                 if not inside_owned(p, owned):
                     errors.append(f"subtask {sid}: path {p} is outside the owned paths of task {tid} ({', '.join(owned)})")
                 elif any(inside_owned(p, [x]) or inside_owned(x, [p]) for x in excluded):
@@ -471,7 +518,13 @@ def validate_subplan(sub, plan, reg):
     waves, cycle = waves_of(list(by_id.values()))
     if cycle:
         errors.append("dependency cycle among " + ", ".join(cycle))
-    return {"plan": plan.get("_path"), "task": tid, "errors": errors, "waves": waves}
+    serial = None
+    if task is not None and task.get("repo"):
+        info = repo_info(plan, reg, task["repo"])
+        if not info["worktrees"]:  # Unity project: never two sub-sessions editing or importing it at once
+            serial = info["reason"]
+            waves = [[sid] for w in waves for sid in w]
+    return {"plan": plan.get("_path"), "task": tid, "errors": errors, "waves": waves, "serial": serial}
 
 
 def cmd_subplan(a, reg):
@@ -497,6 +550,8 @@ def cmd_subplan(a, reg):
             print("ERROR " + e)
         for n, w in enumerate(out["waves"], 1):
             print(f"Wave {n}: {', '.join(w)}")
+        if out["serial"]:
+            print(f"One subtask at a time (no worktree: {out['serial']})")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
 
@@ -514,12 +569,24 @@ def task_branch(plan, info, task):
     return plan["topic"] if not info["worktrees"] else f"{plan['topic']}-{task['id']}"
 
 
+AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
+
+
 def emit(a, reg, agent, prompt, place, title):
     pipe = settings(reg)
     if a.runner == "orca":
         argv = orca_cmd.worker_start(prompt, pipe["agents"][agent]["orca_agent"], place, title=title)
         print(orca_cmd.quote(argv))
     elif a.runner == "agent":
+        # the Agent-tool fallback (no Orca) is Claude only: a fresh Claude session, whatever model the plan names;
+        # a session planned for another model says so, and its review counts as SAME_MODEL
+        if agent != AGENT_FALLBACK:
+            prompt = (f"SAME_MODEL: this session was planned for {agent}; the Agent-tool fallback runs Claude only. Name "
+                      f"SAME_MODEL in your report (a review verdict is recorded with --by {AGENT_FALLBACK} and counts as "
+                      "SAME_MODEL).\n" + prompt)
+            print(f"factory-pipeline: --runner agent starts a fresh Claude session for this {agent} session: SAME_MODEL",
+                  file=sys.stderr)
+            agent = AGENT_FALLBACK
         print(json.dumps(orca_cmd.agent_task(reg, agent, prompt, place, title), indent=2))
     else:
         print(f"# agent: {agent}   worktree: {place['worktree']}" + (f"   base: {place.get('base')}" if place.get("base") else "")
@@ -668,9 +735,21 @@ def cmd_dispatch(a, reg):
             die("qa needs --sha <candidate commit>")
         impls = {t.get("implementer") or pipe["default_implementer"] for t in tasks}
         agent = a.agent or (pipe["review_pairing"].get(next(iter(impls))) if len(impls) == 1 else pipe["default_implementer"])
-        place = orca_cmd.placement(reg, info["registry"], info["path"], a.sha, f"{plan['topic']}-qa")
+        at_head = None
+        if info["worktrees"]:
+            # the integrated tree is the checkout of plan.topic (where the run lead merges): QA joins it, never a new one
+            home = worktree_for(info["path"], plan["topic"])[0] if info["path"] else None
+            if not home:
+                die(f"integration QA: no worktree of {info['path']} has the integration branch {plan['topic']} checked out. "
+                    "Check it out where the run lead integrates, then dispatch the QA again. No worktree was created.", 1)
+            place = {"worktree": f"path:{home}", "new": False, "reason": "the integration checkout"}
+            at_head = (f"Candidate SHA: {a.sha}. You share the integration checkout {home} with the run lead: first check "
+                       "`git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. Never check out, stage, "
+                       "commit or stash.")
+        else:
+            place = orca_cmd.placement(reg, info["registry"], info["path"], a.sha, f"{plan['topic']}-qa")
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
-                  + qa_body(a.sha, tasks)
+                  + qa_body(a.sha, tasks, at_head)
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}")
         return 0
@@ -707,6 +786,9 @@ def cmd_dispatch(a, reg):
     if a.phase != "implement" and not a.sha:
         die(f"{a.phase} needs --sha <candidate commit>")
     if a.paths:
+        bad = [f"{p} {path_problem(p)}" for p in a.paths if path_problem(p)]
+        if bad:
+            die("--paths " + "; ".join(bad))
         outside = [p for p in a.paths if not inside_owned(p, task["paths"])]
         if outside:
             die(f"--paths {', '.join(outside)} outside the owned paths of task {task['id']}: {', '.join(task['paths'])}")
@@ -1156,7 +1238,9 @@ def status(plan, reg):
                 row["notes"].append("waits for " + ", ".join(waiting))
             else:
                 ready.append(tid)  # a worktree repo starts the task lead, which creates the task worktree
-                row["next"] = f"{dispatch} --phase {'lead' if info['worktrees'] else 'implement'} --runner orca"
+                # every task starts its task lead: a worktree repo gets the task worktree, a no-worktree repo the
+                # main checkout; the lead runs the subplan, review and QA in either case
+                row["next"] = f"{dispatch} --phase lead --runner orca"
         elif row["phase"] == "implementing":
             row["notes"].append(f"implementation worker on {row['branch']}"
                                 + (f" in {row['worktree']}" if row["worktree"] else "") + ": wait for its report")
