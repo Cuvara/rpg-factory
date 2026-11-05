@@ -14,6 +14,25 @@ point at the same `./skills/` directory, so the skill set is identical (`tests/c
 | `scripts/codex_hook.py` | Codex | hook adapter: `session-start` and `pre-tool-use`; reads Codex hook JSON on stdin |
 | `tests/fixtures/codex-hooks/` | tests | `<event>-<case>.json` hook inputs; `README.md` lists the expected advisory level (none, warn, high) |
 
+## Commands
+
+Codex skips the Factory command templates, so it reaches every command through the script behind them, run from the
+installed plugin root (the directory that holds `skills/`). `python3 -B <plugin root>/scripts/factory-cmd.py help --json`
+(schema `rpg-factory.commands/1`) lists each verb with its arguments, read-only flag, an example and both forms;
+`--json` makes the output machine-readable (`domain`: `rpg-factory.domain/1`). Exit 2 is a usage error.
+
+| Verb | Claude Code | Codex / shell (`python3 -B <plugin root>/scripts/factory-cmd.py ...`) | Read-only |
+|---|---|---|---|
+| status | `/rpg-factory:status [--remote] [--json]` | `status [--remote] [--json]` | yes |
+| route | `/rpg-factory:route ...` | `route (--domain <id> \| --kind <kind>) \| <repo> <path>... [--lead <skill>] [--json]` | yes |
+| check | `/rpg-factory:check ...` | `check <repo> [<path>...] [--status] [--json]` | only with `--status` |
+| doctor | `/rpg-factory:doctor [--json]` | `doctor [--json]` | yes |
+| domain | `/rpg-factory:domain [<id>] [--json]` | `domain [<id>] [--json]` | yes |
+| workflow | `/rpg-factory:workflow ...` | `workflow plan\|status\|dispatch\|report <spec> [--json]` | yes |
+| pipeline | `/rpg-factory:pipeline ...` | `pipeline tier\|validate\|planner\|dispatch\|verdict\|gate\|cleanup [args]` | no (`verdict`, `cleanup` record state) |
+| ui, ui-figma, ui-components, ui-screen, ui-review | `/rpg-factory:ui <request>` ... | `ui [--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>` | yes |
+| help | none | `help [--json]` | yes |
+
 ## Hook adapter contract
 
 The adapter follows the same rules as the Claude hooks (`.claude/CLAUDE.md`, "Rules for changing this repo"):
