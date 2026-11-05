@@ -5,18 +5,34 @@
 # harness proves the allowed-tools coverage lint bites (a script use the skill's allowed-tools does not grant).
 # One minimal copy (the tracked and untracked files minus what neither the lint nor its tools read), one cheap copy
 # of it per mutation, and the mutations' lints run concurrently (PARALLEL_POLICY_JOBS, default 4); results print in
-# the order below.
+# the order below. A mutation command that itself fails is a FAIL (the copy is writable even for read-only sources).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 P="$TMP/plugin"; mkdir -p "$P"
+# copy_files <src> <dest>: copies the files named on stdin (relative to src). tar keeps file modes, so a read-only
+# source file (Windows read-only attribute) would stay read-only and an `echo >> file` mutation would not apply:
+# the copy is made writable.
+copy_files() {
+  (cd "$1" && while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | tar -cf - -T - | tar -xf - -C "$2") \
+    && chmod -R u+w "$2"
+}
 # not read by tests/skills-lint.sh or the scripts it runs (touchpoints, citations --offline, english-only, check-registry)
-(cd "$ROOT" && git ls-files -co --exclude-standard | grep -vE '^(testlab|templates|\.github|changelog\.d)/|^CHANGELOG\.md$' \
-  | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | tar -cf - -T - | tar -xf - -C "$P")
+(cd "$ROOT" && git ls-files -co --exclude-standard) | grep -vE '^(testlab|templates|\.github|changelog\.d)/|^CHANGELOG\.md$' \
+  | copy_files "$ROOT" "$P"
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -15 | sed 's/^/      /'; }
+
+# regression: a read-only file in the source tree still mutates in the copy (a temp source, never the real worktree)
+RO_SRC="$TMP/ro-src"; RO_DST="$TMP/ro-dst"; RO_F=skills/client-integration/SKILL.md
+mkdir -p "$RO_SRC/${RO_F%/*}" "$RO_DST"; cp "$P/$RO_F" "$RO_SRC/$RO_F"; chmod a-w "$RO_SRC/$RO_F"
+printf '%s\n' "$RO_F" | copy_files "$RO_SRC" "$RO_DST"
+ro_err=$( (cd "$RO_DST" && echo 'zz-ro-mutation' >> "$RO_F") 2>&1 ); ro_rc=$?
+if [ $ro_rc -eq 0 ] && tail -n 1 "$RO_DST/$RO_F" | grep -qx 'zz-ro-mutation'; then ok "read-only source file still mutates in the copy"
+else no "read-only source file did not mutate in the copy (rc=$ro_rc)" "$ro_err"; fi
+chmod -R u+w "$RO_SRC"
 lint() { (cd "$1" && CLAUDE_PLUGIN_ROOT="$1" bash tests/skills-lint.sh 2>&1); }
 PW=skills/factory-core/references/parallel-work.md
 
@@ -28,19 +44,20 @@ MN=(); ME=(); MC=()
 mutate() { MN+=("$1"); ME+=("$2"); MC+=("$3"); }
 lint_one() { # index: fresh copy, mutation, lint -> $TMP/r<i>.rc / .out
   local M="$TMP/m$1"; rm -rf "$M"; cp -r "$P" "$M"
-  (cd "$M" && eval "${MC[$1]}")
+  (cd "$M" && eval "${MC[$1]}") > "$TMP/r$1.merr" 2>&1; echo $? > "$TMP/r$1.mrc"
   lint "$M" > "$TMP/r$1.out"; echo $? > "$TMP/r$1.rc"; rm -rf "$M"
 }
 grade() {
-  local i out rc jobs="${PARALLEL_POLICY_JOBS:-4}"
+  local i out rc mrc jobs="${PARALLEL_POLICY_JOBS:-4}"
   for i in "${!MN[@]}"; do
     while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do wait -n 2>/dev/null || wait; done
     lint_one "$i" &
   done
   wait
   for i in "${!MN[@]}"; do
-    out=$(cat "$TMP/r$i.out"); rc=$(cat "$TMP/r$i.rc")
-    if [ "$rc" -ne 0 ] && grep '^FAIL' <<<"$out" | grep -qF -- "${ME[i]}"; then ok "${MN[i]} -> lint FAIL: ${ME[i]}"
+    out=$(cat "$TMP/r$i.out"); rc=$(cat "$TMP/r$i.rc"); mrc=$(cat "$TMP/r$i.mrc")
+    if [ "$mrc" -ne 0 ]; then no "${MN[i]}: mutation command failed (rc=$mrc)" "$(cat "$TMP/r$i.merr")"
+    elif [ "$rc" -ne 0 ] && grep '^FAIL' <<<"$out" | grep -qF -- "${ME[i]}"; then ok "${MN[i]} -> lint FAIL: ${ME[i]}"
     else no "${MN[i]}: lint did not fail with '${ME[i]}' (rc=$rc)" "$(grep '^FAIL' <<<"$out")"; fi
   done
 }

@@ -37,3 +37,6 @@
 
 - **Pipeline paths.** Owned and subtask paths that are absolute or contain a `..` segment are rejected (plan
   `validate`, `subplan validate`, `dispatch --paths`) before any containment, exclusion or overlap comparison.
+- **Parallel-policy test.** `tests/parallel-policy.test.sh` makes its plugin copy writable (tar kept read-only modes,
+  so `echo >> file` mutations silently did nothing and their cases failed) and reports a FAIL when a mutation command
+  itself fails; a regression case copies a read-only source file and mutates it.
