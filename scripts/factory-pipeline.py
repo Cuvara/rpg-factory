@@ -14,6 +14,12 @@ docs/schemas/pipeline-plan.schema.json.
         disjoint path ownership, dependency cycles, waves, the no-worktree rule (Unity projects: tasks one
         after another in the main checkout, never two in one wave), cross-model review pairing, and shared
         exclusive resources (one Unity test run at a time). Exit 1 on an error.
+  subplan validate <subplan.json> [--plan PATH] [--json]
+        a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
+        relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
+        paths or inside its exclusions, overlapping paths of subtasks not ordered by deps, unknown deps or a cycle, an
+        implementer that is no pipeline agent and a reviewer of the implementer's model (registry
+        pipeline.review_pairing) are errors. Prints the waves. Exit 0 OK, 1 errors, 2 usage.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID] [--runner orca|agent|print] [--agent ID]
@@ -274,6 +280,24 @@ def waves_of(tasks):
     return waves, []
 
 
+def depends(by_id, x, y):
+    """x depends on y, directly or transitively (by_id: id -> item with `deps`)."""
+    seen, todo = set(), [x]
+    while todo:
+        for d in by_id.get(todo.pop(), {}).get("deps", []):
+            if d == y:
+                return True
+            if d not in seen:
+                seen.add(d)
+                todo.append(d)
+    return False
+
+
+def ordered(by_id, x, y):
+    """One of x, y depends on the other: they never run at once, so they may touch the same files."""
+    return depends(by_id, x, y) or depends(by_id, y, x)
+
+
 def serialize(waves, tasks, reg, plan):
     """Split waves so a no-worktree repo never has two tasks in one wave (they run one after another)."""
     by_id = {t["id"]: t for t in tasks}
@@ -335,21 +359,9 @@ def validate(plan, reg):
             if d not in ids:
                 errors.append(f"task {tid}: unknown dependency {d}")
     by_id = {t["id"]: t for t in tasks if t.get("id")}
-
-    def depends(x, y):
-        """x depends on y, directly or transitively."""
-        seen, todo = set(), [x]
-        while todo:
-            for d in by_id.get(todo.pop(), {}).get("deps", []):
-                if d == y:
-                    return True
-                if d not in seen:
-                    seen.add(d)
-                    todo.append(d)
-        return False
     for i, t in enumerate(tasks):
         for u in tasks[i + 1:]:
-            if not (t.get("repo") and u.get("repo") and same_repo(plan, reg, t["repo"], u["repo"])) or depends(t.get("id"), u.get("id")) or depends(u.get("id"), t.get("id")):
+            if not (t.get("repo") and u.get("repo") and same_repo(plan, reg, t["repo"], u["repo"])) or ordered(by_id, t.get("id"), u.get("id")):
                 continue  # tasks ordered by a dependency may touch the same files: they never run at once
             hit = [f"{p} ~ {q}" for p in t.get("paths", []) for q in u.get("paths", []) if overlaps(p, q)]
             if hit:
@@ -388,6 +400,103 @@ def cmd_validate(a, reg):
             print(f"Wave {n}: {', '.join(w)}")
         if out["no_worktree_repos"]:
             print("No worktree (main checkout, one task at a time): " + ", ".join(out["no_worktree_repos"]))
+        print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
+    return 1 if out["errors"] else 0
+
+
+# ---------------------------------------------------------------- subplan
+
+SUBPLAN_SCHEMA = "rpg-factory.pipeline-subplan/1"
+
+
+def validate_subplan(sub, plan, reg):
+    """A task lead's split of one plan task into subtasks: same task, disjoint paths inside its owned paths (unless
+    ordered by deps), known acyclic deps, waves, a pipeline agent per subtask and a reviewer of the other model."""
+    pipe = settings(reg)
+    agents, pairing = pipe["agents"], pipe["review_pairing"]
+    errors = []
+    if sub.get("schema") != SUBPLAN_SCHEMA:
+        errors.append(f"schema must be {SUBPLAN_SCHEMA}")
+    tid = sub.get("task")
+    task = next((t for t in plan.get("tasks", []) if t.get("id") == tid), None) if tid else None
+    if not tid:
+        errors.append("missing `task`")
+    elif task is None:
+        errors.append(f"unknown task {tid}: plan {plan.get('id', '?')} has "
+                      f"{', '.join(str(t.get('id')) for t in plan.get('tasks', [])) or 'no task'}")
+    owned = (task or {}).get("paths") or []
+    excluded = (task or {}).get("exclusions") or []
+    subs = sub.get("subtasks")
+    if not isinstance(subs, list) or not subs:
+        errors.append("missing `subtasks`")
+        subs = []
+    subs = [s for s in subs if isinstance(s, dict)]
+    ids = [s.get("id") for s in subs]
+    for dup in sorted({str(i) for i in ids if ids.count(i) > 1}):
+        errors.append(f"duplicate subtask id {dup}")
+    for s in subs:
+        sid = s.get("id", "?")
+        for k in ("id", "objective", "paths", "implementer"):
+            if not s.get(k):
+                errors.append(f"subtask {sid}: missing `{k}`")
+        if s.get("task") not in (None, tid):
+            errors.append(f"subtask {sid}: belongs to task {s['task']}, not {tid}: one subplan splits one task")
+        if task is not None:
+            for p in s.get("paths") or []:
+                if not inside_owned(p, owned):
+                    errors.append(f"subtask {sid}: path {p} is outside the owned paths of task {tid} ({', '.join(owned)})")
+                elif any(inside_owned(p, [x]) or inside_owned(x, [p]) for x in excluded):
+                    errors.append(f"subtask {sid}: path {p} overlaps an exclusion of task {tid}")
+        impl = s.get("implementer")
+        if impl and impl not in agents:
+            errors.append(f"subtask {sid}: implementer `{impl}` is not a pipeline agent ({', '.join(agents)})")
+        reviewer = s.get("reviewer") or pairing.get(impl)
+        if impl in agents and reviewer == impl:
+            errors.append(f"subtask {sid}: reviewer `{reviewer}` is the implementer's model; cross-model review needs the "
+                          f"pair ({pairing.get(impl)})")
+        elif impl in agents and reviewer not in agents:
+            errors.append(f"subtask {sid}: reviewer `{reviewer}` is not a pipeline agent ({', '.join(agents)})")
+        for d in s.get("deps", []):
+            if d not in ids:
+                errors.append(f"subtask {sid}: unknown dependency {d}")
+    by_id = {s["id"]: s for s in subs if s.get("id")}
+    for i, s in enumerate(subs):
+        for u in subs[i + 1:]:
+            if ordered(by_id, s.get("id"), u.get("id")):
+                continue
+            hit = [f"{p} ~ {q}" for p in s.get("paths") or [] for q in u.get("paths") or [] if overlaps(p, q)]
+            if hit:
+                errors.append(f"subtasks {s.get('id')} and {u.get('id')} own overlapping paths ({'; '.join(hit)}): merge "
+                              "them or make one depend on the other")
+    waves, cycle = waves_of(list(by_id.values()))
+    if cycle:
+        errors.append("dependency cycle among " + ", ".join(cycle))
+    return {"plan": plan.get("_path"), "task": tid, "errors": errors, "waves": waves}
+
+
+def cmd_subplan(a, reg):
+    try:
+        with open(a.subplan, encoding="utf-8") as fh:
+            sub = json.load(fh)
+    except (OSError, ValueError) as e:
+        die(f"cannot read subplan {a.subplan}: {e}")
+    if not isinstance(sub, dict):
+        die("subplan must be a JSON object")
+    path = a.plan or sub.get("plan")
+    if not path:
+        die("the subplan names no `plan` and no --plan was given")
+    if not a.plan and not os.path.isabs(path):
+        path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(a.subplan)), path))
+    plan = read_plan(path)
+    plan["_path"] = path
+    out = validate_subplan(sub, plan, reg)
+    if a.json:
+        print(json.dumps(out, indent=2))
+    else:
+        for e in out["errors"]:
+            print("ERROR " + e)
+        for n, w in enumerate(out["waves"], 1):
+            print(f"Wave {n}: {', '.join(w)}")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
 
@@ -491,7 +600,9 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
         "that Run (the dispatch commands below print `orca orchestration worker-start`). Without Orca: --runner agent.",
         "1. Plan the task and split it into subtasks with disjoint paths inside owned_paths. Subtasks with disjoint paths "
         "run in parallel; the others run in order (deps). Each subtask names its implementer (claude or codex).",
-        f"2. Write subplan.json and validate it: `{me} subplan validate <subplan.json>` must print OK before any dispatch.",
+        f"2. Write subplan.json and validate it: `{me} subplan validate <subplan.json>` must print OK before "
+        "any dispatch (format: docs/schemas/pipeline-subplan.schema.json; "
+        f"`plan` is {os.path.abspath(plan['_path'])}, `task` is {task['id']}).",
         f"3. Per subtask start ONE fresh Claude or Codex session in {where}: `{d} --phase implement --paths <subtask paths> "
         "[--agent claude|codex] --runner orca`. Never reuse a session for another subtask. Sub-sessions edit only their "
         "subtask paths and do NOT commit (one shared index).",
@@ -1152,6 +1263,11 @@ def main():
     p = sub.add_parser("validate")
     p.add_argument("plan")
     p.add_argument("--json", action="store_true")
+    sp = sub.add_parser("subplan")
+    sp.add_argument("action", choices=("validate",))
+    sp.add_argument("subplan")
+    sp.add_argument("--plan")
+    sp.add_argument("--json", action="store_true")
     for name in ("planner", "dispatch"):
         d = sub.add_parser(name)
         if name == "dispatch":
@@ -1191,7 +1307,7 @@ def main():
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
     return {"tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
-            "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status}[a.cmd](a, reg)
+            "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status}[a.cmd](a, reg)
 
 
 if __name__ == "__main__":
