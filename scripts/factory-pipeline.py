@@ -7,6 +7,9 @@ docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
+  tier --plan <plan.json> --repo KEY --paths FILE... [--json]
+        the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
+        from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts.
   validate <plan.json> [--json]
         disjoint path ownership, dependency cycles, waves, the no-worktree rule (Unity projects: tasks one
         after another in the main checkout, never two in one wave), cross-model review pairing, and shared
@@ -26,6 +29,11 @@ docs/schemas/pipeline-plan.schema.json.
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push and `gh pr create` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
+
+  status <plan.json> [--json]
+        how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
+        the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
+        run. Schema docs/schemas/pipeline-status.schema.json. Exit 1 when the plan is invalid.
 
   cleanup <plan.json> [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*); otherwise prints `git worktree remove`
@@ -112,8 +120,46 @@ def tier_of(ctx, pipe):
     return {"tier": "L", "facts": facts, "above": reasons, "flow": pipe["tiers"]["L"].get("flow", "")}
 
 
+PLAIN_MODULE_DIRS = ("scripts", "tests", "registry", "docs", "hooks", "commands")
+
+
+def plain_module(p):
+    """Module of a path in a repo the registry does not map (the plugin repo): skills/<name>, scripts/lib, a top-level
+    directory, or `.` for a root file."""
+    parts = [x for x in str(p).replace("\\", "/").split("/") if x not in ("", ".")]
+    if len(parts) <= 1:
+        return "."
+    if parts[0] == "skills" and len(parts) > 2:
+        return "skills/" + parts[1]
+    if parts[:2] == ["scripts", "lib"] and len(parts) > 2:
+        return "scripts/lib"
+    return parts[0]
+
+
+def plain_context(key, paths):
+    """A routing snapshot built from the paths alone: one repo, no contracts, no generated paths."""
+    files = sorted(set(paths))
+    return {"repos": [{"repo": key, "touched": sorted({plain_module(p) for p in files}),
+                       "files": [{"path": p, "source": "given"} for p in files], "contracts": [], "generated_hits": []}]}
+
+
 def cmd_tier(a, reg):
     pipe = settings(reg)
+    if a.plan:
+        if not a.repo or not a.paths:
+            die("tier --plan needs --repo <plan repo key> and --paths <files>")
+        plan = read_plan(a.plan)
+        plan["_path"] = a.plan
+        info = repo_info(plan, reg, a.repo)
+        if not info["registry"]:
+            if not info["path"]:
+                die(f"repo `{a.repo}` is neither a registry repo nor in plan.repos with a path")
+            out = tier_of(plain_context(a.repo, a.paths), pipe)
+            out["basis"] = "paths (repo not in the registry)"
+            return print_tier(a, out)
+        a.rest = ["--repo", info["registry"], "--paths", *a.paths, *a.rest]
+    elif a.repo or a.paths:
+        die("--repo/--paths go with --plan; for a registry repo pass them after `--` to factory-context.sh")
     if a.context_json:
         with open(a.context_json, encoding="utf-8") as fh:
             ctx = json.load(fh)
@@ -123,13 +169,18 @@ def cmd_tier(a, reg):
         if r.returncode != 0:
             die("factory-context.sh failed: " + (r.stderr or r.stdout).strip()[:400], 1)
         ctx = json.loads(r.stdout)
-    out = tier_of(ctx, pipe)
+    return print_tier(a, tier_of(ctx, pipe))
+
+
+def print_tier(a, out):
     if a.json:
         print(json.dumps(out, indent=2))
     else:
         f = out["facts"]
         print(f"Tier: {out['tier']}  ({len(f['repos'])} repo(s), {len(f['modules'])} module(s), {f['files']} file(s), "
               f"contracts: {', '.join(f['contracts']) or 'none'}, generated: {', '.join(f['generated']) or 'none'})")
+        if out.get("basis"):
+            print(f"  basis: {out['basis']}; modules: {', '.join(f['modules'])}")
         for t, why in out["above"].items():
             if why:
                 print(f"  above {t}: " + "; ".join(why))
@@ -735,6 +786,188 @@ def cmd_cleanup(a, reg):
     return 0 if out["state"] == "CLEAN" else 1
 
 
+# ---------------------------------------------------------------- status
+
+STATUS_SCHEMA = "rpg-factory.pipeline-status/1"
+PHASES = ("pending", "implementing", "candidate", "reviewed", "integrated", "qa")
+
+
+def verdict_of(plan, reg, task_id, phase):
+    """(record, stale): the recorded verdict for this version of the plan, or None; stale when it vouches for another."""
+    rec = fstate.read_json(verdict_file(plan, task_id, phase))
+    if not isinstance(rec, dict) or not rec.get("sha"):
+        return None, False
+    if rec.get("fingerprint") != scope_fingerprint(plan, reg, task_id):
+        return None, True
+    return rec, False
+
+
+def is_ancestor(path, a, b):
+    return bool(a and b) and git(path, "merge-base", "--is-ancestor", a, b)[1] == 0
+
+
+def changed_since(path, sha, head, paths):
+    out, rc = git(path, "diff", "--name-only", sha, head, "--", *paths)
+    return rc != 0 or bool(out)
+
+
+def task_status(plan, reg, task, n_in_repo):
+    """Phase a task reached, derived from git and the recorded verdicts (no context of the session that ran it)."""
+    info = repo_info(plan, reg, task["repo"])
+    path, topic, paths = info["path"], plan["topic"], task["paths"]
+    branch = task_branch(plan, info, task)
+    base = info["base_sha"] or info["base"]
+    row = {"id": task["id"], "repo": task["repo"], "branch": branch, "worktree": None, "sha": None,
+           "phase": "pending", "review": None, "qa": None, "notes": []}
+    if not path or not os.path.isdir(path):
+        row["notes"].append(f"checkout {path} missing")
+        return row, info
+    head = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0] or None
+    topic_head = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0] or None
+    row["worktree"] = worktree_for(path, branch)[0]
+    rv, rv_stale = verdict_of(plan, reg, task["id"], "review")
+    per_task_qa = not info["worktrees"] and n_in_repo > 1
+    qa_id = task["id"] if per_task_qa else f"integration:{task['repo']}"
+    qa, qa_stale = verdict_of(plan, reg, qa_id, "qa")
+    for kind, rec, stale in (("review", rv, rv_stale), ("qa", qa, qa_stale)):
+        if rec:
+            row[kind] = {"state": rec.get("state"), "sha": rec["sha"], "by": rec.get("by"), "task": rec.get("task")}
+        elif stale:
+            row["notes"].append(f"{kind} verdict is STALE: the plan's task changed since it was recorded")
+    if head:
+        row["sha"] = head
+        if info["worktrees"]:
+            ahead = git(path, "rev-list", "--count", f"{base}..{head}")[0] if base else None
+        else:  # the shared integration branch: only commits that touch this task's paths count
+            ahead = git(path, "rev-list", "--count", f"{base}..{head}", "--", *paths)[0] if base else None
+        if ahead is None or not str(ahead).isdigit():
+            row["notes"].append(f"base {base} not found")
+            ahead = "0"
+        if int(ahead) > 0:
+            row["phase"] = "candidate"
+        elif info["worktrees"] or (row["worktree"] and git(row["worktree"], "status", "--porcelain", "--", *paths)[0]):
+            row["phase"] = "implementing"
+    elif topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *paths)[0] not in (None, "", "0"):
+        # task branch removed after integration: the reviewed commit, or the integration HEAD to review
+        ok = rv and rv.get("state") == "PASS" and is_ancestor(path, rv["sha"], topic_head)
+        row["sha"] = rv["sha"] if ok else topic_head
+        row["phase"] = "candidate"
+    if row["phase"] != "candidate" or not rv:
+        return row, info
+    if row["sha"] != rv["sha"] and (not is_ancestor(path, rv["sha"], row["sha"]) or changed_since(path, rv["sha"], row["sha"], paths)):
+        row["notes"].append(f"review at {rv['sha'][:10]} is STALE: owned paths changed since")
+        return row, info
+    row["phase"] = "reviewed"
+    if rv.get("state") != "PASS" or not is_ancestor(path, rv["sha"], topic_head):
+        return row, info
+    row["phase"] = "integrated"
+    if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
+        row["phase"] = "qa"
+        if topic_head != qa["sha"] and changed_since(path, qa["sha"], topic_head, paths):
+            row["phase"] = "integrated"
+            row["notes"].append(f"QA at {qa['sha'][:10]} is STALE: owned paths changed on {topic} since")
+    return row, info
+
+
+def status(plan, reg):
+    v = validate(plan, reg)
+    me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
+    pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
+    tasks = plan.get("tasks", [])
+    if v["errors"]:
+        return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": False,
+                "errors": v["errors"], "waves": v["waves"], "tasks": [], "ready_wave": None, "ready": [],
+                "next": [f"{me} validate {pf}"]}
+    count = {}
+    for t in tasks:
+        count[t["repo"]] = count.get(t["repo"], 0) + 1
+    rows, infos = {}, {}
+    for t in tasks:
+        rows[t["id"]], infos[t["id"]] = task_status(plan, reg, t, count[t["repo"]])
+    wave_of = {tid: n for n, w in enumerate(v["waves"], 1) for tid in w}
+    done = ("integrated", "qa")
+    ready = []
+    for t in tasks:
+        row, info, tid = rows[t["id"]], infos[t["id"]], t["id"]
+        row["wave"] = wave_of.get(tid)
+        row["next"] = None
+        dispatch = f"{me} dispatch {pf} --task {tid}"
+        if row["phase"] == "pending":
+            waiting = [d for d in t.get("deps", []) if rows.get(d, {}).get("phase") not in done]
+            prev = serial_predecessor(plan, reg, t) if not info["worktrees"] else None
+            if prev and rows[prev]["phase"] != "qa":
+                waiting.append(prev)
+            if waiting:
+                row["notes"].append("waits for " + ", ".join(waiting))
+            else:
+                ready.append(tid)
+                row["next"] = f"{dispatch} --phase implement --runner orca"
+        elif row["phase"] == "implementing":
+            row["notes"].append(f"implementation worker on {row['branch']}"
+                                + (f" in {row['worktree']}" if row["worktree"] else "") + ": wait for its report")
+        elif row["phase"] == "candidate":
+            row["next"] = f"{dispatch} --phase review --sha {row['sha']} --runner orca"
+        elif row["phase"] == "reviewed" and row["review"]["state"] != "PASS":
+            row["notes"].append(f"review {row['review']['state']} at {row['review']['sha'][:10]}: fix the findings on "
+                                f"{row['branch']}, then review the new HEAD")
+            row["next"] = f"{dispatch} --phase implement --runner orca"
+        elif row["phase"] == "reviewed":
+            home = worktree_for(info["path"], plan["topic"])[0]
+            if home:
+                row["next"] = orca_cmd.quote(["git", "-C", home, "merge", "--no-ff", row["branch"]])
+            else:
+                row["notes"].append(f"integration branch {plan['topic']} is not checked out: create it from the base, "
+                                    f"check it out where the lead integrates, then merge {row['branch']}")
+                row["next"] = orca_cmd.quote(["git", "-C", info["path"], "branch", plan["topic"],
+                                              info["base_sha"] or info["base"] or "main"])
+        elif row["phase"] == "integrated":
+            topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
+            if not info["worktrees"] and count[t["repo"]] > 1:
+                row["next"] = f"{dispatch} --phase qa --sha {topic_head} --runner orca"
+            else:
+                others = [u["id"] for u in tasks if u["repo"] == t["repo"] and rows[u["id"]]["phase"] not in done]
+                if others:
+                    row["notes"].append("QA runs once all tasks of the repo are integrated: waits for " + ", ".join(others))
+                else:
+                    row["next"] = f"{me} dispatch {pf} --task integration:{t['repo']} --phase qa --sha {topic_head} --runner orca"
+    open_waves = [n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
+    nxt = [f"{me} gate {pf}"] if tasks and all(r["phase"] == "qa" for r in rows.values()) else []
+    out_rows = []
+    for t in tasks:
+        r = rows[t["id"]]
+        out_rows.append({k: r[k] for k in ("id", "repo", "wave", "phase", "branch", "worktree", "sha", "review", "qa",
+                                           "next", "notes")})
+    return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
+            "waves": v["waves"], "tasks": out_rows, "ready_wave": open_waves[0] if open_waves else None,
+            "ready": ready, "next": nxt}
+
+
+def cmd_status(a, reg):
+    plan = read_plan(a.plan)
+    plan["_path"] = a.plan
+    out = status(plan, reg)
+    if a.json:
+        print(json.dumps(out, indent=2))
+        return 0 if out["valid"] else 1
+    print(f"Pipeline {out['plan']} on {out['topic']}" + ("" if out["valid"] else "  INVALID"))
+    for e in out["errors"]:
+        print("  ERROR " + e)
+    for r in out["tasks"]:
+        verdict = "".join(f"  {k} {r[k]['state']}@{r[k]['sha'][:10]}" for k in ("review", "qa") if r[k])
+        print(f"  [{r['id']}] wave {r['wave']}  {r['phase']}" + (f"  {r['sha'][:10]}" if r["sha"] else "") + verdict)
+        for n in r["notes"]:
+            print("      note: " + n)
+        if r["next"]:
+            print("      next: " + r["next"])
+    if out["ready_wave"]:
+        print(f"Ready wave: {out['ready_wave']}" + (f"  (dispatch: {', '.join(out['ready'])})" if out["ready"] else ""))
+    elif out["valid"] and out["tasks"]:
+        print("Every wave is integrated.")
+    for c in out["next"]:
+        print("Next: " + c)
+    return 0 if out["valid"] else 1
+
+
 def main():
     ap = argparse.ArgumentParser(prog="factory-pipeline.py", description=__doc__.split("\n")[0])
     ap.add_argument("--registry", default=os.path.join(ROOT, "registry.json"))
@@ -742,6 +975,9 @@ def main():
     t = sub.add_parser("tier")
     t.add_argument("--json", action="store_true")
     t.add_argument("--context-json")
+    t.add_argument("--plan")
+    t.add_argument("--repo")
+    t.add_argument("--paths", nargs="+")
     t.add_argument("rest", nargs=argparse.REMAINDER)
     p = sub.add_parser("validate")
     p.add_argument("plan")
@@ -765,6 +1001,9 @@ def main():
     v.add_argument("--by", required=True)
     v.add_argument("--state", required=True)
     v.add_argument("--report")
+    st = sub.add_parser("status")
+    st.add_argument("plan")
+    st.add_argument("--json", action="store_true")
     c = sub.add_parser("cleanup")
     c.add_argument("plan")
     c.add_argument("--json", action="store_true")
@@ -780,7 +1019,7 @@ def main():
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
     return {"tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
-            "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup}[a.cmd](a, reg)
+            "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status}[a.cmd](a, reg)
 
 
 if __name__ == "__main__":
