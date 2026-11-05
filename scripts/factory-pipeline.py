@@ -16,11 +16,31 @@ docs/schemas/pipeline-plan.schema.json.
         exclusive resources (one Unity test run at a time). Exit 1 on an error.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
-  dispatch <plan.json> --task ID --phase implement|review|qa [--sha SHA] [--runner orca|agent|print] [--agent ID]
-        the exact worker start for one task (qa: --task integration:<repo>). review/qa need --sha, the frozen
-        candidate commit. The reviewer is the implementer's pair (another model) unless --agent overrides it.
+  dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID] [--runner orca|agent|print] [--agent ID]
+        the run lead starts ONE task-lead session per task. In a worktree repo it gets the task worktree: created here
+        from the base on the task branch <topic>-<id> (or resumed when that branch is already checked out); in a
+        no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
+        own Orca Run, split into subtasks with disjoint paths (`subplan validate`), one fresh session per subtask in the
+        same worktree, sub-sessions do not commit, the task lead commits per subtask, cross-model review and QA sessions
+        there, release each session, report a `status` message (to Orca run RUN_ID: worker_done needs a dispatch,
+        which the task lead has not) with branch and HEAD; never push, merge or remove the worktree. Orca forbids
+        nested workers, so --runner orca prints a handoff, not a worker-start:
+        `orca worktree create --branch <task branch> --no-parent --agent ... --prompt ...` for a new task worktree,
+        `orca agent launch --worktree path:<dir> --prompt ...` for an existing one or a no-worktree repo.
+  dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
+  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID]
+        a session started by the task lead. In a worktree repo it joins the task's EXISTING worktree (found by the task
+        branch in `git worktree list`, `--worktree path:<it>`), never a new one: no such worktree is an error (exit 1;
+        run `--phase lead` first). implement: a sub-session that edits only the owned paths, or the subtask's --paths
+        (inside them; it may then name its model with --agent), and does not commit. review/qa need --sha, the frozen
+        candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
+        model) unless --agent overrides it. Per-task qa runs in the task worktree (a no-worktree repo: main checkout).
+        No-worktree repo without --paths: an implement worker that commits on the task branch in the main checkout.
+  dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
+        QA of the integrated tree: a new worktree at SHA (a no-worktree repo: the main checkout).
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
-        records a review or QA verdict (the only write: <state dir>/pipeline/<plan id>/, lib/fstate.py).
+        records a review or QA verdict (the only write: <state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
+        qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
@@ -40,7 +60,8 @@ docs/schemas/pipeline-plan.schema.json.
         and `git branch -d` for integrated ones, names the rest, and reminds to release every worker session.
         Exit 0 CLEAN, 1 LEFTOVER.
 
-Read-only against the repos (never fetches, pushes, commits or creates worktrees). Exit 2 = usage error.
+Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
+usage error.
 """
 import argparse
 import hashlib
@@ -425,6 +446,96 @@ def serial_predecessor(plan, reg, task):
     return seq[i - 1] if i > 0 else None
 
 
+def task_worktree(plan, info, task, branch):
+    """The existing worktree that has the task branch checked out. Implement, review and per-task QA sessions of a
+    worktree repo join the task lead's worktree; they never create one, so a missing one is an error."""
+    home = worktree_for(info["path"], branch)[0] if info["path"] else None
+    if not home:
+        die(f"task {task['id']}: no worktree of {info['path']} has the task branch {branch} checked out. Start the task "
+            f"lead first: `dispatch {plan['_path']} --task {task['id']} --phase lead` creates the task worktree. "
+            "No worktree was created.", 1)
+    return home
+
+
+def inside_owned(path, owned):
+    p = norm_path(path).rstrip("/")
+    return any(o in ("", ".") or p == o or p.startswith(o + "/") for o in (norm_path(x).rstrip("/") for x in owned))
+
+
+def emit_lead_handoff(reg, agent, prompt, place, branch):
+    """`orca agent launch` in an existing checkout, or `orca worktree create --agent` for the new task worktree: the task
+    lead is not an Orca worker of the run lead (Orca forbids nested workers, max depth 1)."""
+    entry = settings(reg)["agents"][agent]
+    if place.get("new"):
+        argv = ["orca", "worktree", "create", "--name", branch]
+        for flag, key in (("--repo", "repo"), ("--base-branch", "base")):
+            if place.get(key):
+                argv += [flag, place[key]]
+        argv += ["--branch", branch, "--no-parent", "--agent", entry["orca_agent"], "--prompt", prompt, "--json"]
+    else:
+        argv = ["orca", "agent", "launch", "--agent", entry["orca_agent"], "--worktree", place["worktree"], "--prompt", prompt,
+                "--json"]
+    print(orca_cmd.quote(argv))
+    if not shutil.which(entry["bin"]):
+        print(f"factory-pipeline: `{entry['bin']}` is not on PATH here: the {agent} task lead may be unavailable",
+              file=sys.stderr)
+
+
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
+    """The task-lead spec: the task spec plus the rules of the second level (references/parallel-work.md)."""
+    me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
+    d = f"{me} dispatch {orca_cmd.quote([os.path.abspath(plan['_path'])])} --task {task['id']}"
+    rules = [
+        "0. Orca: you are not a worker of the run lead (Orca allows no nested workers). Create your OWN Run "
+        f"(`orca orchestration run-create --objective \"task {task['id']}\"`); your sub-sessions, review and QA are workers of "
+        "that Run (the dispatch commands below print `orca orchestration worker-start`). Without Orca: --runner agent.",
+        "1. Plan the task and split it into subtasks with disjoint paths inside owned_paths. Subtasks with disjoint paths "
+        "run in parallel; the others run in order (deps). Each subtask names its implementer (claude or codex).",
+        f"2. Write subplan.json and validate it: `{me} subplan validate <subplan.json>` must print OK before any dispatch.",
+        f"3. Per subtask start ONE fresh Claude or Codex session in {where}: `{d} --phase implement --paths <subtask paths> "
+        "[--agent claude|codex] --runner orca`. Never reuse a session for another subtask. Sub-sessions edit only their "
+        "subtask paths and do NOT commit (one shared index).",
+        "4. When a sub-session reports, review its diff (only its subtask paths changed, its checks ran with counts), "
+        "then commit that subtask yourself with explicit paths (`git add -- <paths>`, Conventional Commits; never "
+        "`git add -A`).",
+        "5. With every subtask committed, HEAD is the candidate. Start a fresh cross-model review session "
+        f"`{d} --phase review --sha <HEAD> --runner orca` (Codex reviews Claude's work, Claude reviews Codex's: registry "
+        f"pipeline.review_pairing, here {reviewer} for {impl}; subtasks written by the other model get their own review "
+        "with `--agent <its pair>`; the same model only as the SAME_MODEL fallback when the pair is unavailable, named in "
+        f"the report) and a QA session `{d} --phase qa --sha <HEAD> --runner orca`, both in {where}. Keep HEAD at the "
+        "candidate while they run.",
+        "6. A FAIL goes to a fresh fix session (`--phase implement --paths <paths of the finding>`); commit the fix, then "
+        "run review and QA again on the new HEAD.",
+        "7. Release every session as soon as it reports (`orca orchestration worker-release --dispatch <id>`; stop "
+        "background Agent workers).",
+        f"8. Report to the run lead: branch {spec['branch']}, HEAD SHA, each subtask with its commit, the "
+        "review and QA verdicts (state, SHA, model), each check with exact counts (or NOT_RUN with command and reason), "
+        "limitations and out-of-scope findings. With Orca: `orca orchestration send --to "
+        f"run:{report_to or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <that report>`; "
+        "record the review and QA verdicts with `factory-pipeline.py verdict` (the run lead follows `status`).",
+        "9. Never push, merge, tag or remove the worktree: the run lead integrates and removes the worktree after review "
+        "PASS and integration.",
+    ]
+    return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/parallel-work.md. You own "
+            f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
+            + json.dumps(spec, indent=2) + "\nRules:\n" + "\n".join(rules)
+            + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
+               "worktree. The previous task of this repo must have its QA verdict before you start. Subtasks run one after "
+               "another (never two sessions editing or importing the project at once); review and QA also run in this "
+               "checkout; a Unity test run is an exclusive resource (one at a time)."
+               if not info["worktrees"] else ""))
+
+
+def qa_body(sha, tasks, at_head=None):
+    return ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
+            + "\nRead-only unless a check writes its own build output. Check every acceptance criterion below against the\n"
+            "tree, run the tasks' checks (run-checks.py fast tier for registry repos), regressions, edge and failure\n"
+            "cases. A Unity test run waits for the `unity-test` resource from the lead; never start a second Editor.\n"
+            "Fill templates/pipeline/qa-report.md and end with `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\n"
+            + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", []))
+            + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", [])))
+
+
 def cmd_dispatch(a, reg):
     pipe = settings(reg)
     plan = read_plan(a.plan)
@@ -432,30 +543,23 @@ def cmd_dispatch(a, reg):
     v = validate(plan, reg)
     if v["errors"]:
         die("plan is invalid; run `validate` first: " + v["errors"][0], 1)
-    if a.phase == "qa":
-        if a.task.startswith("integration:"):
-            key = a.task.split(":", 1)[1]
-            tasks = [t for t in plan["tasks"] if t["repo"] == key]
-        else:  # per-task QA: only in a no-worktree repo, where each task is QA'd before the next starts
-            task = find_task(plan, a.task)
-            key, tasks = task["repo"], [task]
-            if repo_info(plan, reg, key)["worktrees"]:
-                die("per-task qa is for no-worktree repos; elsewhere QA runs once: --task integration:<repo>")
+    if a.paths and a.phase != "implement":
+        die("--paths (the subtask's paths) goes with --phase implement")
+    if a.report_to and a.phase != "lead":
+        die("--report-to (the run lead's Orca run id) goes with --phase lead")
+    if a.phase == "qa" and a.task.startswith("integration:"):
+        key = a.task.split(":", 1)[1]
+        tasks = [t for t in plan["tasks"] if t["repo"] == key]
+        if not tasks:
+            die(f"no task of the plan is in repo {key}")
         info = repo_info(plan, reg, key)
         if not a.sha:
             die("qa needs --sha <candidate commit>")
         impls = {t.get("implementer") or pipe["default_implementer"] for t in tasks}
         agent = a.agent or (pipe["review_pairing"].get(next(iter(impls))) if len(impls) == 1 else pipe["default_implementer"])
         place = orca_cmd.placement(reg, info["registry"], info["path"], a.sha, f"{plan['topic']}-qa")
-        scope = "integrated tree" if a.task.startswith("integration:") else f"task {tasks[0]['id']}"
-        prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, {scope}.\n"
-                  f"Candidate SHA: {a.sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n"
-                  "Read-only unless a check writes its own build output. Check every acceptance criterion below against the\n"
-                  "tree, run the tasks' checks (run-checks.py fast tier for registry repos), regressions, edge and failure\n"
-                  "cases. A Unity test run waits for the `unity-test` resource from the lead; never start a second Editor.\n"
-                  "Fill templates/pipeline/qa-report.md and end with `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\n"
-                  + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", []))
-                  + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", []))
+        prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
+                  + qa_body(a.sha, tasks)
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}")
         return 0
@@ -467,36 +571,79 @@ def cmd_dispatch(a, reg):
             "owned_paths": task["paths"], "exclusions": task.get("exclusions", []), "deps": task.get("deps", []),
             "checks": task.get("checks", []), "acceptance": task["acceptance"], "branch": branch,
             "base": info["base_sha"] or info["base"]}
-    if a.phase == "implement":
+    if a.phase in ("lead", "implement") and not info["worktrees"]:
+        prev = serial_predecessor(plan, reg, task)
+        if prev and (fstate.read_json(verdict_file(plan, prev, "qa")) or {}).get("state") != "PASS":
+            print(f"factory-pipeline: {task['repo']} takes one task at a time: task {prev} has no QA PASS yet; "
+                  f"start {task['id']} after it", file=sys.stderr)
+    if a.phase == "lead":
+        reviewer = task.get("reviewer") or pipe["review_pairing"].get(impl)
         if not info["worktrees"]:
-            prev = serial_predecessor(plan, reg, task)
-            if prev and (fstate.read_json(verdict_file(plan, prev, "qa")) or {}).get("state") != "PASS":
-                print(f"factory-pipeline: {task['repo']} takes one task at a time: task {prev} has no QA PASS yet; "
-                      f"start {task['id']} after it", file=sys.stderr)
-        if a.agent and a.agent != impl:
-            die(f"task {task['id']} is planned for {impl}; set `implementer: {a.agent}` in the plan (the reviewer pairing "
-                "follows it) instead of --agent")
-        agent = impl
-        place = orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
-        prompt = ("Implementation worker (references/parallel-work.md section 3). Write only the owned paths; commit explicit "
-                  "paths on the task branch; run the checks; report outcome, worktree, branch, base and HEAD SHA, changed "
-                  "paths, each check with counts, limitations, and out-of-scope findings. Never merge or push.\n"
-                  + json.dumps(spec, indent=2)
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {branch}; the previous task of this "
-                     "repo must have its QA verdict before you start." if not info["worktrees"] else ""))
+            place = orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
+            where = f"the main checkout {info['path']}"
+        else:
+            # the task worktree is created here, from the base on the task branch; a later lead resumes in it
+            home = worktree_for(info["path"], branch)[0]
+            place = ({"worktree": f"path:{home}", "new": False, "reason": "task worktree exists: resume in it"} if home
+                     else orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch))
+            where = "this task worktree"
+        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
+        if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
+            emit_lead_handoff(reg, a.agent or impl, prompt, place, branch)
+        else:
+            emit(a, reg, a.agent or impl, prompt, place, f"lead {plan['id']}/{task['id']}")
+        return 0
+    if a.phase != "implement" and not a.sha:
+        die(f"{a.phase} needs --sha <candidate commit>")
+    if a.paths:
+        outside = [p for p in a.paths if not inside_owned(p, task["paths"])]
+        if outside:
+            die(f"--paths {', '.join(outside)} outside the owned paths of task {task['id']}: {', '.join(task['paths'])}")
+        spec["subtask_paths"] = a.paths
+    elif a.phase == "implement" and a.agent and a.agent != impl:
+        die(f"task {task['id']} is planned for {impl}; set `implementer: {a.agent}` in the plan (the reviewer pairing "
+            "follows it) instead of --agent (a subtask session with --paths may name its own model)")
+    # implement, review and per-task QA join the task lead's worktree (a no-worktree repo: its main checkout)
+    home = task_worktree(plan, info, task, branch) if info["worktrees"] else None
+    joined = {"worktree": f"path:{home}", "new": False, "reason": "the task lead's worktree"} if home else None
+    if a.phase == "implement":
+        agent = a.agent or impl
+        place = joined or orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
+        if home or a.paths:
+            prompt = (f"Implementation sub-session started by the task lead of task {task['id']} (references/parallel-work.md). "
+                      f"Work in {home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit "
+                      f"only {'the subtask_paths' if a.paths else 'the owned paths'}. Do NOT commit, stage or stash: the "
+                      "worktree has one shared index and the task lead commits. Run the checks; report to the task lead: "
+                      "changed paths, each check with exact counts (or NOT_RUN with the command and reason), limitations and "
+                      "out-of-scope findings. Never merge or push.\n"
+                      + json.dumps(spec, indent=2)
+                      + (f"\nNo worktree: {info['reason']}." if not info["worktrees"] else ""))
+        else:
+            prompt = ("Implementation worker (references/parallel-work.md section 3). Write only the owned paths; commit explicit "
+                      "paths on the task branch; run the checks; report outcome, worktree, branch, base and HEAD SHA, changed "
+                      "paths, each check with counts, limitations, and out-of-scope findings. Never merge or push.\n"
+                      + json.dumps(spec, indent=2)
+                      + f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {branch}; the previous task of this "
+                        "repo must have its QA verdict before you start.")
         emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}")
         return 0
-    if not a.sha:
-        die("review needs --sha <candidate commit>")
+    at_head = (f"Candidate SHA: {a.sha}. You share the task worktree {home} with the task lead, who keeps HEAD at the "
+               "candidate: first check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. Never check "
+               "out, stage, commit or stash." if home else None)
     agent = a.agent or task.get("reviewer") or pipe["review_pairing"].get(impl)
+    place = joined or {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
+    if a.phase == "qa":  # per-task QA: in the task worktree, or in the main checkout of a no-worktree repo
+        prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}.\n"
+                  + qa_body(a.sha, [task], at_head)
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
+        emit(a, reg, agent, prompt, place, f"qa {plan['id']}/{task['id']}")
+        return 0
     if agent == impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
-    place = orca_cmd.placement(reg, info["registry"], info["path"], a.sha, f"{branch}-review")
-    if not info["worktrees"]:
-        place = {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
     base = info["base_sha"] or info["base"]
     prompt = (f"Review worker ({agent}) for code written by {impl}. Read-only: edit nothing, commit nothing.\n"
-              f"Candidate SHA: {a.sha}. Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
+              + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
+              + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
               " against the spec: scope isolation (any change outside the owned paths is a finding), correctness, safety rules, the routed"
               " lead skill's review checklist, tests for each behaviour change, conventions.\n"
               + json.dumps(spec, indent=2)
@@ -551,8 +698,6 @@ def cmd_verdict(a, reg):
     if not a.task.startswith("integration:"):
         task = find_task(plan, a.task)
         key = task["repo"]
-        if a.phase == "qa" and repo_info(plan, reg, key)["worktrees"]:
-            die("per-task qa verdicts are for no-worktree repos; elsewhere --task integration:<repo>")
     elif a.phase == "review":
         die("review verdicts are per task: --task <id>")
     else:
@@ -899,8 +1044,8 @@ def status(plan, reg):
             if waiting:
                 row["notes"].append("waits for " + ", ".join(waiting))
             else:
-                ready.append(tid)
-                row["next"] = f"{dispatch} --phase implement --runner orca"
+                ready.append(tid)  # a worktree repo starts the task lead, which creates the task worktree
+                row["next"] = f"{dispatch} --phase {'lead' if info['worktrees'] else 'implement'} --runner orca"
         elif row["phase"] == "implementing":
             row["notes"].append(f"implementation worker on {row['branch']}"
                                 + (f" in {row['worktree']}" if row["worktree"] else "") + ": wait for its report")
@@ -909,7 +1054,8 @@ def status(plan, reg):
         elif row["phase"] == "reviewed" and row["review"]["state"] != "PASS":
             row["notes"].append(f"review {row['review']['state']} at {row['review']['sha'][:10]}: fix the findings on "
                                 f"{row['branch']}, then review the new HEAD")
-            row["next"] = f"{dispatch} --phase implement --runner orca"
+            fix = "lead" if info["worktrees"] and not row["worktree"] else "implement"
+            row["next"] = f"{dispatch} --phase {fix} --runner orca"
         elif row["phase"] == "reviewed":
             home = worktree_for(info["path"], plan["topic"])[0]
             if home:
@@ -1011,8 +1157,10 @@ def main():
         if name == "dispatch":
             d.add_argument("plan")
             d.add_argument("--task", required=True)
-            d.add_argument("--phase", required=True, choices=("implement", "review", "qa"))
+            d.add_argument("--phase", required=True, choices=("lead", "implement", "review", "qa"))
             d.add_argument("--sha")
+            d.add_argument("--paths", nargs="+")
+            d.add_argument("--report-to")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default="print")
