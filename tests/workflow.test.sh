@@ -117,6 +117,12 @@ contract=json.loads((t/'dispatch').read_text()); assert contract['allowed_write_
 for runner in ('print','orca','agent'):
     p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'dispatch',str(t/'design.json'),'--registry',str(t/'registry.json'),'--authoring',str(t/'authoring'),'--node','design','--runner',runner],capture_output=True,text=True)
     assert p.returncode==0 and 'allowed_write_paths' in p.stdout and 'A demo' not in p.stdout
+    if runner=='orca':
+        # Orca 1.4: --task takes a task id, a spec text goes to --spec, and a start needs --agent
+        import shlex
+        argv=shlex.split(p.stdout)
+        assert argv[:3]==['orca','orchestration','worker-start'] and '--task' not in argv,(argv[:6])
+        assert '--spec' in argv and argv[argv.index('--agent')+1] and argv[argv.index('--worktree')+1],argv
 author=t/'authoring-contract'; folder=author/'design/features'; folder.mkdir(parents=True); artifact=folder/'DS-test-001.artifact.json'
 artifact.write_text(json.dumps({'id':'DS-test-001','kind':'feature-spec','domain':'design','status':'approved','title':'SECRET ARTIFACT BODY','upstream':[],'acceptance':[],'trace':[]}))
 subprocess.run(['git','init','-q','-b','main',str(author)],check=True); subprocess.run(['git','-C',str(author),'config','user.email','test@example.com'],check=True); subprocess.run(['git','-C',str(author),'config','user.name','Test'],check=True); subprocess.run(['git','-C',str(author),'add','.'],check=True); subprocess.run(['git','-C',str(author),'commit','-qm','source'],check=True)

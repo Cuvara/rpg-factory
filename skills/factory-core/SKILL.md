@@ -2,7 +2,7 @@
 name: factory-core
 description: Shared Factory workflow for every registered discipline domain in the UnityIndie game workspace (rpg-mmo-server, IndieRPGMMOAdventure, Netcode, UnityDots, UIToolkit and the domains' authoring artifacts). Use at the start of ANY task that changes code, configuration, CI, deployment, measurements, documents or domain artifacts there, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic domain and skill routing, coordination, validation with evidence, human gates, git safety and the verify-a-result report; domain workflows live with their registered leads. Game Design is a native domain for design artifacts. Not for web-game projects; web-game-factory owns those.
 argument-hint: "[mode: analyze|plan|implement|validate|review|resume] [task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*)
 ---
 
 # Factory Core
@@ -52,7 +52,8 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    before committing; reuse the **same topic** in every repo of a cross-repo task (factory-status
    links them). Commit, push, PR, merge are **H** (only on request); tags and releases only with the user's
    explicit release authorization in this task (`references/git-safety.md` rule 5).
-6. **Plan (O/M).** Mandatory across modules, contracts or generated paths.
+6. **Plan (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`; M/L: `plan.json` +
+   `validate`. Unity projects take no worktree (tasks in sequence). Steps 6-12: `references/parallel-work.md` section 10.
 7. **Implement (M).** Requested scope only; module rules; generated paths only via their generator.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
    both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
@@ -61,10 +62,10 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    evidence. Evidence is bound to the tree it ran on: after any further edit, `--status` shows it
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
-11. **Review (O).** Non-trivial diffs: `/code-review`, then the lead's review checklist and the review
-    file of every `routing.tech` skill that has one (e.g. the `unity-dots` ECS review checklist).
-12. **Report (M).** `references/report.md`, including the runner table and routing. A release
-    ends at **READY_TO_TAG** - the lead creates the tag, unless the user explicitly authorized the release in this task.
+11. **Review + QA (M).** Cross-model review (Claude's code by Codex, Codex's by Claude) on a frozen SHA with the lead's
+    checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist); then QA. Record each `verdict`.
+12. **Gate, PR, cleanup, report (M).** `gate` READY_FOR_PR + user's `deliver: pr`: push, open the PR (no merge). Then remove the run's
+    worktrees and release its Claude/Codex sessions (`cleanup` CLEAN); report (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
 ## Validation states (from run-checks.py)
 
 PASS / FAIL / BLOCKED / NOT_AVAILABLE / HUMAN_REQUIRED / SKIPPED / NOT_RUN / STALE - meanings and when each is done:
@@ -84,7 +85,7 @@ registry `human_gates`, risky file writes. Stage explicit paths only. Policy and
 
 ## Commands (the user types these; they are read-only except `check`)
 `/rpg-factory:status` · `/rpg-factory:route <repo> <paths>` · `/rpg-factory:check <repo> [paths] [--status]` ·
-`/rpg-factory:doctor`. Suggest them when the user asks "what is pending", "what would this touch", "is it
+`/rpg-factory:doctor` · `/rpg-factory:pipeline <tier|validate|gate ...>`. Suggest them when the user asks "what is pending", "what would this touch", "is it
 validated", "is Factory healthy".
 
 ## Skills
