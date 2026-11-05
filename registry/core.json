@@ -321,16 +321,16 @@
         "max_files": 6,
         "contracts": false,
         "generated": false,
-        "flow": "lead implements in-session; cross-model review; QA by the lead; gate; PR"
+        "flow": "run lead writes a one-task plan.json; validate; dispatch --phase lead starts the task lead (task worktree; no-worktree repo: main checkout); task lead runs sub-sessions, cross-model review and QA; run lead integrates (never implements); gate; PR"
       },
       "M": {
         "max_repos": 1,
         "contracts": false,
         "generated": false,
-        "flow": "lead writes plan.json; validate; implementation workers; per-task cross-model review; integrate; QA worker; gate; PR"
+        "flow": "run lead writes plan.json; validate; dispatch --phase lead per task (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA; gate; PR"
       },
       "L": {
-        "flow": "planner worker writes plan.json; validate; waves of workers; per-task cross-model review; integrate; QA worker; gate; one PR per repo"
+        "flow": "planner worker writes plan.json; validate; dispatch --phase lead per task in waves (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA per repo; gate; one PR per repo"
       }
     },
     "agents": {
