@@ -42,7 +42,7 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - **Developing this plugin:** every plugin task (new or split skill, core change) runs through `factory-pipeline.py`
   with a `plan.json` whose `repos` entry names this checkout (`"plugin": {"path": "<this checkout>"}`), small tasks
   with disjoint owned paths, and cross-model review. How: `parallel-work.md` section 10 and section 8
-  "Session lifecycle" (one fresh session per task, lead handoff through `factory-pipeline.py status plan.json`).
+  "Session lifecycle".
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
   Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line, and gather the
   fragments into the `CHANGELOG.md` section with `python3 -B scripts/changelog.py release X.Y.Z [--summary TEXT]` (run-all and
