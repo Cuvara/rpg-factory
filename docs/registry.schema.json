@@ -141,7 +141,7 @@
             "minItems": 1,
             "items": {
               "type": "string",
-              "pattern": "^(bin|tool|service|mcp|plugin):[^|:]+(\\|(bin|tool|service|mcp|plugin):[^|:]+)*$"
+              "pattern": "^(bin|tool|service|mcp|plugin|plugin-file):[^|:]+(\\|(bin|tool|service|mcp|plugin|plugin-file):[^|:]+)*$"
             },
             "description": "All probes must pass; '|' separates alternatives inside one probe."
           },

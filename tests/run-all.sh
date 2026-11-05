@@ -2,7 +2,11 @@
 # run-all.sh — every local validation for the plugin. Read-only against the workspace.
 # Prints one line per check and a final count; exits non-zero if anything failed.
 #
-# Usage: tests/run-all.sh [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
+# Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
+#   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
+#                   same count and exit code. Read-only live-workspace checks (runl, block) run one at a time
+#                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
+#                   validate) run alone. Ends with the wall time.
 #   --affected      run only the suites the change touches (tests/affected.py: files changed since
 #                   merge-base(REF|origin/main|main) plus untracked); the cheap inline checks always run.
 #                   For iteration; the full run (no --affected) is the gate before a PR and for --release.
@@ -17,12 +21,15 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
 gitcfg_snapshot "$ROOT"      # M4/P0: no test may rewrite the shared git config of the repo this runs in (checked at the end)
-use_ws=true; use_claude=true; release=false; affected=false; base=""
+use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1
 while [ $# -gt 0 ]; do
   case "$1" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
-    --affected) affected=true ;; --base) base="${2:-}"; shift ;; esac
+    --affected) affected=true ;; --base) base="${2:-}"; shift ;;
+    -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; esac
   shift
 done
+case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive integer, got '$jobs'" >&2; exit 2 ;; esac
+t_start=$(date +%s)
 AFF=""
 if $affected && ! $release; then
   AFF=$(mktemp_win)/changed.txt
@@ -30,19 +37,108 @@ if $affected && ! $release; then
   else echo "affected mode: no base, running everything"; AFF=""; fi
 fi
 
-pass=0; fail=0; skip=0; naff=0
-ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
-bad()  { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
-skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
-# suite_of <args>: the test or script file a run line executes (the unit tests/affected.py selects on)
-suite_of() { local a; for a in "$@"; do case "$a" in tests/*|testlab/*|scripts/*) echo "$a"; return ;; esac; done; }
-run()  {
-  local name="$1"; shift; local out s t0 t1
-  s=$(suite_of "$@")
-  if [ -n "$AFF" ] && [ -n "$s" ] && ! python3 -B tests/affected.py select "$AFF" "$s"; then skip=$((skip + 1)); naff=$((naff + 1)); return; fi
-  t0=$(date +%s)
-  if out=$("$@" 2>&1); then t1=$(date +%s); ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+pass=0; fail=0; skip=0; naff=0; cleanup=()
+_ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
+_bad()  { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
+_skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
+_note() { echo "$1"; }
+# Suites read /dev/null, never the caller's stdin. -j 1: every line prints when its check ends. -j N: suites are
+# queued and started in the background (at most N at a time: live-lane suites first, one at a time, one slot for the
+# earliest queued suite, then the SLOW ones, then the rest in order; output buffered in $QD). Every line - suite results and inline checks alike - waits
+# in the queue until the lines before it are out, so the output order, the count and the exit code are those of -j 1.
+QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QL=(); QA=(); PEND=()
+# the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
+SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
+      tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
+      tests/devtools.test.sh tests/domains.test.sh testlab/tests/test_lab.py"
+[ "$jobs" -gt 1 ] && QD=$(mktemp_win) && trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$QD"' EXIT
+queue() { # kind message [detail]
+  if [ -z "$QD" ]; then "_$1" "$2" "${3:-}"; return; fi
+  QK[qn]=$1; QM[qn]=$2; QX[qn]=${3:-}; qn=$((qn + 1)); flush
 }
+ok()   { queue ok "$@"; }
+bad()  { queue bad "$@"; }
+skp()  { queue skp "$@"; }
+note() { queue note "$1"; }
+flush() { # print the queue up to the first suite still running
+  local i st secs
+  while [ "$qnext" -lt "$qn" ]; do
+    i=$qnext
+    if [ "${QK[i]}" = job ]; then
+      [ -f "$QD/$i.res" ] || return 0
+      read -r st secs < "$QD/$i.res"
+      if [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
+      elif [ "$st" = 0 ]; then _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
+      rm -f "$QD/$i.res" "$QD/$i.out"
+    else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
+    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QL[i]' 'QA[i]'; qnext=$((i + 1))
+  done
+}
+running() { # sets nrun (started, not ended), nlive (of them in the live lane), nord (started as the in-order one)
+  local i; nrun=0; nlive=0; nord=0
+  for ((i = qnext; i < qn; i++)); do
+    [ -n "${QL[i]:-}" ] && [ ! -f "$QD/$i.res" ] && { nrun=$((nrun + 1)); [ -n "${QA[i]:-}" ] && nlive=$((nlive + 1))
+      [ "${QL[i]}" = o ] && nord=$((nord + 1)); }
+  done
+}
+start() { # queue index [o: the in-order pick]
+  QL[$1]=${2:-1}
+  ( t0=$(date +%s); eval "${QC[$1]}" > "$QD/$1.out" 2>&1 < /dev/null; rc=$?; t1=$(date +%s)
+    echo "$rc $((t1 - t0))" > "$QD/$1.tmp" && mv "$QD/$1.tmp" "$QD/$1.res" ) &
+}
+pump() { # start queued suites while fewer than $jobs run: a live-lane one when none runs, the earliest queued one when
+  # none of those runs (keeps the output moving), else SLOW first, else in order
+  local i k pick kind
+  while [ ${#PEND[@]} -gt 0 ]; do
+    running; [ "$nrun" -lt "$jobs" ] || return 0
+    pick=""; kind=""
+    [ "$nlive" -eq 0 ] && for i in "${!PEND[@]}"; do [ -n "${QA[${PEND[i]}]}" ] && { pick=$i; break; }; done
+    [ -n "$pick" ] || [ "$nord" -gt 0 ] || for i in "${!PEND[@]}"; do [ -z "${QA[${PEND[i]}]}" ] && { pick=$i; kind=o; break; }; done
+    [ -n "$pick" ] || for k in $SLOW; do for i in "${!PEND[@]}"; do [ "${QS[${PEND[i]}]}" = "$k" ] && { pick=$i; break 2; }; done; done
+    [ -n "$pick" ] || for i in "${!PEND[@]}"; do [ -z "${QA[${PEND[i]}]}" ] && { pick=$i; break; }; done
+    [ -n "$pick" ] || return 0   # only live-lane suites left and one is running
+    start "${PEND[pick]}" "$kind"; unset 'PEND[pick]'
+  done
+}
+drain() { [ -n "$QD" ] || return 0; while pump; flush; [ "$qnext" -lt "$qn" ]; do sleep 0.2; done; }
+# suite_of <args>: sets $s to the test or script file a run line executes (the unit tests/affected.py selects on)
+suite_of() { local a; s=""; for a in "$@"; do case "$a" in tests/*|testlab/*|scripts/*) s=$a; return ;; esac; done; }
+# run <name> <cmd...>: a suite; with -j N it runs in the background.
+# runl <name> <cmd...>: a read-only suite against the live workspace: in the background, but never two at once.
+# run1 <name> <cmd...>: a suite that must run alone (shared git config, installed plugin, `claude plugin validate`):
+#   every queued suite ends first.
+# runp <name> <post> <cmd...>: like run, but <post> <rc> <output> grades the result (with _ok/_bad/_skp).
+# block <fn>: inline checks in function <fn> as one live-lane suite; its PASS/FAIL/SKIP lines are counted (replay).
+run()  { _run bg "" "" "$@"; }
+runl() { _run bg "" live "$@"; }
+runp() { local name="$1" post="$2"; shift 2; _run bg "$post" "" "$name" "$@"; }
+run1() { drain; _run fg "" "" "$@"; }
+block() { if [ -z "$QD" ]; then "$1"; else _run bg replay live "$1" in_block "$1"; fi; }
+in_block() { ( QD=""; "$1"; echo "<end of block>" ); }   # inside the job: the checks print at once
+replay() { # rc output name: the lines a block printed, counted by their prefix
+  local l done=""
+  while IFS= read -r l; do
+    case "$l" in "PASS  "*) pass=$((pass + 1)) ;; "FAIL  "*) fail=$((fail + 1)) ;; "SKIP  "*) skip=$((skip + 1)) ;;
+      "<end of block>") done=1; continue ;; esac
+    printf '%s\n' "$l"
+  done <<<"$2"
+  [ -n "$done" ] || _bad "checks block $3 ended early (rc=$1)"
+}
+_run() {
+  local mode="$1" post="$2" lane="$3" name="$4"; shift 4; local out s t0 t1 n rc
+  suite_of "$@"
+  if [ -n "$AFF" ] && [ -n "$s" ] && ! python3 -B tests/affected.py select "$AFF" "$s"; then skip=$((skip + 1)); naff=$((naff + 1)); return; fi
+  if [ -z "$QD" ] || [ "$mode" = fg ]; then
+    if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
+    t0=$(date +%s)
+    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+    return
+  fi
+  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$s; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
+  pump; flush
+}
+# sourced (tests/run-all-parallel.test.sh): the scheduler above only, no checks
+[ "${BASH_SOURCE[0]}" != "$0" ] && return 0
 
 # ---- syntax
 json_count=0
@@ -130,13 +226,14 @@ run "testlab: packet impairment (S18) unit tests" python3 -B testlab/tests/test_
 run "testlab: native game server mode unit tests" python3 -B testlab/tests/test_native.py
 run "testlab: failure-summary unit tests" python3 -B testlab/tests/test_failsum.py
 run "testlab: harness defects H1-H7 (M4) unit tests" python3 -B testlab/tests/test_m4_harness.py
+run "testlab: frame GC columns (UCF F-21) unit tests" python3 -B testlab/tests/test_framegc.py
 run "testlab: scenarios load" python3 -B testlab/testlab.py list
 find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
 run "registry domain rules + optional repos" tests/check-registry.test.sh
-if $use_ws; then run "registry paths exist in workspace" scripts/check-registry.sh
+if $use_ws; then runl "registry paths exist in workspace" scripts/check-registry.sh
 else skp "registry paths exist in workspace" "--no-workspace"; fi
 
 # ---- git guard, skill contract lint, routing (task + historical replay)
@@ -164,18 +261,17 @@ run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
 run "delivery pipeline (tier, plan, dispatch, verdicts, gate)" env -u TMPDIR tests/pipeline.test.sh
 run "run-all --affected suite selection" tests/affected.test.sh
+run "run-all -j scheduler (order, counts, concurrency cap, live lane, run1 alone)" tests/run-all-parallel.test.sh
 run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
 run "registry fragments (registry/ -> registry.json build, placement, merge)" tests/registry-fragments.test.sh
 # Codex packaging (.codex-plugin, .agents/plugins, hooks/codex-hooks.json, scripts/codex_hook.py)
-cx=$(env -u TMPDIR tests/codex-plugin.test.sh 2>&1); cxrc=$?; cxsum=$(tail -1 <<<"$cx")
-cxpass=$(sed -n 's/.*, \([0-9]*\) passed,.*/\1/p' <<<"$cxsum")
-if [ $cxrc -ne 0 ]; then bad "Codex plugin: manifest, marketplace, hook config, adapter" "$cx"
-elif [ "${cxpass:-0}" -eq 0 ]; then skp "Codex plugin: manifest, marketplace, hook config, adapter" "${cxsum#codex-plugin tests: }: Codex packaging files absent"
-else ok "Codex plugin: manifest, marketplace, hook config, adapter (${cxsum#codex-plugin tests: })"; fi
-if $use_ws; then run "routing properties over real history" python3 -B tests/routing-properties.test.py
-else skp "routing properties over real history" "--no-workspace"; fi
-if $use_ws; then run "registry facts re-probed in the repos" tests/facts.test.sh
-else skp "registry facts re-probed in the repos" "--no-workspace"; fi
+codex_post() { # rc output
+  local cxsum cxpass; cxsum=$(tail -1 <<<"$2"); cxpass=$(sed -n 's/.*, \([0-9]*\) passed,.*/\1/p' <<<"$cxsum")
+  if [ "$1" -ne 0 ]; then _bad "Codex plugin: manifest, marketplace, hook config, adapter" "$2"
+  elif [ "${cxpass:-0}" -eq 0 ]; then _skp "Codex plugin: manifest, marketplace, hook config, adapter" "${cxsum#codex-plugin tests: }: Codex packaging files absent"
+  else _ok "Codex plugin: manifest, marketplace, hook config, adapter (${cxsum#codex-plugin tests: })"; fi
+}
+runp "Codex plugin" codex_post env -u TMPDIR tests/codex-plugin.test.sh
 run "skill citation checker (fixture repos)" env -u TMPDIR tests/skill-citations.test.sh
 run "engineering routing contract unchanged (golden, stand-in workspace)" env -u TMPDIR tests/routing-golden.test.sh
 run "repos without a remote do not crash status or the git guard" env -u TMPDIR tests/registry-nulls.test.sh
@@ -190,22 +286,29 @@ run "VFX production workflow" tests/vfx-workflow.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
-run "git environment isolation + shared-config guard (throwaway repos)" env -u TMPDIR tests/git-env-isolation.test.sh
 if ! $use_ws; then skp "orca commands cited in parallel-work.md" "--no-workspace"
 elif ! command -v orca >/dev/null 2>&1; then skp "orca commands cited in parallel-work.md" "orca not on PATH"
 else run "orca commands cited in parallel-work.md exist in orca --help" tests/orca-commands.test.sh; fi
-if $use_ws; then  # MOVED (anchor unique elsewhere) is a warning here and a failure under --release
+# ---- live workspace (read-only): runl / block - with -j N in the background next to the fixture suites, one at a time
+if $use_ws; then runl "routing properties over real history" python3 -B tests/routing-properties.test.py
+else skp "routing properties over real history" "--no-workspace"; fi
+if $use_ws; then runl "registry facts re-probed in the repos" tests/facts.test.sh
+else skp "registry facts re-probed in the repos" "--no-workspace"; fi
+live_citations() {  # MOVED (anchor unique elsewhere) is a warning here and a failure under --release
+  local cit citrc l
   if $release; then run "skill line citations point at their symbols (integration branches, --strict)" python3 -B scripts/checks/skill-citations.py --strict
   else
     cit=$(python3 -B scripts/checks/skill-citations.py 2>&1); citrc=$?
     if [ $citrc -ne 0 ]; then bad "skill line citations point at their symbols (integration branches)" "$cit"
     else ok "skill line citations point at their symbols (integration branches)"
-      grep '^MOVED ' <<<"$cit" | sed 's/^MOVED /WARN  moved citation: /'
-      grep -q '^MOVED ' <<<"$cit" && echo "WARN  rewrite moved citations: python3 -B scripts/checks/skill-citations.py --fix (fails under --release)"
+      while IFS= read -r l; do note "WARN  moved citation: ${l#MOVED }"; done < <(grep '^MOVED ' <<<"$cit")
+      grep -q '^MOVED ' <<<"$cit" && note "WARN  rewrite moved citations: python3 -B scripts/checks/skill-citations.py --fix (fails under --release)"
     fi
   fi
+}
+if $use_ws; then block live_citations
 else skp "skill line citations against the repos" "--no-workspace"; fi
-if $use_ws; then run "routing + history replay" tests/routing.test.sh
+if $use_ws; then runl "routing + history replay" tests/routing.test.sh
 else
   # task scenarios resolve --paths only, but factory-context still needs the workspace markers and a git
   # work tree per registry repo: a throwaway stand-in (empty repos), never the real workspace
@@ -215,7 +318,7 @@ else
   done < <(jq -r '.repos[].path' registry.json)
   while IFS= read -r m; do mkdir -p "$SW/$(dirname "$m")"; touch "$SW/$m"; done < <(jq -r '.workspace.root_markers[]' registry.json)
   run "routing (task scenarios only, stand-in workspace)" env RPG_FACTORY_WORKSPACE="$SW" tests/routing.test.sh --no-history
-  rm -rf "$SW"
+  cleanup+=("$SW")  # removed after the last suite ended (with -j N this one may still be running)
 fi
 
 # ---- resolver behaviour (pure jq, no workspace needed)
@@ -248,7 +351,8 @@ r=$(resolve server '[]')
 expect "no files -> no checks" '.checks == [] and .touched == []' "$r"
 
 # ---- live context script (read-only against the real workspace)
-if $use_ws; then
+live_context() {
+  local out out2 md
   # every registered repo is snapshotted, except optional repos that are absent on disk, which are reported
   if out=$(scripts/factory-context.sh --json 2>&1) && jq -e --slurpfile reg registry.json '
       ([.repos[].repo] + (.optional_repos_absent // [])) as $seen
@@ -271,9 +375,9 @@ if $use_ws; then
     && ok "factory-context --paths without --repo is rejected" || bad "factory-context --paths without --repo"
   md=$(scripts/factory-context.sh --repo client 2>&1)
   grep -q "^## client:" <<<"$md" && ok "factory-context markdown renders" || bad "factory-context markdown" "$md"
-else
-  skp "factory-context live checks" "--no-workspace"
-fi
+}
+if $use_ws; then block live_context
+else skp "factory-context live checks" "--no-workspace"; fi
 
 # ---- sgl-determinism (ADR-10) against fixtures: banned calls fail, comments/strings/allowed MathF pass
 dt=$(mktemp_win)
@@ -292,7 +396,8 @@ python3 -B scripts/checks/sgl-determinism.py "$dt" >/dev/null 2>&1; [ $? -eq 2 ]
 rm -rf "$dt"
 
 # ---- Factory check scripts against the live workspace (read-only)
-if $use_ws; then
+live_checks() {
+  local wsr cl pin_files out hout ph r p rc
   run "sgl-determinism on Shared.GameLogic" python3 -B scripts/checks/sgl-determinism.py \
     "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/rpg-mmo-server/backend/gameserver-dotnet/Shared.GameLogic"
   # pin-status reads the client's working tree. When the user has uncommitted pin files (the local file:
@@ -326,17 +431,18 @@ if $use_ws; then
     out=$(bash scripts/checks/netcode-headless.sh 2>&1); rc=$?
     [ $rc -eq 0 ] && ok "netcode headless tests: $(sed -n 's/^headless tests: //p' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
   else skp "netcode headless tests" "no dotnet/dotnet.exe"; fi
-fi
+}
+$use_ws && block live_checks
 
 # ---- live derived status + install state
 if $use_ws; then
-  run "factory-status on the real workspace (read-only)" python3 -B scripts/factory-status.py
+  runl "factory-status on the real workspace (read-only)" python3 -B scripts/factory-status.py
 fi
 ist=$(python3 -B scripts/install-status.py --json 2>/dev/null | jq -r .state)
 if $release; then
   [ "$ist" = "CURRENT" ] && ok "installed plugin == source (release gate)" || bad "installed plugin == source (release gate)" "$(python3 -B scripts/install-status.py)"
   [ -z "$(git status --porcelain)" ] && ok "source is committed (release gate)" || bad "source is committed (release gate)" "uncommitted changes"
-  run "safety through the installed hooks (disposable workspace)" env -u TMPDIR tests/installed-safety.sh
+  run1 "safety through the installed hooks (disposable workspace)" env -u TMPDIR tests/installed-safety.sh
 else
   skp "installed plugin == source" "install state $ist; required only with --release"
 fi
@@ -362,13 +468,19 @@ out=$(GIT_CEILING_DIRECTORIES="$T" python3 -B scripts/checks/package-ready.py "$
   && ok "package-ready: unreadable git tree is an error, not READY" || bad "package-ready on a non-repo (rc=$rc)" "$out"
 rm -rf "$T"
 
-# ---- Claude Code's own validator
+# ---- alone (run1): the shared git config guard suite, then Claude Code's own validator
+run1 "git environment isolation + shared-config guard (throwaway repos)" env -u TMPDIR tests/git-env-isolation.test.sh
 if $use_claude && command -v claude >/dev/null 2>&1; then
-  run "claude plugin validate --strict . (marketplace)" claude plugin validate --strict .
-  run "claude plugin validate --strict .claude-plugin/plugin.json (plugin + skills)" claude plugin validate --strict .claude-plugin/plugin.json
+  run1 "claude plugin validate --strict . (marketplace)" claude plugin validate --strict .
+  run1 "claude plugin validate --strict .claude-plugin/plugin.json (plugin + skills)" claude plugin validate --strict .claude-plugin/plugin.json
 else
   skp "claude plugin validate" "claude CLI unavailable or --no-claude"
 fi
+
+drain
+[ -n "$QD" ] && rm -rf "$QD"
+[ ${#cleanup[@]} -gt 0 ] && rm -rf "${cleanup[@]}"
+find scripts tests testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- the shared git config (common dir) must be byte-identical to what it was when the run started
 if [ -n "${GITCFG_FILE:-}" ]; then
@@ -377,5 +489,6 @@ else skp "shared git config unchanged during the run" "not inside a git reposito
 
 total=$((pass + fail + skip))
 echo "----"
+echo "wall time: $(( $(date +%s) - t_start ))s (-j $jobs)"
 echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ -n "$AFF" ] && echo " ($naff not affected by the change)")"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]

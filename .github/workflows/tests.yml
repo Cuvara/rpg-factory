@@ -1,5 +1,5 @@
 # Plugin test suite on clean Linux and Windows (Git Bash) runners. The RPG MMO workspace (server, client, Netcode, UnityDots,
-# UIToolkit) is not available here, so this runs `tests/run-all.sh --no-workspace --no-claude`: every
+# UIToolkit) is not available here, so this runs `tests/run-all.sh -j 4 --no-workspace --no-claude`: every
 # check that needs those repos on disk (registry paths, facts, pin-status, wire-parity, package-ready,
 # netcode headless, live context/status) is reported as SKIP, never as PASS. Those still have to be run
 # locally with the workspace (`tests/run-all.sh`) before a release.
@@ -68,18 +68,18 @@ jobs:
           git config --global user.name ci
           git config --global init.defaultBranch main
 
-      - name: tests/run-all.sh --no-workspace --no-claude
+      - name: tests/run-all.sh -j 4 --no-workspace --no-claude
         run: |
           set -o pipefail
-          tests/run-all.sh --no-workspace --no-claude 2>&1 | tee run-all.log
+          tests/run-all.sh -j 4 --no-workspace --no-claude 2>&1 | tee run-all.log
 
       - name: Summary
         if: always()
         run: |
           {
-            echo '### tests/run-all.sh --no-workspace --no-claude'
+            echo '### tests/run-all.sh -j 4 --no-workspace --no-claude'
             echo '```'
-            grep -E '^(FAIL|SKIP) |^run-all:' run-all.log || echo 'no run-all.log'
+            grep -E '^(FAIL|SKIP) |^run-all:|^wall time:' run-all.log || echo 'no run-all.log'
             echo '```'
             echo 'Workspace checks are skipped here; run `tests/run-all.sh` locally with the workspace.'
           } >> "$GITHUB_STEP_SUMMARY"
