@@ -6,6 +6,9 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 
 - `registry.json` is the source of truth for module knowledge. Never hard-code module paths,
   commands, or rules in `SKILL.md` or the references - put them in the registry and read them.
+  It is generated: edit the fragments under `registry/` (`core.json`, `engineering/<repo>|skills|contracts.json`,
+  `domains/<domain>.json`; placement rule in `scripts/lib/registry_src.py`), then `python3 -B scripts/build-registry.py`.
+  run-all fails when `registry.json` is not the build (`--check`). After a merge, rebuild if `registry.json` conflicted.
 - Keep `factory-context.sh`, `factory-status.py` and `scripts/checks/` read-only: no fetch (except
   opt-in `--remote` ls-remote), no writes into repos. State is derived from git; the only Factory
   files are per-session mode state and check evidence, resolved through `scripts/lib/fstate.py` (never `$TMPDIR`
@@ -83,6 +86,8 @@ env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a thr
 tests/orca-commands.test.sh                # orca commands cited in parallel-work.md exist (SKIP without orca)
 env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
 tests/changelog.test.sh                    # changelog fragments: validation, preview, release assembly
+tests/registry-fragments.test.sh           # registry/ fragments: build, placement, scaffolder, parallel merge
+python3 -B scripts/build-registry.py [--check|--split]   # registry.json from registry/ (--check read-only)
 python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   # changelog.d fragments
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate

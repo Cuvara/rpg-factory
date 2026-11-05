@@ -1,0 +1,300 @@
+{
+  "modules": [
+    {
+      "id": "unitydots.runtime",
+      "repo": "unitydots",
+      "paths": [
+        "Runtime/",
+        "Runtime.DI/",
+        "Runtime.GameFoundation/",
+        "Runtime.GameLogic/",
+        "Runtime.Netcode/",
+        "Runtime.Netcode.Prediction/",
+        "Runtime.Physics/"
+      ],
+      "responsibility": "ECS runtime (Cuvara.DOTS.*): simulation groups, modules, provisioning, views, messaging, DI, GameFoundation/GameLogic/Netcode/Prediction/Physics bridges.",
+      "depends_on": [
+        "netcode.runtime",
+        "server.shared-gamelogic"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/OVERVIEW.md",
+        "Documentation~/MODULE-LIFECYCLE.md",
+        "Documentation~/NETCODE-INTEGRATION.md",
+        "Documentation~/SUPPORT-MATRIX.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI.",
+        "Define-constrained assemblies: behaviour must hold in all six CI matrix configurations (without/with netcode, core-only, physics, full-stack, gamefoundation).",
+        "Game rules (movement, combat, damage, validation, cooldowns, any formula the server must agree with) live only in Shared.GameLogic (server repo, server-realtime) and reach this repo through the com.rpgmmo.shared-gamelogic pin (pin-bump). Never reimplement or copy one here (ADR-10); a missing rule stops this leg."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml (6 configurations) Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.editor",
+      "repo": "unitydots",
+      "paths": [
+        "Editor/"
+      ],
+      "responsibility": "Editor tooling (Cuvara.DOTS.Editor).",
+      "depends_on": [
+        "unitydots.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.samples",
+      "repo": "unitydots",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "Samples: AnimationAndEvents, HybridViews, NetworkedPrediction, PhaseBShowcase, StressBenchmark.",
+      "depends_on": [
+        "unitydots.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.tests",
+      "repo": "unitydots",
+      "paths": [
+        "Tests/"
+      ],
+      "responsibility": "Tests per assembly (Editor, Editor.DI/GameLogic/Netcode/Physics/Prediction, Runtime).",
+      "depends_on": [
+        "unitydots.runtime",
+        "unitydots.editor"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "test-floor-selftest",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/test_assert_test_floors.py",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UnityDots ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.package",
+      "repo": "unitydots",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "ROADMAP.md",
+        "LICENSE",
+        "Documentation~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, docs, CI/release.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Release per Documentation~/RELEASE.md: PR into main, bump package.json and rename [Unreleased] to '## [X.Y.Z] - date' in the tagged commit, compatibility line per moved pin, ### Migration when needed.",
+        "Test floors: CI asserts minimum test counts per assembly (assert_test_floors.py) - adding tests may require raising floors, removing tests fails CI.",
+        "A bumped package.json with an undated CHANGELOG section is not releasable (factory-status / package-ready.py).",
+        "check_metas.py reads `git ls-files` and skips ~ folders: stage new files before trusting it, and check Samples~/Tests~ .meta by hand (UnityDots Samples~ has 8, UIToolkit 17 files without .meta today)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
+          }
+        ],
+        "external": [
+          {
+            "id": "ci",
+            "run": "UnityDots ci.yml on the PR",
+            "evidence": "all jobs pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "unitydots.root",
+      "repo": "unitydots",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    }
+  ]
+}

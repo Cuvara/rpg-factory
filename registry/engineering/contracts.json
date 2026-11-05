@@ -1,0 +1,381 @@
+{
+  "contracts": [
+    {
+      "id": "wire-generated",
+      "summary": "wire.proto is the single source; Go and C# server bindings are generated from it and Netcode carries a byte-identical copy of the C# binding.",
+      "source": {
+        "repo": "server",
+        "path": "backend/shared/proto/wire.proto"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/proto/gen/",
+          "how": "backend/shared/proto/generate.sh (protoc + protoc-gen-go at the CI pins)"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Net/Generated/",
+          "how": "generate.sh"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Protocol/Generated/Wire.cs",
+          "how": "byte copy of the server C# binding"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": "tag",
+      "evidence": "scripts/checks/wire-parity.sh; server CI proto-generated; Netcode CI wire; TestDotnetInterop."
+    },
+    {
+      "id": "protocol-version",
+      "summary": "The wire protocol version constant must agree in the C# server, Go shared/messages and Netcode; the gateway --min-protocol-version flag decides admission.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/Net/WireProtocol.cs"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/messages/messages.go",
+          "how": "const WireProtocolVersion"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Protocol/WireProtocolVersion.cs",
+          "how": "WireProtocolVersion.Current"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/cmd/gateway/main.go",
+          "how": "--min-protocol-version flag (admission policy)"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": "tag",
+      "evidence": "scripts/checks/wire-parity.sh; gateway/server/protocol_version_test.go; ProtocolVersionHandshakeTests."
+    },
+    {
+      "id": "redis-server-registry",
+      "summary": "Redis hash servers:id:{id} is written by the C# game server and read by the Go gateway; both sides change in the same commit.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/Registry/RedisServerRegistry.cs"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/storage/redisstore/registry.go",
+          "how": "hand-maintained Go reader"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": null,
+      "evidence": "Registry tests on both sides + integration e2e (TestDotnetInterop)."
+    },
+    {
+      "id": "sgl-pin",
+      "summary": "Shared.GameLogic releases (package.json + lead-created sgl-vX.Y.Z tag) are pinned by the client in manifest AND lock; package CIs bootstrap their own sgl pin.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/Shared.GameLogic/package.json"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Packages/manifest.json",
+          "how": "com.rpgmmo.shared-gamelogic git URL #sgl-vX.Y.Z"
+        },
+        {
+          "repo": "client",
+          "path": "Packages/packages-lock.json",
+          "how": "same pin"
+        }
+      ],
+      "driver": "pin-bump",
+      "gate": "tag",
+      "evidence": "scripts/checks/pin-status.py; client CI sgl-pin-check.yml + 02-package-pins.yml.",
+      "watchers": [
+        {
+          "repo": "netcode",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI bootstrap pin"
+        },
+        {
+          "repo": "unitydots",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI bootstrap pin"
+        }
+      ]
+    },
+    {
+      "id": "package-pins",
+      "summary": "Client pins of com.cuvara.{netcode,dots,uitoolkit} must name released tags, agree between manifest and lock, and (netcode) match the DOTS Sample copy.",
+      "source": {
+        "repo": "client",
+        "path": "Packages/manifest.json"
+      },
+      "copies": [
+        {
+          "repo": "client",
+          "path": "Packages/packages-lock.json",
+          "how": "identical pin"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Samples/Netcode/DOTS Sample/",
+          "how": "byte copy of Netcode Samples~/DOTSSample + .sample-source"
+        }
+      ],
+      "driver": "pin-bump",
+      "gate": "tag",
+      "evidence": "scripts/checks/pin-status.py (+ --remote); unity-package-pins.py; client CI 02-package-pins.yml.",
+      "upstream": [
+        {
+          "repo": "netcode",
+          "path": "package.json",
+          "how": "released version (tag vX.Y.Z by the lead)"
+        },
+        {
+          "repo": "unitydots",
+          "path": "package.json",
+          "how": "released version"
+        },
+        {
+          "repo": "uitoolkit",
+          "path": "package.json",
+          "how": "released version"
+        }
+      ],
+      "watchers": [
+        {
+          "repo": "netcode",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI installs com.cuvara.dots at a fixed tag"
+        },
+        {
+          "repo": "unitydots",
+          "path": ".github/workflows/ci.yml",
+          "how": "CI installs com.cuvara.netcode at a fixed tag"
+        }
+      ]
+    },
+    {
+      "id": "gamestate-migrations",
+      "summary": "Embedded server migrations and the deploy copies must stay identical (normalised); applied migrations are immutable (checksummed).",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/Persistence/Migrations/"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/deploy/db/migrations/gamestate/",
+          "how": "copy"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/db/init-gamestate.sql",
+          "how": "must match the first migration"
+        }
+      ],
+      "driver": "server-services",
+      "gate": null,
+      "evidence": "MigratorTests EmbeddedMigrations_MatchDeployCopies + InitGamestateSql_MatchesFirstMigration Passed (not Skipped)."
+    },
+    {
+      "id": "server-knobs",
+      "summary": "Every GAMESERVER_* knob declared in code is passed through (or excluded by name) in compose and Agones/k8s fleet manifests.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gameserver-dotnet/GameServer/ServerEnv.cs"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/deploy/docker-compose.yml",
+          "how": "service gameserver-dotnet environment"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/docker-compose.override.yml",
+          "how": "service gameserver-dotnet-map02"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/agones/fleet-map-dotnet-dev.yaml",
+          "how": "env"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/50-fleet-map.yaml",
+          "how": "env"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/60-fleet-dungeon.yaml",
+          "how": "env"
+        }
+      ],
+      "driver": "server-realtime",
+      "gate": null,
+      "evidence": "GameServer.Tests/Deploy (DeclaredKnobs, ComposeEnvPassthroughTests, FleetEnvPassthroughTests) Passed counts.",
+      "co_edit": "server-realtime may edit ONLY the env: passthrough lines of the five copies (plus a backend/deploy/CHANGELOG.md entry) in the same commit as the knob; values (.env.example, 20-configmaps.yaml keys) and everything else in those files stay with server-ops."
+    },
+    {
+      "id": "join-token",
+      "summary": "JoinToken / session JWT claims (sid, jti, keyring) minted by the Go gateway and validated by the C# game server; both sides change in one commit.",
+      "source": {
+        "repo": "server",
+        "path": "backend/gateway/transfer/join_token.go"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/shared/jwt/",
+          "how": "shared JWT/keyring helpers"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Server/JwtValidator.cs",
+          "how": "C# validator"
+        }
+      ],
+      "driver": "wire-contract",
+      "gate": null,
+      "evidence": "Go transfer/jwt tests + C# JwtValidator tests + integration e2e (TestDotnetInterop)."
+    },
+    {
+      "id": "nakama-rpc",
+      "summary": "Nakama RPC names and payloads (party_*, reward_kills, economy) registered in the Go plugin and called by the client, the gateway and the game server.",
+      "source": {
+        "repo": "server",
+        "path": "backend/nakama/main.go"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/nakama/social/",
+          "how": "party RPC handlers/payloads"
+        },
+        {
+          "repo": "server",
+          "path": "backend/nakama/economy/",
+          "how": "economy/reward RPC handlers"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/transfer/party.go",
+          "how": "party_get caller"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Nakama/NakamaClient.cs",
+          "how": "reward_kills caller"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Nakama/Social/PartyService.cs",
+          "how": "party RPC caller"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Nakama/Auth/NakamaAuthProvider.cs",
+          "how": "auth caller"
+        },
+        {
+          "repo": "server",
+          "path": "backend/nakama/auth/token.go",
+          "how": "gateway_token RPC minting the gateway session JWT"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/session/jwt.go",
+          "how": "gateway verifies the Nakama-minted session JWT"
+        }
+      ],
+      "driver": "server-services",
+      "gate": null,
+      "evidence": "nakama social/economy tests, gateway party tests, client EditMode tests (external), backend/nakama/docs/API.md."
+    },
+    {
+      "id": "transport-security",
+      "summary": "Transport security switches and the capabilities they require: gateway/Nakama TLS and GAMESERVER_SEALED=require in the deploy manifests need the game server, gateway, smoketest/verify pins, the Netcode sealed client and the client's certificate pin loading to support them FIRST. Turning a switch on goes capability -> switch; turning it off goes switch -> capability.",
+      "source": {
+        "repo": "server",
+        "path": "backend/deploy/k8s/app/40-gateway.yaml"
+      },
+      "copies": [
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/50-fleet-map.yaml",
+          "how": "GAMESERVER_SEALED on the map fleet"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/app/60-fleet-dungeon.yaml",
+          "how": "GAMESERVER_SEALED on the dungeon fleet"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/data/nakama.yaml",
+          "how": "Nakama (meta hop) TLS"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/docker-compose.yml",
+          "how": "local stack TLS/sealed settings"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gateway/cmd/gateway/main.go",
+          "how": "gateway TLS flags"
+        },
+        {
+          "repo": "server",
+          "path": "backend/gameserver-dotnet/GameServer/Nakama/NakamaTlsPin.cs",
+          "how": "game server -> Nakama pin"
+        },
+        {
+          "repo": "server",
+          "path": "backend/smoketest/smoke/",
+          "how": "smoketest/killprobe pins and sealed sessions (must pin the TARGET cluster's certificate)"
+        },
+        {
+          "repo": "server",
+          "path": "backend/deploy/k8s/verify/",
+          "how": "deployment verification (probe + checks_flow.sh pin the target cluster's certificate)"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Client/SealedHandshakeClient.cs",
+          "how": "client sealed handshake (ADR-22/25)"
+        },
+        {
+          "repo": "netcode",
+          "path": "Runtime/Client/NetworkSettings.cs",
+          "how": "client transport security settings"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/DI/TransportSecurityReport.cs",
+          "how": "loads the gateway / Nakama certificate pins per backend"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Session/BackendCommandLine.cs",
+          "how": "backend settings incl. pin paths"
+        },
+        {
+          "repo": "client",
+          "path": "Assets/Scripts/Nakama/Tls/",
+          "how": "pinned HTTP adapter (no accept-any mode)"
+        }
+      ],
+      "driver": "server-ops",
+      "evidence": "Before a switch goes on: the Netcode tag the client pins supports it (factory-status pins), the client loads a pin for that backend, smoketest/verify pin the target cluster's certificate. History: ed090ab (every dungeon entry failed once meta-hop TLS went on), 437a3db (verify pinned dev's certificate against another cluster).",
+      "gate": "shared-infra"
+    }
+  ]
+}

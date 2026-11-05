@@ -1,0 +1,583 @@
+{
+  "modules": [
+    {
+      "id": "client.dots-sample",
+      "repo": "client",
+      "paths": [
+        "Assets/Samples/Netcode/DOTS Sample/"
+      ],
+      "responsibility": "Tracked byte-for-byte copy of com.cuvara.netcode Samples~/DOTSSample at the version in .sample-source. What the play client builds.",
+      "depends_on": [
+        "client.packages",
+        "netcode.samples"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md#the-dots-sample-what-the-play-client-builds"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "GENERATED COPY - never hand-edit. Changes belong upstream in the Netcode repo.",
+        "When netcode is bumped, recopy Samples~/DOTSSample from the new tag (with .meta) and update .sample-source; 02-package-pins fails until they agree.",
+        "Never re-import through Package Manager (creates a version-named folder and a duplicate DOTSSample assembly)."
+      ],
+      "generated": [
+        "Assets/Samples/Netcode/DOTS Sample/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "package-pins",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/unity-package-pins.py .",
+            "evidence": "Prints 'OK: N git-URL dependencies pinned identically' with N > 0.",
+            "parser": "regex:^OK: [1-9]\\d* git-URL"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-package-pins",
+            "run": "CI 02-package-pins.yml (also checks .sample-source and that pinned refs exist on the remote)",
+            "evidence": "Job pass."
+          }
+        ]
+      },
+      "obligations": [
+        "Update .sample-source with the copied version."
+      ],
+      "skills": [
+        "pin-bump"
+      ]
+    },
+    {
+      "id": "client.samples-imported",
+      "repo": "client",
+      "paths": [
+        "Assets/Samples/"
+      ],
+      "responsibility": "Package samples imported via Package Manager, frozen at the version they were accepted with (#135).",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md#importing-a-package-sample-to-test-it"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "GENERATED - package-owned content. Do not edit or delete; untracked sample folders are usually the user's in-progress imports."
+      ],
+      "generated": [
+        "Assets/Samples/"
+      ],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": []
+    },
+    {
+      "id": "client.scripts",
+      "repo": "client",
+      "paths": [
+        "Assets/Scripts/",
+        "Assets/DotsViews/",
+        "Assets/VContainer/"
+      ],
+      "responsibility": "Client gameplay/presentation code (NDC.Scripts asmdef), DOTS views, DI setup.",
+      "depends_on": [
+        "client.packages"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "docs/DOTS-WIRING.md",
+        "docs/HUD-BRIDGE.md",
+        "docs/ACCOUNT-RECOVERY.md",
+        "docs/DEVICE-BENCHMARK.md",
+        "docs/UI-ARCHITECTURE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Namespace mirrors folder path under Assets; one class per file; VContainer DI over singletons; UniTask over coroutines; prefer separate .asmdef assemblies.",
+        "Every new asset/folder needs its Unity-generated .meta committed with it.",
+        "Networking, ECS views and navigation live in com.cuvara.* packages (unity-package); .claude/agents/unity-netcode.md is stale (known issue).",
+        "Game rules (movement, combat, damage, validation, cooldowns, any formula the server must agree with) live only in Shared.GameLogic (server repo, server-realtime) and reach this repo through the com.rpgmmo.shared-gamelogic pin (pin-bump). Never reimplement or copy one here (ADR-10); a missing rule stops this leg.",
+        "One RegisterMessagePipe (inside RegisterDots); one IWireCodec (RegisterNetworking encoding:); scene components injected via RegisterBuildCallback, not RegisterComponentInHierarchy (except BenchmarkLifetimeScope).",
+        "[DOTSNet] log prefixes in Assets/Scripts/Session/MainSessionFlow.cs are a contract with Tools/verify-multiclient.sh."
+      ],
+      "generated": [
+        "Assets/Scripts/UI/Hud/Generated/"
+      ],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-test-runner",
+            "run": "Unity Test Runner EditMode + PlayMode (NDC.Tests.Editor, NDC.Tests.Runtime) via Unity MCP when the Editor is open",
+            "evidence": "Runner summary: total / passed / failed / skipped per mode. Zero executed is a failure."
+          },
+          {
+            "id": "ci-unity",
+            "run": "CI 01-ci.yml (unity-build-workflows pipeline, run-tests: true)",
+            "evidence": "Job pass and test count in the report artifact."
+          },
+          {
+            "id": "ci-uxml-drift",
+            "run": "CI uxml-codegen-drift.yml (PRs touching *.uxml / *.uxml.g.cs / packages-lock.json)",
+            "evidence": "Job pass."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
+    },
+    {
+      "id": "client.tests",
+      "repo": "client",
+      "paths": [
+        "Assets/Tests/"
+      ],
+      "responsibility": "Client EditMode/PlayMode tests.",
+      "depends_on": [
+        "client.scripts"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "EditMode: Assets/Tests/Editor (NDC.Tests.Editor); PlayMode: Assets/Tests/Runtime (NDC.Tests.Runtime)."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-test-runner",
+            "run": "Unity MCP tool tests-run (ai-game-developer, :23621) testMode EditMode then PlayMode, assemblies NDC.Tests.Editor / NDC.Tests.Runtime; save open scenes first",
+            "evidence": "total/passed/failed/skipped per mode; zero executed = failed"
+          },
+          {
+            "id": "ci-unity",
+            "run": "CI 01-ci.yml",
+            "evidence": "job pass + test count"
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
+    },
+    {
+      "id": "client.ui",
+      "repo": "client",
+      "paths": [
+        "Assets/UI Toolkit/"
+      ],
+      "responsibility": "UI Toolkit theme assets under Assets/UI Toolkit/ (the runtime .tss). The only UXML/USS today, the HUD (Assets/Scripts/UI/Hud/: HudView.uxml, Hud.uss, Generated/*.uxml.g.cs), lives in client.scripts by design (docs/HUD-BRIDGE.md); new screens go here once Assets/UI/Screens/ exists.",
+      "depends_on": [
+        "client.packages"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "docs/UI-ARCHITECTURE.md",
+        "docs/HUD-BRIDGE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "*.uxml.g.cs are generated from UXML by com.cuvara.uitoolkit codegen; regenerate, never hand-edit.",
+        "Never call RegisterScreenManager/RegisterGameFoundation; IScreenNavigator is the only navigation (docs/UI-ARCHITECTURE.md). New screens go under Assets/UI/Screens/<Name>/ (not created yet; the HUD lives in Assets/Scripts/UI/Hud by design, docs/HUD-BRIDGE.md)."
+      ],
+      "generated": [
+        "**/*.uxml.g.cs"
+      ],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-uxml-drift",
+            "run": "CI uxml-codegen-drift.yml (PRs touching *.uxml / *.uxml.g.cs / packages-lock.json)",
+            "evidence": "Job pass."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
+    },
+    {
+      "id": "client.buildscripts",
+      "repo": "client",
+      "paths": [
+        "Assets/BuildScripts/",
+        "BuildConfig/",
+        "Assets/_SampleBuild/"
+      ],
+      "responsibility": "Batch-mode build entries (Assets/BuildScripts/ PlayerBuilder.Build; Assets/_SampleBuild/Editor/ PlayClientBuilder.Build and SampleBuilder.Build, no asmdef: Assembly-CSharp-Editor) and layered build configs (base + environment overlays).",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md#build--ci"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Unity.exe paths must be Windows paths; WSL env vars do not reach Unity.exe.",
+        "SampleImporter uses -samplePackage (client CLAUDE.md example with -importPackage is stale); never commit EditorBuildSettings produced by -addToBuild 1.",
+        "DotsViewLibraryBuildCheck fails every build on a bad Assets/Resources/DotsViews/DotsViewLibrary.asset."
+      ],
+      "generated": [],
+      "tools": [
+        "jq"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "buildconfig-json",
+            "cwd": ".",
+            "run": "for f in BuildConfig/*.json; do jq empty \"$f\" || exit 1; done",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-build",
+            "run": "CI 10-build-development.yml (gh workflow run, user approval required)",
+            "evidence": "Artifact produced and verified per CLAUDE.md 'Verifying a player build actually contains your change'."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ],
+      "gates": [
+        "unity-batch",
+        "workflow-dispatch"
+      ]
+    },
+    {
+      "id": "client.packages",
+      "repo": "client",
+      "paths": [
+        "Packages/manifest.json",
+        "Packages/packages-lock.json"
+      ],
+      "responsibility": "UPM dependency pins (com.cuvara.*, com.rpgmmo.shared-gamelogic, Unity packages).",
+      "depends_on": [
+        "server.shared-gamelogic",
+        "netcode.package",
+        "unitydots.package",
+        "uitoolkit.package"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md#package-pins-and-the-one-local-development-exception"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Git-URL deps are pinned in BOTH manifest.json and packages-lock.json and must agree; the lock is what resolves.",
+        "Pin to a tag. file: paths are allowed locally only and must never be committed.",
+        "Known issue: workspace-root toggle-packages.sh rewrites manifest.json only, not packages-lock.json - its output fails 02-package-pins if committed.",
+        "Bumping com.cuvara.netcode requires recopying the DOTS Sample (client.dots-sample)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "package-pins",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/unity-package-pins.py .",
+            "evidence": "Prints 'OK: N git-URL dependencies pinned identically' with N > 0 and no file: paths.",
+            "parser": "regex:^OK: [1-9]\\d* git-URL"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-package-pins",
+            "run": "CI 02-package-pins.yml + sgl-pin-check.yml",
+            "evidence": "Jobs pass."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "pin-bump"
+      ],
+      "gates": [
+        "client-package-toggle"
+      ]
+    },
+    {
+      "id": "client.gdk-submodules",
+      "repo": "client",
+      "paths": [
+        "Packages/com.gdk.core",
+        "Packages/com.gdk.3rd"
+      ],
+      "responsibility": "NightHowlGames GameFoundation / ThirdPartyServices submodules.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Never edit, update, or reset from the client repo. A dirty submodule pointer is the user's state - leave it."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": [],
+      "gates": [
+        "client-package-toggle"
+      ]
+    },
+    {
+      "id": "client.build-workflows",
+      "repo": "client",
+      "paths": [
+        "unity-build-workflows"
+      ],
+      "responsibility": "Submodule: Cuvara/unity-build-workflows CI toolkit (pytest suite, composite actions).",
+      "depends_on": [],
+      "claude_md": "unity-build-workflows/CLAUDE.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Change it in its own repo; the client only moves the submodule pointer (update-submodule.yml).",
+        "Submodule pointer bumps (update-submodule.yml, #95/#122/#137) are pin-bump work: move the gitlink to a released unity-build-workflows tag/commit, never edit the submodule's files from the client."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": [
+        "pin-bump"
+      ]
+    },
+    {
+      "id": "client.ci",
+      "repo": "client",
+      "paths": [
+        ".github/"
+      ],
+      "responsibility": "Client GitHub Actions (callers of unity-build-workflows@v6, pin checks, releases).",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md#cicd-github-actions"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-run",
+            "run": "Open a PR (with the user's approval) and read gh pr checks",
+            "evidence": "Every expected job listed and passing."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
+    },
+    {
+      "id": "client.tools",
+      "repo": "client",
+      "paths": [
+        "Tools/"
+      ],
+      "responsibility": "Multi-client run/verify scripts (run-clients.sh, verify-multiclient.sh) used for measurement against a running stack.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md#running-several-clients-against-one-backend"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "shell-syntax",
+            "cwd": "Tools",
+            "run": "for f in *.sh; do bash -n \"$f\" || exit 1; done",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": [
+        "measure"
+      ],
+      "gates": [
+        "multi-client"
+      ]
+    },
+    {
+      "id": "client.wire-conformance",
+      "repo": "client",
+      "paths": [
+        "Tools/WireConformance/"
+      ],
+      "responsibility": "Standalone dotnet console that compiles Netcode Protocol/Json/Codec/Snapshot/Transport sources (via Packages/com.cuvara.netcode) and asserts JSON codec output matches the Go struct tags.",
+      "depends_on": [
+        "netcode.protocol",
+        "netcode.codec"
+      ],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "CLAUDE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Compiles the gitignored embedded Packages/com.cuvara.netcode clone (often older than the pin) - state which Netcode version the result describes.",
+        "dotnet build here writes Tools/WireConformance/bin|obj (already present; check they are gitignored before building)."
+      ],
+      "generated": [],
+      "tools": [
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "wire-contract"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "wireconformance-build",
+            "cwd": "Tools/WireConformance",
+            "run": "{dotnet} build",
+            "evidence": "'Build succeeded' with 0 Error(s)"
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    },
+    {
+      "id": "client.unity-assets",
+      "repo": "client",
+      "paths": [
+        "Assets/",
+        "ProjectSettings/"
+      ],
+      "responsibility": "Scenes, settings, addressables, resources and other editor-authored assets.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Editor-authored YAML assets are changed through the Unity Editor (MCP tools), not by hand, unless the change is trivially textual."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": [
+          {
+            "id": "unity-editor",
+            "run": "Open in Unity Editor / Unity MCP and confirm the asset imports without errors (console)",
+            "evidence": "Console error count 0 after import."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "client-integration"
+      ]
+    },
+    {
+      "id": "client.docs",
+      "repo": "client",
+      "paths": [
+        "docs/",
+        "CLAUDE.md",
+        "README.md",
+        "CHANGELOG.md"
+      ],
+      "responsibility": "Client documentation.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [
+        "docs/"
+      ],
+      "changelog": null,
+      "rules": [],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": [],
+      "skills": []
+    },
+    {
+      "id": "client.root",
+      "repo": "client",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "CLAUDE.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    }
+  ]
+}

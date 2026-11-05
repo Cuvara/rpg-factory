@@ -1,0 +1,426 @@
+{
+  "modules": [
+    {
+      "id": "netcode.protocol",
+      "repo": "netcode",
+      "paths": [
+        "Runtime/Protocol/"
+      ],
+      "responsibility": "Wire message types, MsgType, WireProtocolVersion, and the generated protobuf Wire.cs.",
+      "depends_on": [
+        "server.proto"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/WIRE-PROTOCOL.md",
+        "Documentation~/NETCODE.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Runtime/Protocol/Generated/Wire.cs must be byte-identical to rpg-mmo-server GameServer/Net/Generated/RpgMmo/Wire/V1/Wire.cs (CI job 'wire'); copy it, never regenerate or edit here.",
+        "WireProtocolVersion.Current must equal the server's (C# WireProtocol.ProtocolVersion, Go messages.WireProtocolVersion).",
+        "Runtime/Plugins vendors Google.Protobuf (fact netcode-vendored-protobuf) and BouncyCastle.Cryptography.dll - version changes are wire-contract / security decisions."
+      ],
+      "generated": [
+        "Runtime/Protocol/Generated/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package",
+        "wire-contract"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "wire-parity",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/wire-parity.sh",
+            "evidence": "OK lines for Wire.cs bytes and protocol version",
+            "parser": "regex:^OK: Wire.cs byte-identical"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-wire",
+            "run": "Netcode CI job 'wire' (compares with server develop, unpinned)",
+            "evidence": "job pass"
+          },
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.codec",
+      "repo": "netcode",
+      "paths": [
+        "Runtime/Codec/",
+        "Runtime/Json/",
+        "Runtime/Transport/",
+        "Runtime/Crypto/"
+      ],
+      "responsibility": "Protobuf/JSON codecs, encoding sniffing, framing/transport (TCP/KCP), sealed-frame crypto.",
+      "depends_on": [
+        "netcode.protocol"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/NETCODE.md",
+        "Documentation~/WIRE-PROTOCOL.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Headless tests compile only Runtime/Transport/{FrameBuffer,WireFraming,TransportException}.cs; everything else here is covered only by Unity tests."
+      ],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "headless-tests",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/netcode-headless.sh",
+            "evidence": "headless tests: discovered/executed/passed/failed from .trx; executed > 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          },
+          {
+            "id": "client-wire-conformance",
+            "run": "IndieRPGMMOAdventure Tools/WireConformance (compiles the embedded, possibly stale, package clone)",
+            "evidence": "exit 0 - note which Netcode version it compiled"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.runtime",
+      "repo": "netcode",
+      "paths": [
+        "Runtime/"
+      ],
+      "responsibility": "Client runtime: connection, client, prediction, interpolation, snapshot, content client, DI/bootstrap, view, world, diagnostics.",
+      "depends_on": [
+        "netcode.protocol",
+        "netcode.codec",
+        "server.shared-gamelogic"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/NETCODE.md",
+        "Documentation~/PREDICTION.md",
+        "Documentation~/INTERPOLATION.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Consumes Shared.GameLogic (com.rpgmmo.shared-gamelogic); Netcode CI bootstraps its own SGL pin (contract sgl-pin watcher; factory-status shows lag).",
+        "Game rules (movement, combat, damage, validation, cooldowns, any formula the server must agree with) live only in Shared.GameLogic (server repo, server-realtime) and reach this repo through the com.rpgmmo.shared-gamelogic pin (pin-bump). Never reimplement or copy one here (ADR-10); a missing rule stops this leg."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.samples",
+      "repo": "netcode",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "18 package samples (17 with their own asmdef) incl. DOTSSample, which the client copies byte-for-byte.",
+      "depends_on": [
+        "netcode.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Samples~/DOTSSample is copied byte-for-byte into the client (client.dots-sample) at each netcode pin move."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-samples",
+            "run": "Netcode CI job 'samples' (compile in Unity)",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.tests",
+      "repo": "netcode",
+      "paths": [
+        "Tests/",
+        "Tests~/"
+      ],
+      "responsibility": "EditMode/PlayMode tests and the headless dotnet test project.",
+      "depends_on": [
+        "netcode.runtime",
+        "netcode.codec"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "headless-tests",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/netcode-headless.sh",
+            "evidence": "discovered/executed/passed/failed; executed > 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.measurement",
+      "repo": "netcode",
+      "paths": [
+        "Tests/Runtime/PredictionLatencyMeasurement.cs"
+      ],
+      "responsibility": "Prediction/latency measurement harness in the Netcode test suite.",
+      "depends_on": [
+        "netcode.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "A measurement harness change is package code (unity-package); a number quoted from it is measure's (verify-a-result)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "headless-tests",
+            "cwd": ".",
+            "run": "bash {plugin_root}/scripts/checks/netcode-headless.sh",
+            "evidence": "discovered/executed/passed/failed; executed > 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI Netcode ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": [],
+      "skills": [
+        "unity-package",
+        "measure"
+      ],
+      "gates": []
+    },
+    {
+      "id": "netcode.package",
+      "repo": "netcode",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "Documentation~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, docs and CI/release workflows.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta (CI validate: check_metas.py).",
+        "CHANGELOG entry under [Unreleased]; a release renames it to '## [X.Y.Z] - date' with package.json bumped in the same commit (release.yml extracts notes).",
+        "Documentation~/NETCODE.md (~line 359) still says nothing in CI diffs Wire.cs - stale (ci.yml job 'wire' does).",
+        "check_metas.py reads `git ls-files` and skips ~ folders: stage new files before trusting it, and check Samples~/Tests~ .meta by hand (UnityDots Samples~ has 8, UIToolkit 17 files without .meta today)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
+          }
+        ],
+        "external": [
+          {
+            "id": "ci",
+            "run": "Netcode ci.yml on the PR",
+            "evidence": "all jobs pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "netcode.root",
+      "repo": "netcode",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    }
+  ]
+}

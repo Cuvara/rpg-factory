@@ -1,0 +1,54 @@
+# Ownership by domain (registry `domains`). Later rules win. Today one maintainer owns every domain; replace a
+# domain's owner here when someone else takes it over, and branch protection then requests that owner's review.
+
+# shared core: routing, checks runner, guards, hooks, commands, release, the shared registry fragment
+*                                   @dyCuong03
+
+# engineering
+/registry/engineering/              @dyCuong03
+/skills/factory-core/               @dyCuong03
+
+# design
+/registry/domains/design.json       @dyCuong03
+/skills/game-design/                @dyCuong03
+/templates/design/                  @dyCuong03
+/scripts/checks/domains/design.py   @dyCuong03
+/docs/architecture/domains/design.md @dyCuong03
+/tests/design-workflow.test.sh      @dyCuong03
+
+# ui
+/registry/domains/ui.json           @dyCuong03
+/skills/ui-*/                       @dyCuong03
+/scripts/ui/                        @dyCuong03
+/templates/ui/                      @dyCuong03
+/scripts/checks/domains/ui.py       @dyCuong03
+/docs/architecture/domains/ui.md    @dyCuong03
+/docs/architecture/ui-skills.md     @dyCuong03
+/tests/ui-*.sh                      @dyCuong03
+
+# art2d
+/registry/domains/art2d.json        @dyCuong03
+/skills/art-2d/                     @dyCuong03
+/templates/art2d/                   @dyCuong03
+/scripts/adapters/art2d/            @dyCuong03
+/scripts/checks/domains/art2d.py    @dyCuong03
+/docs/architecture/domains/art2d.md @dyCuong03
+/tests/art2d-*                      @dyCuong03
+
+# art3d
+/registry/domains/art3d.json        @dyCuong03
+/skills/art-3d/                     @dyCuong03
+/templates/art3d/                   @dyCuong03
+/scripts/adapters/art3d/            @dyCuong03
+/scripts/checks/domains/art3d.py    @dyCuong03
+/docs/architecture/domains/art3d.md @dyCuong03
+/tests/art3d-workflow.test.sh       @dyCuong03
+
+# vfx
+/registry/domains/vfx.json          @dyCuong03
+/skills/vfx/                        @dyCuong03
+/templates/vfx/                     @dyCuong03
+/scripts/adapters/vfx/              @dyCuong03
+/scripts/checks/domains/vfx.py      @dyCuong03
+/docs/architecture/domains/vfx.md   @dyCuong03
+/tests/vfx-workflow.test.sh         @dyCuong03

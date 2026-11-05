@@ -28,7 +28,8 @@ python3 -B scripts/new-skill.py --name <name> --kind tech|repo|cross-repo --repo
 
 It writes `skills/<name>/SKILL.md` (every section skills-lint requires, `SCAFFOLD:` markers) and the
 registry entry (next free `order`, ownership, `dev_tools.used_by`); it refuses on anything it cannot
-validate and never reformats `registry.json`.
+validate. The registry edit lands in the fragment the skill's domain names (`registry/domains/<domain>.json`, or
+`registry/engineering/skills.json`), and `registry.json` is rebuilt from the fragments.
 
 ## 3. Write the content
 

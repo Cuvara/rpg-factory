@@ -1,0 +1,369 @@
+{
+  "modules": [
+    {
+      "id": "uitoolkit.runtime",
+      "repo": "uitoolkit",
+      "paths": [
+        "Runtime/"
+      ],
+      "responsibility": "UI framework runtime: core, view/viewmodel binding, flow/screen navigation, ECS bridge, VContainer integration, test support.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/HYBRID-DATA-BINDING.md",
+        "Documentation~/LIFECYCLE-PLAN.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "standalone",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_standalone.py",
+            "evidence": "exit 0"
+          },
+          {
+            "id": "uss-prefix",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_uss_prefix.py",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.editor",
+      "repo": "uitoolkit",
+      "paths": [
+        "Editor/"
+      ],
+      "responsibility": "Editor tooling incl. UXML codegen core (Editor/Codegen/Core, also compiled by the CLI).",
+      "depends_on": [
+        "uitoolkit.runtime"
+      ],
+      "claude_md": null,
+      "docs": [
+        "Documentation~/UXML-CODEGEN.md"
+      ],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator.",
+        "Codegen core changes alter every *.uxml.g.cs in consumers: regenerate package fixtures (Tests/Runtime/Generated, Samples~/EcsHud/Generated) and expect client uxml-codegen-drift to need a regen after the pin moves."
+      ],
+      "generated": [
+        "**/*.uxml.g.cs"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          },
+          {
+            "id": "client-codegen-drift",
+            "run": "client uxml-codegen-drift.yml after the pin moves",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.codegen-cli",
+      "repo": "uitoolkit",
+      "paths": [
+        "Tools~/"
+      ],
+      "responsibility": "UxmlCodegenCli (net10.0) that compiles Editor/Codegen/Core for CI and consumers.",
+      "depends_on": [
+        "uitoolkit.editor"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator.",
+        "The CLI only checks, never writes. Regeneration = Editor menu 'Assets/Cuvara/Generate UXML Bindings' or UxmlBindingPostprocessor on reimport (external, Unity Editor)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3",
+        "dotnet"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
+          {
+            "id": "uxml-drift",
+            "cwd": ".",
+            "run": "t=$(mktemp -d -p {plugin_root} .tmp-uxml-XXXXXX) && cp -r Editor Runtime Tests 'Samples~' 'Tools~' package.json \"$t\"/ && (cd \"$t\" && {dotnet} run --project 'Tools~/UxmlCodegenCli/UxmlCodegenCli.csproj' -- .); rc=$?; rm -rf \"$t\"; exit $rc",
+            "trigger": "*.uxml, *.uxml.g.cs or Editor/Codegen/Core/ changed",
+            "evidence": "'uxml-codegen drift check: N enrolled UXML file(s) checked' then 'all generated bindings are up to date', exit 0. Runs from a temp copy because UIToolkit has no .gitignore (bin/obj would dirty the repo)."
+          }
+        ],
+        "external": [
+          {
+            "id": "client-codegen-drift",
+            "run": "client uxml-codegen-drift.yml",
+            "evidence": "job pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.samples",
+      "repo": "uitoolkit",
+      "paths": [
+        "Samples~/"
+      ],
+      "responsibility": "Samples: EcsHud, LoadingFlow, NotificationPopup, ScreenFlow.",
+      "depends_on": [
+        "uitoolkit.runtime"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator."
+      ],
+      "generated": [
+        "Samples~/EcsHud/Generated/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          },
+          {
+            "id": "samples",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_samples.py",
+            "evidence": "exit 0"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.tests",
+      "repo": "uitoolkit",
+      "paths": [
+        "Tests/"
+      ],
+      "responsibility": "Editor/Runtime/Ecs/Flow tests.",
+      "depends_on": [
+        "uitoolkit.runtime",
+        "uitoolkit.editor"
+      ],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator."
+      ],
+      "generated": [
+        "Tests/Runtime/Generated/"
+      ],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [],
+        "external": [
+          {
+            "id": "ci-unity",
+            "run": "CI UIToolkit ci.yml Unity jobs (game-ci, Unity (fact unity-editor-version)) on the PR, or client Editor with a local toggle (human gate client-package-toggle)",
+            "evidence": "Job pass with non-zero executed test count."
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.package",
+      "repo": "uitoolkit",
+      "paths": [
+        "package.json",
+        "CHANGELOG.md",
+        "README.md",
+        "Documentation~/",
+        ".github/"
+      ],
+      "responsibility": "Package manifest, changelog, docs, CI/release/version-bump.",
+      "depends_on": [],
+      "claude_md": null,
+      "docs": [],
+      "changelog": "CHANGELOG.md",
+      "rules": [
+        "Every new file/folder needs its .meta.",
+        "Standalone package: no com.gdk.* dependencies (check_standalone.py); USS class names use the package prefix (check_uss_prefix.py).",
+        "Screens navigate only through IScreenNavigator.",
+        "CHANGELOG.md is not valid UTF-8.",
+        "Documentation~/UXML-CODEGEN.md refers to a drift workflow that lives in the client repo, not here.",
+        "check_metas.py reads `git ls-files` and skips ~ folders: stage new files before trusting it, and check Samples~/Tests~ .meta by hand (UnityDots Samples~ has 8, UIToolkit 17 files without .meta today)."
+      ],
+      "generated": [],
+      "tools": [
+        "python3"
+      ],
+      "gates": [],
+      "skills": [
+        "unity-package"
+      ],
+      "checks": {
+        "fast": [
+          {
+            "id": "check-metas",
+            "cwd": ".",
+            "run": "PYTHONDONTWRITEBYTECODE=1 python3 -B .github/scripts/check_metas.py",
+            "evidence": "exit 0 (every Unity-visible file has a .meta)",
+            "parser": "exit"
+          }
+        ],
+        "extended": [
+          {
+            "id": "release-ready",
+            "cwd": ".",
+            "run": "python3 -B {plugin_root}/scripts/checks/package-ready.py .",
+            "evidence": "Prints READY or the exact NOT READY reasons; only informs the ready-to-tag hand-off.",
+            "trigger": "Preparing a release (READY_TO_TAG) - not required for ordinary changes"
+          }
+        ],
+        "external": [
+          {
+            "id": "ci",
+            "run": "UIToolkit ci.yml on the PR",
+            "evidence": "all jobs pass"
+          }
+        ]
+      },
+      "obligations": []
+    },
+    {
+      "id": "uitoolkit.root",
+      "repo": "uitoolkit",
+      "paths": [
+        "./"
+      ],
+      "fallback": true,
+      "responsibility": "Repository-level files not owned by a module (.gitignore, .gitattributes, .claude/, root docs, editor configs). Routed to factory-core only; no specialised skill.",
+      "depends_on": [],
+      "claude_md": "README.md",
+      "docs": [],
+      "changelog": null,
+      "rules": [
+        "Repository-level config affects every module: review the diff with the repo owner; .claude/ holds the repo's own agent assets (never overwrite them from Factory)."
+      ],
+      "generated": [],
+      "tools": [],
+      "gates": [],
+      "skills": [],
+      "checks": {
+        "fast": [],
+        "extended": [],
+        "external": []
+      },
+      "obligations": []
+    }
+  ]
+}
