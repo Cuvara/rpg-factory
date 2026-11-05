@@ -24,6 +24,8 @@ docs/schemas/pipeline-plan.schema.json.
         no-worktree repo (Unity project). Exit 0 OK, 1 errors, 2 usage.
   planner --request TEXT [--runner orca|agent|print] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
+        Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: planner)
+        and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
         the run lead starts ONE task-lead session per task. In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (or resumed when that branch is already checked out); in a
@@ -51,7 +53,7 @@ docs/schemas/pipeline-plan.schema.json.
         --runner agent is the Claude Code Agent-tool fallback (Claude only): a session planned for codex starts a
         fresh Claude session whose prompt and report say SAME_MODEL.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
-        records a review or QA verdict (the only write: <state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
+        records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
@@ -574,10 +576,21 @@ def task_branch(plan, info, task):
 AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
 
 
-def emit(a, reg, agent, prompt, place, title):
+def orca_prompt(a, prompt, plan=None):
+    """Keep cmd.exe arguments on one line; the full, immutable spec lives in persistent state."""
+    root = verdict_dir(plan or {"id": "planner"})
+    task = fstate.session_key(getattr(a, "task", None) or "planner")
+    phase = getattr(a, "phase", None) or "plan"
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+    path = os.path.abspath(os.path.join(root, "specs", f"{task}-{phase}-{digest}.md"))
+    fstate.write_text(path, prompt)
+    return f"Read your task spec at {path} and follow it."
+
+
+def emit(a, reg, agent, prompt, place, title, plan=None):
     pipe = settings(reg)
     if a.runner == "orca":
-        argv = orca_cmd.worker_start(prompt, pipe["agents"][agent]["orca_agent"], place, title=title)
+        argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan), pipe["agents"][agent]["orca_agent"], place, title=title)
         print(orca_cmd.quote(argv))
     elif a.runner == "agent":
         # the Agent-tool fallback (no Orca) is Claude only: a fresh Claude session, whatever model the plan names;
@@ -761,7 +774,7 @@ def cmd_dispatch(a, reg):
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
                   + qa_body(a.sha, tasks, at_head)
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
-        emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}")
+        emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan)
         return 0
     task = find_task(plan, a.task)
     info = repo_info(plan, reg, task["repo"])
@@ -789,7 +802,7 @@ def cmd_dispatch(a, reg):
             where = "this task worktree"
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
-            emit_lead_handoff(reg, a.agent or impl, prompt, place, branch)
+            emit_lead_handoff(reg, a.agent or impl, orca_prompt(a, prompt, plan), place, branch)
         else:
             emit(a, reg, a.agent or impl, prompt, place, f"lead {plan['id']}/{task['id']}")
         return 0
@@ -827,7 +840,7 @@ def cmd_dispatch(a, reg):
                   + json.dumps(spec, indent=2)
                   + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                      if not info["worktrees"] else ""))
-        emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}")
+        emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}", plan)
         return 0
     at_head = (f"Candidate SHA: {a.sha}. You share the task worktree {home} with the task lead, who keeps HEAD at the "
                "candidate: first check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. Never check "
@@ -838,7 +851,7 @@ def cmd_dispatch(a, reg):
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}.\n"
                   + qa_body(a.sha, [task], at_head)
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
-        emit(a, reg, agent, prompt, place, f"qa {plan['id']}/{task['id']}")
+        emit(a, reg, agent, prompt, place, f"qa {plan['id']}/{task['id']}", plan)
         return 0
     if agent == impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
@@ -851,7 +864,7 @@ def cmd_dispatch(a, reg):
               + json.dumps(spec, indent=2)
               + "\nReport findings as `path:line severity problem fix`, then `VERDICT: PASS|FAIL`."
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
-    emit(a, reg, agent, prompt, place, f"review {plan['id']}/{task['id']}")
+    emit(a, reg, agent, prompt, place, f"review {plan['id']}/{task['id']}", plan)
     return 0
 
 
@@ -1193,8 +1206,9 @@ def task_status(plan, reg, task, n_in_repo):
             row["phase"] = "candidate"
         elif info["worktrees"] or (row["worktree"] and git(row["worktree"], "status", "--porcelain", "--", *paths)[0]):
             row["phase"] = "implementing"
-    elif topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *paths)[0] not in (None, "", "0"):
-        # task branch removed after integration: the reviewed commit, or the integration HEAD to review
+    elif (rv or rv_stale) and topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *paths)[0] not in (None, "", "0"):
+        # A prior review identifies a task whose branch was removed after integration. Without it, commits on
+        # the integration branch may belong to earlier tasks with the same owned paths: this task is pending.
         ok = rv and rv.get("state") == "PASS" and is_ancestor(path, rv["sha"], topic_head)
         row["sha"] = rv["sha"] if ok else topic_head
         row["phase"] = "candidate"
