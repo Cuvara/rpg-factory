@@ -118,10 +118,10 @@ Canonical: `IndieRPGMMOAdventure/.claude/skills/verify-a-result/SKILL.md`, `rpg-
   (`Packages/com.cuvara.*`), submodule content, generated paths or secrets.
 - Stage explicit paths only. Policy: `references/git-safety.md`.
 
-## Commands (the user types these; they are read-only except `check`)
-`/rpg-factory:status` · `/rpg-factory:route <repo> <paths>` · `/rpg-factory:check <repo> [paths] [--status]` ·
-`/rpg-factory:doctor`. Suggest them when the user asks "what is pending", "what would this touch", "is it
-validated", "is Factory healthy".
+## Commands (read-only except `check`; `factory-cmd.py help [--json]` lists every verb with args and an example)
+Claude `/rpg-factory:<verb>`, Codex `python3 -B <plugin root>/scripts/factory-cmd.py <verb>`: `status`, `route`, `check`,
+`doctor`, `domain`, `workflow`, `ui*`, `help`; `--json` for agents. Suggest them for "what is pending", "what would
+this touch", "is it validated", "is Factory healthy", "where does this domain stand".
 
 ## Skills
 

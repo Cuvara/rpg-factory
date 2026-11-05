@@ -84,15 +84,21 @@ Optional tools are detected without launching applications or making provider re
 
 | Command | What you get | Changes anything? |
 |---|---|---|
-| `/rpg-factory:status [--remote]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness; optional authoring domain lifecycle counts, stale upstreams, FAIL and HUMAN_REQUIRED gates | no |
-| `/rpg-factory:route <repo> <path>... [--lead <skill>]` | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
-| `/rpg-factory:check <repo> [<path>...] [--status]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
-| `/rpg-factory:doctor` | install state (what this session loads), registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
+| `/rpg-factory:status [--remote] [--json]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness; optional authoring domain lifecycle counts, stale upstreams, FAIL and HUMAN_REQUIRED gates | no |
+| `/rpg-factory:route <repo> <path>... [--lead <skill>] [--json]` (or `--domain <id>` / `--kind <kind>`) | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
+| `/rpg-factory:check <repo> [<path>...] [--status] [--json]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
+| `/rpg-factory:doctor [--json]` | install state (what this session loads), registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
+| `/rpg-factory:domain [<id>] [--json]` | every registry domain with its lead, repos and artifact counts; for one domain: artifact kinds, quality and human gates, handoffs, artifacts by status, stale upstreams, FAIL and HUMAN_REQUIRED artifacts, next steps | no |
+| `/rpg-factory:workflow plan\|status\|dispatch\|report <spec>` | dependency-aware artifact workflow: plan, node states, a dispatch contract (printed only), report | no |
 | `/rpg-factory:ui <request>` | UI plan: intent, only the UI skills the request needs (in order), lead route, missing context, component choices | no |
 | `/rpg-factory:ui-figma <figma url> <request>` | the UI plan for a Figma frame (import, analyze, validate, troubleshoot); asks for the URL or project when missing | no |
 | `/rpg-factory:ui-components <request>` | component selection from the real com.cuvara.uitoolkit catalog and Unity built-ins: reuse > configure > compose > missing | no |
 | `/rpg-factory:ui-screen <request>` | the UI plan for implementing or wiring a screen (including imported UXML) | no |
 | `/rpg-factory:ui-review <request>` | the UI plan for a review, loading only the validation skills | no |
+
+Every verb also runs from a shell (Codex, scripts, other agents) as `python3 -B <plugin root>/scripts/factory-cmd.py
+<verb> <args>`; `factory-cmd.py help [--json]` (schema `rpg-factory.commands/1`) lists each verb with its arguments, an
+example and both forms. `--json` output is for agents: `domain` emits `rpg-factory.domain/1`.
 
 Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
 works too). The `ui*` commands only plan; the plan names the route and the UI skills to load
@@ -471,8 +477,18 @@ What differs:
   session restart (see above).
 - **No slash commands.** Codex's install-time command migration skips the Factory command templates (they use
   `$ARGUMENTS` and inline shell), so the Codex manifest has no `commands`. Run the script behind them from the
-  plugin root instead: `python3 -B <plugin root>/scripts/factory-cmd.py status` (`route`, `check`, `doctor`,
-  `ui <request>`, ...); the plugin root is the directory that holds the installed `skills/`.
+  plugin root instead (the directory that holds the installed `skills/`); `factory-cmd.py help --json` lists them:
+
+  | Verb | Claude Code | Codex / shell (`python3 -B <plugin root>/scripts/factory-cmd.py ...`) | Read-only |
+  |---|---|---|---|
+  | status | `/rpg-factory:status [--remote] [--json]` | `status [--remote] [--json]` | yes |
+  | route | `/rpg-factory:route ...` | `route (--domain <id> \| --kind <kind>) \| <repo> <path>... [--lead <skill>] [--json]` | yes |
+  | check | `/rpg-factory:check ...` | `check <repo> [<path>...] [--status] [--json]` | only with `--status` |
+  | doctor | `/rpg-factory:doctor [--json]` | `doctor [--json]` | yes |
+  | domain | `/rpg-factory:domain [<id>] [--json]` | `domain [<id>] [--json]` | yes |
+  | workflow | `/rpg-factory:workflow ...` | `workflow plan\|status\|dispatch\|report <spec> [--json]` | yes |
+  | ui, ui-figma, ui-components, ui-screen, ui-review | `/rpg-factory:ui <request>` ... | `ui [--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>` | yes |
+  | help | none | `help [--json]` | yes |
 - **No Skill tool event.** Codex loads skills without a hookable tool call, so the Skill-hook behaviour (execution
   mode recording, auto-correcting a tech skill requested before factory-core, the tech-before-lead advisory) does
   not apply; the session follows factory-core's routing text instead.
