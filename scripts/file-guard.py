@@ -31,6 +31,13 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+if __name__ == "__main__":  # the hook: reuse compiled plugin modules (lib/hookspeed.py)
+    try:
+        import hookspeed
+        hookspeed.enable_bytecache()
+    except Exception:
+        pass
+import workspace  # noqa: E402  (find_workspace, linked_worktree: no git guard load, not even for a Read)
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 SECRET = re.compile(r"(^|/)(\.env(\.(?!example$|sample$|template$|dist$)[A-Za-z0-9_-]+)?|kubeconfig\.local)$", re.IGNORECASE)
@@ -52,12 +59,56 @@ def generated_match(rel, pattern):
 
 
 def gitlinks(repo_dir):
+    """The submodule paths (gitlinks) in the index of the work tree at repo_dir. `git ls-files -s` lists the whole
+    index (~50-80 ms on a big Unity repo), so the answer is cached in the state dir per work tree and index
+    stat (mtime + size): a changed index recomputes, and so does any doubt (no index file found, unreadable cache,
+    GIT_INDEX_FILE set, a git error - errors are never cached)."""
+    stamp = index_stamp(repo_dir)
+    cache = None
+    if stamp:
+        try:
+            import hashlib
+            import fstate
+            key = hashlib.sha1(os.path.normcase(os.path.abspath(repo_dir)).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+            cache = os.path.join(fstate.persistent(), "cache", "gitlinks", key + ".json")
+            hit = fstate.read_json(cache)
+            if (isinstance(hit, dict) and hit.get("top") == os.path.abspath(repo_dir) and hit.get("index") == stamp
+                    and isinstance(hit.get("gitlinks"), list)):
+                return hit["gitlinks"]
+        except Exception:
+            cache = None
     import subprocess
     try:
-        out = subprocess.run(["git", "-C", repo_dir, "ls-files", "-s"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5).stdout
+        r = subprocess.run(["git", "-C", repo_dir, "ls-files", "-s"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
     except (OSError, subprocess.SubprocessError):
         return []
-    return [l.split("\t", 1)[1] for l in out.splitlines() if l.startswith("160000 ")]
+    links = [l.split("\t", 1)[1] for l in r.stdout.splitlines() if l.startswith("160000 ")]
+    if cache and r.returncode == 0 and index_stamp(repo_dir) == stamp:  # the index did not move while git read it
+        try:
+            fstate.write_json(cache, {"top": os.path.abspath(repo_dir), "index": stamp, "gitlinks": links})
+        except Exception:
+            pass
+    return links
+
+
+def index_stamp(repo_dir):
+    """[mtime_ns, size] of the index of the work tree at repo_dir (main checkout or linked worktree), else None."""
+    if os.environ.get("GIT_INDEX_FILE") or os.environ.get("GIT_DIR"):
+        return None
+    try:
+        dot = os.path.join(repo_dir, ".git")
+        if os.path.isdir(dot):
+            index = os.path.join(dot, "index")
+        else:
+            with open(dot, encoding="utf-8", errors="replace") as f:
+                line = f.readline().strip()
+            if not line.startswith("gitdir:"):
+                return None
+            index = os.path.join(os.path.normpath(os.path.join(repo_dir, line[7:].strip())), "index")
+        st = os.stat(index)
+        return [st.st_mtime_ns, st.st_size]
+    except (OSError, ValueError):
+        return None
 
 
 def within(path, root):
@@ -124,13 +175,12 @@ def evaluate(payload, registry):
         hint = session.skill_read_hint([found.group(1)], registry) if found and path.replace("\\", "/").endswith("/SKILL.md") else None
         if hint:
             return [hint]
-    g = session.guard()
-    ws = g.find_workspace(os.path.dirname(path), registry)
+    ws = workspace.find_workspace(os.path.dirname(path), registry)
     shown = None
     if not ws or not within(path, ws):  # the env root only helps locate the workspace: never an opinion outside it
-        lw = g.linked_worktree(os.path.dirname(path))  # unless path is in a linked worktree whose main checkout is in
+        lw = workspace.linked_worktree(os.path.dirname(path))  # unless path is in a linked worktree whose main checkout is in
         top, main = lw or (None, None)                  # a workspace (read from its .git file: no git call per Read)
-        ws = g.find_workspace(main, registry) if top and main and os.path.normcase(top) != os.path.normcase(main) else None
+        ws = workspace.find_workspace(main, registry) if top and main and os.path.normcase(top) != os.path.normcase(main) else None
         if not ws or not within(main, ws) or os.path.normcase(main) == os.path.normcase(ws):
             return []
         shown = f"{path} (worktree of {os.path.relpath(main, ws)})"  # the worktree may sit on another drive

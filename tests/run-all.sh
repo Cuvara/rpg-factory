@@ -84,7 +84,7 @@ cmver=""; [ -f .agents/plugins/marketplace.json ] && cmver=$(jq -r '[.version?, 
 # release policy wording: tags and releases are the lead's by default and the agent's only with explicit release
 # authorization in the current task - no authoritative text may state the absolute "agents never tag" rule again
 policy_files=(.claude/CLAUDE.md README.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
-              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/context.py
+              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/gitguard.py scripts/lib/context.py
               .claude-plugin/plugin.json .claude-plugin/marketplace.json)
 absolute=$(grep -nE -i "agents never tag|never create the tag|tags are never (done|created) by agents|never tag, never publish|; never tag\b" "${policy_files[@]}" 2>/dev/null)
 missing=$(for f in .claude/CLAUDE.md README.md registry.json skills/factory-core/references/git-safety.md skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md; do
@@ -147,6 +147,7 @@ run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
 run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
 run "file guard (Write/Edit/MultiEdit/NotebookEdit/Read)" env -u TMPDIR tests/file-guard.test.sh
+run "hook cost (no git guard on Read, bytecode in the state dir, gitlinks cache, python3 alias)" env -u TMPDIR tests/hook-perf.test.sh
 run "slash commands (files, parsing, invocation)" env -u TMPDIR tests/commands.test.sh
 run "UI component catalog + selection (UIToolkit git fixture, refs, NOT_AVAILABLE)" env -u TMPDIR tests/ui-catalog.test.sh
 run "UI plan commands (intent, skills per verb, NOT_UI, NEEDS_CONTEXT, Figma URL)" env -u TMPDIR tests/ui-commands.test.sh
