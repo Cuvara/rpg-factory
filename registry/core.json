@@ -299,6 +299,66 @@
       "fallback": "ask the user for the frame link (Copy link to selection, with node-id=) and a PNG export of the frame; the preflight is then HUMAN_REQUIRED for anything the screenshot cannot show (variable bindings)"
     }
   ],
+  "pipeline": {
+    "description": "Delivery pipeline (scripts/factory-pipeline.py, policy references/parallel-work.md): task tiers, the agents that implement and review, cross-model review pairing and shared exclusive resources.",
+    "tiers": {
+      "S": {
+        "max_repos": 1,
+        "max_modules": 1,
+        "max_files": 6,
+        "contracts": false,
+        "generated": false,
+        "flow": "lead implements in-session; cross-model review; QA by the lead; gate; PR"
+      },
+      "M": {
+        "max_repos": 1,
+        "contracts": false,
+        "generated": false,
+        "flow": "lead writes plan.json; validate; implementation workers; per-task cross-model review; integrate; QA worker; gate; PR"
+      },
+      "L": {
+        "flow": "planner worker writes plan.json; validate; waves of workers; per-task cross-model review; integrate; QA worker; gate; one PR per repo"
+      }
+    },
+    "agents": {
+      "claude": {
+        "orca_agent": "claude",
+        "bin": "claude",
+        "agent_runner": "general-purpose"
+      },
+      "codex": {
+        "orca_agent": "codex",
+        "bin": "codex",
+        "agent_runner": "codex:codex-rescue"
+      }
+    },
+    "review_pairing": {
+      "claude": "codex",
+      "codex": "claude"
+    },
+    "default_implementer": "claude",
+    "verdict_states": [
+      "PASS",
+      "FAIL",
+      "NOT_RUN",
+      "BLOCKED"
+    ],
+    "exclusive_resources": [
+      {
+        "id": "unity-test",
+        "repos": [
+          "client",
+          "netcode",
+          "unitydots",
+          "uitoolkit"
+        ],
+        "rule": "One Unity EditMode/PlayMode test run at a time across every Unity project and package test project; other tasks queue for it while non-Unity work continues."
+      }
+    ],
+    "no_worktree_markers": [
+      "ProjectSettings/ProjectVersion.txt"
+    ]
+  },
   "global_rules": [
     {
       "id": "english-only",
@@ -385,6 +445,8 @@
       "instructions": [
         "CLAUDE.md"
       ],
+      "worktrees": false,
+      "worktrees_reason": "Unity project: every worktree needs its own multi-GB Library/ import. Tasks here run one after another in the main checkout, each with review and QA before the next.",
       "notes": [
         "Unity (fact unity-editor-version). No local test CLI: EditMode/PlayMode tests run in the Unity Test Runner (Editor via MCP) or CI 01-ci.yml.",
         "Packages/com.gdk.* and unity-build-workflows are git submodules. Packages/com.cuvara.* are gitignored embedded clones.",

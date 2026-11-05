@@ -21,7 +21,9 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
    follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target the repo's default branch (`registry.json` `repos.<key>`), and the
    repos squash-merge. Inside a delegated task, worker commits on their task branches and merging worker
    branches into the task's integration branch are the lead's decision (`parallel-work.md`); merging into
-   protected branches and pushing stay on request. Without explicit release authorization
+   protected branches and pushing stay on request. Delivery exception: when the user put `deliver: pr` in the
+   task and `factory-pipeline.py gate` prints READY_FOR_PR, the lead pushes the task's integration branch and opens
+   its PR (`parallel-work.md` section 10); merging it stays on request. Without explicit release authorization
    from the user in the current task, an agent creates no tag (`v*`, `sgl-v*`, `core-baseline-*`) and publishes no release in
    any repo: skills stop at "ready to tag" with evidence and the lead tags. When the user explicitly
    authorizes a release in the current task, the agent performs exactly the authorized merge, version,
