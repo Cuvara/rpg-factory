@@ -143,6 +143,7 @@ run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
+run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
 # Codex packaging (.codex-plugin, .agents/plugins, hooks/codex-hooks.json, scripts/codex_hook.py)
 cx=$(env -u TMPDIR tests/codex-plugin.test.sh 2>&1); cxrc=$?; cxsum=$(tail -1 <<<"$cx")
 cxpass=$(sed -n 's/.*, \([0-9]*\) passed,.*/\1/p' <<<"$cxsum")

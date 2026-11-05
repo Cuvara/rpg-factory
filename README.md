@@ -534,8 +534,11 @@ Architecture documentation and decision records are indexed in `docs/architectur
   factory-status fixtures, install-status, facts, routing properties and history replay, the live
   check scripts, Netcode headless tests, and `claude plugin validate --strict`. `--release` also
   requires the installed plugin to be CURRENT. It must report 0 failed.
+- Changelog: each change adds a fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`); `CHANGELOG.md`
+  `[Unreleased]` stays empty, so parallel branches never conflict on it. `python3 -B scripts/changelog.py check|preview`
+  validates and previews; `release X.Y.Z` writes the version section and removes the fragments (`changelog.d/README.md`).
 - Releases of this plugin: `python3 -B scripts/release-check.py` (read-only) gates the tag - versions agree,
-  the CHANGELOG section exists and `[Unreleased]` is empty, the tag is new locally and on origin, HEAD is the
+  the CHANGELOG section exists, `[Unreleased]` is empty and `changelog.d/` holds no fragment, the tag is new locally and on origin, HEAD is the
   `origin/main` merge commit, the tree is clean; `--verify-tag` checks the annotated tag afterwards and
   `--notes` prints the release notes. Order: `.claude/CLAUDE.md` "Releases".
 - Skill line citations are checked against the code: `python3 -B scripts/checks/skill-citations.py
