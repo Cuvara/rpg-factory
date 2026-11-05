@@ -135,5 +135,9 @@ out=$(cd "$WS" && python3 -B "$CMD" workflow plan "$TMP/workflow.json" --json 2>
 [ "$rc" -eq 0 ] && python3 -c 'import json,sys; assert json.load(sys.stdin)["nodes"]' <<<"$out" && ok "workflow entry point dispatches plan" || no "workflow entry point rc=$rc: $(head -c 300 <<<"$out")"
 out=$(python3 -B "$CMD" pipeline "planner --request 'add a crafting screen, then wire it' --runner orca" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && grep -q "add a crafting screen, then wire it" <<<"$out" && grep -q -- "--worktree current" <<<"$out" && ok "pipeline entry point keeps the request text (one quoted string)" || no "pipeline entry point rc=$rc: $(head -c 300 <<<"$out")"
+printf '%s
+' '{"schema":"rpg-factory.pipeline-plan/1","id":"cmd","title":"T","topic":"feat/core/cmd","tasks":[{"id":"a","repo":"nope","objective":"o","paths":["x/"],"acceptance":["a"]}]}' > "$TMP/pipeline-plan.json"
+out=$(python3 -B "$CMD" pipeline status "$TMP/pipeline-plan.json" 2>&1); rc=$?
+[ "$rc" -eq 1 ] && ! grep -q "pipeline needs" <<<"$out" && grep -qE "^Next: .* validate " <<<"$out" && ok "pipeline status is a pipeline verb (an invalid plan: exit 1, next is validate)" || no "pipeline status rc=$rc: $(head -c 300 <<<"$out")"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

@@ -188,5 +188,138 @@ out=$(cd "$TMP" && python3 -B "$P" dispatch "$TP" --task o --phase implement --r
 if grep -q "Create your own worktree first" <<<"$out" && ! grep -q '"isolation"' <<<"$out"; then pass=$((pass + 1)); echo "PASS  agent fallback for another repo names repo and base, no isolation"
 else fail=$((fail + 1)); echo "FAIL  agent fallback placement"; head -c 400 <<<"$out"; fi
 
+echo "-- tier for a repo the registry does not know (the plugin repo)"
+PL=$(plan plug "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"scripts/\"],\"acceptance\":[\"a\"]}]}")
+expect "one file of a plan repo: S from the paths alone" 0 '"tier": "S"' tier --json --plan "$PL" --repo plugin --paths scripts/factory-pipeline.py
+expect "plan repo tier names its basis" 0 "basis: paths \(repo not in the registry\)" tier --plan "$PL" --repo plugin --paths scripts/a.py
+out=$(python3 -B "$P" tier --json --plan "$PL" --repo plugin --paths skills/factory-core/SKILL.md skills/ui-ux/SKILL.md scripts/lib/x.py scripts/y.py tests/z.sh README.md 2>&1)
+if python3 -c 'import json,sys; o=json.loads(sys.argv[1]); f=o["facts"]
+assert o["tier"]=="M", o["tier"]
+assert f["modules"]==["other","scripts","scripts/lib","skills/factory-core","skills/ui-ux","tests"], f["modules"]
+assert f["files"]==6 and f["repos"]==["plugin"] and f["contracts"]==[] and f["generated"]==[]' "$out"; then
+  pass=$((pass + 1)); echo "PASS  plan repo tier: skills/<name>, scripts/lib, listed dirs and other are modules; M"
+else fail=$((fail + 1)); echo "FAIL  plan repo tier facts"; head -c 600 <<<"$out"; fi
+out=$(python3 -B "$P" tier --json --plan "$PL" --repo plugin --paths .claude/CLAUDE.md evals/e.json changelog.d/x.md README.md skills/README.md hooks/hooks.json registry/core.json docs/d.md commands/c.md 2>&1)
+if python3 -c 'import json,sys; f=json.loads(sys.argv[1])["facts"]
+assert f["modules"]==["commands","docs","hooks","other","registry"], f["modules"]' "$out"; then
+  pass=$((pass + 1)); echo "PASS  plan repo tier: .claude, evals, changelog.d and root files are one other module"
+else fail=$((fail + 1)); echo "FAIL  plan repo tier other module"; head -c 600 <<<"$out"; fi
+expect "seven files of a plan repo: above S" 0 "7 files > 6" tier --plan "$PL" --repo plugin --paths scripts/a scripts/b scripts/c scripts/d scripts/e scripts/f scripts/g
+expect "tier --plan needs --paths" 2 "needs --repo <plan repo key> and --paths" tier --plan "$PL" --repo plugin
+expect "tier --plan with an unknown repo key fails cleanly" 2 "neither a registry repo nor in plan.repos" tier --plan "$PL" --repo nope --paths x
+expect "--repo without --plan is a usage error" 2 "go with --plan" tier --repo plugin --paths x
+
+echo "-- status (resume a run from git and the verdicts)"
+# srv: a worktree repo (a, then b); cli: a Unity project (c1, then c2 in the main checkout); topic feat/core/st
+ST=$(plan st "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"st\",\"title\":\"Status\",\"topic\":\"feat/core/st\",
+ \"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"},\"cli\":{\"path\":\"ws/IndieRPGMMOAdventure\",\"base\":\"develop\"}},\"tasks\":[
+ {\"id\":\"a\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"sa/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"b\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"sb/\"],\"acceptance\":[\"a\"],\"deps\":[\"a\"]},
+ {\"id\":\"c1\",\"repo\":\"cli\",\"objective\":\"o\",\"paths\":[\"Assets/C/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"c2\",\"repo\":\"cli\",\"objective\":\"o\",\"paths\":[\"Assets/D/\"],\"acceptance\":[\"a\"],\"implementer\":\"codex\"}]}")
+sv() { python3 -B "$P" verdict "$ST" "$@" >/dev/null || echo "verdict failed: $*"; }
+# st_phase <name> <task> <phase> [<next-regex>]: the task's phase in status --json (and its next command)
+st_phase() {
+  local name="$1" id="$2" want="$3" nx="${4:-}" out
+  out=$(python3 -B "$P" status --json "$ST" 2>&1)
+  if python3 -c 'import json,re,sys; o=json.loads(sys.argv[1]); r={t["id"]:t for t in o["tasks"]}[sys.argv[2]]
+assert r["phase"]==sys.argv[3], r
+assert not sys.argv[4] or re.search(sys.argv[4], r["next"] or ""), r' "$out" "$id" "$want" "$nx"; then
+    pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
+}
+st_phase "nothing started: pending, next is the implement dispatch" a pending "dispatch .* --task a --phase implement --runner orca"
+st_phase "a dependent task waits (no next command)" b pending '^$'
+expect "the first Unity task is ready, the second waits for its QA" 0 "note: waits for c1" status "$ST"
+expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
+git -C "$S" worktree add -q "$TMP/st-a" -b feat/core/st-a develop 2>/dev/null
+st_phase "task branch and worktree without commits: implementing" a implementing '^$'
+expect "implementing names the worker's worktree" 0 "implementation worker on feat/core/st-a in .*st-a" status "$ST"
+mkdir -p "$TMP/st-a/sa"; echo a > "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" add sa; gi "$TMP/st-a" commit -qm "feat: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
+st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase review --sha $SA --runner orca"
+sv --task a --phase review --sha "$SA" --by codex --state FAIL
+st_phase "review FAIL: reviewed, next is the implement dispatch again" a reviewed "--task a --phase implement"
+expect "review FAIL is named with its SHA" 0 "review FAIL@${SA:0:10}" status "$ST"
+echo a2 >> "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" commit -qam "fix: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
+st_phase "a fix after the FAIL is a new candidate" a candidate "--phase review --sha $SA"
+expect "and the old review is named STALE" 0 "review at .* is STALE: owned paths changed since" status "$ST"
+sv --task a --phase review --sha "$SA" --by codex --state PASS
+st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
+git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
+st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
+gi "$TMP/st-int" merge -q --no-ff feat/core/st-a -m "merge a"
+st_phase "merged after review PASS: integrated" a integrated '^$'
+expect "QA waits for the other tasks of the repo" 0 "QA runs once all tasks of the repo are integrated: waits for b" status "$ST"
+st_phase "the dependency is integrated: b is ready" b pending "--task b --phase implement"
+expect "ready tasks span waves: b (wave 3) next to c1 (wave 1)" 0 "^Ready wave: 1  \(dispatch: b, c1\)$" status "$ST"
+git -C "$S" worktree remove "$TMP/st-a"; git -C "$S" branch -q -D feat/core/st-a
+st_phase "a removed task branch stays integrated (verdict + integration branch)" a integrated
+git -C "$S" worktree add -q "$TMP/st-b" -b feat/core/st-b feat/core/st 2>/dev/null
+st_phase "a task branch cut from the integration branch, no own commits yet: implementing" b implementing
+mkdir -p "$TMP/st-b/sb"; echo b > "$TMP/st-b/sb/b.go"; gi "$TMP/st-b" add sb; gi "$TMP/st-b" commit -qm "feat: b"; SB=$(git -C "$S" rev-parse feat/core/st-b)
+sv --task b --phase review --sha "$SB" --by codex --state PASS
+gi "$TMP/st-int" merge -q --no-ff feat/core/st-b -m "merge b"; SI=$(git -C "$S" rev-parse feat/core/st)
+st_phase "every task of the repo integrated: next is the integration QA at its HEAD" a integrated "--task integration:srv --phase qa --sha $SI"
+sv --task integration:srv --phase qa --sha "$SI" --by codex --state PASS
+st_phase "QA PASS on a commit containing the review: qa" a qa
+st_phase "and for the second task" b qa
+# the Unity project: tasks run on the integration branch in the main checkout
+gi "$C" checkout -qb feat/core/st develop
+mkdir -p "$C/Assets/C"; echo c > "$C/Assets/C/c.cs"
+st_phase "uncommitted work in the Unity task's paths: implementing" c1 implementing
+gi "$C" add Assets/C; gi "$C" commit -qm "feat: c1"; SC=$(git -C "$C" rev-parse HEAD)
+st_phase "a commit on the integration branch touching the task: candidate" c1 candidate "--task c1 --phase review --sha $SC"
+st_phase "the next Unity task still waits" c2 pending '^$'
+sv --task c1 --phase review --sha "$SC" --by codex --state PASS
+st_phase "Unity review PASS is integrated at once; next is the per-task QA" c1 integrated "--task c1 --phase qa --sha $SC"
+sv --task c1 --phase qa --sha "$SC" --by codex --state PASS
+st_phase "per-task QA PASS: qa" c1 qa
+st_phase "and the next Unity task is ready" c2 pending "--task c2 --phase implement"
+refute "no gate command while c2 is pending" "^Next: .* gate " status "$ST"
+mkdir -p "$C/Assets/D"; echo d > "$C/Assets/D/d.cs"; gi "$C" add Assets/D; gi "$C" commit -qm "feat: c2"; SD=$(git -C "$C" rev-parse HEAD)
+sv --task c2 --phase review --sha "$SD" --by claude --state PASS
+sv --task c2 --phase qa --sha "$SD" --by claude --state PASS
+# agree <name>: status names the gate as next exactly when the gate (no registry checks here) is READY_FOR_PR
+agree() {
+  local out g rc
+  out=$(python3 -B "$P" status --json "$ST" 2>&1); g=$(python3 -B "$P" gate "$ST" 2>&1); rc=$?
+  if python3 -c 'import json,sys; o=json.loads(sys.argv[1]); said=any(" gate " in c for c in o["next"])
+assert said == (sys.argv[2] == "0"), (o["next"], sys.argv[2])' "$out" "$rc"; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1 (gate rc=$rc)"; head -c 800 <<<"$out"; echo; sed 's/^/      /' <<<"$g" | head -10; fi
+}
+st_phase "per-task QA of every Unity task: integration QA at the HEAD is still due" c2 integrated "--task integration:cli --phase qa --sha $SD"
+expect "and the missing integration QA is named" 0 "no integration QA for cli: the gate needs it" status "$ST"
+refute "no gate command before the Unity integration QA" "^Next: .* gate " status "$ST"
+expect "the gate agrees: integration QA missing" 1 "BLOCKER integration:cli: no qa verdict" gate "$ST"
+agree "status and gate agree before the Unity integration QA"
+sv --task integration:cli --phase qa --sha "$SC" --by codex --state PASS
+st_phase "an integration QA on an older HEAD is STALE" c1 integrated "--task integration:cli --phase qa --sha $SD"
+agree "status and gate agree on a stale integration QA"
+sv --task integration:cli --phase qa --sha "$SD" --by codex --state PASS
+expect "every task has QA: the plan-level next is the gate" 0 "^Next: .* gate .*st.json" status "$ST"
+expect "and the gate is READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$ST"
+agree "status and gate agree once every QA is at the HEAD"
+expect "every wave integrated" 0 "^Every wave is integrated" status "$ST"
+python3 -B "$P" status --json "$ST" > "$TMP/status.json" 2>&1
+if python3 - "$ROOT" "$TMP/status.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+value = json.load(open(sys.argv[2], encoding="utf-8"))
+assert value["schema"] == "rpg-factory.pipeline-status/1"
+errors = m.schema_errors(value, schema, schema)
+assert not errors, errors
+PY
+then pass=$((pass + 1)); echo "PASS  status --json matches docs/schemas/pipeline-status.schema.json"
+else fail=$((fail + 1)); echo "FAIL  status --json schema"; head -c 800 "$TMP/status.json"; fi
+sed -i 's/"objective":"o","paths":\["sa\/"\]/"objective":"changed","paths":["sa\/"]/' "$ST"
+st_phase "a changed task in the plan: its review is no longer counted; review the integration HEAD" a candidate "--task a --phase review --sha $SI"
+expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
+X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
+expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
+gi "$C" checkout -q feat/core/demo
+git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
+
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
