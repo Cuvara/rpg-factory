@@ -46,6 +46,11 @@ sed -i '/^### Added$/d; /^- pending$/d' "$R/CHANGELOG.md"; sed -i 's/^## \[2.1.0
 expect "no ## [2.1.0] section" 1 "FAIL +CHANGELOG has a non-empty ## \[2.1.0\] section" --no-remote
 sed -i 's/^## \[2.0.5\]/## [2.1.0]/' "$R/CHANGELOG.md"; gc commit -qam cl3; gc push -q origin main 2>/dev/null; gc fetch -q origin
 expect "fixed again" 0 - --no-remote
+mkdir -p "$R/changelog.d"; printf '# fragments\n' > "$R/changelog.d/README.md"; gc add -A; gc commit -qm frd; gc push -q origin main 2>/dev/null; gc fetch -q origin
+expect "changelog.d with only its README is fine" 0 "OK +changelog.d/ holds no unreleased fragment" --no-remote
+printf '### Fixed\n\n- pending\n' > "$R/changelog.d/pending-fix.md"; gc add -A; gc commit -qm fr; gc push -q origin main 2>/dev/null; gc fetch -q origin
+expect "an unreleased fragment fails" 1 "FAIL +changelog.d/ holds no unreleased fragment.*pending-fix.md" --no-remote
+gc rm -q "changelog.d/pending-fix.md"; gc commit -qm fr2; gc push -q origin main 2>/dev/null; gc fetch -q origin
 
 echo "-- Codex packaging (only when present)"
 sync() { gc add -A; gc commit -qm "$1"; gc push -q origin main 2>/dev/null; gc fetch -q origin; }

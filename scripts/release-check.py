@@ -4,7 +4,7 @@
 Before tagging (default):
   - VERSION == .claude-plugin/plugin.json == marketplace.json plugin entry == README "Version X (see `VERSION`)"
     (+ .codex-plugin/plugin.json when present, + .agents/plugins/marketplace.json when it carries a version)
-  - CHANGELOG.md has a `## [X.Y.Z]` section and `## [Unreleased]` is empty
+  - CHANGELOG.md has a `## [X.Y.Z]` section, `## [Unreleased]` is empty and changelog.d/ holds no fragment
   - tag vX.Y.Z does not exist locally, nor on origin (`git ls-remote --tags`, skipped with --no-remote)
   - HEAD is main (on branch main, or detached at the merge commit) and equals origin/main
     (the remote-tracking ref; with remote checks also the live `git ls-remote origin refs/heads/main`)
@@ -134,6 +134,10 @@ def main(argv):
     unreleased = changelog_section(cl, "Unreleased")
     check(unreleased is not None and not unreleased.strip(), "CHANGELOG ## [Unreleased] is present and empty",
           "missing" if unreleased is None else f"{len(unreleased.strip().splitlines())} line(s) still unreleased")
+    frag_dir = os.path.join(repo, "changelog.d")
+    pending = sorted(f for f in os.listdir(frag_dir) if f.endswith(".md") and f != "README.md") if os.path.isdir(frag_dir) else []
+    check(not pending, "changelog.d/ holds no unreleased fragment (scripts/changelog.py release gathered them)",
+          ", ".join(pending[:5]) + (" ..." if len(pending) > 5 else ""))
     tag = f"v{ver}"
     head = git(repo, "rev-parse", "HEAD")
     local_tag = git(repo, "rev-parse", "-q", "--verify", f"refs/tags/{tag}")

@@ -20,7 +20,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   creation/deletion/pushes (incl. `gh api` tag refs, `gh release create`) and repo deletion. Every new bypass found gets a
   case in `tests/git-guard.test.sh` (and `tests/installed-safety.sh` for new classes). File-tool rules live
   in `scripts/file-guard.py`; both guards raise mode advisories (never a block). Each human gate regex and the git evaluation must fail independently.
-- Every behaviour change gets a test in `tests/` and a `CHANGELOG.md` entry under [Unreleased].
+- Every behaviour change gets a test in `tests/` and a changelog fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`
+  sections; `changelog.d/README.md`). Never edit `CHANGELOG.md` `[Unreleased]` directly: it stays empty (run-all checks it).
 - Before committing: `tests/run-all.sh` must report 0 failed. Report the pass count. CI
   (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
@@ -33,8 +34,9 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
   only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
-  Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line together with a
-  `CHANGELOG.md` section (run-all and `release-check.py` check it). The local directory marketplace loads this checkout in
+  Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line, and gather the
+  fragments into the `CHANGELOG.md` section with `python3 -B scripts/changelog.py release X.Y.Z [--summary TEXT]` (run-all and
+  `release-check.py` check it: section present, `[Unreleased]` empty, no fragment left). The local directory marketplace loads this checkout in
   place (what is checked out is what sessions run); the install record only updates on a version
   change: `claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory`,
   restart, then `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
@@ -80,6 +82,8 @@ env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throw
 env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a throwaway plugin copy
 tests/orca-commands.test.sh                # orca commands cited in parallel-work.md exist (SKIP without orca)
 env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
+tests/changelog.test.sh                    # changelog fragments: validation, preview, release assembly
+python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   # changelog.d fragments
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 
