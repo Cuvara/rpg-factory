@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rpg-factory delivery pipeline plan (scripts/factory-pipeline.py validate)",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "title",
+    "topic",
+    "tasks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rpg-factory.pipeline-plan/1"
+    },
+    "id": {
+      "type": "string",
+      "description": "Plan id; verdicts are stored under <state dir>/pipeline/<id>/."
+    },
+    "title": {
+      "type": "string",
+      "description": "PR title."
+    },
+    "goal": {
+      "type": "string"
+    },
+    "tier": {
+      "enum": [
+        "S",
+        "M",
+        "L"
+      ],
+      "description": "From `factory-pipeline.py tier`; an override is named in the report."
+    },
+    "topic": {
+      "type": "string",
+      "description": "Integration branch <type>/<area>/<topic>, the same in every repo; task branches are <topic>-<task id>."
+    },
+    "deliver": {
+      "enum": [
+        "pr",
+        "none"
+      ],
+      "description": "pr: the user authorized push + gh pr create once the gate is READY_FOR_PR. Merge stays with the user."
+    },
+    "repos": {
+      "type": "object",
+      "description": "Repos that are not in the registry (e.g. a tool or plugin repo), or overrides of the base.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "registry": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute, or relative to the plan file."
+          },
+          "base": {
+            "type": "string"
+          },
+          "base_sha": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "repo",
+          "objective",
+          "paths",
+          "acceptance"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "repo": {
+            "type": "string",
+            "description": "Registry repo key or a key of plan.repos."
+          },
+          "objective": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Owned paths (repo-relative); disjoint from every task it does not depend on."
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acceptance": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "implementer": {
+            "type": "string",
+            "description": "registry pipeline.agents key; default pipeline.default_implementer"
+          },
+          "reviewer": {
+            "type": "string",
+            "description": "default: pipeline.review_pairing[implementer]; never the implementer"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "pipeline.exclusive_resources ids the task needs (repos listed there imply it)"
+          },
+          "worktree": {
+            "type": "boolean",
+            "description": "true is rejected for a repo with worktrees: false"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

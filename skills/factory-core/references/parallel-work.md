@@ -2,6 +2,8 @@
 
 The single policy for splitting a Factory task across agents. Other files point here; none restates it.
 It adds no gate and no prompt: when something is missing, the task reports it and other work continues.
+The delivery pipeline (section 10, `scripts/factory-pipeline.py`) is how the lead runs this policy end to end:
+tier, plan, workers, cross-model review, QA, READY_FOR_PR, PR.
 
 ## 1. Roles
 
@@ -52,9 +54,13 @@ scope it noticed.
   never a nested repository.
 - Never edit another task's worktree. Read-only inspection of it is fine.
 - One mutating command per worktree at a time (`git-safety.md` rule 14) still applies.
-- **Unity:** at most one Unity writer worktree per client project. Each extra client worktree needs its own
-  multi-GB `Library/` import, so client tasks usually run in sequence; server and package tasks parallelise well.
-- **Shared exclusive resources** (Unity Editor, a local or scratch Docker stack, the test lab, fixed ports):
+- **No worktree in a Unity project.** A repo with registry `worktrees: false` (the client) or a
+  `ProjectSettings/ProjectVersion.txt` at its root never gets a worktree, for any role: each one needs its own
+  multi-GB `Library/` import. Its tasks run one after another in the main checkout on the task branch, each with
+  implement, cross-model review and QA before the next starts; its reviewers read the commits there and change
+  nothing. Package, server, tool and plugin repos use worktrees and parallelise well.
+- **Shared exclusive resources** (Unity Editor and Unity test runs - one at a time across the client and every
+  package test project, registry `pipeline.exclusive_resources` -, a local or scratch Docker stack, the test lab, fixed ports):
   the lead assigns each to one task at a time. A task without the resource reports the dependent check as
   `NOT_RUN` with the exact command and reason; other work continues. There is no prompt.
 
@@ -80,7 +86,8 @@ scope it noticed.
 - Each QA and review worker runs in its own worktree checked out at that SHA
   (`orca orchestration worker-start --worktree new-top-level --base-branch <sha>`, or `isolation: "worktree"`,
   which starts from the lead's current HEAD). The worker first checks that `git rev-parse HEAD` is that SHA;
-  a result from a shared or changing tree is reported as not independent.
+  a result from a shared or changing tree is reported as not independent. Exception: in a no-worktree repo
+  (section 4) review and QA run in the main checkout, one at a time, while no other task of that repo runs.
 - When the candidate moves (a fix lands), list which findings and results refer to the old SHA and must be
   redone; re-run only those.
 - Verdicts are PASS, FAIL, NOT_RUN or BLOCKED. NOT_RUN is never a pass.
@@ -102,14 +109,25 @@ Merging worker branches into the task's integration branch is the lead's decisio
 or shared branch (develop, main, staging, release-*) and pushing stay on the user's request (`git-safety.md`
 rule 5).
 
-## 8. Cleanup
+## 8. Cleanup (mandatory when a task is done)
 
-Remove only worktrees that the lead's own tasks created, after they are integrated and clean, with
-`git worktree remove <path>` without `--force`. Keep the task branches unless the user asks to delete them.
-`orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see its
-`--help`), so use it only for a worktree whose branch is disposable (an Orca-created QA or review branch
-with no commits) or whose branch the user asked to delete. Release settled Orca workers with
-`orca orchestration worker-release`.
+A task is done when its contribution is integrated and its review and QA are recorded; the whole run is done
+when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_PR). Then, every time:
+
+1. **Worktrees.** Remove every worktree the lead's own run created (implementation, review, QA), once it is
+   integrated and clean: `git worktree remove <path>` without `--force`. A worktree with uncommitted or
+   unintegrated work is not removed: report it instead. Never remove the main checkout, the integration branch's
+   checkout before its PR is open, or a worktree another coordinator owns (section 2).
+2. **Task branches.** The user asked for full cleanup, so a task branch whose commits are in the integration
+   branch is deleted with its worktree (`git branch -d`, never `-D`). The integration branch stays: it carries
+   the PR. `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see
+   its `--help`), and keeps branches it cannot prove merged - use it for Orca-created worktrees.
+3. **Agent sessions.** End every Claude and Codex session the run started: `orca orchestration worker-release`
+   for each settled Orca worker (it closes only that worker's terminal and keeps its output readable), and stop
+   any background Agent-tool worker that is still running. No idle worker session outlives its task.
+4. **Check.** `factory-pipeline.py cleanup plan.json` lists what is left (worktrees and task branches of the
+   plan) and prints the commands; it must report CLEAN before the final report. The report's Cleanup column
+   names what was removed and what was kept and why.
 
 ## 9. Not authorized by this policy
 
@@ -120,5 +138,42 @@ with no commits) or whose branch the user asked to delete. Release settled Orca 
   `human_gates` and keep their rules.
 - Repositories outside the task.
 - Bypassing branch protection or required CI.
+
+## 10. Delivery pipeline
+
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py` turns sections 1-8 into commands. Tier thresholds, agents,
+review pairing and exclusive resources live in registry `pipeline`; the plan format is
+`docs/schemas/pipeline-plan.schema.json`. The pipeline only prints commands and grades state; the lead runs them.
+
+1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L and the flow.
+   S: the lead implements in its own session, then the review, QA and gate steps below with one plan task.
+   M: the lead writes `plan.json`. L: a planner worker writes it (`factory-pipeline.py planner --request <text>
+   --runner orca`); planning is read-only and runs in the lead's checkout, never in a new worktree.
+2. **Plan.** `factory-pipeline.py validate plan.json` must print OK: disjoint owned paths (or a dependency between the
+   tasks), no cycle, waves, no worktree for a no-worktree repo and never two of its tasks in one wave, a reviewer of
+   another model, and a warning when one wave shares an exclusive resource (queue those runs).
+3. **Implement.** Per ready task, `factory-pipeline.py dispatch plan.json --task <id> --phase implement --runner orca`
+   prints the worker start (section 5; `--runner agent` is the fallback). Section 3 is the task spec.
+4. **Cross-model review.** Code written by Claude is reviewed by Codex and code written by Codex by Claude
+   (registry `pipeline.review_pairing`). On the task's stable candidate commit:
+   `dispatch ... --phase review --sha <sha>`. Record the result: `factory-pipeline.py verdict plan.json --task <id>
+   --phase review --sha <sha> --by <agent> --state PASS|FAIL --report <file>`. A FAIL goes back to the implementer
+   as a scoped fix and a new candidate SHA. When the paired model is unavailable, a fresh session of the same
+   model reviews, the report names it SAME_MODEL, and the gate accepts it only with `--allow-same-model`.
+5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`.
+6. **QA.** Once per repo on the integration HEAD: `dispatch ... --task integration:<repo> --phase qa --sha <head>`;
+   in a no-worktree repo also per task, before the next task starts (`--task <id>`). The QA worker fills
+   `templates/pipeline/qa-report.md`; the lead records `verdict ... --phase qa`.
+7. **READY_FOR_PR.** `factory-pipeline.py gate plan.json` is a read-only report: every task integrated, reviewed PASS
+   by its paired model on a commit whose owned paths have not changed since, QA PASS on each integration HEAD,
+   clean integration trees, fast checks PASS and not STALE (`run-checks.py --status`), and no pipeline worktree in
+   a no-worktree repo. Anything else is a listed blocker: fix it and re-run the affected review or QA only.
+8. **PR.** When the user put `deliver: pr` in the task (plan `deliver: "pr"`) and the gate prints READY_FOR_PR, the
+   lead pushes the integration branch and opens the PR with the commands the gate prints, body = the final report
+   (`report.md`). This is the delivery exception of `git-safety.md` rule 5. Merging stays with the user;
+   without `deliver: pr` the task ends at READY_FOR_PR in the report.
+9. **Cleanup.** Section 8, every time: remove the run's worktrees and merged task branches, release every Claude
+   and Codex worker session, and run `factory-pipeline.py cleanup plan.json` until it reports CLEAN. In a no-worktree
+   repo, release each task's sessions as soon as its QA verdict is recorded, before the next task starts.
 
 This policy introduces no tripwire, no latch and no new confirmation step.

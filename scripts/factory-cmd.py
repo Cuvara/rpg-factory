@@ -9,6 +9,9 @@
   doctor                                  install state, registry, state paths, tools,
                                           dev tools (MCP servers, plugins, binaries) per skill
   workflow plan|status|dispatch|report     dependency-aware artifact workflow entry point
+  pipeline tier|validate|planner|dispatch|verdict|gate|cleanup [args]
+                                          factory-pipeline.py: task tier, plan validation, worker dispatch
+                                          commands, review/QA verdicts and the READY_FOR_PR gate
   ui [--json] [--project DIR] [--uitoolkit-ref REF] <request...>
                                           scripts/ui/ui_plan.py: UI plan - intent, ONLY the UI skills
                                           needed, lead route, missing context, components (exit 3 =
@@ -22,6 +25,7 @@ run-checks.py. Exit code = the underlying script's; 2 = usage error.
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -159,6 +163,17 @@ def cmd_workflow(args):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-workflow.py"), *args])
 
 
+PIPELINE_VERBS = ("tier", "validate", "planner", "dispatch", "verdict", "gate", "cleanup")
+
+
+def cmd_pipeline(raw):
+    """Arguments keep their text (a planner request has blanks and commas); one quoted string is split shell-style."""
+    args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
+    if not args or args[0] not in PIPELINE_VERBS:
+        raise ValueError("pipeline needs " + "|".join(PIPELINE_VERBS))
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-pipeline.py"), *args])
+
+
 UI_VERBS = ("ui", "ui-figma", "ui-components", "ui-screen", "ui-review")
 
 
@@ -189,6 +204,11 @@ def cmd_ui(verb, raw):
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         return usage()
+    if argv[0] == "pipeline":
+        try:
+            return cmd_pipeline(argv[1:])
+        except ValueError as e:
+            return usage(str(e))
     if argv[0] in UI_VERBS:
         try:
             return cmd_ui(argv[0], argv[1:])

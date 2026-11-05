@@ -41,8 +41,9 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <
 
 <!-- Only when work was delegated to workers (references/parallel-work.md); otherwise omit this section. -->
 ## Parallel work (when delegated)
-| Task | Owner / agent | Worktree | Branch | Base | Candidate SHA | QA / review verdict | Integrated | Cleanup |
-|---|---|---|---|---|---|---|---|---|
+| Task | Implementer | Reviewer (model) | Worktree | Branch | Base | Candidate SHA | Review verdict | QA verdict / report | Integrated | Cleanup |
+|---|---|---|---|---|---|---|---|---|---|---|
+<!-- Then: tier (and any --tier override), `factory-pipeline.py gate` state with its blockers, SAME_MODEL reviews, Unity test waits, PR URL or "READY_FOR_PR, deliver not requested". -->
 
 ## Pending (cross-repo / release)
 - `factory-status.py` pending items this task created or left: <item -> owning skill> | none
