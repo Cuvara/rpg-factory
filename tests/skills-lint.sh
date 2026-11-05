@@ -9,6 +9,11 @@ pass=0; fail=0
 ok()  { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL  $1"; }
 
+# factory-core is loaded on every task: past this budget it should shed detail into its references/ (the
+# hard cap below stays 160). A WARN, not a failure.
+CORE_BUDGET=140
+core_budget() { [ "$1" -le "$CORE_BUDGET" ] || echo "WARN  factory-core: SKILL.md has $1 lines (> $CORE_BUDGET budget, cap 160): move detail into references/"; }
+
 fm() { # field value from YAML frontmatter
   awk -v k="$2" 'NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>1{ if (index($0, k": ")==1) { sub("^" k ": ", ""); print; exit } }' "$1"
 }
@@ -26,6 +31,7 @@ for dir in skills/*/; do
   grep -q 'factory-context.sh' <<<"$(fm "$f" allowed-tools)" && ok || bad "$s: allowed-tools must grant factory-context.sh"
   lines=$(wc -l < "$f")
   [ "$lines" -le 160 ] && ok || bad "$s: SKILL.md has $lines lines (> 160)"
+  [ "$s" = "factory-core" ] && core_budget "$lines"
   refs=$(ls "$dir/references" 2>/dev/null | wc -l)
   { [ "$s" = "factory-core" ] || [ "$refs" -le 3 ]; } && ok || bad "$s: $refs reference files (> 3)"
   for r in $(grep -oE 'references/[A-Za-z0-9_.-]+\.md' "$f" | sort -u); do
@@ -217,6 +223,9 @@ if [ -f "$pw" ]; then
 else
   bad "parallel-work: $pw missing"
 fi
+
+# the budget warning itself: silent at the budget, a WARN line (never a failure) above it
+[ -z "$(core_budget "$CORE_BUDGET")" ] && [[ "$(core_budget $((CORE_BUDGET + 1)))" == "WARN  factory-core: SKILL.md has $((CORE_BUDGET + 1)) lines"* ]]   && ok || bad "factory-core line budget: WARN line missing or wrong above $CORE_BUDGET lines"
 
 total=$((pass + fail))
 echo "skills lint: $total checks, $pass passed, $fail failed"

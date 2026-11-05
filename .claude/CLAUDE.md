@@ -143,7 +143,7 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 - **Slash commands** (`commands/*.md`: status, route, check, doctor, ui, ui-figma, ui-components, ui-screen,
   ui-review) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
   `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`.
-- **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work) routes to
+- **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work, engineering, workflows) routes to
   13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
   unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 10 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
   unity-client-tech, unity-dots, netcode-client, and the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
@@ -157,5 +157,5 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 
 ## Layout
 
-- `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (+ `lib/`, `checks/` read-only evidence
+- `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
   scripts, `ui/` read-only UI plan engine, catalog, selection and Figma environment check) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`
