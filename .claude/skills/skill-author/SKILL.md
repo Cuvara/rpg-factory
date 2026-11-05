@@ -9,9 +9,10 @@ Repo-local workflow for this plugin's own skills. The rules are in `.claude/CLAU
 `skills/factory-core/references/skill-contract.md`; this skill is the order of work and the tools.
 
 **Flow.** Adding or splitting a skill is a plugin task: it runs through the delivery pipeline (`.claude/CLAUDE.md`
-"Developing this plugin"). After the gate (section 1), plan the steps below as separate tasks when they own
-disjoint paths - scaffold (`skills/<name>/` and its registry fragment), content, and routing and dogfood scenarios
-(`tests/`, `evals/`) - with a dependency where one needs another's output (content after scaffold).
+"Developing this plugin"). After the gate (section 1), plan the steps below as separate tasks (or as subtasks
+of one task, for its task lead) when they own disjoint paths - scaffold (`skills/<name>/` and its registry
+fragment), content, and routing and dogfood scenarios (`tests/`, `evals/`) - with a dependency where one needs
+another's output (content after scaffold).
 
 ## 1. Gate: does this deserve a skill?
 
@@ -60,4 +61,5 @@ validate. The registry edit lands in the fragment the skill's domain names (`reg
 - `tests/skills-lint.sh`, `scripts/check-registry.sh`, `tests/routing.test.sh`, then `tests/run-all.sh`
   (0 failed, report the count); `tests/dogfood.sh --installed <scenario>` for the new scenario (spends
   tokens - say so).
-- Changelog fragment `changelog.d/<topic>.md` (never `CHANGELOG.md` `[Unreleased]`); branch `feat/skills/<name>`; commit, push and PR only on request.
+- Changelog fragment `changelog.d/<topic>.md` (never `CHANGELOG.md` `[Unreleased]`); branch
+  `feat/skills/<name>`; commit, push and PR only on request.
