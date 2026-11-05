@@ -97,5 +97,52 @@ mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops:
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 grade
 
+# Two-level rule at S tier (parallel-work.md is its only copy): the run lead never edits or implements a task itself,
+# an S task is a one-task plan with its own task lead. Prose-tolerant: any clause (split on . ; and line breaks are
+# joined) where a lead implements/edits/codes in its own session, itself or directly without a negation, or an
+# S-tier clause where a lead implements without one, is the restored shortcut. Prints the offending text; rc 1.
+s_tier_policy() {
+  python3 -B - "$1" <<'PY'
+import re, sys
+text = re.sub(r"\s+", " ", open(sys.argv[1], encoding="utf-8").read())
+clauses = [c.strip() for c in re.split(r"(?<=[.;])\s+", text) if c.strip()]
+verb = re.compile(r"\b(implement(s|ed|ing)?|edit(s|ed|ing)?|code(s|d)?|coding|writes? the code|makes? the change)\b", re.I)
+lead = re.compile(r"\blead\b", re.I)
+neg = re.compile(r"\b(never|not|no|nor|cannot)\b|n't", re.I)
+self_ = re.compile(r"\b(own session|itself|himself|directly|in place)\b", re.I)
+s_tier = re.compile(r"(^|[\s(])S( tier)?\s*[:)]|\bS[- ]tier\b|\b[Ss]mall\b")
+errs = []
+for c in clauses:
+    if lead.search(c) and verb.search(c) and not neg.search(c) and (self_.search(c) or s_tier.search(c)):
+        errs.append("run lead implements a task itself: " + c[:160])
+if not any(lead.search(c) and neg.search(c) and verb.search(c) for c in clauses):
+    errs.append("missing: the run lead never edits/implements a task's files itself")
+if not any(s_tier.search(c) and re.search(r"\bone task\b", c, re.I) and re.search(r"\btask lead\b", c, re.I) for c in clauses):
+    errs.append("missing: an S-tier task is a one-task plan with its own task lead")
+print("\n".join(errs))
+sys.exit(1 if errs else 0)
+PY
+}
+s_out=$(s_tier_policy "$ROOT/$PW" 2>&1); s_rc=$?
+[ $s_rc -eq 0 ] && ok "S tier keeps the two-level rule in $PW" || no "S tier two-level rule broken in $PW (rc=$s_rc)" "$s_out"
+# s_mutate <name> <expected text> <commands in a copy of the policy file $F>: the checker must FAIL with that text
+s_mutate() {
+  local F="$TMP/pw-mut.md" merr out rc
+  cp "$ROOT/$PW" "$F" && chmod u+w "$F"
+  if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
+  out=$(s_tier_policy "$F" 2>&1); rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> S-tier check FAIL: $2"
+  else no "$1: S-tier check did not fail with '$2' (rc=$rc)" "$out"; fi
+}
+s_mutate "S-tier shortcut restored (old wording)" "run lead implements a task itself" \
+  'sed -i "s/^   S: the run lead writes/   S: the run lead implements in its own session, then the review, QA and gate steps below with one plan task. The run lead writes/" "$F"'
+s_mutate "S-tier shortcut reworded (lead does it directly)" "run lead implements a task itself" \
+  'printf "\nFor an S task the lead edits the files directly.\n" >> "$F"'
+s_mutate "never-implements negation dropped" "missing: the run lead never edits/implements" \
+  'sed -i -e "s/ and never edits a task.s files itself//" -e "s/; the run lead never implements it in its own session//" "$F"'
+s_mutate "one-task plan with its task lead dropped" "missing: an S-tier task is a one-task plan" \
+  'sed -i -e "s/A small (S tier) change is a plan with one task and still gets one task lead\.//" -e "s/S: the run lead writes a .plan\.json. with one task and dispatches its task lead/S: the run lead writes a plan/" "$F"'
+
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
