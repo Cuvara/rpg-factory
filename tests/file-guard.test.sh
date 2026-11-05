@@ -65,6 +65,15 @@ t warn  Write "$WT/Assets/Samples/Mine/x.cs"                            # genera
 t warn  Write "$WT/Packages/com.gdk.core/s.cs"                          # submodule content in the worktree
 t allow Write "$WT/Assets/Scripts/Net/NewFile.cs"
 t warn  Write "$WT/Assets/Scripts/New/Deep/Missing.uxml.g.cs"          # target directory does not exist yet
+# the gitlinks are cached per work tree and index stat (state dir): a submodule added or removed after a write is
+# seen at the next write, in the main checkout and (own index) in the worktree
+t allow Write "$C/Packages/com.gdk.extra/s.cs"
+gc "$C" -c protocol.file.allow=always submodule add -q "$SUB" Packages/com.gdk.extra >/dev/null 2>&1
+t warn  Write "$C/Packages/com.gdk.extra/s.cs"                          # added after the first write
+t allow Write "$WT/Packages/com.gdk.extra/s.cs"                         # not in the worktree's index
+gc "$C" rm -q --cached Packages/com.gdk.extra >/dev/null 2>&1
+t allow Write "$C/Packages/com.gdk.extra/s.cs"                          # removed from the index
+t warn  Write "$WT/Packages/com.gdk.core/s.cs"                          # the worktree's cache entry is its own
 # a linked worktree OUTSIDE the workspace root (Orca worktree) whose main checkout is in the workspace gets its rules
 OWS="$TMP/orca/server-wt"; gc "$S" worktree add -q -b feat/outside "$OWS" >/dev/null 2>&1; mkdir -p "$OWS/backend/shared/proto/gen"
 t warn  Read  "$OWS/backend/.env"                                        # secrets

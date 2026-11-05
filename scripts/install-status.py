@@ -27,9 +27,10 @@ CODEX_HOME config and
 the installed plugin cache, comparing its version with the source VERSION.
 
 Usage: install-status.py [--json] [--session] [--source DIR] [--codex]
-  --session  SessionStart-hook mode: silent when CURRENT, otherwise emits additionalContext; always
+  --session  SessionStart-hook mode: silent when CURRENT, otherwise emits additionalContext (also when `python3` on
+             PATH is the Windows Store alias, which slows every hook call: lib/hookspeed.py); always
              exits 0 and never prints a traceback (malformed plugin records mean "no advisory")
-Exit: 0 CURRENT, 1 otherwise, 2 error. Writes nothing.
+Exit: 0 CURRENT, 1 otherwise, 2 error. Writes nothing (--session caches compiled bytecode in the state dir).
 """
 import hashlib
 import json
@@ -40,11 +41,33 @@ import sys
 PLUGIN_KEY = "rpg-factory@rpg-factory"
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(HERE, "scripts", "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+if __name__ == "__main__" and "--session" in sys.argv:  # the SessionStart hook: reuse compiled modules
+    try:
+        import hookspeed  # noqa: E402
+        hookspeed.enable_bytecache()
+    except Exception:
+        pass
 try:
     from pluginroot import is_codex  # noqa: E402
 except ImportError:  # a copied script without lib/ (tests, partial installs): Claude Code, never a traceback
     def is_codex():
         return False
+
+
+def alias_advisory():
+    """The SessionStart line when `python3` is the Windows Store alias (lib/hookspeed.py), else None."""
+    try:
+        import hookspeed  # noqa: E402
+        advice = hookspeed.alias_advice()
+    except Exception:
+        return None
+    return f"rpg-factory advisory (warn): {advice}." if advice else None
+
+
+def emit_session(msgs):
+    msgs = [m for m in msgs if m]
+    if msgs:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": " ".join(msgs)}}))
 
 
 def git(repo, *args):
@@ -166,9 +189,11 @@ def codex_session_advisory(source=None):
 
 def codex_main(source, as_json, session):
     if session:
-        msg = codex_session_advisory(source)
-        if msg:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
+        try:
+            msg = codex_session_advisory(source)
+        except Exception:  # each advisory fails on its own: a broken install check keeps the alias advisory
+            msg = None
+        emit_session([msg, alias_advisory()])
         return 0
     r = codex_status(source)
     if as_json:
@@ -275,11 +300,12 @@ def main():
     fix = ("claude plugin marketplace update rpg-factory && claude plugin update rpg-factory@rpg-factory "
            "(then restart Claude)")
     if session:
+        msg = None
         if r["state"] != "CURRENT":
             msg = (f"rpg-factory install state: {r['state']}. " + "; ".join(r["reasons"]) + f". Fix: {fix}. "
                    + ("Sessions load the source directory in place; the stale part is the install record."
                       if r["mode"] == "directory" else "Until then this session runs the installed copy, not the source."))
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
+        emit_session([msg, alias_advisory()])
         return 0
     if as_json:
         print(json.dumps(r, indent=2))
@@ -306,6 +332,9 @@ if __name__ == "__main__":
         try:
             main()
         except Exception:
-            pass
+            try:
+                emit_session([alias_advisory()])  # the install check failed on its own: the alias advisory still holds
+            except Exception:
+                pass
         sys.exit(0)
     sys.exit(main())

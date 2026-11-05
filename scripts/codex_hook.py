@@ -14,6 +14,13 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)
+sys.path.append(os.path.join(HERE, "lib"))
+if __name__ == "__main__":  # the hook: reuse compiled plugin modules (lib/hookspeed.py)
+    try:
+        import hookspeed
+        hookspeed.enable_bytecache()
+    except Exception:
+        pass
 
 
 def load(name, filename):

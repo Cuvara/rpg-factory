@@ -162,6 +162,9 @@ def cmd_doctor(args):
     repos = {k: {"path": os.path.join(ws, r["path"]), "optional": bool(r.get("optional")),
                  "present": os.path.isdir(os.path.join(ws, r["path"], ".git"))} for k, r in reg["repos"].items()}
     missing = [t for t in ("git", "jq", "python3", "bash") if not shutil.which(t)]
+    import hookspeed
+    alias = hookspeed.python_alias()  # detection only: doctor never changes PATH
+    py3 = {"path": alias or shutil.which("python3"), "windows_store_alias": bool(alias), "advice": hookspeed.alias_advice()}
     hooks = json.load(open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8"))["hooks"]
     hooks = {e: [h.get("matcher") or "*" for h in v] for e, v in hooks.items()}
     import devtools
@@ -180,7 +183,7 @@ def cmd_doctor(args):
         print(json.dumps({"schema": "rpg-factory.doctor/1", "install": install_state, "registry": registry_state,
                           "workspace": {"path": ws, "markers_ok": ok_ws, "scratch_state": fstate.scratch(),
                                         "persistent_state": fstate.persistent(), "tmpdir": os.environ.get("TMPDIR")},
-                          "repos": repos, "tools": {"required": ["git", "jq", "python3", "bash"], "missing": missing},
+                          "repos": repos, "tools": {"required": ["git", "jq", "python3", "bash"], "missing": missing, "python3": py3},
                           "hooks": hooks, "dev_tools": tools, "skill_gaps": gaps, "exit": rc}, indent=2))
         return rc
     print("\n## Workspace and state")
@@ -190,6 +193,8 @@ def cmd_doctor(args):
     print(f"- scratch state: {fstate.scratch()}  (TMPDIR={os.environ.get('TMPDIR', '<unset>')!r})")
     print(f"- persistent state: {fstate.persistent()}")
     print(f"- tools: {'all present' if not missing else 'MISSING ' + ', '.join(missing)}")
+    if py3["advice"]:
+        print(f"- python3: {py3['advice']}")
     print("- hooks: " + "; ".join(f"{e} [{', '.join(m)}]" for e, m in hooks.items()))
     print("\n## Dev tools (registry dev_tools; names only are read from MCP/plugin config)")
     for t in tools:
