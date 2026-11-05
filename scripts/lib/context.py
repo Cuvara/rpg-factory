@@ -40,7 +40,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 import devtools  # noqa: E402
-PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(HERE))
+from pluginroot import plugin_root
+PLUGIN_ROOT = plugin_root()
 REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "registry.json")
 RESOLVE = os.path.join(PLUGIN_ROOT, "scripts", "lib", "resolve.jq")
 

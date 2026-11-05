@@ -8,6 +8,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 # Factory Core
 
 The Factory workflow for every discipline domain. Engineering is the first domain and keeps its existing behavior. Task: $ARGUMENTS
+**Codex:** resolve `${CLAUDE_PLUGIN_ROOT}` as `PLUGIN_ROOT` in hooks, otherwise two directories above this skill's containing directory; use that absolute root for commands and run the live snapshot explicitly. Load routed skills using Codex's skill mechanism (read their `SKILL.md`); Claude's Skill tool and inline shell expansion are unavailable.
 **Domains:** use `--domain` / `--kind` for domain entry points; non-engineering leads come from registry `domains`.
 
 ## Live snapshot (computed now - uncommitted paths shown are the user's baseline, not routed)

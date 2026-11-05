@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 -B \"${PLUGIN_ROOT}/scripts/codex_hook.py\" session-start; exit 0", "timeout": 15}]}],
+    "PreToolUse": [{"matcher": "Bash|apply_patch", "hooks": [{"type": "command", "command": "python3 -B \"${PLUGIN_ROOT}/scripts/codex_hook.py\" pre-tool-use; exit 0", "timeout": 10}]}]
+  }
+}

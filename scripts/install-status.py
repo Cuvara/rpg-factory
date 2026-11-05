@@ -22,7 +22,11 @@ from the source), NOT_INSTALLED.
 Notes (informational, never a state change): the source HEAD is not the commit of tag v<VERSION>, e.g.
 "source 1.0.4 + 3 commits past v1.0.4" - directory mode then runs unreleased code under the release label.
 
-Usage: install-status.py [--json] [--session] [--source DIR]
+Codex: --codex (or a Codex session: CODEX_THREAD_ID / PLUGIN_ROOT, never under Claude Code's CLAUDECODE) reads
+CODEX_HOME config and
+the installed plugin cache, comparing its version with the source VERSION.
+
+Usage: install-status.py [--json] [--session] [--source DIR] [--codex]
   --session  SessionStart-hook mode: silent when CURRENT, otherwise emits additionalContext; always
              exits 0 and never prints a traceback (malformed plugin records mean "no advisory")
 Exit: 0 CURRENT, 1 otherwise, 2 error. Writes nothing.
@@ -35,6 +39,12 @@ import sys
 
 PLUGIN_KEY = "rpg-factory@rpg-factory"
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(HERE, "scripts", "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+try:
+    from pluginroot import is_codex  # noqa: E402
+except ImportError:  # a copied script without lib/ (tests, partial installs): Claude Code, never a traceback
+    def is_codex():
+        return False
 
 
 def git(repo, *args):
@@ -95,6 +105,84 @@ def release_note(source, version):
     return None
 
 
+def codex_status(source=None):
+    """Codex installs local sources into its versioned cache, unlike Claude directory mode.
+
+    Read config/cache directly: no Codex subprocess, network, or repository scan in hooks.
+    Config fields/cache selection verified against CLI 0.164.0 and its tagged source.
+    """
+    sys.path.append(os.path.join(HERE, "scripts", "lib"))
+    import codexconfig
+    cfg = codexconfig.config()
+    marketplace = cfg.get("marketplaces", {}).get("rpg-factory", {})
+    origin = marketplace.get("source") if marketplace.get("source_type") == "local" else None
+    source = source or origin or HERE
+    rt = os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    installed_root = codexconfig.active_root()
+
+    def version(root):
+        manifest = load_json(os.path.join(root, ".codex-plugin", "plugin.json")) if root else None
+        return manifest.get("version") if isinstance(manifest, dict) else None
+
+    try:
+        with open(os.path.join(source, "VERSION"), encoding="utf-8") as fh:
+            wanted = fh.read().strip()
+    except OSError:
+        wanted = version(source)
+    installed = version(installed_root)
+    enabled = cfg.get("plugins", {}).get(PLUGIN_KEY, {}).get("enabled", False)
+    reasons = []
+    state = "CURRENT"
+    if not installed:
+        state = "NOT_INSTALLED"
+        reasons.append("no installed Codex cache for rpg-factory@rpg-factory")
+    elif not enabled:
+        state = "DISABLED"
+        reasons.append("rpg-factory@rpg-factory is disabled in Codex configuration")
+    elif installed != wanted:
+        state = "STALE"
+        reasons.append(f"installed Codex version {installed} != source VERSION {wanted}")
+    runtime = None
+    if rt:
+        same = installed_root and os.path.normcase(os.path.realpath(rt)) == os.path.normcase(os.path.realpath(installed_root))
+        runtime = {"path": rt, "version": version(rt), "kind": "Codex installed-cache" if same else "Codex other checkout",
+                   "is_installed_load_path": bool(same)}
+        if installed and (not same or runtime["version"] != wanted):
+            reasons.append("this Codex session runs a different plugin copy/version; restart the session")
+            if state == "CURRENT":
+                state = "RESTART_REQUIRED"
+    return {"source": {"path": source, "version": wanted}, "mode": "codex-cache",
+            "installed": {"path": installed_root, "loads_from": installed_root, "version": installed, "enabled": enabled} if installed else None,
+            "runtime": runtime, "state": state, "reasons": reasons, "notes": []}
+
+
+def codex_session_advisory(source=None):
+    r = codex_status(source)
+    if r["state"] == "CURRENT":
+        return None
+    return (f"rpg-factory advisory (warn): Codex install state: {r['state']}. " + "; ".join(r["reasons"])
+            + ". Refresh with `codex plugin add rpg-factory@rpg-factory`, then restart the session.")
+
+
+def codex_main(source, as_json, session):
+    if session:
+        msg = codex_session_advisory(source)
+        if msg:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
+        return 0
+    r = codex_status(source)
+    if as_json:
+        print(json.dumps(r, indent=2))
+    else:
+        print(f"source    {r['source']['version']}  {r['source']['path']}")
+        inst = r["installed"] or {}
+        print(f"installed {inst.get('version')}  mode=codex-cache  loads {inst.get('loads_from')}")
+        print(f"state     {r['state']}")
+        for reason in r["reasons"]:
+            print(f"  - {reason}")
+    return 0 if r["state"] == "CURRENT" else 1
+
+
 def main():
     as_json = "--json" in sys.argv
     session = "--session" in sys.argv
@@ -106,6 +194,8 @@ def main():
             print("install-status: --source needs a directory", file=sys.stderr)
             return 2
         source = sys.argv[i]
+    if "--codex" in sys.argv or is_codex():
+        return codex_main(source, as_json, session)
     entry = None
     installed_all = load_json(os.path.join(home, ".claude/plugins/installed_plugins.json"))
     plugins = installed_all.get("plugins") if isinstance(installed_all, dict) else None

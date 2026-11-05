@@ -32,7 +32,7 @@ You give Claude a development request. The plugin works out, from the live state
 - which checks must run, which require a human, and what counts as evidence
 - when to stop: at tags, at shared infrastructure, and at the release actions of the lead
 
-Version 1.4.0 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
+Version 1.5.0 (see `VERSION`). Tags and releases: without explicit release authorization from the user in the
 current task, an agent stops at **READY_TO_TAG** and the maintainer tags; when the user explicitly authorizes the
 release in that task, the agent performs the authorized merge, version, tag and release steps itself, within that
 scope and after the release checks pass. The guard's tag/release advisories apply either way.
@@ -436,6 +436,53 @@ Troubleshooting:
 | `git-guard.test.sh` passes everything as `allow` | a test from before this release with `RPG_FACTORY_WORKSPACE` set in the shell; the suite now unsets it. |
 | `pin-status` FAIL with `!= lock 'file:...'` | the client is in the local `file:` package toggle (human gate). Factory reports it; it never changes it. Restore the git pins with `toggle-packages.sh` before committing. |
 
+### Codex CLI
+
+The same checkout is also a Codex CLI plugin: `.codex-plugin/plugin.json` (same name, version and `./skills/`
+directory as the Claude manifest) and a repo-local Codex marketplace in `.agents/plugins/marketplace.json`.
+
+```bash
+# from a local clone (the repo-local marketplace .agents/plugins/marketplace.json)
+codex plugin marketplace add /mnt/c/Workspaces/UnityIndie/rpg-factory
+# or from GitHub
+codex plugin marketplace add Cuvara/rpg-factory
+codex plugin add rpg-factory@rpg-factory
+codex plugin list --marketplace rpg-factory --json  # rpg-factory installed and enabled at the source version
+# then start Codex and review + trust the rpg-factory hooks: until they are trusted they do not run
+
+# update: Codex installs a COPY ($CODEX_HOME/plugins/cache/rpg-factory/rpg-factory/<version>/); `plugin add`
+# refreshes that copy from the source, also at an unchanged version (no remove, no version bump needed)
+codex plugin marketplace upgrade rpg-factory        # Git marketplaces only; a local one reads the checkout
+codex plugin add rpg-factory@rpg-factory            # after a new version or edits in the checkout; then restart the session
+```
+
+What works the same: the skills (factory-core and every specialised and tech skill, namespaced
+`rpg-factory:<skill>`), `registry.json`, the routing, status, check and release scripts, and the advisory guards.
+Codex hooks (`hooks/codex-hooks.json`) run `scripts/codex_hook.py` on SessionStart and on PreToolUse for `Bash`
+(every shell, PowerShell included) and `apply_patch` (file edits, both sides of a move): it feeds the same git guard
+and file guard and emits the same `rpg-factory advisory (high|warn): ...` context. Like the Claude hooks it never
+blocks, never asks, exits 0 on any input, and resolves the plugin root itself (Codex passes `PLUGIN_ROOT`,
+`PLUGIN_DATA` and a compatibility `CLAUDE_PLUGIN_ROOT`; none is required).
+
+What differs:
+
+- **Copy, not in place.** Unlike the Claude directory marketplace, a Codex session runs the installed copy, not
+  the checkout: edits reach Codex sessions only after `codex plugin add rpg-factory@rpg-factory` again and a
+  session restart (see above).
+- **No slash commands.** Codex's install-time command migration skips the Factory command templates (they use
+  `$ARGUMENTS` and inline shell), so the Codex manifest has no `commands`. Run the script behind them from the
+  plugin root instead: `python3 -B <plugin root>/scripts/factory-cmd.py status` (`route`, `check`, `doctor`,
+  `ui <request>`, ...); the plugin root is the directory that holds the installed `skills/`.
+- **No Skill tool event.** Codex loads skills without a hookable tool call, so the Skill-hook behaviour (execution
+  mode recording, auto-correcting a tech skill requested before factory-core, the tech-before-lead advisory) does
+  not apply; the session follows factory-core's routing text instead.
+- **Install state.** The Codex SessionStart hook warns when it cannot find a current Codex install; for details run
+  `codex plugin list --marketplace rpg-factory --json`.
+- **Hook trust.** Codex requires a trust review before plugin hooks run: after installing, review and trust the
+  rpg-factory hooks; until then no guard advisory appears.
+
+Details and the dogfood procedure: [docs/codex.md](docs/codex.md).
+
 ## Usage examples
 
 ```text
@@ -500,6 +547,10 @@ Architecture documentation and decision records are indexed in `docs/architectur
   repo-local `.claude/skills/skill-author` skill.
 - `tests/dogfood.sh` runs real headless Claude sessions and asserts which skills were invoked;
   `--installed` uses the installed plugin (no `--plugin-dir`) and asserts the runtime version.
+- Codex packaging: `tests/codex-plugin.test.sh` (in run-all) checks the Codex manifest, marketplace, hook config and
+  the hook adapter (exit 0 on any stdin, never a deny/block decision, advisory level per fixture);
+  `tests/dogfood-codex.sh` (opt-in, spends tokens) installs the plugin into a throwaway `CODEX_HOME` and grades
+  real `codex exec` sessions; `--dry-run` self-tests its grader offline.
 
 ## Known limitations
 
@@ -508,7 +559,7 @@ Architecture documentation and decision records are indexed in `docs/architectur
 - **Local protoc is not the CI pin** (registry fact `protoc-ci-pin`). `generate.sh` output would drift locally; leave regeneration to CI, or install the pinned version.
 - **No local cluster tooling.** kubectl, helm, promtool and kubeconform are not installed. Cluster checks are external and human-gated.
 - **Plugin evals with Bash are blocked on this machine** (`claude plugin eval` refuses Bash because of a symlink in `~/.docker`). Behaviour is verified with deterministic tests and headless dogfood sessions instead.
-- **The guard reads command text.** Anything it cannot see through gets a `warn` advisory; git run by a script file or a background process is not seen (the git-safety rules are the control there). Remote-only GitHub changes are only flagged by the guard (advisory, not blocked). Another agent runtime (e.g. Codex) is outside all layers.
+- **The guard reads command text.** Anything it cannot see through gets a `warn` advisory; git run by a script file or a background process is not seen (the git-safety rules are the control there). Remote-only GitHub changes are only flagged by the guard (advisory, not blocked). Another agent runtime is outside all layers; Codex CLI is covered only with the rpg-factory Codex plugin installed and its hooks trusted (see "Codex CLI").
 - **MCP tools are not inspected.** Unity-MCP asset/scene edits are controlled by the `unity-asset-edit` human gate (policy), not by a hook.
 - **Evidence identity** covers the check's directory plus the paths of its module's same-repo dependencies (registry `depends_on`); untracked files count by name, size and mtime (not contents). Changes in *another* repo are not part of it (a package's new tag reaches a consumer through its pin file, which is in the consumer repo).
 - **Hook cost:** one guard process per Bash/PowerShell call and one file-guard process per file tool call; no SessionStart repository scan and no post-command comparison (both left with the tripwire in 1.0.1). Python start-up alone is ~0.1 s on native Windows.

@@ -24,8 +24,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(HERE)
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+from pluginroot import plugin_root
+PLUGIN_ROOT = plugin_root()
 import fstate  # noqa: E402
 
 READ_ONLY_PROGS = {"ls", "cat", "head", "tail", "grep", "egrep", "rg", "jq", "wc", "echo", "printf", "pwd", "stat", "file",

@@ -78,7 +78,9 @@ def native_path(p, nt=None):
     m = re.match(r"^/mnt/([A-Za-z])(/|$)", p) or re.match(r"^/([A-Za-z])(/|$)", p)
     return f"{m.group(1).upper()}:/{p[m.end():]}" if m else p
 
-PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from pluginroot import plugin_root
+PLUGIN_ROOT = plugin_root()
 
 
 def load_registry():
@@ -1153,25 +1155,33 @@ def main():
     registry = load_registry()
     if not registry:
         return 0
+    reasons = collect(payload, registry)
+    if reasons:
+        json.dump(advisory("rpg-factory guard", reasons), sys.stdout)
+    return 0
+
+
+def collect(payload, registry, skill_tool=True):
+    """Every reason for one Bash/PowerShell payload (dialect from tool_name). skill_tool=False is for runtimes
+    without a Skill tool (Codex reads SKILL.md to load a skill): it drops the skill-read advisory. An argument,
+    not a payload field, so no hook input can switch it off."""
     command = (payload.get("tool_input") or {}).get("command") or ""
     if len(command) > MAX_COMMAND:  # analysing it would take minutes: say so instead of guessing
-        json.dump(advisory("rpg-factory guard", [("ask", f"command too large to check ({len(command) // 1024} KB); review it")]), sys.stdout)
-        return 0
+        return [("ask", f"command too large to check ({len(command) // 1024} KB); review it")]
     reasons = []
     try:
         need_mode = _needs_mode(payload)
     except Exception:
         need_mode = True  # cannot tell cheaply: do the full checks
-    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits, skill_read_hits) if need_mode else (evaluate, human_gate_hits, process_kill_hits, skill_read_hits)
+    parts = (mode_hits, evaluate, human_gate_hits, process_kill_hits) if need_mode else (evaluate, human_gate_hits, process_kill_hits)
+    if skill_tool:
+        parts += (skill_read_hits,)
     for part in parts:  # isolated: a failure in one never drops the others
         try:
             reasons += part(payload, registry)
         except Exception:  # a guard bug must never break the session
             pass
-    if not reasons:
-        return 0
-    json.dump(advisory("rpg-factory guard", reasons), sys.stdout)
-    return 0
+    return reasons
 
 
 def advisory(who, reasons):

@@ -49,6 +49,9 @@ def _path_key(p):
 def mcp_servers(ws, reg):
     """{server name: [where configured]} - names only."""
     found = {}
+    import codexconfig
+    for name in codexconfig.mcp_servers():
+        found[name] = ["Codex config"]
 
     def note(names, where):
         for n in names or []:
@@ -74,7 +77,8 @@ def mcp_servers(ws, reg):
 
 def enabled_plugins(ws):
     """Set of enabled plugin names (without @marketplace)."""
-    names = set()
+    import codexconfig
+    names = codexconfig.enabled_plugins()
     for path in (os.path.join(_config_dir(), "settings.json"),
                  os.path.join(ws, ".claude", "settings.json"),
                  os.path.join(ws, ".claude", "settings.local.json")):
