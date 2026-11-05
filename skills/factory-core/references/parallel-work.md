@@ -11,14 +11,14 @@ tier, plan, workers, cross-model review, QA, READY_FOR_PR, PR.
 1. owns the task scope and splits it into tasks with disjoint file ownership;
 2. records each task's base commit and integration target;
 3. writes the task spec for every dispatch (section 3);
-4. creates or requests one worktree per implementation task (section 4);
+4. creates or requests one worktree per task (section 4);
 5. dispatches and supervises workers, and answers their questions;
 6. assigns shared exclusive resources, one task at a time;
 7. reviews every diff and re-verifies the key checks itself;
 8. decides when a contribution is ready and integrates it (section 7);
 9. writes the final report with the parallel-work ledger (`report.md`) and cleans up (section 8).
 
-**Implementation worker** - works only in its own worktree and branch, runs the targeted checks from its
+**Implementation worker** - works only in its task's worktree and branch, runs the targeted checks from its
 spec, commits explicit paths, and sends a completion report.
 **QA worker** - checks acceptance criteria, test coverage, regressions, edge and failure cases on a recorded
 candidate SHA. Read-only unless its spec says otherwise.
@@ -48,7 +48,8 @@ scope it noticed.
 
 ## 4. Worktrees
 
-- One worktree per implementation task, on a new `<type>/<area>/<topic>` branch from the recorded base.
+- One worktree per task, on a new `<type>/<area>/<topic>` branch from the recorded base. The task's implementer,
+  review, QA and fix sessions all run in it (section 8, "Session lifecycle").
 - Only the dispatching tool creates worktrees: Orca (`orca orchestration worker-start --worktree <selector>`,
   or `orca worktree create`) or a Claude Code agent with `isolation: "worktree"`. Never a second clone,
   never a nested repository.
@@ -83,11 +84,12 @@ scope it noticed.
 
 - Start QA and review on a **stable candidate commit**: record its SHA and give it to both workers. Never
   point them at a tree that is still changing.
-- Each QA and review worker runs in its own worktree checked out at that SHA
-  (`orca orchestration worker-start --worktree new-top-level --base-branch <sha>`, or `isolation: "worktree"`,
-  which starts from the lead's current HEAD). The worker first checks that `git rev-parse HEAD` is that SHA;
-  a result from a shared or changing tree is reported as not independent. Exception: in a no-worktree repo
-  (section 4) review and QA run in the main checkout, one at a time, while no other task of that repo runs.
+- A task's review and QA workers run as fresh, read-only sessions in the task's own worktree, which holds the
+  candidate commit (`orca orchestration worker-start --worktree path:<task worktree>`); never in a new worktree.
+  Integration QA runs in the integration branch's checkout. The worker first checks that `git rev-parse HEAD` is
+  that SHA; a result from a changing tree, or with HEAD on another commit, is reported as not independent.
+  Exception: in a no-worktree repo (section 4) review and QA run in the main checkout, one at a time, while no
+  other task of that repo runs.
 - When the candidate moves (a fix lands), list which findings and results refer to the old SHA and must be
   redone; re-run only those.
 - Verdicts are PASS, FAIL, NOT_RUN or BLOCKED. NOT_RUN is never a pass.
@@ -114,8 +116,9 @@ rule 5).
 A task is done when its contribution is integrated and its review and QA are recorded; the whole run is done
 when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_PR). Then, every time:
 
-1. **Worktrees.** Remove every worktree the lead's own run created (implementation, review, QA), once it is
-   integrated and clean: `git worktree remove <path>` without `--force`. A worktree with uncommitted or
+1. **Worktrees.** Remove every task worktree the lead's own run created once the task's review PASS is recorded
+   and the task is integrated, and the tree is clean (no-worktree repo: nothing to remove; its sessions settle
+   after its QA): `git worktree remove <path>` without `--force`. A worktree with uncommitted or
    unintegrated work is not removed: report it instead. Never remove the main checkout, the integration branch's
    checkout before its PR is open, or a worktree another coordinator owns (section 2).
 2. **Task branches.** The user asked for full cleanup, so a task branch whose commits are in the integration
@@ -133,13 +136,16 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 
 - **One task, one fresh worker session.** Every dispatch starts a new worker session (Orca worker or Agent-tool
   worker) for exactly one task. A worker session is never reused for another task, another phase or a later wave.
-  A scoped fix after a FAIL is a new dispatch in a new implementer session, on the same task branch.
-- **Settle each session in its own turn.** In the turn an implementer reports done (`worker_done`, or the agent's
-  final report), the lead releases that session (`orca orchestration worker-release`, or stops the agent), pushes
-  the task branch and removes the implementation worktree (step 1 above): the branch keeps the work. A review or QA
-  session is released, and its worktree removed, in the turn its verdict is recorded. The task is integrated
-  (section 7) when its review PASS is recorded, in wave order (section 10 step 5); a FAIL goes to a fresh
-  implementer session on the task branch. A settled worker never waits for a later turn or wave.
+  A scoped fix after a FAIL is a new dispatch in a new implementer session, in the same task worktree.
+- **One worktree per task, for its whole life.** The task's implementer, reviewer, QA worker and any fix run as
+  separate fresh sessions in that one worktree; review and QA never get a new worktree. Reviewer and QA sessions
+  are read-only and first check that `git rev-parse HEAD` is the candidate SHA (section 6).
+- **Release each session as soon as it reports.** In the turn a session reports (`worker_done`, the agent's final
+  report, or a review or QA verdict), it is released (`orca orchestration worker-release`, or the agent is
+  stopped); the task worktree stays. The next role runs as a fresh session in that worktree: review on the
+  candidate SHA, a fix after a FAIL, QA where the repo needs it. The task is integrated (section 7) when its review
+  PASS is recorded, in wave order (section 10 step 5); only then is its worktree removed (step 1 above). In a
+  no-worktree repo the task's sessions settle after its QA. A settled worker never waits for a later turn or wave.
 - **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in the
   implementer's session, never in the lead's session, and never reused across tasks or candidate SHAs.
 - **The lead keeps only the plan and the integration state:** `plan.json`, the integration branch, the recorded
@@ -147,8 +153,7 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 - **Handoff.** After each wave, or earlier when its context grows long, the lead hands off: it ends its session
   with every worker of the wave settled, and the next lead session resumes from
   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py status plan.json`, which re-derives where the plan
-  stands.
-  Nothing else carries over. A handoff adds no gate and no confirmation step.
+  stands. Nothing else carries over. A handoff adds no gate and no confirmation step.
 
 ## 9. Not authorized by this policy
 
@@ -177,11 +182,13 @@ review pairing and exclusive resources live in registry `pipeline`; the plan for
    prints the worker start (section 5; `--runner agent` is the fallback). Section 3 is the task spec.
 4. **Cross-model review.** Code written by Claude is reviewed by Codex and code written by Codex by Claude
    (registry `pipeline.review_pairing`). On the task's stable candidate commit:
-   `dispatch ... --phase review --sha <sha>`. Record the result: `factory-pipeline.py verdict plan.json --task <id>
+   `dispatch ... --phase review --sha <sha>`. The review session runs in the task worktree (section 6);
+   `dispatch --phase review|qa` still prints a start in a new worktree, so start the worker with
+   `--worktree path:<task worktree>` instead. Record the result: `factory-pipeline.py verdict plan.json --task <id>
    --phase review --sha <sha> --by <agent> --state PASS|FAIL --report <file>`. A FAIL goes back to the task as a
-   scoped fix in a fresh implementer session (section 8, "Session lifecycle") and a new candidate SHA. When the
-   paired model is unavailable, a fresh session of the same model reviews, the report names it SAME_MODEL, and
-   the gate accepts it only with `--allow-same-model`.
+   scoped fix in a fresh implementer session in the task worktree (section 8, "Session lifecycle") and a new
+   candidate SHA. When the paired model is unavailable, a fresh session of the same model reviews, the report
+   names it SAME_MODEL, and the gate accepts it only with `--allow-same-model`.
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`.
 6. **QA.** Once per repo on the integration HEAD: `dispatch ... --task integration:<repo> --phase qa --sha <head>`;
    in a no-worktree repo also per task, before the next task starts (`--task <id>`). The QA worker fills
