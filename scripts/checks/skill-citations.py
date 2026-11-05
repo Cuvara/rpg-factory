@@ -2,6 +2,7 @@
 """Read-only check that the file:line citations in the Factory skills still point at what they name.
 
 Usage: skill-citations.py [--workspace DIR] [--skill NAME]... [--ref REPO=REF]... [--suggest] [--offline]
+                          [--strict] [--fix]
 
 A line citation is a backticked `path/File.cs:N`, `File.cs:N-M`, `File.cs:N,M-K` or a bare `:N` that
 continues the last file named earlier in the same section (a heading resets it). Paths resolve through the registry:
@@ -14,8 +15,15 @@ before this one (`TickOnce` (`Server/TickLoop.cs:510`)); its last segment must o
 lines +/- 3. Files are read at the integration branch (`origin/<default_branch>` from the last fetch,
 `--ref server=HEAD` to override), never from the working tree.
 
+MOVED: the anchor is not within the cited lines +/- 3 but has exactly one candidate - it occurs once in
+the whole file, or once within +/- 40 lines of the cited lines. The citation is reported with the
+shifted line spec and does not fail unless --strict (run-all --release). Several candidates and none
+unique nearby, an anchor that no longer occurs, a missing file or a line past the end still FAIL.
+
 --offline checks only what needs no repos (every line citation backticked and anchored) - skills-lint.
-Exit 0 = no problem; 1 = problems; 2 = usage. Writes nothing.
+--fix rewrites the line spec inside the backticks of every MOVED citation found in this run, in place in
+the skill markdown (nothing else changes: encoding and newlines are kept), and reports each rewrite.
+Exit 0 = no problem (MOVED allowed unless --strict); 1 = problems; 2 = usage. Writes nothing without --fix.
 """
 import json
 import os
@@ -34,20 +42,34 @@ IDENT = re.compile(r"^[\[@]?(?P<id>[A-Za-z_][\w.]*?)(?:<[^`]*>)?(?:\([^`]*\))?[\
 BARE_LINE_CITE = re.compile(r"(?<![`\w/])[A-Za-z0-9_.~/\-]+\." + EXT + r":\d+", re.IGNORECASE)
 SPAN = re.compile(r"`([^`\n]+)`")
 SLACK = 3
+NEAR = 40  # a moved anchor may occur several times in the file if it is the only occurrence this close
+NEWLINE = re.compile(r"\r\n|\n|\r")
+
+
+def lines_with_offsets(text):
+    """[(offset in text, line without its newline)] for \n, \r\n and \r line endings."""
+    out, pos = [], 0
+    for m in NEWLINE.finditer(text):
+        out.append((pos, text[pos:m.start()]))
+        pos = m.end()
+    if pos < len(text):
+        out.append((pos, text[pos:]))
+    return out
 
 
 def blocks(text):
-    """Paragraphs, list items and table rows: the scope a bare `:N` continuation inherits from."""
+    """Paragraphs, list items and table rows: the scope a bare `:N` continuation inherits from.
+    A block is a list of (offset, line), so a citation can be rewritten in place."""
     out, cur = [], []
-    for line in text.splitlines():
+    for off, line in lines_with_offsets(text):
         starts = re.match(r"^\s*(?:[-*]|\d+\.|\|)\s", line) or not line.strip()
         if starts and cur:
-            out.append("\n".join(cur))
+            out.append(cur)
             cur = []
         if line.strip():
-            cur.append(line)
+            cur.append((off, line))
     if cur:
-        out.append("\n".join(cur))
+        out.append(cur)
     return out
 
 
@@ -67,22 +89,29 @@ def anchor_of(span):
 
 
 def parse(text):
-    """[(path, lines, anchor or None, context)] in document order, plus unbackticked line citations."""
+    """[(path, lines, anchor or None, context, (start, end) of the line spec in text)] in document order,
+    plus unbackticked line citations."""
     cites, loose = [], []
     last_file = None  # carries across the paragraphs and list items of one section; a heading resets it
-    for b in blocks(text):
+    for blk in blocks(text):
+        b = "\n".join(line for _, line in blk)
         pending = None
         if b.lstrip().startswith("#"):
             last_file = None
-        for m in SPAN.finditer(b):
-            s = m.group(1).strip()
+        # a span never crosses a line: matching line by line keeps document order and gives offsets
+        for off, m in ((off, m) for off, line in blk for m in SPAN.finditer(line)):
+            raw = m.group(1)
+            s = raw.strip()
+            base = off + m.start(1) + len(raw) - len(raw.lstrip())
             full, cont, fmatch = FULL.match(s), CONT.match(s), FILE.match(s)
             if full:
                 last_file = full.group("path")
-                cites.append((last_file, full.group("lines"), pending, b))
+                cites.append((last_file, full.group("lines"), pending, b,
+                              (base + full.start("lines"), base + full.end("lines"))))
                 pending = None
             elif cont and last_file:
-                cites.append((last_file, cont.group("lines"), pending, b))
+                cites.append((last_file, cont.group("lines"), pending, b,
+                              (base + cont.start("lines"), base + cont.end("lines"))))
                 pending = None
             elif cont:
                 loose.append(f":{cont.group('lines')} (continues no file named earlier in its section)")
@@ -172,6 +201,16 @@ def resolve(repos, reg, skill, path):
     return key, full, hits
 
 
+def shifted(rs, to):
+    """The line ranges moved so that the first one starts at line `to`."""
+    d = to - rs[0][0]
+    return [(a + d, b + d) for a, b in rs]
+
+
+def spec_of(rs):
+    return ",".join(f"{a}" if a == b else f"{a}-{b}" for a, b in rs)
+
+
 def main():
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -181,6 +220,7 @@ def main():
     ws = os.environ.get(reg["workspace"].get("root_env", ""), "") or reg["workspace"]["root_default"]
     skills, overrides = [], {}
     suggest, offline = "--suggest" in args, "--offline" in args
+    strict, fix = "--strict" in args, "--fix" in args
     it = iter(args)
     for a in it:
         if a == "--workspace":
@@ -190,7 +230,7 @@ def main():
         elif a == "--ref":
             k, _, v = next(it, "").partition("=")
             overrides[k] = v
-        elif a not in ("--suggest", "--offline"):
+        elif a not in ("--suggest", "--offline", "--strict", "--fix"):
             print(f"unknown argument {a}\n{__doc__}")
             return 2
     skills = skills or sorted(reg["skills"])
@@ -199,7 +239,7 @@ def main():
         print(f"unknown skill(s): {', '.join(unknown)}")
         return 2
     repos = Repos(ws, reg, overrides)
-    problems, checked, skipped = [], 0, set()
+    problems, moved, checked, skipped = [], [], 0, set()
     for skill in skills:
         sdir = os.path.join(PLUGIN_ROOT, "skills", skill)
         files = [os.path.join(sdir, "SKILL.md")] + sorted(
@@ -209,13 +249,13 @@ def main():
             if not os.path.isfile(f):
                 continue
             rel = os.path.relpath(f, PLUGIN_ROOT).replace("\\", "/")
-            cites, loose = parse(open(f, encoding="utf-8").read())
+            cites, loose = parse(open(f, encoding="utf-8", newline="").read())
             for c in loose:
                 if c.startswith(":"):
                     problems.append(f"{rel}: `{c.split(' ')[0]}` - orphan continuation: it {c.split(' (')[1].rstrip(')')}; name the file")
                 else:
                     problems.append(f"{rel}: `{c}` - line citation outside backticks (write it as `path:N`)")
-            for path, spec, anchor, _ in cites:
+            for path, spec, anchor, _, span in cites:
                 where = f"{rel}: `{path}:{spec}`"
                 if path.lower().endswith(".md"):
                     problems.append(f"{where} - doc line citation: cite `{path}` by section, not line (skill-contract)")
@@ -247,12 +287,18 @@ def main():
                 if near:
                     continue
                 found = [i + 1 for i, line in enumerate(text) if word.search(line)]
+                close = [n for n in found if any(a - NEAR <= n <= b + NEAR for a, b in rs)]
+                one = found if len(found) == 1 else close if len(close) == 1 else None
+                if one:
+                    new_rs = shifted(rs, one[0])
+                    if min(a for a, _ in new_rs) >= 1 and max(b for _, b in new_rs) <= len(text):
+                        moved.append((f, where, f"`{path}:{spec_of(new_rs)}`", anchor, one[0], span, spec_of(new_rs)))
+                        continue
                 msg = f"{where} - drift: `{anchor}` is not at the cited lines ({key}:{rpath} @ {repos.ref(key)})"
                 if found:
                     first = rs[0][0]
                     to = min(found, key=lambda n: abs(n - first))
-                    d = to - first
-                    new = ",".join(f"{a + d}" if a == b else f"{a + d}-{b + d}" for a, b in rs)
+                    new = spec_of(shifted(rs, to))
                     msg += f"; `{anchor}` is at line {', '.join(map(str, found[:5]))}"
                     if suggest:
                         msg += f" -> suggest `{path}:{new}`"
@@ -261,14 +307,31 @@ def main():
                 problems.append(msg)
     for p in problems:
         print(f"FAIL  {p}")
+    if fix:  # only the line spec inside each MOVED citation's backticks; last offset first keeps the others valid
+        edits = {}
+        for f, _, _, _, _, span, new in moved:
+            edits.setdefault(f, []).append((span, new))
+        for f, spans in edits.items():
+            text = open(f, encoding="utf-8", newline="").read()
+            for (a, b), new in sorted(spans, reverse=True):
+                text = text[:a] + new + text[b:]
+            with open(f, "w", encoding="utf-8", newline="") as out:
+                out.write(text)
+    for _, where, cite, anchor, line, _, _ in moved:
+        print(f"FIXED {where} -> {cite}" if fix else f"MOVED {where} -> suggest {cite}", f"(`{anchor}` is at line {line})")
     for k in sorted(skipped):
         print(f"SKIP  repo {k} not present in {ws}: its citations are not checked")
     mode = "offline (anchors only)" if offline else "against " + ", ".join(
         f"{k}@{repos.ref(k)}" for k in sorted({k for k in reg["repos"] if repos.present(k)}))
-    if problems:
-        print(f"FAILED: {checked} line citation(s) checked {mode}, {len(problems)} problem(s)")
+    tail = ""
+    if moved:
+        tail = f", {len(moved)} moved citation(s) rewritten" if fix else \
+            f", {len(moved)} moved (rewrite them: python3 -B scripts/checks/skill-citations.py --fix)"
+    if problems or (strict and moved and not fix):
+        extra = f" + {len(moved)} moved (--strict)" if strict and moved and not fix else ""
+        print(f"FAILED: {checked} line citation(s) checked {mode}, {len(problems)} problem(s){extra}{tail}")
         return 1
-    print(f"OK: {checked} line citation(s) checked {mode}, 0 problem(s)")
+    print(f"OK: {checked} line citation(s) checked {mode}, 0 problem(s){tail}")
     return 0
 
 

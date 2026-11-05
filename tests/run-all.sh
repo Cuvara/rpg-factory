@@ -194,7 +194,16 @@ run "git environment isolation + shared-config guard (throwaway repos)" env -u T
 if ! $use_ws; then skp "orca commands cited in parallel-work.md" "--no-workspace"
 elif ! command -v orca >/dev/null 2>&1; then skp "orca commands cited in parallel-work.md" "orca not on PATH"
 else run "orca commands cited in parallel-work.md exist in orca --help" tests/orca-commands.test.sh; fi
-if $use_ws; then run "skill line citations point at their symbols (integration branches)" python3 -B scripts/checks/skill-citations.py
+if $use_ws; then  # MOVED (anchor unique elsewhere) is a warning here and a failure under --release
+  if $release; then run "skill line citations point at their symbols (integration branches, --strict)" python3 -B scripts/checks/skill-citations.py --strict
+  else
+    cit=$(python3 -B scripts/checks/skill-citations.py 2>&1); citrc=$?
+    if [ $citrc -ne 0 ]; then bad "skill line citations point at their symbols (integration branches)" "$cit"
+    else ok "skill line citations point at their symbols (integration branches)"
+      grep '^MOVED ' <<<"$cit" | sed 's/^MOVED /WARN  moved citation: /'
+      grep -q '^MOVED ' <<<"$cit" && echo "WARN  rewrite moved citations: python3 -B scripts/checks/skill-citations.py --fix (fails under --release)"
+    fi
+  fi
 else skp "skill line citations against the repos" "--no-workspace"; fi
 if $use_ws; then run "routing + history replay" tests/routing.test.sh
 else
