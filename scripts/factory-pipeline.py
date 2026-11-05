@@ -43,7 +43,8 @@ docs/schemas/pipeline-plan.schema.json.
         (inside them; it may then name its model with --agent), and does not commit. review/qa need --sha, the frozen
         candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
         model) unless --agent overrides it. Per-task qa runs in the task worktree (a no-worktree repo: main checkout).
-        No-worktree repo without --paths: an implement worker that commits on the task branch in the main checkout.
+        A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
+        without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
         QA of the integrated tree, in the existing checkout of the integration branch (plan.topic, found in `git
         worktree list`); none is an error (exit 1, no worktree created). A no-worktree repo: the main checkout.
@@ -492,7 +493,7 @@ def validate_subplan(sub, plan, reg):
             for p in s["paths"]:
                 if not inside_owned(p, owned):
                     errors.append(f"subtask {sid}: path {p} is outside the owned paths of task {tid} ({', '.join(owned)})")
-                elif any(inside_owned(p, [x]) or inside_owned(x, [p]) for x in excluded):
+                elif excluded_by(p, excluded):
                     errors.append(f"subtask {sid}: path {p} overlaps an exclusion of task {tid}")
         impl = s.get("implementer")
         if impl and impl not in agents:
@@ -636,6 +637,11 @@ def task_worktree(plan, info, task, branch):
 def inside_owned(path, owned):
     p = norm_path(path).rstrip("/")
     return any(o in ("", ".") or p == o or p.startswith(o + "/") for o in (norm_path(x).rstrip("/") for x in owned))
+
+
+def excluded_by(path, exclusions):
+    """A path overlaps an exclusion when either contains the other (subplan validate and dispatch --paths)."""
+    return any(inside_owned(path, [x]) or inside_owned(x, [path]) for x in exclusions)
 
 
 def emit_lead_handoff(reg, agent, prompt, place, branch):
@@ -792,6 +798,10 @@ def cmd_dispatch(a, reg):
         outside = [p for p in a.paths if not inside_owned(p, task["paths"])]
         if outside:
             die(f"--paths {', '.join(outside)} outside the owned paths of task {task['id']}: {', '.join(task['paths'])}")
+        excluded = [p for p in a.paths if excluded_by(p, task.get("exclusions") or [])]
+        if excluded:
+            die(f"--paths {', '.join(excluded)} overlap the exclusions of task {task['id']}: "
+                f"{', '.join(task.get('exclusions') or [])}")
         spec["subtask_paths"] = a.paths
     elif a.phase == "implement" and a.agent and a.agent != impl:
         die(f"task {task['id']} is planned for {impl}; set `implementer: {a.agent}` in the plan (the reviewer pairing "
@@ -802,22 +812,17 @@ def cmd_dispatch(a, reg):
     if a.phase == "implement":
         agent = a.agent or impl
         place = joined or orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
-        if home or a.paths:
-            prompt = (f"Implementation sub-session started by the task lead of task {task['id']} (references/parallel-work.md). "
-                      f"Work in {home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit "
-                      f"only {'the subtask_paths' if a.paths else 'the owned paths'}. Do NOT commit, stage or stash: the "
-                      "worktree has one shared index and the task lead commits. Run the checks; report to the task lead: "
-                      "changed paths, each check with exact counts (or NOT_RUN with the command and reason), limitations and "
-                      "out-of-scope findings. Never merge or push.\n"
-                      + json.dumps(spec, indent=2)
-                      + (f"\nNo worktree: {info['reason']}." if not info["worktrees"] else ""))
-        else:
-            prompt = ("Implementation worker (references/parallel-work.md section 3). Write only the owned paths; commit explicit "
-                      "paths on the task branch; run the checks; report outcome, worktree, branch, base and HEAD SHA, changed "
-                      "paths, each check with counts, limitations, and out-of-scope findings. Never merge or push.\n"
-                      + json.dumps(spec, indent=2)
-                      + f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {branch}; the previous task of this "
-                        "repo must have its QA verdict before you start.")
+        # always a non-committing sub-session of the task lead, also in a no-worktree repo without --paths: only the
+        # task lead commits (one shared index); there is no committing implementation worker
+        prompt = (f"Implementation sub-session started by the task lead of task {task['id']} (references/parallel-work.md). "
+                  f"Work in {home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit "
+                  f"only {'the subtask_paths' if a.paths else 'the owned paths'}. Do NOT commit, stage or stash: the "
+                  "worktree has one shared index and the task lead commits. Run the checks; report to the task lead: "
+                  "changed paths, each check with exact counts (or NOT_RUN with the command and reason), limitations and "
+                  "out-of-scope findings. Never merge or push.\n"
+                  + json.dumps(spec, indent=2)
+                  + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
+                     if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}")
         return 0
     at_head = (f"Candidate SHA: {a.sha}. You share the task worktree {home} with the task lead, who keeps HEAD at the "
@@ -1249,8 +1254,9 @@ def status(plan, reg):
         elif row["phase"] == "reviewed" and row["review"]["state"] != "PASS":
             row["notes"].append(f"review {row['review']['state']} at {row['review']['sha'][:10]}: fix the findings on "
                                 f"{row['branch']}, then review the new HEAD")
-            fix = "lead" if info["worktrees"] and not row["worktree"] else "implement"
-            row["next"] = f"{dispatch} --phase {fix} --runner orca"
+            # only the task lead commits: it resumes (task worktree, or the main checkout of a no-worktree repo) and
+            # starts a fresh fix session, then review and QA on the new HEAD
+            row["next"] = f"{dispatch} --phase lead --runner orca"
         elif row["phase"] == "reviewed":
             home = worktree_for(info["path"], plan["topic"])[0]
             if home:

@@ -202,7 +202,14 @@ no_new_worktree "review without the task worktree: error, no worktree" dispatch 
 no_new_worktree "per-task qa without the task worktree: error, no worktree" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
 no_new_worktree "agent fallback without the task worktree: error too" dispatch "$OK" --task gw --phase implement --runner agent
 expect "client implement: main checkout, no new worktree" 0 "--agent claude --worktree '?path:[^' ]*IndieRPGMMOAdventure'?" dispatch "$OK" --task c1 --phase implement --runner orca
-refute "client implement has no creation flags" "new-top-level|--base-branch" dispatch "$OK" --task c1 --phase implement --runner orca
+refute "client implement has no creation flags" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase implement --runner orca
+expect "Unity implement without --paths is a sub-session that does not commit" 0 "Do NOT commit, stage or stash" dispatch "$OK" --task c1 --phase implement
+refute "Unity implement never prints a committing worker" "commit explicit|Implementation worker \(" dispatch "$OK" --task c1 --phase implement
+refute "Unity implement in the agent fallback never commits or creates a worktree" "commit explicit|isolation|Create your own worktree" dispatch "$OK" --task c1 --phase implement --runner agent
+expect "registry worktrees=false: implement does not commit" 0 "Do NOT commit, stage or stash" --registry "$TMP/reg-nowt.json" dispatch "$OK" --task gw --phase implement --runner orca
+refute "registry worktrees=false: implement never commits or creates a worktree" "commit explicit|new-top-level|--base-branch|worktree create" --registry "$TMP/reg-nowt.json" dispatch "$OK" --task gw --phase implement --runner orca
+expect "Unity marker (unregistered repo): implement does not commit" 0 "Do NOT commit, stage or stash" dispatch "$TOOL" --task t --phase implement --runner orca
+refute "Unity marker: implement never commits or creates a worktree" "commit explicit|new-top-level|--base-branch|worktree create" dispatch "$TOOL" --task t --phase implement --runner orca
 expect "next Unity task warns until the previous task has QA PASS" 0 "task c1 has no QA PASS yet" dispatch "$OK" --task c2 --phase implement
 expect "review of codex's code goes to claude, read-only in the main checkout" 0 "--agent claude --worktree '?path:" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 expect "review needs a candidate SHA" 2 "review needs --sha" dispatch "$OK" --task gw --phase review
@@ -218,6 +225,9 @@ expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash:
 expect "implement sub-session reports changed paths and check counts to the task lead" 0 "report to the task lead: " dispatch "$OK" --task gw --phase implement
 expect "subtask paths narrow the sub-session" 0 '"subtask_paths": \[' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go
 expect "a subtask session may name its own model" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner orca
+expect "subtask paths inside a task exclusion are refused" 2 "--paths backend/shared/proto/wire.proto overlap the exclusions of task gw: backend/shared/proto/" dispatch "$EX" --task gw --phase implement --paths backend/shared/proto/wire.proto
+expect "subtask paths containing a task exclusion are refused" 2 "--paths backend/shared/ overlap the exclusions of task gw" dispatch "$EX" --task gw --phase implement --paths backend/gateway/x.go backend/shared/
+refute "an excluded subtask path never reaches a worker" "subtask_paths|orca orchestration" dispatch "$EX" --task gw --phase implement --paths backend/shared/proto/wire.proto --runner orca
 expect "subtask paths outside the owned paths are refused" 2 "--paths backend/other outside the owned paths of task gw" dispatch "$OK" --task gw --phase implement --paths backend/other
 expect "--paths goes only with implement" 2 "--paths .* goes with --phase implement" dispatch "$OK" --task gw --phase review --sha abc1234 --paths backend/gateway/x.go
 expect "review of claude's code goes to codex, in the task worktree" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
@@ -406,7 +416,7 @@ expect "implementing names the worker's worktree" 0 "implementation worker on fe
 mkdir -p "$TMP/st-a/sa"; echo a > "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" add sa; gi "$TMP/st-a" commit -qm "feat: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase review --sha $SA --runner orca"
 sv --task a --phase review --sha "$SA" --by codex --state FAIL
-st_phase "review FAIL: reviewed, next is the implement dispatch again" a reviewed "--task a --phase implement"
+st_phase "review FAIL: reviewed, next resumes the task lead (only it commits the fix)" a reviewed "--task a --phase lead --runner orca"
 expect "review FAIL is named with its SHA" 0 "review FAIL@${SA:0:10}" status "$ST"
 echo a2 >> "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" commit -qam "fix: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "a fix after the FAIL is a new candidate" a candidate "--phase review --sha $SA"
@@ -438,6 +448,17 @@ st_phase "uncommitted work in the Unity task's paths: implementing" c1 implement
 gi "$C" add Assets/C; gi "$C" commit -qm "feat: c1"; SC=$(git -C "$C" rev-parse HEAD)
 st_phase "a commit on the integration branch touching the task: candidate" c1 candidate "--task c1 --phase review --sha $SC"
 st_phase "the next Unity task still waits" c2 pending '^$'
+sv --task c1 --phase review --sha "$SC" --by codex --state FAIL
+st_phase "Unity review FAIL: next resumes the task lead in the main checkout, not an implement worker" c1 reviewed "--task c1 --phase lead --runner orca$"
+# follow status.next: the resumed task lead is launched in the main checkout, never a worktree or a committing worker
+NX=$(python3 -B "$P" status --json "$ST" | python3 -c 'import json,sys; print({t["id"]:t for t in json.load(sys.stdin)["tasks"]}["c1"]["next"])')
+out=$(eval "$NX" 2>&1)
+if grep -qE "^orca agent launch --agent claude --worktree '?path:[^' ]*IndieRPGMMOAdventure" <<<"$out" \
+   && ! grep -qE "new-top-level|--base-branch|worktree create|commit explicit" <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  Unity review FAIL: status.next launches the task lead in the main checkout"
+else fail=$((fail + 1)); echo "FAIL  Unity review FAIL: status.next"; sed 's/^/      /' <<<"$out" | head -10; fi
+expect "Unity fix session after the FAIL does not commit" 0 "Do NOT commit, stage or stash" dispatch "$ST" --task c1 --phase implement --runner orca
+refute "Unity fix session after the FAIL has no committing prompt and no worktree" "commit explicit|new-top-level|--base-branch|worktree create" dispatch "$ST" --task c1 --phase implement --runner orca
 sv --task c1 --phase review --sha "$SC" --by codex --state PASS
 st_phase "Unity review PASS is integrated at once; next is the per-task QA" c1 integrated "--task c1 --phase qa --sha $SC"
 sv --task c1 --phase qa --sha "$SC" --by codex --state PASS

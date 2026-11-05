@@ -22,7 +22,8 @@ lead, which integrates and cleans up.
 7. reviews every task's result and re-verifies the key checks itself;
 8. decides when a contribution is ready and integrates it (section 7), then runs integration QA (section 6);
 9. writes the final report with the parallel-work ledger (`report.md`) and cleans up (section 8).
-It does not start a task's sub-sessions: that is the task lead's job.
+It does not start a task's sub-sessions and never edits a task's files itself: that is the task lead's job, for
+every tier. A small (S tier) change is a plan with one task and still gets one task lead.
 
 **Task lead** - one fresh session per plan task, in that task's worktree (a no-worktree repo: its main checkout,
 section 4). It is not an Orca worker of the run lead (section 5): it creates its own Orca Run. It:
@@ -228,8 +229,9 @@ review pairing and exclusive resources live in registry `pipeline`; the plan for
 `docs/schemas/pipeline-plan.schema.json`. The pipeline only prints commands and grades state; the leads run them.
 
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L and the flow.
-   S: the run lead implements in its own session, then the review, QA and gate steps below with one plan task.
-   M: the run lead writes `plan.json`. L: a planner worker writes it (`factory-pipeline.py planner --request <text>
+   S: the run lead writes a `plan.json` with one task and dispatches its task lead (step 3; the task worktree, or
+   the main checkout of a no-worktree repo); the run lead never implements it in its own session. Steps 4-8 follow
+   with that one task. M: the run lead writes `plan.json`. L: a planner worker writes it (`factory-pipeline.py planner --request <text>
    --runner orca`); planning is read-only and runs in the run lead's checkout, never in a new worktree.
 2. **Plan.** `factory-pipeline.py validate plan.json` must print OK: disjoint owned paths (or a dependency between the
    tasks), no cycle, waves, no worktree for a no-worktree repo and never two of its tasks in one wave, a reviewer of
@@ -253,9 +255,11 @@ review pairing and exclusive resources live in registry `pipeline`; the plan for
    `--agent <its pair>`. On the task's stable candidate commit the task lead runs
    `dispatch ... --phase review --sha <sha>`, which starts the review in the task worktree (section 6). Record the
    result: `factory-pipeline.py verdict plan.json --task <id> --phase review --sha <sha> --by <agent>
-   --state PASS|FAIL --report <file>`. A FAIL goes back to the task as a scoped fix in a fresh implementation
-   session in the task worktree (section 8, "Session lifecycle"), committed by the task lead as a new candidate
-   SHA. When the paired model is unavailable, a fresh session of the same model reviews, the report names it
+   --state PASS|FAIL --report <file>`. A FAIL goes back to the task lead (`status` names `--phase lead`, which
+   resumes it in the task worktree or the main checkout of a no-worktree repo): it starts a scoped fix in a fresh
+   implementation session there (section 8, "Session lifecycle") and commits it as a new candidate SHA.
+   `--phase implement` always starts a sub-session that does not commit, in every repo; `--paths` inside the
+   task's exclusions is refused. When the paired model is unavailable, a fresh session of the same model reviews, the report names it
    SAME_MODEL, and the gate accepts it only with `--allow-same-model`; `--runner agent` (Claude only) marks a
    session planned for Codex SAME_MODEL in its prompt. The task lead also runs the per-task QA
    (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).

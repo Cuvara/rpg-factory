@@ -37,6 +37,12 @@
 
 - **Pipeline paths.** Owned and subtask paths that are absolute or contain a `..` segment are rejected (plan
   `validate`, `subplan validate`, `dispatch --paths`) before any containment, exclusion or overlap comparison.
+- **Only the task lead commits.** `status` names `--phase lead` after a review FAIL in every repo (the task lead
+  resumes in its task worktree or the main checkout and starts a fresh fix session), and `dispatch --phase implement`
+  never prints a committing worker: in a no-worktree repo it is a sub-session in the main checkout that does not
+  commit, with or without `--paths`. `dispatch --paths` overlapping a task exclusion is refused (exit 2), with the
+  exclusion test of `subplan validate`. `parallel-work.md` drops the S-tier shortcut: an S task is a one-task plan
+  with its own task lead; the run lead never implements a task in its own session.
 - **Parallel-policy test.** `tests/parallel-policy.test.sh` makes its plugin copy writable (tar kept read-only modes,
   so `echo >> file` mutations silently did nothing and their cases failed) and reports a FAIL when a mutation command
   itself fails; a regression case copies a read-only source file and mutates it.
