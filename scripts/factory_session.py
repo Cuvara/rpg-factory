@@ -8,7 +8,7 @@
   --skills <session-id>      print the skills that loaded in a session, one per line, in order
   --advisories <session-id>  print the advisories the Skill hook gave a session, one per line, in order
 
-As a module (git-guard.py, file-guard.py): record_mode() / current_mode() for `factory-context.sh
+As a module (lib/gitguard.py, file-guard.py): record_mode() / current_mode() for `factory-context.sh
 --mode <m>`, is_read_only() and runs_checks() to decide what a read-only or validate mode still allows.
 
 State: per-session scratch in fstate.scratch()/<fstate.session_key(id)>/ - always absolute, never inside a repo:
@@ -25,6 +25,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(HERE, "lib"))  # appended: stdlib lookups must not stat /mnt/c first
+if __name__ == "__main__":  # the Skill hook: reuse compiled plugin modules (lib/hookspeed.py)
+    try:
+        import hookspeed
+        hookspeed.enable_bytecache()
+    except Exception:
+        pass
 from pluginroot import plugin_root
 PLUGIN_ROOT = plugin_root()
 import fstate  # noqa: E402
@@ -47,21 +53,12 @@ _REGISTRY = None
 
 
 def guard():
-    """git-guard.py as a module - once per process (reused when git-guard.py itself is running)."""
+    """The git guard module (scripts/lib/gitguard.py; scripts/git-guard.py is its hook entry) - once per process."""
     global _GUARD
-    if _GUARD is not None:
-        return _GUARD
-    main = sys.modules.get("__main__")
-    if main is not None and hasattr(main, "classify_gh") and hasattr(main, "find_workspace"):
-        _GUARD = main
-        return main
-    sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("git_guard", os.path.join(HERE, "git-guard.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    _GUARD = mod
-    return mod
+    if _GUARD is None:
+        import gitguard
+        _GUARD = gitguard
+    return _GUARD
 
 
 def session_dir(sid, create=True):

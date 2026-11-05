@@ -40,6 +40,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(HERE)  # appended: stdlib lookups must not stat /mnt/c first
 import devtools  # noqa: E402
+import workspace  # noqa: E402
+from workspace import native_abs  # noqa: E402,F401  (public: run-checks.py imports it from here)
 from pluginroot import plugin_root
 PLUGIN_ROOT = plugin_root()
 REGISTRY = os.environ.get("RPG_FACTORY_REGISTRY") or os.path.join(PLUGIN_ROOT, "registry.json")
@@ -105,19 +107,7 @@ def parse_args(argv):
 
 
 def find_workspace(reg):
-    markers = reg["workspace"]["root_markers"]
-    ok = lambda d: d and all(os.path.exists(os.path.join(d, m)) for m in markers)
-    env = os.environ.get(reg["workspace"]["root_env"])
-    if ok(env):
-        return os.path.abspath(env)
-    d = os.getcwd()
-    while True:
-        if ok(d):
-            return d
-        if os.path.dirname(d) == d:
-            break
-        d = os.path.dirname(d)
-    return reg["workspace"]["root_default"] if ok(reg["workspace"]["root_default"]) else None
+    return workspace.find_workspace(os.getcwd(), reg, env_first=True, use_default=True)
 
 
 def domain_result(reg, domain_id, ws, lead_override=None):
@@ -255,8 +245,7 @@ def handoff_graph(reg, domain_id):
 
 
 def main_checkout(top):
-    common = (git(top, "rev-parse", "--path-format=absolute", "--git-common-dir") or "").strip().rstrip("/")
-    return os.path.dirname(common) if os.path.basename(common) == ".git" else top
+    return workspace.main_checkout(top, timeout=60)
 
 
 def same_path(a, b):
@@ -331,25 +320,6 @@ def status_files(d, submodules):
         files.append({"path": path, "status": st, "source": "worktree"})
         i += 2 if st[0] in "RC" else 1
     return files
-
-
-def native_abs(p):
-    """Map a forward-slash path written in another shell's drive form to this platform's form: on Windows
-    the git-bash `/c/...` and WSL `/mnt/c/...` forms become `C:/...`; elsewhere `C:/...` becomes
-    `/mnt/c/...`. Anything else is returned unchanged."""
-    if os.name == "nt":
-        m = re.match(r"^/(?:mnt/)?([A-Za-z])(/.*)?$", p)
-        if m:
-            return f"{m.group(1).upper()}:{m.group(2) or '/'}"
-        # git-bash rewrites an argument /mnt/c/x into <Git install>/mnt/c/x (MSYS path conversion)
-        m = re.match(r"^[A-Za-z]:/.*?/mnt/([A-Za-z])(/.*)?$", p)
-        if m and not os.path.exists(p):
-            return f"{m.group(1).upper()}:{m.group(2) or '/'}"
-    else:
-        m = re.match(r"^([A-Za-z]):(/.*)?$", p)
-        if m:
-            return f"/mnt/{m.group(1).lower()}{m.group(2) or '/'}"
-    return p
 
 
 def rel_to(p, d):

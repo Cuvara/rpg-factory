@@ -100,5 +100,31 @@ for case in 'known_marketplaces.json=[]' 'installed_plugins.json={"plugins":[]}'
   chk "--json with $case: no traceback" "" "$(grep Traceback <<<"$err")"
 done
 
+echo "-- python3 as the Windows Store alias: a SessionStart advisory (detection only)"
+export RPG_FACTORY_STATE_DIR="$TMP/state"
+AL="$TMP/alias"; mkdir -p "$AL/scripts/lib"; cp "$ROOT/scripts/install-status.py" "$AL/scripts/"
+cp "$ROOT/scripts/lib/hookspeed.py" "$ROOT/scripts/lib/fstate.py" "$ROOT/scripts/lib/pluginroot.py" "$AL/scripts/lib/"
+alias_path='C:\Users\u\AppData\Local\Microsoft\WindowsApps\python3.exe'
+install 0.3.2 "$(git -C "$SRC" rev-parse HEAD)"
+sess() { HOME="$H" USERPROFILE="$H" RPG_FACTORY_PYTHON3="$1" python3 -B "$2/scripts/install-status.py" --session --source "$SRC" "${@:3}"; }
+out=$(sess "$alias_path" "$AL" | jq -r '.hookSpecificOutput.additionalContext // ""')
+case "$out" in "rpg-factory advisory (warn): \`python3\` on PATH is the Windows Store alias "*"70 ms slower"*"nothing was changed"*)
+  pass=$((pass + 1)); echo "PASS  alias: SessionStart advisory names it and the fix";; *) fail=$((fail + 1)); echo "FAIL  alias advisory: $out";; esac
+chk "real python3 + CURRENT: still silent" "" "$(sess /usr/bin/python3 "$AL")"
+chk "no python3 on PATH: silent" "" "$(sess "" "$AL")"
+chk "copy without lib/: no alias advisory, no traceback" "" "$(sess "$alias_path" "$SRC" 2>&1)"
+install 0.3.1 "$(git -C "$SRC" rev-parse HEAD)"   # STALE record: install state and alias share one additionalContext
+out=$(sess "$alias_path" "$AL" | jq -r '.hookSpecificOutput.additionalContext // ""')
+case "$out" in "rpg-factory install state: STALE"*"Windows Store alias"*) pass=$((pass + 1)); echo "PASS  install state and alias in one advisory";;
+  *) fail=$((fail + 1)); echo "FAIL  combined advisory: $out";; esac
+# Codex: its install check needs lib/codexconfig.py, absent from this copy - it fails on its own, the alias still shows
+out=$(CODEX_HOME="$TMP/codex" sess "$alias_path" "$AL" --codex | jq -r '.hookSpecificOutput.additionalContext // ""' 2>&1)
+case "$out" in "rpg-factory advisory (warn): \`python3\` on PATH is the Windows Store alias"*) pass=$((pass + 1)); echo "PASS  Codex session: alias advisory survives a failing install check";;
+  *) fail=$((fail + 1)); echo "FAIL  Codex alias: $out";; esac
+cp "$ROOT/scripts/lib/codexconfig.py" "$AL/scripts/lib/"
+out=$(CODEX_HOME="$TMP/codex" sess "$alias_path" "$AL" --codex | jq -r '.hookSpecificOutput.additionalContext // ""' 2>&1)
+case "$out" in *"Codex install state"*"Windows Store alias"*) pass=$((pass + 1)); echo "PASS  Codex session: install state and alias";;
+  *) fail=$((fail + 1)); echo "FAIL  Codex combined: $out";; esac
+
 total=$((pass + fail)); echo "install-status tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
