@@ -160,5 +160,85 @@ python3 -B "$ROOT/scripts/factory-status.py" >/dev/null; rc=$?
 [ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  default exit 0 (informational)"; } || { fail=$((fail + 1)); echo "FAIL  exit $rc"; }
 python3 -B "$ROOT/scripts/factory-status.py" --strict >/dev/null; rc=$?
 [ $rc -eq 1 ] && { pass=$((pass + 1)); echo "PASS  --strict exits 1 when work is pending"; } || { fail=$((fail + 1)); echo "FAIL  --strict exit $rc"; }
+
+# Optional authoring is discovered through the registry, with no engineering status changes.
+expect "S14 absent authoring omits JSON domains" 'has("domains") | not' "$s"
+text=$(python3 -B "$ROOT/scripts/factory-status.py")
+if ! grep -q '^## Domains$' <<<"$text"; then pass=$((pass + 1)); echo "PASS  absent authoring omits Domains section"; else fail=$((fail + 1)); echo "FAIL  unexpected Domains section"; fi
+export RPG_FACTORY_WORKSPACE="$TMP/domain-ws"
+A="$RPG_FACTORY_WORKSPACE/game-authoring"
+mkdir -p "$A"
+cp -R "$ROOT/tests/fixtures/dogfood/game-authoring/." "$A/"
+git -C "$A" init -q -b main; gc "$A" add .; gc "$A" commit -qm "fixture: draft concept"
+s=$(status)
+expect "S14 draft lifecycle counted under its registered domain lead" '.domains.design.domain == "design" and .domains.design.lead == "game-design" and .domains.design.artifacts == {draft: 1}' "$s"
+expect "S14 empty domains and engineering skipped" '(.domains | keys) == ["design"]' "$s"
+expect "S14 draft quality passes with no domain pending" '.domains.design.quality.PASS > 0 and .domains.design.quality.FAIL == 0 and .domains.design.human_required == [] and .domains.design.failing == [] and .pending == []' "$s"
+python3 -B "$ROOT/scripts/factory-status.py" --strict > /dev/null; rc=$?
+[ $rc -eq 0 ] && { pass=$((pass + 1)); echo "PASS  --strict accepts clean draft authoring"; } || { fail=$((fail + 1)); echo "FAIL  clean draft --strict exit $rc"; }
+text=$(python3 -B "$ROOT/scripts/factory-status.py")
+if grep -q '^## Domains$' <<<"$text" && grep -q 'design \[game-design\]: draft 1; stale upstream: none; FAIL 0; HUMAN_REQUIRED 0' <<<"$text"; then pass=$((pass + 1)); echo "PASS  text Domains reports lifecycle and quality counts"; else fail=$((fail + 1)); echo "FAIL  draft Domains text: $text"; fi
+# Record a downstream revision, then edit the upstream without committing it.
+python3 -B - "$A" <<'PY'
+import json, pathlib, subprocess, sys
+root=pathlib.Path(sys.argv[1]); source=root/'design/concepts/GD-game-concept-001.artifact.json'
+obj=json.loads(source.read_text(encoding='utf-8'))
+rev=subprocess.run(['git','-C',str(root),'hash-object',str(source)],capture_output=True,text=True,check=True).stdout.strip()
+obj.update(id='GD-downstream-001',upstream=[{'id':'GD-game-concept-001','rev':rev}])
+(root/'design/concepts/GD-downstream-001.artifact.json').write_text(json.dumps(obj),encoding='utf-8')
+PY
+gc "$A" add .; gc "$A" commit -qm "fixture: recorded upstream"
+s=$(status)
+expect "S14 unchanged upstream revision is fresh" '.domains.design.stale == [] and .domains.design.artifacts.draft == 2' "$s"
+printf '\n' >> "$A/design/concepts/GD-game-concept-001.artifact.json"
+s=$(status)
+expect "S14 working-tree upstream change marks downstream stale" '.domains.design.stale == ["GD-downstream-001"] and any(.pending[]; .skill == "game-design" and .repo == "authoring" and .what == "GD-downstream-001 stale upstream revision")' "$s"
+text=$(python3 -B "$ROOT/scripts/factory-status.py")
+if grep -q '^\- \[game-design\] authoring: GD-downstream-001 stale upstream revision$' <<<"$text"; then pass=$((pass + 1)); echo "PASS  stale text Pending routes to the domain lead"; else fail=$((fail + 1)); echo "FAIL  stale Pending text"; fi
+python3 -B "$ROOT/scripts/factory-status.py" --strict > /dev/null; rc=$?
+[ $rc -eq 1 ] && { pass=$((pass + 1)); echo "PASS  --strict rejects stale authoring alone"; } || { fail=$((fail + 1)); echo "FAIL  stale --strict exit $rc"; }
+gc "$A" checkout -q -- design/concepts/GD-game-concept-001.artifact.json
+# Value-free approved artifacts pass; binding artifacts still need human approval.
+python3 -B - "$A" <<'PY'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1]); obj=json.loads((root/'design/concepts/GD-game-concept-001.artifact.json').read_text(encoding='utf-8'))
+obj.update(id='GD-approved-001',status='approved',acceptance=[{'id':'AC1','text':'Concept is understandable','verify':'review'}])
+(root/'design/concepts/GD-approved-001.artifact.json').write_text(json.dumps(obj),encoding='utf-8')
+PY
+gc "$A" add .; gc "$A" commit -qm "fixture: approval gate"
+s=$(status)
+expect "S14 approved lifecycle counted alongside drafts" '.domains.design.artifacts == {draft: 2, approved: 1}' "$s"
+expect "S14 value-free approved concept needs no approval" '.domains.design.quality.FAIL == 0 and .domains.design.human_required == [] and .pending == []' "$s"
+python3 -B - "$A" <<'PY'
+import json, pathlib, sys
+path=pathlib.Path(sys.argv[1])/'design/concepts/GD-approved-001.artifact.json'
+obj=json.loads(path.read_text(encoding='utf-8')); obj['binding_values']=True; obj['spec'].pop('concept')
+path.write_text(json.dumps(obj),encoding='utf-8')
+PY
+gc "$A" add .; gc "$A" commit -qm "fixture: binding values and incomplete concept"
+s=$(status)
+expect "S14 missing approval remains HUMAN_REQUIRED" '.domains.design.quality.HUMAN_REQUIRED > 0 and .domains.design.human_required == ["GD-approved-001"] and any(.pending[]; .skill == "game-design" and .repo == "authoring" and (.what | startswith("GD-approved-001 HUMAN_REQUIRED")))' "$s"
+expect "S14 failed concept quality appears in quality and Pending" '.domains.design.quality.FAIL > 0 and .domains.design.failing == ["GD-approved-001"] and any(.pending[]; .skill == "game-design" and .repo == "authoring" and (.what | startswith("GD-approved-001 FAIL")))' "$s"
+before=$(git -C "$A" status --porcelain=v1)
+s2=$(status)
+if [ "$before" = "$(git -C "$A" status --porcelain=v1)" ] && [ "$(jq -S .domains <<<"$s")" = "$(jq -S .domains <<<"$s2")" ]; then pass=$((pass + 1)); echo "PASS  domain status is read-only and repeatable"; else fail=$((fail + 1)); echo "FAIL  domain status changed repository or summary"; fi
+# Public library contract, filtered quality, unique artifact IDs, and unavailable checker behavior.
+if python3 -B - "$ROOT" "$A" <<'PY'
+import json, os, pathlib, sys
+root=pathlib.Path(sys.argv[1]); authoring=sys.argv[2]; sys.path.insert(0,str(root/'scripts/lib'))
+from artifacts import scan, upstream_changes, domain_summary
+regpath=str(root/'registry.json'); reg=json.loads(pathlib.Path(regpath).read_text(encoding='utf-8'))
+arts=scan(authoring_dir=authoring); summary=domain_summary(reg,regpath,authoring,'design')
+assert set(summary)=={'domain','lead','artifacts','stale','quality','human_required','failing'},summary
+assert len(arts)==3 and upstream_changes(arts['GD-downstream-001'],arts)==[]
+assert summary['human_required']==['GD-approved-001'] and summary['failing']==['GD-approved-001'],summary
+empty=domain_summary(reg,regpath,authoring,'ui')
+assert empty['artifacts']=={} and not any(empty['quality'].values()),empty
+os.environ['RPG_FACTORY_ARTIFACT_QUALITY']=str(root/'does-not-exist.py')
+unavailable=domain_summary(reg,regpath,authoring,'design')
+assert unavailable['quality']['BLOCKED']==3 and unavailable['quality']['PASS']==0 and len(unavailable['failing'])==3,unavailable
+PY
+then pass=$((pass + 1)); echo "PASS  shared artifact API preserves summary contract and unavailable checks"; else fail=$((fail + 1)); echo "FAIL  shared artifact API"; fi
+
 total=$((pass + fail)); echo "factory-status tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

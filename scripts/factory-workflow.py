@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Plan, inspect, dispatch and report registry-routed artifact workflows."""
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -13,6 +12,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE / "lib"))
 from context import handoff_graph
+from artifacts import scan as artifacts, quality, upstream_changes
 
 
 def die(message, code=2):
@@ -78,32 +78,6 @@ def authoring_module(reg, domain, kind):
     module=exact or max(modules,key=lambda m:max((score(m.get("id","")),*(score(p) for p in m.get("paths",[])))))
     path=max(module.get("paths",[]),key=score)
     return module,[path]
-
-
-def artifacts(authoring):
-    found = {}
-    if not authoring or not Path(authoring).is_dir():
-        return found
-    for path in Path(authoring).rglob("*"):
-        if not path.is_file() or ".git" in path.parts or "approvals" in path.parts:
-            continue
-        try:
-            raw = path.read_text(encoding="utf-8")
-            if path.suffix == ".json":
-                obj = json.loads(raw)
-            elif raw.startswith("---json"):
-                m = re.match(r"\A---json\s*\n(.*?)\n---", raw, re.S)
-                obj = json.loads(m.group(1)) if m else None
-            else:
-                continue
-            if isinstance(obj, dict) and obj.get("id"):
-                rev = subprocess.run(["git", "-C", str(authoring), "hash-object", str(path)], capture_output=True, text=True, encoding="utf-8").stdout.strip()
-                if not re.fullmatch(r"[0-9a-f]{40,64}", rev):
-                    rev = hashlib.sha1(path.read_bytes()).hexdigest()
-                found[obj["id"]] = {"id": obj["id"], "rev": rev, "status": obj.get("status", "draft"), "domain": obj.get("domain"), "kind": obj.get("kind"), "path": path.relative_to(authoring).as_posix(), "sources": obj.get("sources", []), "upstream": obj.get("upstream", []), "trace": obj.get("trace", [])}
-        except (OSError, ValueError):
-            continue
-    return found
 
 
 def build(spec, reg, authoring):
@@ -277,45 +251,6 @@ def build(spec, reg, authoring):
     return {"schema":"rpg-factory.workflow-plan/1","workflow":spec,"nodes":nodes,"edges":[{"from":a,"to":b} for a,b in sorted(edges)],"waves":waves,"sync_links":sync_links,"existing":existing}
 
 
-def quality(authoring, reg_path, repos, involved):
-    if not authoring or not Path(authoring).is_dir(): return {}
-    def unavailable(aid, detail):
-        if not detail.startswith("quality-check-unavailable:"):
-            detail="quality-check-unavailable: " + detail
-        return {"results":[{"artifact":aid,"check":"quality-check-unavailable","state":"BLOCKED","reasons":[detail]}]}
-    checker=os.environ.get("RPG_FACTORY_ARTIFACT_QUALITY",str(ROOT/"scripts/checks/artifact-quality.py"))
-    cmd=[sys.executable,"-B",checker,authoring,"--registry",reg_path,"--json"]
-    for item in repos: cmd += ["--repos",item]
-    try:
-        p=subprocess.run(cmd,capture_output=True,text=True,encoding="utf-8")
-    except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
-        detail=f"could not run artifact-quality: {exc}"
-        return {aid:unavailable(aid,detail) for aid in involved}
-    detail=None
-    if p.returncode not in (0,1): detail=f"artifact-quality exited {p.returncode}: {(p.stderr or p.stdout).strip()}"
-    try: data=json.loads(p.stdout)
-    except (ValueError, TypeError):
-        data=None
-        detail=detail or f"artifact-quality returned invalid JSON: {(p.stderr or p.stdout).strip()}"
-    if not isinstance(data,dict) or not isinstance(data.get("results"),list):
-        detail=detail or "artifact-quality JSON has no results array"
-    if detail:
-        return {aid:unavailable(aid,detail) for aid in involved}
-    grouped = {}
-    for result in data.get("results", []):
-        if isinstance(result,dict) and result.get("artifact") in involved:
-            grouped.setdefault(result["artifact"], {"results": []})["results"].append(result)
-    valid_states={"PASS","FAIL","WARN","HUMAN_REQUIRED","NOT_AVAILABLE","BLOCKED"}
-    for aid in involved:
-        rows=grouped.get(aid,{}).get("results",[])
-        bad=[row for row in rows if row.get("state") not in valid_states]
-        if bad:
-            grouped[aid]=unavailable(aid,f"artifact-quality returned an invalid result for {aid}: {bad[0].get('check')!r} state {bad[0].get('state')!r}")
-        elif not rows or not any(row.get("check")=="lifecycle" for row in rows):
-            grouped[aid]=unavailable(aid,f"artifact-quality returned no lifecycle result for {aid}")
-    return grouped
-
-
 def state_for(node, plan, quality_map):
     artifact=plan["existing"].get(node.get("artifact_id") or node["id"])
     if not artifact:
@@ -332,17 +267,6 @@ def state_for(node, plan, quality_map):
 
 def node_artifact(node, plan):
     return plan["existing"].get(node.get("artifact_id") or node["id"])
-
-
-def upstream_changes(artifact, all_artifacts):
-    recorded = {}
-    for item in artifact.get("upstream", []):
-        if isinstance(item, dict) and item.get("id"):
-            recorded[item["id"]] = item.get("rev")
-    for item in artifact.get("sources", []):
-        if isinstance(item, dict) and item.get("id"):
-            recorded.setdefault(item["id"], item.get("rev"))
-    return [aid for aid, rev in recorded.items() if aid in all_artifacts and rev != all_artifacts[aid].get("rev")]
 
 
 def reviews(authoring, artifact):

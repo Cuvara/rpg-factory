@@ -84,7 +84,7 @@ Optional tools are detected without launching applications or making provider re
 
 | Command | What you get | Changes anything? |
 |---|---|---|
-| `/rpg-factory:status [--remote]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness | no |
+| `/rpg-factory:status [--remote]` | pending cross-repo work with its owning skill (wire rollout stage, READY_TO_TAG packages, unpinned releases, package-CI pin drift), uncommitted work per repo, embedded clones, validation evidence (current vs STALE), fetch freshness; optional authoring domain lifecycle counts, stale upstreams, FAIL and HUMAN_REQUIRED gates | no |
 | `/rpg-factory:route <repo> <path>... [--lead <skill>]` | lead / co-leads / legs / follow-ups for those files, touched contracts, checks by tier, gates - and why each skill was or was not chosen | no |
 | `/rpg-factory:check <repo> [<path>...] [--status]` | runs the fast checks and grades them; `--status` grades stored evidence against the current tree (STALE / NOT_RUN) without running anything | runs builds/tests (not with `--status`) |
 | `/rpg-factory:doctor` | install state (what this session loads), registry validity, repos, state paths, tools, hooks, dev tools (MCP servers, plugins, binaries: OK / DOWN / MISSING with fallback, skills missing a required tool) | no |
@@ -287,7 +287,7 @@ Read-only check scripts against the product repos:
 
 | Script | Purpose |
 |---|---|
-| `scripts/factory-status.py [--remote] [--strict]` | Derived cross-repo state: contract consistency, wire rollout stage, package release state (READY_TO_TAG), pins vs latest tags, package-CI pins (watchers), build-toolkit refs, uncommitted work, embedded clones, validation evidence (current/STALE), fetch freshness, in-flight topic branches, pending items with owning skill. Never fetches: remote conclusions are labelled with the last fetch's age (stale after 24 h, with the `git fetch` to run) |
+| `scripts/factory-status.py [--remote] [--strict]` | Derived cross-repo state: contract consistency, wire rollout stage, package release state (READY_TO_TAG), pins vs latest tags, package-CI pins (watchers), build-toolkit refs, uncommitted work, embedded clones, validation evidence (current/STALE), fetch freshness, in-flight topic branches, pending items with owning skill; optional authoring domain lifecycle counts, stale upstreams, FAIL and HUMAN_REQUIRED gates. Never fetches: remote conclusions are labelled with the last fetch's age (stale after 24 h, with the `git fetch` to run) |
 | `scripts/checks/pin-status.py [--remote]` | For every client pin: manifest = lock, upstream tag exists, newer tags available, `.sample-source` |
 | `scripts/checks/pin-plan.py <pkg> <tag> [--client-ref REF]` | Exact manifest/lock edits (lock hash = tag commit), dependency changes, DOTS Sample files |
 | `scripts/checks/wire-parity.sh` | Netcode `Wire.cs` byte-identical to the server binding, and the protocol version equal in all three places |
