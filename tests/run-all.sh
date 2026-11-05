@@ -2,7 +2,10 @@
 # run-all.sh — every local validation for the plugin. Read-only against the workspace.
 # Prints one line per check and a final count; exits non-zero if anything failed.
 #
-# Usage: tests/run-all.sh [--no-workspace] [--no-claude] [--release]
+# Usage: tests/run-all.sh [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
+#   --affected      run only the suites the change touches (tests/affected.py: files changed since
+#                   merge-base(REF|origin/main|main) plus untracked); the cheap inline checks always run.
+#                   For iteration; the full run (no --affected) is the gate before a PR and for --release.
 #   --release       the installed plugin must equal the source (install-status CURRENT), the source
 #                   must be committed, and tests/installed-safety.sh must pass against the installed hooks
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
@@ -14,16 +17,32 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
 gitcfg_snapshot "$ROOT"      # M4/P0: no test may rewrite the shared git config of the repo this runs in (checked at the end)
-use_ws=true; use_claude=true; release=false
-for a in "$@"; do
-  case "$a" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;; esac
+use_ws=true; use_claude=true; release=false; affected=false; base=""
+while [ $# -gt 0 ]; do
+  case "$1" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
+    --affected) affected=true ;; --base) base="${2:-}"; shift ;; esac
+  shift
 done
+AFF=""
+if $affected && ! $release; then
+  AFF=$(mktemp_win)/changed.txt
+  if python3 -B tests/affected.py changed $base > "$AFF"; then echo "affected mode: $(wc -l < "$AFF" | tr -d ' ') changed file(s)"
+  else echo "affected mode: no base, running everything"; AFF=""; fi
+fi
 
-pass=0; fail=0; skip=0
+pass=0; fail=0; skip=0; naff=0
 ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
 bad()  { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
 skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
-run()  { local name="$1"; shift; local out; if out=$("$@" 2>&1); then ok "$name"; else bad "$name" "$out"; fi; }
+# suite_of <args>: the test or script file a run line executes (the unit tests/affected.py selects on)
+suite_of() { local a; for a in "$@"; do case "$a" in tests/*|testlab/*|scripts/*) echo "$a"; return ;; esac; done; }
+run()  {
+  local name="$1"; shift; local out s t0 t1
+  s=$(suite_of "$@")
+  if [ -n "$AFF" ] && [ -n "$s" ] && ! python3 -B tests/affected.py select "$AFF" "$s"; then skip=$((skip + 1)); naff=$((naff + 1)); return; fi
+  t0=$(date +%s)
+  if out=$("$@" 2>&1); then t1=$(date +%s); ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+}
 
 # ---- syntax
 json_count=0
@@ -143,6 +162,8 @@ run "candidate tree checks" tests/checks-candidate.test.sh
 run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
+run "delivery pipeline (tier, plan, dispatch, verdicts, gate)" env -u TMPDIR tests/pipeline.test.sh
+run "run-all --affected suite selection" tests/affected.test.sh
 run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
 run "registry fragments (registry/ -> registry.json build, placement, merge)" tests/registry-fragments.test.sh
 # Codex packaging (.codex-plugin, .agents/plugins, hooks/codex-hooks.json, scripts/codex_hook.py)
@@ -347,5 +368,5 @@ else skp "shared git config unchanged during the run" "not inside a git reposito
 
 total=$((pass + fail + skip))
 echo "----"
-echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped"
+echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ -n "$AFF" ] && echo " ($naff not affected by the change)")"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
