@@ -836,10 +836,9 @@ def task_status(plan, reg, task, n_in_repo):
             row["notes"].append(f"{kind} verdict is STALE: the plan's task changed since it was recorded")
     if head:
         row["sha"] = head
-        if info["worktrees"]:
-            ahead = git(path, "rev-list", "--count", f"{base}..{head}")[0] if base else None
-        else:  # the shared integration branch: only commits that touch this task's paths count
-            ahead = git(path, "rev-list", "--count", f"{base}..{head}", "--", *paths)[0] if base else None
+        # only commits that touch the task's own paths: a task branch cut from the integration branch, and the
+        # shared integration branch of a no-worktree repo, also carry other tasks' commits
+        ahead = git(path, "rev-list", "--count", f"{base}..{head}", "--", *paths)[0] if base else None
         if ahead is None or not str(ahead).isdigit():
             row["notes"].append(f"base {base} not found")
             ahead = "0"
@@ -915,6 +914,9 @@ def status(plan, reg):
             home = worktree_for(info["path"], plan["topic"])[0]
             if home:
                 row["next"] = orca_cmd.quote(["git", "-C", home, "merge", "--no-ff", row["branch"]])
+            elif git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]:
+                row["notes"].append(f"integration branch {plan['topic']} exists but is not checked out: check it out "
+                                    f"where the lead integrates, then merge {row['branch']}")
             else:
                 row["notes"].append(f"integration branch {plan['topic']} is not checked out: create it from the base, "
                                     f"check it out where the lead integrates, then merge {row['branch']}")

@@ -250,6 +250,7 @@ expect "ready tasks span waves: b (wave 3) next to c1 (wave 1)" 0 "^Ready wave: 
 git -C "$S" worktree remove "$TMP/st-a"; git -C "$S" branch -q -D feat/core/st-a
 st_phase "a removed task branch stays integrated (verdict + integration branch)" a integrated
 git -C "$S" worktree add -q "$TMP/st-b" -b feat/core/st-b feat/core/st 2>/dev/null
+st_phase "a task branch cut from the integration branch, no own commits yet: implementing" b implementing
 mkdir -p "$TMP/st-b/sb"; echo b > "$TMP/st-b/sb/b.go"; gi "$TMP/st-b" add sb; gi "$TMP/st-b" commit -qm "feat: b"; SB=$(git -C "$S" rev-parse feat/core/st-b)
 sv --task b --phase review --sha "$SB" --by codex --state PASS
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-b -m "merge b"; SI=$(git -C "$S" rev-parse feat/core/st)
