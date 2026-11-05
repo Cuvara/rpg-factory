@@ -33,6 +33,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   from `scripts/new-skill.py` and are done when `scripts/skill-touchpoints.py <s>` is OK (`.claude/skills/skill-author`).
 - A skill's `path:line` citation names the symbol it shows (anchor) and must pass
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
+  A citation whose anchor moved to a unique line is MOVED (warning; FAIL under `--strict` / `run-all --release`):
+  `--fix` rewrites its line spec in place.
 - Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree per task
   (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
   only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
@@ -78,7 +80,7 @@ env -u TMPDIR tests/devtools.test.sh       # dev tool probes, snapshot/doctor li
 scripts/check-registry.sh [--structure-only]
 env -u TMPDIR tests/skill-citations.test.sh  # citation checker on fixture repos
 env -u TMPDIR tests/netcode-headless.test.sh  # netcode-headless.sh server resolution (--server, worktrees)
-python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest]   # skill path:line vs integration branches
+python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest] [--strict] [--fix]   # skill path:line vs integration branches
 python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
 python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
 env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
