@@ -120,20 +120,20 @@ def tier_of(ctx, pipe):
     return {"tier": "L", "facts": facts, "above": reasons, "flow": pipe["tiers"]["L"].get("flow", "")}
 
 
-PLAIN_MODULE_DIRS = ("scripts", "tests", "registry", "docs", "hooks", "commands")
+PLAIN_MODULE_DIRS = ("scripts/lib", "scripts", "tests", "registry", "docs", "hooks", "commands")
 
 
 def plain_module(p):
-    """Module of a path in a repo the registry does not map (the plugin repo): skills/<name>, scripts/lib, a top-level
-    directory, or `.` for a root file."""
-    parts = [x for x in str(p).replace("\\", "/").split("/") if x not in ("", ".")]
-    if len(parts) <= 1:
-        return "."
+    """Module of a path in a repo the registry does not map (the plugin repo): skills/<name>, one of PLAIN_MODULE_DIRS,
+    or `other` for anything else (root files, .claude, evals, changelog.d, ...)."""
+    path = "/".join(x for x in str(p).replace("\\", "/").split("/") if x not in ("", "."))
+    parts = path.split("/")
     if parts[0] == "skills" and len(parts) > 2:
         return "skills/" + parts[1]
-    if parts[:2] == ["scripts", "lib"] and len(parts) > 2:
-        return "scripts/lib"
-    return parts[0]
+    for d in PLAIN_MODULE_DIRS:
+        if path.startswith(d + "/"):
+            return d
+    return "other"
 
 
 def plain_context(key, paths):
@@ -932,6 +932,28 @@ def status(plan, reg):
                     row["notes"].append("QA runs once all tasks of the repo are integrated: waits for " + ", ".join(others))
                 else:
                     row["next"] = f"{me} dispatch {pf} --task integration:{t['repo']} --phase qa --sha {topic_head} --runner orca"
+    # the gate needs the repo's integration QA PASS at the integration HEAD (also after per-task QA of a no-worktree
+    # repo): until then the repo's tasks stay integrated and the next command is that QA
+    for key in sorted(count):
+        mine = [t["id"] for t in tasks if t["repo"] == key]
+        if not all(rows[tid]["phase"] == "qa" for tid in mine):
+            continue
+        info = infos[mine[0]]
+        topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
+        iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
+        if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
+            continue
+        if iq and iq.get("state") != "PASS":
+            why = f"integration QA {iq.get('state')} at {iq['sha'][:10]}"
+        elif iq:
+            why = f"integration QA at {iq['sha'][:10]} is STALE: the integration HEAD is {(topic_head or '?')[:10]}"
+        else:
+            why = "no integration QA" + (" (its verdict is STALE: the plan changed)" if iq_stale else "")
+        for tid in mine:
+            rows[tid]["phase"] = "integrated"
+            rows[tid]["notes"].append(why + f" for {key}: the gate needs it at the integration HEAD")
+            rows[tid]["next"] = (f"{me} dispatch {pf} --task integration:{key} --phase qa --sha {topic_head} "
+                                 "--runner orca")
     open_waves = [n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
     nxt = [f"{me} gate {pf}"] if tasks and all(r["phase"] == "qa" for r in rows.values()) else []
     out_rows = []

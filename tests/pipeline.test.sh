@@ -195,10 +195,15 @@ expect "plan repo tier names its basis" 0 "basis: paths \(repo not in the regist
 out=$(python3 -B "$P" tier --json --plan "$PL" --repo plugin --paths skills/factory-core/SKILL.md skills/ui-ux/SKILL.md scripts/lib/x.py scripts/y.py tests/z.sh README.md 2>&1)
 if python3 -c 'import json,sys; o=json.loads(sys.argv[1]); f=o["facts"]
 assert o["tier"]=="M", o["tier"]
-assert f["modules"]==[".","scripts","scripts/lib","skills/factory-core","skills/ui-ux","tests"], f["modules"]
+assert f["modules"]==["other","scripts","scripts/lib","skills/factory-core","skills/ui-ux","tests"], f["modules"]
 assert f["files"]==6 and f["repos"]==["plugin"] and f["contracts"]==[] and f["generated"]==[]' "$out"; then
-  pass=$((pass + 1)); echo "PASS  plan repo tier: skills/<name>, scripts/lib, top dirs and root are modules; M"
+  pass=$((pass + 1)); echo "PASS  plan repo tier: skills/<name>, scripts/lib, listed dirs and other are modules; M"
 else fail=$((fail + 1)); echo "FAIL  plan repo tier facts"; head -c 600 <<<"$out"; fi
+out=$(python3 -B "$P" tier --json --plan "$PL" --repo plugin --paths .claude/CLAUDE.md evals/e.json changelog.d/x.md README.md skills/README.md hooks/hooks.json registry/core.json docs/d.md commands/c.md 2>&1)
+if python3 -c 'import json,sys; f=json.loads(sys.argv[1])["facts"]
+assert f["modules"]==["commands","docs","hooks","other","registry"], f["modules"]' "$out"; then
+  pass=$((pass + 1)); echo "PASS  plan repo tier: .claude, evals, changelog.d and root files are one other module"
+else fail=$((fail + 1)); echo "FAIL  plan repo tier other module"; head -c 600 <<<"$out"; fi
 expect "seven files of a plan repo: above S" 0 "7 files > 6" tier --plan "$PL" --repo plugin --paths scripts/a scripts/b scripts/c scripts/d scripts/e scripts/f scripts/g
 expect "tier --plan needs --paths" 2 "needs --repo <plan repo key> and --paths" tier --plan "$PL" --repo plugin
 expect "tier --plan with an unknown repo key fails cleanly" 2 "neither a registry repo nor in plan.repos" tier --plan "$PL" --repo nope --paths x
@@ -274,7 +279,26 @@ refute "no gate command while c2 is pending" "^Next: .* gate " status "$ST"
 mkdir -p "$C/Assets/D"; echo d > "$C/Assets/D/d.cs"; gi "$C" add Assets/D; gi "$C" commit -qm "feat: c2"; SD=$(git -C "$C" rev-parse HEAD)
 sv --task c2 --phase review --sha "$SD" --by claude --state PASS
 sv --task c2 --phase qa --sha "$SD" --by claude --state PASS
+# agree <name>: status names the gate as next exactly when the gate (no registry checks here) is READY_FOR_PR
+agree() {
+  local out g rc
+  out=$(python3 -B "$P" status --json "$ST" 2>&1); g=$(python3 -B "$P" gate "$ST" 2>&1); rc=$?
+  if python3 -c 'import json,sys; o=json.loads(sys.argv[1]); said=any(" gate " in c for c in o["next"])
+assert said == (sys.argv[2] == "0"), (o["next"], sys.argv[2])' "$out" "$rc"; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1 (gate rc=$rc)"; head -c 800 <<<"$out"; echo; sed 's/^/      /' <<<"$g" | head -10; fi
+}
+st_phase "per-task QA of every Unity task: integration QA at the HEAD is still due" c2 integrated "--task integration:cli --phase qa --sha $SD"
+expect "and the missing integration QA is named" 0 "no integration QA for cli: the gate needs it" status "$ST"
+refute "no gate command before the Unity integration QA" "^Next: .* gate " status "$ST"
+expect "the gate agrees: integration QA missing" 1 "BLOCKER integration:cli: no qa verdict" gate "$ST"
+agree "status and gate agree before the Unity integration QA"
+sv --task integration:cli --phase qa --sha "$SC" --by codex --state PASS
+st_phase "an integration QA on an older HEAD is STALE" c1 integrated "--task integration:cli --phase qa --sha $SD"
+agree "status and gate agree on a stale integration QA"
+sv --task integration:cli --phase qa --sha "$SD" --by codex --state PASS
 expect "every task has QA: the plan-level next is the gate" 0 "^Next: .* gate .*st.json" status "$ST"
+expect "and the gate is READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$ST"
+agree "status and gate agree once every QA is at the HEAD"
 expect "every wave integrated" 0 "^Every wave is integrated" status "$ST"
 python3 -B "$P" status --json "$ST" > "$TMP/status.json" 2>&1
 if python3 - "$ROOT" "$TMP/status.json" <<'PY'
