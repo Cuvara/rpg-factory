@@ -52,3 +52,13 @@
 /scripts/checks/domains/vfx.py      @dyCuong03
 /docs/architecture/domains/vfx.md   @dyCuong03
 /tests/vfx-workflow.test.sh         @dyCuong03
+
+# assetgen
+/registry/domains/assetgen.json     @dyCuong03
+/skills/asset-gen/                  @dyCuong03
+/skills/comfyui/                    @dyCuong03
+/templates/assetgen/                @dyCuong03
+/scripts/assetgen/                  @dyCuong03
+/scripts/checks/domains/assetgen.py @dyCuong03
+/docs/architecture/domains/assetgen.md @dyCuong03
+/tests/assetgen.test.sh             @dyCuong03
