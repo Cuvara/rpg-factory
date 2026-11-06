@@ -49,9 +49,15 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 
 ## Libraries
 
-- `lib/` - `context.py` + `resolve.jq` (routing engine), `evidence.py`, `fstate.py` (state paths), `devtools.py`,
-  `tools.py`, `registry_src.py`, `shells.py`, `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh`
-  (sourced by tests). `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`
+- `lib/` - `context.py` + `resolve.jq` (routing engine), `snapshot_render.py` (snapshot text, domain views, Next line),
+  `workspace.py` (workspace and checkout path helpers shared by the hooks and routing), `gitguard.py` (git guard
+  facade; loads the `guard/` package by path as `rpgf_guard`: `common`, `shell`, `git`, `process`, `gates`, `mode`,
+  `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
+  pollution fingerprints), `artifacts.py` (artifact discovery and quality), `orca_cmd.py` (Orca and Agent dispatch
+  argv), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
+  `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
+  `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
+  `tests/hook-perf.test.sh`
 - `ui/` - UI plan engine (`ui_plan.py`, data in `ui/data/`), `ui_catalog.py`, `ui_select.py`, `figma_env.py`.
   `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh`, `tests/ui-figma-env.test.sh`
 - `adapters/` - optional domain tool adapters (`art2d/provider.py`, `art3d/blender-stats.py` run inside Blender,

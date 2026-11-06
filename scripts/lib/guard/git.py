@@ -423,5 +423,3 @@ def evaluate(payload, registry):
         if created and top:
             predicted_branch[top] = created
     return reasons
-
-
