@@ -185,6 +185,8 @@ mal mal-qa '{"extends": "icon", "qa": "strict"}'
 mal mal-params '{"extends": "icon", "params": ["quality"]}'
 mal mal-rubric '{"extends": "icon", "image_rubric": "looks good"}'
 mal mal-blank '{"extends": "texture-tileable", "qa": {"tileable": true, "not_blank": 1, "size": {"mode": "min", "expect": 1024}}}'
+mal mal-zero '{"extends": "icon", "qa": {"size": {"mode": "aspect", "expect": "1024x0"}}}'
+mal mal-zerow '{"extends": "icon", "qa": {"size": {"mode": "min", "expect": "0x1024"}}}'
 mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "default_style": 7}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
@@ -201,6 +203,8 @@ expect_mal mal-blank "qa.not_blank must be an object" "malformed purpose: tileab
 got=$(AG lint "$LA/assetgen/purposes/mal-blank.json" --authoring "$LA" 2>&1)
 grep -q "qa.tileable.max_seam_error must be" <<<"$got" && grep -q "qa.size.expect must be WIDTHxHEIGHT" <<<"$got" \
   && ok "malformed purpose: every malformed qa field is named" || no "mal-blank reasons" "$got"
+expect_mal mal-zero "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero height in qa.size.expect -> FAIL row"
+expect_mal mal-zerow "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero width in qa.size.expect -> FAIL row"
 expect_mal mal-prompt "prompt.must_include must be a list of strings" "malformed purpose: prompt guidance and default_style types -> FAIL row"
 python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
@@ -324,6 +328,13 @@ AG qa --run "$RUNS/qa-malformed-001" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
   && [ "$(jq -r '.outputs[0].path' "$TMP/q.json")" = outputs/icon-ok.png ] && ! grep -q Traceback "$TMP/err" \
   && ok "qa: malformed purpose qa block (qa.size a list) is a purpose-qa FAIL row, outputs still hashed, no traceback" \
   || no "malformed qa rc=$rc" "$(cat "$TMP/err"; jq -c . "$TMP/q.json" 2>/dev/null)"
+mal zero-req '{"extends": "image-edit", "qa": {"size": {"mode": "aspect"}}}'   # expect defaults to the requested size
+for z in 1024x0 0x1024; do
+  zr="$RUNS/qa-zero-${z%%x*}-001"; mkrun "$(basename "$zr")" zero-req --style stylized-painterly --authoring "$LA"     && AG render --run "$zr" --param reference_image=ref.png >/dev/null
+  jq --arg z "$z" '(.[] | select(.class_type == "NineRouterImage") | .inputs.size) = $z' "$zr/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$zr/workflow.json"
+  cp "$FX/icon-ok.png" "$zr/outputs/"; AG qa --run "$zr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ! grep -q Traceback "$TMP/err"     && ok "qa: requested size $z (zero dimension) is a png-size FAIL, no traceback" || no "zero size $z rc=$rc" "$(cat "$TMP/err"; jq -c .results "$TMP/q.json" 2>/dev/null)"
+done
 if has_pil; then
   python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
@@ -415,7 +426,7 @@ spec = json.load(open(os.path.join(run, "spec.json"), encoding="utf-8"))
 gen = runfiles.generation_inputs(json.load(open(os.path.join(run, "workflow.json"), encoding="utf-8")), spec,
                                  lambda n: os.path.join(run, "references", n))
 img = [n["inputs"] for n in gen["graph"].values() if n["class_type"] == "NineRouterImage"][0]
-assert "user_prompt" not in img and "size" in img and "quality" in img and gen["references"] == {}, gen
+assert img["user_prompt"] == open(os.path.join(run, "prompt.md"), encoding="utf-8").read().strip() and "size" in img and "quality" in img and gen["references"] == {}, gen
 want = runfiles.requirements_sha256(spec, gen)
 assert image["binding"]["requirements_sha256"] == want, (image["binding"], want)
 assert runfiles.SHA256.match(want) and want != runfiles.requirements_sha256(spec, None)
@@ -544,6 +555,7 @@ variant qp-rubric-001; AG resolve --purpose sprite-2d --style stylized-painterly
 AG qa --run "$RUNS/qp-rubric-001" >/dev/null; AG manifest --run "$RUNS/qp-rubric-001" >/dev/null
 variant qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
 AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-001" >/dev/null
+variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
 variant qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
@@ -632,6 +644,8 @@ case_ qp-rubric-001 gen-run-image-review FAIL 'bound to other requirements' "pur
   && ok "re-resolved run: qa and manifest re-run are consistent, only the reviews are stale" \
   || no "rubric run qa/outputs: $(st AGEN-qp-rubric-001 gen-run-qa)/$(st AGEN-qp-rubric-001 gen-run-outputs)" "$(why AGEN-qp-rubric-001 gen-run-qa)"
 case_ qp-rsize-001 gen-run-image-review FAIL 'bound to other requirements' "render --param size after the image review: FAIL (requested size is bound)"
+case_ qp-wfprompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' "workflow.json prompt edited after the record: provenance FAIL"
+case_ qp-wfprompt-001 gen-run-image-review FAIL 'bound to other requirements' "workflow.json prompt edited after the image review: FAIL (prompts are bound)"
 case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
 [ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
   || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"

@@ -40,16 +40,19 @@ def steps(n):
 
 def parse_size(text):
     try:
-        w, h = str(text).lower().split("x")
-        return int(w), int(h)
+        w, h = (int(v) for v in str(text).lower().split("x"))
     except ValueError:
         return None
+    return (w, h) if w > 0 and h > 0 else None
 
 
 def check_size(img, cfg, requested):
     mode = cfg.get("mode", "any")
-    expect = parse_size(cfg.get("expect", requested))
+    raw = cfg.get("expect", requested)
+    expect = parse_size(raw)
     got = "%dx%d" % (img.width, img.height)
+    if mode != "any" and expect is None and raw != "auto":
+        return "FAIL", ["%s, expected size %r is not WIDTHxHEIGHT with positive dimensions" % (got, raw)]
     if mode == "any" or expect is None:
         return "PASS", ["%s (size mode any%s)" % (got, "" if mode == "any" else ", expected size auto")]
     ew, eh = expect

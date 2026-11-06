@@ -15,8 +15,8 @@ requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sort
   still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
   params or the rendered generation inputs changed is stale.
 generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
-  workflow.json graph with the 9router nodes' user_prompt left out (the prompt is bound on its own), so every render
-  --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
+  workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
+  that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
   path of the run's copy references/<name> (None or a missing file -> null). Without a workflow: the spec params.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
@@ -33,7 +33,7 @@ import os
 import re
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-SIZE_RE = re.compile(r"^\d+x\d+$")
+SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
 SIZE_MODES = {"exact", "min", "aspect", "any"}
 ALPHA_MODES = {"required", "forbidden", "any"}
 
@@ -96,6 +96,14 @@ def qa_errors(qa):
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
 
 
+def workflow_prompts(workflow):
+    """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent)."""
+    if not isinstance(workflow, dict):
+        return []
+    return [n["inputs"].get("user_prompt") for n in workflow.values() if isinstance(n, dict)
+            and n.get("class_type") in PROMPT_NODES and isinstance(n.get("inputs"), dict)]
+
+
 def reference_names(workflow):
     if not isinstance(workflow, dict):
         return []
@@ -122,8 +130,6 @@ def generation_inputs(workflow, spec, locate=None):
             if not isinstance(node, dict):
                 continue
             inputs = dict(node["inputs"]) if isinstance(node.get("inputs"), dict) else {}
-            if node.get("class_type") in PROMPT_NODES:
-                inputs.pop("user_prompt", None)
             graph[str(nid)] = {"class_type": node.get("class_type"), "inputs": inputs}
         refs = {}
         for name in reference_names(workflow):

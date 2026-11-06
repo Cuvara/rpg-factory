@@ -273,6 +273,10 @@ def check(artifact, ctx):
     wf = resolve("workflow.json")
     if gen.get("workflow") != "workflow.json" or wf is None or not wf.is_file():
         todo.append("the rendered workflow.json is not recorded in the run directory (assetgen.py render --run)")
+    sent = runfiles.workflow_prompts(workflow)
+    if workflow is not None and sent and any(p != spec.get("prompt") for p in sent):
+        todo.append("workflow.json sends another prompt than the recorded one (prompt.md); re-render the workflow "
+                    "and generate again")
     for name in runfiles.reference_names(workflow):
         ref = resolve("references/" + os.path.basename(name))
         if ref is None or not ref.is_file():

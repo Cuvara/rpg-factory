@@ -15,7 +15,7 @@
   (`docs/schemas/kinds/gen-run.schema.json`), quality plugin `scripts/checks/domains/assetgen.py` (the reviewer
   model differs from the prompt author; the review files, not the `run.md` summary, are the evidence and each verdict
   is bound to the prompt and output SHA-256s and a requirements hash (purpose, style and template content hashes,
-  resolved params, and for the image review the `workflow.json` graph and the reference images kept in `references/`) that `review-cmd` handed the reviewer, so a missing,
+  resolved params, and for the image review the whole `workflow.json` graph and the reference images kept in `references/`) that `review-cmd` handed the reviewer, so a missing,
   contradicting or stale review fails, also after a purpose is re-resolved with a stricter rubric; `qa.json` must be PASS with a PASS row for every check the purpose requires, `NOT_AVAILABLE` never
   grades PASS, and a QA report graded with an older purpose qa block or requested size is stale; output hashes, provenance, refs), human gate `assetgen-approval`,
   handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`, and the `comfy-mcp` dev tool (MCP server plus a
