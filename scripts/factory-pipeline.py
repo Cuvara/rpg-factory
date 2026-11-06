@@ -872,15 +872,12 @@ def cmd_dispatch(a, reg):
         return 0
     if agent == impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
-    # the task branch's start: a later wave's diff leaves out the earlier waves on plan.topic; once the candidate is
-    # merged into plan.topic that diff is empty, so a re-review diffs against repos.<key>.base
-    base = spec["base"]
-    if base == plan["topic"] and is_ancestor(info["path"], a.sha, base):
-        base = info["base_sha"] or info["base"]
+    base, base_note = review_base(info, plan["topic"], spec["base"], a.sha)
     prompt = (f"Review worker ({agent}) for code written by {impl}. Read-only: edit nothing, commit nothing.\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
-              " against the spec: scope isolation (any change outside the owned paths is a finding), correctness, safety rules, the routed"
+              + (f" ({base_note})" if base_note else "")
+              + " against the spec: scope isolation (any change outside the owned paths is a finding), correctness, safety rules, the routed"
               " lead skill's review checklist, tests for each behaviour change, conventions.\n"
               + json.dumps(spec, indent=2)
               + "\nReport findings as `path:line severity problem fix`, then `VERDICT: PASS|FAIL`."
@@ -1196,6 +1193,34 @@ def verdict_of(plan, reg, task_id, phase):
 
 def is_ancestor(path, a, b):
     return bool(a and b) and git(path, "merge-base", "--is-ancestor", a, b)[1] == 0
+
+
+def review_base(info, topic, start, sha):
+    """Base of a review diff `git diff <base>...<sha>`: the task's own fork point, the same before and after integration.
+
+    `start` is where the task branch was cut (plan.topic for a later wave, else repos.<key>.base). While `sha` is not on
+    the topic, `start` is that fork point. Once the topic merged it, topic...sha is empty and repos.<key>.base would add
+    the earlier waves' files, so the base is merge-base(M^1, sha) for the oldest first-parent topic commit M containing
+    sha. Returns (base, note); the note says when no such merge is found and the diff may include earlier waves."""
+    path = info["path"]
+    if start != topic or not is_ancestor(path, sha, topic):
+        return start, None
+    chain = (git(path, "rev-list", "--first-parent", topic)[0] or "").split()  # newest first
+    lo, hi, found = 0, len(chain) - 1, None  # containment is monotonic along the chain: binary search the oldest
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if is_ancestor(path, sha, chain[mid]):
+            found, lo = chain[mid], mid + 1
+        else:
+            hi = mid - 1
+    full = git(path, "rev-parse", "--verify", "-q", f"{sha}^{{commit}}")[0]
+    if found and found != full:  # found == sha: a fast-forward, no merge commit marks the task's start
+        fork, rc = git(path, "merge-base", f"{found}^1", sha)
+        if rc == 0 and fork:
+            return fork, None
+    base = info["base_sha"] or info["base"]
+    return base, (f"{sha} is on {topic} without a merge commit that brought it in: this diff against {base} "
+                  "may include earlier waves' changes; judge scope by the task's own commits")
 
 
 def changed_since(path, sha, head, paths):
