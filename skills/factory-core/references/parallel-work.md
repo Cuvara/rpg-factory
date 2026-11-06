@@ -143,7 +143,8 @@ sessions; only `dispatch --phase lead` defaults to `child` (a new task worktree 
   `dispatch plan.json --task <id> --phase implement|review|qa --subplan subplan.json --subtask <sid>` takes the
   subtask's paths, agent and placement and prints the matching `--worktree` (`path:<task worktree>` or
   `new-child`, run from the task worktree).
-- A child session commits on its own child branch (`<task branch>--<subtask or phase>`), with explicit paths.
+- A child session commits on its own child branch (`<task branch>--<subtask or phase>`), with explicit paths. Review
+  and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`, so the review and QA of one candidate never collide.
 
 <!-- policy:child-merge-remove -->
 The owner merges a child's branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).
