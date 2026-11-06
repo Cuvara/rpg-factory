@@ -872,7 +872,11 @@ def cmd_dispatch(a, reg):
         return 0
     if agent == impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
-    base = spec["base"]  # the task branch's start: a later wave's diff leaves out the earlier waves on plan.topic
+    # the task branch's start: a later wave's diff leaves out the earlier waves on plan.topic; once the candidate is
+    # merged into plan.topic that diff is empty, so a re-review diffs against repos.<key>.base
+    base = spec["base"]
+    if base == plan["topic"] and is_ancestor(info["path"], a.sha, base):
+        base = info["base_sha"] or info["base"]
     prompt = (f"Review worker ({agent}) for code written by {impl}. Read-only: edit nothing, commit nothing.\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"

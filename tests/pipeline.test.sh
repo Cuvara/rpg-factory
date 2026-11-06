@@ -555,6 +555,8 @@ expect_spec "wave-2 review diffs against the integration branch, not the base" "
 st_phase "status still compares b against the base: candidate at its SHA" b candidate "--task b --phase review --sha $SB"
 sv --task b --phase review --sha "$SB" --by codex --state PASS
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-b -m "merge b"; SI=$(git -C "$S" rev-parse feat/core/st)
+expect_spec "wave-2 re-review after the merge diffs against the base (the topic diff is empty)" "git diff develop\.\.\.$SB" dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
+refute_spec "wave-2 re-review after the merge never diffs against the integration branch" "git diff feat/core/st\.\.\." dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
 st_phase "every task of the repo integrated: next is the integration QA at its HEAD" a integrated "--task integration:srv --phase qa --sha $SI"
 sv --task integration:srv --phase qa --sha "$SI" --by codex --state PASS
 st_phase "QA PASS on a commit containing the review: qa" a qa
