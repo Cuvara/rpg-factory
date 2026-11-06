@@ -230,16 +230,22 @@ else nok "timeout check did not create pid file: $tdiag"; fi
 # Windows reuses PIDs fast under load, so a PID that is alive again is only our grandchild when its process
 # started no later than the check's own timestamp taken after the spawn (child.spawned). A process at that PID that
 # started later is a reuse: the grandchild had already died. No wall-clock bound; order only. Evidence on FAIL.
+# One Win32_Process query decides, so a PID that exits between two observations cannot read as a survivor:
+# gone (no process), unknown (query failed or no CreationDate) or the creation time in Unix ms. CreationDate is
+# readable for every process; Get-Process StartTime is access denied for an elevated or other-user process.
+winpid_state() { # <winpid>; prints gone | unknown | <creation epoch ms>
+  local st
+  st=$(powershell.exe -NoProfile -NonInteractive -Command "try { \$p = Get-CimInstance Win32_Process -Filter 'ProcessId=$1' -ErrorAction Stop; if (-not \$p) { 'gone' } elseif (\$p.CreationDate) { ([DateTimeOffset]\$p.CreationDate).ToUnixTimeMilliseconds() } else { 'unknown' } } catch { 'unknown' }" 2>/dev/null | tr -d '\r\n ')
+  case "$st" in gone|unknown) echo "$st" ;; *[!0-9]*|'') echo unknown ;; *) echo "$st" ;; esac
+}
 winpid_survivor() { # <winpid> <spawned epoch ms>; 0 = the original process is still alive; prints the evidence
-  local row started
-  row=$(tasklist //FI "PID eq $1" //FO CSV //NH 2>/dev/null | tr -d '\r' | grep -F ",\"$1\",")
-  [ -n "$row" ] || { echo "no process at pid $1"; return 1; }
-  # Win32_Process CreationDate is readable for every process; Get-Process StartTime is access denied for an elevated
-  # or other-user process, which would make such a PID reuse look like a survivor
-  started=$(powershell.exe -NoProfile -NonInteractive -Command "try { \$p = Get-CimInstance Win32_Process -Filter 'ProcessId=$1' -ErrorAction Stop; if (\$p -and \$p.CreationDate) { ([DateTimeOffset]\$p.CreationDate).ToUnixTimeMilliseconds() } } catch { '' }" 2>/dev/null | tr -d '\r\n ')
-  echo "tasklist row: $row; started_ms=${started:-unknown}; spawned_ms=$2"
-  [ -z "$started" ] && return 0        # alive but start time unreadable: cannot prove reuse, so it counts as a survivor
-  [ "$started" -le "$2" ]
+  local st; st=$(winpid_state "$1")
+  echo "pid $1 state=$st; spawned_ms=$2"
+  case "$st" in
+    gone) return 1 ;;                  # no process at that PID: killed
+    unknown) return 0 ;;               # cannot prove it is gone or reused, so it counts as a survivor
+    *) [ "$st" -le "$2" ] ;;           # started no later than the spawn timestamp: the original; later: a reuse
+  esac
 }
 if [ -s "$S/child.winpid" ]; then
   wpid=$(tr -d '\r\n ' < "$S/child.winpid"); spawned=$(tr -d '\r\n ' < "$S/child.spawned" 2>/dev/null)
@@ -254,7 +260,21 @@ if [ -e "/proc/$$/winpid" ]; then # Windows: the probe self-test runs even when 
     ev=$(winpid_survivor "$bw" "$((before - 1000))") && nok "pid probe took a reused pid for the grandchild: $ev" || okk "pid probe tells a reused pid from the grandchild ($ev)"
   else nok "pid probe self-test: no Windows pid for pid $bpid"; fi
   kill "$bpid" 2>/dev/null; wait "$bpid" 2>/dev/null
+  # disappearance between observations: the process existed when its timestamp was taken and is gone at the query
+  if [ -n "$bw" ]; then
+    ev=$(winpid_survivor "$bw" "$after") && nok "pid probe took an exited process for a survivor: $ev" || okk "pid probe reads an exited process as killed ($ev)"
+  fi
 fi
+# the decision on each probe state, with the CIM query stubbed (a PID that exits right before the query is 'gone')
+probe_states=$(
+  winpid_state() { echo "$STUB_STATE"; }
+  for c in "gone 1000 1" "unknown 1000 0" "900 1000 0" "1000 1000 0" "1100 1000 1"; do
+    set -- $c; STUB_STATE=$1
+    ev=$(winpid_survivor 4242 "$2"); rc=$?
+    [ "$rc" = "$3" ] && echo "ok $1" || echo "bad $1: rc=$rc want $3 ($ev)"
+  done
+)
+grep -q '^bad' <<<"$probe_states" && nok "pid probe state decision: $(grep '^bad' <<<"$probe_states" | tr '\n' ';')" || okk "pid probe state decision: gone=killed, unknown=survivor, earlier/equal=survivor, later=reuse"
 rm -f "$S/child.pid" "$S/child.winpid" "$S/child.spawned"
 python3 -B "$ROOT/tests/fixtures/run-checks-cleanup-failure.py" "$P/scripts/run-checks.py" && okk "simulated timeout cleanup failure is reported" || nok "simulated cleanup failure was hidden"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-ext --approve t-ext --json)
