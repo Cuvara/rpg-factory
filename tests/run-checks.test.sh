@@ -198,7 +198,9 @@ winpid_survivor() { # <winpid> <spawned epoch ms>; 0 = the original process is s
   local row started
   row=$(tasklist //FI "PID eq $1" //FO CSV //NH 2>/dev/null | tr -d '\r' | grep -F ",\"$1\",")
   [ -n "$row" ] || { echo "no process at pid $1"; return 1; }
-  started=$(powershell.exe -NoProfile -NonInteractive -Command "try { ([DateTimeOffset](Get-Process -Id $1 -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds() } catch { '' }" 2>/dev/null | tr -d '\r\n ')
+  # Win32_Process CreationDate is readable for every process; Get-Process StartTime is access denied for an elevated
+  # or other-user process, which would make such a PID reuse look like a survivor
+  started=$(powershell.exe -NoProfile -NonInteractive -Command "try { \$p = Get-CimInstance Win32_Process -Filter 'ProcessId=$1' -ErrorAction Stop; if (\$p -and \$p.CreationDate) { ([DateTimeOffset]\$p.CreationDate).ToUnixTimeMilliseconds() } } catch { '' }" 2>/dev/null | tr -d '\r\n ')
   echo "tasklist row: $row; started_ms=${started:-unknown}; spawned_ms=$2"
   [ -z "$started" ] && return 0        # alive but start time unreadable: cannot prove reuse, so it counts as a survivor
   [ "$started" -le "$2" ]
@@ -207,6 +209,8 @@ if [ -s "$S/child.winpid" ]; then
   wpid=$(tr -d '\r\n ' < "$S/child.winpid"); spawned=$(tr -d '\r\n ' < "$S/child.spawned" 2>/dev/null)
   [ -n "$spawned" ] || spawned=$(date +%s%3N)   # check killed before its timestamp: anything started from now on is a reuse
   if ev=$(winpid_survivor "$wpid" "$spawned"); then nok "timeout Windows grandchild survived (pid $wpid): $ev"; else okk "timeout Windows grandchild was killed ($ev)"; fi
+fi
+if [ -e "/proc/$$/winpid" ]; then # Windows: the probe self-test runs even when the check was killed before child.winpid
   # the probe itself: a live process started before the timestamp is a survivor; one started after it is a PID reuse
   before=$(date +%s%3N); sleep 30 & bpid=$!; sleep 0.3; bw=$(tr -d '\r\n ' < "/proc/$bpid/winpid" 2>/dev/null); after=$(date +%s%3N)
   if [ -n "$bw" ]; then
