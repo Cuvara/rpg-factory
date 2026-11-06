@@ -29,8 +29,9 @@ docs/schemas/pipeline-plan.schema.json.
         planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
         the run lead starts ONE task-lead session per task. In a worktree repo it gets the task worktree: created here
-        from the base on the task branch <topic>-<id> (or resumed when that branch is already checked out); in a
-        no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
+        from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
+        exists, it carries the earlier waves; status still compares against the base), or resumed when that branch is
+        already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
         own Orca Run, split into subtasks with disjoint paths (`subplan validate`), one fresh session per subtask in the
         same worktree, sub-sessions do not commit, the task lead commits per subtask, cross-model review and QA sessions
         there, release each session, report a `status` message (to Orca run RUN_ID: worker_done needs a dispatch,
@@ -576,6 +577,17 @@ def task_branch(plan, info, task):
     return plan["topic"] if not info["worktrees"] else f"{plan['topic']}-{task['id']}"
 
 
+def start_base(plan, info, task):
+    """Where a task branch starts: a later-wave task (deps) of a worktree repo starts from the integration branch
+    plan.topic when it exists (it carries the earlier waves); otherwise the base. repos.<key>.base stays the
+    comparison base of `status` and the gate."""
+    base = info["base_sha"] or info["base"]
+    if task.get("deps") and info["worktrees"] and info["path"]:
+        if git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]:
+            return plan["topic"]
+    return base
+
+
 AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
 
 
@@ -787,7 +799,7 @@ def cmd_dispatch(a, reg):
     spec = {"plan": plan["id"], "task": task["id"], "repo": task["repo"], "objective": task["objective"],
             "owned_paths": task["paths"], "exclusions": task.get("exclusions", []), "deps": task.get("deps", []),
             "checks": task.get("checks", []), "acceptance": task["acceptance"], "branch": branch,
-            "base": info["base_sha"] or info["base"]}
+            "base": start_base(plan, info, task)}
     if a.phase in ("lead", "implement") and not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
         if prev and (fstate.read_json(verdict_file(plan, prev, "qa")) or {}).get("state") != "PASS":
@@ -799,7 +811,8 @@ def cmd_dispatch(a, reg):
             place = orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
             where = f"the main checkout {info['path']}"
         else:
-            # the task worktree is created here, from the base on the task branch; a later lead resumes in it
+            # the task worktree is created here on the task branch, from the base (a later wave: from plan.topic, which
+            # carries the earlier waves); a later lead resumes in it
             home = worktree_for(info["path"], branch)[0]
             place = ({"worktree": f"path:{home}", "new": False, "reason": "task worktree exists: resume in it"} if home
                      else orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch))
@@ -859,7 +872,7 @@ def cmd_dispatch(a, reg):
         return 0
     if agent == impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
-    base = info["base_sha"] or info["base"]
+    base = spec["base"]  # the task branch's start: a later wave's diff leaves out the earlier waves on plan.topic
     prompt = (f"Review worker ({agent}) for code written by {impl}. Read-only: edit nothing, commit nothing.\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"

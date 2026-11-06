@@ -516,6 +516,7 @@ st_phase "a fix after the FAIL is a new candidate" a candidate "--phase review -
 expect "and the old review is named STALE" 0 "review at .* is STALE: owned paths changed since" status "$ST"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
+expect "no integration branch yet: a later-wave task lead starts from the base" 0 "--base-branch develop --branch feat/core/st-b " dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-a -m "merge a"
@@ -540,12 +541,18 @@ then pass=$((pass + 1)); echo "PASS  task without branch/worktree stays pending 
 else fail=$((fail + 1)); echo "FAIL  unstarted task inherits an integration candidate"; fi
 expect "QA waits for the other tasks of the repo" 0 "QA runs once all tasks of the repo are integrated: waits for b" status "$ST"
 st_phase "the dependency is integrated: b is ready, next starts its task lead" b pending "--task b --phase lead"
+expect "wave 2: the task lead's worktree starts from the integration branch (it carries wave 1)" 0 "--base-branch feat/core/st --branch feat/core/st-b " dispatch "$ST" --task b --phase lead --runner orca
+expect_spec "wave 2: the task spec names the integration branch as its base" '"base": "feat/core/st"' dispatch "$ST" --task b --phase lead --runner orca
+st_phase "status is unchanged by the wave-2 dispatch: b still pending" b pending "--task b --phase lead"
 expect "ready tasks span waves: b (wave 3) next to c1 (wave 1)" 0 "^Ready wave: 1  \(dispatch: b, c1\)$" status "$ST"
 git -C "$S" worktree remove "$TMP/st-a"; git -C "$S" branch -q -D feat/core/st-a
 st_phase "a removed task branch stays integrated (verdict + integration branch)" a integrated
+expect "wave 1 starts from the base even when the integration branch exists" 0 "--base-branch develop --branch feat/core/st-a " dispatch "$ST" --task a --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-b" -b feat/core/st-b feat/core/st 2>/dev/null
 st_phase "a task branch cut from the integration branch, no own commits yet: implementing" b implementing
 mkdir -p "$TMP/st-b/sb"; echo b > "$TMP/st-b/sb/b.go"; gi "$TMP/st-b" add sb; gi "$TMP/st-b" commit -qm "feat: b"; SB=$(git -C "$S" rev-parse feat/core/st-b)
+expect_spec "wave-2 review diffs against the integration branch, not the base" "git diff feat/core/st\.\.\.$SB" dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
+st_phase "status still compares b against the base: candidate at its SHA" b candidate "--task b --phase review --sha $SB"
 sv --task b --phase review --sha "$SB" --by codex --state PASS
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-b -m "merge b"; SI=$(git -C "$S" rev-parse feat/core/st)
 st_phase "every task of the repo integrated: next is the integration QA at its HEAD" a integrated "--task integration:srv --phase qa --sha $SI"
