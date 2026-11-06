@@ -66,15 +66,20 @@ docs/schemas/pipeline-plan.schema.json.
         Then prints the push and `gh pr create` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
 
-  status <plan.json> [--json]
+  status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
         run. Schema docs/schemas/pipeline-status.schema.json. Exit 1 when the plan is invalid.
+        With a task lead's Orca Run (task `orca_run` in the plan, or --orca-run, repeatable) it also lists the Run's
+        settled workers that are not released (`orca orchestration worker-list --run <id> --json`, read-only) and puts
+        their `orca orchestration worker-release --dispatch <id>` first in `next`; a running worker is no finding;
+        no orca or a failing call is a NOT_AVAILABLE line, never an error.
 
-  cleanup <plan.json> [--json]
-        CLEAN when the run left no worktree or task branch (<topic>-*); otherwise prints `git worktree remove`
-        and `git branch -d` for integrated ones, names the rest, and reminds to release every worker session.
-        Exit 0 CLEAN, 1 LEFTOVER.
+  cleanup <plan.json> [--orca-run RUN_ID]... [--json]
+        CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
+        (as in status) is unreleased; otherwise prints `git worktree remove`, `git branch -d` for integrated ones and
+        `orca orchestration worker-release --dispatch <id>` per unreleased worker, names the rest, and reminds to
+        release every worker session. Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
@@ -383,6 +388,8 @@ def validate(plan, reg):
                           f"({pipe['review_pairing'].get(impl)})")
         if not info["worktrees"] and t.get("worktree") is True:
             errors.append(f"task {tid}: repo `{t.get('repo')}` takes no worktree ({info['reason']}); drop `worktree: true`")
+        if "orca_run" in t and not (isinstance(t["orca_run"], str) and t["orca_run"].strip()):
+            errors.append(f"task {tid}: `orca_run` must be the task lead's Orca Run id (a non-empty string)")
         for d in t.get("deps", []):
             if d not in ids:
                 errors.append(f"task {tid}: unknown dependency {d}")
@@ -721,9 +728,12 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
         "candidate while they run.",
         "6. A FAIL goes to a fresh fix session (`--phase implement --paths <paths of the finding>`); commit the fix, then "
         "run review and QA again on the new HEAD.",
-        "7. Release every session as soon as it reports (`orca orchestration worker-release --dispatch <id>`; stop "
-        "background Agent workers).",
-        f"8. Report to the run lead: branch {spec['branch']}, HEAD SHA, each subtask with its commit, the "
+        "7. Release every implement, review and QA session the moment it reports, its candidate is superseded (a new "
+        "HEAD replaces the SHA it checks) or it stops - not at task end: `orca orchestration worker-release --dispatch "
+        "<id>` (stop background Agent workers). Check before each new dispatch and before reporting: "
+        f"`{me} status {orca_cmd.quote([os.path.abspath(plan['_path'])])} --orca-run <your run id>` lists settled "
+        "workers that are not released, with their release commands.",
+        f"8. Report to the run lead: branch {spec['branch']}, HEAD SHA, your Orca Run id, each subtask with its commit, the "
         "review and QA verdicts (state, SHA, model), each check with exact counts (or NOT_RUN with command and reason), "
         "limitations and out-of-scope findings. With Orca: `orca orchestration send --to "
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <that report>`; "
@@ -1120,8 +1130,102 @@ def cmd_gate(a, reg):
     return 0 if out["state"] == "READY_FOR_PR" else 1
 
 
-def cleanup(plan, reg):
-    """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them."""
+# Orca worker accounting (`orca orchestration worker-list --json`): a worker whose dispatch settled still owns its
+# terminal until it is released; terminal state `released` is done, any other state of a settled worker is a finding.
+SETTLED_STATES = {"succeeded", "failed", "completed", "cancelled", "canceled", "stopped", "superseded", "abandoned",
+                  "timed_out", "expired", "exited", "crashed"}
+
+
+def orca_runs(plan, extra=None):
+    """The task leads' Orca Run ids: each task's `orca_run` plus --orca-run, in order, without duplicates."""
+    runs = [t.get("orca_run") for t in plan.get("tasks", []) if isinstance(t, dict)] + list(extra or [])
+    runs = [r.strip()[len("run:"):] if r.strip().startswith("run:") else r.strip() for r in runs if isinstance(r, str)]
+    return list(dict.fromkeys(r for r in runs if r))
+
+
+def orca_workers(run):
+    """(workers, None) from `orca orchestration worker-list --run RUN --json` (every page), or (None, why)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None, "orca is not on PATH"
+    workers, cursor = [], None
+    for _ in range(50):
+        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100", "--json"]
+        if cursor:
+            argv += ["--cursor", cursor]
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+                               stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as e:
+            return None, f"orca worker-list failed: {e}"
+        try:
+            doc = json.loads(r.stdout or "")
+        except ValueError:
+            doc = None
+        if r.returncode != 0 or not isinstance(doc, dict) or doc.get("ok") is False or not isinstance(doc.get("result"), dict):
+            why = " ".join(((r.stderr or "") + " " + (r.stdout or "")).split())[:200]
+            return None, f"orca worker-list exited {r.returncode}" + (f": {why}" if why else "")
+        res = doc["result"]
+        workers += [w for w in res.get("workers") or [] if isinstance(w, dict)]
+        page = res.get("page") if isinstance(res.get("page"), dict) else {}
+        cursor = page.get("nextCursor") if page.get("hasMore") else None
+        if not cursor:
+            return workers, None
+    return workers, None
+
+
+def worker_settled(w):
+    stage = ((w.get("projection") or {}).get("stage") or {}) if isinstance(w.get("projection"), dict) else {}
+    return (stage.get("detail") == "settled" or str(w.get("workerState", "")).lower() in SETTLED_STATES
+            or str(w.get("dispatchStatus", "")).lower() in SETTLED_STATES)
+
+
+def orca_sessions(runs):
+    """Per Run: settled workers that are not released, with the release command; NOT_AVAILABLE when orca cannot say.
+    Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here."""
+    out = []
+    for run in runs:
+        workers, why = orca_workers(run)
+        if workers is None:
+            out.append({"run": run, "state": "NOT_AVAILABLE", "reason": why, "unreleased": [], "released": 0, "running": 0})
+            continue
+        unreleased, released, running = [], 0, 0
+        for w in workers:
+            res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
+            term = w.get("terminalState") or res.get("releaseState") or "unknown"
+            if term == "released" or res.get("releaseState") == "released":
+                released += 1
+            elif not worker_settled(w):
+                running += 1
+            else:
+                did = str(w.get("dispatchId") or "?")
+                note = res.get("retainedReason") or (f"release requested at {res['releaseRequestedAt']}"
+                                                     if res.get("releaseRequestedAt") else None)
+                unreleased.append({"dispatch": did, "worker": w.get("workerState"), "terminal": term, "note": note,
+                                   "command": orca_cmd.quote(["orca", "orchestration", "worker-release", "--dispatch", did])})
+        out.append({"run": run, "state": "UNRELEASED" if unreleased else "OK", "reason": None, "unreleased": unreleased,
+                    "released": released, "running": running})
+    return out
+
+
+def session_lines(sessions):
+    """Text lines for cleanup and status: one per Run, one per unreleased worker."""
+    lines = []
+    for s in sessions:
+        if s["state"] == "NOT_AVAILABLE":
+            lines.append(f"NOT_AVAILABLE  run {s['run']}: {s['reason']} (worker release not checked)")
+            continue
+        lines.append(f"{s['state']}  run {s['run']}: {len(s['unreleased'])} settled worker(s) not released, "
+                     f"{s['released']} released, {s['running']} running")
+        for u in s["unreleased"]:
+            lines.append(f"  UNRELEASED {u['dispatch']} ({u['worker']}, terminal {u['terminal']}"
+                         + (f", {u['note']}" if u["note"] else "") + f"): {u['command']}")
+    return lines
+
+
+def cleanup(plan, reg, orca_run=None):
+    """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
+    Orca workers of the task leads' Runs that are not released."""
     left, commands, kept = [], [], []
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
         info = repo_info(plan, reg, key)
@@ -1152,15 +1256,22 @@ def cleanup(plan, reg):
     specs_dir = os.path.join(verdict_dir(plan), "specs")
     n_specs = len([f for f in os.listdir(specs_dir) if f.endswith(".md")]) if os.path.isdir(specs_dir) else 0
     specs_kept = [f"{n_specs} spec file(s) in {specs_dir} (dispatch specs, kept as the run's record; delete by hand)"] if n_specs else []
+    workers = orca_sessions(orca_runs(plan, orca_run))
+    for s in workers:
+        for u in s["unreleased"]:
+            left.append(f"orca:{u['dispatch']}")
+            commands.append(u["command"])
     return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
+            "workers": workers,
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
-                        "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"}
+                        "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
+                        + ("" if workers else "; name the task leads' Runs (task `orca_run` or --orca-run) to check them")}
 
 
 def cmd_cleanup(a, reg):
     plan = read_plan(a.plan)
     plan["_path"] = a.plan
-    out = cleanup(plan, reg)
+    out = cleanup(plan, reg, a.orca_run)
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -1171,6 +1282,8 @@ def cmd_cleanup(a, reg):
             print("  KEPT  " + k)
         for k in out["state_kept"]:
             print("  STATE " + k)
+        for line in session_lines(out["workers"]):
+            print("  WORKERS " + line)
         print("Sessions: " + out["sessions"])
     return 0 if out["state"] == "CLEAN" else 1
 
@@ -1289,7 +1402,7 @@ def task_status(plan, reg, task, n_in_repo):
     return row, info
 
 
-def status(plan, reg):
+def status(plan, reg, orca_run=None):
     v = validate(plan, reg)
     me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
@@ -1381,6 +1494,9 @@ def status(plan, reg):
                                  "--runner orca")
     open_waves = [n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
     nxt = [f"{me} gate {pf}"] if tasks and all(r["phase"] == "qa" for r in rows.values()) else []
+    # settled Orca workers of the task leads' Runs that still own a terminal: release them now, not at task end
+    workers = orca_sessions(orca_runs(plan, orca_run))
+    nxt = [u["command"] for s in workers for u in s["unreleased"]] + nxt
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]
@@ -1388,13 +1504,14 @@ def status(plan, reg):
                                            "next", "notes")})
     return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
             "waves": v["waves"], "tasks": out_rows, "ready_wave": open_waves[0] if open_waves else None,
-            "ready": ready, "next": nxt}
+            "ready": ready, "next": nxt, "_workers": workers}
 
 
 def cmd_status(a, reg):
     plan = read_plan(a.plan)
     plan["_path"] = a.plan
-    out = status(plan, reg)
+    out = status(plan, reg, a.orca_run)
+    workers = out.pop("_workers", [])
     if a.json:
         print(json.dumps(out, indent=2))
         return 0 if out["valid"] else 1
@@ -1412,6 +1529,8 @@ def cmd_status(a, reg):
         print(f"Ready wave: {out['ready_wave']}" + (f"  (dispatch: {', '.join(out['ready'])})" if out["ready"] else ""))
     elif out["valid"] and out["tasks"]:
         print("Every wave is integrated.")
+    for line in session_lines(workers):
+        print("Workers: " + line)
     for c in out["next"]:
         print("Next: " + c)
     return 0 if out["valid"] else 1
@@ -1460,9 +1579,11 @@ def main():
     st = sub.add_parser("status")
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
+    st.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
     c = sub.add_parser("cleanup")
     c.add_argument("plan")
     c.add_argument("--json", action="store_true")
+    c.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
     g = sub.add_parser("gate")
     g.add_argument("plan")
     g.add_argument("--allow-same-model", action="store_true")

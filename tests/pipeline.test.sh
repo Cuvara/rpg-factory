@@ -209,12 +209,12 @@ for pat in '"owned_paths": \[' '"backend/gateway/"' '"branch": "feat/core/demo-g
   "ONE fresh Claude or Codex session in this task worktree" "--phase implement --paths <subtask paths>" "do NOT commit \(one shared index\)" \
   "commit that subtask yourself with explicit paths" "Codex reviews Claude's work, Claude reviews Codex's" "here codex for claude" \
   "SAME_MODEL fallback" "--phase qa --sha <HEAD>" "FAIL goes to a fresh fix session" "worker-release" \
-  "to the run lead: branch feat/core/demo-gw, HEAD SHA" "Never push, merge, tag or remove the worktree"; do
+  "to the run lead: branch feat/core/demo-gw, HEAD SHA, your Orca Run id"   "the moment it reports, its candidate is superseded .* or it stops - not at task end" "status .* --orca-run <your run id>"   "Never push, merge, tag or remove the worktree"; do
   expect "task-lead spec: $pat" 0 "$pat" dispatch "$OK" --task gw --phase lead
 done
 expect "Unity task lead: an agent launched in the main checkout" 0 "^orca agent launch --agent claude --worktree '?path:[^' ]*IndieRPGMMOAdventure'?" dispatch "$OK" --task c1 --phase lead --runner orca
 refute "Unity task lead never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase lead --runner orca
-refute "Unity task lead in the agent fallback never creates a worktree" "isolation|Create your own worktree" dispatch "$OK" --task c1 --phase lead --runner agent
+refute "Unity task lead in the agent fallback never creates a worktree" '"isolation"|Create your own worktree' dispatch "$OK" --task c1 --phase lead --runner agent
 expect "Unity task lead runs subtasks one after another" 0 "Subtasks run one after another" dispatch "$OK" --task c1 --phase lead
 refute "Unity review never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 refute "Unity per-task qa never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase qa --sha abc1234 --runner orca
@@ -435,6 +435,92 @@ specs="$RPG_FACTORY_STATE_DIR/pipeline/demo/specs"; n=$(ls "$specs"/*.md 2>/dev/
 expect "cleanup names the plan's dispatch specs as kept state, still CLEAN" 0 "STATE $n spec file\(s\) in .*demo.specs .*delete by hand" cleanup "$G"
 if [ "$n" -gt 0 ] && [ "$(ls "$specs"/*.md | wc -l)" = "$n" ]; then pass=$((pass + 1)); echo "PASS  cleanup never deletes the spec files"
 else fail=$((fail + 1)); echo "FAIL  cleanup spec files ($n before)"; fi
+
+echo "-- cleanup and status: settled Orca workers that are not released"
+# a fake `orca` first on PATH: worker-list prints $FAKE_ORCA_JSON (page 2 when --cursor is given), `error` exits 1,
+# `garbage` prints no JSON; every call is logged so the tests can prove only worker-list ran
+FB="$TMP/fakebin"; mkdir -p "$FB"
+cat > "$FB/fake_orca.py" <<'PY'
+import json, os, sys
+with open(os.environ["FAKE_ORCA_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(" ".join(sys.argv[1:]) + "\n")
+mode = os.environ.get("FAKE_ORCA_MODE", "list")
+if sys.argv[1:3] != ["orchestration", "worker-list"] or mode == "error":
+    print("error: run not found", file=sys.stderr); sys.exit(1)
+if mode == "garbage":
+    print("not json"); sys.exit(0)
+src = os.environ["FAKE_ORCA_JSON"] + (".page2" if "--cursor" in sys.argv else "")
+print(json.dumps(json.load(open(src, encoding="utf-8"))))
+PY
+PYEXE=$(python3 -c 'import sys; print(sys.executable)')
+if [ -n "$RPGF_WINDOWS" ]; then printf '@"%s" "%%~dp0fake_orca.py" %%*\r\n' "$PYEXE" > "$FB/orca.cmd"
+else printf '#!/bin/sh\nexec "%s" "$(dirname "$0")/fake_orca.py" "$@"\n' "$PYEXE" > "$FB/orca"; chmod +x "$FB/orca"; fi
+export FAKE_ORCA_LOG="$TMP/orca.log" FAKE_ORCA_JSON="$TMP/workers.json"
+# w <dispatch> <workerState> <terminalState> <stage detail> [releaseRequestedAt]: one worker-list row
+w() { jq -nc --arg d "$1" --arg ws "$2" --arg t "$3" --arg st "$4" --arg rq "${5:-}" '{dispatchId:$d,runId:"run_T",workerState:$ws,
+  dispatchStatus:(if $ws=="running" then "dispatched" else "completed" end),terminalState:$t,
+  resource:{releaseState:$t,releaseRequestedAt:(if $rq=="" then null else $rq end),
+  retainedReason:(if $t=="retained" then "user_takeover" else null end)},projection:{stage:{detail:$st}}}'; }
+jq -n --argjson a "$(w ctx_rel succeeded released settled 2026-11-05)" --argjson b "$(w ctx_ret succeeded retained settled)" \
+  --argjson c "$(w ctx_run running active running)" --argjson d "$(w ctx_live succeeded active settled)" \
+  '{ok:true,result:{workers:[$a,$b,$c,$d],page:{hasMore:true,nextCursor:"c2"},scope:{run:"run_T"}}}' > "$FAKE_ORCA_JSON"
+jq -n --argjson e "$(w ctx_pend failed release_pending settled 2026-11-06)" --argjson f "$(w ctx_recl failed reclaimable settled)" \
+  '{ok:true,result:{workers:[$e,$f],page:{hasMore:false,nextCursor:null}}}' > "$FAKE_ORCA_JSON.page2"
+GO=$(plan gate-orca "$(sed 's/"id":"gw","repo":"srv"/"id":"gw","repo":"srv","orca_run":"run:run_T"/' "$G")")
+fpath="$(path_entry "$FB"):$PATH"
+# opath <name> <rc> <pattern> <args...> / oref <name> <pattern> <args...>: expect / refute with the fake orca first on PATH
+opath() { local n="$1" rc="$2" pat="$3"; shift 3; PATH="$fpath" expect "$n" "$rc" "$pat" "$@"; }
+oref() { local n="$1" pat="$2"; shift 2; PATH="$fpath" refute "$n" "$pat" "$@"; }
+expect "a plan task's orca_run is valid" 0 "^OK" validate "$GO"
+X=$(plan orca-bad "$(sed 's/"id":"gw","repo":"srv"/"id":"gw","repo":"srv","orca_run":""/' "$G")")
+expect "an empty orca_run is an error" 1 "task gw: .orca_run. must be the task lead's Orca Run id" validate "$X"
+if [ "$(python3 -B "$P" status --json "$G" | jq -c .tasks)" = "$(PATH="$fpath" python3 -B "$P" status --json "$GO" | jq -c .tasks)" ]
+then pass=$((pass + 1)); echo "PASS  orca_run is not part of the verdict fingerprint (same task phases)"
+else fail=$((fail + 1)); echo "FAIL  orca_run changed the task status"; fi
+: > "$FAKE_ORCA_LOG"
+opath "settled unreleased workers make cleanup LEFTOVER" 1 "^Cleanup: LEFTOVER" cleanup "$GO"
+opath "a settled retained worker gets its release command" 1 "^  orca orchestration worker-release --dispatch ctx_ret$" cleanup "$GO"
+opath "a settled worker with a live terminal is unreleased" 1 "worker-release --dispatch ctx_live$" cleanup "$GO"
+opath "the next page is read: a reclaimable failed worker" 1 "UNRELEASED ctx_recl \(failed, terminal reclaimable\)" cleanup "$GO"
+opath "a pending release is named with its request time" 1 "UNRELEASED ctx_pend .*release requested at 2026-11-06" cleanup "$GO"
+opath "the run line counts unreleased, released and running" 1 "WORKERS UNRELEASED  run run_T: 4 settled worker\(s\) not released, 1 released, 1 running" cleanup "$GO"
+oref "a released worker is no finding" "dispatch ctx_rel( |$)" cleanup "$GO"
+oref "a running worker is no finding" "dispatch ctx_run( |$)" cleanup "$GO"
+opath "--orca-run names a Run for a plan without orca_run" 1 "worker-release --dispatch ctx_ret" cleanup "$G" --orca-run run_T
+if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^orchestration worker-list --run run_T --limit 100 --json( --cursor c2)?$" "$FAKE_ORCA_LOG"
+then pass=$((pass + 1)); echo "PASS  only read-only worker-list calls, run:<id> normalised"
+else fail=$((fail + 1)); echo "FAIL  orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
+PATH="$fpath" python3 -B "$P" cleanup --json "$GO" > "$TMP/cleanup-orca.json" 2>&1
+if jq -e '.state == "LEFTOVER" and (.workers[0].unreleased | length) == 4 and any(.left[]; . == "orca:ctx_ret")' "$TMP/cleanup-orca.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json carries the workers"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json workers"; head -c 1500 "$TMP/cleanup-orca.json"; fi
+opath "status lists unreleased workers" 0 "^Workers:   UNRELEASED ctx_ret" status "$GO"
+if PATH="$fpath" python3 -B "$P" status --json "$GO" | jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' >/dev/null
+then pass=$((pass + 1)); echo "PASS  status --json puts the release commands first in next"
+else fail=$((fail + 1)); echo "FAIL  status --json next"; fi
+PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/status-orca.json" 2>&1
+if python3 - "$ROOT" "$TMP/status-orca.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+assert not m.schema_errors(json.load(open(sys.argv[2], encoding="utf-8")), schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status --json with workers still matches the status schema"
+else fail=$((fail + 1)); echo "FAIL  status --json with workers schema"; fi
+jq -n --argjson a "$(w ctx_rel succeeded released settled 2026-11-05)" --argjson c "$(w ctx_run running active running)" \
+  '{ok:true,result:{workers:[$a,$c],page:{hasMore:false}}}' > "$FAKE_ORCA_JSON"
+opath "every settled worker released: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$GO"
+opath "and the run line is OK" 0 "WORKERS OK  run run_T: 0 settled" cleanup "$GO"
+for mode in error garbage; do
+  FAKE_ORCA_MODE=$mode opath "orca $mode: NOT_AVAILABLE, never a failure" 0 "WORKERS NOT_AVAILABLE  run run_T: orca worker-list exited" cleanup "$GO"
+  FAKE_ORCA_MODE=$mode oref "orca $mode: no traceback" "Traceback" status "$GO"
+done
+noorca=""; IFS=: read -ra parts <<<"$PATH"
+for d in "${parts[@]}"; do [ -e "$d/orca" ] || [ -e "$d/orca.exe" ] || [ -e "$d/orca.cmd" ] || noorca="$noorca${noorca:+:}$d"; done
+PATH="$noorca" expect "orca missing: NOT_AVAILABLE, cleanup stays CLEAN" 0 "WORKERS NOT_AVAILABLE  run run_T: orca is not on PATH" cleanup "$GO"
+PATH="$noorca" expect "orca missing: status still exits 0" 0 "^Workers: NOT_AVAILABLE  run run_T" status "$GO"
+refute "no Run named: no worker line" "WORKERS " cleanup "$G"
 
 echo "-- review findings"
 expect "--agent cannot swap the planned implementer" 2 "is planned for claude; set .implementer: codex." dispatch "$OK" --task gw --phase implement --agent codex
