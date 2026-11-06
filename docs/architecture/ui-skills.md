@@ -13,7 +13,7 @@ Toolkit controls. Skills cite the package at its tag; nothing here restates pack
 |---|---|---|
 | Five UI tech skills, registry entries with `domain: ui` and `paths` | `skills/ui-*/`, `registry.json` | implemented |
 | `routing.tech` scoping by `paths` | `scripts/lib/resolve.jq` | implemented |
-| Snapshot Next line loads UI skills through `ui-orchestrator` | `scripts/lib/context.py` | implemented |
+| Snapshot Next line loads UI skills through `ui-orchestrator` | `scripts/lib/snapshot_render.py` | implemented |
 | UI plan engine and the `ui*` verbs and commands | `scripts/ui/ui_plan.py`, `scripts/factory-cmd.py`, `commands/ui*.md` | implemented |
 | Component catalog and selection | `scripts/ui/ui_catalog.py`, `scripts/ui/ui_select.py`, `scripts/ui/data/*.json` | implemented |
 | Figma connector environment check | `scripts/ui/figma_env.py` | implemented |

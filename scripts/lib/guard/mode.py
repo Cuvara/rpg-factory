@@ -65,5 +65,3 @@ def mode_hits(payload, registry):
     if mode == "validate" and not session.runs_checks(payload):
         return [("deny", "Factory mode is `validate`: only read-only commands and run-checks.py - " + how)]
     return []
-
-

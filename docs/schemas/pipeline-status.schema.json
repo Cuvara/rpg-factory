@@ -11,6 +11,7 @@
     "errors",
     "waves",
     "tasks",
+    "integration_children",
     "ready_wave",
     "ready",
     "next"
@@ -72,6 +73,7 @@
           "sha",
           "review",
           "qa",
+          "children",
           "next",
           "notes"
         ],
@@ -133,6 +135,38 @@
           "qa": {
             "$ref": "#/$defs/verdict"
           },
+          "children": {
+            "description": "Leftover Orca child worktrees of the task worktree (branch or directory `<task branch>--*`); each also gets a note: merge it into the task branch, then `orca worktree rm --worktree path:<child>`.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "branch",
+                "merged"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "const": null
+                    }
+                  ]
+                },
+                "merged": {
+                  "type": "boolean",
+                  "description": "The child branch is contained in the task branch."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "next": {
             "description": "The command the lead runs next for this task; null while it waits.",
             "anyOf": [
@@ -149,6 +183,47 @@
             "items": {
               "type": "string"
             }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "integration_children": {
+      "description": "Leftover Orca child worktrees of each repo's integration checkout (integration QA or a helper session: branch or directory `<topic>--*`, or any name whose Orca lineage parent is the integration checkout), listed once per repo. Merge a child's commits into the integration branch, then remove it at once with `orca worktree rm --worktree path:<child>`; `cleanup` names each as \"child of integration:<repo>\".",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "repo",
+          "path",
+          "branch",
+          "merged",
+          "note"
+        ],
+        "properties": {
+          "repo": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "merged": {
+            "type": "boolean",
+            "description": "The child branch is contained in the integration branch."
+          },
+          "note": {
+            "type": "string",
+            "description": "Cleanup guidance: merge it (unless merged), then the `orca worktree rm` command."
           }
         },
         "additionalProperties": false

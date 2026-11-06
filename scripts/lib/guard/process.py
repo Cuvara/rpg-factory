@@ -159,5 +159,3 @@ def process_kill_hits(payload, registry):
     except Exception:
         hit = bool(PROCESS_KILL_FALLBACK.search(command))
     return [("deny", PROCESS_TERMINATION_RULE)] if hit else []
-
-

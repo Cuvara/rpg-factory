@@ -54,12 +54,12 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    links them). Commit, push, PR, merge are **H** (only on request); tags and releases only with the user's
    explicit release authorization in this task (`references/git-safety.md` rule 5).
 6. **Plan (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`, then a
-   `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task the run lead runs
-   `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one task lead in
-   the task worktree, always Claude). Unity (no-worktree) repos: task lead and every session in the main checkout, subtasks in
-   sequence. Resume or follow: `factory-pipeline.py status plan.json`. Steps 6-12: `references/parallel-work.md` section 10.
-7. **Implement (M, task lead).** `subplan validate`, then one fresh sub-session per subtask (`--phase implement`); the
-   task lead commits each with explicit paths. Requested scope only; module rules; generated paths only via their generator.
+   `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task:
+   `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one Claude task
+   lead per task worktree; Unity: main checkout, in sequence). Resume: `status plan.json`. How: `references/parallel-work.md` section 10.
+7. **Implement (M, task lead).** `subplan validate`, then one short, fresh sub-session per subtask
+   (`--phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per its `placement`:
+   parallel-work.md section 4); the task lead commits or merges each. Requested scope only; module rules; generated paths via their generator.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
    both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
 9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
