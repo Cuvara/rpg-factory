@@ -490,6 +490,14 @@ expect "status keeps the newer subtask FAIL after a late older PASS" 0 "note: su
 v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s4
 v --task gw --phase review --sha "$SA" --by claude --state FAIL --subtask s4
 refute "a late subtask FAIL on an older candidate does not reopen the newer PASS" "subtask s4" gate "$G"
+# a fix left on an unmerged child branch: its PASS on a descendant of the integration HEAD resolves nothing
+SC=$(git -C "$S" commit-tree "$SG^{tree}" -p "$SG" -m "fix(gateway): child"); git -C "$S" branch -q gw-child-fix "$SC"
+v --task gw --phase review --sha "$SG" --by claude --state FAIL --subtask s5
+v --task gw --phase review --sha "$SC" --by claude --state PASS --subtask s5
+expect "a subtask PASS on an unmerged child commit keeps the FAIL on the integration HEAD: NOT_READY" 1 "BLOCKER gw: subtask s5 review FAIL at ${SG:0:10} by claude" gate "$G"
+expect "status keeps the subtask FAIL while its fix is on an unmerged child" 0 "note: subtask s5 review FAIL at ${SG:0:10}" status "$G"
+git -C "$S" branch -q -D gw-child-fix
+v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s5
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "READY prints the PR command against the base branch" 0 "gh pr create --base develop --head feat/core/demo" gate "$G"
 cp "$G" "$TMP/gate.bak"; sed -i 's/"objective":"o","paths":\["backend/"objective":"changed","paths":["backend/' "$G"

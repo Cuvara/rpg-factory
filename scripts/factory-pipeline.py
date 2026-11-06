@@ -1081,12 +1081,14 @@ def read_verdict(plan, reg, task_id, phase, blockers):
     return rec
 
 
-def subtask_failures(plan, reg, task_id):
-    """The subtask review/QA verdicts of a task that are not PASS on the newest candidate: each blocks the gate and
-    status. Every record of this version of the plan counts (the current file and the per-candidate archives; STALE
-    records are ignored). Per subtask and phase, a candidate's own verdict is its current record (else its latest
-    archive, a tie keeps the non-PASS) and only candidates that no other recorded candidate contains decide: a PASS
-    on a newer commit resolves an older FAIL, a late PASS on an older candidate never resolves a newer FAIL."""
+def subtask_failures(plan, reg, task_id, target):
+    """The subtask review/QA verdicts of a task that are not PASS on the target (the commit being graded: the
+    integration HEAD in the gate, the task candidate in status): each blocks the gate and status. Every record of this
+    version of the plan counts (the current file and the per-candidate archives; STALE records are ignored), but only
+    when its commit is the target or an ancestor of it: a PASS on a fix left on an unmerged child branch never resolves
+    a FAIL. Per subtask and phase, a candidate's own verdict is its current record (else its latest archive, a tie keeps
+    the non-PASS) and only applicable candidates that no other applicable one contains decide: a PASS on a newer commit
+    resolves an older FAIL, a late PASS on an older candidate never resolves a newer FAIL."""
     vdir, pre = verdict_dir(plan), f"{safe_name(task_id)}__sub-"
     names = sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []
     fp, groups = None, {}
@@ -1112,6 +1114,8 @@ def subtask_failures(plan, reg, task_id):
             by_sha.setdefault(rec["sha"], []).append((current, rec))
         eff = {}
         for sha, rs in by_sha.items():
+            if target and sha != target and not is_ancestor(path, sha, target):
+                continue
             cur = [r for c, r in rs if c]
             eff[sha] = cur[0] if cur else max((r for _, r in rs),
                                               key=lambda r: (str(r.get("timestamp", "")), r.get("state") != "PASS"))
@@ -1271,7 +1275,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         info = repo_info(plan, reg, key)
         impl = t.get("implementer") or pipe["default_implementer"]
         want = t.get("reviewer") or pipe["review_pairing"].get(impl)
-        blockers += [f"{t['id']}: {f}" for f in subtask_failures(plan, reg, t["id"])]
+        blockers += [f"{t['id']}: {f}" for f in subtask_failures(plan, reg, t["id"], heads[key])]
         rv = read_verdict(plan, reg, t["id"], "review", blockers)
         if not rv:
             continue
@@ -1817,7 +1821,7 @@ def status(plan, reg, orca_run=None):
     # a current subtask review/QA FAIL blocks the task like a task review FAIL: the task lead fixes it (no gate)
     blocked = False
     for t in tasks:
-        fails = subtask_failures(plan, reg, t["id"]) if rows[t["id"]]["phase"] in ("reviewed", "integrated", "qa") else []
+        fails = subtask_failures(plan, reg, t["id"], rows[t["id"]]["sha"]) if rows[t["id"]]["phase"] in ("reviewed", "integrated", "qa") else []
         if fails:
             blocked = True
             rows[t["id"]]["notes"] += fails
