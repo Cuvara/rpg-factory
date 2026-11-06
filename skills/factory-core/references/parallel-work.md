@@ -40,6 +40,9 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
 6. reports to the run lead (section 3) and records the review and QA verdicts.
 It never pushes, merges, tags or removes its worktree.
 
+<!-- policy:task-lead-claude -->
+The task lead is always a Claude session (registry pipeline.lead_agent), whatever the task's implementer; implementation, review and QA sessions keep the cross-model pairing.
+
 **Implementation sub-session** - edits only its subtask's paths in the task worktree, runs the targeted checks
 from its spec, and reports to the task lead. It does not commit, stage or stash: the worktree has one shared
 index and the task lead commits.

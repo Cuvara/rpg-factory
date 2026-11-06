@@ -56,7 +56,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 6. **Plan (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`, then a
    `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task the run lead runs
    `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one task lead in
-   the task worktree). Unity (no-worktree) repos: task lead and every session in the main checkout, subtasks in
+   the task worktree, always Claude). Unity (no-worktree) repos: task lead and every session in the main checkout, subtasks in
    sequence. Resume or follow: `factory-pipeline.py status plan.json`. Steps 6-12: `references/parallel-work.md` section 10.
 7. **Implement (M, task lead).** `subplan validate`, then one fresh sub-session per subtask (`--phase implement`); the
    task lead commits each with explicit paths. Requested scope only; module rules; generated paths only via their generator.

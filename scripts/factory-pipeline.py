@@ -28,7 +28,8 @@ docs/schemas/pipeline-plan.schema.json.
         and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
         planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
-        the run lead starts ONE task-lead session per task. In a worktree repo it gets the task worktree: created here
+        the run lead starts ONE task-lead session per task, always a registry pipeline.lead_agent (Claude) session
+        whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
         exists, it carries the earlier waves; status still compares against the base), or resumed when that branch is
         already checked out; in a no-worktree repo the main checkout, never a worktree. The prompt is the task spec plus the task-lead rules: its
@@ -829,10 +830,15 @@ def cmd_dispatch(a, reg):
                      else orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch))
             where = "this task worktree"
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
+        # the task lead is always the registry's lead agent (Claude), whatever the task's implementer
+        lead = pipe.get("lead_agent") or "claude"
+        if a.agent and a.agent != lead:
+            print(f"factory-pipeline: the task lead is always {lead} (registry pipeline.lead_agent); --agent {a.agent} "
+                  f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
-            emit_lead_handoff(reg, a.agent or impl, orca_prompt(a, prompt, plan), place, branch)
+            emit_lead_handoff(reg, lead, orca_prompt(a, prompt, plan), place, branch)
         else:
-            emit(a, reg, a.agent or impl, prompt, place, f"lead {plan['id']}/{task['id']}")
+            emit(a, reg, lead, prompt, place, f"lead {plan['id']}/{task['id']}")
         return 0
     if a.phase != "implement" and not a.sha:
         die(f"{a.phase} needs --sha <candidate commit>")

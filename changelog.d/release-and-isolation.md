@@ -5,6 +5,7 @@
 ### Changed
 
 - **Pipeline.** The task-lead spec printed by `dispatch --phase lead` says to release every implement, review and QA session the moment it reports, its candidate is superseded or it stops, not at task end; to check with `status --orca-run <run id>`; and to name its Orca Run id in the report. `parallel-work.md` section 8 names the check.
+- **Pipeline.** The task lead is always a Claude session, whatever the task's implementer: registry `pipeline.lead_agent` (`"claude"`, the default when the key is missing) picks the agent of `dispatch --phase lead`, and `--agent codex` on `--phase lead` prints a warning and keeps Claude. Implementation, review and QA sessions keep the cross-model pairing. `parallel-work.md` states the rule under the new `policy:task-lead-claude` marker, linted by `tests/parallel-policy.test.sh`, and factory-core `SKILL.md` step 6 says it.
 
 ### Fixed
 
