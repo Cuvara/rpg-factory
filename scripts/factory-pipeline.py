@@ -1081,6 +1081,26 @@ def read_verdict(plan, reg, task_id, phase, blockers):
     return rec
 
 
+def subtask_failures(plan, reg, task_id):
+    """The current (this version of the plan) subtask review/QA verdicts of a task that are not PASS: each blocks the
+    gate and status until a later `verdict --subtask <id>` PASS replaces it. STALE subtask records are ignored."""
+    vdir, pre, out = verdict_dir(plan), f"{safe_name(task_id)}__sub-", []
+    names = sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []
+    fp = None
+    for n in names:
+        phase = next((p for p in ("review", "qa") if n.startswith(pre) and n.endswith(f"__{p}.json")), None)
+        if not phase:
+            continue
+        rec = fstate.read_json(os.path.join(vdir, n))
+        if not isinstance(rec, dict) or rec.get("task") != task_id or not rec.get("subtask") or rec.get("phase") != phase:
+            continue
+        fp = fp or scope_fingerprint(plan, reg, task_id)
+        if rec.get("fingerprint") == fp and rec.get("state") != "PASS":
+            out.append(f"subtask {rec['subtask']} {phase} {rec.get('state')} at {str(rec.get('sha', ''))[:10]} by "
+                       f"{rec.get('by')} (fix it, then record `verdict --subtask {rec['subtask']}` PASS)")
+    return out
+
+
 def cmd_verdict(a, reg):
     pipe = settings(reg)
     plan = read_plan(a.plan)
@@ -1228,6 +1248,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         info = repo_info(plan, reg, key)
         impl = t.get("implementer") or pipe["default_implementer"]
         want = t.get("reviewer") or pipe["review_pairing"].get(impl)
+        blockers += [f"{t['id']}: {f}" for f in subtask_failures(plan, reg, t["id"])]
         rv = read_verdict(plan, reg, t["id"], "review", blockers)
         if not rv:
             continue
@@ -1400,17 +1421,27 @@ def cleanup(plan, reg, orca_run=None):
         topic = plan["topic"]
         integrated = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0]
         _, trees = worktree_for(info["path"], topic)
-        # an Orca child of a task worktree (or of the integration checkout) is named after its parent branch
+        # an Orca child of a task worktree (or of the integration checkout): named after its parent branch, or
+        # Orca's lineage names that worktree as its parent; only children of this run's worktrees
         parents = [(t["id"], task_branch(plan, info, t)) for t in plan["tasks"] if t.get("repo") == key]
         parents.append((f"integration:{key}", topic))
+        parents = [(tid, pb, worktree_for(info["path"], pb)[0]) for tid, pb in parents]
+        lineage = Lineage(pb for _, pb, _ in parents)
         for wt in trees:
-            owner = next(((tid, pb) for tid, pb in parents if info["worktrees"] and is_child(wt, pb)), None)
+            owner = next(((tid, pb, pp) for tid, pb, pp in parents
+                          if info["worktrees"] and norm_wt(wt["path"]) != norm_wt(pp) and is_child(wt, pb, pp, lineage)), None)
             if owner:
-                c = children_of(info["path"], [wt], owner[1])[0]
+                c = children_of(info["path"], [wt], owner[1], owner[2], lineage)[0]
                 left.append(wt["path"])
-                kept.append(f"{key}: child of {owner[0]}: {child_note_text(c, owner[1])}")
-                if c["merged"]:
-                    commands.append(orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{wt['path']}"]))
+                dirty, rc = git(wt["path"], "status", "--porcelain")
+                if rc != 0 or dirty is None:
+                    kept.append(f"{key}: child of {owner[0]}: `git status` failed in {wt['path']} - not removed, report it")
+                elif dirty:
+                    kept.append(f"{key}: child of {owner[0]}: {wt['path']} has uncommitted changes - not removed, report it")
+                else:
+                    kept.append(f"{key}: child of {owner[0]}: {child_note_text(c, owner[1])}")
+                    if c["merged"]:
+                        commands.append(orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{wt['path']}"]))
                 continue
             if not str(wt.get("branch", "")).startswith(topic + "-"):
                 continue
@@ -1513,20 +1544,70 @@ def review_base(info, topic, start, sha):
                   "may include earlier waves' changes; judge scope by the task's own commits")
 
 
-def is_child(wt, parent_branch):
+def norm_wt(p):
+    p = str(p or "").replace("\\", "/").rstrip("/")
+    return p.casefold() if os.name == "nt" or p[1:3] == ":/" else p
+
+
+class Lineage:
+    """Orca's parent of each worktree (child path -> parent path), from the read-only `orca worktree list --json`,
+    read once and only when a worktree is not already a child by name. Orca unavailable or failing: empty (the
+    naming rule alone), never an error."""
+
+    def __init__(self, own_branches=()):
+        self._map, self._own = None, set(own_branches)
+
+    def parent(self, wt):
+        if wt.get("branch") in self._own:  # a task worktree or the integration checkout is no child: no orca call
+            return None
+        if self._map is None:
+            self._map = self._read()
+        return self._map.get(norm_wt(wt.get("path")))
+
+    @staticmethod
+    def _read():
+        exe = shutil.which("orca")
+        if not exe:
+            return {}
+        try:
+            r = subprocess.run([exe, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True,
+                               timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+            rows = json.loads(r.stdout or "")["result"]["worktrees"] if r.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+            return {}
+        rows = [w for w in rows if isinstance(w, dict)] if isinstance(rows, list) else []
+        path_of = {w.get("id"): w.get("path") for w in rows if w.get("id") and w.get("path")}
+        out = {}
+        for w in rows:
+            lin = w.get("lineage") if isinstance(w.get("lineage"), dict) else {}
+            pid = w.get("parentWorktreeId") or lin.get("parentWorktreeId")
+            if pid in path_of and w.get("path"):
+                out[norm_wt(w["path"])] = norm_wt(path_of[pid])
+        for w in rows:  # a parent's childWorktreeIds also name its children
+            kids = w.get("childWorktreeIds") if isinstance(w.get("childWorktreeIds"), list) else []
+            for cid in kids:
+                if cid in path_of and w.get("path"):
+                    out.setdefault(norm_wt(path_of[cid]), norm_wt(w["path"]))
+        return out
+
+
+def is_child(wt, parent_branch, parent_path=None, lineage=None):
     """An Orca child of the worktree on `parent_branch`: its branch (Orca may add a prefix) or directory name starts
-    with `<parent branch>--` (dispatch names children `<task branch>--<subtask or phase>`)."""
+    with `<parent branch>--` (dispatch names children `<task branch>--<subtask or phase>`), or Orca's lineage names
+    the worktree at `parent_path` as its parent (`orca worktree create --parent-worktree` with any name)."""
     mark = parent_branch + "--"
     br = str(wt.get("branch") or "")
     base = os.path.basename(str(wt.get("path") or "").replace("\\", "/").rstrip("/"))
-    return br.startswith(mark) or ("/" + mark) in br or base.startswith(mark.replace("/", "-"))
+    if br.startswith(mark) or ("/" + mark) in br or base.startswith(mark.replace("/", "-")):
+        return True
+    return bool(parent_path and lineage and lineage.parent(wt) == norm_wt(parent_path))
 
 
-def children_of(repo, trees, parent_branch):
+def children_of(repo, trees, parent_branch, parent_path=None, lineage=None):
     """[{path, branch, merged}] of the child worktrees of `parent_branch` (merged: its HEAD is in the parent branch)."""
     out = []
     for wt in trees:
-        if is_child(wt, parent_branch):
+        if norm_wt(wt.get("path")) != norm_wt(parent_path) and is_child(wt, parent_branch, parent_path, lineage):
             br = wt.get("branch")
             out.append({"path": wt["path"], "branch": br,
                         "merged": bool(br) and is_ancestor(repo, f"refs/heads/{br}", f"refs/heads/{parent_branch}")})
@@ -1544,7 +1625,7 @@ def changed_since(path, sha, head, paths):
     return rc != 0 or bool(out)
 
 
-def task_status(plan, reg, task, n_in_repo):
+def task_status(plan, reg, task, n_in_repo, lineage=None):
     """Phase a task reached, derived from git and the recorded verdicts (no context of the session that ran it)."""
     info = repo_info(plan, reg, task["repo"])
     path, topic, paths = info["path"], plan["topic"], task["paths"]
@@ -1559,7 +1640,7 @@ def task_status(plan, reg, task, n_in_repo):
     topic_head = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0] or None
     row["worktree"], trees = worktree_for(path, branch)
     if info["worktrees"]:
-        row["children"] = children_of(path, trees, branch)
+        row["children"] = children_of(path, trees, branch, row["worktree"], lineage)
         row["notes"] += [child_note_text(c, branch) for c in row["children"]]
     rv, rv_stale = verdict_of(plan, reg, task["id"], "review")
     per_task_qa = not info["worktrees"] and n_in_repo > 1
@@ -1621,8 +1702,10 @@ def status(plan, reg, orca_run=None):
     for t in tasks:
         count[t["repo"]] = count.get(t["repo"], 0) + 1
     rows, infos = {}, {}
+    own = [task_branch(plan, repo_info(plan, reg, t["repo"]), t) for t in tasks] + [plan["topic"]]
+    lineage = Lineage(own)  # one read-only `orca worktree list` for every task, only when needed
     for t in tasks:
-        rows[t["id"]], infos[t["id"]] = task_status(plan, reg, t, count[t["repo"]])
+        rows[t["id"]], infos[t["id"]] = task_status(plan, reg, t, count[t["repo"]], lineage)
     wave_of = {tid: n for n, w in enumerate(v["waves"], 1) for tid in w}
     done = ("integrated", "qa")
     ready = []
@@ -1698,8 +1781,16 @@ def status(plan, reg, orca_run=None):
             rows[tid]["notes"].append(why + f" for {key}: the gate needs it at the integration HEAD")
             rows[tid]["next"] = (f"{me} dispatch {pf} --task integration:{key} --phase qa --sha {topic_head} "
                                  "--runner orca")
-    open_waves = [n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
-    nxt = [f"{me} gate {pf}"] if tasks and all(r["phase"] == "qa" for r in rows.values()) else []
+    # a current subtask review/QA FAIL blocks the task like a task review FAIL: the task lead fixes it (no gate)
+    blocked = False
+    for t in tasks:
+        fails = subtask_failures(plan, reg, t["id"]) if rows[t["id"]]["phase"] in ("reviewed", "integrated", "qa") else []
+        if fails:
+            blocked = True
+            rows[t["id"]]["notes"] += fails
+            rows[t["id"]]["next"] = f"{me} dispatch {pf} --task {t['id']} --phase lead --runner orca"
+    open_waves =[n for n, w in enumerate(v["waves"], 1) if any(rows[tid]["phase"] not in done for tid in w)]
+    nxt = [f"{me} gate {pf}"] if tasks and not blocked and all(r["phase"] == "qa" for r in rows.values()) else []
     # settled Orca workers of the task leads' Runs that still own a terminal: release them now, not at task end
     workers = orca_sessions(orca_runs(plan, orca_run))
     nxt = [u["command"] for s in workers for u in s["unreleased"]] + nxt

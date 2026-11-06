@@ -472,6 +472,14 @@ v --task c1 --phase qa --sha "$C1" --by codex --state PASS
 v --task c2 --phase qa --sha "$C1" --by codex --state PASS
 expect "per-task QA on a commit without the reviewed one blocks" 1 "BLOCKER c2: QA ran on .* does not contain the reviewed commit" gate "$G"
 v --task c2 --phase qa --sha "$C2" --by codex --state PASS
+# every task and integration verdict PASS, but the current subtask s2 review FAIL still blocks gate and status
+expect "a current subtask review FAIL blocks the gate: NOT_READY" 1 "BLOCKER gw: subtask s2 review FAIL at .* by claude" gate "$G"
+expect "status names the subtask FAIL and starts the task lead" 0 "note: subtask s2 review FAIL" status "$G"
+refute "status offers no gate while a subtask FAIL is open" "^Next: .* gate " status "$G"
+python3 -B "$P" verdict "$G" --task gw --phase qa --sha "$SG" --by codex --state FAIL --subtask s3 >/dev/null
+expect "a subtask QA FAIL blocks the gate" 1 "BLOCKER gw: subtask s3 qa FAIL" gate "$G"
+v --task gw --phase review --sha "$SG" --by codex --state PASS --subtask s2
+v --task gw --phase qa --sha "$SG" --by codex --state PASS --subtask s3
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "READY prints the PR command against the base branch" 0 "gh pr create --base develop --head feat/core/demo" gate "$G"
 cp "$G" "$TMP/gate.bak"; sed -i 's/"objective":"o","paths":\["backend/"objective":"changed","paths":["backend/' "$G"
@@ -537,6 +545,14 @@ then pass=$((pass + 1)); echo "PASS  status --json with children matches the sta
 else fail=$((fail + 1)); echo "FAIL  status --json children schema"; fi
 gi "$TMP/srv-gw" merge -q --no-ff feat/core/demo-gw--s2 -m "merge s2"
 expect "a merged child gets its orca worktree rm command" 1 "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw--s2'?$" cleanup "$G"
+echo wip > "$TMP/feat-core-demo-gw--s2/wip.txt"
+expect "a merged child with uncommitted work is kept and named" 1 "KEPT  srv: child of gw: .*feat-core-demo-gw--s2 has uncommitted changes - not removed" cleanup "$G"
+refute "a dirty child gets no remove command" "orca worktree rm .*--s2" cleanup "$G"
+rm "$TMP/feat-core-demo-gw--s2/wip.txt"
+cp "$TMP/feat-core-demo-gw--s2/.git" "$TMP/s2-gitfile"; echo "gitdir: $TMP/nowhere" > "$TMP/feat-core-demo-gw--s2/.git"
+expect "a child whose git status fails is kept and named" 1 "KEPT  srv: child of gw: .git status. failed in .*feat-core-demo-gw--s2 - not removed" cleanup "$G"
+refute "a child whose git status fails gets no remove command" "orca worktree rm .*--s2" cleanup "$G"
+cp "$TMP/s2-gitfile" "$TMP/feat-core-demo-gw--s2/.git"
 git -C "$S" worktree remove "$TMP/feat-core-demo-gw--s2"; git -C "$S" worktree remove "$TMP/srv-gw"
 git -C "$S" branch -q -D feat/core/demo-gw--s2 feat/core/demo-gw
 expect "child and task worktree removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
@@ -546,7 +562,8 @@ if [ "$n" -gt 0 ] && [ "$(ls "$specs"/*.md | wc -l)" = "$n" ]; then pass=$((pass
 else fail=$((fail + 1)); echo "FAIL  cleanup spec files ($n before)"; fi
 
 echo "-- cleanup and status: settled Orca workers that are not released"
-# a fake `orca` first on PATH: worker-list prints $FAKE_ORCA_JSON (page 2 when --cursor is given), `error` exits 1,
+# a fake `orca` first on PATH: worker-list prints $FAKE_ORCA_JSON (page 2 when --cursor is given), worktree list
+# prints $FAKE_ORCA_WT (when set), `error` exits 1,
 # `garbage` prints no JSON; every call is logged so the tests can prove only worker-list ran
 FB="$TMP/fakebin"; mkdir -p "$FB"
 cat > "$FB/fake_orca.py" <<'PY'
@@ -554,6 +571,8 @@ import json, os, sys
 with open(os.environ["FAKE_ORCA_LOG"], "a", encoding="utf-8") as fh:
     fh.write(" ".join(sys.argv[1:]) + "\n")
 mode = os.environ.get("FAKE_ORCA_MODE", "list")
+if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
+    print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] != ["orchestration", "worker-list"] or mode == "error":
     print("error: run not found", file=sys.stderr); sys.exit(1)
 if mode == "garbage":
@@ -642,6 +661,33 @@ PATH="$noorca" expect "orca missing: NOT_AVAILABLE, cleanup stays CLEAN" 0 "WORK
 PATH="$noorca" expect "orca missing: status still exits 0" 0 "^Workers: NOT_AVAILABLE  run run_T" status "$GO"
 status_json_na "orca missing: status --json prints NOT_AVAILABLE on stderr, valid JSON, exit 0" PATH="$noorca"
 refute "no Run named: no worker line" "WORKERS " cleanup "$G"
+# a child with any name (orca worktree create --parent-worktree path:<task worktree> --name isolated-qa): Orca's
+# lineage (parentWorktreeId, or the parent's childWorktreeIds) names it; orca unavailable means the naming rule only
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/isolated-qa" -b isolated-qa feat/core/demo-gw 2>/dev/null
+wtp() { git -C "$1" rev-parse --show-toplevel; }
+export FAKE_ORCA_WT="$TMP/orca-wt.json"
+jq -n --arg p "$(wtp "$TMP/srv-gw")" --arg c "$(wtp "$TMP/isolated-qa")" --arg o "$TMP/other-child"   '{ok:true,result:{worktrees:[{id:"r::gw",path:$p,parentWorktreeId:null,childWorktreeIds:[]},
+   {id:"r::qa",path:$c,parentWorktreeId:"r::gw",childWorktreeIds:[]},{id:"r::o",path:$o,parentWorktreeId:"r::gw"}]}}' > "$FAKE_ORCA_WT"
+: > "$FAKE_ORCA_LOG"
+opath "Orca lineage: a child named isolated-qa is a child of its task" 1 "KEPT  srv: child of gw: leftover child worktree .*isolated-qa \(isolated-qa\): merged, then remove it" cleanup "$G"
+opath "Orca lineage: the merged child gets its orca worktree rm command" 1 "^  orca worktree rm --worktree '?path:[^ ]*isolated-qa'?$" cleanup "$G"
+if PATH="$fpath" python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.tasks[] | select(.id == "gw") | (.children | length) == 1 and .children[0].branch == "isolated-qa"' >/dev/null
+then pass=$((pass + 1)); echo "PASS  Orca lineage: status lists the isolated-qa child"
+else fail=$((fail + 1)); echo "FAIL  Orca lineage: status children"; fi
+if grep -q "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && ! grep -qvE "^(worktree list --limit 10000 --json|orchestration worker-list .*)$" "$FAKE_ORCA_LOG"
+then pass=$((pass + 1)); echo "PASS  Orca lineage is read with the read-only worktree list only"
+else fail=$((fail + 1)); echo "FAIL  Orca lineage calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
+jq '.result.worktrees |= map(if .id == "r::qa" then .parentWorktreeId = null elif .id == "r::gw" then .childWorktreeIds = ["r::qa"] else . end)' "$FAKE_ORCA_WT" > "$FAKE_ORCA_WT.2"; mv "$FAKE_ORCA_WT.2" "$FAKE_ORCA_WT"
+opath "Orca lineage: the parent's childWorktreeIds also name the child" 1 "KEPT  srv: child of gw: leftover child worktree .*isolated-qa" cleanup "$G"
+FAKE_ORCA_MODE=error oref "orca failing: the naming rule only, the isolated-qa child is not named" "child of gw" cleanup "$G"
+FAKE_ORCA_MODE=error oref "orca failing: no traceback" "Traceback" cleanup "$G"
+PATH="$noorca" refute "orca missing: the naming rule only, never an error" "child of gw|Traceback" cleanup "$G"
+PATH="$noorca" expect "orca missing: status still exits 0 with a child by lineage only" 0 "^Pipeline demo" status "$G"
+unset FAKE_ORCA_WT
+git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
+git -C "$S" branch -q -D isolated-qa feat/core/demo-gw
+expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 
 echo "-- review findings"
 expect "--agent cannot swap the planned implementer" 2 "is planned for claude; set .implementer: codex." dispatch "$OK" --task gw --phase implement --agent codex
