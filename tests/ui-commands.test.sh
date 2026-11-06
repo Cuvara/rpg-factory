@@ -24,7 +24,8 @@ for r in "$S" "$C"; do git -C "$r" init -q -b develop; git -C "$r" add -A; git -
 export RPG_FACTORY_WORKSPACE="$WS"
 URL='https://www.figma.com/design/AbC123xyz/Shop-Demo?node-id=1-2&t=k9'
 
-plan() { (cd "$WS" && python3 -B "$CMD" "$@" --json) > "$TMP/p.json" 2>"$TMP/err"; }
+# Each plan starts with no output: a failed command never leaves the previous case's JSON for q to read.
+plan() { rm -f "$TMP/p.json" "$TMP/err"; (cd "$WS" && python3 -B "$CMD" "$@" --json) > "$TMP/p.json" 2>"$TMP/err"; }
 q() { jq -r "$1" "$TMP/p.json"; }
 skills() { q '[.skills[].name] | join(",")'; }
 expect() {  # expect <label> <rc> <status> <intent> <skills csv> -- <factory-cmd args...>
@@ -68,8 +69,13 @@ expect "ui-figma analyze ->ui-figma-import, ui-component-selection" 0 PLAN figma
 expect "ui-figma validate -> ui-figma-import, ui-validation" 0 PLAN figma-validate "ui-figma-import,ui-validation" -- ui-figma "Validate the import of $URL"
 expect "ui-figma FIG023 -> troubleshoot with ui-figma-import" 0 PLAN troubleshoot "ui-figma-import" -- ui-figma "Fix FIG023 in the imported shop screen"
 expect "ui-components settings -> components only" 0 PLAN components "ui-component-selection" -- ui-components "Find components needed for a settings screen"
-[ "$(q '.components.selections[] | select(.need == "settings-data") | .choice[0]')" = pkg:SettingsModel ] && [ "$(q '.lead.route[-1]')" = Assets/Scripts/UI/Settings/ ] \
-  && ok "ui-components: settings selection reuses SettingsModel" || no "components settings: $(q .components.selections[1])"
+# Every asserted value is read once with its jq exit code and printed on failure (a QA run once failed here
+# with a correct selection and nothing else shown).
+choice=$(q '[.components.selections[] | select(.need == "settings-data") | .choice[0]] | join(",")'); qc=$?
+route=$(q '.lead.route[-1]'); qr=$?
+[ $qc -eq 0 ] && [ $qr -eq 0 ] && [ "$choice" = pkg:SettingsModel ] && [ "$route" = Assets/Scripts/UI/Settings/ ] \
+  && ok "ui-components: settings selection reuses SettingsModel" \
+  || no "components settings: settings-data choice=[$choice] (jq $qc) route[-1]=[$route] (jq $qr) lead=$(jq -c .lead "$TMP/p.json" 2>&1) needs=$(q '[.components.selections[].need] | join(",")' 2>&1) p.json=$(wc -c <"$TMP/p.json" 2>&1)B err=$(head -c 200 "$TMP/err" 2>&1)"
 q '.next[0]' | grep -q "(mode plan)" && ok "component selection runs factory-core in plan mode" || no "mode: $(q .next[0])"
 expect "ui-screen imported UXML -> integrate" 0 PLAN integrate "ui-toolkit-screen,ui-validation" -- ui-screen "Implement this imported UXML in the current screen architecture"
 expect "ui-screen plain -> screen" 0 PLAN screen "ui-component-selection,ui-toolkit-screen,ui-validation" -- ui-screen "Add a quest panel"
@@ -128,8 +134,8 @@ plan ui --uitoolkit-ref v0.8.0 "Create a settings screen"
   && [ "$(q '.components.selections[] | select(.need == "theme") | .status')" = reuse ] && ok "--uitoolkit-ref v0.8.0: arg ref, pin-bump warning, theme reusable" || no "--uitoolkit-ref: $(q .context.uitoolkit)"
 plan ui "Create a settings screen"
 [ "$(q '.components.selections[] | select(.need == "theme") | .status')" = missing ] && ok "at the v0.7.2 pin the theme service is missing (no invention)" || no "theme@pin: $(q '.components.selections[] | select(.need == "theme")')"
-(cd "$WS" && python3 -B "$CMD" ui "Create a settings screen --json") > "$TMP/p.json"; [ "$(q .schema)" = rpg-factory.ui-plan/1 ] && ok "one quoted \$ARGUMENTS string with --json is split" || no "quoted args"
-(cd "$WS" && python3 -B "$CMD" ui "\"Create a settings screen\"" --json) > "$TMP/p.json"; [ "$(q .request)" = "Create a settings screen" ] && ok "surrounding quotes are stripped once" || no "quotes: $(q .request)"
+rm -f "$TMP/p.json"; (cd "$WS" && python3 -B "$CMD" ui "Create a settings screen --json") > "$TMP/p.json"; [ "$(q .schema)" = rpg-factory.ui-plan/1 ] && ok "one quoted \$ARGUMENTS string with --json is split" || no "quoted args"
+rm -f "$TMP/p.json"; (cd "$WS" && python3 -B "$CMD" ui "\"Create a settings screen\"" --json) > "$TMP/p.json"; [ "$(q .request)" = "Create a settings screen" ] && ok "surrounding quotes are stripped once" || no "quotes: $(q .request)"
 (cd "$WS" && python3 -B "$CMD" ui-figma "$URL, import it") > /dev/null 2>&1; plan ui-figma "$URL, import it"
 [ "$(q .context.figma.node_id)" = 1:2 ] && ok "commas in the request are kept (no comma splitting for UI verbs)" || no "comma: $(q .context.figma)"
 
