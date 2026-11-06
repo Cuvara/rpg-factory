@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tests/run-all.sh -j N: the scheduler (sourced from run-all.sh, no checks run) on stand-in suites. With -j 3 the
-# output is line for line the -j 1 output (times aside), the counts are equal, at most 3 suites run at once, a SLOW
-# suite starts first, live-lane suites (runl, block) never overlap each other, a block's lines are counted, a run1
-# suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
+# output is line for line the -j 1 output (times aside), the counts are equal, two slow suites overlap (event order,
+# no wall clock), at most 3 suites run at once, a SLOW suite starts first, live-lane suites (runl, block) never
+# overlap each other, a block's lines are counted, a run1 suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -15,9 +15,9 @@ no()  { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head
 cat > "$TMP/plan.sh" <<'PLAN'
 X="$1"; shift
 . "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
-suite() { # name seconds rc: marks itself running, records the running count, sleeps, unmarks
+suite() { # name seconds rc: marks itself running, records the running count and start/end events, sleeps, unmarks
   local n; echo "$1" >> "$X/order"; touch "$X/running.$1"; n=$(ls "$X" | grep -c '^running\.'); echo "$n" >> "$X/seen"
-  sleep "$2"; echo "out of $1"; rm -f "$X/running.$1"; return "$3"
+  echo "start $1" >> "$X/events"; sleep "$2"; echo "out of $1"; echo "end $1" >> "$X/events"; rm -f "$X/running.$1"; return "$3"
 }
 alone() { local n; n=$(ls "$X" | grep -c '^running\.'); echo "alone saw $n" >> "$X/alone"; echo "ran alone"; }
 post() { if [ "$1" -eq 0 ] && grep -q 'out of p' <<<"$2"; then _ok "graded by runp handler"; else _bad "runp handler" "$2"; fi; }
@@ -49,7 +49,7 @@ plan() { # jobs -> output with the [Ns] times removed
   local X="$TMP/x$1"; rm -rf "$X"; mkdir -p "$X"
   ROOT_UNDER_TEST="$ROOT" bash "$TMP/plan.sh" "$X" -j "$1" 2>&1 | sed -E 's/ \[[0-9]+s\]$//'
 }
-t0=$(date +%s); serial=$(plan 1); t1=$(date +%s); par=$(plan 3); t2=$(date +%s)
+serial=$(plan 1); par=$(plan 3)
 want="PASS  slow a
 PASS  inline after a
 FAIL  slow b fails
@@ -82,7 +82,11 @@ o1=$(tr '\n' ' ' < "$TMP/x1/order"); o3=$(tr '\n' ' ' < "$TMP/x3/order")
   && good "-j 3 starts a queued SLOW suite before an earlier one (p), -j 1 keeps the written order" || no "start order: -j 1 '$o1', -j 3 '$o3'"
 [ "$(sort -n "$TMP/x3/liveseen" | tail -1)" = 1 ] && good "live-lane suites run one at a time" || no "live-lane overlap: $(cat "$TMP/x3/liveseen")"
 [ "$(cat "$TMP/x3/alone")" = "alone saw 0" ] && good "run1 runs with no other suite running" || no "run1 not alone: $(cat "$TMP/x3/alone")"
-[ $((t2 - t1)) -lt $((t1 - t0)) ] && good "-j 3 is faster than -j 1 ($((t2 - t1))s < $((t1 - t0))s)" || no "-j 3 not faster ($((t2 - t1))s vs $((t1 - t0))s)"
+# overlap by event order, not wall clock: b starts before a ends at -j 3; at -j 1 every start follows the previous end
+ev3=$(tr '\n' ' ' < "$TMP/x3/events"); ev1=$(tr '\n' ' ' < "$TMP/x1/events")
+[[ "$ev3" == *"start b"*"end a"* ]] && good "-j 3: slow a and slow b overlap (b starts before a ends)" || no "-j 3: a and b did not overlap: $ev3"
+[ "$ev1" = "start a end a start b end b start c end c start d end d start p end p start z end z start f end f " ] \
+  && good "-j 1: each suite starts after the previous one ends" || no "-j 1 events: $ev1"
 for j in 0 x ""; do
   out=$(bash "$ROOT/tests/run-all.sh" -j "$j" 2>&1); rc=$?
   [ $rc -eq 2 ] && grep -q 'needs a positive integer' <<<"$out" && good "-j '$j' is rejected (exit 2)" || no "-j '$j' (rc=$rc)" "$out"
