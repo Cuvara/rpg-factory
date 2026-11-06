@@ -13,19 +13,24 @@ no()  { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head
 
 # a stand-in run-all: suites that sleep, fail, read stdin, and record how many suites were running at their start
 cat > "$TMP/plan.sh" <<'PLAN'
-X="$1"; shift
+X="$1"; J="$3"; shift   # J: the -j value
 . "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
-suite() { # name seconds rc: marks itself running, records the running count and start/end events, sleeps, unmarks
-  local n; echo "$1" >> "$X/order"; touch "$X/running.$1"; n=$(ls "$X" | grep -c '^running\.'); echo "$n" >> "$X/seen"
-  echo "start $1" >> "$X/events"; sleep "$2"; echo "out of $1"; echo "end $1" >> "$X/events"; rm -f "$X/running.$1"; return "$3"
+suite() { # name seconds rc [other]: marks itself running, records the running count and start/end events, sleeps,
+  # at -j > 1 waits (60 s cap, so a serial scheduler fails instead of hanging) for suite <other> to start, unmarks
+  local n i; echo "$1" >> "$X/order"; touch "$X/running.$1"; n=$(ls "$X" | grep -c '^running\.'); echo "$n" >> "$X/seen"
+  echo "start $1" >> "$X/events"; sleep "$2"
+  if [ -n "${4:-}" ] && [ "$J" -gt 1 ]; then
+    i=$((SECONDS + 60)); until grep -qx "start $4" "$X/events" || [ "$SECONDS" -ge "$i" ]; do sleep 0.1; done
+  fi
+  echo "out of $1"; echo "end $1" >> "$X/events"; rm -f "$X/running.$1"; return "$3"
 }
 alone() { local n; n=$(ls "$X" | grep -c '^running\.'); echo "alone saw $n" >> "$X/alone"; echo "ran alone"; }
 post() { if [ "$1" -eq 0 ] && grep -q 'out of p' <<<"$2"; then _ok "graded by runp handler"; else _bad "runp handler" "$2"; fi; }
 live() { local n; touch "$X/live.$1"; n=$(ls "$X" | grep -c '^live\.'); echo "$n" >> "$X/liveseen"; sleep 0.5; rm -f "$X/live.$1"; }
 blk() { ok "block line one"; skp "block skip" "why"; note "WARN  block note"; }
-export -f suite alone live; export X
+export -f suite alone live; export X J
 SLOW="tests/zz-slow.sh"   # suite_of: the `bash -c` $0 below
-run "slow a" bash -c 'suite a 1.5 0'
+run "slow a" bash -c 'suite a 1.5 0 b'
 ok "inline after a"
 run "slow b fails" bash -c 'suite b 1.5 3'
 skp "skipped thing" "a reason"
@@ -82,7 +87,8 @@ o1=$(tr '\n' ' ' < "$TMP/x1/order"); o3=$(tr '\n' ' ' < "$TMP/x3/order")
   && good "-j 3 starts a queued SLOW suite before an earlier one (p), -j 1 keeps the written order" || no "start order: -j 1 '$o1', -j 3 '$o3'"
 [ "$(sort -n "$TMP/x3/liveseen" | tail -1)" = 1 ] && good "live-lane suites run one at a time" || no "live-lane overlap: $(cat "$TMP/x3/liveseen")"
 [ "$(cat "$TMP/x3/alone")" = "alone saw 0" ] && good "run1 runs with no other suite running" || no "run1 not alone: $(cat "$TMP/x3/alone")"
-# overlap by event order, not wall clock: b starts before a ends at -j 3; at -j 1 every start follows the previous end
+# overlap by event order, not wall clock: at -j 3 a waits for b's start before it ends, so a scheduler that launches b
+# only after a ends never writes "start b" before "end a"; at -j 1 a does not wait and every start follows the previous end
 ev3=$(tr '\n' ' ' < "$TMP/x3/events"); ev1=$(tr '\n' ' ' < "$TMP/x1/events")
 [[ "$ev3" == *"start b"*"end a"* ]] && good "-j 3: slow a and slow b overlap (b starts before a ends)" || no "-j 3: a and b did not overlap: $ev3"
 [ "$ev1" = "start a end a start b end b start c end c start d end d start p end p start z end z start f end f " ] \
