@@ -43,7 +43,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   with a `plan.json` whose `repos` entry names this checkout (`"plugin": {"path": "<this checkout>"}`), small tasks
   with disjoint owned paths, and cross-model review. The run lead starts each task's lead with
   `dispatch --phase lead`; the task lead runs its subtasks, review and QA in that task's worktree. How:
-  `parallel-work.md` sections 1 and 10 and section 8 "Session lifecycle".
+  `parallel-work.md` sections 1 and 10 and section 8 "Session lifecycle"; the session-level steps (tier, plan,
+  `dispatch --phase lead`, `status` to resume, review pairing, gate, cleanup) are factory-core `SKILL.md` steps 6, 7, 11, 12.
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
   Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line, and gather the
   fragments into the `CHANGELOG.md` section with `python3 -B scripts/changelog.py release X.Y.Z [--summary TEXT]` (run-all and
