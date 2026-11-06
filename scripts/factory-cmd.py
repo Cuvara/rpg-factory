@@ -13,8 +13,8 @@
   domain [<id>] [--json]                  registry domains: lead, repos, artifact kinds, gates, handoffs,
                                           authoring artifact counts, stale/FAIL/HUMAN_REQUIRED, next steps
   workflow plan|status|dispatch|report     dependency-aware artifact workflow entry point
-  pipeline tier|validate|planner|dispatch|verdict|gate|cleanup|status [args]
-                                          factory-pipeline.py: task tier, plan validation, worker dispatch
+  pipeline tier|validate|subplan|planner|dispatch|verdict|gate|cleanup|status [args]
+                                          factory-pipeline.py: task tier, plan and subplan validation, dispatch
                                           commands, review/QA verdicts, the READY_FOR_PR gate and run status
   ui [--json] [--project DIR] [--uitoolkit-ref REF] <request...>
                                           scripts/ui/ui_plan.py: UI plan - intent, ONLY the UI skills
@@ -212,7 +212,7 @@ def cmd_workflow(args):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-workflow.py"), *args])
 
 
-PIPELINE_VERBS = ("tier", "validate", "planner", "dispatch", "verdict", "gate", "cleanup", "status")
+PIPELINE_VERBS = ("tier", "validate", "subplan", "planner", "dispatch", "verdict", "gate", "cleanup", "status")
 
 
 def cmd_pipeline(raw):
@@ -377,9 +377,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "registry domains: lead, repos, kinds, gates, handoffs, artifact counts, stale/FAIL/HUMAN_REQUIRED, next steps"},
     {"verb": "workflow", "args": "plan|status|dispatch|report <spec> [--json]", "read_only": True,
      "example": "workflow plan spec.json --json", "summary": "dependency-aware artifact workflow (dispatch only prints a contract)"},
-    {"verb": "pipeline", "args": "tier|validate|planner|dispatch|verdict|gate|cleanup|status [args]", "read_only": False,
+    {"verb": "pipeline", "args": "tier|validate|subplan|planner|dispatch|verdict|gate|cleanup|status [args]", "read_only": False,
      "example": "pipeline tier -- --repo server --paths backend/shared/proto/wire.proto",
-     "summary": "delivery pipeline: task tier, plan validation, worker dispatch, review/QA verdicts, READY_FOR_PR gate, cleanup, run status"},
+     "summary": "delivery pipeline: task tier, plan and subplan validation, worker dispatch, review/QA verdicts, READY_FOR_PR gate, cleanup, run status"},
     {"verb": "ui", "args": "[--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>", "read_only": True,
      "example": "ui Create an inventory screen", "summary": "UI plan: intent, ONLY the UI skills needed, lead route, missing context"},
     {"verb": "ui-figma", "args": "[ui options] <request>", "read_only": True, "example": "ui-figma Import the shop frame",

@@ -150,5 +150,13 @@ printf '%s
 ' '{"schema":"rpg-factory.pipeline-plan/1","id":"cmd","title":"T","topic":"feat/core/cmd","tasks":[{"id":"a","repo":"nope","objective":"o","paths":["x/"],"acceptance":["a"]}]}' > "$TMP/pipeline-plan.json"
 out=$(python3 -B "$CMD" pipeline status "$TMP/pipeline-plan.json" 2>&1); rc=$?
 [ "$rc" -eq 1 ] && ! grep -q "pipeline needs" <<<"$out" && grep -qE "^Next: .* validate " <<<"$out" && ok "pipeline status is a pipeline verb (an invalid plan: exit 1, next is validate)" || no "pipeline status rc=$rc: $(head -c 300 <<<"$out")"
+printf '%s
+' '{"schema":"rpg-factory.pipeline-subplan/1","plan":"pipeline-plan.json","task":"a","subtasks":[{"id":"s","objective":"o","paths":["x/"]}]}' > "$TMP/pipeline-subplan.json"
+python3 -B "$CMD" pipeline bogus >/dev/null 2>"$TMP/err"
+grep -q "pipeline needs tier|validate|subplan|" "$TMP/err" && grep -qE "^  pipeline [a-z|]*subplan" "$TMP/err" \
+  && ok "pipeline usage lists subplan (error and usage line)" || no "pipeline usage lacks subplan: $(head -c 300 "$TMP/err")"
+out=$(python3 -B "$CMD" pipeline subplan validate "$TMP/pipeline-subplan.json" 2>&1); rc=$?
+[ "$rc" -eq 1 ] && ! grep -q "pipeline needs" <<<"$out" && grep -qE "^(ERROR |INVALID)" <<<"$out" \
+  && ok "pipeline subplan is a pipeline verb (reaches subplan validate: exit 1 with its ERROR lines)" || no "pipeline subplan rc=$rc: $(head -c 300 <<<"$out")"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
