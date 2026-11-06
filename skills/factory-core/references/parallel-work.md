@@ -91,7 +91,8 @@ noticed.
 ## 4. Worktrees
 
 - One worktree per plan task, for its whole life, on the task branch `<topic>-<task id>` from the recorded base
-  (the plan `topic` is the `<type>/<area>/<topic>` integration branch). It is created for the task lead; the task
+  (the plan `topic` is the `<type>/<area>/<topic>` integration branch; a no-worktree repo has no per-task branch,
+  below). It is created for the task lead; the task
   lead's implementation sub-sessions, review, QA and fix sessions run in it (section 8, "Session lifecycle"),
   except a session placed in an Orca child worktree ("Child worktrees" below).
 - Only the dispatching tool creates worktrees: Orca (`orca worktree create`, the run lead's task-lead handoff, or
@@ -104,7 +105,7 @@ noticed.
 - **No worktree in a Unity project.** A repo with registry `worktrees: false` (the client) or a
   `ProjectSettings/ProjectVersion.txt` at its root (registry `pipeline.no_worktree_markers`) never gets a
   worktree, for any role: each one needs its own multi-GB `Library/` import. Its task lead runs in the main
-  checkout on the task branch (the handoff is `orca agent launch --worktree path:<main checkout>`, never a
+  checkout on the plan `topic` branch, which is its task branch: every task of that repo commits there in turn (the handoff is `orca agent launch --worktree path:<main checkout>`, never a
   worktree create or a new top-level worker); its subtasks run one after another, never two sessions editing or
   importing the project at once; its review and QA sessions run in that checkout too, read the commits there and
   change nothing. Its tasks run one after another: the next task starts after the previous task's QA verdict.
@@ -122,7 +123,9 @@ noticed.
 ### Child worktrees
 
 Both levels may place a session in an Orca child worktree when that is faster or safer than sharing. The shared
-worktree is the default. Choose per session:
+worktree is the default for every session a task lead starts (implement, review, QA) and for the run lead's helper
+sessions; only `dispatch --phase lead` defaults to `child` (a new task worktree under the integration checkout,
+"Run lead" below). Choose per session:
 
 <!-- policy:placement-table -->
 | Placement | When | How |
@@ -140,7 +143,8 @@ worktree is the default. Choose per session:
   `dispatch plan.json --task <id> --phase implement|review|qa --subplan subplan.json --subtask <sid>` takes the
   subtask's paths, agent and placement and prints the matching `--worktree` (`path:<task worktree>` or
   `new-child`, run from the task worktree).
-- A child session commits on its own child branch (`<task branch>--<subtask or phase>`), with explicit paths.
+- A child session commits on its own child branch (`<task branch>--<subtask or phase>`), with explicit paths. Review
+  and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`, so the review and QA of one candidate never collide.
 
 <!-- policy:child-merge-remove -->
 The owner merges a child's branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).
@@ -238,8 +242,8 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 
 1. **Worktrees.** The run lead removes every task worktree its own run created once the task's review PASS is
    recorded and the task is integrated, and the tree is clean (no-worktree repo: nothing to remove):
-   `git worktree remove <path>` without `--force`. A leftover child (section 4) is merged into its parent branch,
-   then removed the same way. A worktree with uncommitted or unintegrated work is not
+   `git worktree remove <path>` without `--force` (an Orca-created one: `orca worktree rm`, item 2). A leftover
+   child (section 4) is merged into its parent branch, then removed with `orca worktree rm --worktree path:<child>`. A worktree with uncommitted or unintegrated work is not
    removed: report it instead. Never remove the main checkout, the integration branch's checkout before its PR is
    open, or a worktree another coordinator owns (section 2).
 2. **Task branches.** The user asked for full cleanup, so a task branch whose commits are in the integration
@@ -352,7 +356,9 @@ A no-worktree (Unity) repo never gets a worktree; its task lead and all its sess
    --state PASS|FAIL --report <file>`. A FAIL goes back to the task lead (`status` names `--phase lead`, which
    resumes it in the task worktree or the main checkout of a no-worktree repo): it starts a scoped fix in a fresh
    implementation session there (section 8, "Session lifecycle") and commits it as a new candidate SHA.
-   `--phase implement` always starts a sub-session that does not commit, in every repo; `--paths` inside the
+   `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
+   `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
+   merges that branch and removes the child (section 4); `--paths` inside the
    task's exclusions is refused. When the paired model is unavailable, a fresh session of the same model reviews, the report names it
    SAME_MODEL, and the gate accepts it only with `--allow-same-model`; `--runner agent` (Claude only) marks a
    session planned for Codex SAME_MODEL in its prompt. The task lead also runs the per-task QA

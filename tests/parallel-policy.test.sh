@@ -123,6 +123,7 @@ RETIRED_PHRASES=(
   'the run lead edits'
   'the lead edits the files directly'
   'implements in its own session, then the review'
+  'always starts a sub-session that does not commit'
 )
 policy_markers() {
   local f="$1" id n got errs=() p hits
@@ -142,6 +143,16 @@ policy_markers() {
     hits=$(grep -niF -- "$p" "$f" | head -1)
     [ -z "$hits" ] || errs+=("retired shortcut phrasing '$p': $hits")
   done
+  # Section 10 step 4 keeps the child exception: a shared implement session never commits, a child one commits on
+  # its own child branch (section 4 "Child worktrees").
+  local step4
+  step4=$(awk '/^4\. \*\*Cross-model review\.\*\*/ { f = 1 } f && /^5\. / { exit } f' "$f" | tr '\n' ' ' | tr -s ' ')
+  if [ -z "$step4" ]; then errs+=("section 10 step 4 (Cross-model review) missing")
+  else
+    for p in 'in the shared placement starts a sub-session that does not commit' 'commits on its own child branch'; do
+      grep -qF -- "$p" <<<"$step4" || errs+=("section 10 step 4 lacks the child exception: '$p'")
+    done
+  fi
   [ ${#errs[@]} -eq 0 ] && return 0
   printf '%s\n' "${errs[@]}"; return 1
 }
@@ -194,6 +205,45 @@ s_mutate "harmless rewording outside a marker" PASS \
   'sed -i "s/^It never pushes, merges, tags or removes its worktree\.$/It never pushes, merges or tags, and it never removes its worktree./" "$F"'
 s_mutate "harmless S-tier sentence about the task lead" PASS \
   'printf "\nFor an S-tier task the task lead reviews the code directly; one task lead per task.\n" >> "$F"'
+
+s_mutate "step 4 child exception dropped" "section 10 step 4 lacks the child exception: 'commits on its own child branch'" \
+  'sed -i "s/the session commits on its own child branch only/the session works in the child/" "$F"'
+s_mutate "step 4 says implement never commits" "retired shortcut phrasing 'always starts a sub-session that does not commit'" \
+  'sed -i "s/^   \`--phase implement\` in the shared placement starts a sub-session that does not commit/   \`--phase implement\` always starts a sub-session that does not commit/" "$F"'
+
+# AGENTS.md (the Codex entry) never makes Codex the run lead or a task lead: the run lead is the main Claude Code
+# session and the task lead is always Claude (policy:task-lead-claude). Prints each problem; rc 1.
+AGENTS_REQUIRED=('the task lead is always Claude' 'only as a session a Claude task lead starts')
+AGENTS_FORBIDDEN=('as a task lead' 'as the main session (run lead)' 'as the run lead' 'drive it through factory-core'
+  'codex is the run lead' 'codex is the task lead')
+agents_roles() {
+  local f="$1" p hits errs=() flat
+  flat=$(tr '\n' ' ' < "$f" | tr -s ' ')
+  for p in "${AGENTS_REQUIRED[@]}"; do grep -qiF -- "$p" <<<"$flat" || errs+=("AGENTS.md lacks: '$p'"); done
+  for p in "${AGENTS_FORBIDDEN[@]}"; do
+    hits=$(grep -oiF -- "$p" <<<"$flat" | head -1)
+    [ -z "$hits" ] || errs+=("AGENTS.md names Codex as a lead: '$p'")
+  done
+  [ ${#errs[@]} -eq 0 ] && return 0
+  printf '%s\n' "${errs[@]}"; return 1
+}
+a_out=$(agents_roles "$ROOT/AGENTS.md" 2>&1); a_rc=$?
+[ $a_rc -eq 0 ] && ok "AGENTS.md keeps Codex out of the lead roles" || no "AGENTS.md lead roles (rc=$a_rc)" "$a_out"
+a_mutate() { # <name> <expected text> <commands in a copy of AGENTS.md $F>
+  local F="$TMP/agents-mut.md" merr out rc
+  cp "$ROOT/AGENTS.md" "$F" && chmod u+w "$F"
+  if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if cmp -s "$ROOT/AGENTS.md" "$F"; then no "$1: mutation changed nothing"; return; fi
+  out=$(agents_roles "$F" 2>&1); rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> AGENTS.md check FAIL: $2"
+  else no "$1: AGENTS.md check did not fail with '$2' (rc=$rc)" "$out"; fi
+}
+a_mutate "Codex as task lead re-added" "names Codex as a lead: 'as a task lead'" \
+  'printf "\n- Codex follows the same flow as a task lead or as a session a task lead starts.\n" >> "$F"'
+a_mutate "Codex as run lead re-added" "names Codex as a lead: 'as the main session (run lead)'" \
+  'printf "\nAs the main session (run lead), drive it through factory-core steps 6, 7, 11 and 12.\n" >> "$F"'
+a_mutate "Claude task-lead rule dropped" "AGENTS.md lacks: 'the task lead is always Claude'" \
+  'sed -i "s/the task lead is always Claude/the task lead may be any model/" "$F"'
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

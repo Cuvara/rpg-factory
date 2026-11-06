@@ -2,7 +2,7 @@
 name: factory-core
 description: Shared Factory workflow for every registered discipline domain in the UnityIndie game workspace (rpg-mmo-server, IndieRPGMMOAdventure, Netcode, UnityDots, UIToolkit and the domains' authoring artifacts). Use at the start of ANY task that changes code, configuration, CI, deployment, measurements, documents or domain artifacts there, when resuming interrupted cross-repo work, and before reporting such work as done. Provides the live snapshot, deterministic domain and skill routing, coordination, validation with evidence, human gates, git safety and the verify-a-result report; domain workflows live with their registered leads. Game Design is a native domain for design artifacts. Not for web-game projects; web-game-factory owns those.
 argument-hint: "[mode: analyze|plan|implement|validate|review|resume] [task]"
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-status.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py:*), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*), Bash(python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*)
 ---
 
 # Factory Core
