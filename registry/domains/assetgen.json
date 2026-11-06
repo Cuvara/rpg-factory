@@ -54,6 +54,25 @@
       "domain": "assetgen",
       "order": 100,
       "summary": "AI image asset generation runs: purpose x style x ComfyUI workflow template, reviewed prompt, comfy-mcp generation, deterministic QA, image review, gen-run record and human-approved handoff."
+    },
+    "comfyui": {
+      "kind": "tech",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 101,
+      "paths": [
+        "assetgen/"
+      ],
+      "used_by": [
+        "asset-gen",
+        "art-2d",
+        "art-3d",
+        "ui-ux",
+        "vfx"
+      ],
+      "summary": "How asset-gen's ComfyUI side works: the comfy-template format and game-layer overrides, the comfy-mcp tool sequence, the 9router image node's behaviour and pitfalls, ComfyUI ports, and how to add a purpose, style or template."
     }
   },
   "contracts": [

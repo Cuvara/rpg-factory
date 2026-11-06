@@ -183,14 +183,15 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
     is logged to the session's `ADVISORIES` file (tests, dogfood). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor, workflow, pipeline, ui, ui-figma, ui-components, ui-screen,
-  ui-review) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
-  `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`.
+  ui-review, assetgen) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
+  `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`;
+  `assetgen` forwards the read-only verbs of `scripts/assetgen/assetgen.py` (asset-gen engine, `tests/assetgen.test.sh`).
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work, engineering, workflows) routes to
-  13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
-  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 10 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
-  unity-client-tech, unity-dots, netcode-client, and the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
-  ui-toolkit-screen, ui-validation) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
-  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders), and the
+  14 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
+  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d, vfx and asset-gen. 11 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
+  unity-client-tech, unity-dots, netcode-client, the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
+  ui-toolkit-screen, ui-validation, and comfyui) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
+  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders; comfyui: `assetgen/`), and the
   snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
   (`docs/architecture/ui-skills.md`).
 - **Delivery pipeline:** `factory-pipeline.py` (settings: registry `pipeline`; plan schema

@@ -50,7 +50,7 @@ QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=()
 # the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
 SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
-      tests/devtools.test.sh tests/domains.test.sh testlab/tests/test_lab.py"
+      tests/devtools.test.sh tests/domains.test.sh tests/assetgen.test.sh testlab/tests/test_lab.py"
 [ "$jobs" -gt 1 ] && QD=$(mktemp_win) && trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$QD"' EXIT
 queue() { # kind message [detail]
   if [ -z "$QD" ]; then "_$1" "$2" "${3:-}"; return; fi
@@ -286,6 +286,7 @@ run "UI/UX production workflow" tests/ui-workflow.test.sh
 run "2D Art production workflow" tests/art2d-workflow.test.sh
 run "3D Art production workflow" tests/art3d-workflow.test.sh
 run "VFX production workflow" tests/vfx-workflow.test.sh
+run "asset-gen engine, core templates, image QA, gen-run quality plugin (temp authoring repo, no network)" env -u TMPDIR tests/assetgen.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh

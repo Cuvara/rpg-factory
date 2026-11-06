@@ -203,6 +203,13 @@ for spec in "ui-ux:ui:ui-spec" "art-2d:art2d:art2d-asset" "art-3d:art3d:art3d-as
   out=$(fctx "$FA" --kind "$kind" --json)
   fexpect "--kind $kind routes to $skill" "jq -e '.domain.id == \"$domain\" and .domain.lead == \"$skill\"' <<<\"\$out\" >/dev/null"
 done
+# authoring assetgen/ (game-layer data, run records) -> asset-gen leads with tech comfyui (paths-scoped: not for art2d/)
+assetgen_route="$(lead asset-gen) and $(tech comfyui)"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/runs/iron-sword-icon-001/run.md assetgen/templates/image-generate.json 2>&1)
+fexpect 'authoring assetgen path -> asset-gen leads, tech comfyui' "jq -e '.repos[0] | $assetgen_route' <<<\"\$out\" >/dev/null"
+art2d_nocomfy="$(lead art-2d) and $(notech comfyui)"
+out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths art2d/specs/iron-sword.md 2>&1)
+fexpect 'authoring art2d path -> art-2d leads, no tech comfyui (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
 out=$(fctx "$FS")
 fexpect "dirty tree, no --paths: baseline listed with modules, not routed" \
   'grep -q "server.go\` -> server.gateway" <<<"$out" && grep -q "Baseline only - not routed" <<<"$out" && grep -q -- "--paths <files the task will write>" <<<"$out"'

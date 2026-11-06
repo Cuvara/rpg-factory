@@ -204,15 +204,16 @@
         "plugin:codex",
         "bin:codex"
       ],
-      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks.",
+      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks. For asset-gen: the independent prompt and image review (codex exec, read-only sandbox) of a generation run.",
       "used_by": [
         "server-realtime",
         "server-services",
         "unity-package",
-        "client-integration"
+        "client-integration",
+        "asset-gen"
       ],
       "required": false,
-      "fallback": "none needed"
+      "fallback": "none needed; asset-gen: a Claude review recorded as SAME_MODEL:claude (grades WARN, never PASS)"
     },
     {
       "id": "dotnet",
@@ -328,7 +329,8 @@
       ],
       "provides": "ComfyUI from the agent through the official Comfy-Org comfy-mcp server (tool ids mcp__comfy-mcp__<tool>): server_info, validate_workflow against the live node list, run_workflow, job, fetch_outputs into a run directory, upload_file for reference images, nodes, workflow slots and launch_comfyui.",
       "used_by": [
-        "asset-gen"
+        "asset-gen",
+        "comfyui"
       ],
       "required": false,
       "fallback": "render the workflow with assetgen.py render and leave the generation step NOT_RUN (a person runs workflow.json in ComfyUI and drops the PNGs into outputs/); never claim a generation that did not run"
@@ -5045,6 +5047,25 @@
       "domain": "assetgen",
       "order": 100,
       "summary": "AI image asset generation runs: purpose x style x ComfyUI workflow template, reviewed prompt, comfy-mcp generation, deterministic QA, image review, gen-run record and human-approved handoff."
+    },
+    "comfyui": {
+      "kind": "tech",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 101,
+      "paths": [
+        "assetgen/"
+      ],
+      "used_by": [
+        "asset-gen",
+        "art-2d",
+        "art-3d",
+        "ui-ux",
+        "vfx"
+      ],
+      "summary": "How asset-gen's ComfyUI side works: the comfy-template format and game-layer overrides, the comfy-mcp tool sequence, the 9router image node's behaviour and pitfalls, ComfyUI ports, and how to add a purpose, style or template."
     },
     "game-design": {
       "kind": "repo",

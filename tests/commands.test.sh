@@ -20,7 +20,7 @@ for f in "$ROOT"/commands/*.md; do
   pat=$(sed -n 's/^allowed-tools: Bash(\(.*\):\*)$/\1/p' "$f"); line=$(sed -n 's/^!`\(.*\)`$/\1/p' "$f")
   [ -n "$pat" ] && [ "${line#"$pat"}" != "$line" ] && ok "commands/$n.md ! line matches its allowed-tools prefix" || no "commands/$n.md: '$line' does not start with allowed '$pat'"
 done
-[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 12 ] && ok "exactly 12 commands (status, route, check, doctor, domain, workflow, pipeline, ui, ui-figma, ui-components, ui-screen, ui-review)" || no "command count"
+[ "$(ls "$ROOT"/commands/*.md | wc -l)" -eq 13 ] && ok "exactly 13 commands (status, route, check, doctor, domain, workflow, pipeline, ui, ui-figma, ui-components, ui-screen, ui-review, assetgen)" || no "command count"
 # the usage text documents every command's verb
 python3 -B "$CMD" --help 2>"$TMP/usage"
 for f in "$ROOT"/commands/*.md; do
@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen resolve --purpose icon --out x.json"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -41,7 +41,7 @@ out=$(python3 -B "$CMD" help); rc=$?
 [ $rc -eq 0 ] && grep -q '^- domain \[<id>\] \[--json\]' <<<"$out" && grep -q 'e.g. /rpg-factory:domain design  |  python3 -B .*/scripts/factory-cmd.py domain design' <<<"$out" \
   && ok "help: text lists verbs with Claude and Codex forms (exit 0)" || no "help text rc=$rc: $(head -c 300 <<<"$out")"
 python3 -B "$CMD" help --json >"$TMP/help.json"; rc=$?
-[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.commands/1" and (.commands | length) == 13
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.commands/1" and (.commands | length) == 14
   and all(.commands[]; .verb as $v | (.args | type) == "string" and (.read_only | type) == "boolean" and (.example | startswith($v))
           and (.codex | test("^python3 -B .*/scripts/factory-cmd.py " + $v + "$")))
   and ([.commands[] | select(.read_only | not) | .verb] == ["check", "pipeline"])
@@ -150,5 +150,17 @@ printf '%s
 ' '{"schema":"rpg-factory.pipeline-plan/1","id":"cmd","title":"T","topic":"feat/core/cmd","tasks":[{"id":"a","repo":"nope","objective":"o","paths":["x/"],"acceptance":["a"]}]}' > "$TMP/pipeline-plan.json"
 out=$(python3 -B "$CMD" pipeline status "$TMP/pipeline-plan.json" 2>&1); rc=$?
 [ "$rc" -eq 1 ] && ! grep -q "pipeline needs" <<<"$out" && grep -qE "^Next: .* validate " <<<"$out" && ok "pipeline status is a pipeline verb (an invalid plan: exit 1, next is validate)" || no "pipeline status rc=$rc: $(head -c 300 <<<"$out")"
+# -- assetgen: read-only assetgen.py verbs; the game layer of the workspace authoring repo is picked up by default
+out=$(python3 -B "$CMD" assetgen list --kind purpose --json); rc=$?
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-list/1" and any(.entries[]; .id == "icon" and .layer == "core")' <<<"$out" >/dev/null   && ok "assetgen list: core purposes through factory-cmd (exit 0)" || no "assetgen list rc=$rc: $(head -c 300 <<<"$out")"
+mkdir -p "$WS/game-authoring/assetgen/styles"
+printf '%s
+' '{"schema": "rpg-factory.assetgen-style/1", "title": "Game house style", "prefix": "p", "suffix": "s", "avoid": []}' > "$WS/game-authoring/assetgen/styles/house.json"
+out=$(python3 -B "$CMD" assetgen "resolve --purpose icon --style house --json"); rc=$?
+[ $rc -eq 0 ] && jq -e '.style.id == "house" and .style.layer == "game" and .purpose.id == "icon"' <<<"$out" >/dev/null   && ok "assetgen resolve (one quoted string): --authoring defaults to the workspace authoring repo's game layer" || no "assetgen resolve rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" assetgen lint 2>&1); rc=$?
+[ $rc -eq 0 ] && grep -q "house.json" <<<"$out" && grep -qE "^assetgen lint: [0-9]+ PASS, [0-9]+ WARN, 0 FAIL" <<<"$out"   && ok "assetgen lint: core and game-layer data, 0 FAIL" || no "assetgen lint rc=$rc: $(tail -3 <<<"$out")"
+python3 -B "$CMD" assetgen resolve --purpose icon --out "$TMP/spec.json" >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$TMP/spec.json" ] && ok "assetgen resolve --out refused (exit 2, nothing written)" || no "assetgen resolve --out rc=$rc"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
