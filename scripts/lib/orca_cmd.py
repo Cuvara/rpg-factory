@@ -3,7 +3,8 @@
 Nothing here runs Orca: it builds the exact argv the lead runs (or prints). Placement follows the worktree rule in
 references/parallel-work.md: a repo with registry `worktrees: false`, or whose root holds a
 `pipeline.no_worktree_markers` file (a Unity project), never gets a new worktree - the worker runs in the existing
-main checkout (`--worktree path:<checkout>`); every other repo gets `--worktree new-top-level` from a base ref.
+main checkout (`--worktree path:<checkout>`); every other repo gets `--worktree new-top-level` from a base ref, or an
+Orca child of the caller's worktree (`--worktree new-child`, child_placement) when the owner picks isolation.
 Flags match `orca orchestration worker-start --help` (Orca 1.4): (--task <id> | --spec <text>) and
 (--agent <id> | --terminal <handle>); creation flags (--repo, --base-branch, --name) only with new worktrees.
 Printed commands use POSIX quoting (Claude Code's Bash tool, Git Bash); PowerShell needs its own quoting.
@@ -55,11 +56,23 @@ def placement(registry, key=None, path=None, base=None, name=None):
     return flags
 
 
+CHILD_RULE = ("never create or remove a child worktree while a full tests/run-all.sh runs (shared .git/config); the owner "
+              "merges the child branch into its parent branch and removes the child at once")
+
+
+def child_placement(name, base, parent):
+    """worker-start placement for an Orca child of the caller's worktree `parent` (run the command from there)."""
+    return {"worktree": "new-child", "new": True, "name": name, "base": base, "child_of": parent,
+            "reason": f"Orca child of {parent}"}
+
+
 def worker_start(spec, agent, place, title=None):
     """argv for `orca orchestration worker-start --spec ...` (the spec creates its own Orca task)."""
     argv = ["orca", "orchestration", "worker-start", "--spec", spec, "--agent", agent, "--worktree", place["worktree"]]
     if place.get("new"):
-        for flag, key in (("--repo", "repo"), ("--base-branch", "base"), ("--name", "name")):
+        order = ((("--name", "name"), ("--base-branch", "base")) if place["worktree"] == "new-child" else
+                 (("--repo", "repo"), ("--base-branch", "base"), ("--name", "name")))
+        for flag, key in order:
             if place.get(key):
                 argv += [flag, place[key]]
     if title:

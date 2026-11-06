@@ -194,6 +194,36 @@ X=$(subplan marker t '[{"id":"s1","objective":"o","paths":["x/a/"],"implementer"
 expect "Unity marker (unregistered repo): disjoint subtasks run one per wave" 0 "^Wave 2: s2$" subplan validate "$X" --plan "$TOOL"
 expect "Unity marker: the marker is named" 0 "One subtask at a time \(no worktree: ProjectSettings/ProjectVersion.txt present" subplan validate "$X" --plan "$TOOL"
 expect "Unity marker --json: the serial reason is reported" 0 '"serial": "ProjectSettings' subplan validate "$X" --plan "$TOOL" --json
+# placement: shared (default) or child (an Orca child of the task worktree, with a reason); never child without worktrees
+SPC=$(subplan child gw '[
+ {"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","placement":"shared"},
+ {"id":"s2","objective":"o","paths":["backend/gateway/b.go"],"implementer":"codex","placement":"child","reason":"runs the full suite","checks":["c"]}]')
+expect "placement shared and child (with a reason): OK" 0 "^OK$" subplan validate "$SPC"
+X=$(subplan child-noreason gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","placement":"child"}]')
+expect "placement child without a reason is an error" 1 "ERROR subtask s1: placement child needs a .reason." subplan validate "$X"
+X=$(subplan child-bad gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","placement":"top"}]')
+expect "an unknown placement is an error" 1 "ERROR subtask s1: placement .top. is not one of shared, child" subplan validate "$X"
+X=$(subplan child-unity t '[{"id":"s1","objective":"o","paths":["x/a/"],"implementer":"claude","placement":"child","reason":"r"}]')
+expect "placement child in a Unity project is an error" 1 "ERROR subtask s1: placement child in repo .tool., which takes no worktree" subplan validate "$X" --plan "$TOOL"
+expect "placement child with registry worktrees=false is an error" 1 "placement child in repo .server., which takes no worktree \(test flag\)" --registry "$TMP/reg-nowt.json" subplan validate "$SPC"
+if python3 - "$ROOT" "$SPC" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-subplan.schema.json", encoding="utf-8"))
+value = json.load(open(sys.argv[2], encoding="utf-8"))
+assert not m.schema_errors(value, schema, schema)
+value["subtasks"][0]["placement"] = "top"
+assert m.schema_errors(value, schema, schema), "an unknown placement must fail the schema"
+PY
+then pass=$((pass + 1)); echo "PASS  pipeline-subplan.schema.json knows placement and reason"
+else fail=$((fail + 1)); echo "FAIL  pipeline-subplan.schema.json placement"; fi
+# a UTF-8 BOM (PowerShell's Out-File / Set-Content) is no read error, for plans and subplans
+printf '\xef\xbb\xbf' > "$TMP/bom.json"; cat "$OK" >> "$TMP/bom.json"
+printf '\xef\xbb\xbf{"schema":"rpg-factory.pipeline-subplan/1","plan":"bom.json","task":"gw","subtasks":[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude"}]}\n' > "$TMP/sub-bom.json"
+expect "a plan with a UTF-8 BOM validates" 0 "^OK$" validate "$TMP/bom.json"
+expect "a subplan (and its plan) with a UTF-8 BOM validates" 0 "^OK$" subplan validate "$TMP/sub-bom.json"
+expect "dispatch reads a plan with a UTF-8 BOM" 0 "^Task lead for task gw" dispatch "$TMP/bom.json" --task gw --phase lead
 expect "the task-lead spec names the subplan schema, plan and task" 0 "pipeline-subplan.schema.json; .plan. is .*ok.json, .task. is gw" dispatch "$OK" --task gw --phase lead
 
 echo "-- dispatch"
@@ -208,27 +238,30 @@ refute "--agent codex on --phase lead never launches codex" "^orca .*--agent cod
 expect "the codex task's implement session keeps its implementer" 0 "^orca orchestration worker-start .*--agent codex" dispatch "$OK" --task c2 --phase implement --runner orca
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("lead_agent",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nolead.json"
 expect "registry without pipeline.lead_agent: the task lead defaults to claude" 0 "^orca agent launch --agent claude " --registry "$TMP/reg-nolead.json" dispatch "$OK" --task c2 --phase lead --runner orca
-expect "task lead creates its own Orca Run" 0 "Create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
+expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
 expect "--report-to goes only with the lead" 2 "--report-to .* goes with --phase lead" dispatch "$OK" --task gw --phase implement --report-to R42
 for pat in '"owned_paths": \[' '"backend/gateway/"' '"branch": "feat/core/demo-gw"' '"acceptance": \[' "subplan validate <subplan.json>" \
-  "ONE fresh Claude or Codex session in this task worktree" "--phase implement --paths <subtask paths>" "do NOT commit \(one shared index\)" \
-  "commit that subtask yourself with explicit paths" "Codex reviews Claude's work, Claude reviews Codex's" "here codex for claude" \
+  "ONE fresh session in this task worktree" "--phase implement --subplan <subplan.json> --subtask <id>" "does NOT commit \(one shared index\)" \
+  "you commit it with explicit paths" "Cross-model review .<dispatch> --phase review" "\(codex for claude" \
   "SAME_MODEL fallback" "--phase qa --sha <HEAD>" "FAIL goes to a fresh fix session" "worker-release" \
-  "to the run lead: branch feat/core/demo-gw, HEAD SHA, your Orca Run id"   "the moment it reports, its candidate is superseded .* or it stops - not at task end" "status .* --orca-run <your run id>"   "Never push, merge, tag or remove the worktree"; do
+  "<dispatch> = .<pipeline> dispatch <plan> --task gw." "placement child .*merge that branch into feat/core/demo-gw and remove the child at once" \
+  "never create or remove a child worktree while a full tests/run-all.sh runs" "verdict --subtask <id>" \
+  "branch feat/core/demo-gw, HEAD SHA, your Orca Run id" "the moment it reports, its candidate is superseded or it stops - not at task end" "status <plan> --orca-run <your run id>" \
+  "Never push, tag, merge into the integration branch or remove the task worktree"; do
   expect "task-lead spec: $pat" 0 "$pat" dispatch "$OK" --task gw --phase lead
 done
 expect "Unity task lead: an agent launched in the main checkout" 0 "^orca agent launch --agent claude --worktree '?path:[^' ]*IndieRPGMMOAdventure'?" dispatch "$OK" --task c1 --phase lead --runner orca
 refute "Unity task lead never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase lead --runner orca
 refute "Unity task lead in the agent fallback never creates a worktree" '"isolation"|Create your own worktree' dispatch "$OK" --task c1 --phase lead --runner agent
-expect "Unity task lead runs subtasks one after another" 0 "Subtasks run one after another" dispatch "$OK" --task c1 --phase lead
+expect "Unity task lead runs subtasks one after another" 0 "Subtasks, review and QA run one after another" dispatch "$OK" --task c1 --phase lead
 refute "Unity review never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 refute "Unity per-task qa never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase qa --sha abc1234 --runner orca
 expect "Unity task lead works on the integration branch in the main checkout" 0 "No worktree: .*on branch feat/core/demo;" dispatch "$OK" --task c1 --phase lead
-refute "Unity task lead rule 9 never mentions removing a worktree" "^9\..*remove(s)? the worktree" dispatch "$OK" --task c1 --phase lead
-expect "Unity task lead rule 9: the main checkout is never removed" 0 "^9\. Never push, merge or tag: .*main checkout, which is never removed" dispatch "$OK" --task c1 --phase lead
+refute "Unity task lead rule 7 never mentions removing a worktree" "^7\..*remove(s)? the (task )?worktree" dispatch "$OK" --task c1 --phase lead
+expect "Unity task lead rule 7: the main checkout is never removed" 0 "^7\. Never push, merge or tag: .*the main checkout is never removed" dispatch "$OK" --task c1 --phase lead
 refute "Unity task lead prompt has no double period after the reason" "\.\. " dispatch "$OK" --task c1 --phase lead
 # no_new_worktree <name> <args...>: exit 1, names the branch and `--phase lead`, and `git worktree list` is unchanged
 no_new_worktree() {
@@ -264,8 +297,8 @@ git -C "$S" worktree add -q "$TMP/demo-gw" -b feat/core/demo-gw develop 2>/dev/n
 WT="--worktree '?path:[^' ]*demo-gw'?"
 expect "implement joins the task worktree" 0 "--agent claude $WT" dispatch "$OK" --task gw --phase implement --runner orca
 refute "implement never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase implement --runner orca
-expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash: the" dispatch "$OK" --task gw --phase implement
-expect "implement sub-session reports changed paths and check counts to the task lead" 0 "report to the task lead: " dispatch "$OK" --task gw --phase implement
+expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash: one shared index" dispatch "$OK" --task gw --phase implement
+expect "implement sub-session reports changed paths and check counts to the task lead" 0 "Report to the task lead: changed paths" dispatch "$OK" --task gw --phase implement
 expect "subtask paths narrow the sub-session" 0 '"subtask_paths": \[' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go
 expect "a subtask session may name its own model" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner orca
 expect "subtask paths inside a task exclusion are refused" 2 "--paths backend/shared/proto/wire.proto overlap the exclusions of task gw: backend/shared/proto/" dispatch "$EX" --task gw --phase implement --paths backend/shared/proto/wire.proto
@@ -340,7 +373,36 @@ assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full
 PY
 then pass=$((pass + 1)); echo "PASS  Orca phases use one-line prompts and complete, immutable persistent specs"
 else fail=$((fail + 1)); echo "FAIL  Orca one-line prompts and persistent specs"; fi
+echo "-- dispatch: subplan subtasks and Orca child worktrees"
+CH="^orca orchestration worker-start .*--worktree new-child --name feat/core/demo-gw--"
+expect "subplan placement child: worker-start --worktree new-child from the task branch" 0 "${CH}s2 --base-branch feat/core/demo-gw .*--json$" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect "the child subtask runs its implementer (codex)" 0 "worker-start .*--agent codex --worktree new-child" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect "a child command says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs \(shared .git/config\)" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec commits on the child branch" "Commit on your child branch with explicit paths" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec: the task lead merges and removes the child at once" "the task lead merges it into feat/core/demo-gw and removes the child at once" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec says the run-all rule" "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the subtask's paths are in the spec" '"subtask_paths": \["backend/gateway/b.go"\]' dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child's reason is in the spec" '"placement_reason": "runs the full suite"' dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect "subplan placement shared: the task worktree" 0 "--agent claude $WT" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s1 --runner orca
+expect_spec "a shared subtask does not commit" "Do NOT commit, stage or stash" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s1 --runner orca
+expect "--placement shared overrides the subtask's child" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --placement shared --runner orca
+expect "a subtask review goes to its implementer's pair (claude for codex)" 0 "worker-start .*--agent claude --worktree new-child --name feat/core/demo-gw--s2 --base-branch abc1234 " dispatch "$OK" --task gw --phase review --sha abc1234 --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "a child review checks HEAD is the candidate in its child" "Orca child worktree of .*demo-gw created at it" dispatch "$OK" --task gw --phase review --sha abc1234 --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "a subtask review records with verdict --subtask" "record with .verdict --subtask s2." dispatch "$OK" --task gw --phase review --sha abc1234 --subplan "$SPC" --subtask s2 --runner orca
+expect "--placement child on qa: a frozen child at the SHA" 0 "${CH}qa --base-branch abc1234 " dispatch "$OK" --task gw --phase qa --sha abc1234 --placement child --runner orca
+expect "--subtask without --subplan is a usage error" 2 "--subplan and --subtask go together" dispatch "$OK" --task gw --phase implement --subtask s2
+expect "an unknown subtask is a usage error" 2 "unknown subtask zz: subplan has s1, s2" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask zz
+expect "a subplan of another task is a usage error" 2 "splits task gw, not c1" dispatch "$OK" --task c1 --phase implement --subplan "$SPC" --subtask s1
+# child in a no-worktree repo: usage error, nothing on stdout
+for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "--task c1 --phase lead" "--task integration:client --phase qa --sha abc1234"; do
+  # shellcheck disable=SC2086
+  out=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>/dev/null); rc=$?
+  err=$(python3 -B "$P" dispatch "$OK" $args --placement child --runner orca 2>&1 >/dev/null)
+  if [ "$rc" = 2 ] && [ -z "$out" ] && grep -q "takes no worktree" <<<"$err"; then pass=$((pass + 1)); echo "PASS  child in the Unity project ($args): usage error, nothing printed"
+  else fail=$((fail + 1)); echo "FAIL  child in the Unity project ($args) (rc=$rc)"; head -5 <<<"$out$err"; fi
+done
 git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/demo-gw
+expect "lead --placement child without the integration checkout: error" 1 "no worktree of .* has the integration branch feat/core/demo checked out \(the parent of the child\)" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 # integration QA joins the checkout of plan.topic; without one it is an error and no worktree is created
 before=$(git -C "$S" worktree list --porcelain); out=$(python3 -B "$P" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca 2>&1); rc=$?
 if [ "$rc" = 1 ] && grep -q "no worktree of .* has the integration branch feat/core/demo checked out" <<<"$out" && grep -q "No worktree was created" <<<"$out" \
@@ -350,6 +412,11 @@ git -C "$S" worktree add -q "$TMP/demo-int" -b feat/core/demo develop 2>/dev/nul
 expect "integration QA joins the integration checkout of plan.topic" 0 "--agent codex --worktree '?path:[^' ]*demo-int'?" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 refute "integration QA never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "You share the integration checkout .*demo-int with the run lead" dispatch "$OK" --task integration:server --phase qa --sha abc1234
+expect "lead --placement child: the task worktree is an Orca child of the integration checkout" 0 "^orca worktree create --name feat/core/demo-gw .*--branch feat/core/demo-gw --parent-worktree '?path:[^' ]*demo-int'? --agent claude " dispatch "$OK" --task gw --phase lead --placement child --runner orca
+refute "lead --placement child has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --placement child --runner orca
+expect "lead --placement child says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase lead --placement child --runner orca
+expect "integration QA --placement child: a child of the integration checkout at the SHA" 0 "^orca orchestration worker-start .*--worktree new-child --name feat/core/demo--qa --base-branch abc1234 " dispatch "$OK" --task integration:server --phase qa --sha abc1234 --placement child --runner orca
+expect_spec "integration QA in a child checks HEAD in its child" "Orca child worktree of .*demo-int created at it" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --placement child --runner orca
 git -C "$S" worktree remove "$TMP/demo-int"; git -C "$S" branch -q -D feat/core/demo
 expect "integration QA in the Unity project: main checkout" 0 "--worktree '?path:[^' ]*IndieRPGMMOAdventure'?" dispatch "$OK" --task integration:client --phase qa --sha abc1234 --runner orca
 expect "planner runs in the lead's checkout (no worktree)" 0 "--worktree current" planner --request "add a thing" --runner orca
@@ -391,6 +458,15 @@ v --task c1 --phase review --sha "$C1" --by codex --state PASS
 v --task c2 --phase review --sha "$C2" --by claude --state PASS
 v --task integration:srv --phase qa --sha "$SG" --by codex --state PASS
 v --task integration:cli --phase qa --sha "$C2" --by codex --state PASS
+# subtask reviews and per-candidate records never replace the task review the gate reads
+VD="$RPG_FACTORY_STATE_DIR/pipeline/demo"
+expect "verdict --subtask records the subtask's own review" 0 "recorded review FAIL for gw subtask s2 at .*gw__sub-s2__review.json" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state FAIL --subtask s2
+expect "a non-pair task review at the reviewed SHA keeps the pair's record" 0 "kept the codex review of gw .*kept per candidate only" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state FAIL
+if jq -e '.by == "codex" and .state == "PASS"' "$VD/gw__review.json" >/dev/null && jq -e '.subtask == "s2" and .state == "FAIL"' "$VD/gw__sub-s2__review.json" >/dev/null \
+   && [ -f "$VD/gw__review__${SG:0:12}__codex.json" ] && [ -f "$VD/gw__review__${SG:0:12}__claude.json" ] && [ -f "$VD/gw__sub-s2__review__${SG:0:12}__claude.json" ]
+then pass=$((pass + 1)); echo "PASS  verdict --subtask never overwrites the task review; every verdict is kept per candidate"
+else fail=$((fail + 1)); echo "FAIL  verdict records"; ls "$VD" | sed 's/^/      /'; fi
+expect "--subtask goes with a plan task" 2 "--subtask is the id of a subtask" verdict "$G" --task integration:srv --phase qa --sha "$SG" --by codex --state PASS --subtask s2
 expect "Unity tasks need their own QA, one after another" 1 "BLOCKER c1: no qa verdict" gate "$G"
 v --task c1 --phase qa --sha "$C1" --by codex --state PASS
 v --task c2 --phase qa --sha "$C1" --by codex --state PASS
@@ -439,6 +515,31 @@ expect "an unintegrated task branch is kept, not deleted" 1 "KEPT  srv: branch f
 refute "an unintegrated task branch gets no branch -d" "branch -d feat/core/demo-x" cleanup "$G"
 gi "$S" branch -q -D feat/core/demo-x
 expect "after removal: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+# a leftover Orca child of the task worktree (branch and directory <task branch>--<subtask>): status and cleanup name it
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/feat-core-demo-gw--s2" -b feat/core/demo-gw--s2 feat/core/demo-gw 2>/dev/null
+echo c > "$TMP/feat-core-demo-gw--s2/backend/gateway/c.go"; gi "$TMP/feat-core-demo-gw--s2" add backend/gateway/c.go; gi "$TMP/feat-core-demo-gw--s2" commit -qm "feat(gateway): c"
+expect "cleanup lists a leftover child as a child of its task" 1 "KEPT  srv: child of gw: leftover child worktree .*feat-core-demo-gw--s2 \(feat/core/demo-gw--s2\): merge it into feat/core/demo-gw" cleanup "$G"
+refute "an unmerged child gets no remove command" "^  orca worktree rm .*--s2" cleanup "$G"
+python3 -B "$P" status --json "$G" > "$TMP/status-child.json" 2>&1
+if jq -e '(.tasks[] | select(.id == "gw") | .children) as $c | ($c | length) == 1 and ($c[0].branch == "feat/core/demo-gw--s2") and ($c[0].merged == false)' "$TMP/status-child.json" >/dev/null \
+   && jq -e '.tasks[] | select(.id == "gw") | any(.notes[]; test("leftover child worktree .*--s2.*orca worktree rm --worktree"))' "$TMP/status-child.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  status lists the leftover child with a note"
+else fail=$((fail + 1)); echo "FAIL  status children"; head -c 1500 "$TMP/status-child.json"; fi
+if python3 - "$ROOT" "$TMP/status-child.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+assert not m.schema_errors(json.load(open(sys.argv[2], encoding="utf-8")), schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status --json with children matches the status schema"
+else fail=$((fail + 1)); echo "FAIL  status --json children schema"; fi
+gi "$TMP/srv-gw" merge -q --no-ff feat/core/demo-gw--s2 -m "merge s2"
+expect "a merged child gets its orca worktree rm command" 1 "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw--s2'?$" cleanup "$G"
+git -C "$S" worktree remove "$TMP/feat-core-demo-gw--s2"; git -C "$S" worktree remove "$TMP/srv-gw"
+git -C "$S" branch -q -D feat/core/demo-gw--s2 feat/core/demo-gw
+expect "child and task worktree removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 specs="$RPG_FACTORY_STATE_DIR/pipeline/demo/specs"; n=$(ls "$specs"/*.md 2>/dev/null | wc -l)
 expect "cleanup names the plan's dispatch specs as kept state, still CLEAN" 0 "STATE $n spec file\(s\) in .*demo.specs .*delete by hand" cleanup "$G"
 if [ "$n" -gt 0 ] && [ "$(ls "$specs"/*.md | wc -l)" = "$n" ]; then pass=$((pass + 1)); echo "PASS  cleanup never deletes the spec files"

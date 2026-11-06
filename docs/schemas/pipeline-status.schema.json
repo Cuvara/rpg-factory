@@ -72,6 +72,7 @@
           "sha",
           "review",
           "qa",
+          "children",
           "next",
           "notes"
         ],
@@ -132,6 +133,38 @@
           },
           "qa": {
             "$ref": "#/$defs/verdict"
+          },
+          "children": {
+            "description": "Leftover Orca child worktrees of the task worktree (branch or directory `<task branch>--*`); each also gets a note: merge it into the task branch, then `orca worktree rm --worktree path:<child>`.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "branch",
+                "merged"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "const": null
+                    }
+                  ]
+                },
+                "merged": {
+                  "type": "boolean",
+                  "description": "The child branch is contained in the task branch."
+                }
+              },
+              "additionalProperties": false
+            }
           },
           "next": {
             "description": "The command the lead runs next for this task; null while it waits.",
