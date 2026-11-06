@@ -3,9 +3,6 @@ import json
 import os
 import sys
 
-from pluginroot import plugin_root
-from workspace import find_workspace, git_out, linked_worktree, main_checkout, native_path
-
 DEFAULT_PROTECTED = ["develop", "staging", "main", "master", "release-*"]
 TAG_REF = r"^(refs/tags/|v\d|sgl-v\d|core-baseline)"
 SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
@@ -90,5 +87,3 @@ def is_protected(branch, patterns):
         if branch == p:
             return True
     return False
-
-

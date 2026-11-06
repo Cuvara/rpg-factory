@@ -66,5 +66,3 @@ def skill_read_hits(payload, registry):
                     names.append(m.group(1))
     hint = session.skill_read_hint(names, registry)
     return [hint] if hint else []
-
-

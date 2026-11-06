@@ -253,5 +253,3 @@ def expand(command, depth=0, shell="bash"):
                 yield argv
             continue
         yield argv
-
-

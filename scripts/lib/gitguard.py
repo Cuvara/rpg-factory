@@ -41,8 +41,29 @@ import subprocess
 import sys
 
 
+def _load_guard_package():
+    """Load scripts/lib/guard/ as the package `rpgf_guard`, by path and once: a top-level `guard` would be a generic
+    name on sys.path that shadows (or is shadowed by) any other module called `guard`. Its relative imports stay."""
+    import importlib.util
+    name = "rpgf_guard"
+    if name not in sys.modules:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard")
+        spec = importlib.util.spec_from_file_location(name, os.path.join(path, "__init__.py"),
+                                                      submodule_search_locations=[path])
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    return sys.modules[name]
+
+
+_load_guard_package()
+
 # Compatibility facade: retain every name the original hook module exported.
-from guard.common import (
+from rpgf_guard.common import (
     DEFAULT_PROTECTED,
     TAG_REF,
     SEPARATORS,
@@ -73,7 +94,7 @@ from guard.common import (
     protected_patterns,
     is_protected,
 )
-from guard.shell import (
+from rpgf_guard.shell import (
     HEREDOC,
     logical_lines,
     _stdin_reader,
@@ -84,7 +105,7 @@ from guard.shell import (
     peel,
     expand,
 )
-from guard.git import (
+from rpgf_guard.git import (
     parse_git,
     has_short_flag,
     refspec_dsts,
@@ -106,7 +127,7 @@ from guard.git import (
     new_branch_from,
     evaluate,
 )
-from guard.process import (
+from rpgf_guard.process import (
     PROCESS_TERMINATION_RULE,
     PROCESS_KILL_FALLBACK,
     PROCESS_PREFILTER,
@@ -123,17 +144,17 @@ from guard.process import (
     process_findings,
     process_kill_hits,
 )
-from guard.gates import (
+from rpgf_guard.gates import (
     human_gate_hits,
     skill_read_hits,
 )
-from guard.mode import (
+from rpgf_guard.mode import (
     _needs_mode,
     MODE_SCRIPTS,
     mode_runner,
     mode_hits,
 )
-from guard.runtime import (
+from rpgf_guard.runtime import (
     main,
     collect,
     advisory,
