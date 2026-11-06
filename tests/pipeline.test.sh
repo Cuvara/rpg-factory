@@ -801,6 +801,37 @@ assert r["b"]["next"] is None and any(n=="waits for a" for n in r["b"]["notes"])
 then pass=$((pass + 1)); echo "PASS  status: two aliases of one Unity checkout are never both ready (b waits for a)"
 else fail=$((fail + 1)); echo "FAIL  status alias serialization"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
 expect "dispatch warns the second alias task that the first has no QA PASS" 0 "takes one task at a time: task a has no QA PASS yet" dispatch "$X" --task b --phase lead --runner print
+# after task a's review and per-task QA PASS (task b not started), the checkout is b's: no integration QA of either
+# alias runs beside b's task lead, and the aliases' integration QAs run one at a time once b passed its QA too
+gi "$C" checkout -qb feat/core/alias3 develop; mkdir -p "$C/Assets/A" "$C/Assets/B"
+echo a > "$C/Assets/A/al.cs"; gi "$C" add Assets/A; gi "$C" commit -qm "feat: alias a"; UA=$(git -C "$C" rev-parse HEAD)
+python3 -B "$P" verdict "$X" --task a --phase review --sha "$UA" --by codex --state PASS >/dev/null
+python3 -B "$P" verdict "$X" --task a --phase qa --sha "$UA" --by codex --state PASS >/dev/null
+if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
+assert o["ready"]==["b"] and o["ready_wave"]==2, (o["ready"], o["ready_wave"])
+assert r["a"]["phase"]=="qa" and r["a"]["next"] is None, r["a"]
+assert "--task b --phase lead" in r["b"]["next"] and "integration:" not in json.dumps(o), r["b"]'
+then pass=$((pass + 1)); echo "PASS  status: after the first alias task's QA only the next task lead is offered (no integration QA)"
+else fail=$((fail + 1)); echo "FAIL  status alias integration QA beside a task lead"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
+expect "dispatch warns an alias's integration QA while a task of the checkout has no QA PASS" 0 "u1 takes one task at a time: task b has no QA PASS yet" dispatch "$X" --task integration:u1 --phase qa --sha "$UA" --runner print
+echo b > "$C/Assets/B/al.cs"; gi "$C" add Assets/B; gi "$C" commit -qm "feat: alias b"; UB=$(git -C "$C" rev-parse HEAD)
+python3 -B "$P" verdict "$X" --task b --phase review --sha "$UB" --by codex --state PASS >/dev/null
+python3 -B "$P" verdict "$X" --task b --phase qa --sha "$UB" --by codex --state PASS >/dev/null
+if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
+assert "--task integration:u1 --phase qa" in r["a"]["next"], r["a"]
+assert r["b"]["next"] is None and any("integration QA of u1 runs first" in n for n in r["b"]["notes"]), r["b"]'
+then pass=$((pass + 1)); echo "PASS  status: integration QAs of two aliases of one Unity checkout run one at a time"
+else fail=$((fail + 1)); echo "FAIL  status alias integration QA order"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
+python3 -B "$P" verdict "$X" --task integration:u1 --phase qa --sha "$UB" --by codex --state PASS >/dev/null
+if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
+assert r["a"]["phase"]=="qa" and r["a"]["next"] is None, r["a"]
+assert "--task integration:u2 --phase qa" in r["b"]["next"], r["b"]'
+then pass=$((pass + 1)); echo "PASS  status: the second alias's integration QA follows the first one's PASS"
+else fail=$((fail + 1)); echo "FAIL  status alias second integration QA"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
+python3 -B "$P" verdict "$X" --task integration:u2 --phase qa --sha "$UB" --by codex --state PASS >/dev/null
+refute "gate: the aliases' tasks share the integration branch, so neither alias's changes are stray" "changes outside every task's owned paths" gate "$X" --no-run-checks
+expect "gate: two aliases of one Unity checkout with every verdict are READY_FOR_PR" 0 "READY_FOR_PR" gate "$X" --no-run-checks
+gi "$C" checkout -q feat/core/demo
 X=$(plan norm "{$HEAD,\"tasks\":[
  {\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"./backend/gateway\"],\"acceptance\":[\"a\"]},
  {\"id\":\"b\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend\\\\gateway\\\\x.go\"],\"acceptance\":[\"a\"]}]}")

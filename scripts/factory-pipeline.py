@@ -918,6 +918,14 @@ def cmd_dispatch(a, reg):
                            "out, stage, commit or stash.")
         else:
             place = orca_cmd.placement(reg, info["registry"], info["path"], a.sha, f"{plan['topic']}-qa")
+            # one checkout, every plan alias of it: integration QA waits for each task's own QA (as status does)
+            me = serial_key(plan, reg, key)
+            group = [t["id"] for t in plan["tasks"] if serial_key(plan, reg, t["repo"]) == me]
+            open_ = [tid for tid in group if len(group) > 1
+                     and (fstate.read_json(verdict_file(plan, tid, "qa")) or {}).get("state") != "PASS"]
+            if open_:
+                print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
+                      "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
                   + qa_body(a.sha, tasks, at_head)
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
@@ -1317,7 +1325,8 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: base {base} not found; cannot prove every change belongs to a task")
         else:
             changed, rc = git(info["path"], "diff", "--name-only", mb, head)
-            owned = [norm_path(p).rstrip("/") for t in plan["tasks"] if t["repo"] == key for p in t["paths"]]
+            # every plan alias of this checkout shares the integration branch: their tasks' changes are not stray
+            owned = [norm_path(p).rstrip("/") for t in plan["tasks"] if same_repo(plan, reg, t["repo"], key) for p in t["paths"]]
             stray = [f for f in (changed or "").splitlines()
                      if not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
             if rc != 0 or stray:
@@ -1799,6 +1808,34 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     return row, info
 
 
+def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
+    """Mark repo `key`'s tasks integrated with the integration QA as next command when that QA is not PASS at the
+    integration HEAD. `first` is the alias of the same no-worktree checkout whose integration QA was offered already:
+    this one waits for it. Returns the alias offered (or still `first`)."""
+    mine = [t["id"] for t in tasks if t["repo"] == key]
+    info = infos[mine[0]]
+    topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
+    iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
+    if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
+        return first
+    if iq and iq.get("state") != "PASS":
+        why = f"integration QA {iq.get('state')} at {iq['sha'][:10]}"
+    elif iq:
+        why = f"integration QA at {iq['sha'][:10]} is STALE: the integration HEAD is {(topic_head or '?')[:10]}"
+    else:
+        why = "no integration QA" + (" (its verdict is STALE: the plan changed)" if iq_stale else "")
+    for tid in mine:
+        rows[tid]["phase"] = "integrated"
+        rows[tid]["notes"].append(why + f" for {key}: the gate needs it at the integration HEAD")
+        if first:
+            rows[tid]["notes"].append(f"integration QA of {first} runs first in this checkout: wait for its verdict")
+            rows[tid]["next"] = None
+        else:
+            rows[tid]["next"] = (f"{me} dispatch {pf} --task integration:{key} --phase qa --sha {topic_head} "
+                                 "--runner orca")
+    return first or key
+
+
 def status(plan, reg, orca_run=None):
     v = validate(plan, reg)
     me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
@@ -1879,27 +1916,19 @@ def status(plan, reg, orca_run=None):
                 else:
                     row["next"] = f"{me} dispatch {pf} --task integration:{t['repo']} --phase qa --sha {topic_head} --runner orca"
     # the gate needs the repo's integration QA PASS at the integration HEAD (also after per-task QA of a no-worktree
-    # repo): until then the repo's tasks stay integrated and the next command is that QA
+    # repo): until then the repo's tasks stay integrated and the next command is that QA. A no-worktree checkout is
+    # one serial group across every plan alias of it: its integration QA waits until every task of the checkout
+    # passed per-task QA (a task lead may still edit it), and the aliases' integration QAs run one at a time
+    groups = {}
     for key in keys:
-        mine = [t["id"] for t in tasks if t["repo"] == key]
-        if not all(rows[tid]["phase"] == "qa" for tid in mine):
+        groups.setdefault(serial_key(plan, reg, key), []).append(key)
+    for gkeys in groups.values():
+        if not all(rows[t["id"]]["phase"] == "qa" for t in tasks if t["repo"] in gkeys):
             continue
-        info = infos[mine[0]]
+        first = None
+        for key in gkeys:
+            first = _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf)
         topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
-        iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
-        if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
-            continue
-        if iq and iq.get("state") != "PASS":
-            why = f"integration QA {iq.get('state')} at {iq['sha'][:10]}"
-        elif iq:
-            why = f"integration QA at {iq['sha'][:10]} is STALE: the integration HEAD is {(topic_head or '?')[:10]}"
-        else:
-            why = "no integration QA" + (" (its verdict is STALE: the plan changed)" if iq_stale else "")
-        for tid in mine:
-            rows[tid]["phase"] = "integrated"
-            rows[tid]["notes"].append(why + f" for {key}: the gate needs it at the integration HEAD")
-            rows[tid]["next"] = (f"{me} dispatch {pf} --task integration:{key} --phase qa --sha {topic_head} "
-                                 "--runner orca")
     # a current subtask review/QA FAIL blocks the task like a task review FAIL: the task lead fixes it (no gate)
     blocked = False
     for t in tasks:
