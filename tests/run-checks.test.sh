@@ -144,10 +144,51 @@ assert "/p" not in env["WSLENV"]
 PY
   [ $? -eq 0 ] && okk "Git Bash and WSL path/environment probes pass" || nok "bash path/environment probe failed"
 fi
-start=$(python3 -c 'import time; print(time.monotonic())')
+# The timeout bound is graded on the runner's own record (spawn -> timeout -> tree verified gone),
+# never on this script's wall clock: python start-up and git under machine load are not the property.
+TIMEOUT_OK='.timeout | if type == "object" and .verified == true and ([.limit_s, .timed_out_after_s, .killed_after_s, .cleanup_grace_s] | all(type == "number"))
+  then .timed_out_after_s >= .limit_s and .killed_after_s >= .timed_out_after_s and (.killed_after_s - .timed_out_after_s) <= .cleanup_grace_s else false end'
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
-elapsed=$(python3 -c 'import time,sys; print(time.monotonic()-float(sys.argv[1]))' "$start")
-[ "$(awk -v e="$elapsed" 'BEGIN {print (e <= 8) ? "yes" : "no"}')" = yes ] && okk "timeout runner returned within timeout plus cleanup grace (${elapsed}s)" || nok "timeout runner exceeded bound (${elapsed}s)"
+trec=$(jq -c '.results[] | select(.check == "t-timeout-tree") | .timeout' <<<"$out")
+jq -e '.results[] | select(.check == "t-timeout-tree") | '"$TIMEOUT_OK" <<<"$out" >/dev/null && okk "timeout tree killed after the limit and within the runner's cleanup grace ($trec)" || nok "timeout record outside limit/grace: $trec"
+# Negative: a hung child the runner never manages to kill must not pass that bound (fake clock, no real wait).
+neg=$(python3 -B - "$P/scripts/run-checks.py" <<'PY'
+import importlib.util, json, subprocess, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+class Clock:
+    now = 100.0
+    def monotonic(self): return self.now
+    def sleep(self, s): self.now += s
+class Hung:
+    pid = 4242; calls = 0
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            Clock.now += timeout
+            raise subprocess.TimeoutExpired("bash", timeout)
+        return "", None
+    def wait(self, timeout=None): return 0
+timing = {}
+with patch.object(mod.procrun, "time", Clock()), patch.object(mod.os, "name", "posix"), \
+     patch.object(mod.subprocess, "Popen", return_value=Hung()), \
+     patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
+     patch.object(mod.signal, "SIGKILL", 9, create=True), \
+     patch.object(mod.os, "killpg", side_effect=lambda pgid, sig: None, create=True):
+    code, out, timed_out, cleanup = mod.procrun.run_check("sleep 60", ".", {}, 1, ("bash", "gitbash"), timing)
+assert code == 124 and timed_out and cleanup.startswith("failed"), (code, timed_out, cleanup)
+print(json.dumps({"timeout": mod.procrun.timeout_record(timing)}))
+PY
+)
+if [ -n "$neg" ] && ! jq -e "$TIMEOUT_OK" <<<"$neg" >/dev/null; then okk "never-killed hung child fails the timeout bound ($neg)"; else nok "never-killed hung child passed the timeout bound: ${neg:-no record}"; fi
+bad_records='{}
+{"timeout":null}
+{"timeout":{"limit_s":1,"timed_out_after_s":1.01,"killed_after_s":9.9,"cleanup_grace_s":3.5,"verified":true}}
+{"timeout":{"limit_s":1,"timed_out_after_s":0.4,"killed_after_s":0.5,"cleanup_grace_s":3.5,"verified":true}}
+{"timeout":{"limit_s":1,"timed_out_after_s":1.01,"killed_after_s":null,"cleanup_grace_s":3.5,"verified":false}}'
+accepted=$(jq -c "select($TIMEOUT_OK)" <<<"$bad_records")
+[ -z "$accepted" ] && okk "timeout bound rejects missing, late, early and unverified kill records" || nok "timeout bound accepted: $accepted"
 [ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
 if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
 if [ -s "$S/child.winpid" ]; then wpid=$(cat "$S/child.winpid"); tasklist //FI "PID eq $wpid" 2>/dev/null | grep -q "$wpid" && nok "timeout Windows grandchild survived (pid $wpid)" || okk "timeout Windows grandchild was killed"; fi

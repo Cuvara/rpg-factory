@@ -145,8 +145,8 @@ def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback=""):
     return procrun._windows_fallback_cleanup(exit_code, pids, is_alive, fallback, _verify_windows_pids)
 
 
-def run_check(command, cwd, env, timeout):
-    return procrun.run_check(command, cwd, env, timeout, select_bash())
+def run_check(command, cwd, env, timeout, timing=None):
+    return procrun.run_check(command, cwd, env, timeout, select_bash(), timing)
 
 
 def parser_for(check):
@@ -422,7 +422,8 @@ def main():
                 }
                 if bash_flavor == "wsl":
                     check_env = wsl_environment(check_env)
-                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"])
+                timing = {}
+                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"], timing)
             except OSError as e:
                 code, out, timed_out, cleanup = 127, f"could not start: {e}", False, "not started"
             res["duration_s"] = round(time.perf_counter() - t0, 1)
@@ -439,6 +440,7 @@ def main():
                 state = "FAIL"
                 diag = out.splitlines()[0] if out.startswith("TIMEOUT") else f"TIMEOUT after {a['timeout']} s"
                 reason = f"{diag}; cleanup={cleanup}"
+                res["timeout"] = procrun.timeout_record(timing)
             res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
                        identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})

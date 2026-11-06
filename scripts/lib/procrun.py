@@ -9,6 +9,38 @@ import stat
 import subprocess
 import time
 
+# Cleanup budgets: how long the runner may spend between noticing a timeout and
+# verifying that the check's process tree is gone. A timeout record reports the
+# measured latency against this grace (POLL_SLACK_S covers the last probe and
+# poll sleep past a deadline), so tests bound the runner's own work, not the
+# machine's load.
+POSIX_LIST_S, POSIX_REAP_S, VERIFY_S, TASKKILL_S, POLL_SLACK_S = 3, 1, 3, 5, .5
+POSIX_GRACE_S = POSIX_LIST_S + POSIX_REAP_S + VERIFY_S + POLL_SLACK_S
+WINDOWS_JOB_GRACE_S = VERIFY_S + POLL_SLACK_S
+WINDOWS_FALLBACK_GRACE_S = TASKKILL_S + VERIFY_S + POLL_SLACK_S
+
+
+def _timing_start(timing, limit):
+    if timing is not None:
+        timing.clear()
+        timing.update(limit_s=limit, started=time.monotonic())
+
+
+def _timing_timeout(timing, grace):
+    if timing is not None:
+        timing.update(timed_out_after_s=round(time.monotonic() - timing["started"], 3), cleanup_grace_s=grace,
+                      killed_after_s=None, verified=False)
+
+
+def _timing_killed(timing):
+    if timing is not None:
+        timing.update(killed_after_s=round(time.monotonic() - timing["started"], 3), verified=True)
+
+
+def timeout_record(timing):
+    """JSON shape of a timeout: the limit, when it fired, when the tree was verified gone, the runner's grace."""
+    return {k: timing.get(k) for k in ("limit_s", "timed_out_after_s", "killed_after_s", "cleanup_grace_s", "verified")}
+
 
 def git(d, *args):
     try:
@@ -73,7 +105,7 @@ def wsl_environment(env):
     return env
 
 
-def _verify_windows_pids(pids, is_alive, grace=3):
+def _verify_windows_pids(pids, is_alive, grace=VERIFY_S):
     deadline = time.monotonic() + grace
     remaining = set(pids)
     while time.monotonic() < deadline:
@@ -110,7 +142,7 @@ def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback="", verify_pid
     return f"{status}; {fallback}" if fallback else status
 
 
-def _run_windows_check(bash, command, kwargs, timeout):
+def _run_windows_check(bash, command, kwargs, timeout, timing=None):
     """Own a suspended check in a kill-on-close job before it can spawn children."""
     import ctypes
     from ctypes import wintypes
@@ -198,6 +230,7 @@ def _run_windows_check(bash, command, kwargs, timeout):
         fallback = f"job creation failed ({ctypes.get_last_error()}); taskkill fallback"
     if p is None:
         p = subprocess.Popen([bash, "-c", command], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **kwargs)
+    _timing_start(timing, timeout)
     try:
         out, _ = p.communicate(timeout=timeout)
         if job:
@@ -207,22 +240,26 @@ def _run_windows_check(bash, command, kwargs, timeout):
         return p.returncode, out or "", False, "not needed"
     except subprocess.TimeoutExpired:
         cleanup = "failed"
+        _timing_timeout(timing, WINDOWS_JOB_GRACE_S if job else WINDOWS_FALLBACK_GRACE_S)
         if job:
             kernel.TerminateJobObject(job, 1)
             account = BASIC_ACCOUNT()
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + VERIFY_S
             verified = False
             while time.monotonic() < deadline:
                 if kernel.QueryInformationJobObject(job, 1, ctypes.byref(account), ctypes.sizeof(account), None) and account.ActiveProcesses == 0:
                     verified = True
+                    _timing_killed(timing)
                     break
                 time.sleep(.05)
             cleanup = "success (job ActiveProcesses=0)" if verified else f"failed (job ActiveProcesses={account.ActiveProcesses})"
         else:
             try:
                 tree = descendants(p.pid)
-                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TASKKILL_S)
                 cleanup = _windows_fallback_cleanup(killer.returncode, tree, alive, fallback)
+                if cleanup.startswith("success"):
+                    _timing_killed(timing)
             except (OSError, subprocess.SubprocessError) as e:
                 cleanup = f"failed ({e}); {fallback}"
         try:
@@ -237,8 +274,12 @@ def _run_windows_check(bash, command, kwargs, timeout):
         return 124, f"TIMEOUT after {timeout} s; pids={[p.pid]}; cleanup={cleanup}\n{out or ''}", True, cleanup
 
 
-def run_check(command, cwd, env, timeout, bash_selection):
-    """Run bash in an isolated process group and clean up its entire child tree on timeout."""
+def run_check(command, cwd, env, timeout, bash_selection, timing=None):
+    """Run bash in an isolated process group and clean up its entire child tree on timeout.
+
+    A `timing` dict, when given, is filled with the runner's own measurements
+    (see timeout_record). They exclude interpreter start-up and other work
+    outside the check, which a caller's wall clock includes."""
     bash, flavor = bash_selection
     if not bash:
         return 127, "could not start: bash not found", False, "not started"
@@ -249,34 +290,37 @@ def run_check(command, cwd, env, timeout, bash_selection):
     kwargs = dict(cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                   encoding="utf-8", errors="replace", env=env)
     if os.name == "nt":
-        return _run_windows_check(bash, command, kwargs, timeout)
+        return _run_windows_check(bash, command, kwargs, timeout, timing)
     else:
         p = subprocess.Popen([bash, "-c", command], start_new_session=True, **kwargs)
+    _timing_start(timing, timeout)
     try:
         out, _ = p.communicate(timeout=timeout)
         return p.returncode, out or "", False, "not needed"
     except subprocess.TimeoutExpired:
         pids = [p.pid]
         cleanup = "success"
+        _timing_timeout(timing, POSIX_GRACE_S)
         try:
             if os.name == "nt":
                 killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
                 cleanup = "success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode}: {killer.stderr.strip() or killer.stdout.strip()})"
             else:
-                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3)
+                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=POSIX_LIST_S)
                 if listing.returncode == 0:
                     pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
                 os.killpg(p.pid, signal.SIGKILL)
                 try:
-                    p.wait(timeout=1)  # reap the direct child before probing group membership
+                    p.wait(timeout=POSIX_REAP_S)  # reap the direct child before probing group membership
                 except subprocess.TimeoutExpired:
                     pass
-                deadline = time.monotonic() + 3
+                deadline = time.monotonic() + VERIFY_S
                 while time.monotonic() < deadline:
                     try:
                         os.killpg(p.pid, 0)
                     except ProcessLookupError:
                         cleanup = "success"
+                        _timing_killed(timing)
                         break
                     except PermissionError:
                         cleanup = f"failed (pgid {p.pid} still has members)"
