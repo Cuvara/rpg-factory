@@ -23,6 +23,7 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       runnable as is by comfy-mcp run_workflow; render --run sets filename_prefix=assetgen/<run-id>
                       unless --param filename_prefix=... is given
   outputs/*.png       comfy-mcp fetch_outputs out_dir
+  references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
@@ -170,7 +171,8 @@ def render(spec, prompt, overrides, run_id=None):
 
 def generation_inputs(run_dir, spec):
     wf = os.path.join(run_dir, "workflow.json")
-    return runfiles.generation_inputs(read_json(wf, "workflow") if os.path.isfile(wf) else None, spec)
+    return runfiles.generation_inputs(read_json(wf, "workflow") if os.path.isfile(wf) else None, spec,
+                                      lambda name: os.path.join(run_dir, "references", name))
 
 
 def requested_size(run_dir, spec):

@@ -14,9 +14,11 @@ requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sort
   (resolved refs carry sha256) and on run.md's spec block (manifest copies the refs and params); malformed input
   still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
   params or the rendered generation inputs changed is stale.
-generation_inputs(workflow, spec) -> the effective inputs the images were generated with: the NineRouterImage
-  scalar inputs of workflow.json except user_prompt (model, size, quality, background, ... - so every render --param
-  override is bound), else the resolved spec params.
+generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
+  workflow.json graph with the 9router nodes' user_prompt left out (the prompt is bound on its own), so every render
+  --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
+  path of the run's copy references/<name> (None or a missing file -> null). Without a workflow: the spec params.
+reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
   exactly these; the plugin requires a PASS row for each). Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
@@ -91,12 +93,45 @@ def qa_errors(qa):
     return errs
 
 
-def generation_inputs(workflow, spec):
-    if isinstance(workflow, dict):
-        for node in workflow.values():
-            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
-                inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
-                return {k: v for k, v in inputs.items() if k != "user_prompt" and not isinstance(v, (list, dict))}
+PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
+
+
+def reference_names(workflow):
+    if not isinstance(workflow, dict):
+        return []
+    names = [(n.get("inputs") or {}).get("image") for n in workflow.values()
+             if isinstance(n, dict) and n.get("class_type") == "LoadImage" and isinstance(n.get("inputs"), dict)]
+    return sorted({x for x in names if isinstance(x, str)})
+
+
+def _file_sha256(path):
+    if not path or not os.path.isfile(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 16), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def generation_inputs(workflow, spec, locate=None):
+    if isinstance(workflow, dict) and any(isinstance(n, dict) and n.get("class_type") == "NineRouterImage"
+                                          for n in workflow.values()):
+        graph = {}
+        for nid, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = dict(node["inputs"]) if isinstance(node.get("inputs"), dict) else {}
+            if node.get("class_type") in PROMPT_NODES:
+                inputs.pop("user_prompt", None)
+            graph[str(nid)] = {"class_type": node.get("class_type"), "inputs": inputs}
+        refs = {}
+        for name in reference_names(workflow):
+            try:
+                refs[name] = _file_sha256(locate(os.path.basename(name)) if locate else None)
+            except (OSError, TypeError, ValueError):
+                refs[name] = None
+        return {"graph": graph, "references": refs}
     params = spec.get("params") if isinstance(spec, dict) else None
     return params if isinstance(params, dict) else {}
 

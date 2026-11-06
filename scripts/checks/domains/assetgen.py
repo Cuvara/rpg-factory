@@ -127,7 +127,8 @@ def check(artifact, ctx):
         workflow = None
     size = runfiles.requested_size(workflow, spec_json if isinstance(spec_json, dict) else spec)
     requirements = {"prompt": runfiles.requirements_sha256(spec, None), "image": runfiles.requirements_sha256(
-        spec, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec))}
+        spec, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec,
+                                    lambda name: resolve("references/" + name)))}
     author = spec.get("prompt_author") or ""
     for phase in ("prompt", "image"):
         rv = spec.get(phase + "_review") if isinstance(spec.get(phase + "_review"), dict) else {}
@@ -272,6 +273,11 @@ def check(artifact, ctx):
     wf = resolve("workflow.json")
     if gen.get("workflow") != "workflow.json" or wf is None or not wf.is_file():
         todo.append("the rendered workflow.json is not recorded in the run directory (assetgen.py render --run)")
+    for name in runfiles.reference_names(workflow):
+        ref = resolve("references/" + os.path.basename(name))
+        if ref is None or not ref.is_file():
+            todo.append("reference image %s is not kept as references/%s in the run directory (copy the original "
+                        "there before upload_file; the image review binds its sha256)" % (name, os.path.basename(name)))
     grade("gen-run-provenance", fails, todo)
 
     fails, todo, warns = [], [], []

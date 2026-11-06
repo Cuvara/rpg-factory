@@ -48,8 +48,8 @@ and run directories `assetgen/runs/<run-id>/`. Core purposes, styles and templat
    never `PASS`; say so. A verdict binds the prompt and images it saw (`prompt_sha256`, `outputs`): change either
    and the review is stale until it runs again.
 5. **Render.** `assetgen.py render --run <run> [--param name=value]` writes `<run>/workflow.json` (strict: an
-   undeclared or missing param is an error). For `image-edit`, upload the reference first (step 6) and pass
-   `--param reference_image=<name it returned>`.
+   undeclared or missing param is an error). For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
+   upload it first (step 6) and pass `--param reference_image=<name it returned>`.
 6. **Generate** (spends image credits: only when the task asks for generation). comfy-mcp: `server_info` (ComfyUI
    up, the image node present) -> `validate_workflow` on `<run>/workflow.json` -> `upload_file` for an edit's
    reference -> `run_workflow` (wait) -> `job` until done -> `fetch_outputs` with `out_dir` `<run>/outputs`. Tool

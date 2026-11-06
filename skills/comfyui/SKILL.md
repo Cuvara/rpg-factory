@@ -82,7 +82,8 @@ lead's workflow asks for in a run directory or the game layer.
 - **No local models:** the install runs API nodes only, so a graph with a checkpoint loader or sampler has nothing
   to load; the offline snapshot knows only the 9router and IO nodes (`scripts/assetgen/data/known-nodes.json`).
 - **LoadImage reads ComfyUI's input folder, not the run directory:** upload the reference with `upload_file` and pass
-  the returned name as `reference_image` (`templates/assetgen/workflows/image-edit.json`).
+  the returned name as `reference_image` (`templates/assetgen/workflows/image-edit.json`); keep the original as
+  `<run>/references/<that name>` too, or the gen-run quality plugin fails provenance and cannot bind it.
 - **SaveImage writes into ComfyUI's output folder** under `filename_prefix` (`render --run` sets
   `assetgen/<run-id>`, `scripts/assetgen/assetgen.py` `render`); only `fetch_outputs` puts the PNGs into the run.
 - **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`):

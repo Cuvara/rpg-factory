@@ -133,7 +133,7 @@
           }
         }
       },
-      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs of workflow.json (runfiles.generation_inputs) for the image review; outputs only for the image review)."
+      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs (runfiles.generation_inputs: the workflow.json graph without the prompt and the sha256 of each references/<name>) for the image review; outputs only for the image review)."
     },
     "output": {
       "type": "object",

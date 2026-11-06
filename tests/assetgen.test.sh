@@ -412,8 +412,10 @@ sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
 import runfiles
 run, image = sys.argv[2], json.load(open(sys.argv[3], encoding="utf-8"))
 spec = json.load(open(os.path.join(run, "spec.json"), encoding="utf-8"))
-gen = runfiles.generation_inputs(json.load(open(os.path.join(run, "workflow.json"), encoding="utf-8")), spec)
-assert "user_prompt" not in gen and "size" in gen and "quality" in gen, gen
+gen = runfiles.generation_inputs(json.load(open(os.path.join(run, "workflow.json"), encoding="utf-8")), spec,
+                                 lambda n: os.path.join(run, "references", n))
+img = [n["inputs"] for n in gen["graph"].values() if n["class_type"] == "NineRouterImage"][0]
+assert "user_prompt" not in img and "size" in img and "quality" in img and gen["references"] == {}, gen
 want = runfiles.requirements_sha256(spec, gen)
 assert image["binding"]["requirements_sha256"] == want, (image["binding"], want)
 assert runfiles.SHA256.match(want) and want != runfiles.requirements_sha256(spec, None)
@@ -545,6 +547,17 @@ AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-0
 variant qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
+# image-edit: the reference image is bound by name and content (references/<name> in the run directory)
+edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --authoring "$AUTH"
+mkdir -p "$edit/references"; cp "$FX/icon-ok.png" "$edit/references/ref-a.png"
+AG render --run "$edit" --param reference_image=ref-a.png >/dev/null && cp "$FX/icon-ok.png" "$edit/outputs/edit.png" && AG qa --run "$edit" >/dev/null   || no "image-edit run: render/qa did not PASS" "$(jq -c .results "$edit/qa.json" 2>/dev/null)"
+bound "$edit" prompt PASS codex > "$edit/review-prompt.json"; bound "$edit" image PASS codex > "$edit/review-image.json"
+AG manifest --run "$edit" >/dev/null
+evariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$edit" "$d"; rm -f "$d/run.md"; }
+evariant qp-eswap-001; cp "$FX/icon-opaque.png" "$RUNS/qp-eswap-001/references/ref-b.png"
+AG render --run "$RUNS/qp-eswap-001" --param reference_image=ref-b.png >/dev/null; AG qa --run "$RUNS/qp-eswap-001" >/dev/null; AG manifest --run "$RUNS/qp-eswap-001" >/dev/null
+evariant qp-ebytes-001; cp "$FX/icon-opaque.png" "$RUNS/qp-ebytes-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-ebytes-001" >/dev/null
+evariant qp-enoref-001; rm -f "$RUNS/qp-enoref-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-enoref-001" >/dev/null
 # wired through the registry (artifact-quality --domain assetgen) on a small authoring repo: artifact-quality runs
 # artifact-trace once per artifact over every artifact, so the case matrix below calls the plugin directly
 QAUTH="$TMP/qauth"; mkdir -p "$QAUTH/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$QAUTH/assetgen/"
@@ -622,6 +635,11 @@ case_ qp-rsize-001 gen-run-image-review FAIL 'bound to other requirements' "rend
 case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
 [ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
   || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
+got=$(for c in $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-edit-001 "$c")"; done)
+[ "$got" = "$(for c in $plugin_checks; do printf '%s=PASS ' "$c"; done)" ] && ok "image-edit run with its reference kept in references/: every plugin check PASS"   || no "image-edit good run: $got" "$(jq -c '.results[] | select(.artifact == "AGEN-qp-edit-001" and .state != "PASS")' "$TMP/aq.json")"
+case_ qp-eswap-001 gen-run-image-review FAIL 'bound to other requirements' "image-edit re-rendered with another reference after the image review: FAIL"
+case_ qp-ebytes-001 gen-run-image-review FAIL 'bound to other requirements' "reference image bytes changed after the image review: FAIL"
+case_ qp-enoref-001 gen-run-provenance FAIL 'is not kept as references/ref-a.png' "image-edit reference not kept in the run directory: FAIL"
 case_ qa-malformed-001 gen-run-qa FAIL 'purpose qa block is malformed' "malformed purpose qa block in spec.json: gen-run-qa FAIL, no traceback"
 [ "$(st AGEN-qp-fallback-001 gen-run-outputs)/$(st AGEN-qp-tamper-001 gen-run-prompt-review)" = "PASS/PASS" ] \
   && ok "cases stay independent (a fallback run's outputs PASS, a tampered run's review PASS)" \
