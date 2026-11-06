@@ -9,6 +9,9 @@ read_verdict(path, phase) -> {by, state, findings, prompt_sha256, outputs}
   A verdict without them, or with other values than the run's current prompt and outputs, is unbound or stale.
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
   exactly these; the plugin requires a PASS row for each).
+requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
+  the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
+  (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
 """
 import json
 import os
@@ -26,6 +29,15 @@ def required_checks(purpose_qa):
     if purpose_qa.get("not_blank") is not None:
         checks.append("png-not-blank")
     return checks
+
+
+def requested_size(workflow, spec):
+    if isinstance(workflow, dict):
+        for node in workflow.values():
+            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
+                return (node.get("inputs") or {}).get("size", "auto")
+    params = spec.get("params") if isinstance(spec, dict) else None
+    return (params or {}).get("size", "auto") if isinstance(params, dict) else "auto"
 
 
 def _outputs(value):

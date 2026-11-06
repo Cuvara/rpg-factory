@@ -27,7 +27,8 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       (review-cmd prompt); prompt_sha256 is the binding review-cmd hands the reviewer to copy back
   review-image.json   the same for the images (review-cmd image), binding also "outputs": [{"path", "sha256"}]
                       (runfiles.py; the quality plugin FAILs a stale or unbound verdict once the run is proposed)
-  qa.json             qa: rpg-factory.validation/1 results per output
+  qa.json             qa: rpg-factory.validation/1 results per output, bound to the purpose content hash and the
+                      requested size it graded with (purpose_sha256, requested_size)
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
 
 Read-only except: resolve/render --out, render --run (workflow.json), qa (qa.json) and manifest (run.md) in the
@@ -166,11 +167,7 @@ def render(spec, prompt, overrides, run_id=None):
 
 def requested_size(run_dir, spec):
     wf = os.path.join(run_dir, "workflow.json")
-    if os.path.isfile(wf):
-        for node in read_json(wf, "workflow").values():
-            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
-                return node.get("inputs", {}).get("size", "auto")
-    return spec.get("params", {}).get("size", "auto")
+    return runfiles.requested_size(read_json(wf, "workflow") if os.path.isfile(wf) else None, spec)
 
 
 def workflow_model(run_dir, spec):
@@ -387,11 +384,13 @@ def main(argv=None):
             return 0
         if a.cmd == "qa":
             spec = load_spec(os.path.join(a.run, "spec.json"))
-            results, outputs = qa.run_qa(a.run, spec, requested_size(a.run, spec))
+            size = requested_size(a.run, spec)
+            results, outputs = qa.run_qa(a.run, spec, size)
             state = qa.overall(results)
             counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "FAIL", "NOT_AVAILABLE")}
             report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
-                      "purpose": spec["purpose"]["id"], "state": state, "results": results, "outputs": outputs, "summary": counts}
+                      "purpose": spec["purpose"]["id"],
+                      "purpose_sha256": layers.content_hash(spec["purpose"]["data"]), "requested_size": size, "state": state, "results": results, "outputs": outputs, "summary": counts}
             write_json(os.path.join(a.run, "qa.json"), report)
             emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
                  + "\nassetgen qa: %s (%d PASS, %d FAIL, %d NOT_AVAILABLE)" % (state, counts["PASS"], counts["FAIL"], counts["NOT_AVAILABLE"]))

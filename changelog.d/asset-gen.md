@@ -16,7 +16,7 @@
   model differs from the prompt author; the review files, not the `run.md` summary, are the evidence and each verdict
   is bound to the prompt and output SHA-256s `review-cmd` handed the reviewer, so a missing, contradicting or stale
   review fails; `qa.json` must be PASS with a PASS row for every check the purpose requires, `NOT_AVAILABLE` never
-  grades PASS; output hashes, provenance, refs), human gate `assetgen-approval`,
+  grades PASS, and a QA report graded with an older purpose qa block or requested size is stale; output hashes, provenance, refs), human gate `assetgen-approval`,
   handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`, and the `comfy-mcp` dev tool (MCP server plus a
   ComfyUI service probe, headless or Desktop). A same-model review is allowed only as the explicit fallback
   `"by": "SAME_MODEL:<model>"`, which grades WARN, never PASS.

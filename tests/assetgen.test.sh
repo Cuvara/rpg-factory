@@ -232,6 +232,9 @@ qarun qa-icon-ok-001 icon icon-ok.png
 [ -f "$RUNS/qa-icon-ok-001/qa.json" ] && [ "$(jq -r .schema "$RUNS/qa-icon-ok-001/qa.json")" = rpg-factory.validation/1 ] \
   && [ "$(jq -r '.outputs[0].sha256' "$RUNS/qa-icon-ok-001/qa.json")" = "$(sha256sum "$FX/icon-ok.png" | cut -d' ' -f1)" ] \
   && ok "qa.json written (rpg-factory.validation/1, output sha256)" || no "qa.json"
+qb="$RUNS/qa-icon-ok-001"; want_size=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$qb/workflow.json")
+[ "$(jq -r '.purpose_sha256 | test("^[0-9a-f]{64}$")' "$qb/qa.json")/$(jq -r .requested_size "$qb/qa.json")" = "true/$want_size" ] \
+  && ok "qa.json binds the purpose content hash and the requested size it graded with" || no "qa.json binding" "$(jq -c '{purpose_sha256, requested_size}' "$qb/qa.json")"
 ASSETGEN_NO_PIL=1 AG qa --run "$RUNS/qa-icon-ok-001" --json > "$TMP/q.json"; rc=$?
 [ $rc -eq 0 ] && jq -r '.results[] | select(.check == "png-valid") | .reasons[0]' "$TMP/q.json" | grep -q "decoder stdlib" \
   && ok "stdlib decoder path gives the same PASS" || no "stdlib qa rc=$rc" "$(jq -c .results "$TMP/q.json")"
@@ -444,6 +447,9 @@ variant qp-qapart-001; qaset qp-qapart-001 'obj["results"] = [r for r in obj["re
 variant qp-qana-001; qaset qp-qana-001 'obj["state"] = "NOT_AVAILABLE"; obj["results"] = [{"output": "outputs/qp-icon.png", "check": "png-valid", "state": "NOT_AVAILABLE", "reasons": ["16-bit"]}]'
 AG manifest --run "$RUNS/qp-qana-001" >/dev/null
 variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["purpose"]["data"]["qa"] = {}; json.dump(s, open(p, "w"))' "$RUNS/qp-qaspec-001/spec.json"
+variant qp-qapurp-001; qaset qp-qapurp-001 'obj["purpose_sha256"] = "0" * 64'; AG manifest --run "$RUNS/qp-qapurp-001" >/dev/null
+variant qp-qasize-001; python3 -B -c 'import json, sys; p = sys.argv[1]; w = json.load(open(p)); [n["inputs"].__setitem__("size", "1024x1536") for n in w.values() if n.get("class_type") == "NineRouterImage"]; json.dump(w, open(p, "w"))' "$RUNS/qp-qasize-001/workflow.json"
+AG manifest --run "$RUNS/qp-qasize-001" >/dev/null
 variant qp-tool-001; fmset "$RUNS/qp-tool-001" 'obj["provenance"]["tool"] = "other"'
 variant qp-ref-001; fmset "$RUNS/qp-ref-001" 'obj["spec"]["style"]["id"] = "no-such-style"'
 variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha256"] = "0" * 64'
@@ -509,6 +515,8 @@ case_ qp-qacontra-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows'
 case_ qp-qapart-001 gen-run-qa FAIL 'lacks the required check(s) png-corners' "qa.json PASS without a purpose-required check: FAIL"
 case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAILABLE QA never grades PASS"
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
+case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"
+case_ qp-qasize-001 gen-run-qa FAIL 'graded for requested size' "requested size changed after QA: FAIL"
 case_ qp-tool-001 gen-run-provenance FAIL 'provenance.tool must be comfyui' "provenance tool other than comfyui: FAIL"
 case_ qp-ref-001 gen-run-refs FAIL "style 'no-such-style' does not resolve" "unresolvable style ref: FAIL"
 case_ qp-drift-001 gen-run-refs WARN 'changed since the run' "template content changed since the run: WARN (the record keeps what was used)"

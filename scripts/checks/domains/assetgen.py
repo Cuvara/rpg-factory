@@ -196,9 +196,10 @@ def check(artifact, ctx):
     required, problems = None, []
     sj = resolve("spec.json")
     try:
-        purpose = json.loads(sj.read_text(encoding="utf-8"))["purpose"] if sj is not None and sj.is_file() else None
+        spec_json = json.loads(sj.read_text(encoding="utf-8")) if sj is not None and sj.is_file() else None
+        purpose = spec_json["purpose"] if spec_json is not None else None
     except (OSError, ValueError, KeyError, TypeError):
-        purpose = False
+        spec_json, purpose = None, False
     rec_purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
     if purpose is None:
         todo.append("spec.json is missing from the run directory; the purpose's required QA checks are unknown")
@@ -209,6 +210,18 @@ def check(artifact, ctx):
     else:
         required = runfiles.required_checks(purpose["data"].get("qa", {}))
     if disk is not None:
+        if disk.get("purpose_sha256") != rec_purpose.get("sha256"):
+            fails.append("qa.json was graded with another purpose qa block (purpose_sha256 %s, run records %s); "
+                         "re-run qa and manifest" % (disk.get("purpose_sha256"), rec_purpose.get("sha256")))
+        wf = resolve("workflow.json")
+        try:
+            workflow = json.loads(wf.read_text(encoding="utf-8")) if wf is not None and wf.is_file() else None
+        except (OSError, ValueError):
+            workflow = None
+        size = runfiles.requested_size(workflow, spec_json if isinstance(spec_json, dict) else {})
+        if disk.get("requested_size") != size:
+            fails.append("qa.json was graded for requested size %r, the run now requests %r; re-run qa and manifest"
+                         % (disk.get("requested_size"), size))
         if state != "PASS":
             todo.append("QA is %s; run assetgen.py qa until it reports PASS, then manifest" % (state or "missing"))
         for path in recorded:
