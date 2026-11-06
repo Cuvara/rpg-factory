@@ -480,6 +480,16 @@ python3 -B "$P" verdict "$G" --task gw --phase qa --sha "$SG" --by codex --state
 expect "a subtask QA FAIL blocks the gate" 1 "BLOCKER gw: subtask s3 qa FAIL" gate "$G"
 v --task gw --phase review --sha "$SG" --by codex --state PASS --subtask s2
 v --task gw --phase qa --sha "$SG" --by codex --state PASS --subtask s3
+# late results: a PASS on an older candidate (SG~1) never resolves a FAIL on the newer SG; a PASS on SG resolves it, and
+# a late FAIL on the older candidate then changes nothing
+SA=$(git -C "$S" rev-parse "$SG~1")
+v --task gw --phase review --sha "$SG" --by claude --state FAIL --subtask s4
+v --task gw --phase review --sha "$SA" --by claude --state PASS --subtask s4
+expect "a late subtask PASS on an older candidate keeps the newer FAIL: NOT_READY" 1 "BLOCKER gw: subtask s4 review FAIL at ${SG:0:10} by claude" gate "$G"
+expect "status keeps the newer subtask FAIL after a late older PASS" 0 "note: subtask s4 review FAIL at ${SG:0:10}" status "$G"
+v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s4
+v --task gw --phase review --sha "$SA" --by claude --state FAIL --subtask s4
+refute "a late subtask FAIL on an older candidate does not reopen the newer PASS" "subtask s4" gate "$G"
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "READY prints the PR command against the base branch" 0 "gh pr create --base develop --head feat/core/demo" gate "$G"
 cp "$G" "$TMP/gate.bak"; sed -i 's/"objective":"o","paths":\["backend/"objective":"changed","paths":["backend/' "$G"
@@ -688,6 +698,37 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
 git -C "$S" branch -q -D isolated-qa feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+# children of the integration checkout ($S on feat/core/demo): the integration QA child dispatch names
+# (<topic>--qa) and a helper with any name whose Orca lineage parent is the integration checkout; status lists them
+# once per repo in integration_children with cleanup guidance, cleanup names them "child of integration:srv"
+opath "integration QA --placement child (orca on PATH): worker-start --worktree new-child at the SHA" 0 "^orca orchestration worker-start .*--worktree new-child --name feat/core/demo--qa --base-branch $SG " dispatch "$G" --task integration:srv --phase qa --sha "$SG" --placement child --runner orca
+git -C "$S" worktree add -q "$TMP/feat-core-demo--qa" -b feat/core/demo--qa "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/int-helper" -b int-helper "$SG" 2>/dev/null
+export FAKE_ORCA_WT="$TMP/orca-wt.json"
+jq -n --arg p "$(wtp "$S")" --arg h "$(wtp "$TMP/int-helper")" \
+  '{ok:true,result:{worktrees:[{id:"r::int",path:$p,parentWorktreeId:null},{id:"r::h",path:$h,parentWorktreeId:"r::int"}]}}' > "$FAKE_ORCA_WT"
+PATH="$fpath" python3 -B "$P" status --json "$G" > "$TMP/status-int.json" 2>/dev/null
+if jq -e '(.integration_children | length) == 2 and all(.integration_children[]; .repo == "srv" and .merged
+     and (.note | test("leftover child worktree .*merged, then remove it at once: orca worktree rm --worktree")))
+   and ([.integration_children[].branch] | sort) == ["feat/core/demo--qa", "int-helper"]
+   and all(.tasks[]; (.children | length) == 0)' "$TMP/status-int.json" >/dev/null && python3 - "$ROOT" "$TMP/status-int.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+assert not m.schema_errors(json.load(open(sys.argv[2], encoding="utf-8")), schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status lists integration-checkout children once per repo (name and lineage), schema-valid"
+else fail=$((fail + 1)); echo "FAIL  status integration_children"; head -c 1500 "$TMP/status-int.json"; fi
+opath "status text names the integration child with its rm command" 0 "^  \[integration:srv\] child: leftover child worktree .*feat-core-demo--qa .*orca worktree rm" status "$G"
+opath "cleanup names the integration QA child" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*feat-core-demo--qa" cleanup "$G"
+opath "cleanup names the lineage helper of the integration checkout" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*int-helper" cleanup "$G"
+unset FAKE_ORCA_WT
+git -C "$S" worktree remove "$TMP/feat-core-demo--qa"; git -C "$S" worktree remove "$TMP/int-helper"
+git -C "$S" branch -q -D feat/core/demo--qa int-helper
+if python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.integration_children == []' >/dev/null
+then pass=$((pass + 1)); echo "PASS  integration children removed: status lists none"
+else fail=$((fail + 1)); echo "FAIL  integration_children after removal"; fi
 
 echo "-- review findings"
 expect "--agent cannot swap the planned implementer" 2 "is planned for claude; set .implementer: codex." dispatch "$OK" --task gw --phase implement --agent codex

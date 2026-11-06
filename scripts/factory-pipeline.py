@@ -1082,22 +1082,45 @@ def read_verdict(plan, reg, task_id, phase, blockers):
 
 
 def subtask_failures(plan, reg, task_id):
-    """The current (this version of the plan) subtask review/QA verdicts of a task that are not PASS: each blocks the
-    gate and status until a later `verdict --subtask <id>` PASS replaces it. STALE subtask records are ignored."""
-    vdir, pre, out = verdict_dir(plan), f"{safe_name(task_id)}__sub-", []
+    """The subtask review/QA verdicts of a task that are not PASS on the newest candidate: each blocks the gate and
+    status. Every record of this version of the plan counts (the current file and the per-candidate archives; STALE
+    records are ignored). Per subtask and phase, a candidate's own verdict is its current record (else its latest
+    archive, a tie keeps the non-PASS) and only candidates that no other recorded candidate contains decide: a PASS
+    on a newer commit resolves an older FAIL, a late PASS on an older candidate never resolves a newer FAIL."""
+    vdir, pre = verdict_dir(plan), f"{safe_name(task_id)}__sub-"
     names = sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []
-    fp = None
+    fp, groups = None, {}
     for n in names:
-        phase = next((p for p in ("review", "qa") if n.startswith(pre) and n.endswith(f"__{p}.json")), None)
-        if not phase:
+        if not (n.startswith(pre) and n.endswith(".json")):
             continue
         rec = fstate.read_json(os.path.join(vdir, n))
-        if not isinstance(rec, dict) or rec.get("task") != task_id or not rec.get("subtask") or rec.get("phase") != phase:
+        if (not isinstance(rec, dict) or rec.get("task") != task_id or not rec.get("subtask")
+                or rec.get("phase") not in ("review", "qa") or not rec.get("sha")):
             continue
         fp = fp or scope_fingerprint(plan, reg, task_id)
-        if rec.get("fingerprint") == fp and rec.get("state") != "PASS":
-            out.append(f"subtask {rec['subtask']} {phase} {rec.get('state')} at {str(rec.get('sha', ''))[:10]} by "
-                       f"{rec.get('by')} (fix it, then record `verdict --subtask {rec['subtask']}` PASS)")
+        if rec.get("fingerprint") != fp:
+            continue
+        current = n == f"{pre}{safe_name(rec['subtask'])}__{rec['phase']}.json"
+        groups.setdefault((rec["subtask"], rec["phase"]), []).append((current, rec))
+    if not groups:
+        return []
+    path = repo_info(plan, reg, find_task(plan, task_id)["repo"])["path"] or "."
+    out = []
+    for (sid, phase), recs in sorted(groups.items()):
+        by_sha = {}
+        for current, rec in recs:
+            by_sha.setdefault(rec["sha"], []).append((current, rec))
+        eff = {}
+        for sha, rs in by_sha.items():
+            cur = [r for c, r in rs if c]
+            eff[sha] = cur[0] if cur else max((r for _, r in rs),
+                                              key=lambda r: (str(r.get("timestamp", "")), r.get("state") != "PASS"))
+        tips = [sha for sha in eff if not any(o != sha and is_ancestor(path, sha, o) for o in eff)]
+        for sha in sorted(tips):
+            rec = eff[sha]
+            if rec.get("state") != "PASS":
+                out.append(f"subtask {sid} {phase} {rec.get('state')} at {sha[:10]} by {rec.get('by')} (fix it, then "
+                           f"record `verdict --subtask {sid}` PASS on a commit that contains {sha[:10]})")
     return out
 
 
@@ -1696,8 +1719,8 @@ def status(plan, reg, orca_run=None):
     tasks = plan.get("tasks", [])
     if v["errors"]:
         return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": False,
-                "errors": v["errors"], "waves": v["waves"], "tasks": [], "ready_wave": None, "ready": [],
-                "next": [f"{me} validate {pf}"]}
+                "errors": v["errors"], "waves": v["waves"], "tasks": [], "integration_children": [], "ready_wave": None,
+                "ready": [], "next": [f"{me} validate {pf}"]}
     count = {}
     for t in tasks:
         count[t["repo"]] = count.get(t["repo"], 0) + 1
@@ -1706,6 +1729,16 @@ def status(plan, reg, orca_run=None):
     lineage = Lineage(own)  # one read-only `orca worktree list` for every task, only when needed
     for t in tasks:
         rows[t["id"]], infos[t["id"]] = task_status(plan, reg, t, count[t["repo"]], lineage)
+    # children of the integration checkout (integration QA or a helper in `<topic>--*`, or any name by Orca's
+    # lineage), once per repo
+    int_children = []
+    for key in sorted(count):
+        info = repo_info(plan, reg, key)
+        if not info["worktrees"] or not info["path"] or not os.path.isdir(info["path"]):
+            continue
+        home, trees = worktree_for(info["path"], plan["topic"])
+        for c in children_of(info["path"], trees, plan["topic"], home, lineage):
+            int_children.append({"repo": key, **c, "note": child_note_text(c, plan["topic"])})
     wave_of = {tid: n for n, w in enumerate(v["waves"], 1) for tid in w}
     done = ("integrated", "qa")
     ready = []
@@ -1800,7 +1833,7 @@ def status(plan, reg, orca_run=None):
         out_rows.append({k: r[k] for k in ("id", "repo", "wave", "phase", "branch", "worktree", "sha", "review", "qa",
                                            "children", "next", "notes")})
     return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
-            "waves": v["waves"], "tasks": out_rows, "ready_wave": open_waves[0] if open_waves else None,
+            "waves": v["waves"], "tasks": out_rows, "integration_children": int_children, "ready_wave": open_waves[0] if open_waves else None,
             "ready": ready, "next": nxt, "_workers": workers}
 
 
@@ -1825,6 +1858,8 @@ def cmd_status(a, reg):
             print("      note: " + n)
         if r["next"]:
             print("      next: " + r["next"])
+    for c in out["integration_children"]:
+        print(f"  [integration:{c['repo']}] child: {c['note']}")
     if out["ready_wave"]:
         print(f"Ready wave: {out['ready_wave']}" + (f"  (dispatch: {', '.join(out['ready'])})" if out["ready"] else ""))
     elif out["valid"] and out["tasks"]:
