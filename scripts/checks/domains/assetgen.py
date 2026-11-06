@@ -12,9 +12,11 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        than the author FAILS (it is not a fallback). The review file itself is the evidence, not the
                        run.md summary: review-<phase>.json must exist, run.md's <phase>_review must equal what
                        scripts/assetgen/runfiles.py reads from it (else FAIL: re-run manifest), and its binding must
-                       name the current bytes: prompt_sha256 = spec.prompt_sha256 and, for the image review, outputs =
-                       the recorded outputs (review-cmd hands the reviewer these values to copy back). A missing,
-                       invalid, unbound or stale review file is missing work.
+                       name the current bytes: prompt_sha256 = spec.prompt_sha256, requirements_sha256 =
+                       runfiles.requirements_sha256 of the run.md spec (purpose, style and template content hashes,
+                       params; for the image review also the generation inputs of workflow.json) and, for the
+                       image review, outputs = the recorded outputs (review-cmd hands the reviewer these values to copy back). A missing, invalid,
+                       unbound or stale review file is missing work.
   gen-run-qa           qa.json is the evidence: it hashed the recorded output bytes, run.md's qa equals its state and
                        results (else FAIL: re-run manifest), its state is PASS, and every recorded output has a PASS
                        row for each check the purpose requires (runfiles.required_checks of the run's spec.json
@@ -112,6 +114,20 @@ def check(artifact, ctx):
     outputs = [o for o in spec.get("outputs") or [] if isinstance(o, dict)]
     recorded = {o.get("path"): o.get("sha256") for o in outputs}
     runfiles = engine("runfiles")
+    sj = resolve("spec.json")
+    try:
+        spec_json = json.loads(sj.read_text(encoding="utf-8")) if sj is not None and sj.is_file() else None
+        purpose = spec_json["purpose"] if spec_json is not None else None
+    except (OSError, ValueError, KeyError, TypeError):
+        spec_json, purpose = None, False
+    wf = resolve("workflow.json")
+    try:
+        workflow = json.loads(wf.read_text(encoding="utf-8")) if wf is not None and wf.is_file() else None
+    except (OSError, ValueError):
+        workflow = None
+    size = runfiles.requested_size(workflow, spec_json if isinstance(spec_json, dict) else spec)
+    requirements = {"prompt": runfiles.requirements_sha256(spec, None), "image": runfiles.requirements_sha256(
+        spec, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec))}
     author = spec.get("prompt_author") or ""
     for phase in ("prompt", "image"):
         rv = spec.get(phase + "_review") if isinstance(spec.get(phase + "_review"), dict) else {}
@@ -132,6 +148,9 @@ def check(artifact, ctx):
                             % (name, str(disk["prompt_sha256"])[:12], str(spec.get("prompt_sha256"))[:12]))
             elif phase == "image" and {o["path"]: o["sha256"] for o in disk["outputs"]} != recorded:
                 todo.append("%s is bound to other outputs than the recorded ones: re-run the image review" % name)
+            elif disk["requirements_sha256"] != requirements[phase]:
+                todo.append("%s is bound to other requirements (purpose, style, template or params changed since the "
+                            "review%s): re-run the review" % (name, ", or the generation inputs" if phase == "image" else ""))
         if state != "PASS":
             todo.append("%s review is %s%s (evidence review-%s.json)" % (
                 phase, state or "missing", ", %s finding(s)" % rv.get("findings") if rv.get("findings") else "", phase))
@@ -194,12 +213,6 @@ def check(artifact, ctx):
     state = disk.get("state") if disk is not None else None
     rows = [r for r in (disk or {}).get("results") or [] if isinstance(r, dict)]
     required, problems = None, []
-    sj = resolve("spec.json")
-    try:
-        spec_json = json.loads(sj.read_text(encoding="utf-8")) if sj is not None and sj.is_file() else None
-        purpose = spec_json["purpose"] if spec_json is not None else None
-    except (OSError, ValueError, KeyError, TypeError):
-        spec_json, purpose = None, False
     rec_purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
     if purpose is None:
         todo.append("spec.json is missing from the run directory; the purpose's required QA checks are unknown")
@@ -208,17 +221,16 @@ def check(artifact, ctx):
         fails.append("spec.json purpose is not the purpose the run recorded (unreadable, or its content hash "
                      "differs from spec.purpose.sha256)")
     else:
-        required = runfiles.required_checks(purpose["data"].get("qa", {}))
+        purpose_qa = purpose["data"].get("qa", {})
+        malformed = runfiles.qa_errors(purpose_qa)
+        if malformed:
+            fails.append("spec.json purpose qa block is malformed (%s); fix the purpose, resolve, re-run qa and manifest"
+                         % "; ".join(malformed))
+        required = runfiles.required_checks(purpose_qa)
     if disk is not None:
         if disk.get("purpose_sha256") != rec_purpose.get("sha256"):
             fails.append("qa.json was graded with another purpose qa block (purpose_sha256 %s, run records %s); "
                          "re-run qa and manifest" % (disk.get("purpose_sha256"), rec_purpose.get("sha256")))
-        wf = resolve("workflow.json")
-        try:
-            workflow = json.loads(wf.read_text(encoding="utf-8")) if wf is not None and wf.is_file() else None
-        except (OSError, ValueError):
-            workflow = None
-        size = runfiles.requested_size(workflow, spec_json if isinstance(spec_json, dict) else {})
         if disk.get("requested_size") != size:
             fails.append("qa.json was graded for requested size %r, the run now requests %r; re-run qa and manifest"
                          % (disk.get("requested_size"), size))

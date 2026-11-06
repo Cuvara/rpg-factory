@@ -8,14 +8,15 @@
   `image-generate` and `image-edit` (`rpg-factory.comfy-template/1`: `{{param}}` placeholders, typed params,
   `output_node`). A game layer `<authoring>/assetgen/{purposes,styles,templates}/` overrides or `extends` core ids.
   `render` is strict, `lint` checks data and workflows offline against a node snapshot and rejects URLs, host
-  addresses and credentials, `review-cmd` only prints a read-only `codex exec` command, and `qa` checks PNG validity,
+  addresses and credentials (malformed nested data and out-of-range link indices are FAIL rows, never a traceback), `review-cmd` only prints a read-only `codex exec` command, and `qa` checks PNG validity,
   size (exact, min, aspect or any), alpha, transparent corners, tileable seams and blank images. The stdlib PNG
   decoder applies gray, RGB and palette `tRNS` transparency like Pillow. Every parser refuses abbreviated options.
 - **Domain `assetgen`.** Module `authoring.assetgen` (`assetgen/`), artifact kind `gen-run`
   (`docs/schemas/kinds/gen-run.schema.json`), quality plugin `scripts/checks/domains/assetgen.py` (the reviewer
   model differs from the prompt author; the review files, not the `run.md` summary, are the evidence and each verdict
-  is bound to the prompt and output SHA-256s `review-cmd` handed the reviewer, so a missing, contradicting or stale
-  review fails; `qa.json` must be PASS with a PASS row for every check the purpose requires, `NOT_AVAILABLE` never
+  is bound to the prompt and output SHA-256s and a requirements hash (purpose, style and template content hashes,
+  resolved params, and for the image review the generation inputs of `workflow.json`) that `review-cmd` handed the reviewer, so a missing,
+  contradicting or stale review fails, also after a purpose is re-resolved with a stricter rubric; `qa.json` must be PASS with a PASS row for every check the purpose requires, `NOT_AVAILABLE` never
   grades PASS, and a QA report graded with an older purpose qa block or requested size is stale; output hashes, provenance, refs), human gate `assetgen-approval`,
   handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`, and the `comfy-mcp` dev tool (MCP server plus a
   ComfyUI service probe, headless or Desktop). A same-model review is allowed only as the explicit fallback

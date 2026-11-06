@@ -76,6 +76,7 @@
       "state": "NOT_RUN",
       "findings": 0,
       "prompt_sha256": null,
+      "requirements_sha256": null,
       "outputs": []
     },
     "generation": {
@@ -94,6 +95,7 @@
       "state": "NOT_RUN",
       "findings": 0,
       "prompt_sha256": null,
+      "requirements_sha256": null,
       "outputs": []
     }
   }
@@ -106,9 +108,10 @@ writes the real record (status `proposed`) with the content hashes of the resolv
 model from `workflow.json`, the review verdicts, the QA results and the sha256 of every `outputs/*.png`. Do not
 hand-edit a generated record; fix the run and re-run `manifest`.
 
-- Reviews: `review-prompt.json` and `review-image.json` hold `{"state", "findings", "by", "prompt_sha256"}` (the
-  image review also `"outputs": [{"path", "sha256"}]`): the binding `review-cmd` hands the reviewer to copy back, so a
-  verdict on an older prompt or other images is stale. `by` names the reviewing model and must differ from
+- Reviews: `review-prompt.json` and `review-image.json` hold `{"state", "findings", "by", "prompt_sha256",
+  "requirements_sha256"}` (the image review also `"outputs": [{"path", "sha256"}]`): the binding `review-cmd` hands
+  the reviewer to copy back, so a verdict on an older prompt, other requirements (purpose, style, template, params;
+  for the image review also the generation inputs of `workflow.json`) or other images is stale. `by` names the reviewing model and must differ from
   `prompt_author`. When the independent reviewer is unavailable, a same-model review is
   recorded explicitly as `"by": "SAME_MODEL:<model>"` (quality WARN, never a silent PASS).
 - Status: approval is human-only (gate `assetgen-approval`); only an approved run hands its images to 2D Art, 3D

@@ -23,10 +23,13 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       runnable as is by comfy-mcp run_workflow; render --run sets filename_prefix=assetgen/<run-id>
                       unless --param filename_prefix=... is given
   outputs/*.png       comfy-mcp fetch_outputs out_dir
-  review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "..."}
-                      (review-cmd prompt); prompt_sha256 is the binding review-cmd hands the reviewer to copy back
-  review-image.json   the same for the images (review-cmd image), binding also "outputs": [{"path", "sha256"}]
-                      (runfiles.py; the quality plugin FAILs a stale or unbound verdict once the run is proposed)
+  review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
+                      "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
+                      hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
+                      style and template content hashes and the resolved params
+  review-image.json   the same for the images (review-cmd image); its requirements_sha256 also covers the generation
+                      inputs of workflow.json (runfiles.generation_inputs), and the binding adds "outputs": [{"path", "sha256"}] (runfiles.py; the
+                      quality plugin FAILs a stale or unbound verdict once the run is proposed)
   qa.json             qa: rpg-factory.validation/1 results per output, bound to the purpose content hash and the
                       requested size it graded with (purpose_sha256, requested_size)
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
@@ -165,6 +168,11 @@ def render(spec, prompt, overrides, run_id=None):
     return workflow, e
 
 
+def generation_inputs(run_dir, spec):
+    wf = os.path.join(run_dir, "workflow.json")
+    return runfiles.generation_inputs(read_json(wf, "workflow") if os.path.isfile(wf) else None, spec)
+
+
 def requested_size(run_dir, spec):
     wf = os.path.join(run_dir, "workflow.json")
     return runfiles.requested_size(read_json(wf, "workflow") if os.path.isfile(wf) else None, spec)
@@ -226,7 +234,8 @@ def review_cmd(run_dir, phase, codex):
     qa_path = os.path.join(run_dir, "qa.json")
     qa_report = read_json(qa_path, "qa") if phase == "image" and os.path.isfile(qa_path) else None
     rel = [os.path.relpath(i, run_dir).replace(os.sep, "/") for i in images]
-    binding = {"prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest()}
+    binding = {"prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+               "requirements_sha256": runfiles.requirements_sha256(spec, generation_inputs(run_dir, spec) if phase == "image" else None)}
     if phase == "image":
         binding["outputs"] = [{"path": r, "sha256": qa.sha256(i)} for r, i in zip(rel, images)]
     stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding)
@@ -386,11 +395,11 @@ def main(argv=None):
             spec = load_spec(os.path.join(a.run, "spec.json"))
             size = requested_size(a.run, spec)
             results, outputs = qa.run_qa(a.run, spec, size)
+            purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
             state = qa.overall(results)
             counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "FAIL", "NOT_AVAILABLE")}
             report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
-                      "purpose": spec["purpose"]["id"],
-                      "purpose_sha256": layers.content_hash(spec["purpose"]["data"]), "requested_size": size, "state": state, "results": results, "outputs": outputs, "summary": counts}
+                      "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size, "state": state, "results": results, "outputs": outputs, "summary": counts}
             write_json(os.path.join(a.run, "qa.json"), report)
             emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
                  + "\nassetgen qa: %s (%d PASS, %d FAIL, %d NOT_AVAILABLE)" % (state, counts["PASS"], counts["FAIL"], counts["NOT_AVAILABLE"]))

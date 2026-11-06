@@ -4,7 +4,8 @@
 # lint errors and warnings, review-cmd output (prints, never runs Codex), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings), the gen-run quality plugin (pass and fail cases: review files and their
-# prompt/output binding, qa.json as the QA evidence; through artifact-quality and called directly), artifact-lint on
+# prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
+# malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md,
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
@@ -177,6 +178,49 @@ jq '.["1"].inputs.user_prompt = "{{prompt}}"' "$RUNS/golden-icon-001/workflow.js
 got=$(AG lint "$TMP/left.json" 2>&1); grep -q "unfilled placeholder prompt" <<<"$got" && ok "rendered workflow with a leftover placeholder: FAIL" || no "leftover placeholder lint"
 echo '{"schema": "x"}' > "$TMP/other.json"
 got=$(AG lint "$TMP/other.json" 2>&1); grep -q "not an asset-gen" <<<"$got" && ok "unrelated JSON: FAIL" || no "unrelated JSON lint"
+# malformed nested data and link indices are FAIL rows, never a traceback (review findings 2 and 3)
+mal() { echo "$2" > "$LA/assetgen/purposes/$1.json"; }
+mal mal-size '{"extends": "icon", "qa": {"size": []}}'
+mal mal-qa '{"extends": "icon", "qa": "strict"}'
+mal mal-params '{"extends": "icon", "params": ["quality"]}'
+mal mal-rubric '{"extends": "icon", "image_rubric": "looks good"}'
+mal mal-blank '{"extends": "texture-tileable", "qa": {"tileable": true, "not_blank": 1, "size": {"mode": "min", "expect": 1024}}}'
+mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "default_style": 7}'
+expect_mal() { # expect_mal ID TEXT LABEL
+  local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
+  local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
+  case "$rc/$got" in "1/FAIL "*"$2"*) grep -q Traceback "$TMP/err" && no "lint $3: traceback" "$(cat "$TMP/err")" || ok "lint $3" ;;
+    *) no "lint $3 rc=$rc" "$got
+$(cat "$TMP/err")" ;; esac
+}
+expect_mal mal-size "qa.size must be an object" "malformed purpose: qa.size a list -> FAIL row, exit 1, no traceback"
+expect_mal mal-qa "qa must be an object" "malformed purpose: qa not an object -> FAIL row"
+expect_mal mal-params "params must be an object" "malformed purpose: params not an object -> FAIL row"
+expect_mal mal-rubric "image_rubric must be a non-empty list of strings" "malformed purpose: rubric not a list -> FAIL row"
+expect_mal mal-blank "qa.not_blank must be an object" "malformed purpose: tileable true, not_blank 1, numeric expect -> FAIL rows"
+got=$(AG lint "$LA/assetgen/purposes/mal-blank.json" --authoring "$LA" 2>&1)
+grep -q "qa.tileable.max_seam_error must be" <<<"$got" && grep -q "qa.size.expect must be WIDTHxHEIGHT" <<<"$got" \
+  && ok "malformed purpose: every malformed qa field is named" || no "mal-blank reasons" "$got"
+expect_mal mal-prompt "prompt.must_include must be a list of strings" "malformed purpose: prompt guidance and default_style types -> FAIL row"
+python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+for bad in ([], "x", None, {"size": []}, {"tileable": True, "not_blank": 1}, {"transparent_corners": "yes"}):
+    runfiles.required_checks(bad)
+    assert runfiles.qa_errors(bad) or bad is None, bad
+assert runfiles.qa_errors(None) == ["qa must be an object"]
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "runfiles.required_checks and qa_errors never raise on malformed qa blocks" || no "required_checks robustness" "$(cat "$TMP/o")"
+LINKOK='"1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": "{{prompt}}", "model": "m", "size": "auto", "quality": "auto", "background": "auto"}}'
+for idx in -1 -99 5 true; do
+  tmpl "link-$idx" '' "{$LINKOK, \"2\": {\"class_type\": \"SaveImage\", \"inputs\": {\"filename_prefix\": \"x\", \"images\": [\"1\", $idx]}}}"
+done
+expect_lint link--1 FAIL "node 1 has no output -1" "link output index -1: FAIL (negative index never passes bounds)"
+expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAIL, no traceback"
+expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
+expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
 AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "19 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "core + game layer lint clean (19 files)" || no "full lint" "$(tail -5 "$TMP/o")"
 
 echo "-- fixture PNGs"
@@ -274,6 +318,12 @@ qarun qa-corrupt-001 icon corrupt.png not-a-png.png
 [ $rc -eq 1 ] && [ "$(st png-valid)" = "FAIL,FAIL" ] && ok "bad CRC and non-PNG bytes: png-valid FAIL" || no "corrupt rc=$rc $(st png-valid)"
 mkrun qa-none-001 icon --style pixel-art; AG qa --run "$RUNS/qa-none-001" --json > "$TMP/q.json"; rc=$?
 [ $rc -eq 1 ] && [ "$(st png-present)" = FAIL ] && ok "no outputs: FAIL" || no "no outputs rc=$rc"
+mkrun qa-malformed-001 mal-size --style stylized-painterly --authoring "$LA" && cp "$FX/icon-ok.png" "$RUNS/qa-malformed-001/outputs/"
+AG qa --run "$RUNS/qa-malformed-001" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(st purpose-qa)" = FAIL ] && jq -r '.results[0].reasons[0]' "$TMP/q.json" | grep -q "qa.size must be an object" \
+  && [ "$(jq -r '.outputs[0].path' "$TMP/q.json")" = outputs/icon-ok.png ] && ! grep -q Traceback "$TMP/err" \
+  && ok "qa: malformed purpose qa block (qa.size a list) is a purpose-qa FAIL row, outputs still hashed, no traceback" \
+  || no "malformed qa rc=$rc" "$(cat "$TMP/err"; jq -c . "$TMP/q.json" 2>/dev/null)"
 if has_pil; then
   python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
@@ -356,6 +406,33 @@ psha=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], en
   && [ "$(jq -r '.binding.outputs[0].path + " " + .binding.outputs[0].sha256' "$TMP/rc.json")" = "outputs/icon-ok.png $(sha256sum "$d/outputs/icon-ok.png" | cut -d' ' -f1)" ] \
   && jq -r .stdin "$TMP/rc.json" | grep -qF "\"prompt_sha256\": \"$psha\"" && jq -r .stdin "$TMP/rc.json" | grep -q "Copy these binding fields unchanged"; } \
   && ok "image review-cmd binds the verdict: prompt sha256 and output sha256s in the instruction and --json binding" || no "binding" "$(jq -c .binding "$TMP/rc.json")"
+python3 -B - "$ROOT" "$d" "$TMP/rc.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+run, image = sys.argv[2], json.load(open(sys.argv[3], encoding="utf-8"))
+spec = json.load(open(os.path.join(run, "spec.json"), encoding="utf-8"))
+gen = runfiles.generation_inputs(json.load(open(os.path.join(run, "workflow.json"), encoding="utf-8")), spec)
+assert "user_prompt" not in gen and "size" in gen and "quality" in gen, gen
+want = runfiles.requirements_sha256(spec, gen)
+assert image["binding"]["requirements_sha256"] == want, (image["binding"], want)
+assert runfiles.SHA256.match(want) and want != runfiles.requirements_sha256(spec, None)
+for bad in (None, [], {"purpose": 3, "params": [1]}, {"purpose": {"sha256": None}, "params": {"x": object()}}):
+    assert runfiles.SHA256.match(runfiles.requirements_sha256(bad, {"size": "auto"})), bad
+    assert isinstance(runfiles.generation_inputs(bad, bad), dict), bad
+print("ok")
+EOF
+AG review-cmd --phase prompt --run "$d" --json > "$TMP/rcp.json"
+python3 -B -c "
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'assetgen'))
+import runfiles
+spec = json.load(open(os.path.join(sys.argv[2], 'spec.json'), encoding='utf-8'))
+print(runfiles.requirements_sha256(spec, None))" "$ROOT" "$d" > "$TMP/req"
+{ grep -qx ok "$TMP/o" && [ "$(jq -r .binding.requirements_sha256 "$TMP/rcp.json")" = "$(cat "$TMP/req")" ] \
+  && jq -r .stdin "$TMP/rc.json" | grep -qF "\"requirements_sha256\": \"$(jq -r .binding.requirements_sha256 "$TMP/rc.json")\""; } \
+  && ok "review-cmd binds requirements_sha256 (prompt: purpose/style/template/params; image: + generation inputs); malformed specs still hash" \
+  || no "requirements binding" "$(cat "$TMP/o"; jq -c .binding "$TMP/rcp.json")"
 
 echo "-- manifest (run.md, gen-run)"
 d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art; AG render --run "$d" >/dev/null
@@ -456,6 +533,18 @@ variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha25
 variant qp-prompt-001; printf 'A different prompt.\n' > "$RUNS/qp-prompt-001/prompt.md"
 variant qp-where-001; fmset "$RUNS/qp-where-001" 'obj["id"] = "AGEN-somewhere-else-001"'
 variant qp-escape-001; fmset "$RUNS/qp-escape-001" 'obj["spec"]["outputs"][0]["path"] = "outputs/../../qp-icon-001/outputs/qp-icon.png"'
+# reviews are bound to the requirements (review finding 1): a purpose re-resolved with a stricter rubric and qa, then
+# qa and manifest re-run, keeps the old review files -> stale; a render --param size change -> stale image review
+RUBA="$TMP/rubric-authoring"; mkdir -p "$RUBA/assetgen"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$RUBA/assetgen/"
+echo '{"extends": "sprite-2d", "prompt_rubric": ["Names one subject only."], "image_rubric": ["Exactly one subject, nothing else."], "qa": {"not_blank": {"min_stddev": 3.0}}}' \
+  > "$RUBA/assetgen/purposes/sprite-2d.json"
+variant qp-rubric-001; AG resolve --purpose sprite-2d --style stylized-painterly --authoring "$RUBA" --out "$RUNS/qp-rubric-001/spec.json" >/dev/null
+AG qa --run "$RUNS/qp-rubric-001" >/dev/null; AG manifest --run "$RUNS/qp-rubric-001" >/dev/null
+variant qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
+AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-001" >/dev/null
+variant qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
+AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
+AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # wired through the registry (artifact-quality --domain assetgen) on a small authoring repo: artifact-quality runs
 # artifact-trace once per artifact over every artifact, so the case matrix below calls the plugin directly
 QAUTH="$TMP/qauth"; mkdir -p "$QAUTH/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$QAUTH/assetgen/"
@@ -524,6 +613,16 @@ case_ qp-prompt-001 gen-run-refs FAIL 'prompt.md differs' "prompt.md edited afte
 [ "$(st AGEN-somewhere-else-001 gen-run-location)" = FAIL ] && why AGEN-somewhere-else-001 gen-run-location | grep -qF 'id must be AGEN-qp-where-001' \
   && ok "id that does not match the run directory: FAIL" || no "location: $(why AGEN-somewhere-else-001 gen-run-location)"
 case_ qp-escape-001 gen-run-outputs FAIL 'not a path inside the run directory' "output path escaping the run directory: FAIL"
+case_ qp-rubric-001 gen-run-prompt-review FAIL 'bound to other requirements' "purpose re-resolved with a stricter rubric after the prompt review: FAIL"
+case_ qp-rubric-001 gen-run-image-review FAIL 'bound to other requirements' "purpose re-resolved with a stricter rubric after the image review: FAIL"
+[ "$(st AGEN-qp-rubric-001 gen-run-qa)/$(st AGEN-qp-rubric-001 gen-run-outputs)" = "PASS/PASS" ] \
+  && ok "re-resolved run: qa and manifest re-run are consistent, only the reviews are stale" \
+  || no "rubric run qa/outputs: $(st AGEN-qp-rubric-001 gen-run-qa)/$(st AGEN-qp-rubric-001 gen-run-outputs)" "$(why AGEN-qp-rubric-001 gen-run-qa)"
+case_ qp-rsize-001 gen-run-image-review FAIL 'bound to other requirements' "render --param size after the image review: FAIL (requested size is bound)"
+case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
+[ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
+  || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
+case_ qa-malformed-001 gen-run-qa FAIL 'purpose qa block is malformed' "malformed purpose qa block in spec.json: gen-run-qa FAIL, no traceback"
 [ "$(st AGEN-qp-fallback-001 gen-run-outputs)/$(st AGEN-qp-tamper-001 gen-run-prompt-review)" = "PASS/PASS" ] \
   && ok "cases stay independent (a fallback run's outputs PASS, a tampered run's review PASS)" \
   || no "independence: $(st AGEN-qp-fallback-001 gen-run-outputs)/$(st AGEN-qp-tamper-001 gen-run-prompt-review)"

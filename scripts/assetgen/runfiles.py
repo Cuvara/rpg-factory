@@ -1,43 +1,127 @@
 """Run-directory evidence rules shared by the asset-gen engine and the gen-run quality plugin (stdlib only; imports
 nothing from the engine, so scripts/checks/domains/assetgen.py can load it by file path).
 
-read_verdict(path, phase) -> {by, state, findings, prompt_sha256, outputs}
+read_verdict(path, phase) -> {by, state, findings, prompt_sha256, requirements_sha256, outputs}
   A review file (review-prompt.json, review-image.json) holds one JSON verdict object, possibly inside other text
   (codex exec -o writes the last message). state NOT_RUN when the file is absent, INVALID when no object with state
   PASS or FAIL is found. The binding fields are what review-cmd told the reviewer to copy back unchanged: the
-  sha256 of the prompt it reviewed (both phases) and, for the image phase, [{path, sha256}] of the images it saw.
-  A verdict without them, or with other values than the run's current prompt and outputs, is unbound or stale.
+  sha256 of the prompt it reviewed and the requirements_sha256 it judged against (both phases) and, for the image
+  phase, [{path, sha256}] of the images it saw. A verdict without them, or with other values than the run's
+  current prompt, requirements and outputs, is unbound or stale.
+requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sorted keys, compact separators) of
+  {purpose, style, template: their content sha256, params: the resolved params, generation: generation}. generation
+  is None for the prompt review and generation_inputs(workflow, spec) for the image review. Works on spec.json
+  (resolved refs carry sha256) and on run.md's spec block (manifest copies the refs and params); malformed input
+  still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
+  params or the rendered generation inputs changed is stale.
+generation_inputs(workflow, spec) -> the effective inputs the images were generated with: the NineRouterImage
+  scalar inputs of workflow.json except user_prompt (model, size, quality, background, ... - so every render --param
+  override is bound), else the resolved spec params.
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
-  exactly these; the plugin requires a PASS row for each).
+  exactly these; the plugin requires a PASS row for each). Malformed input never raises.
+qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
+  run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
 requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
   the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
   (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
 """
+import hashlib
 import json
 import os
 import re
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SIZE_RE = re.compile(r"^\d+x\d+$")
+SIZE_MODES = {"exact", "min", "aspect", "any"}
+ALPHA_MODES = {"required", "forbidden", "any"}
 
 
 def required_checks(purpose_qa):
+    qa = purpose_qa if isinstance(purpose_qa, dict) else {}
     checks = ["png-valid", "png-size", "png-alpha"]
-    if purpose_qa.get("transparent_corners"):
+    if qa.get("transparent_corners"):
         checks.append("png-corners")
-    if purpose_qa.get("tileable"):
+    if qa.get("tileable"):
         checks.append("png-tileable")
-    if purpose_qa.get("not_blank") is not None:
+    if qa.get("not_blank") is not None:
         checks.append("png-not-blank")
     return checks
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def qa_errors(qa):
+    if not isinstance(qa, dict):
+        return ["qa must be an object"]
+    errs = []
+    size = qa.get("size", {"mode": "any"})
+    if not isinstance(size, dict):
+        errs.append("qa.size must be an object")
+    else:
+        if size.get("mode", "any") not in SIZE_MODES:
+            errs.append("qa.size.mode must be one of %s" % sorted(SIZE_MODES))
+        expect = size.get("expect", "auto")
+        if not (expect == "auto" or (isinstance(expect, str) and SIZE_RE.match(expect))):
+            errs.append("qa.size.expect must be WIDTHxHEIGHT or auto")
+        if "aspect_tolerance" in size and not (_number(size["aspect_tolerance"]) and 0 <= size["aspect_tolerance"] < 1):
+            errs.append("qa.size.aspect_tolerance must be a number between 0 and 1")
+        if "min_side" in size and not (_number(size["min_side"]) and size["min_side"] >= 0):
+            errs.append("qa.size.min_side must be a number >= 0")
+    if qa.get("alpha", "any") not in ALPHA_MODES:
+        errs.append("qa.alpha must be one of %s" % sorted(ALPHA_MODES))
+    if not isinstance(qa.get("transparent_corners", False), bool):
+        errs.append("qa.transparent_corners must be true or false")
+    tile = qa.get("tileable")
+    if tile is not None and not (isinstance(tile, dict) and _number(tile.get("max_seam_error"))
+                                 and 0 < tile["max_seam_error"] < 1):
+        errs.append("qa.tileable.max_seam_error must be a number between 0 and 1")
+    blank = qa.get("not_blank")
+    if blank is not None:
+        if not isinstance(blank, dict):
+            errs.append("qa.not_blank must be an object")
+        else:
+            if "min_stddev" in blank and not (_number(blank["min_stddev"]) and blank["min_stddev"] >= 0):
+                errs.append("qa.not_blank.min_stddev must be a number >= 0")
+            if "min_coverage" in blank and not (_number(blank["min_coverage"]) and 0 <= blank["min_coverage"] <= 1):
+                errs.append("qa.not_blank.min_coverage must be a number between 0 and 1")
+    if qa.get("alpha") == "forbidden" and qa.get("transparent_corners"):
+        errs.append("qa.transparent_corners contradicts qa.alpha forbidden")
+    return errs
+
+
+def generation_inputs(workflow, spec):
+    if isinstance(workflow, dict):
+        for node in workflow.values():
+            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
+                inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+                return {k: v for k, v in inputs.items() if k != "user_prompt" and not isinstance(v, (list, dict))}
+    params = spec.get("params") if isinstance(spec, dict) else None
+    return params if isinstance(params, dict) else {}
+
+
+def requirements_sha256(spec, generation=None):
+    spec = spec if isinstance(spec, dict) else {}
+
+    def ref(key):
+        r = spec.get(key)
+        return r.get("sha256") if isinstance(r, dict) else None
+    params = spec.get("params")
+    obj = {"purpose": ref("purpose"), "style": ref("style"), "template": ref("template"),
+           "params": params if isinstance(params, dict) else {}, "generation": generation}
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def requested_size(workflow, spec):
     if isinstance(workflow, dict):
         for node in workflow.values():
             if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
-                return (node.get("inputs") or {}).get("size", "auto")
+                inputs = node.get("inputs")
+                return inputs.get("size", "auto") if isinstance(inputs, dict) else "auto"
     params = spec.get("params") if isinstance(spec, dict) else None
-    return (params or {}).get("size", "auto") if isinstance(params, dict) else "auto"
+    return params.get("size", "auto") if isinstance(params, dict) else "auto"
 
 
 def _outputs(value):
@@ -47,9 +131,13 @@ def _outputs(value):
     return sorted((o for o in rows if isinstance(o["path"], str) and isinstance(o["sha256"], str)), key=lambda o: o["path"])
 
 
+def _empty(state):
+    return {"by": None, "state": state, "findings": 0, "prompt_sha256": None, "requirements_sha256": None, "outputs": []}
+
+
 def read_verdict(path, phase):
     if not os.path.isfile(path):
-        return {"by": None, "state": "NOT_RUN", "findings": 0, "prompt_sha256": None, "outputs": []}
+        return _empty("NOT_RUN")
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     obj = None
@@ -60,10 +148,13 @@ def read_verdict(path, phase):
         except ValueError:
             continue
     if not isinstance(obj, dict) or obj.get("state") not in ("PASS", "FAIL"):
-        return {"by": None, "state": "INVALID", "findings": 0, "prompt_sha256": None, "outputs": []}
-    digest = obj.get("prompt_sha256")
+        return _empty("INVALID")
+
+    def digest(key):
+        v = obj.get(key)
+        return v if isinstance(v, str) and SHA256.match(v) else None
     findings = obj.get("findings")
     return {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
             "findings": len(findings) if isinstance(findings, list) else 0,
-            "prompt_sha256": digest if isinstance(digest, str) and SHA256.match(digest) else None,
+            "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
             "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}

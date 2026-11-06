@@ -13,6 +13,8 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       neighbour difference (0..1 scale) must stay at or under the limit
   png-not-blank       qa.not_blank: luminance stddev >= min_stddev (0..255) and, with alpha, the share of
                       pixels with alpha > 8 >= min_coverage
+  purpose-qa          FAIL (one row for outputs/, nothing graded) when the purpose qa block is malformed
+                      (runfiles.qa_errors; the same rules lint reports)
 """
 import hashlib
 import math
@@ -125,12 +127,19 @@ def check_not_blank(img, cfg):
 
 def run_qa(run_dir, spec, requested_size):
     """(results, outputs) for every outputs/*.png of the run."""
-    qa = spec["purpose"]["data"].get("qa", {})
+    purpose = spec.get("purpose") if isinstance(spec, dict) else None
+    data = purpose.get("data") if isinstance(purpose, dict) else None
+    qa = data.get("qa", {}) if isinstance(data, dict) else None
     out_dir = os.path.join(run_dir, "outputs")
     files = sorted(n for n in os.listdir(out_dir) if n.lower().endswith(".png")) if os.path.isdir(out_dir) else []
     results, outputs = [], []
     if not files:
         return [{"output": "outputs/", "check": "png-present", "state": "FAIL", "reasons": ["no outputs/*.png in the run"]}], []
+    malformed = runfiles.qa_errors(qa) if isinstance(data, dict) else ["spec.json purpose data must be an object"]
+    if malformed:  # grade nothing against a qa block that cannot be read; the outputs are still hashed
+        outputs = [{"path": "outputs/" + n, "sha256": sha256(os.path.join(out_dir, n))} for n in files]
+        return [{"output": "outputs/", "check": "purpose-qa", "state": "FAIL",
+                 "reasons": ["the purpose qa block is malformed: " + "; ".join(malformed)]}], outputs
 
     def add(rel, check, verdict):
         results.append({"output": rel, "check": check, "state": verdict[0], "reasons": verdict[1]})

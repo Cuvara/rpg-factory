@@ -81,6 +81,7 @@
         "state",
         "findings",
         "prompt_sha256",
+        "requirements_sha256",
         "outputs"
       ],
       "additionalProperties": false,
@@ -113,6 +114,18 @@
             }
           ]
         },
+        "requirements_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
         "outputs": {
           "type": "array",
           "items": {
@@ -120,7 +133,7 @@
           }
         }
       },
-      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; outputs only for the image review)."
+      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs of workflow.json (runfiles.generation_inputs) for the image review; outputs only for the image review)."
     },
     "output": {
       "type": "object",
