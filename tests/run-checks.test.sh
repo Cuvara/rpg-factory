@@ -38,7 +38,7 @@ jq --arg ws "$WS" '
         {id: "t-isolated-clean2", cwd: ".", run: "echo clean again", evidence: "e"},
         {id: "t-dirty-edit", cwd: ".", run: "echo edited >> backend/gateway/x.go", evidence: "e"},
         {id: "t-large-untracked", cwd: ".", run: "echo clean", evidence: "e"},
-        {id: "t-timeout-tree", cwd: ".", run: "(sleep 60) & echo $! > child.pid; cat /proc/$!/winpid > child.winpid 2>/dev/null || true; wait", evidence: "e"},
+        {id: "t-timeout-tree", cwd: ".", run: "(sleep 60) & echo $! > child.pid; cat /proc/$!/winpid > child.winpid 2>/dev/null || true; date +%s%3N > child.spawned; wait", evidence: "e"},
         {id: "t-env", cwd: ".", run: "env | grep '^RPG_FACTORY_'; pwd", evidence: "e"}
       ],
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
@@ -191,8 +191,31 @@ accepted=$(jq -c "select($TIMEOUT_OK)" <<<"$bad_records")
 [ -z "$accepted" ] && okk "timeout bound rejects missing, late, early and unverified kill records" || nok "timeout bound accepted: $accepted"
 [ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
 if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
-if [ -s "$S/child.winpid" ]; then wpid=$(cat "$S/child.winpid"); tasklist //FI "PID eq $wpid" 2>/dev/null | grep -q "$wpid" && nok "timeout Windows grandchild survived (pid $wpid)" || okk "timeout Windows grandchild was killed"; fi
-rm -f "$S/child.pid" "$S/child.winpid"
+# Windows reuses PIDs fast under load, so a PID that is alive again is only our grandchild when its process
+# started no later than the check's own timestamp taken after the spawn (child.spawned). A process at that PID that
+# started later is a reuse: the grandchild had already died. No wall-clock bound; order only. Evidence on FAIL.
+winpid_survivor() { # <winpid> <spawned epoch ms>; 0 = the original process is still alive; prints the evidence
+  local row started
+  row=$(tasklist //FI "PID eq $1" //FO CSV //NH 2>/dev/null | tr -d '\r' | grep -F ",\"$1\",")
+  [ -n "$row" ] || { echo "no process at pid $1"; return 1; }
+  started=$(powershell.exe -NoProfile -NonInteractive -Command "try { ([DateTimeOffset](Get-Process -Id $1 -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds() } catch { '' }" 2>/dev/null | tr -d '\r\n ')
+  echo "tasklist row: $row; started_ms=${started:-unknown}; spawned_ms=$2"
+  [ -z "$started" ] && return 0        # alive but start time unreadable: cannot prove reuse, so it counts as a survivor
+  [ "$started" -le "$2" ]
+}
+if [ -s "$S/child.winpid" ]; then
+  wpid=$(tr -d '\r\n ' < "$S/child.winpid"); spawned=$(tr -d '\r\n ' < "$S/child.spawned" 2>/dev/null)
+  [ -n "$spawned" ] || spawned=$(date +%s%3N)   # check killed before its timestamp: anything started from now on is a reuse
+  if ev=$(winpid_survivor "$wpid" "$spawned"); then nok "timeout Windows grandchild survived (pid $wpid): $ev"; else okk "timeout Windows grandchild was killed ($ev)"; fi
+  # the probe itself: a live process started before the timestamp is a survivor; one started after it is a PID reuse
+  before=$(date +%s%3N); sleep 30 & bpid=$!; sleep 0.3; bw=$(tr -d '\r\n ' < "/proc/$bpid/winpid" 2>/dev/null); after=$(date +%s%3N)
+  if [ -n "$bw" ]; then
+    ev=$(winpid_survivor "$bw" "$after") && okk "pid probe flags a live grandchild ($ev)" || nok "pid probe missed a live grandchild: $ev"
+    ev=$(winpid_survivor "$bw" "$((before - 1000))") && nok "pid probe took a reused pid for the grandchild: $ev" || okk "pid probe tells a reused pid from the grandchild ($ev)"
+  else nok "pid probe self-test: no Windows pid for pid $bpid"; fi
+  kill "$bpid" 2>/dev/null; wait "$bpid" 2>/dev/null
+fi
+rm -f "$S/child.pid" "$S/child.winpid" "$S/child.spawned"
 python3 -B "$ROOT/tests/fixtures/run-checks-cleanup-failure.py" "$P/scripts/run-checks.py" && okk "simulated timeout cleanup failure is reported" || nok "simulated cleanup failure was hidden"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-ext --approve t-ext --json)
 expect t-ext PASS
