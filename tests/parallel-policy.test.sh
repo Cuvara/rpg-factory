@@ -101,13 +101,20 @@ grade
 # is a marker comment `<!-- policy:<id> -->` on its own line, present exactly once, whose next non-empty line is the
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
-POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude)
+POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
+  child-merge-remove child-no-run-all)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
-  [only-task-lead-commits]='Sub-sessions never commit, stage or stash; only the task lead commits, with explicit paths.'
+  [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
   [no-worktree-repo]='A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.'
   [task-lead-claude]="The task lead is always a Claude session (registry pipeline.lead_agent), whatever the task's implementer; implementation, review and QA sessions keep the cross-model pairing."
+  [speed-rule]='Prefer many short, focused parallel sessions over one long session; every spec stays short: objective, owned paths, checks, report format.'
+  [placement-table]='| Placement | When | How |'
+  [child-merge-remove]='The owner merges a child'"'"'s branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).'
+  [child-no-run-all]='Never create or remove a child worktree while a full tests/run-all.sh runs: every checkout shares one .git/config.'
 )
+# The placement table under its marker keeps both rows: shared (the default) and child.
+PLACEMENT_ROWS=('| shared (default) |' '| child |')
 RETIRED_PHRASES=(
   'the lead implements in its own session'
   'lead implements in-session'
@@ -125,6 +132,11 @@ policy_markers() {
     if [ "$n" -gt 1 ]; then errs+=("marker duplicated: policy:$id appears $n times"); continue; fi
     got=$(awk -v m="<!-- policy:$id -->" 'f && NF { print; exit } $0 == m { f = 1 }' "$f")
     [ "$got" = "${POLICY_SENTENCE[$id]}" ] || errs+=("sentence changed under policy:$id: '$got'")
+  done
+  local table
+  table=$(awk '$0 == "<!-- policy:placement-table -->" { f = 1; next } f && /^\|/ { print; t = 1; next } f && t { exit }' "$f")
+  for p in "${PLACEMENT_ROWS[@]}"; do
+    grep -qF -- "$p" <<<"$table" || errs+=("placement table row missing: '$p'")
   done
   for p in "${RETIRED_PHRASES[@]}"; do
     hits=$(grep -niF -- "$p" "$f" | head -1)
@@ -159,7 +171,17 @@ s_mutate "canonical sentence changed (task lead follows the implementer)" "sente
 s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence changed under policy:run-lead-never-implements" \
   'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
 s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \
-  'sed -i "s/^Sub-sessions never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
+  'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
+s_mutate "placement table removed" "marker missing: policy:placement-table" \
+  'sed -i "/^<!-- policy:placement-table -->\$/,/^\$/d" "$F"'
+s_mutate "placement table child row removed" "placement table row missing: '| child |'" \
+  'sed -i "/^| child |/d" "$F"'
+s_mutate "run-all/child rule removed" "marker missing: policy:child-no-run-all" \
+  'sed -i "/^<!-- policy:child-no-run-all -->\$/,+1d" "$F"'
+s_mutate "run-all/child rule weakened" "sentence changed under policy:child-no-run-all" \
+  'sed -i "s/^Never create or remove a child worktree while a full tests\/run-all.sh runs:/Avoid creating a child worktree during a full run:/" "$F"'
+s_mutate "child merge-and-remove rule removed" "marker missing: policy:child-merge-remove" \
+  'sed -i "/^<!-- policy:child-merge-remove -->\$/d" "$F"'
 s_mutate "canonical sentence moved off its marker" "sentence changed under policy:no-worktree-repo" \
   'sed -i "/^<!-- policy:no-worktree-repo -->$/a Unity projects are special." "$F"'
 s_mutate "old S-tier shortcut re-added" "retired shortcut phrasing 'the run lead implements'" \
