@@ -130,8 +130,10 @@ worktree is the default. Choose per session:
 | shared (default) | small subtasks with disjoint files and narrow tests; review or QA while nothing else edits | the task worktree (run lead: the integration checkout); `placement: "shared"` |
 | child | parallel subtasks that both run full suites or write generated or build output; risky or experimental work; QA that needs a clean frozen checkout while others still edit | `orca orchestration worker-start --worktree new-child` (a session) or `orca worktree create --parent-worktree <selector>` (a worktree); `placement: "child"` + `reason` |
 
-- **Run lead.** `dispatch --phase lead --placement child` creates the task worktree as a child of the integration
-  checkout of the plan `topic` (`--parent-worktree path:<checkout>`) instead of `--no-parent`. Helper sessions -
+- **Run lead.** `dispatch --phase lead` creates a new task worktree as an Orca child of the checkout that has the
+  plan `topic` checked out (`--parent-worktree path:<checkout>`); only when no checkout has it, `--no-parent` (a
+  stderr note says so). `--placement shared` forces `--no-parent`; `--placement child` is the default. Orca lineage
+  only: the git layout is the same. Helper sessions -
   integration QA (`--task integration:<repo> --phase qa --placement child`) or a quick fix - may run in a child
   of the integration checkout instead of sharing it.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child`) and, for `child`, a `reason`.
@@ -156,8 +158,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
   the first dispatch, and follow it. This file does not restate it.
 - **No nested workers.** Orca allows one level of workers (`nested_worker_depth_exceeded`, maximum depth 1); never
   route around it. So the task lead is not a worker of the run lead: the run lead starts it as a handoff,
-  `orca worktree create --name <task branch> --branch <task branch> --no-parent --agent <id> --prompt <spec>` for a
-  new task worktree (`--parent-worktree path:<integration checkout>` instead of `--no-parent` for a child, section
+  `orca worktree create --name <task branch> --branch <task branch> --parent-worktree path:<integration checkout>
+  --agent <id> --prompt <spec>` for a new task worktree (`--no-parent` only when no checkout has the topic, section
   4) or `orca agent launch --agent <id> --worktree path:<dir> --prompt <spec>` for an existing one
   (or a no-worktree repo). The task lead creates its own Run (`orca orchestration run-create --objective <text>`),
   starts its sessions as workers of that Run (`orca orchestration worker-start --worktree path:<task worktree>`,
