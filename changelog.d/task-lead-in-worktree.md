@@ -6,8 +6,9 @@
   that do not commit, the task lead commits per subtask, cross-model review and QA sessions in that worktree, a fresh
   fix session after a FAIL, every session released as it reports, a `status` report to the run lead (branch, HEAD,
   verdicts, checks), never push, merge or remove the worktree. Orca forbids nested workers, so `--runner orca` prints
-  a handoff instead of a worker start: `orca worktree create --branch <topic>-<task> --no-parent --agent ... --prompt
-  ...` for a new task worktree, `orca agent launch --worktree path:<dir> --prompt ...` to resume in it; the task lead
+  a handoff instead of a worker start: `orca worktree create --branch <topic>-<task> --parent-worktree path:<integration
+  checkout> --agent ... --prompt ...` for a new task worktree (`--no-parent` only without such a checkout or with
+  `--placement shared`, `child-worktrees.md`), `orca agent launch --worktree path:<dir> --prompt ...` to resume in it; the task lead
   creates its own Orca Run and reports with `orca orchestration send --to run:<id> --type status`. In a no-worktree
   repo (Unity project) the task lead runs in the main checkout and dispatch never prints a worktree create or a new
   top-level worker. `status` names `--phase lead` as the next command of a pending task.
@@ -22,7 +23,7 @@
 - **Pipeline placement.** `dispatch --phase implement|review|qa` joins the task's existing worktree (found by the task
   branch in `git worktree list`, `--worktree path:<it>`) and never creates one: a missing task worktree is an error
   (exit 1, run `--phase lead` first). `--phase implement --paths <subtask paths>` starts a sub-session limited to those
-  paths that does not commit. Integration QA (`--task integration:<repo> --phase qa`) runs in the existing checkout of
+  paths that does not commit (a `child` placement commits on its child branch only, `child-worktrees.md`). Integration QA (`--task integration:<repo> --phase qa`) runs in the existing checkout of
   the integration branch, never in a task worktree; none is an error, no worktree is created.
 - **Agent fallback.** `--runner agent` starts Claude sessions only: a session planned for Codex runs as a fresh Claude
   session whose prompt says SAME_MODEL, and its review counts as SAME_MODEL.
