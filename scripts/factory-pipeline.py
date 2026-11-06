@@ -39,11 +39,13 @@ docs/schemas/pipeline-plan.schema.json.
         there, release each session, report a `status` message (to Orca run RUN_ID: worker_done needs a dispatch,
         which the task lead has not) with branch and HEAD; never push, merge or remove the worktree. Orca forbids
         nested workers, so --runner orca prints a handoff, not a worker-start:
-        `orca worktree create --branch <task branch> --no-parent --agent ... --prompt ...` for a new task worktree,
-        `orca agent launch --worktree path:<dir> --prompt ...` for an existing one or a no-worktree repo.
-  dispatch <plan.json> --task ID --phase lead --placement child ...
-        the new task worktree is an Orca child of the integration checkout (plan.topic): `orca worktree create ...
-        --parent-worktree path:<it>` instead of --no-parent; no checkout of plan.topic is an error (exit 1).
+        `orca worktree create --branch <task branch> --parent-worktree path:<integration checkout> --agent ... --prompt
+        ...` for a new task worktree (an Orca child of the checkout of plan.topic; Orca lineage only, same git layout;
+        no such checkout: --no-parent and a stderr note), `orca agent launch --worktree path:<dir> --prompt ...` for an
+        existing one or a no-worktree repo.
+  dispatch <plan.json> --task ID --phase lead --placement shared|child ...
+        shared: the new task worktree is top-level (--no-parent) even when the integration checkout exists; child: the
+        default (accepted, same result).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
   dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID]
   ... [--subplan FILE --subtask ID] [--placement shared|child]
@@ -727,7 +729,7 @@ def emit_lead_handoff(reg, agent, prompt, place, branch):
         for flag, key in (("--repo", "repo"), ("--base-branch", "base")):
             if place.get(key):
                 argv += [flag, place[key]]
-        # --placement child: an Orca child of the integration checkout; otherwise unrelated top-level work
+        # an Orca child of the integration checkout (default); --no-parent without one or with --placement shared
         lineage = ["--parent-worktree", f"path:{place['parent']}"] if place.get("parent") else ["--no-parent"]
         argv += ["--branch", branch, *lineage, "--agent", entry["orca_agent"], "--prompt", prompt, "--json"]
     else:
@@ -899,18 +901,20 @@ def cmd_dispatch(a, reg):
             where = f"the main checkout {info['path']}"
         else:
             # the task worktree is created here on the task branch, from the base (a later wave: from plan.topic, which
-            # carries the earlier waves); a later lead resumes in it. --placement child: an Orca child of the
-            # integration checkout (plan.topic) instead of a top-level worktree
+            # carries the earlier waves); a later lead resumes in it
             home = worktree_for(info["path"], branch)[0]
             place = ({"worktree": f"path:{home}", "new": False, "reason": "task worktree exists: resume in it"} if home
                      else orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch))
-            if placement == "child" and not home:
-                parent = worktree_for(info["path"], plan["topic"])[0]
-                if not parent:
-                    die(f"--placement child: no worktree of {info['path']} has the integration branch {plan['topic']} "
-                        "checked out (the parent of the child). No worktree was created.", 1)
-                place["parent"] = parent
-                place["reason"] = f"Orca child of the integration checkout {parent}"
+            if not home:
+                # a new task worktree is an Orca child of the integration checkout by default (lineage only, the git
+                # layout is the same); --placement shared, or no checkout of plan.topic yet, keeps --no-parent
+                parent = None if a.placement == "shared" else worktree_for(info["path"], plan["topic"])[0]
+                if parent:
+                    place["parent"] = parent
+                    place["reason"] = f"Orca child of the integration checkout {parent}"
+                elif a.placement != "shared":
+                    print(f"factory-pipeline: no worktree of {info['path']} has the integration branch {plan['topic']} "
+                          "checked out: the task worktree is created with --no-parent (no Orca parent)", file=sys.stderr)
             where = "this task worktree"
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
         # the task lead is always the registry's lead agent (Claude), whatever the task's implementer

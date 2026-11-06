@@ -402,7 +402,10 @@ for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "
   else fail=$((fail + 1)); echo "FAIL  child in the Unity project ($args) (rc=$rc)"; head -5 <<<"$out$err"; fi
 done
 git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/demo-gw
-expect "lead --placement child without the integration checkout: error" 1 "no worktree of .* has the integration branch feat/core/demo checked out \(the parent of the child\)" dispatch "$OK" --task gw --phase lead --placement child --runner orca
+expect "new task worktree without an integration checkout: --no-parent fallback" 0 "^orca worktree create --name feat/core/demo-gw .*--branch feat/core/demo-gw --no-parent --agent claude " dispatch "$OK" --task gw --phase lead --runner orca
+refute "new task worktree without an integration checkout: no --parent-worktree" "--parent-worktree" dispatch "$OK" --task gw --phase lead --runner orca
+expect "new task worktree without an integration checkout: stderr note" 0 "has the integration branch feat/core/demo checked out: the task worktree is created with --no-parent" dispatch "$OK" --task gw --phase lead --runner orca
+expect "lead --placement child without the integration checkout: same --no-parent fallback" 0 "--branch feat/core/demo-gw --no-parent --agent claude " dispatch "$OK" --task gw --phase lead --placement child --runner orca
 # integration QA joins the checkout of plan.topic; without one it is an error and no worktree is created
 before=$(git -C "$S" worktree list --porcelain); out=$(python3 -B "$P" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca 2>&1); rc=$?
 if [ "$rc" = 1 ] && grep -q "no worktree of .* has the integration branch feat/core/demo checked out" <<<"$out" && grep -q "No worktree was created" <<<"$out" \
@@ -412,7 +415,11 @@ git -C "$S" worktree add -q "$TMP/demo-int" -b feat/core/demo develop 2>/dev/nul
 expect "integration QA joins the integration checkout of plan.topic" 0 "--agent codex --worktree '?path:[^' ]*demo-int'?" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 refute "integration QA never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "You share the integration checkout .*demo-int with the run lead" dispatch "$OK" --task integration:server --phase qa --sha abc1234
-expect "lead --placement child: the task worktree is an Orca child of the integration checkout" 0 "^orca worktree create --name feat/core/demo-gw .*--branch feat/core/demo-gw --parent-worktree '?path:[^' ]*demo-int'? --agent claude " dispatch "$OK" --task gw --phase lead --placement child --runner orca
+expect "new task worktree: an Orca child of the integration checkout by default" 0 "^orca worktree create --name feat/core/demo-gw .*--branch feat/core/demo-gw --parent-worktree '?path:[^' ]*demo-int'? --agent claude " dispatch "$OK" --task gw --phase lead --runner orca
+refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
+expect "lead --placement shared: the task worktree stays top-level (--no-parent)" 0 "--branch feat/core/demo-gw --no-parent --agent claude " dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+refute "lead --placement shared has no --parent-worktree" "--parent-worktree" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+expect "lead --placement child (redundant): the same Orca child of the integration checkout" 0 "^orca worktree create --name feat/core/demo-gw .*--branch feat/core/demo-gw --parent-worktree '?path:[^' ]*demo-int'? --agent claude " dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "lead --placement child has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 expect "lead --placement child says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 expect "integration QA --placement child: a child of the integration checkout at the SHA" 0 "^orca orchestration worker-start .*--worktree new-child --name feat/core/demo--qa --base-branch abc1234 " dispatch "$OK" --task integration:server --phase qa --sha abc1234 --placement child --runner orca
@@ -706,6 +713,13 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
 git -C "$S" branch -q -D isolated-qa feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+# a new task worktree is an Orca child of the integration checkout ($S on feat/core/demo); dispatch only prints it
+: > "$FAKE_ORCA_LOG"
+opath "fake orca: a new task worktree carries --parent-worktree path:<integration checkout>" 0 "^orca worktree create --name feat/core/demo-gw .*--parent-worktree '?path:$(wtp "$S")'? --agent claude " dispatch "$G" --task gw --phase lead --runner orca
+oref "fake orca: a new task worktree under the integration checkout has no --no-parent" "--no-parent" dispatch "$G" --task gw --phase lead --runner orca
+opath "fake orca: --placement shared keeps --no-parent" 0 "--branch feat/core/demo-gw --no-parent --agent claude " dispatch "$G" --task gw --phase lead --placement shared --runner orca
+if ! grep -q "worktree create" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  fake orca: dispatch --phase lead only prints the worktree create"
+else fail=$((fail + 1)); echo "FAIL  fake orca: dispatch ran orca worktree create"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 # children of the integration checkout ($S on feat/core/demo): the integration QA child dispatch names
 # (<topic>--qa) and a helper with any name whose Orca lineage parent is the integration checkout; status lists them
 # once per repo in integration_children with cleanup guidance, cleanup names them "child of integration:srv"
