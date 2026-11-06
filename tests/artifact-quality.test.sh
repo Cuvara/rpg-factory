@@ -58,6 +58,7 @@ print('PASS malformed artifacts fail closed with path and parse reason')
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,json,os,pathlib,subprocess,sys
+sys.path.insert(0,str(pathlib.Path(sys.argv[1])/'scripts/lib'))
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts/checks')); exe=t/'fake-tool.py'; exe.write_text('print("fake 1.0")\n'); os.environ['RPG_FACTORY_TOOL_NODE']=str(exe)
 s=importlib.util.spec_from_file_location('tools',root/'scripts/lib/tools.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); found=m.find_tool('node'); assert found and found['path']==str(exe.resolve()) and 'fake' in found['version']
 print('PASS tool override discovery')
@@ -80,6 +81,7 @@ print('PASS Unity tool detection is path-only in direct and artifact-quality cal
 PY
 python3 -B - "$ROOT" "$T" <<'PY'
 import importlib.util,json,os,pathlib,subprocess,sys
+sys.path.insert(0,str(pathlib.Path(sys.argv[1])/'scripts/lib'))
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); sys.path.insert(0,str(root/'scripts/checks')); spec=importlib.util.spec_from_file_location('tools_provider',root/'scripts/lib/tools.py'); tools=importlib.util.module_from_spec(spec); spec.loader.exec_module(tools)
 provider='game-art-mcp'; secret='fixture-never-print-this-secret'; clean=t/'clean-settings.json'; clean.write_text('{}')
 for env_name in ('RPG_FACTORY_CLAUDE_SETTINGS','RPG_FACTORY_PROJECT_SETTINGS','RPG_FACTORY_PROJECT_SETTINGS_LOCAL','RPG_FACTORY_USER_MCP_FILE','RPG_FACTORY_MCP_FILE','RPG_FACTORY_INSTALLED_PLUGINS'): os.environ[env_name]=str(clean)
