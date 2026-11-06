@@ -487,6 +487,18 @@ ST=$(plan st "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"st\",\"title\
  {\"id\":\"c1\",\"repo\":\"cli\",\"objective\":\"o\",\"paths\":[\"Assets/C/\"],\"acceptance\":[\"a\"]},
  {\"id\":\"c2\",\"repo\":\"cli\",\"objective\":\"o\",\"paths\":[\"Assets/D/\"],\"acceptance\":[\"a\"],\"implementer\":\"codex\"}]}")
 sv() { python3 -B "$P" verdict "$ST" "$@" >/dev/null || echo "verdict failed: $*"; }
+# review_diff_lists <name> <files>: run the `git diff X...Y` printed in b's review spec in the fixture; it lists exactly <files>
+review_diff_lists() {
+  local name="$1" want="$2" out spec range got
+  out=$(python3 -B "$P" dispatch "$ST" --task b --phase review --sha "$SB" --runner orca 2>&1)
+  spec=$(python3 -c 'import pathlib,shlex,sys
+args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"; prompt=args[args.index(flag)+1]
+print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$out" 2>&1)
+  range=$(grep -oE 'git diff [^ `]+\.\.\.[0-9a-f]+' <<<"$spec" | head -1 | cut -d' ' -f3)
+  got=$([ -n "$range" ] && git -C "$S" diff --name-only "$range" | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$range" ] && [ "$got" = "$want" ]; then pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name (range '$range' lists '$got', want '$want')"; fi
+}
 # st_phase <name> <task> <phase> [<next-regex>]: the task's phase in status --json (and its next command)
 st_phase() {
   local name="$1" id="$2" want="$3" nx="${4:-}" out
@@ -516,6 +528,7 @@ st_phase "a fix after the FAIL is a new candidate" a candidate "--phase review -
 expect "and the old review is named STALE" 0 "review at .* is STALE: owned paths changed since" status "$ST"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
+expect "no integration branch yet: a later-wave task lead starts from the base" 0 "--base-branch develop --branch feat/core/st-b " dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-a -m "merge a"
@@ -540,14 +553,24 @@ then pass=$((pass + 1)); echo "PASS  task without branch/worktree stays pending 
 else fail=$((fail + 1)); echo "FAIL  unstarted task inherits an integration candidate"; fi
 expect "QA waits for the other tasks of the repo" 0 "QA runs once all tasks of the repo are integrated: waits for b" status "$ST"
 st_phase "the dependency is integrated: b is ready, next starts its task lead" b pending "--task b --phase lead"
+expect "wave 2: the task lead's worktree starts from the integration branch (it carries wave 1)" 0 "--base-branch feat/core/st --branch feat/core/st-b " dispatch "$ST" --task b --phase lead --runner orca
+expect_spec "wave 2: the task spec names the integration branch as its base" '"base": "feat/core/st"' dispatch "$ST" --task b --phase lead --runner orca
+st_phase "status is unchanged by the wave-2 dispatch: b still pending" b pending "--task b --phase lead"
 expect "ready tasks span waves: b (wave 3) next to c1 (wave 1)" 0 "^Ready wave: 1  \(dispatch: b, c1\)$" status "$ST"
 git -C "$S" worktree remove "$TMP/st-a"; git -C "$S" branch -q -D feat/core/st-a
 st_phase "a removed task branch stays integrated (verdict + integration branch)" a integrated
+expect "wave 1 starts from the base even when the integration branch exists" 0 "--base-branch develop --branch feat/core/st-a " dispatch "$ST" --task a --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-b" -b feat/core/st-b feat/core/st 2>/dev/null
 st_phase "a task branch cut from the integration branch, no own commits yet: implementing" b implementing
 mkdir -p "$TMP/st-b/sb"; echo b > "$TMP/st-b/sb/b.go"; gi "$TMP/st-b" add sb; gi "$TMP/st-b" commit -qm "feat: b"; SB=$(git -C "$S" rev-parse feat/core/st-b)
+expect_spec "wave-2 review diffs against the integration branch, not the base" "git diff feat/core/st\.\.\.$SB" dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
+review_diff_lists "wave-2 review before the merge: the printed diff lists only b's files" sb/b.go
+st_phase "status still compares b against the base: candidate at its SHA" b candidate "--task b --phase review --sha $SB"
 sv --task b --phase review --sha "$SB" --by codex --state PASS
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-b -m "merge b"; SI=$(git -C "$S" rev-parse feat/core/st)
+review_diff_lists "wave-2 re-review after the merge: the printed diff still lists only b's files (its fork point)" sb/b.go
+refute_spec "wave-2 re-review after the merge never diffs against the integration branch (empty)" "git diff feat/core/st\.\.\." dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
+refute_spec "wave-2 re-review after the merge needs no fallback note" "without a merge commit" dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
 st_phase "every task of the repo integrated: next is the integration QA at its HEAD" a integrated "--task integration:srv --phase qa --sha $SI"
 sv --task integration:srv --phase qa --sha "$SI" --by codex --state PASS
 st_phase "QA PASS on a commit containing the review: qa" a qa

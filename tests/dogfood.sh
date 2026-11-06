@@ -16,6 +16,7 @@
 #                 with a clone dir). tests/pipeline.test.sh runs it on synthetic transcripts.
 #
 # Opt-in: it spends model tokens and takes minutes. Not part of run-all.sh.
+# Reading failures (1-3 nondeterministic per --all run; classify grader / plugin / model, retry, report): docs/dogfood.md
 # Tools are restricted to Skill/Read/Grep/Glob; the skills' own allowed-tools grant the
 # factory-context / status / check scripts. Transcripts land in ${DOGFOOD_OUT:-/tmp/rpgf-dogfood}/.
 #

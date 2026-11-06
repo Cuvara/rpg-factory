@@ -4,6 +4,7 @@
 # deterministically (like tests/dogfood.sh does for Claude Code).
 #
 # Opt-in: it spends model tokens and takes minutes. Not part of run-all.sh.
+# Reading failures (classify grader / plugin / model, retry, report; known traps): docs/dogfood.md
 # Never modifies ~/.codex: the throwaway home gets a copy of auth.json, the top-level `model` and the [windows]
 # table of ~/.codex/config.toml (nothing else), the rpg-factory marketplace (this checkout) and the plugin.
 # Sessions run with `-s read-only` and `--dangerously-bypass-hook-trust` (the throwaway home has no persisted hook
