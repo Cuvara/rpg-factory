@@ -119,7 +119,7 @@ out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gatewa
 head=$(git -C "$S" rev-parse HEAD)
 jq -e --arg ws "$WS" --arg repo "$S" --arg head "$head" '.results[] | select(.check == "t-env") | .state == "PASS" and (.output_tail | contains("work space") and contains("rpg-mmo-server") and contains("server") and contains($head))' <<<"$out" >/dev/null && okk "bash receives workspace, repo, repo key and head; cwd is correct" || { nok "environment contract"; jq -c '.results[] | select(.check == "t-env") | {state,reason,output_tail}' <<<"$out"; }
 out=$(RPG_FACTORY_WORKSPACE="$TMP/missing workspace" python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-env --approve t-env --json)
-[ "$(jq -r '.results[] | select(.check == "t-env") | .state' <<<"$out")" = BLOCKED ] && okk "missing workspace blocks the check" || nok "missing workspace did not block"
+jq -e '.results[] | select(.check == "t-env") | .state == "BLOCKED" and (.reason | contains("missing: workspace") and contains("bash="))' <<<"$out" >/dev/null && okk "missing workspace blocks the check and names what is missing" || nok "missing workspace did not block: $(jq -c '.results[] | select(.check == "t-env") | {state,reason}' <<<"$out")"
 if [ -n "$RPGF_WINDOWS" ]; then
   python3 -B - "$P/scripts/run-checks.py" "$WS" "$(command -v bash)" <<'PY'
 import importlib.util, sys, shutil
@@ -144,13 +144,44 @@ assert "/p" not in env["WSLENV"]
 PY
   [ $? -eq 0 ] && okk "Git Bash and WSL path/environment probes pass" || nok "bash path/environment probe failed"
 fi
+# The Windows bash flavor probe is a process start like any other: one that fails to run under load must not turn
+# the flavor into "unknown" (every check of the run would be BLOCKED); only repeated failures do, and they say why.
+probe_out=$(python3 -B - "$P/scripts/run-checks.py" <<'PY' 2>&1
+import importlib.util, subprocess, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+bash = mod.os.path.abspath("C:/Git/bin/bash.exe")
+def probe(*answers):
+    seq = list(answers)
+    def run(*a, **k):
+        x = seq.pop(0)
+        if isinstance(x, BaseException): raise x
+        return subprocess.CompletedProcess([], x[0], x[1], "")
+    mod._BASH_SELECTION = None
+    with patch.object(mod.os, "name", "nt"), patch.object(mod, "bash_candidates", return_value=[bash]), \
+         patch.object(mod.os.path, "isfile", return_value=True), patch.object(mod.subprocess, "run", side_effect=run):
+        return mod.select_bash(), mod.bash_diagnostics(), len(seq)
+sel, diag, left = probe(subprocess.TimeoutExpired("bash", 10), (3221225794, ""), (0, "MINGW64_NT-10.0\n3.4.10"), (0, "unused"))
+assert sel == (bash, "gitbash") and left == 1, (sel, diag, left)
+sel, diag, left = probe(OSError("start failed"), (1, "fork: Resource temporarily unavailable"), (3221225794, ""), (0, "unused"))
+assert sel == (bash, "unknown") and left == 1 and "start failed" in diag and "fork: Resource" in diag and "exit 3221225794" in diag, (sel, diag)
+sel, diag, left = probe((0, "SomeOS\n1.0"), (0, "MINGW64"))
+assert sel == (bash, "unknown") and left == 1, (sel, diag)  # a probe that ran is not retried: its answer stands
+print("ok")
+PY
+)
+[ "$probe_out" = ok ] && okk "bash flavor probe retries a failed start, keeps an answer that ran, and explains an unknown flavor" || nok "bash flavor probe: $probe_out"
 # The timeout bound is graded on the runner's own record (spawn -> timeout -> tree verified gone),
 # never on this script's wall clock: python start-up and git under machine load are not the property.
 TIMEOUT_OK='.timeout | if type == "object" and .verified == true and ([.limit_s, .timed_out_after_s, .killed_after_s, .cleanup_grace_s] | all(type == "number"))
   then .timed_out_after_s >= .limit_s and .killed_after_s >= .timed_out_after_s and (.killed_after_s - .timed_out_after_s) <= .cleanup_grace_s else false end'
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
 trec=$(jq -c '.results[] | select(.check == "t-timeout-tree") | .timeout' <<<"$out")
-jq -e '.results[] | select(.check == "t-timeout-tree") | '"$TIMEOUT_OK" <<<"$out" >/dev/null && okk "timeout tree killed after the limit and within the runner's cleanup grace ($trec)" || nok "timeout record outside limit/grace: $trec"
+# every t-timeout-tree failure prints what the runner returned: the graded result, else the raw output head
+tdiag=$(jq -c '.results[] | select(.check == "t-timeout-tree") | {state, reason, exit, duration_s, timeout, output_tail}' <<<"$out" 2>/dev/null)
+[ -n "$tdiag" ] || tdiag="no t-timeout-tree result; raw output: $(head -c 600 <<<"$out")"
+jq -e '.results[] | select(.check == "t-timeout-tree") | '"$TIMEOUT_OK" <<<"$out" >/dev/null && okk "timeout tree killed after the limit and within the runner's cleanup grace ($trec)" || nok "timeout record outside limit/grace: $tdiag"
 # Negative: a hung child the runner never manages to kill must not pass that bound (fake clock, no real wait).
 neg=$(python3 -B - "$P/scripts/run-checks.py" <<'PY'
 import importlib.util, json, subprocess, sys
@@ -189,8 +220,13 @@ bad_records='{}
 {"timeout":{"limit_s":1,"timed_out_after_s":1.01,"killed_after_s":null,"cleanup_grace_s":3.5,"verified":false}}'
 accepted=$(jq -c "select($TIMEOUT_OK)" <<<"$bad_records")
 [ -z "$accepted" ] && okk "timeout bound rejects missing, late, early and unverified kill records" || nok "timeout bound accepted: $accepted"
-[ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
-if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
+[ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics: $tdiag"
+# Under load bash can take longer than the 1 s limit to reach `echo $!`: the check is then killed before it writes
+# child.pid and there is no grandchild pid to probe. That is a legitimate timeout as long as the runner's own record
+# says the whole tree was verified gone; without a verified record a missing child.pid is a failure.
+if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"
+elif jq -e '.results[] | select(.check == "t-timeout-tree") | '"$TIMEOUT_OK" <<<"$out" >/dev/null; then okk "timeout check was killed before it wrote child.pid; the verified record covers its tree ($trec)"
+else nok "timeout check did not create pid file: $tdiag"; fi
 # Windows reuses PIDs fast under load, so a PID that is alive again is only our grandchild when its process
 # started no later than the check's own timestamp taken after the spawn (child.spawned). A process at that PID that
 # started later is a reuse: the grandchild had already died. No wall-clock bound; order only. Evidence on FAIL.

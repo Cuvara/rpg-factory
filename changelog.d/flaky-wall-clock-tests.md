@@ -13,3 +13,13 @@
   post-spawn timestamp, and the probe prints the tasklist row and both times on failure (a live grandchild still
   fails). `tests/session-state.test.sh` checks the file-lock retries on a fake clock instead of real elapsed time,
   and `tests/run-all-parallel.test.sh` relies on overlap evidence instead of comparing `-j 3` and `-j 1` wall time.
+- **Timeout tree check under load.** When bash needs more than the 1 s limit to reach `echo $!`, the check is killed
+  before it writes `child.pid` (seen in 6 of 90 runs under a process-spawn storm). The test now accepts that case when
+  the runner's own record verifies the whole tree is gone, and still fails without a verified record. Every
+  `t-timeout-tree` failure now prints the result's state, reason, exit, duration, timeout record and output tail
+  (or the raw output head when there is no result).
+- **`run-checks.py` bash flavor probe.** On Windows, a `uname` probe that fails to start or exits non-zero no longer makes
+  the flavor `unknown` at once (that BLOCKs every check of the run). The probe now runs up to 3 times, and a probe that
+  ran keeps its answer. The "cannot be resolved" BLOCKED reason now names what is missing (workspace, workspace path,
+  checkout path, HEAD), the selected bash, its flavor and each probe answer. A timeout reason no longer repeats
+  `cleanup=`.
