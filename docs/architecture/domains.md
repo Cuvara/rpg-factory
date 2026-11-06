@@ -11,6 +11,7 @@ Domains describe who owns a discipline's artifacts, which registry paths route w
 | 2D Art | `art-2d` | Optional `authoring` | `art-direction-2d`, `concept-2d`, `asset-spec-2d`, `runtime-export-2d`, `reference-2d` (plus legacy aliases) | `--domain art2d`, `--kind`, or `art2d/` paths |
 | 3D Art | `art-3d` | Optional `authoring` | `art-direction-3d`, `model-spec`, `material-spec`, `rig-spec`, `animation-spec`, `asset-3d` (plus legacy aliases `art3d-brief`, `art3d-asset`) | `--domain art3d`, `--kind`, or `art3d/` paths |
 | VFX | `vfx` | Optional `authoring` | `vfx-direction`, `vfx-spec`, `vfx-asset` | `--domain vfx`, `--kind`, or `vfx/` paths |
+| Asset generation | `asset-gen` | Optional `authoring` | `gen-run` | `--domain assetgen`, `--kind gen-run`, or `assetgen/` paths |
 | Engineering | Existing Engineering leads | Product repos | Code, tests, packages and deployment outputs | Existing `--repo` / `--paths` routing |
 
 ## Readiness
@@ -22,8 +23,9 @@ Domains describe who owns a discipline's artifacts, which registry paths route w
 | 2D Art | Active; registered, routed, contracted and checked | Production 2D art and export workflow |
 | 3D Art | Active; registered, routed, contracted and checked | Production 3D art specification and delivery workflow |
 | VFX | Active; registered, routed, contracted and checked | Production VFX specification and delivery workflow |
+| Asset generation | Active; registered, routed, contracted and checked | ComfyUI generation runs with reviewed prompts, image QA and human-approved handoff (generation needs comfy-mcp) |
 
-An active domain has registry ownership, routing, handoff contracts, shared checks and a production workflow. Domain details: [Game Design](domains/design.md), [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md).
+An active domain has registry ownership, routing, handoff contracts, shared checks and a production workflow. Domain details: [Game Design](domains/design.md), [UI/UX](domains/ui.md), [2D Art](domains/art2d.md), [3D Art](domains/art3d.md), [VFX](domains/vfx.md), [Asset generation](domains/assetgen.md).
 
 ## Game Design
 

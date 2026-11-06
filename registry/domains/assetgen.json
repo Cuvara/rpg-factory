@@ -1,0 +1,292 @@
+{
+  "modules": [
+    {
+      "id": "authoring.assetgen",
+      "repo": "authoring",
+      "paths": [
+        "assetgen/"
+      ],
+      "responsibility": "AI image generation: the game layer of asset-gen purposes, styles and ComfyUI workflow templates, and generation run records (gen-run) with prompt, reviews, QA and output hashes.",
+      "depends_on": [],
+      "rules": [
+        "Approval of a gen-run is human-only (gate assetgen-approval); agents never write approvals.",
+        "The prompt and image reviews come from a model other than the prompt author; a same-model review is an explicit SAME_MODEL fallback, never a silent pass.",
+        "No credentials, endpoints or provider URLs in templates or run records; the ComfyUI node reads its own credentials."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "assetgen-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain assetgen",
+            "evidence": "Generation runs: reviewer model differs from the prompt author, QA PASS recorded, output hashes match the files, provenance complete, purpose/style/template refs resolve."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "asset-gen"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "assetgen",
+      "docs": []
+    }
+  ],
+  "skills": {
+    "asset-gen": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 100,
+      "summary": "AI image asset generation runs: purpose x style x ComfyUI workflow template, reviewed prompt, comfy-mcp generation, deterministic QA, image review, gen-run record and human-approved handoff."
+    }
+  },
+  "contracts": [
+    {
+      "id": "assetgen-to-art2d",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to 2D Art (runtime exports cite them) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art2d/exports/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "assetgen-to-art3d",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to 3D Art (model references, textures) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art3d/models/"
+        },
+        {
+          "repo": "authoring",
+          "path": "art3d/materials/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "assetgen-to-ui",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to UI/UX (UI element parts) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "ui/specs/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "assetgen-to-vfx",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to VFX (effect textures) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/assets/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    }
+  ],
+  "domains": {
+    "assetgen": {
+      "summary": "AI image generation runs (ComfyUI through comfy-mcp): reviewed prompts, deterministic image QA, provenance and human-approved handoff of the images to 2D Art, 3D Art, UI/UX and VFX.",
+      "status": "active",
+      "lead": "asset-gen",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "gen-run"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace",
+        "assetgen-quality"
+      ],
+      "human_gates": [
+        "assetgen-approval"
+      ],
+      "handoffs": [
+        "assetgen-to-art2d",
+        "assetgen-to-art3d",
+        "assetgen-to-ui",
+        "assetgen-to-vfx"
+      ],
+      "may_own_feature_state": false,
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/assetgen.py",
+      "reviewers": []
+    }
+  },
+  "artifact_lifecycles": {
+    "gen-run": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "needs_approval": [
+            "assetgen-approval"
+          ]
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    }
+  },
+  "kind_schemas": {
+    "gen-run": "docs/schemas/kinds/gen-run.schema.json"
+  }
+}

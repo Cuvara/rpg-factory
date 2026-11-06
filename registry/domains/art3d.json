@@ -443,6 +443,7 @@
         "art3d-visual-review"
       ],
       "handoffs": [
+        "assetgen-to-art3d",
         "art3d-asset-to-vfx",
         "art3d-asset-to-impl",
         "asset-3d-to-vfx",

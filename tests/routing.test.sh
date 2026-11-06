@@ -198,7 +198,7 @@ out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths de
 fexpect 'authoring design path -> game-design leads' "jq -e '.repos[0] | $design_lead' <<<\"\$out\" >/dev/null"
 out=$(fctx "$FA" --kind feature-spec --json)
 fexpect "--kind feature-spec -> design domain and game-design lead" 'jq -e ".domain.lead == \"game-design\" and .domain.id == \"design\"" <<<"$out" >/dev/null'
-for spec in "ui-ux:ui:ui-spec" "art-2d:art2d:art2d-asset" "art-3d:art3d:art3d-asset" "vfx:vfx:vfx-spec"; do
+for spec in "ui-ux:ui:ui-spec" "art-2d:art2d:art2d-asset" "art-3d:art3d:art3d-asset" "vfx:vfx:vfx-spec" "asset-gen:assetgen:gen-run"; do
   IFS=: read -r skill domain kind <<<"$spec"
   out=$(fctx "$FA" --kind "$kind" --json)
   fexpect "--kind $kind routes to $skill" "jq -e '.domain.id == \"$domain\" and .domain.lead == \"$skill\"' <<<\"\$out\" >/dev/null"

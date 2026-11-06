@@ -93,6 +93,14 @@
     "unity-mcp": {
       "probe": "tcp://127.0.0.1:23621",
       "purpose": "Unity Editor MCP (ai-game-developer). Reachable only while the Editor has the client project open. Used to run the Unity Test Runner from an agent."
+    },
+    "comfyui": {
+      "probe": "tcp://127.0.0.1:8188",
+      "purpose": "ComfyUI started headless (main.py, default port). asset-gen runs workflows on it through comfy-mcp; reachable only while ComfyUI runs."
+    },
+    "comfyui-desktop": {
+      "probe": "tcp://127.0.0.1:8189",
+      "purpose": "ComfyUI Desktop session (its own port). Either this or the headless comfyui service is enough for comfy-mcp."
     }
   },
   "dev_tools": [
@@ -310,6 +318,20 @@
       ],
       "required": false,
       "fallback": "the hand-walked multi-client steps in measure references/legs.md; a claim the run did not produce stays NOT_RUN"
+    },
+    {
+      "id": "comfy-mcp",
+      "kind": "mcp",
+      "probes": [
+        "mcp:comfy-mcp|mcp:comfy",
+        "service:comfyui|service:comfyui-desktop"
+      ],
+      "provides": "ComfyUI from the agent through the official Comfy-Org comfy-mcp server (tool ids mcp__comfy-mcp__<tool>): server_info, validate_workflow against the live node list, run_workflow, job, fetch_outputs into a run directory, upload_file for reference images, nodes, workflow slots and launch_comfyui.",
+      "used_by": [
+        "asset-gen"
+      ],
+      "required": false,
+      "fallback": "render the workflow with assetgen.py render and leave the generation step NOT_RUN (a person runs workflow.json in ComfyUI and drops the PNGs into outputs/); never claim a generation that did not run"
     }
   ],
   "pipeline": {
@@ -803,6 +825,10 @@
     {
       "id": "art3d-visual-review",
       "rule": "3D visual acceptance, rights and final production review are human decisions."
+    },
+    {
+      "id": "assetgen-approval",
+      "rule": "A person approves a generation run (gen-run) before its images become a production source in another domain; agents never approve, including their own generations."
     }
   ],
   "contracts": [],
