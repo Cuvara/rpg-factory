@@ -101,11 +101,12 @@ grade
 # is a marker comment `<!-- policy:<id> -->` on its own line, present exactly once, whose next non-empty line is the
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
-POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo)
+POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions never commit, stage or stash; only the task lead commits, with explicit paths.'
   [no-worktree-repo]='A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.'
+  [task-lead-claude]="The task lead is always a Claude session (registry pipeline.lead_agent), whatever the task's implementer; implementation, review and QA sessions keep the cross-model pairing."
 )
 RETIRED_PHRASES=(
   'the lead implements in its own session'
@@ -151,8 +152,10 @@ for id in "${POLICY_IDS[@]}"; do
   s_mutate "marker policy:$id deleted" "marker missing: policy:$id" \
     "sed -i '/^<!-- policy:$id -->\$/d' \"\$F\""
   s_mutate "marker policy:$id duplicated" "marker duplicated: policy:$id appears 2 times" \
-    "printf '\n<!-- policy:$id -->\n%s\n' '${POLICY_SENTENCE[$id]}' >> \"\$F\""
+    "printf '\n<!-- policy:$id -->\n%s\n' $(printf %q "${POLICY_SENTENCE[$id]}") >> \"\$F\""
 done
+s_mutate "canonical sentence changed (task lead follows the implementer)" "sentence changed under policy:task-lead-claude" \
+  'sed -i "s/^The task lead is always a Claude session (registry pipeline\.lead_agent), whatever/The task lead runs on the implementer model, whatever/" "$F"'
 s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence changed under policy:run-lead-never-implements" \
   'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
 s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \

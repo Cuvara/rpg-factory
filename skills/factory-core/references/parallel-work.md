@@ -40,6 +40,9 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
 6. reports to the run lead (section 3) and records the review and QA verdicts.
 It never pushes, merges, tags or removes its worktree.
 
+<!-- policy:task-lead-claude -->
+The task lead is always a Claude session (registry pipeline.lead_agent), whatever the task's implementer; implementation, review and QA sessions keep the cross-model pairing.
+
 **Implementation sub-session** - edits only its subtask's paths in the task worktree, runs the targeted checks
 from its spec, and reports to the task lead. It does not commit, stage or stash: the worktree has one shared
 index and the task lead commits.
@@ -206,7 +209,9 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    terminal and keeps its output readable), the run lead ends each task-lead session once its report is in, and
    any background Agent-tool session still running is stopped. No idle session outlives its task.
 4. **Check.** `factory-pipeline.py cleanup plan.json` lists what is left (worktrees and task branches of the
-   plan) and prints the commands; it must report CLEAN before the final report. The report's Cleanup column
+   plan, and settled Orca workers not released in each task lead's Run: task `orca_run` or `--orca-run <id>`,
+   read-only `worker-list`; no orca is NOT_AVAILABLE) and prints the commands; it must report CLEAN before the
+   final report. The report's Cleanup column
    names what was removed and what was kept and why.
 
 ### Session lifecycle
@@ -228,7 +233,14 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
   recorded, in wave order (section 10 step 5); only then is its worktree removed (step 1 above). In a no-worktree
   repo only the task work is serialized - the next task starts after the previous task's QA verdict - while its
   sessions are released one by one as they report, like everywhere else. A settled session never waits for a
-  later turn or wave.
+  later turn or wave. A review or QA session whose candidate is superseded (a new HEAD) is released at once,
+  not at task end; `factory-pipeline.py status plan.json --orca-run <run id>` lists the Run's settled workers that
+  are not released.
+- **Releasing a session does not stop its test processes.** On Windows `orca orchestration worker-stop` and
+  `worker-release` close the worker's terminal, but test processes it started (`run-all.sh`, `parallel-policy.test.sh`
+  and their children) keep running, reparented, and load the machine (seen with a stopped QA `run-all.sh` and a
+  reviewer's suites). Before a worker that runs tests is released, it stops its own test process tree; the lead then
+  checks for leftover test processes whose cwd is the task worktree and stops only those.
 - **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in an
   implementation session, never in a lead's session, and never reused across tasks or candidate SHAs.
 - **Few sessions at once.** Under memory pressure Claude Code reaps background shells, which kills long test runs

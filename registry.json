@@ -350,6 +350,7 @@
       "codex": "claude"
     },
     "default_implementer": "claude",
+    "lead_agent": "claude",
     "verdict_states": [
       "PASS",
       "FAIL",

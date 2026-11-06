@@ -6,6 +6,9 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+# Claude fixtures must not select Codex install checks through the caller's runtime.
+unset CODEX_THREAD_ID PLUGIN_ROOT PLUGIN_DATA
+export CODEX_HOME="$TMP/codex"
 SRC="$TMP/src"; mkdir -p "$SRC/.claude-plugin" "$SRC/scripts"
 cp "$ROOT/scripts/install-status.py" "$SRC/scripts/"
 echo '{"name":"rpg-factory","version":"0.3.0"}' > "$SRC/.claude-plugin/plugin.json"; echo "a" > "$SRC/file.txt"
@@ -125,6 +128,19 @@ cp "$ROOT/scripts/lib/codexconfig.py" "$AL/scripts/lib/"
 out=$(CODEX_HOME="$TMP/codex" sess "$alias_path" "$AL" --codex | jq -r '.hookSpecificOutput.additionalContext // ""' 2>&1)
 case "$out" in *"Codex install state"*"Windows Store alias"*) pass=$((pass + 1)); echo "PASS  Codex session: install state and alias";;
   *) fail=$((fail + 1)); echo "FAIL  Codex combined: $out";; esac
+
+# Exercise the suite entry point, including the partial-lib fixture above, from a
+# Codex caller. The guard permits exactly one child run; its output stays buffered.
+if [ "${RPG_FACTORY_INSTALL_STATUS_INHERITED_TEST:-}" != 1 ]; then
+  out=$(CODEX_THREAD_ID=t PLUGIN_ROOT=/x PLUGIN_DATA=/x \
+    RPG_FACTORY_INSTALL_STATUS_INHERITED_TEST=1 env -u CLAUDECODE -u TMPDIR \
+    bash "$ROOT/tests/install-status.test.sh" 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^PASS  install state and alias in one advisory$' <<<"$out"; then
+    pass=$((pass + 1)); echo "PASS  suite isolates inherited Codex runtime markers"
+  else
+    fail=$((fail + 1)); printf 'FAIL  suite with inherited Codex runtime markers (rc=%s):\n%s\n' "$rc" "$out"
+  fi
+fi
 
 total=$((pass + fail)); echo "install-status tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

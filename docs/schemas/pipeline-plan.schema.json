@@ -141,6 +141,11 @@
           "worktree": {
             "type": "boolean",
             "description": "true is rejected for a repo with worktrees: false"
+          },
+          "orca_run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The task lead's own Orca Run id (from its report; run:<id> accepted). status and cleanup list that Run's settled workers that are not released (read-only worker-list). Not part of the verdict fingerprint."
           }
         },
         "additionalProperties": false
