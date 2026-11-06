@@ -250,6 +250,10 @@
         "default_implementer": {
           "type": "string"
         },
+        "lead_agent": {
+          "type": "string",
+          "description": "agent of every task lead (dispatch --phase lead), whatever the task's implementer; default claude"
+        },
         "verdict_states": {
           "type": "array",
           "items": {
