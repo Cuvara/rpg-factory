@@ -1015,6 +1015,32 @@ expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* valida
 gi "$C" checkout -q feat/core/demo
 git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
 
+echo "-- owned paths in another case (Windows: case-insensitive pathspecs)"
+# The plan owns SRC/ while the commits touch src/a.txt. On Windows (os.name nt, as specs() checks) the owned-path check
+# and the git pathspecs agree case-insensitively: status counts the commit and a later change makes the review STALE.
+# Elsewhere git is case-sensitive: the commit is not the task's own, so the task is still implementing.
+I="$WS/icase"; mkdir -p "$I"; git init -q -b develop "$I"; echo base > "$I/README.md"; gi "$I" add -A; gi "$I" commit -qm base
+IC=$(plan icase '{"schema":"rpg-factory.pipeline-plan/1","id":"icase","title":"Case","topic":"feat/core/ic","deliver":"pr",
+ "repos":{"ic":{"path":"ws/icase","base":"develop"}},"tasks":[{"id":"t","repo":"ic","objective":"o","paths":["SRC/"],"acceptance":["a"]}]}')
+gi "$I" checkout -qb feat/core/ic-t; mkdir -p "$I/src"; echo a > "$I/src/a.txt"; gi "$I" add -A; gi "$I" commit -qm "feat: a"; IT=$(git -C "$I" rev-parse HEAD)
+ic_phase() {  # ic_phase <name> <phase>: task t's phase in status --json
+  local out; out=$(python3 -B "$P" status --json "$IC" 2>&1)
+  if python3 -c 'import json,sys; r={t["id"]:t for t in json.loads(sys.argv[1])["tasks"]}["t"]; assert r["phase"]==sys.argv[2], r' "$out" "$2"
+  then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1"; head -c 1200 <<<"$out"; echo; fi
+}
+if [ "$(python3 -c 'import os; print(os.name)')" = nt ]; then
+  ic_phase "Windows: status counts a commit in src/ for the owned path SRC/ (candidate)" candidate
+  python3 -B "$P" verdict "$IC" --task t --phase review --sha "$IT" --by codex --state PASS >/dev/null || echo "verdict failed: icase review"
+  gi "$I" checkout -qb feat/core/ic develop; gi "$I" merge -q --no-ff feat/core/ic-t -m "merge t"; II=$(git -C "$I" rev-parse HEAD)
+  python3 -B "$P" verdict "$IC" --task integration:ic --phase qa --sha "$II" --by codex --state PASS >/dev/null || echo "verdict failed: icase qa"
+  expect "Windows: review and QA PASS on the owned path in another case: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$IC"
+  echo b >> "$I/src/a.txt"; gi "$I" commit -qam "fix: a after review"
+  expect "Windows: a change to src/ after review makes the review of SRC/ STALE" 1 "BLOCKER t: review is STALE" gate "$IC"
+  expect "Windows: and the QA on the old HEAD is STALE" 1 "BLOCKER ic: QA is STALE" gate "$IC"
+else
+  ic_phase "case-sensitive host: a commit in src/ is not the task's own for SRC/ (implementing)" implementing
+fi
+
 echo "-- dogfood two-level grader (offline, synthetic transcripts)"
 # tl_transcript <file> <bash command> <its result text> [extra tool_use json]: a stream-json run lead transcript that
 # loads factory-core, runs one Bash command (is_error false, as a pipe reports) and finishes with success
