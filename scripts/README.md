@@ -27,7 +27,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `artifact-review.py` - git identity and SSH signature helpers for the artifact checks. `tests/artifact-quality.test.sh`
 - `artifact-quality.py` - aggregates artifact checks and the domain plugins. `tests/artifact-quality.test.sh`
 - `domains/*.py` - per-domain quality plugins (`_api.py` contract; design, ui, art2d, art3d, vfx, assetgen, noop). `tests/artifact-quality.test.sh`, `tests/<domain>-workflow.test.sh`
-- `domains/assetgen.py` - gen-run quality plugin: reviewer model differs from the prompt author (`SAME_MODEL:<model>` fallback grades WARN), QA PASS, output hashes, provenance, refs. `tests/assetgen.test.sh`
+- `domains/assetgen.py` - gen-run quality plugin: reviewer model differs from the prompt author (`SAME_MODEL:<model>` fallback grades WARN), review files bound to the current prompt and outputs, `qa.json` PASS with every required check, output hashes, provenance, refs. `tests/assetgen.test.sh`
 - `asset-manifest.py` - asset manifest records against registered repos. `tests/asset-manifest.test.sh`
 - `registry-ownership.py` - cross-domain ownership and handoff invariants. `tests/handoff-e2e.test.sh`
 - `english-only.py` - English-only content policy (`--enforce`). `tests/english-only.test.sh`, `tests/skills-lint.sh`
@@ -64,7 +64,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `ui/` - UI plan engine (`ui_plan.py`, data in `ui/data/`), `ui_catalog.py`, `ui_select.py`, `figma_env.py`.
   `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh`, `tests/ui-figma-env.test.sh`
 - `assetgen/` - asset-gen engine modules: `layers.py` (core and game layers, override and extends), `lint.py` (offline data
-  and workflow lint against `data/known-nodes.json`), `qa.py` and `png.py` (deterministic image QA, stdlib PNG decoder).
+  and workflow lint against `data/known-nodes.json`), `qa.py` and `png.py` (deterministic image QA, stdlib PNG decoder), `runfiles.py` (review verdict
+  binding and required QA checks, shared with `checks/domains/assetgen.py`).
   `tests/assetgen.test.sh`
 - `adapters/` - optional domain tool adapters (`art2d/provider.py`, `art3d/blender-stats.py` run inside Blender,
   `vfx/unity.py`). `tests/art2d-workflow.test.sh`, `tests/art3d-workflow.test.sh`, `tests/vfx-workflow.test.sh`

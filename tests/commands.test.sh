@@ -162,5 +162,15 @@ out=$(python3 -B "$CMD" assetgen lint 2>&1); rc=$?
 [ $rc -eq 0 ] && grep -q "house.json" <<<"$out" && grep -qE "^assetgen lint: [0-9]+ PASS, [0-9]+ WARN, 0 FAIL" <<<"$out"   && ok "assetgen lint: core and game-layer data, 0 FAIL" || no "assetgen lint rc=$rc: $(tail -3 <<<"$out")"
 python3 -B "$CMD" assetgen resolve --purpose icon --out "$TMP/spec.json" >/dev/null 2>&1; rc=$?
 [ $rc -eq 2 ] && [ ! -e "$TMP/spec.json" ] && ok "assetgen resolve --out refused (exit 2, nothing written)" || no "assetgen resolve --out rc=$rc"
+# abbreviations of --out (argparse would expand them) are refused too, separate args or one quoted string
+for a in "--ou=$TMP/abbr.json" "--ou $TMP/abbr.json" "--o=$TMP/abbr.json" "--out=$TMP/abbr.json"; do
+  python3 -B "$CMD" assetgen resolve --purpose icon $a >/dev/null 2>"$TMP/err"; rc1=$?
+  python3 -B "$CMD" assetgen "resolve --purpose icon $a" >/dev/null 2>>"$TMP/err"; rc2=$?
+  [ $rc1 -eq 2 ] && [ $rc2 -eq 2 ] && [ ! -e "$TMP/abbr.json" ] && grep -q "abbreviation" "$TMP/err" \
+    && ok "assetgen resolve $a refused (exit 2, nothing written)" || no "assetgen resolve $a rc=$rc1/$rc2" "$(head -2 "$TMP/err")"
+done
+python3 -B "$ROOT/scripts/assetgen/assetgen.py" resolve --purpose icon "--ou=$TMP/abbr.json" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$TMP/abbr.json" ] && grep -q "unrecognized arguments: --ou=" "$TMP/err" \
+  && ok "assetgen.py itself does not expand --ou to --out (allow_abbrev=False)" || no "assetgen.py --ou rc=$rc" "$(cat "$TMP/err")"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

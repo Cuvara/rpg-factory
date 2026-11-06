@@ -9,10 +9,14 @@
   `output_node`). A game layer `<authoring>/assetgen/{purposes,styles,templates}/` overrides or `extends` core ids.
   `render` is strict, `lint` checks data and workflows offline against a node snapshot and rejects URLs, host
   addresses and credentials, `review-cmd` only prints a read-only `codex exec` command, and `qa` checks PNG validity,
-  size (exact, min, aspect or any), alpha, transparent corners, tileable seams and blank images.
+  size (exact, min, aspect or any), alpha, transparent corners, tileable seams and blank images. The stdlib PNG
+  decoder applies gray, RGB and palette `tRNS` transparency like Pillow. Every parser refuses abbreviated options.
 - **Domain `assetgen`.** Module `authoring.assetgen` (`assetgen/`), artifact kind `gen-run`
   (`docs/schemas/kinds/gen-run.schema.json`), quality plugin `scripts/checks/domains/assetgen.py` (the reviewer
-  model differs from the prompt author, QA PASS, output hashes, provenance, refs), human gate `assetgen-approval`,
+  model differs from the prompt author; the review files, not the `run.md` summary, are the evidence and each verdict
+  is bound to the prompt and output SHA-256s `review-cmd` handed the reviewer, so a missing, contradicting or stale
+  review fails; `qa.json` must be PASS with a PASS row for every check the purpose requires, `NOT_AVAILABLE` never
+  grades PASS; output hashes, provenance, refs), human gate `assetgen-approval`,
   handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`, and the `comfy-mcp` dev tool (MCP server plus a
   ComfyUI service probe, headless or Desktop). A same-model review is allowed only as the explicit fallback
   `"by": "SAME_MODEL:<model>"`, which grades WARN, never PASS.
@@ -25,7 +29,7 @@
   Desktop and headless ports, and adding a purpose, style or template.
 - **Commands.** `/rpg-factory:assetgen` (`factory-cmd.py assetgen`) runs the read-only engine verbs `list`, `show`,
   `resolve`, `lint` and `review-cmd`. It defaults `--authoring` to the workspace authoring repo when that repo has
-  `assetgen/`, and it refuses `render`, `qa`, `manifest` and `resolve --out`.
+  `assetgen/`, and it refuses `render`, `qa`, `manifest` and `--out` with any abbreviation of it (`--ou=FILE`).
 - **Tests.** `tests/assetgen.test.sh` (in run-all, selected by `--affected` for engine, template and quality-plugin
   changes), routing scenarios (`assetgen/` -> lead `asset-gen` with tech `comfyui`; `art2d/` without it), the
   `asset-gen` dogfood scenario and the `asset-gen-icon` eval.

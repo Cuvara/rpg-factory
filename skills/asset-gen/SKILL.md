@@ -44,7 +44,9 @@ and run directories `assetgen/runs/<run-id>/`. Core purposes, styles and templat
    command; run it as printed. It writes `<run>/review-prompt.json`. On `FAIL` fix `prompt.md` from the findings and
    review again, at most 2 fix rounds; still `FAIL` -> stop, report `BLOCKED` with the findings, ask the user.
    When `codex` is not OK or the command fails, review it yourself against the same text (`review-cmd --json`, field
-   `stdin`) and write the verdict with `"by": "SAME_MODEL:claude"` - it grades `WARN`, never `PASS`; say so.
+   `stdin`) and write the verdict with its `binding` fields and `"by": "SAME_MODEL:claude"` - it grades `WARN`,
+   never `PASS`; say so. A verdict binds the prompt and images it saw (`prompt_sha256`, `outputs`): change either
+   and the review is stale until it runs again.
 5. **Render.** `assetgen.py render --run <run> [--param name=value]` writes `<run>/workflow.json` (strict: an
    undeclared or missing param is an error). For `image-edit`, upload the reference first (step 6) and pass
    `--param reference_image=<name it returned>`.

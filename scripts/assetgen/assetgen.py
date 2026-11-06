@@ -23,15 +23,18 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       runnable as is by comfy-mcp run_workflow; render --run sets filename_prefix=assetgen/<run-id>
                       unless --param filename_prefix=... is given
   outputs/*.png       comfy-mcp fetch_outputs out_dir
-  review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex"} (review-cmd prompt)
-  review-image.json   the same for the images (review-cmd image)
+  review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "..."}
+                      (review-cmd prompt); prompt_sha256 is the binding review-cmd hands the reviewer to copy back
+  review-image.json   the same for the images (review-cmd image), binding also "outputs": [{"path", "sha256"}]
+                      (runfiles.py; the quality plugin FAILs a stale or unbound verdict once the run is proposed)
   qa.json             qa: rpg-factory.validation/1 results per output
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
 
 Read-only except: resolve/render --out, render --run (workflow.json), qa (qa.json) and manifest (run.md) in the
 given run dir. review-cmd only prints a `codex exec --sandbox read-only` command; this script never runs agents,
 ComfyUI or the network. Model ids, sizes and other values live in template params data, not here.
-Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa).
+Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa). Options are never abbreviated (--ou is
+not --out): allow_abbrev=False on every parser.
 """
 import argparse
 import glob
@@ -46,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import layers  # noqa: E402
 import lint  # noqa: E402
 import qa  # noqa: E402
+import runfiles  # noqa: E402
 
 RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{3}$")
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
@@ -180,7 +184,7 @@ def workflow_model(run_dir, spec):
 
 # -- review-cmd ------------------------------------------------------------------------------------------------
 
-def review_prompt_text(phase, spec, prompt, images, qa_report):
+def review_prompt_text(phase, spec, prompt, images, qa_report, binding):
     p, s = spec["purpose"], spec["style"]
     rubric = p["data"].get("prompt_rubric" if phase == "prompt" else "image_rubric", [])
     lines = [
@@ -204,10 +208,12 @@ def review_prompt_text(phase, spec, prompt, images, qa_report):
         if qa_report:
             lines += ["Deterministic QA: %s (%s)" % (qa_report.get("state"), "; ".join(
                 "%s %s %s" % (r["state"], r["output"], r["check"]) for r in qa_report.get("results", []) if r["state"] != "PASS") or "all checks PASS")]
+    bound = ", ".join("%s: %s" % (json.dumps(k), json.dumps(v, sort_keys=True)) for k, v in sorted(binding.items()))
     lines += ["", "Answer with exactly one JSON object and nothing else:",
               '{"state": "PASS" or "FAIL", "findings": [{"rubric": <item number>, "severity": "blocker|major|minor", '
-              '"text": "<finding>"}], "by": "codex"}',
-              "state is FAIL when any rubric item is not met with a blocker or major finding."]
+              '"text": "<finding>"}], "by": "codex", ' + bound + "}",
+              "state is FAIL when any rubric item is not met with a blocker or major finding.",
+              "Copy these binding fields unchanged into your answer; they name what you reviewed: " + bound]
     text = "\n".join(lines)
     return "\n".join(l if l.strip() != HEREDOC else l + "." for l in text.splitlines())
 
@@ -223,7 +229,10 @@ def review_cmd(run_dir, phase, codex):
     qa_path = os.path.join(run_dir, "qa.json")
     qa_report = read_json(qa_path, "qa") if phase == "image" and os.path.isfile(qa_path) else None
     rel = [os.path.relpath(i, run_dir).replace(os.sep, "/") for i in images]
-    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report)
+    binding = {"prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest()}
+    if phase == "image":
+        binding["outputs"] = [{"path": r, "sha256": qa.sha256(i)} for r, i in zip(rel, images)]
+    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding)
     verdict = os.path.join(run_dir, REVIEW_FILES[phase]).replace(os.sep, "/")
     argv = [codex, "exec", "--sandbox", "read-only", "-C", run_dir.replace(os.sep, "/")]
     for i in images:
@@ -231,28 +240,10 @@ def review_cmd(run_dir, phase, codex):
     argv += ["-o", verdict, "-"]
     shell = "%s <<'%s'\n%s\n%s" % (shlex.join(argv), HEREDOC, stdin, HEREDOC)
     return {"schema": "rpg-factory.assetgen-review-cmd/1", "phase": phase, "argv": argv, "stdin": stdin,
-            "verdict": verdict, "shell": shell}
+            "verdict": verdict, "binding": binding, "shell": shell}
 
 
 # -- manifest --------------------------------------------------------------------------------------------------
-
-def read_verdict(path):
-    """{by, state, findings} from a review file; NOT_RUN when absent, INVALID when no JSON object is found."""
-    if not os.path.isfile(path):
-        return {"by": None, "state": "NOT_RUN", "findings": 0}
-    with open(path, encoding="utf-8", errors="replace") as f:
-        text = f.read()
-    obj = None
-    for candidate in [text] + re.findall(r"\{.*\}", text, re.S):
-        try:
-            obj = json.loads(candidate)
-            break
-        except ValueError:
-            continue
-    if not isinstance(obj, dict) or obj.get("state") not in ("PASS", "FAIL"):
-        return {"by": None, "state": "INVALID", "findings": 0}
-    return {"by": obj.get("by"), "state": obj["state"], "findings": len(obj.get("findings") or [])}
-
 
 def existing_front(path):
     if not os.path.isfile(path):
@@ -301,11 +292,11 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
             "params": spec.get("params", {}),
             "prompt": prompt, "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "prompt_author": prompt_author,
-            "prompt_review": read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"])),
+            "prompt_review": runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt"),
             "generation": {"generated_by": generated_by, "tool": "comfyui", "model": model,
                            "workflow": "workflow.json" if os.path.isfile(os.path.join(run_dir, "workflow.json")) else None},
             "outputs": outputs, "qa": qa_block,
-            "image_review": read_verdict(os.path.join(run_dir, REVIEW_FILES["image"])),
+            "image_review": runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["image"]), "image"),
         },
     }
     return front, bool(old.get("status")) and not same_outputs and old.get("status") != "proposed"
@@ -327,19 +318,22 @@ def manifest_text(front):
 # -- CLI -------------------------------------------------------------------------------------------------------
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="assetgen.py", description="asset-gen engine (see module docstring)")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    c = sub.add_parser("list"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
-    c = sub.add_parser("show"); c.add_argument("id"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
-    c = sub.add_parser("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
+    ap = argparse.ArgumentParser(prog="assetgen.py", description="asset-gen engine (see module docstring)", allow_abbrev=False)
+    subs = ap.add_subparsers(dest="cmd", required=True)
+
+    def sp(name):
+        return subs.add_parser(name, allow_abbrev=False)  # every subparser refuses abbreviated options
+    c = sp("list"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sp("show"); c.add_argument("id"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
     c.add_argument("--authoring"); c.add_argument("--out"); c.add_argument("--json", action="store_true")
-    c = sub.add_parser("render"); c.add_argument("--run"); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
+    c = sp("render"); c.add_argument("--run"); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
     c.add_argument("--param", action="append", default=[])
-    c = sub.add_parser("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
-    c = sub.add_parser("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); c.add_argument("--run", required=True)
+    c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); c.add_argument("--run", required=True)
     c.add_argument("--codex", default="codex"); c.add_argument("--json", action="store_true")
-    c = sub.add_parser("qa"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
-    c = sub.add_parser("manifest"); c.add_argument("--run", required=True); c.add_argument("--title")
+    c = sp("qa"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
+    c = sp("manifest"); c.add_argument("--run", required=True); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     authoring = getattr(a, "authoring", None)

@@ -2,8 +2,10 @@
 # asset-gen engine (scripts/assetgen/): list/show/resolve with core + game layers (override, extends, per-field
 # source, param precedence), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
 # lint errors and warnings, review-cmd output (prints, never runs Codex), PNG QA on fixture PNGs generated here
-# (alpha, corners, seam, blank, size modes, stdlib decoder, NOT_AVAILABLE), manifest run.md (gen-run front matter), the gen-run quality plugin (pass and fail cases; through
-# artifact-quality and called directly), artifact-lint on manifest-produced run.md,
+# (alpha, corners, seam, blank, size modes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
+# (gen-run front matter, review bindings), the gen-run quality plugin (pass and fail cases: review files and their
+# prompt/output binding, qa.json as the QA evidence; through artifact-quality and called directly), artifact-lint on
+# manifest-produced run.md,
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -17,6 +19,8 @@ pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      /'; return 0; }
 AG() { python3 -B "$ROOT/scripts/assetgen/assetgen.py" "$@"; }
+# bound RUN PHASE STATE BY [FINDINGS-JSON]: a verdict carrying the binding review-cmd hands the reviewer (stdout)
+bound() { AG review-cmd --phase "$2" --run "$1" --json | jq -c --arg s "$3" --arg b "$4" --argjson f "${5:-[]}" '.binding + {state: $s, by: $b, findings: $f}'; }
 GOLD="$ROOT/tests/fixtures/assetgen/golden"
 G=(-c user.email=t@t -c user.name=t -c commit.gpgsign=false)
 has_pil() { python3 -c "import PIL" 2>/dev/null; }
@@ -289,6 +293,43 @@ EOF
   grep -qx ok "$TMP/o" && ok "stdlib decoder = Pillow on Pillow-written PNGs (all filters; RGBA, RGB, L, LA, P+tRNS)" || no "stdlib vs Pillow" "$(cat "$TMP/o")"
 fi
 
+python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
+import os, struct, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+out = sys.argv[2]
+cases = {  # name: (png bytes, expected alpha per pixel)
+    "trns-gray": (png.encode_raw(4, 1, 8, 0, [bytes([0, 50, 50, 200])], extra=[(b"tRNS", struct.pack(">H", 50))]), [255, 0, 0, 255]),
+    "trns-rgb": (png.encode_raw(3, 1, 8, 2, [bytes([1, 2, 3, 9, 9, 9, 1, 2, 3])], extra=[(b"tRNS", struct.pack(">HHH", 1, 2, 3))]), [0, 255, 0]),
+    "trns-pal": (png.encode_raw(3, 1, 8, 3, [bytes([0, 1, 2])], extra=[(b"PLTE", bytes([10, 10, 10, 20, 20, 20, 30, 30, 30])),
+                                                                      (b"tRNS", bytes([0, 128]))]), [0, 128, 255]),
+}
+try:
+    import PIL  # noqa: F401
+    pil = True
+except ImportError:
+    pil = False
+for name, (data, want) in cases.items():
+    path = os.path.join(out, name + ".png")
+    open(path, "wb").write(data)
+    os.environ["ASSETGEN_NO_PIL"] = "1"; a = png.decode(path)
+    assert a.decoder == "stdlib" and list(a.rgba[3::4]) == want and a.has_alpha, (name, list(a.rgba[3::4]))
+    del os.environ["ASSETGEN_NO_PIL"]
+    if pil:
+        b = png.decode(path)
+        assert b.decoder == "pillow" and a.rgba == b.rgba and a.has_alpha == b.has_alpha, (name, list(b.rgba[3::4]))
+# a gray icon whose background is transparent only through its tRNS key: corners and alpha must see it
+rows = [bytes(0 if (x - 128) ** 2 + (y - 128) ** 2 > 90 ** 2 else 40 + (x + y) % 200 for x in range(256)) for y in range(256)]
+open(os.path.join(out, "trns-icon.png"), "wb").write(png.encode_raw(256, 256, 8, 0, rows, extra=[(b"tRNS", struct.pack(">H", 0))]))
+print("ok pillow" if pil else "ok stdlib-only")
+EOF
+grep -q "^ok" "$TMP/o" && ok "stdlib decoder applies gray, RGB and palette tRNS ($(cat "$TMP/o"): same pixels as Pillow when present)" \
+  || no "tRNS decode" "$(cat "$TMP/o")"
+qarun qa-trns-001 icon trns-icon.png
+ASSETGEN_NO_PIL=1 AG qa --run "$RUNS/qa-trns-001" --json > "$TMP/q.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(st png-alpha)/$(st png-corners)/$(st png-not-blank)" = "PASS/PASS/PASS" ] \
+  && ok "QA without Pillow: a gray PNG transparent through tRNS passes alpha required and corners" || no "tRNS qa rc=$rc" "$(jq -c .results "$TMP/q.json")"
+
 echo "-- review-cmd (prints only)"
 d="$RUNS/qa-icon-ok-001"
 out=$(AG review-cmd --phase prompt --run "$d" 2>&1); rc=$?
@@ -307,12 +348,17 @@ AG review-cmd --phase image --run "$d" --json > "$TMP/rc.json"; rc=$?
 AG review-cmd --phase image --run "$RUNS/qa-none-001" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "no outputs" "$TMP/err" && ok "image review without outputs: error" || no "image review no outputs rc=$rc"
 got=$(AG review-cmd --phase prompt --run "$d" --codex codex-nightly); grep -q "^codex-nightly exec" <<<"$got" && ok "--codex selects the binary" || no "--codex"
+psha=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], encoding='utf-8').read().strip().encode()).hexdigest())" "$d/prompt.md")
+{ [ "$(jq -r .binding.prompt_sha256 "$TMP/rc.json")" = "$psha" ] \
+  && [ "$(jq -r '.binding.outputs[0].path + " " + .binding.outputs[0].sha256' "$TMP/rc.json")" = "outputs/icon-ok.png $(sha256sum "$d/outputs/icon-ok.png" | cut -d' ' -f1)" ] \
+  && jq -r .stdin "$TMP/rc.json" | grep -qF "\"prompt_sha256\": \"$psha\"" && jq -r .stdin "$TMP/rc.json" | grep -q "Copy these binding fields unchanged"; } \
+  && ok "image review-cmd binds the verdict: prompt sha256 and output sha256s in the instruction and --json binding" || no "binding" "$(jq -c .binding "$TMP/rc.json")"
 
 echo "-- manifest (run.md, gen-run)"
 d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art; AG render --run "$d" >/dev/null
 cp "$FX/icon-ok.png" "$d/outputs/iron-sword.png"; AG qa --run "$d" >/dev/null
-printf '{"state": "PASS", "findings": [], "by": "codex"}\n' > "$d/review-prompt.json"
-printf 'Review done.\n{"state": "FAIL", "findings": [{"rubric": 2, "severity": "major", "text": "off style"}], "by": "codex"}\n' > "$d/review-image.json"
+bound "$d" prompt PASS codex > "$d/review-prompt.json"
+{ echo "Review done."; bound "$d" image FAIL codex '[{"rubric": 2, "severity": "major", "text": "off style"}]'; } > "$d/review-image.json"
 AG manifest --run "$d" > "$TMP/o" 2>&1; rc=$?
 fm() { python3 -c "import json,re,sys; print(json.dumps(json.loads(re.match(r'\A---json\s*\n(.*?)\n---', open(sys.argv[1], encoding='utf-8').read(), re.S).group(1))))" "$d/run.md" | jq -r "$1"; }
 [ $rc -eq 0 ] && [ "$(fm '.id + " " + .kind + " " + .domain + " " + .status')" = "AGEN-iron-sword-icon-001 gen-run assetgen proposed" ] \
@@ -323,6 +369,8 @@ fm() { python3 -c "import json,re,sys; print(json.dumps(json.loads(re.match(r'\A
   && ok "outputs: path and sha256" || no "outputs: $(fm .spec.outputs)"
 [ "$(fm '.spec.prompt_review.by + " " + .spec.prompt_review.state + " " + .spec.image_review.state + " " + (.spec.image_review.findings | tostring) + " " + .spec.qa.state')" = "codex PASS FAIL 1 PASS" ] \
   && ok "reviews (JSON found inside text) and QA state recorded" || no "reviews: $(fm '.spec | {prompt_review, image_review, q: .qa.state}')"
+[ "$(fm '.spec.prompt_review.prompt_sha256 == .spec.prompt_sha256 and .spec.image_review.outputs == .spec.outputs and .spec.prompt_review.outputs == []')" = true ] \
+  && ok "review bindings recorded (prompt sha256; outputs for the image review only)" || no "bindings: $(fm '.spec | {prompt_review, image_review}')"
 [ "$(fm '.provenance.tool + " " + .provenance.model + " " + .spec.generation.generated_by + " " + .spec.prompt_author')" = "comfyui cx/gpt-5.6-sol-image claude claude" ] \
   && ok "provenance: tool comfyui, model from workflow.json, authors" || no "provenance: $(fm .provenance)"
 [ "$(fm '.spec.prompt')" = "Test prompt for icon: one subject, centered." ] && ok "final prompt recorded verbatim" || no "prompt: $(fm .spec.prompt)"
@@ -349,7 +397,7 @@ echo "-- quality plugin (scripts/checks/domains/assetgen.py) and artifact-lint o
 good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly --authoring "$AUTH"
 AG render --run "$good" >/dev/null && cp "$FX/icon-ok.png" "$good/outputs/qp-icon.png" && AG qa --run "$good" >/dev/null \
   || no "good run: render/qa did not PASS" "$(jq -c .results "$good/qa.json" 2>/dev/null)"
-printf '{"state": "PASS", "findings": [], "by": "codex"}\n' | tee "$good/review-prompt.json" > "$good/review-image.json"
+bound "$good" prompt PASS codex > "$good/review-prompt.json"; bound "$good" image PASS codex > "$good/review-image.json"
 AG manifest --run "$good" >/dev/null
 fmset() { # fmset RUN-DIR PYTHON-STATEMENT: edit run.md front matter (obj) in place
   python3 -B -c '
@@ -363,8 +411,11 @@ open(path, "w", encoding="utf-8", newline="\n").write("---json\n" + json.dumps(o
 }
 variant() { # variant NAME [prompt-review-by]: a copy of the good run, re-manifested under its own id
   local d="$RUNS/$1"; rm -rf "$d"; cp -R "$good" "$d"; rm -f "$d/run.md"
-  [ -n "${2:-}" ] && printf '{"state": "PASS", "findings": [], "by": "%s"}\n' "$2" > "$d/review-prompt.json"
+  [ -n "${2:-}" ] && bound "$d" prompt PASS "$2" > "$d/review-prompt.json"
   AG manifest --run "$d" >/dev/null
+}
+qaset() { # qaset NAME PYTHON-STATEMENT: edit the run's qa.json (obj) in place
+  python3 -B -c 'import json, sys; p = sys.argv[1]; obj = json.load(open(p, encoding="utf-8")); exec(sys.argv[2], {"obj": obj}); json.dump(obj, open(p, "w", encoding="utf-8"))' "$RUNS/$1/qa.json" "$2"
 }
 variant qp-same-001 claude-sonnet                      # unmarked review by the prompt author's model family
 variant qp-fallback-001 SAME_MODEL:claude              # explicit same-model fallback
@@ -375,8 +426,24 @@ variant qp-qafail-001; cp "$FX/icon-opaque.png" "$RUNS/qp-qafail-001/outputs/qp-
 AG qa --run "$RUNS/qp-qafail-001" >/dev/null; AG manifest --run "$RUNS/qp-qafail-001" >/dev/null
 variant qp-noqa-001; rm -f "$RUNS/qp-noqa-001/qa.json"; AG manifest --run "$RUNS/qp-noqa-001" >/dev/null
 variant qp-prov-001; fmset "$RUNS/qp-prov-001" 'obj["provenance"]["model"] = ""'
-variant qp-draft-001
-fmset "$RUNS/qp-draft-001" 'obj["status"] = "draft"; obj["provenance"]["model"] = ""; obj["spec"]["image_review"] = {"by": None, "state": "NOT_RUN", "findings": 0}'
+variant qp-draft-001; rm -f "$RUNS/qp-draft-001/review-image.json"; AG manifest --run "$RUNS/qp-draft-001" >/dev/null
+printf 'A draft prompt edited after its review.\n' > "$RUNS/qp-draft-001/prompt.md"; AG manifest --run "$RUNS/qp-draft-001" >/dev/null
+fmset "$RUNS/qp-draft-001" 'obj["status"] = "draft"; obj["provenance"]["model"] = ""'
+# review files are the evidence (finding 1): missing, contradicting run.md, unbound, stale
+variant qp-norev-001; rm -f "$RUNS/qp-norev-001/review-prompt.json"
+variant qp-revdiff-001; bound "$RUNS/qp-revdiff-001" image FAIL codex '[{"rubric": 1, "severity": "blocker", "text": "x"}]' > "$RUNS/qp-revdiff-001/review-image.json"
+variant qp-unbound-001; printf '{"state": "PASS", "findings": [], "by": "codex"}\n' > "$RUNS/qp-unbound-001/review-prompt.json"; AG manifest --run "$RUNS/qp-unbound-001" >/dev/null
+variant qp-staleprompt-001; printf 'Another prompt than the reviewed one.\n' > "$RUNS/qp-staleprompt-001/prompt.md"; AG manifest --run "$RUNS/qp-staleprompt-001" >/dev/null
+variant qp-staleimg-001; cp "$FX/trns-icon.png" "$RUNS/qp-staleimg-001/outputs/qp-icon.png"
+AG qa --run "$RUNS/qp-staleimg-001" >/dev/null; AG manifest --run "$RUNS/qp-staleimg-001" >/dev/null
+variant qp-invalid-001; printf 'no verdict here\n' > "$RUNS/qp-invalid-001/review-image.json"; AG manifest --run "$RUNS/qp-invalid-001" >/dev/null
+# qa.json is the QA evidence (finding 2): contradicts run.md, contradicts itself, incomplete, NOT_AVAILABLE, spec drift
+variant qp-qadisk-001; qaset qp-qadisk-001 'obj["state"] = "FAIL"; obj["results"][0]["state"] = "FAIL"'
+variant qp-qacontra-001; qaset qp-qacontra-001 'obj["results"][1]["state"] = "FAIL"'; AG manifest --run "$RUNS/qp-qacontra-001" >/dev/null
+variant qp-qapart-001; qaset qp-qapart-001 'obj["results"] = [r for r in obj["results"] if r["check"] != "png-corners"]'; AG manifest --run "$RUNS/qp-qapart-001" >/dev/null
+variant qp-qana-001; qaset qp-qana-001 'obj["state"] = "NOT_AVAILABLE"; obj["results"] = [{"output": "outputs/qp-icon.png", "check": "png-valid", "state": "NOT_AVAILABLE", "reasons": ["16-bit"]}]'
+AG manifest --run "$RUNS/qp-qana-001" >/dev/null
+variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["purpose"]["data"]["qa"] = {}; json.dump(s, open(p, "w"))' "$RUNS/qp-qaspec-001/spec.json"
 variant qp-tool-001; fmset "$RUNS/qp-tool-001" 'obj["provenance"]["tool"] = "other"'
 variant qp-ref-001; fmset "$RUNS/qp-ref-001" 'obj["spec"]["style"]["id"] = "no-such-style"'
 variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha256"] = "0" * 64'
@@ -425,10 +492,23 @@ case_ qp-badmark-001 gen-run-prompt-review FAIL 'is not the prompt author' "SAME
 case_ qp-tamper-001 gen-run-outputs FAIL 'sha256 on disk differs' "output bytes changed after the record: FAIL"
 case_ qp-extra-001 gen-run-outputs FAIL 'outputs/second.png is not recorded' "unrecorded outputs/*.png: FAIL"
 case_ qp-qafail-001 gen-run-qa FAIL 'QA is FAIL' "QA not PASS on a proposed run: FAIL"
-case_ qp-noqa-001 gen-run-qa FAIL 'QA is NOT_RUN' "QA never run: FAIL"
+case_ qp-noqa-001 gen-run-qa FAIL 'qa.json is missing' "QA never run: FAIL"
 case_ qp-prov-001 gen-run-provenance FAIL 'provenance.model is not recorded' "provenance without model on a proposed run: FAIL"
 case_ qp-draft-001 gen-run-provenance WARN 'provenance.model is not recorded' "draft run: missing work is WARN (provenance)"
-case_ qp-draft-001 gen-run-image-review WARN 'image review is NOT_RUN' "draft run: missing work is WARN (image review)"
+case_ qp-draft-001 gen-run-image-review WARN 'review-image.json is missing' "draft run: missing work is WARN (image review)"
+case_ qp-draft-001 gen-run-prompt-review WARN 'is bound to prompt' "draft run: a stale prompt review is WARN"
+case_ qp-norev-001 gen-run-prompt-review FAIL 'review-prompt.json is missing' "run.md claims a PASS review but review-prompt.json is gone: FAIL"
+case_ qp-revdiff-001 gen-run-image-review FAIL 'differs from review-image.json (file: FAIL' "review file says FAIL while run.md says PASS: FAIL"
+case_ qp-unbound-001 gen-run-prompt-review FAIL 'is bound to prompt None' "verdict without the prompt binding: FAIL on a proposed run"
+case_ qp-staleprompt-001 gen-run-prompt-review FAIL 'is bound to prompt' "prompt changed after its review: FAIL"
+case_ qp-staleprompt-001 gen-run-image-review FAIL 'is bound to prompt' "prompt changed after the image review: FAIL"
+case_ qp-staleimg-001 gen-run-image-review FAIL 'bound to other outputs' "images changed after the image review: FAIL"
+case_ qp-invalid-001 gen-run-image-review FAIL 'holds no JSON verdict' "review file without a verdict: FAIL"
+case_ qp-qadisk-001 gen-run-qa FAIL 'differs from qa.json (FAIL)' "qa.json FAIL while run.md claims PASS: FAIL"
+case_ qp-qacontra-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows' "qa.json PASS with a failing row: FAIL"
+case_ qp-qapart-001 gen-run-qa FAIL 'lacks the required check(s) png-corners' "qa.json PASS without a purpose-required check: FAIL"
+case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAILABLE QA never grades PASS"
+case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-tool-001 gen-run-provenance FAIL 'provenance.tool must be comfyui' "provenance tool other than comfyui: FAIL"
 case_ qp-ref-001 gen-run-refs FAIL "style 'no-such-style' does not resolve" "unresolvable style ref: FAIL"
 case_ qp-drift-001 gen-run-refs WARN 'changed since the run' "template content changed since the run: WARN (the record keeps what was used)"

@@ -1,6 +1,7 @@
 """Deterministic image QA of a run's outputs/*.png against the purpose's qa expectations.
 
-Per output PNG (results keyed by output path, rpg-factory.validation/1 states):
+Per output PNG (results keyed by output path, rpg-factory.validation/1 states); the checks a purpose requires are
+runfiles.required_checks(qa), which the gen-run quality plugin also requires as PASS rows:
   png-valid           decodes (Pillow when present, else the stdlib decoder; NOT_AVAILABLE when neither can)
   png-size            qa.size.mode: exact (= expect), min (width and height >= expect), aspect (ratio within
                       aspect_tolerance, default 0.02, and the short side >= min_side, default 256), any.
@@ -18,6 +19,7 @@ import math
 import os
 
 import png
+import runfiles
 
 SAMPLES = 256  # rows/columns sampled per statistic; keeps the stdlib path fast on 1536x1024 outputs
 
@@ -146,14 +148,13 @@ def run_qa(run_dir, spec, requested_size):
             continue
         item.update(width=img.width, height=img.height)
         add(rel, "png-valid", ("PASS", ["%dx%d, decoder %s" % (img.width, img.height, img.decoder)]))
-        add(rel, "png-size", check_size(img, qa.get("size", {"mode": "any"}), requested_size))
-        add(rel, "png-alpha", check_alpha(img, qa.get("alpha", "any")))
-        if qa.get("transparent_corners"):
-            add(rel, "png-corners", check_corners(img))
-        if qa.get("tileable"):
-            add(rel, "png-tileable", check_tileable(img, qa["tileable"].get("max_seam_error", 0.06)))
-        if qa.get("not_blank") is not None:
-            add(rel, "png-not-blank", check_not_blank(img, qa["not_blank"]))
+        checks = {"png-size": lambda: check_size(img, qa.get("size", {"mode": "any"}), requested_size),
+                  "png-alpha": lambda: check_alpha(img, qa.get("alpha", "any")),
+                  "png-corners": lambda: check_corners(img),
+                  "png-tileable": lambda: check_tileable(img, qa["tileable"].get("max_seam_error", 0.06)),
+                  "png-not-blank": lambda: check_not_blank(img, qa["not_blank"])}
+        for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
+            add(rel, name_, checks[name_]())
     return results, outputs
 
 

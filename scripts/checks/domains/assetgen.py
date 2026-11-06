@@ -9,9 +9,19 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        before the first - _ / . : @ or space, so claude-sonnet counts as claude). A same-model review
                        is allowed only as an explicit fallback: by = "SAME_MODEL:<model>" grades WARN (the human
                        approver weighs it); an unmarked same-model review FAILS, and a marker naming another model
-                       than the author FAILS (it is not a fallback).
-  gen-run-qa           qa.state PASS, every output covered by PASS rows only, no rows for unrecorded outputs, and
-                       qa.json (when present) hashed the same bytes as the recorded outputs
+                       than the author FAILS (it is not a fallback). The review file itself is the evidence, not the
+                       run.md summary: review-<phase>.json must exist, run.md's <phase>_review must equal what
+                       scripts/assetgen/runfiles.py reads from it (else FAIL: re-run manifest), and its binding must
+                       name the current bytes: prompt_sha256 = spec.prompt_sha256 and, for the image review, outputs =
+                       the recorded outputs (review-cmd hands the reviewer these values to copy back). A missing,
+                       invalid, unbound or stale review file is missing work.
+  gen-run-qa           qa.json is the evidence: it hashed the recorded output bytes, run.md's qa equals its state and
+                       results (else FAIL: re-run manifest), its state is PASS, and every recorded output has a PASS
+                       row for each check the purpose requires (runfiles.required_checks of the run's spec.json
+                       purpose, whose content hash must equal spec.purpose.sha256). NOT_AVAILABLE never grades PASS:
+                       it is missing work (install Pillow, re-run qa). A report that claims PASS while a row is not
+                       PASS or a required check is missing contradicts itself and always FAILS; rows for unrecorded
+                       outputs FAIL.
   gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present
@@ -35,17 +45,21 @@ from domains._api import Result
 ROOT = Path(__file__).resolve().parents[3]
 LENIENT = {"draft", "rejected", "blocked", "superseded", "deprecated"}
 FALLBACK = "SAME_MODEL:"
-_layers = None
+REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
+_engine = {}
+
+
+def engine(name):
+    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules), loaded once under a private name."""
+    if name not in _engine:
+        spec = importlib.util.spec_from_file_location("assetgen_" + name, ROOT / "scripts" / "assetgen" / (name + ".py"))
+        _engine[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_engine[name])
+    return _engine[name]
 
 
 def layers():
-    """scripts/assetgen/layers.py (the engine's resolver), loaded once."""
-    global _layers
-    if _layers is None:
-        spec = importlib.util.spec_from_file_location("assetgen_layers", ROOT / "scripts" / "assetgen" / "layers.py")
-        _layers = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_layers)
-    return _layers
+    return engine("layers")
 
 
 def family(name):
@@ -95,10 +109,29 @@ def check(artifact, ctx):
         p = (base / run_rel / name).resolve()
         return p if p == base or base in p.parents else None
 
+    outputs = [o for o in spec.get("outputs") or [] if isinstance(o, dict)]
+    recorded = {o.get("path"): o.get("sha256") for o in outputs}
+    runfiles = engine("runfiles")
     author = spec.get("prompt_author") or ""
     for phase in ("prompt", "image"):
         rv = spec.get(phase + "_review") if isinstance(spec.get(phase + "_review"), dict) else {}
         by, state, fails, todo, warns = rv.get("by") or "", rv.get("state"), [], [], []
+        name = REVIEW_FILES[phase]
+        rf = resolve(name)
+        if rf is None or not rf.is_file():
+            todo.append("%s is missing from the run directory (run the review, then assetgen.py manifest)" % name)
+        else:
+            disk = runfiles.read_verdict(str(rf), phase)
+            if disk != rv:
+                fails.append("run.md %s_review differs from %s (file: %s by %s); re-run assetgen.py manifest"
+                             % (phase, name, disk["state"], disk["by"] or "-"))
+            if disk["state"] == "INVALID":
+                todo.append("%s holds no JSON verdict with state PASS or FAIL" % name)
+            elif disk["prompt_sha256"] != spec.get("prompt_sha256"):
+                todo.append("%s is bound to prompt %s, not the recorded prompt %s: re-run the review (review-cmd)"
+                            % (name, str(disk["prompt_sha256"])[:12], str(spec.get("prompt_sha256"))[:12]))
+            elif phase == "image" and {o["path"]: o["sha256"] for o in disk["outputs"]} != recorded:
+                todo.append("%s is bound to other outputs than the recorded ones: re-run the image review" % name)
         if state != "PASS":
             todo.append("%s review is %s%s (evidence review-%s.json)" % (
                 phase, state or "missing", ", %s finding(s)" % rv.get("findings") if rv.get("findings") else "", phase))
@@ -121,8 +154,6 @@ def check(artifact, ctx):
             fails.append("%s review PASS without a reviewer (by)" % phase)
         grade("gen-run-%s-review" % phase, fails, todo, warns)
 
-    outputs = [o for o in spec.get("outputs") or [] if isinstance(o, dict)]
-    recorded = {o.get("path"): o.get("sha256") for o in outputs}
     fails, todo = [], []
     if not outputs:
         todo.append("no outputs recorded (fetch_outputs into outputs/, then assetgen.py manifest)")
@@ -141,31 +172,64 @@ def check(artifact, ctx):
                 fails.append("outputs/%s is not recorded; re-run qa and manifest" % name)
     grade("gen-run-outputs", fails, todo)
 
-    qa = spec.get("qa") if isinstance(spec.get("qa"), dict) else {}
-    rows = [r for r in qa.get("results") or [] if isinstance(r, dict)]
     fails, todo = [], []
-    if qa.get("state") != "PASS":
-        todo.append("QA is %s; run assetgen.py qa until it reports PASS, then manifest" % (qa.get("state") or "missing"))
-    for path in recorded:
-        mine = [r for r in rows if r.get("output") == path]
-        if not mine:
-            todo.append("QA results do not cover %s" % path)
-        elif any(r.get("state") != "PASS" for r in mine):
-            todo.append("QA of %s: %s" % (path, ", ".join("%s %s" % (r.get("check"), r.get("state")) for r in mine if r.get("state") != "PASS")))
-    stale = sorted({r.get("output") for r in rows} - set(recorded) - {"outputs/"})
-    if stale:
-        fails.append("QA results name outputs that are not recorded: " + ", ".join(map(str, stale)))
+    qa = spec.get("qa") if isinstance(spec.get("qa"), dict) else {}
+    disk = None
     qa_file = resolve("qa.json")
     if qa_file is not None and qa_file.is_file():
         try:
             disk = json.loads(qa_file.read_text(encoding="utf-8"))
             hashed = {o.get("path"): o.get("sha256") for o in disk.get("outputs") or [] if isinstance(o, dict)}
+        except (OSError, ValueError, AttributeError):
+            disk = None
+            fails.append("qa.json is not readable JSON")
+        else:
             if hashed != recorded:
                 fails.append("qa.json checked other bytes than the recorded outputs; re-run qa and manifest")
-        except (OSError, ValueError, AttributeError):
-            fails.append("qa.json is not readable JSON")
-    elif recorded:
-        todo.append("qa.json is missing from the run directory")
+            if [disk.get("state"), disk.get("results", [])] != [qa.get("state"), qa.get("results")]:
+                fails.append("run.md qa (%s) differs from qa.json (%s); re-run assetgen.py manifest"
+                             % (qa.get("state"), disk.get("state")))
+    else:
+        todo.append("qa.json is missing from the run directory (assetgen.py qa)")
+    state = disk.get("state") if disk is not None else None
+    rows = [r for r in (disk or {}).get("results") or [] if isinstance(r, dict)]
+    required, problems = None, []
+    sj = resolve("spec.json")
+    try:
+        purpose = json.loads(sj.read_text(encoding="utf-8"))["purpose"] if sj is not None and sj.is_file() else None
+    except (OSError, ValueError, KeyError, TypeError):
+        purpose = False
+    rec_purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
+    if purpose is None:
+        todo.append("spec.json is missing from the run directory; the purpose's required QA checks are unknown")
+    elif not isinstance(purpose, dict) or not isinstance(purpose.get("data"), dict) \
+            or layers().content_hash(purpose["data"]) != rec_purpose.get("sha256"):
+        fails.append("spec.json purpose is not the purpose the run recorded (unreadable, or its content hash "
+                     "differs from spec.purpose.sha256)")
+    else:
+        required = runfiles.required_checks(purpose["data"].get("qa", {}))
+    if disk is not None:
+        if state != "PASS":
+            todo.append("QA is %s; run assetgen.py qa until it reports PASS, then manifest" % (state or "missing"))
+        for path in recorded:
+            mine = [r for r in rows if r.get("output") == path]
+            bad = ["%s %s" % (r.get("check"), r.get("state")) for r in mine if r.get("state") != "PASS"]
+            if any(r.get("state") == "NOT_AVAILABLE" for r in mine):
+                bad.append("NOT_AVAILABLE does not grade PASS (install Pillow, re-run qa)")
+            missing = [c for c in required or [] if c not in {r.get("check") for r in mine}]
+            if not mine:
+                problems.append("QA results do not cover %s" % path)
+            elif bad:
+                problems.append("QA of %s: %s" % (path, ", ".join(bad)))
+            if mine and missing:
+                problems.append("QA of %s lacks the required check(s) %s" % (path, ", ".join(missing)))
+        stale = sorted({str(r.get("output")) for r in rows} - set(recorded) - {"outputs/"})
+        if stale:
+            fails.append("QA results name outputs that are not recorded: " + ", ".join(stale))
+        if state == "PASS" and (problems or any(r.get("state") != "PASS" for r in rows)):
+            fails.append("qa.json claims PASS but contradicts its own rows: " + ("; ".join(problems) or "a row is not PASS"))
+        else:
+            todo += problems
     grade("gen-run-qa", fails, todo)
 
     prov = artifact.get("provenance") if isinstance(artifact.get("provenance"), dict) else {}

@@ -262,10 +262,14 @@ def cmd_assetgen(raw):
     """Read-only assetgen.py verbs; render, qa and manifest write into a run directory and stay with the asset-gen skill."""
     args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
     if not args or args[0] not in ASSETGEN_VERBS:
-        hint = " (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]             if args and args[0] in ("render", "qa", "manifest") else ""
+        hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
+                if args and args[0] in ("render", "qa", "manifest") else "")
         raise ValueError("assetgen needs " + "|".join(ASSETGEN_VERBS) + hint)
-    if args[0] == "resolve" and any(a == "--out" or a.startswith("--out=") for a in args):
-        raise ValueError("assetgen resolve --out writes a file: run scripts/assetgen/assetgen.py directly (the asset-gen skill)")
+    # --out writes a file. Refuse it and every prefix of it (--o, --ou, with or without =VALUE) for every verb, so an
+    # abbreviation cannot slip past; assetgen.py also parses with allow_abbrev=False.
+    if any(len(a.split("=", 1)[0]) >= 3 and "--out".startswith(a.split("=", 1)[0]) for a in args):
+        raise ValueError("assetgen --out (or an abbreviation of it) writes a file: run scripts/assetgen/assetgen.py directly "
+                         "(the asset-gen skill)")
     if args[0] in ("list", "show", "resolve", "lint") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
         reg = registry()
         game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])

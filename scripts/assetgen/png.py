@@ -3,12 +3,15 @@
 
 decode(path) -> Image(width, height, rgba: bytes, has_alpha: bool, decoder: "pillow"|"stdlib").
   Pillow decodes every PNG it supports. Without Pillow (or with ASSETGEN_NO_PIL=1) the stdlib decoder handles
-  8-bit, non-interlaced PNGs of color types 0 (gray), 2 (RGB), 3 (palette, tRNS), 4 (gray+alpha) and 6 (RGBA);
+  8-bit, non-interlaced PNGs of color types 0 (gray), 2 (RGB), 3 (palette), 4 (gray+alpha) and 6 (RGBA);
   anything else raises Unsupported (the caller grades NOT_AVAILABLE). A broken file raises Invalid.
+  tRNS is applied as Pillow does: a gray (2 bytes) or RGB (6 bytes) key makes matching pixels alpha 0; palette
+  entries take their tRNS alpha (255 past its end).
   has_alpha: the file can carry transparency (an alpha channel or a tRNS chunk).
 encode(width, height, rgba, alpha=True) -> PNG bytes (8-bit RGBA, or RGB when alpha=False; filter 0).
-encode_raw(width, height, bit_depth, color_type, rows, interlace=0) -> PNG bytes from raw scanline bytes (test
-  fixtures for formats the stdlib decoder does not handle).
+encode_raw(width, height, bit_depth, color_type, rows, interlace=0, extra=()) -> PNG bytes from raw scanline bytes
+  (test fixtures: formats the stdlib decoder does not handle; extra [(type, body)] chunks such as PLTE and tRNS go
+  before IDAT).
 """
 import os
 import struct
@@ -150,6 +153,11 @@ def decode_stdlib(data):
         g = px[0::n]
         rgba[0::4] = rgba[1::4] = rgba[2::4] = g
         rgba[3::4] = px[1::2] if ctype == 4 else b"\xff" * (w * h)
+        key = struct.unpack(">H", trns)[0] if ctype == 0 and trns and len(trns) == 2 else None
+        if key is not None:
+            for i in range(w * h):
+                if g[i] == key:
+                    rgba[i * 4 + 3] = 0
     else:
         if palette is None:
             raise Invalid("palette image without PLTE")
@@ -183,10 +191,11 @@ def chunk(ctype, body):
     return struct.pack(">I", len(body)) + ctype + body + struct.pack(">I", zlib.crc32(ctype + body) & 0xFFFFFFFF)
 
 
-def encode_raw(width, height, bit_depth, color_type, rows, interlace=0):
+def encode_raw(width, height, bit_depth, color_type, rows, interlace=0, extra=()):
     raw = b"".join(b"\x00" + bytes(r) for r in rows)
     ihdr = struct.pack(">IIBBBBB", width, height, bit_depth, color_type, 0, 0, interlace)
-    return SIGNATURE + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    return (SIGNATURE + chunk(b"IHDR", ihdr) + b"".join(chunk(t, b) for t, b in extra)
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
 def encode(width, height, rgba, alpha=True):

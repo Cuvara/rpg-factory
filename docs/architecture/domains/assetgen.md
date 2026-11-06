@@ -16,7 +16,7 @@ Fast checks: `artifact-lint`, `artifact-trace`, and `assetgen-quality` (`artifac
 
 - `purpose`, `style` and `template` refs: ID, layer, source files and the content hash of the merged data
 - the `handoff_domain` (`art2d`, `art3d`, `ui` or `vfx`), the resolved params, and the final prompt with its SHA-256 and `prompt_author`
-- `prompt_review` and `image_review` (`by`, `state`, `findings`, read from `review-prompt.json` and `review-image.json`)
+- `prompt_review` and `image_review` (`by`, `state`, `findings`, `prompt_sha256`, `outputs`, read from `review-prompt.json` and `review-image.json`; `scripts/assetgen/runfiles.py`). `review-cmd` hands the reviewer the SHA-256 of the prompt and, for the image review, of every output, and asks it to copy them into its verdict. That binding ties the verdict to the bytes it reviewed.
 - `generation` (`generated_by`, `tool: comfyui`, `model`, `workflow`) and `outputs` (`path`, `sha256` of each `outputs/*.png`)
 - `qa`: the deterministic image QA from `qa.json`
 
@@ -31,8 +31,8 @@ The lifecycle is the shared lifecycle v2. `manifest` writes `proposed`, an indep
 | Check | Rule |
 |---|---|
 | `gen-run-location` | The record is `assetgen/runs/<run_id>/run.md` and its ID is `AGEN-<run_id>`. |
-| `gen-run-prompt-review`, `gen-run-image-review` | The state is `PASS`. The reviewer (`by`) is a model other than `prompt_author`, compared by model family: the name up to the first `-`, `_`, `/`, `.`, `:`, `@` or space, so `claude-sonnet` counts as `claude`. |
-| `gen-run-qa` | `qa.state` is `PASS`. Every output is covered by `PASS` rows only, no rows name unrecorded outputs, and `qa.json` hashed the same bytes as the recorded outputs. |
+| `gen-run-prompt-review`, `gen-run-image-review` | The state is `PASS`. The reviewer (`by`) is a model other than `prompt_author`, compared by model family: the name up to the first `-`, `_`, `/`, `.`, `:`, `@` or space, so `claude-sonnet` counts as `claude`. The review file is the evidence: it must exist, the record must equal what is read from it (else `FAIL`), and its binding must name the current prompt and, for the image review, the recorded outputs. A missing, invalid, unbound or stale review file is missing work. |
+| `gen-run-qa` | `qa.json` is the evidence. It hashed the recorded output bytes, and the record's `qa` equals its state and results (else `FAIL`). Its state is `PASS`, and every output has a `PASS` row for each check its purpose requires (from the run's `spec.json`, whose purpose content hash must equal the recorded one). `NOT_AVAILABLE` never grades `PASS`. A `qa.json` that claims `PASS` with a failing row or a missing required check always fails. Rows for unrecorded outputs fail. |
 | `gen-run-outputs` | Outputs are recorded and lie inside the run directory. Every file exists with the recorded SHA-256, and no `outputs/*.png` is unrecorded. |
 | `gen-run-provenance` | `provenance` has `generated_by`, `tool: comfyui` and `model`, and equals `spec.generation`. The rendered `workflow.json` is present. |
 | `gen-run-refs` | Purpose, style and template resolve in the core and game layers. A content hash that changed since the run is a `WARN`, because the record keeps what was used. `prompt_sha256` and `prompt.md` match the recorded prompt, and the contract `assetgen-to-<handoff_domain>` is registered. |

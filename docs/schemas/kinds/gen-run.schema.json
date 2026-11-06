@@ -79,7 +79,9 @@
       "required": [
         "by",
         "state",
-        "findings"
+        "findings",
+        "prompt_sha256",
+        "outputs"
       ],
       "additionalProperties": false,
       "properties": {
@@ -98,6 +100,42 @@
         "findings": {
           "type": "integer",
           "minimum": 0
+        },
+        "prompt_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/output"
+          }
+        }
+      },
+      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; outputs only for the image review)."
+    },
+    "output": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^outputs/[^/]+[.][Pp][Nn][Gg]$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
         }
       }
     }
@@ -171,21 +209,7 @@
     "outputs": {
       "type": "array",
       "items": {
-        "type": "object",
-        "required": [
-          "path",
-          "sha256"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "path": {
-            "type": "string",
-            "pattern": "^outputs/[^/]+[.][Pp][Nn][Gg]$"
-          },
-          "sha256": {
-            "$ref": "#/$defs/sha256"
-          }
-        }
+        "$ref": "#/$defs/output"
       }
     },
     "qa": {
