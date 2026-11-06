@@ -1,0 +1,49 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "Image edit",
+ "description": "Edit or restyle an existing image given as a reference image.",
+ "handoff_domain": "art2d",
+ "default_template": "image-edit",
+ "params": {
+  "size": "auto",
+  "background": "auto",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "State what must change and what must stay the same.",
+   "Refer to the reference image explicitly (keep pose, keep palette ...).",
+   "One edit goal per run."
+  ],
+  "must_include": [
+   "change",
+   "keep"
+  ],
+  "avoid": [
+   "unrelated new subjects"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt separates what changes from what must stay unchanged."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "Unchanged parts of the reference are preserved.",
+  "The requested change is applied fully."
+ ],
+ "qa": {
+  "size": {
+   "mode": "any"
+  },
+  "alpha": "any",
+  "not_blank": {
+   "min_stddev": 2.0
+  }
+ }
+}

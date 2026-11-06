@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""asset-gen engine: purposes x styles x ComfyUI workflow templates -> a reviewed, QA'd, recorded generation run.
+
+Usage:
+  assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
+  assetgen.py show ID [--kind K] [--authoring DIR] [--json]
+  assetgen.py resolve --purpose P [--style S] [--template T] [--authoring DIR] [--out FILE] [--json]
+  assetgen.py render (--run DIR | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]...
+  assetgen.py lint [PATH...] [--authoring DIR] [--json]
+  assetgen.py review-cmd --phase prompt|image --run DIR [--codex BIN] [--json]
+  assetgen.py qa --run DIR [--json]
+  assetgen.py manifest --run DIR [--title T] [--prompt-author A] [--generated-by G] [--json]
+
+Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
+layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
+game wins) core ids. resolve prints the merged spec with the source file of every field and each param.
+Param precedence, low to high: template default < style params < purpose params < render --param.
+
+Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
+  spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
+  prompt.md           the final prompt text only (written by the prompt author; sent verbatim, reviewed verbatim)
+  workflow.json       render: ComfyUI API-format graph {"<id>": {"class_type", "inputs"}}, links [node_id, index];
+                      runnable as is by comfy-mcp run_workflow; render --run sets filename_prefix=assetgen/<run-id>
+                      unless --param filename_prefix=... is given
+  outputs/*.png       comfy-mcp fetch_outputs out_dir
+  review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex"} (review-cmd prompt)
+  review-image.json   the same for the images (review-cmd image)
+  qa.json             qa: rpg-factory.validation/1 results per output
+  run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
+
+Read-only except: resolve/render --out, render --run (workflow.json), qa (qa.json) and manifest (run.md) in the
+given run dir. review-cmd only prints a `codex exec --sandbox read-only` command; this script never runs agents,
+ComfyUI or the network. Model ids, sizes and other values live in template params data, not here.
+Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa).
+"""
+import argparse
+import glob
+import hashlib
+import json
+import os
+import re
+import shlex
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import layers  # noqa: E402
+import lint  # noqa: E402
+import qa  # noqa: E402
+
+RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{3}$")
+REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
+HEREDOC = "ASSETGEN_REVIEW"
+
+
+def fail(msg, code=1):
+    print("assetgen: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def emit(obj, as_json, text):
+    print(json.dumps(obj, indent=1, sort_keys=True) if as_json else text)
+
+
+def write_json(path, obj):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(obj, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+def read_json(path, what):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as exc:
+        fail("cannot read %s %s: %s" % (what, path, exc))
+
+
+def load_spec(path):
+    spec = read_json(path, "spec")
+    if spec.get("schema") != "rpg-factory.assetgen-spec/1":
+        fail("%s is not a resolved spec (run resolve --out)" % path)
+    return spec
+
+
+def read_prompt(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError as exc:
+        fail("cannot read prompt %s: %s" % (path, exc))
+    if not text:
+        fail("prompt %s is empty" % path)
+    return text
+
+
+# -- render ----------------------------------------------------------------------------------------------------
+
+def typed(name, decl, value):
+    """value coerced to the param type; raises ValueError naming the param."""
+    t = decl.get("type")
+    if t == "int" and not isinstance(value, int):
+        value = int(value)
+    elif t == "number" and not isinstance(value, (int, float)):
+        value = float(value)
+    elif t == "bool" and not isinstance(value, bool):
+        if str(value).lower() not in ("true", "false"):
+            raise ValueError("param %s: expected true or false, got %r" % (name, value))
+        value = str(value).lower() == "true"
+    elif t in ("string", "enum"):
+        value = str(value)
+    if t == "enum" and value not in decl.get("options", []):
+        raise ValueError("param %s: %r is not one of %s" % (name, value, decl.get("options")))
+    return value
+
+
+def fill(node, values):
+    if isinstance(node, dict):
+        return {k: fill(v, values) for k, v in node.items()}
+    if isinstance(node, list):
+        return [fill(v, values) for v in node]
+    if isinstance(node, str):
+        whole = lint.PLACEHOLDER.fullmatch(node.strip())
+        if whole and whole.group(1) in values:
+            return values[whole.group(1)]
+        return lint.PLACEHOLDER.sub(lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0), node)
+    return node
+
+
+def render(spec, prompt, overrides, run_id=None):
+    """(workflow, errors). Strict: undeclared params, missing required params and leftover placeholders are errors.
+    run_id (render --run) sets filename_prefix to assetgen/<run_id> when the template declares it."""
+    tmpl = spec["template"]["data"]
+    declared = tmpl.get("params", {})
+    values, errors = dict(spec.get("params", {})), []
+    values["prompt"] = prompt
+    if run_id and "filename_prefix" in declared:
+        values["filename_prefix"] = "assetgen/" + run_id
+    for item in overrides:
+        name, sep, value = item.partition("=")
+        if not sep:
+            errors.append("--param %r: expected NAME=VALUE" % item)
+        elif name == "prompt":
+            errors.append("--param prompt: the prompt comes from the prompt file only")
+        else:
+            values[name] = value
+    for name in sorted(values):
+        if name not in declared:
+            errors.append("param %s is not declared by template %s" % (name, spec["template"]["id"]))
+            continue
+        try:
+            values[name] = typed(name, declared[name], values[name])
+        except ValueError as exc:
+            errors.append(str(exc))
+    errors += ["param %s is required and has no value" % n for n, d in declared.items() if d.get("required") and n not in values]
+    if errors:
+        return None, errors
+    workflow = fill(tmpl.get("workflow", {}), values)
+    e, _ = lint.check_graph(workflow, None)
+    return workflow, e
+
+
+def requested_size(run_dir, spec):
+    wf = os.path.join(run_dir, "workflow.json")
+    if os.path.isfile(wf):
+        for node in read_json(wf, "workflow").values():
+            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
+                return node.get("inputs", {}).get("size", "auto")
+    return spec.get("params", {}).get("size", "auto")
+
+
+def workflow_model(run_dir, spec):
+    wf = os.path.join(run_dir, "workflow.json")
+    if os.path.isfile(wf):
+        for node in read_json(wf, "workflow").values():
+            if isinstance(node, dict) and node.get("class_type") == "NineRouterImage":
+                return node.get("inputs", {}).get("model")
+    return spec.get("params", {}).get("model")
+
+
+# -- review-cmd ------------------------------------------------------------------------------------------------
+
+def review_prompt_text(phase, spec, prompt, images, qa_report):
+    p, s = spec["purpose"], spec["style"]
+    rubric = p["data"].get("prompt_rubric" if phase == "prompt" else "image_rubric", [])
+    lines = [
+        "You are the independent %s reviewer of an asset-gen run (purpose %s, style %s, template %s)."
+        % (phase, p["id"], s["id"], spec["template"]["id"]),
+        "Do not modify any file. Judge only against the rubric and the requirements below.",
+        "", "Purpose: %s - %s" % (p["data"].get("title", ""), p["data"].get("description", "")),
+        "Style: %s. Prefix: %s Suffix: %s" % (s["data"].get("title", ""), s["data"].get("prefix", ""), s["data"].get("suffix", "")),
+        "Style avoid: %s" % ", ".join(s["data"].get("avoid", [])),
+        "Requested params: %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(spec.get("params", {}).items())),
+    ]
+    guide = p["data"].get("prompt", {})
+    if phase == "prompt":
+        lines += ["Prompt guidance: " + " ".join(guide.get("guidance", [])),
+                  "Must include: " + ", ".join(guide.get("must_include", [])),
+                  "Must avoid: " + ", ".join(guide.get("avoid", []))]
+    lines += ["", "Rubric:"] + ["%d. %s" % (i + 1, r) for i, r in enumerate(rubric)]
+    lines += ["", "Prompt under review:" if phase == "prompt" else "Prompt that produced the images:", prompt]
+    if phase == "image":
+        lines += ["", "Attached images (one per -i): " + ", ".join(images)]
+        if qa_report:
+            lines += ["Deterministic QA: %s (%s)" % (qa_report.get("state"), "; ".join(
+                "%s %s %s" % (r["state"], r["output"], r["check"]) for r in qa_report.get("results", []) if r["state"] != "PASS") or "all checks PASS")]
+    lines += ["", "Answer with exactly one JSON object and nothing else:",
+              '{"state": "PASS" or "FAIL", "findings": [{"rubric": <item number>, "severity": "blocker|major|minor", '
+              '"text": "<finding>"}], "by": "codex"}',
+              "state is FAIL when any rubric item is not met with a blocker or major finding."]
+    text = "\n".join(lines)
+    return "\n".join(l if l.strip() != HEREDOC else l + "." for l in text.splitlines())
+
+
+def review_cmd(run_dir, phase, codex):
+    spec = load_spec(os.path.join(run_dir, "spec.json"))
+    prompt = read_prompt(os.path.join(run_dir, "prompt.md"))
+    images = []
+    if phase == "image":
+        images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
+        if not images:
+            fail("no outputs/*.png in %s for the image review" % run_dir)
+    qa_path = os.path.join(run_dir, "qa.json")
+    qa_report = read_json(qa_path, "qa") if phase == "image" and os.path.isfile(qa_path) else None
+    rel = [os.path.relpath(i, run_dir).replace(os.sep, "/") for i in images]
+    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report)
+    verdict = os.path.join(run_dir, REVIEW_FILES[phase]).replace(os.sep, "/")
+    argv = [codex, "exec", "--sandbox", "read-only", "-C", run_dir.replace(os.sep, "/")]
+    for i in images:
+        argv += ["-i", i.replace(os.sep, "/")]
+    argv += ["-o", verdict, "-"]
+    shell = "%s <<'%s'\n%s\n%s" % (shlex.join(argv), HEREDOC, stdin, HEREDOC)
+    return {"schema": "rpg-factory.assetgen-review-cmd/1", "phase": phase, "argv": argv, "stdin": stdin,
+            "verdict": verdict, "shell": shell}
+
+
+# -- manifest --------------------------------------------------------------------------------------------------
+
+def read_verdict(path):
+    """{by, state, findings} from a review file; NOT_RUN when absent, INVALID when no JSON object is found."""
+    if not os.path.isfile(path):
+        return {"by": None, "state": "NOT_RUN", "findings": 0}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    obj = None
+    for candidate in [text] + re.findall(r"\{.*\}", text, re.S):
+        try:
+            obj = json.loads(candidate)
+            break
+        except ValueError:
+            continue
+    if not isinstance(obj, dict) or obj.get("state") not in ("PASS", "FAIL"):
+        return {"by": None, "state": "INVALID", "findings": 0}
+    return {"by": obj.get("by"), "state": obj["state"], "findings": len(obj.get("findings") or [])}
+
+
+def existing_front(path):
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        m = re.match(r"\A---json\s*\n(.*?)\n---", f.read(), re.S)
+    try:
+        return json.loads(m.group(1)) if m else None
+    except ValueError:
+        return None
+
+
+def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude"):
+    """The gen-run front matter (and whether a previous status was reset)."""
+    name = os.path.basename(os.path.normpath(run_dir))
+    if not RUN_ID.match(name):
+        fail("run dir name %r must be <slug>-NNN (lowercase, digits, dashes), e.g. iron-sword-icon-001" % name)
+    spec = load_spec(os.path.join(run_dir, "spec.json"))
+    prompt = read_prompt(os.path.join(run_dir, "prompt.md"))
+    outputs = [{"path": "outputs/" + os.path.basename(p), "sha256": qa.sha256(p)}
+               for p in sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))]
+    qa_path = os.path.join(run_dir, "qa.json")
+    qa_report = read_json(qa_path, "qa") if os.path.isfile(qa_path) else None
+    qa_block = {"state": qa_report.get("state"), "results": qa_report.get("results", [])} if qa_report else {"state": "NOT_RUN", "results": []}
+    model = workflow_model(run_dir, spec)
+
+    def ref(r):
+        return {"id": r["id"], "layer": r["layer"], "files": r["files"], "sha256": r["sha256"]}
+    old = existing_front(os.path.join(run_dir, "run.md")) or {}
+    same_outputs = old.get("spec", {}).get("outputs") == outputs
+    status = old.get("status") if old.get("status") and same_outputs else "proposed"
+    front = {
+        "id": "AGEN-" + name, "kind": "gen-run", "domain": "assetgen", "schema_version": 2, "status": status,
+        "title": title or old.get("title") or "%s / %s generation run %s" % (spec["purpose"]["id"], spec["style"]["id"], name),
+        "upstream": old.get("upstream", []), "sources": [o["path"] for o in outputs],
+        "authors": old.get("authors") or [{"kind": "agent", "id": prompt_author}],
+        "acceptance": old.get("acceptance") or [
+            {"id": "AC-1", "text": "The prompt was reviewed by a model other than its author.", "verify": "review", "evidence": REVIEW_FILES["prompt"]},
+            {"id": "AC-2", "text": "Deterministic image QA passes for every output.", "verify": "test", "evidence": "qa.json"},
+            {"id": "AC-3", "text": "The images were reviewed against the purpose rubric.", "verify": "review", "evidence": REVIEW_FILES["image"]}],
+        "trace": old.get("trace", []),
+        "provenance": {"generated_by": generated_by, "tool": "comfyui", "model": model or ""},
+        "spec": {
+            "run_id": name, "purpose": ref(spec["purpose"]), "style": ref(spec["style"]), "template": ref(spec["template"]),
+            "handoff_domain": spec["purpose"]["data"].get("handoff_domain"),
+            "params": spec.get("params", {}),
+            "prompt": prompt, "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "prompt_author": prompt_author,
+            "prompt_review": read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"])),
+            "generation": {"generated_by": generated_by, "tool": "comfyui", "model": model,
+                           "workflow": "workflow.json" if os.path.isfile(os.path.join(run_dir, "workflow.json")) else None},
+            "outputs": outputs, "qa": qa_block,
+            "image_review": read_verdict(os.path.join(run_dir, REVIEW_FILES["image"])),
+        },
+    }
+    return front, bool(old.get("status")) and not same_outputs and old.get("status") != "proposed"
+
+
+def manifest_text(front):
+    s = front["spec"]
+    body = ["# " + front["title"], "",
+            "- Purpose: `%s` (%s), style `%s`, template `%s`" % (s["purpose"]["id"], s["purpose"]["layer"], s["style"]["id"], s["template"]["id"]),
+            "- Prompt review: %s by %s" % (s["prompt_review"]["state"], s["prompt_review"]["by"] or "-"),
+            "- Generation: %s, model `%s`" % (s["generation"]["tool"], s["generation"]["model"] or "-"),
+            "- QA: %s" % s["qa"]["state"],
+            "- Image review: %s by %s" % (s["image_review"]["state"], s["image_review"]["by"] or "-"),
+            "- Status: %s (approval is human-only)" % front["status"], "", "## Prompt", "", s["prompt"], "", "## Outputs", ""]
+    body += ["![%s](%s)" % (o["path"], o["path"]) for o in s["outputs"]] or ["(none)"]
+    return "---json\n%s\n---\n%s\n" % (json.dumps(front, indent=2, ensure_ascii=True), "\n".join(body))
+
+
+# -- CLI -------------------------------------------------------------------------------------------------------
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="assetgen.py", description="asset-gen engine (see module docstring)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("list"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sub.add_parser("show"); c.add_argument("id"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sub.add_parser("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
+    c.add_argument("--authoring"); c.add_argument("--out"); c.add_argument("--json", action="store_true")
+    c = sub.add_parser("render"); c.add_argument("--run"); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
+    c.add_argument("--param", action="append", default=[])
+    c = sub.add_parser("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
+    c = sub.add_parser("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); c.add_argument("--run", required=True)
+    c.add_argument("--codex", default="codex"); c.add_argument("--json", action="store_true")
+    c = sub.add_parser("qa"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
+    c = sub.add_parser("manifest"); c.add_argument("--run", required=True); c.add_argument("--title")
+    c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    authoring = getattr(a, "authoring", None)
+    if authoring and not os.path.isdir(authoring):
+        fail("--authoring %s is not a directory" % authoring, 2)
+    try:
+        if a.cmd == "list":
+            items = layers.entries(a.kind, authoring)
+            emit({"schema": "rpg-factory.assetgen-list/1", "entries": items}, a.json, "\n".join(
+                "%-8s %-20s %-13s %s" % (e["kind"], e["id"], e["layer"], e.get("error") or e["title"]) for e in items))
+            return 1 if any(e["layer"] == "error" for e in items) else 0
+        if a.cmd == "show":
+            e = layers.find(a.id, a.kind, authoring)
+            emit(e, a.json, "%s %s (%s; %s)\n%s" % (e["kind"], e["id"], e["layer"], ", ".join(e["files"]), json.dumps(e["data"], indent=1)))
+            return 0
+        if a.cmd == "resolve":
+            spec = layers.resolve(a.purpose, a.style, a.template, authoring)
+            if a.out:
+                write_json(a.out, spec)
+            emit(spec, a.json, "\n".join(
+                ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
+                + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
+                + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())]))
+            return 0
+        if a.cmd == "render":
+            if a.run:
+                spec_path, prompt_path = os.path.join(a.run, "spec.json"), os.path.join(a.run, "prompt.md")
+                out = a.out or os.path.join(a.run, "workflow.json")
+            elif a.spec and a.prompt_file and a.out:
+                spec_path, prompt_path, out = a.spec, a.prompt_file, a.out
+            else:
+                fail("render needs --run DIR or --spec, --prompt-file and --out", 2)
+            run_id = os.path.basename(os.path.normpath(a.run)) if a.run else None
+            workflow, errors = render(load_spec(spec_path), read_prompt(prompt_path), a.param, run_id)
+            if errors:
+                print("\n".join("FAIL " + e for e in errors))
+                return 1
+            write_json(out, workflow)
+            print("rendered %s (%d nodes)" % (out, len(workflow)))
+            return 0
+        if a.cmd == "lint":
+            results = [lint.lint_file(p, authoring) for p in (a.paths or lint.default_paths(authoring))]
+            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL")}
+            emit({"schema": "rpg-factory.validation/1", "tool": "assetgen-lint", "results": results, "summary": counts}, a.json,
+                 "\n".join("%s %s%s" % (r["state"], r["path"], (": " + "; ".join(r["reasons"])) if r["reasons"] else "") for r in results)
+                 + "\nassetgen lint: %(PASS)d PASS, %(WARN)d WARN, %(FAIL)d FAIL" % counts)
+            return 1 if counts["FAIL"] else 0
+        if a.cmd == "review-cmd":
+            cmd = review_cmd(a.run, a.phase, a.codex)
+            emit(cmd, a.json, cmd["shell"])
+            return 0
+        if a.cmd == "qa":
+            spec = load_spec(os.path.join(a.run, "spec.json"))
+            results, outputs = qa.run_qa(a.run, spec, requested_size(a.run, spec))
+            state = qa.overall(results)
+            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "FAIL", "NOT_AVAILABLE")}
+            report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
+                      "purpose": spec["purpose"]["id"], "state": state, "results": results, "outputs": outputs, "summary": counts}
+            write_json(os.path.join(a.run, "qa.json"), report)
+            emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
+                 + "\nassetgen qa: %s (%d PASS, %d FAIL, %d NOT_AVAILABLE)" % (state, counts["PASS"], counts["FAIL"], counts["NOT_AVAILABLE"]))
+            return {"PASS": 0, "FAIL": 1}.get(state, 3)
+        if a.cmd == "manifest":
+            front, reset = manifest(a.run, a.title, a.prompt_author, a.generated_by)
+            with open(os.path.join(a.run, "run.md"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(manifest_text(front))
+            note = " (outputs changed: status reset to proposed)" if reset else ""
+            emit(front, a.json, "wrote %s/run.md: %s %s%s" % (a.run.replace(os.sep, "/"), front["id"], front["status"], note))
+            return 0
+    except layers.SpecError as exc:
+        fail(str(exc))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

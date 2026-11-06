@@ -1,0 +1,53 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "2D concept image",
+ "description": "Exploration image for a character, prop or environment; feeds art2d concept artifacts.",
+ "handoff_domain": "art2d",
+ "default_template": "image-generate",
+ "params": {
+  "size": "1536x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Describe subject, mood, silhouette and key shapes before details.",
+   "Name camera framing (full body, three-quarter, wide establishing).",
+   "Keep one focal subject; the background supports it."
+  ],
+  "must_include": [
+   "subject",
+   "framing",
+   "mood"
+  ],
+  "avoid": [
+   "text",
+   "watermark",
+   "UI overlay"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt describes silhouette and readability, not only surface detail."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "The silhouette reads at thumbnail size."
+ ],
+ "qa": {
+  "size": {
+   "mode": "min",
+   "expect": "1024x1024"
+  },
+  "alpha": "any",
+  "not_blank": {
+   "min_stddev": 4.0
+  }
+ }
+}

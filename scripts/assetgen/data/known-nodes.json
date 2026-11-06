@@ -1,0 +1,114 @@
+{
+ "schema": "rpg-factory.comfy-known-nodes/1",
+ "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes). assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time.",
+ "nodes": {
+  "NineRouterImage": {
+   "inputs": {
+    "user_prompt": {
+     "type": "STRING",
+     "required": true
+    },
+    "model": {
+     "type": "STRING",
+     "required": true
+    },
+    "size": {
+     "type": "COMBO",
+     "options": [
+      "auto",
+      "1024x1024",
+      "1536x1024",
+      "1024x1536"
+     ],
+     "required": true
+    },
+    "quality": {
+     "type": "COMBO",
+     "options": [
+      "auto",
+      "low",
+      "medium",
+      "high"
+     ],
+     "required": true
+    },
+    "background": {
+     "type": "COMBO",
+     "options": [
+      "auto",
+      "opaque",
+      "transparent"
+     ],
+     "required": true
+    },
+    "reference_images": {
+     "type": "IMAGE",
+     "required": false
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "warn_values": {
+    "model": {
+     "cx/gpt-image-2.5": "unsupported by the 9router gateway"
+    }
+   }
+  },
+  "NineRouterChat": {
+   "inputs": {
+    "user_prompt": {
+     "type": "STRING",
+     "required": true
+    },
+    "model": {
+     "type": "STRING",
+     "required": true
+    },
+    "system_prompt": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "STRING"
+   ]
+  },
+  "SaveImage": {
+   "inputs": {
+    "images": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "filename_prefix": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [],
+   "output_node": true
+  },
+  "LoadImage": {
+   "inputs": {
+    "image": {
+     "type": "STRING",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE",
+    "MASK"
+   ]
+  },
+  "PreviewAny": {
+   "inputs": {
+    "source": {
+     "type": "*",
+     "required": true
+    }
+   },
+   "outputs": [],
+   "output_node": true
+  }
+ }
+}

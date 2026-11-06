@@ -1,0 +1,16 @@
+{
+ "schema": "rpg-factory.assetgen-style/1",
+ "title": "Low poly",
+ "prefix": "Low-poly 3D game asset render,",
+ "suffix": "flat-shaded faceted polygons, simple materials.",
+ "avoid": [
+  "high-frequency texture detail",
+  "photorealism",
+  "subdivided smooth surfaces"
+ ],
+ "palette": "Bold flat colors per face group.",
+ "lighting": "Single soft directional light, flat shaded facets.",
+ "params": {
+  "quality": "high"
+ }
+}

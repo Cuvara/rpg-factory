@@ -1,0 +1,59 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "Tileable texture",
+ "description": "Seamless, opaque surface texture (albedo reference) for materials.",
+ "handoff_domain": "art3d",
+ "default_template": "image-generate",
+ "params": {
+  "size": "1024x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name the material and its scale (for example stone floor, 1 m tile).",
+   "Ask for a seamless, tileable, top-down, evenly lit texture.",
+   "No objects, no perspective, no vignetting, no baked light direction."
+  ],
+  "must_include": [
+   "material",
+   "seamless tileable",
+   "top-down",
+   "even lighting"
+  ],
+  "avoid": [
+   "perspective",
+   "vignette",
+   "strong cast shadows",
+   "single focal object"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt asks for seamless tiling and even, flat lighting."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "No visible seam or repeating focal feature when tiled 2x2.",
+  "Lighting is flat; no baked directional light."
+ ],
+ "qa": {
+  "size": {
+   "mode": "aspect",
+   "expect": "1024x1024"
+  },
+  "alpha": "forbidden",
+  "tileable": {
+   "max_seam_error": 0.06
+  },
+  "not_blank": {
+   "min_stddev": 2.0
+  }
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "schema": "rpg-factory.assetgen-style/1",
+ "title": "Stylized painterly",
+ "prefix": "Stylized hand-painted game art,",
+ "suffix": "soft painterly brushwork, readable shapes, cohesive color.",
+ "avoid": [
+  "photorealism",
+  "noisy micro detail",
+  "harsh black outlines"
+ ],
+ "palette": "Warm saturated mid-tones with cool shadows.",
+ "lighting": "Soft key light with gentle rim light.",
+ "params": {
+  "quality": "high"
+ }
+}

@@ -1,0 +1,18 @@
+{
+ "schema": "rpg-factory.assetgen-style/1",
+ "title": "Flat UI",
+ "prefix": "Flat vector-style game UI element,",
+ "suffix": "clean shapes, consistent corner radius, crisp edges.",
+ "avoid": [
+  "photo texture",
+  "perspective",
+  "heavy gradients",
+  "text"
+ ],
+ "palette": "Small token-friendly palette: primary, secondary, neutral, accent.",
+ "lighting": "No lighting effects beyond subtle flat shading.",
+ "params": {
+  "quality": "high",
+  "background": "transparent"
+ }
+}
