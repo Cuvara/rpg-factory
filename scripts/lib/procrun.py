@@ -336,4 +336,3 @@ def run_check(command, cwd, env, timeout, bash_selection, timing=None):
             out = ""
             cleanup += "; pipes/process did not close within 3 s"
         return 124, f"TIMEOUT after {timeout} s; pids={pids}; cleanup={cleanup}\n{out or ''}", True, cleanup
-
