@@ -103,6 +103,11 @@ noticed.
   package test project, registry `pipeline.exclusive_resources` -, a local or scratch Docker stack, the test lab, fixed ports):
   the lead assigns each to one task at a time. A task without the resource reports the dependent check as
   `NOT_RUN` with the exact command and reason; other work continues. There is no prompt.
+- **Full test runs are a shared resource too.** At most two full `tests/run-all.sh` runs (or other whole-repo
+  suites) at once on one machine; every other session runs `--affected` or its targeted suites and leaves the full
+  run to the run lead. Four parallel full runs made every suite 2-4x slower and timed some out. Never create a
+  worktree or branch while a full run is in flight: the shared `.git/config` check fails (`.claude/CLAUDE.md`
+  "Operating lessons").
 
 ## 5. Orca (preferred coordinator when available)
 
@@ -122,6 +127,22 @@ noticed.
   `orca orchestration send`, `orca orchestration worker-show`, `orca orchestration worker-read`,
   `orca orchestration worker-list`, `orca orchestration worker-release`, `orca agent launch`,
   `orca worktree list`, `orca worktree create`, `orca worktree rm`.
+- **Orca message traps** (seen in this plugin's runs):
+  - Only a dispatched Orca worker can send `--type escalation` or `worker_done`; from any other session Orca
+    refuses with "No active Dispatch belongs to this message sender". A task lead is not a worker of the run lead,
+    so it reports with `--type status` (or asks with `--type question`).
+  - `orca orchestration check --wait --types <types>` still returns heartbeats: a wait loop acks each batch and
+    keeps waiting until a message of the wanted type arrives, instead of treating the heartbeat as the answer.
+  - A multi-line `--prompt` passed through `cmd.exe` (Windows) is cut at the first newline. Write the spec to a file
+    and send a one-line prompt that names it (`factory-pipeline.py dispatch` does this).
+  - After every worker start or launch with `--agent codex`, read the session's terminal
+    (`orca orchestration worker-read` for a worker) until it shows the prompt being worked on. `input_accepted` alone is no proof:
+    a Codex CLI (v0.166) once sat idle at an empty prompt.
+- **Codex, else Claude.** Codex runs the rpg-factory hooks only after the user has trusted them once in Codex (a
+  one-time step outside the run; `AGENTS.md`). When a Codex session cannot start or never picks up its prompt
+  (trust prompt, CLI error, quota, idle terminal), the lead starts a Claude session for the same role instead, a
+  review by it is marked SAME_MODEL (section 10 step 4), and the report names the substitution. Codex never blocks
+  the run. There is no registry `fallback_agent` setting: the lead makes the switch with `--agent claude`.
 - Never use `orca orchestration gate-create` for routine work: a decision gate blocks a task, and this
   plugin adds no blocking step.
 - Runs you did not create belong to other coordinators (section 2).
@@ -210,6 +231,9 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
   later turn or wave.
 - **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in an
   implementation session, never in a lead's session, and never reused across tasks or candidate SHAs.
+- **Few sessions at once.** Under memory pressure Claude Code reaps background shells, which kills long test runs
+  and waits mid-way. Keep open sessions and parallel full test runs few (section 4), and release each one as soon
+  as it reports.
 - **Each lead keeps only its state:** the run lead `plan.json`, the integration branch, the recorded SHAs and the
   verdicts in the pipeline state dir; the task lead its subplan, its commits and verdicts. Neither carries
   session transcripts forward.
@@ -248,9 +272,12 @@ A no-worktree (Unity) repo never gets a worktree; its task lead and all its sess
    another model, and a warning when one wave shares an exclusive resource (queue those runs).
 3. **Task lead.** Per ready task the run lead runs
    `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run lead run id> --runner orca`.
-   It prints the handoff of section 5: a new task worktree from the base on the task branch, or `orca agent launch`
-   in the existing task worktree or the main checkout of a no-worktree repo (never a worktree there). The prompt is
-   the task spec plus the task-lead rules (section 1). The task lead:
+   It prints the handoff of section 5: a new task worktree on the task branch, or `orca agent launch`
+   in the existing task worktree or the main checkout of a no-worktree repo (never a worktree there). A first-wave
+   task branches from `repos.<key>.base`; a later-wave task (one with deps) branches from the plan's `topic`
+   integration branch when it exists, because that branch carries the earlier waves. `repos.<key>.base` stays the
+   comparison base of `status` and the gate: never point it at the topic (then `base..head` counts nothing and
+   integrated tasks show as pending). The prompt is the task spec plus the task-lead rules (section 1). The task lead:
    - writes `subplan.json` (`docs/schemas/pipeline-subplan.schema.json`) and runs
      `factory-pipeline.py subplan validate subplan.json` until it prints OK: every subtask path inside the task's owned
      paths and outside its exclusions, repo-relative (no absolute or `..` path), overlapping subtasks ordered by
@@ -274,7 +301,9 @@ A no-worktree (Unity) repo never gets a worktree; its task lead and all its sess
    session planned for Codex SAME_MODEL in its prompt. The task lead also runs the per-task QA
    (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`. The run lead
-   follows the tasks with `factory-pipeline.py status plan.json`.
+   follows the tasks with `factory-pipeline.py status plan.json`. A recorded verdict holds for its task's
+   fingerprint (objective, owned paths, exclusions, acceptance, checks, agents): a plan edit that only changes deps
+   keeps it, while changing a task's paths or acceptance makes it stale. Re-run `status` after any plan edit.
 6. **QA.** Once per repo on the integration HEAD, in the integration branch's existing checkout (section 6):
    `dispatch ... --task integration:<repo> --phase qa --sha <head>`; in a no-worktree repo also per task, before the
    next task starts (`--task <id>`). The QA worker fills `templates/pipeline/qa-report.md`; the lead records

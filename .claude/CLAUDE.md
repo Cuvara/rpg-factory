@@ -69,6 +69,33 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Registry facts must be verified against the product repos (file paths, CI workflow
   contents, run logs), not copied from docs that may be stale.
 
+## Operating lessons
+
+Learned the hard way while building 1.3-1.5. Each rule names its reason; delivery-flow lessons (Orca, Codex,
+sessions, load limits) live only in `skills/factory-core/references/parallel-work.md`, dogfood practice in
+`docs/dogfood.md`.
+
+- **No worktree or branch creation while `tests/run-all.sh` runs.** Every checkout shares one `.git/config`, and
+  run-all's shared-config check fails when it changes mid-run (a new worktree or tracking branch writes to it).
+- **Create branches with `git switch --no-track -c <branch>`.** A tracking branch writes `branch.<name>.*` into
+  the shared `.git/config`, which races with other sessions' runs.
+- **Git Bash, never WSL, on Windows** (every agent runtime). A WSL git run once wrote `core.worktree=/mnt/c/...`
+  into the shared config and broke every checkout of the repo.
+- **Fix citation drift right before a release gate:** `python3 -B scripts/checks/skill-citations.py --fix`.
+  Citations are checked against client and Netcode `develop`, which merge refactors every 30-60 minutes; in 1.3.0
+  they drifted between the fix and the gate four times. Check their open PRs before starting the gate.
+- **At most 2 concurrent full `tests/run-all.sh` runs on this machine;** other sessions use `--affected`. Four
+  parallel full runs made every suite 2-4x slower and timed some out (`parallel-work.md` section 4 treats the
+  full run as an exclusive resource).
+- **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
+  script is committed as 100644 and fails on Linux CI.
+- **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted
+  shell argument (for example an `orca orchestration send --body`) are command substitution: they run in the
+  sender's shell and the message loses the example.
+- **Learning loop.** A new operating lesson goes into this section, or into the policy file it belongs to
+  (`parallel-work.md`, `docs/dogfood.md`, `git-safety.md`), with its reason and a test when it can have one.
+  Private agent memory only points here: Codex, other machines and new sessions never see it.
+
 ## Commands
 
 ```bash

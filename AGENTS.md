@@ -6,6 +6,8 @@ Codex-specific notes and does not restate those rules.
 
 ## Codex-only notes
 
+- **Operating lessons:** `.claude/CLAUDE.md` "Operating lessons" (worktrees and branches during run-all, Git Bash,
+  citation drift, run-all load limit, executable bit, quoting) applies to Codex too; add new lessons there.
 - **Shell:** on Windows use Git Bash, never WSL. A WSL git run once rewrote the shared `.git/config`.
 - **Loading your edits:** after editing the checkout, run `codex plugin add rpg-factory@rpg-factory`
   and restart Codex so the session loads the changed plugin.
