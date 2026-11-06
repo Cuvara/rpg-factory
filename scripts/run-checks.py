@@ -111,6 +111,8 @@ def usage_error(msg):
 
 
 _BASH_SELECTION = None
+_BASH_PROBE = []  # what each flavor probe attempt answered (Windows only)
+BASH_PROBE_ATTEMPTS = 3
 
 
 def select_bash():
@@ -126,15 +128,30 @@ def select_bash():
     if not bash:
         _BASH_SELECTION = (None, "missing")
         return _BASH_SELECTION
-    try:
-        p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+    flavor = "unknown"
+    _BASH_PROBE.clear()
+    # A probe that could not run (start-up failure under load, timeout) says nothing about the flavor, and an
+    # unknown flavor BLOCKs every check of this run: retry it a bounded number of times before giving up.
+    for _ in range(BASH_PROBE_ATTEMPTS):
+        try:
+            p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            _BASH_PROBE.append(f"{type(e).__name__}: {e}")
+            continue
         probe = (p.stdout + p.stderr).lower()
         flavor = "wsl" if p.returncode == 0 and "linux" in probe and "microsoft" in probe else \
                  "gitbash" if p.returncode == 0 and ("mingw" in probe or "msys" in probe) else "unknown"
-    except (OSError, subprocess.SubprocessError):
-        flavor = "unknown"
+        _BASH_PROBE.append(f"exit {p.returncode}: {' '.join((p.stdout + p.stderr).split())[:160]}")
+        if p.returncode == 0:
+            break  # the probe ran: its answer stands, even for a bash this runner does not support
     _BASH_SELECTION = (bash, flavor)
     return _BASH_SELECTION
+
+
+def bash_diagnostics():
+    """The selected bash and what its flavor probe answered, for a BLOCKED reason."""
+    bash, flavor = select_bash()
+    return f"bash={bash or 'not found'}, flavor={flavor}" + (f", probe: {' | '.join(_BASH_PROBE)}" if _BASH_PROBE else "")
 
 
 def bash_env_path(path, bash, flavor=None):
@@ -145,8 +162,8 @@ def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback=""):
     return procrun._windows_fallback_cleanup(exit_code, pids, is_alive, fallback, _verify_windows_pids)
 
 
-def run_check(command, cwd, env, timeout):
-    return procrun.run_check(command, cwd, env, timeout, select_bash())
+def run_check(command, cwd, env, timeout, timing=None):
+    return procrun.run_check(command, cwd, env, timeout, select_bash(), timing)
 
 
 def parser_for(check):
@@ -410,7 +427,10 @@ def main():
             repo_path = bash_env_path(os.path.realpath(rdir), bash, bash_flavor) if bash else None
             head = git(rdir, "rev-parse", "HEAD").strip()
             if not os.path.isdir(ws) or (requested_ws and not os.path.isdir(requested_ws)) or not ws_path or not repo_path or not head:
-                res.update(state="BLOCKED", reason="workspace or checkout path cannot be resolved for the selected bash environment")
+                missing = [n for n, ok in (("workspace", os.path.isdir(ws) and (not requested_ws or os.path.isdir(requested_ws))),
+                                           ("workspace path", ws_path), ("checkout path", repo_path), ("HEAD", head)) if not ok]
+                res.update(state="BLOCKED", reason="workspace or checkout path cannot be resolved for the selected bash environment"
+                           f" (missing: {', '.join(missing)}; {bash_diagnostics()})")
                 state_of[key] = res["state"]
                 results.append(res)
                 continue
@@ -422,7 +442,8 @@ def main():
                 }
                 if bash_flavor == "wsl":
                     check_env = wsl_environment(check_env)
-                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"])
+                timing = {}
+                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"], timing)
             except OSError as e:
                 code, out, timed_out, cleanup = 127, f"could not start: {e}", False, "not started"
             res["duration_s"] = round(time.perf_counter() - t0, 1)
@@ -438,7 +459,8 @@ def main():
             if timed_out:
                 state = "FAIL"
                 diag = out.splitlines()[0] if out.startswith("TIMEOUT") else f"TIMEOUT after {a['timeout']} s"
-                reason = f"{diag}; cleanup={cleanup}"
+                reason = diag if "cleanup=" in diag else f"{diag}; cleanup={cleanup}"  # the TIMEOUT line already names the cleanup
+                res["timeout"] = procrun.timeout_record(timing)
             res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
                        identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})
