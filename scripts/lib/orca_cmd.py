@@ -92,12 +92,22 @@ def _toplevel(path):
 def agent_task(registry, agent, prompt, place, description, cwd=None):
     """Claude Code Agent tool call (fallback when Orca is unavailable). `isolation: worktree` copies the lead's own
     repository at the lead's HEAD, so it is used only when the target is that repository and no other base is
-    needed; otherwise the prompt names the repo, base and branch and the worker creates its worktree with git."""
+    needed; otherwise the prompt names the repo, base and branch and the worker creates its worktree with git. An Orca
+    child placement (new-child) always uses `isolation: worktree`: the session itself never creates a worktree."""
     runner = registry.get("pipeline", {}).get("agents", {}).get(agent, {}).get("agent_runner", "general-purpose")
     target = place.get("repo", "")[5:] if str(place.get("repo", "")).startswith("path:") else None
     here = _toplevel(cwd or os.getcwd())
     call = {"subagent_type": runner, "description": description, "prompt": prompt}
-    if place.get("new"):
+    if place.get("worktree") == "new-child":
+        # only the dispatching tool creates worktrees: the Agent tool's own isolation copy of the caller's checkout
+        # stands in for the Orca child; the session never runs `git worktree add`
+        call["isolation"] = "worktree"
+        base = place.get("base") or "HEAD"
+        call["prompt"] = (f"Placement: an isolated worktree of {place.get('child_of') or 'the current checkout'} that the "
+                          f"Agent tool created at the caller's HEAD (it stands in for the Orca child {place.get('name')}); "
+                          "never create or remove a worktree yourself. First check that `git rev-parse HEAD` equals "
+                          f"`git rev-parse {base}`; otherwise report NOT_INDEPENDENT and stop.\n" + prompt)
+    elif place.get("new"):
         same = target is None or (here is not None and _toplevel(target) == here)
         if same and not place.get("base"):
             call["isolation"] = "worktree"
