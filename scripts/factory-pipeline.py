@@ -73,7 +73,8 @@ docs/schemas/pipeline-plan.schema.json.
         With a task lead's Orca Run (task `orca_run` in the plan, or --orca-run, repeatable) it also lists the Run's
         settled workers that are not released (`orca orchestration worker-list --run <id> --json`, read-only) and puts
         their `orca orchestration worker-release --dispatch <id>` first in `next`; a running worker is no finding;
-        no orca or a failing call is a NOT_AVAILABLE line, never an error.
+        no orca or a failing call is a NOT_AVAILABLE line, never an error. With --json the "Workers:" lines go to
+        stderr (stdout stays the status schema).
 
   cleanup <plan.json> [--orca-run RUN_ID]... [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
@@ -1514,6 +1515,9 @@ def cmd_status(a, reg):
     workers = out.pop("_workers", [])
     if a.json:
         print(json.dumps(out, indent=2))
+        # the status schema has no workers field: the Run lines (NOT_AVAILABLE, UNRELEASED) go to stderr
+        for line in session_lines(workers):
+            print("Workers: " + line, file=sys.stderr)
         return 0 if out["valid"] else 1
     print(f"Pipeline {out['plan']} on {out['topic']}" + ("" if out["valid"] else "  INVALID"))
     for e in out["errors"]:

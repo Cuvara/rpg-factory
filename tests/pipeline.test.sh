@@ -474,7 +474,7 @@ oref() { local n="$1" pat="$2"; shift 2; PATH="$fpath" refute "$n" "$pat" "$@"; 
 expect "a plan task's orca_run is valid" 0 "^OK" validate "$GO"
 X=$(plan orca-bad "$(sed 's/"id":"gw","repo":"srv"/"id":"gw","repo":"srv","orca_run":""/' "$G")")
 expect "an empty orca_run is an error" 1 "task gw: .orca_run. must be the task lead's Orca Run id" validate "$X"
-if [ "$(python3 -B "$P" status --json "$G" | jq -c .tasks)" = "$(PATH="$fpath" python3 -B "$P" status --json "$GO" | jq -c .tasks)" ]
+if [ "$(python3 -B "$P" status --json "$G" | jq -c .tasks)" = "$(PATH="$fpath" python3 -B "$P" status --json "$GO" 2>/dev/null | jq -c .tasks)" ]
 then pass=$((pass + 1)); echo "PASS  orca_run is not part of the verdict fingerprint (same task phases)"
 else fail=$((fail + 1)); echo "FAIL  orca_run changed the task status"; fi
 : > "$FAKE_ORCA_LOG"
@@ -495,10 +495,14 @@ if jq -e '.state == "LEFTOVER" and (.workers[0].unreleased | length) == 4 and an
 then pass=$((pass + 1)); echo "PASS  cleanup --json carries the workers"
 else fail=$((fail + 1)); echo "FAIL  cleanup --json workers"; head -c 1500 "$TMP/cleanup-orca.json"; fi
 opath "status lists unreleased workers" 0 "^Workers:   UNRELEASED ctx_ret" status "$GO"
-if PATH="$fpath" python3 -B "$P" status --json "$GO" | jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' >/dev/null
+if PATH="$fpath" python3 -B "$P" status --json "$GO" 2>/dev/null | jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' >/dev/null
 then pass=$((pass + 1)); echo "PASS  status --json puts the release commands first in next"
 else fail=$((fail + 1)); echo "FAIL  status --json next"; fi
-PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/status-orca.json" 2>&1
+PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/so.json" 2> "$TMP/se.txt"; rc=$?
+if [ $rc = 0 ] && jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' "$TMP/so.json" >/dev/null && grep -q "^Workers:   UNRELEASED ctx_ret" "$TMP/se.txt"
+then pass=$((pass + 1)); echo "PASS  status --json: unreleased workers on stderr, release command in next, exit 0"
+else fail=$((fail + 1)); echo "FAIL  status --json unreleased (rc $rc)"; head -5 "$TMP/se.txt"; fi
+PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/status-orca.json" 2>/dev/null
 if python3 - "$ROOT" "$TMP/status-orca.json" <<'PY'
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
@@ -516,10 +520,18 @@ for mode in error garbage; do
   FAKE_ORCA_MODE=$mode opath "orca $mode: NOT_AVAILABLE, never a failure" 0 "WORKERS NOT_AVAILABLE  run run_T: orca worker-list exited" cleanup "$GO"
   FAKE_ORCA_MODE=$mode oref "orca $mode: no traceback" "Traceback" status "$GO"
 done
+# status_json_na <name> [env...]: status --json exits 0, stdout is valid JSON, stderr has the NOT_AVAILABLE Run line
+status_json_na() { local n="$1" rc; shift
+  env "$@" python3 -B "$P" status --json "$GO" > "$TMP/so.json" 2> "$TMP/se.txt"; rc=$?
+  if [ $rc = 0 ] && jq -e '.valid' "$TMP/so.json" >/dev/null && grep -q "^Workers: NOT_AVAILABLE  run run_T" "$TMP/se.txt"
+  then pass=$((pass + 1)); echo "PASS  $n"
+  else fail=$((fail + 1)); echo "FAIL  $n (rc $rc)"; head -5 "$TMP/se.txt"; fi; }
+status_json_na "orca erroring: status --json prints NOT_AVAILABLE on stderr, valid JSON, exit 0" PATH="$fpath" FAKE_ORCA_MODE=error
 noorca=""; IFS=: read -ra parts <<<"$PATH"
 for d in "${parts[@]}"; do [ -e "$d/orca" ] || [ -e "$d/orca.exe" ] || [ -e "$d/orca.cmd" ] || noorca="$noorca${noorca:+:}$d"; done
 PATH="$noorca" expect "orca missing: NOT_AVAILABLE, cleanup stays CLEAN" 0 "WORKERS NOT_AVAILABLE  run run_T: orca is not on PATH" cleanup "$GO"
 PATH="$noorca" expect "orca missing: status still exits 0" 0 "^Workers: NOT_AVAILABLE  run run_T" status "$GO"
+status_json_na "orca missing: status --json prints NOT_AVAILABLE on stderr, valid JSON, exit 0" PATH="$noorca"
 refute "no Run named: no worker line" "WORKERS " cleanup "$G"
 
 echo "-- review findings"

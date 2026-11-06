@@ -233,6 +233,11 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
   later turn or wave. A review or QA session whose candidate is superseded (a new HEAD) is released at once,
   not at task end; `factory-pipeline.py status plan.json --orca-run <run id>` lists the Run's settled workers that
   are not released.
+- **Releasing a session does not stop its test processes.** On Windows `orca orchestration worker-stop` and
+  `worker-release` close the worker's terminal, but test processes it started (`run-all.sh`, `parallel-policy.test.sh`
+  and their children) keep running, reparented, and load the machine (seen with a stopped QA `run-all.sh` and a
+  reviewer's suites). Before a worker that runs tests is released, it stops its own test process tree; the lead then
+  checks for leftover test processes whose cwd is the task worktree and stops only those.
 - **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in an
   implementation session, never in a lead's session, and never reused across tasks or candidate SHAs.
 - **Few sessions at once.** Under memory pressure Claude Code reaps background shells, which kills long test runs
