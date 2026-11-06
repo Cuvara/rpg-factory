@@ -495,10 +495,10 @@ v --task integration:srv --phase qa --sha "$SG" --by codex --state PASS
 v --task integration:cli --phase qa --sha "$C2" --by codex --state PASS
 # subtask reviews and per-candidate records never replace the task review the gate reads
 VD="$RPG_FACTORY_STATE_DIR/pipeline/demo"
-expect "verdict --subtask records the subtask's own review" 0 "recorded review FAIL for gw subtask s2 at .*gw__sub-s2__review.json" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state FAIL --subtask s2
+expect "verdict --subtask records the subtask's own review" 0 "recorded review FAIL for gw subtask s2 at .*gw@s2__review.json" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state FAIL --subtask s2
 expect "a non-pair task review at the reviewed SHA keeps the pair's record" 0 "kept the codex review of gw .*kept per candidate only" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state FAIL
-if jq -e '.by == "codex" and .state == "PASS"' "$VD/gw__review.json" >/dev/null && jq -e '.subtask == "s2" and .state == "FAIL"' "$VD/gw__sub-s2__review.json" >/dev/null \
-   && [ -f "$VD/gw__review__${SG:0:12}__codex.json" ] && [ -f "$VD/gw__review__${SG:0:12}__claude.json" ] && [ -f "$VD/gw__sub-s2__review__${SG:0:12}__claude.json" ]
+if jq -e '.by == "codex" and .state == "PASS"' "$VD/gw__review.json" >/dev/null && jq -e '.subtask == "s2" and .state == "FAIL"' "$VD/gw@s2__review.json" >/dev/null \
+   && [ -f "$VD/gw__review__${SG:0:12}__codex.json" ] && [ -f "$VD/gw__review__${SG:0:12}__claude.json" ] && [ -f "$VD/gw@s2__review__${SG:0:12}__claude.json" ]
 then pass=$((pass + 1)); echo "PASS  verdict --subtask never overwrites the task review; every verdict is kept per candidate"
 else fail=$((fail + 1)); echo "FAIL  verdict records"; ls "$VD" | sed 's/^/      /'; fi
 expect "--subtask goes with a plan task" 2 "--subtask is the id of a subtask" verdict "$G" --task integration:srv --phase qa --sha "$SG" --by codex --state PASS --subtask s2
@@ -513,6 +513,23 @@ expect "status names the subtask FAIL and starts the task lead" 0 "note: subtask
 refute "status offers no gate while a subtask FAIL is open" "^Next: .* gate " status "$G"
 python3 -B "$P" verdict "$G" --task gw --phase qa --sha "$SG" --by codex --state FAIL --subtask s3 >/dev/null
 expect "a subtask QA FAIL blocks the gate" 1 "BLOCKER gw: subtask s3 qa FAIL" gate "$G"
+# verdict file names: task "a__sub-b" and subtask b of task a never share a file (the old <task>__sub-<id> did)
+X=$(plan coll "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"coll\",\"title\":\"Coll\",\"topic\":\"feat/core/coll\",
+ \"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"}},\"tasks\":[
+ {\"id\":\"a\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"ca/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"a__sub-b\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"cb/\"],\"acceptance\":[\"a\"]}]}")
+CVD="$RPG_FACTORY_STATE_DIR/pipeline/coll"
+git -C "$S" branch -q feat/core/coll "$SG"
+python3 -B "$P" verdict "$X" --task a --phase review --sha "$SG" --by claude --state FAIL --subtask b >/dev/null
+python3 -B "$P" verdict "$X" --task a__sub-b --phase review --sha "$SG" --by codex --state PASS >/dev/null
+if jq -e '.task == "a" and .subtask == "b" and .state == "FAIL"' "$CVD/a@b__review.json" >/dev/null    && jq -e '.task == "a__sub-b" and .state == "PASS" and (has("subtask") | not)' "$CVD/a__sub-b__review.json" >/dev/null    && [ -f "$CVD/a@b__review__${SG:0:12}__claude.json" ] && [ -f "$CVD/a__sub-b__review__${SG:0:12}__codex.json" ]
+then pass=$((pass + 1)); echo "PASS  task a__sub-b and subtask b of task a keep their own verdict files"
+else fail=$((fail + 1)); echo "FAIL  verdict file collision"; ls "$CVD" | sed 's/^/      /'; fi
+expect "the subtask FAIL blocks its own task a" 1 "BLOCKER a: subtask b review FAIL" gate "$X" --no-run-checks
+refute "task a__sub-b is not blocked by subtask b of task a" "BLOCKER a__sub-b: subtask|a__sub-b: no review verdict" gate "$X" --no-run-checks
+# an older <task>__sub-<id> record still counts for its own task and subtask
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r.update(subtask="c",state="FAIL"); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$CVD/a@b__review.json" "$CVD/a__sub-c__review.json"
+expect "a legacy subtask record of task a still blocks it" 1 "BLOCKER a: subtask c review FAIL" gate "$X" --no-run-checks
 v --task gw --phase review --sha "$SG" --by codex --state PASS --subtask s2
 v --task gw --phase qa --sha "$SG" --by codex --state PASS --subtask s3
 # late results: a PASS on an older candidate (SG~1) never resolves a FAIL on the newer SG; a PASS on SG resolves it, and
@@ -817,6 +834,11 @@ expect "dispatch warns an alias's integration QA while a task of the checkout ha
 echo b > "$C/Assets/B/al.cs"; gi "$C" add Assets/B; gi "$C" commit -qm "feat: alias b"; UB=$(git -C "$C" rev-parse HEAD)
 python3 -B "$P" verdict "$X" --task b --phase review --sha "$UB" --by codex --state PASS >/dev/null
 python3 -B "$P" verdict "$X" --task b --phase qa --sha "$UB" --by codex --state PASS >/dev/null
+# dispatch reads the per-task QA like status: a PASS recorded for an older version of task a is STALE, not PASS
+python3 -c 'import json,sys; p=json.load(open(sys.argv[1],encoding="utf-8")); p["tasks"][0]["objective"]="changed"; json.dump(p,open(sys.argv[2],"w",encoding="utf-8"))' "$X" "$TMP/alias3-stale.json"
+expect "dispatch: a STALE per-task QA PASS leaves the alias's integration QA open" 0 "u1 takes one task at a time: task a has no QA PASS yet" dispatch "$TMP/alias3-stale.json" --task integration:u1 --phase qa --sha "$UB" --runner print
+expect "dispatch: a STALE QA PASS of the serial predecessor still warns the next task lead" 0 "takes one task at a time: task a has no QA PASS yet" dispatch "$TMP/alias3-stale.json" --task b --phase lead --runner print
+refute "dispatch: a current QA PASS of every alias task: no warning" "takes one task at a time" dispatch "$X" --task integration:u1 --phase qa --sha "$UB" --runner print
 if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
 assert "--task integration:u1 --phase qa" in r["a"]["next"], r["a"]
 assert r["b"]["next"] is None and any("integration QA of u1 runs first" in n for n in r["b"]["notes"]), r["b"]'
@@ -831,6 +853,29 @@ else fail=$((fail + 1)); echo "FAIL  status alias second integration QA"; python
 python3 -B "$P" verdict "$X" --task integration:u2 --phase qa --sha "$UB" --by codex --state PASS >/dev/null
 refute "gate: the aliases' tasks share the integration branch, so neither alias's changes are stray" "changes outside every task's owned paths" gate "$X" --no-run-checks
 expect "gate: two aliases of one Unity checkout with every verdict are READY_FOR_PR" 0 "READY_FOR_PR" gate "$X" --no-run-checks
+# a dependent no-worktree task owning its predecessor's path: the predecessor's commits on the shared integration
+# branch are not its own, so it is no review candidate before the predecessor's verdict and its own commit
+X=$(plan uov "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"uov\",\"title\":\"Uov\",\"topic\":\"feat/core/uov\",
+ \"repos\":{\"u1\":{\"path\":\"ws/IndieRPGMMOAdventure\",\"base\":\"develop\"}},\"tasks\":[
+ {\"id\":\"a\",\"repo\":\"u1\",\"objective\":\"o\",\"paths\":[\"Assets/U/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"b\",\"repo\":\"u1\",\"objective\":\"o\",\"paths\":[\"Assets/U/\"],\"acceptance\":[\"a\"],\"deps\":[\"a\"]}]}")
+gi "$C" checkout -qb feat/core/uov develop; mkdir -p "$C/Assets/U"
+echo a > "$C/Assets/U/u.cs"; gi "$C" add Assets/U; gi "$C" commit -qm "feat: uov a"; VA=$(git -C "$C" rev-parse HEAD)
+echo wip > "$C/Assets/U/wip.cs"  # the predecessor's uncommitted work in the shared path is not b's
+if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
+assert r["a"]["phase"]=="candidate" and "--task a --phase review --sha "+sys.argv[1] in r["a"]["next"], r["a"]
+assert r["b"]["phase"]=="pending" and r["b"]["next"] is None and any(n=="waits for a" for n in r["b"]["notes"]), r["b"]
+assert "--task b --phase review" not in json.dumps(o), o' "$VA"
+then pass=$((pass + 1)); echo "PASS  status: a dependent no-worktree task with the same path is pending before its predecessor's QA (no review at a's commit)"
+else fail=$((fail + 1)); echo "FAIL  status no-worktree dependent before QA"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
+rm -f "$C/Assets/U/wip.cs"
+python3 -B "$P" verdict "$X" --task a --phase review --sha "$VA" --by codex --state PASS >/dev/null
+python3 -B "$P" verdict "$X" --task a --phase qa --sha "$VA" --by codex --state PASS >/dev/null
+echo b >> "$C/Assets/U/u.cs"; gi "$C" add Assets/U; gi "$C" commit -qm "feat: uov b"; VB=$(git -C "$C" rev-parse HEAD)
+if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
+assert r["b"]["phase"]=="candidate" and r["b"]["sha"]==sys.argv[1] and "--task b --phase review --sha "+sys.argv[1] in r["b"]["next"], r["b"]' "$VB"
+then pass=$((pass + 1)); echo "PASS  status: after the predecessor's QA PASS, the dependent task's own commit makes it a candidate at that SHA"
+else fail=$((fail + 1)); echo "FAIL  status no-worktree dependent after QA"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
 gi "$C" checkout -q feat/core/demo
 X=$(plan norm "{$HEAD,\"tasks\":[
  {\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"./backend/gateway\"],\"acceptance\":[\"a\"]},

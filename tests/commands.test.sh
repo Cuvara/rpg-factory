@@ -158,5 +158,8 @@ grep -q "pipeline needs tier|validate|subplan|" "$TMP/err" && grep -qE "^  pipel
 out=$(python3 -B "$CMD" pipeline subplan validate "$TMP/pipeline-subplan.json" 2>&1); rc=$?
 [ "$rc" -eq 1 ] && ! grep -q "pipeline needs" <<<"$out" && grep -qE "^(ERROR |INVALID)" <<<"$out" \
   && ok "pipeline subplan is a pipeline verb (reaches subplan validate: exit 1 with its ERROR lines)" || no "pipeline subplan rc=$rc: $(head -c 300 <<<"$out")"
+needs=$(sed -n 's/^factory-cmd: pipeline needs //p' "$TMP/err")
+hint=$(sed -n 's/^argument-hint: "\([a-z|]*\) .*/\1/p' "$ROOT/commands/pipeline.md")
+[ -n "$needs" ] && [ "$hint" = "$needs" ] && ok "/pipeline argument-hint lists every pipeline verb ($hint)" || no "/pipeline argument-hint '$hint' != verbs '$needs'"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

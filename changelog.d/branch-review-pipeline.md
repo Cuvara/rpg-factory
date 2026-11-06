@@ -8,8 +8,9 @@
   every alias's owned paths on the shared integration branch, so their changes are not stray.
 - **Pipeline: dependent tasks with shared paths.** `status` counts only a task's own commits: a task branch cut from the
   integration branch starts at its fork point (no own commits while it is still on the topic's first-parent chain),
-  and a no-worktree task starts after its serial predecessor's last verdict. A dependent task that owns an earlier
-  task's paths is no longer a review candidate before its first commit.
+  and a no-worktree task starts after its serial predecessor's last verdict (before that verdict it has not started).
+  A dependent task that owns an earlier task's paths is no longer a review candidate before its first commit, in a
+  worktree repo and in a no-worktree (Unity) repo.
 - **Pipeline: child names.** Review and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`, so the review
   and the QA of one candidate, or a subtask whose implement child still exists, never collide in Orca. A child
   command also says on stderr to run it from the parent worktree (integration QA included).
