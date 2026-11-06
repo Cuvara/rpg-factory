@@ -241,6 +241,7 @@ else skp "registry paths exist in workspace" "--no-workspace"; fi
 run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -u TMPDIR tests/compat.test.sh
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
+run "line budget (gitguard.py, context.py, run-checks.py under 500 lines; self-test at 499/500)" tests/line-budget.test.sh
 run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
 run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
