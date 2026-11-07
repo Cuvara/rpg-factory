@@ -57,6 +57,13 @@ lead's workflow asks for in a run directory or the game layer.
 - **Image node:** the core templates use the 9router custom node `NineRouterImage` (`user_prompt`, `model`, `size`,
   `quality`, `background`, optional `reference_images`) into `SaveImage`; `NineRouterChat` is the text node. Their
   inputs are snapshotted in `scripts/assetgen/data/known-nodes.json` for offline lint.
+- **Anchor wiring** (style lock, `scripts/assetgen/assetgen.py` `wire_references`): for each anchor
+  `spec.style_lock.references` selected, `render --run` copies its image to `<run>/references/anchor-<id>.png` and adds
+  a `LoadImage` node (`image` `anchor-<id>.png`, title `Anchor <id> (<strength>)`) plus a chain of core `ImageBatch`
+  nodes (`image1`, `image2`) whose output feeds `NineRouterImage.reference_images`; an existing `reference_images`
+  link (image-edit) is `image1` of the first batch, so the edit's own image stays first. New node ids are the next free
+  integers, in both `workflow.json` and `workflow.ui.json`. Selection and its order are the engine's
+  (`scripts/assetgen/stylelock.py` docstring), never edited in the graph.
 - **comfy-mcp** is the official Comfy-Org MCP server (stdio), MCP name `comfy-mcp`, tool ids
   `mcp__comfy-mcp__<tool>`. It talks to the ComfyUI its `COMFY_LOCAL_URL` env names. Ports: registry services
   `comfyui` (headless `main.py`, default port) and `comfyui-desktop` (Comfy Desktop's own port):
@@ -65,7 +72,8 @@ lead's workflow asks for in a run directory or the game layer.
 ## Idioms
 
 - **Run sequence:** `server_info` (version, nodes present) -> `validate_workflow` (`<run>/workflow.json` against the
-  live node list) -> `upload_file` (image-edit reference; returns the input-folder name) -> `run_workflow`
+  live node list) -> `upload_file` (every `<run>/references/*` file under its own name: the image-edit reference and
+  each `anchor-<id>.png`; returns the input-folder name) -> `run_workflow`
   (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`).
   -> `assetgen.py embed --run <run>` (mandatory, before `qa`). `nodes`, `list_workflow_slots` and
   `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
@@ -88,6 +96,10 @@ lead's workflow asks for in a run directory or the game layer.
   same way. **Add a template:** API-format graph with placeholders, every placeholder a declared param, `output_node`
   set; then `assetgen.py lint [--authoring <A>]` and a live `validate_workflow`.
 - **Game override:** prefer `extends` with only the changed fields, so core fixes still reach the game.
+- **Style data for the checks:** structured style fields (`palette` colours, `outline.edge_darkness`, `canvas` per
+  family, `tone`, `forbidden`) and purpose `default_family`, `dimensions`, `max_references`, `qa.outlines` are data;
+  a field may stay prose (its `text` is the hint). A changed style gets a new `version`
+  (`docs/architecture/domains/assetgen.md` "Style lock").
 
 ## Pitfalls
 
@@ -116,6 +128,10 @@ lead's workflow asks for in a run directory or the game layer.
   `assetgen/<run-id>` and `render --run` requires that value and refuses `--param filename_prefix`
   (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`
   again. Only `fetch_outputs` puts the PNGs into the run.
+- **Anchors need the same upload as an edit reference:** the anchor `LoadImage` nodes name `anchor-<id>.png` in
+  ComfyUI's input folder, so upload every `references/anchor-*.png` before `run_workflow`. `render --run` refuses an
+  anchor whose image changed since `resolve` (resolve again), and a template with other than exactly one
+  `NineRouterImage` node cannot take anchors (`scripts/assetgen/assetgen.py` `copy_anchors`, `wire_references`).
 - **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`):
   `COMFY_LOCAL_URL` pointing at the one that is not running makes every tool fail while the snapshot shows the other
   service up.
@@ -124,7 +140,8 @@ lead's workflow asks for in a run directory or the game layer.
 
 - `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI
   graph converted back equals the API graph), hints and lint blame, review-cmd, embed, publish against a fake HTTP
-  server, PNG QA, manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
+  server, PNG QA, style lock (project config, anchors, selection, anchor wiring, consistency rows, drift), manifest
+  and the quality plugin (temp authoring repo, no network, no ComfyUI).
 - `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs
   ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
 

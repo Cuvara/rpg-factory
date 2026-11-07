@@ -52,6 +52,39 @@
 - **Skills.** `asset-gen` and `comfyui` document `embed` and `publish`, that comfy-mcp `run_workflow` posts to
   `/prompt` and never opens a canvas tab, Claude's own image review file, and that the generate step reports an
   outdated `comfyui_9router` node pack from `server_info` without updating it.
+- **Style lock: project style config.** `<authoring>/assetgen/project.json` (`rpg-factory.assetgen-project/1`:
+  default `style` `{id, version}`, `allowed_styles`, `families` mapping an asset family to a game sub-style,
+  `art_direction` refs) is the single source of the game's style. `resolve --family F` (else the purpose's
+  `default_family`) picks the style, refuses a style outside the project or a deprecated one unless
+  `--style-override REASON` (recorded in `spec.style_lock.override` and `run.md`), and keeps today's behaviour with a
+  lint `WARN` when the game has no `project.json`. Schemas `docs/schemas/assetgen-{project,anchor,rejection}.schema.json`.
+- **Style lock: versioned, structured styles.** Styles carry `version` and `status` (`draft`, `active`,
+  `deprecated`) and optional structured fields (`palette` colours, `lighting`, `outline` with `edge_darkness`,
+  `shape_language`, `forbidden[]`, `canvas` per family, `tone`); a prose string still works. Purposes gain
+  `default_family`, `dimensions`, `max_references` and `qa.outlines`. Every spec, review binding, anchor, rejection
+  and gen-run records the style reference `{style_id, version, sha256}`.
+- **Style lock: anchors and rejections.** `assetgen.py promote-anchor` writes a `proposed` anchor from a manifested
+  run output under `assetgen/styles/<style-id>/anchors/`; only a person activates it, and it is valid only while its
+  source gen-run is approved (the quality check `gen-run-style` also checks the signed approval, the image hash and
+  that the approver is not an agent or model). `assetgen.py reject` records a rejected asset or direction with a
+  fixed reason under `rejections/`; relevant rejections feed the prompt's avoid list and the review rubric.
+- **Style lock: deterministic reference selection.** `resolve` selects valid active anchors of the run's style
+  version (family match, dimension overlap, strength, id; capped by `max_references`) with `reason[]` per pick, and
+  `render --run` copies them to `<run>/references/anchor-<id>.png` and wires them through `LoadImage` and core
+  `ImageBatch` nodes into `NineRouterImage.reference_images` (an image-edit reference stays first).
+- **Style lock: consistency QA.** `qa` adds the soft rows `style-palette`, `style-tone`, `style-edges` and
+  `style-canvas` (`scripts/assetgen/consistency.py`; `WARN` by default, `FAIL` only when the style says so,
+  `NOT_AVAILABLE` without the style field), and the image review attaches the selected anchors, adds an anchor
+  rubric item and one `Not repeated:` item per relevant rejection, and binds the style ref and anchor hashes.
+- **Style lock: drift.** `assetgen.py drift --authoring DIR` (read-only, `rpg-factory.assetgen-drift/1`) lists
+  gen-runs, anchors and rejections recorded on an older style version, a changed style hash or a missing style.
+  `/rpg-factory:assetgen drift` forwards it; `factory-cmd.py assetgen` refuses `promote-anchor` and `reject`,
+  because they write into the authoring repo.
+- **Style lock docs and skills.** `docs/architecture/domains/assetgen.md` section "Style lock"; `asset-gen` gains
+  the family, override, anchor upload, style-row and rejection steps and a reference
+  `references/style-lock.md` (bootstrap a new game style: exploration `concept-2d` runs, a person picks,
+  `promote-anchor`, a person approves, then `project.json` and the game style at version 1; style change and drift);
+  `comfyui` documents the anchor wiring and uploading every `references/*` file.
 
 ### Changed
 
