@@ -608,6 +608,8 @@ def validate_subplan(sub, plan, reg):
                     errors.append(f"subtask {sid}: path {p} overlaps an exclusion of task {tid}")
         if s.get("kind") is not None and s["kind"] not in pr.KINDS:
             errors.append(f"subtask {sid}: unknown kind {s['kind']}")
+        if not s.get("implementer") and not s.get("kind"):
+            errors.append(f"subtask {sid}: missing implementer (or kind)")
         if s.get("implementer") and s["implementer"] not in agents:
             errors.append(f"subtask {sid}: implementer `{s['implementer']}` is not a pipeline agent ({', '.join(agents)})")
         impl = pr.route(pipe, s, {a: {"available": True} for a in agents})[0]
@@ -1030,10 +1032,9 @@ def cmd_dispatch(a, reg):
                           "checked out: the task worktree is created with --no-parent (no Orca parent)", file=sys.stderr)
             where = "this task worktree"
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
-        # the task lead is always the registry's lead agent (Claude), whatever the task's implementer
         lead = model_roles["lead"][0]
         if a.agent and a.agent != lead:
-            print(f"factory-pipeline: the task lead is always {lead} (registry pipeline.lead_agent); --agent {a.agent} "
+            print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
             emit_lead_handoff(reg, lead, orca_prompt(a, prompt, plan), place, branch)
@@ -1304,9 +1305,12 @@ def cmd_verdict(a, reg):
     if a.subtask:
         rec["subtask"] = a.subtask
     if a.fallback:
+        if pr.available(pipe, plan).get(a.fallback, {}).get("available"):
+            die(f"--fallback {a.fallback} is available now")
         rec["fallback"] = a.fallback
     if task is not None and a.phase == "review":
         impl = pr.route(pipe, task, pr.available(pipe, plan))[0]
+        rec["implementer"] = impl
         pair = pr.paired(pipe, task, impl)
         if a.by == impl and not pr.available(pipe, plan).get(pair, {}).get("available"):
             rec["fallback"] = pair
@@ -1316,10 +1320,12 @@ def cmd_verdict(a, reg):
     if task is not None and a.phase == "review" and not a.subtask:
         # the task review the gate reads: a review by another model (a paired review of a Codex subtask recorded
         # without --subtask) never replaces the paired reviewer's record for the same candidate
-        impl = pr.route(pipe, task, pr.available(pipe, plan))[0]
-        want = pr.paired(pipe, task, impl)
         old = fstate.read_json(path)
-        if (a.by != want and rec.get("fallback") != want and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
+        old_impl = (old.get("implementer") or pr.route(pipe, task, {x: {"available": True} for x in pipe["agents"]})[0]) if isinstance(old, dict) else impl
+        want = pr.paired(pipe, task, old_impl)
+        new_pair = pr.paired(pipe, task, rec["implementer"])
+        new_paired = a.by == new_pair or (a.by == rec["implementer"] and rec.get("fallback") == new_pair)
+        if (not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
                 and old.get("fingerprint") == rec["fingerprint"]):
             print(f"factory-pipeline: kept the {want} review of {a.task} at {a.sha[:10]} (the task's paired reviewer); "
                   f"this {a.by} review is kept per candidate only: {kept}. A subtask review takes --subtask <id>.",
@@ -1424,12 +1430,12 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         if key not in heads:
             continue
         info = repo_info(plan, reg, key)
-        impl = pr.route(pipe, t, pr.available(pipe, plan))[0]
-        want = pr.paired(pipe, t, impl)
         blockers += [f"{t['id']}: {f}" for f in subtask_failures(plan, reg, t["id"], heads[key])]
         rv = read_verdict(plan, reg, t["id"], "review", blockers)
         if not rv:
             continue
+        impl = rv.get("implementer") or pr.route(pipe, t, {a: {"available": True} for a in pipe["agents"]})[0]
+        want = pr.paired(pipe, t, impl)
         if rv.get("state") != "PASS":
             blockers.append(f"{t['id']}: review {rv.get('state')} at {rv.get('sha', '')[:10]}")
             continue

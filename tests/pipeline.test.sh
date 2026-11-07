@@ -251,7 +251,7 @@ refute "the task lead is no nested Orca worker (no worker-start)" "^orca orchest
 expect "task lead of a claude-implementer task is claude" 0 "--no-parent --agent claude --prompt " dispatch "$OK" --task gw --phase lead --runner orca
 expect "task lead of a codex-implementer task is still claude (pipeline.lead_agent)" 0 "^orca agent launch --agent claude " dispatch "$OK" --task c2 --phase lead --runner orca
 refute "task lead of a codex-implementer task is never codex" "^orca .*--agent codex" dispatch "$OK" --task c2 --phase lead --runner orca
-expect "--agent codex on --phase lead warns" 0 "the task lead is always claude \(registry pipeline.lead_agent\); --agent codex is ignored" dispatch "$OK" --task gw --phase lead --runner orca --agent codex
+expect "--agent codex on --phase lead warns" 0 "the task lead is claude \(lead_agent\); --agent codex is ignored" dispatch "$OK" --task gw --phase lead --runner orca --agent codex
 expect "--agent codex on --phase lead still prints --agent claude" 0 "--no-parent --agent claude --prompt " dispatch "$OK" --task gw --phase lead --runner orca --agent codex
 refute "--agent codex on --phase lead never launches codex" "^orca .*--agent codex" dispatch "$OK" --task gw --phase lead --runner orca --agent codex
 expect "the codex task's implement session keeps its implementer" 0 "^orca orchestration worker-start .*--agent codex" dispatch "$OK" --task c2 --phase implement --runner orca
@@ -560,10 +560,16 @@ expect "status keeps the subtask FAIL while its fix is on an unmerged child" 0 "
 git -C "$S" branch -q -D gw-child-fix
 v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s5
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
+expect "manual fallback for an available model is refused" 2 "fallback codex is available now" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS --fallback codex
+expect "refused fallback leaves paired evidence intact" 0 "^Gate: READY_FOR_PR" gate "$G"
+expect "mark codex down after its implementation was reviewed" 0 "MODEL_UNAVAILABLE" agents "$G" --down codex --reason 401
+expect "cross-model review survives implementer becoming unavailable" 0 "^Gate: READY_FOR_PR" gate "$G"
+expect "clear codex runtime failure" 0 "codex: available" agents "$G" --up codex
 RPG_FACTORY_AGENTS=claude expect "single claude records automatic fallback" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS
 RPG_FACTORY_AGENTS=claude v --task c1 --phase review --sha "$C1" --by claude --state PASS
 RPG_FACTORY_AGENTS=claude v --task c2 --phase review --sha "$C2" --by claude --state PASS
 RPG_FACTORY_AGENTS=claude expect "single claude fallback gate accepted" 0 "SAME_MODEL \(fallback: codex unavailable\)" gate "$G"
+expect "fallback evidence stays SAME_MODEL when both models return" 0 "SAME_MODEL \(fallback: codex unavailable\)" gate "$G"
 RPG_FACTORY_AGENTS=codex expect "single codex records automatic fallback" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by codex --state PASS
 RPG_FACTORY_AGENTS=codex v --task c1 --phase review --sha "$C1" --by codex --state PASS
 RPG_FACTORY_AGENTS=codex v --task c2 --phase review --sha "$C2" --by codex --state PASS
@@ -1222,25 +1228,29 @@ if tail -n 1 "$ROOT/tests/dogfood.sh" | grep -qF '"${tl_fail:-0}" -eq 0'; then p
 else fail=$((fail + 1)); echo "FAIL  dogfood --all exit status includes the two-level result (last line of tests/dogfood.sh)"; fi
 
 echo "-- model routing"
-if python3 -B - "$ROOT" "$TMP" <<'ROUTING'
+cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
-root, tmp = sys.argv[1:]
+root, tmp, case = sys.argv[1:]
 sys.path.insert(0, root + '/scripts/lib')
 import pipeline_route as r
 pipe = json.loads(pathlib.Path(root + '/registry.json').read_text())['pipeline']
 both = {a: {'available': True} for a in pipe['agents']}
-for kind in r.KINDS:
-    expected = pipe['agent_routing'][kind]
-    assert r.route(pipe, {'kind': kind}, both)[0] == expected
-assert r.route(pipe, {'kind': 'code', 'implementer': 'claude'}, both)[0] == 'claude'
-assert r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude'}], both)
-assert not r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude', 'reason': 'special expertise'}], both)
-assert r.warnings(pipe, [{'kind': 'code'}] * 3, both)
-assert r.roles(pipe, {'kind': 'code'}, both)['qa'][0] == 'claude'
-assert r.roles(pipe, {'kind': 'docs'}, both)['qa'][0] == 'codex'
+if case.startswith('kind-'):
+    kind = case[len('kind-'):]
+    assert kind in r.KINDS
+    assert r.route(pipe, {'kind': kind}, both)[0] == pipe['agent_routing'][kind]
+if case == 'overrides-and-qa':
+    assert r.route(pipe, {'kind': 'code', 'implementer': 'claude'}, both)[0] == 'claude'
+    assert r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude'}], both)
+    assert not r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude', 'reason': 'special expertise'}], both)
+    assert r.warnings(pipe, [{'kind': 'code'}] * 3, both)
+    assert r.roles(pipe, {'kind': 'code'}, both)['qa'][0] == 'claude'
+    assert r.roles(pipe, {'kind': 'docs'}, both)['qa'][0] == 'codex'
 plan = {'id': 'routing-unit'}
 for sole in ('claude', 'codex'):
+    if case != 'availability-' + sole:
+        continue
     with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': sole}):
         avail = r.available(pipe, plan)
         for kind in r.KINDS:
@@ -1255,18 +1265,23 @@ for sole in ('claude', 'codex'):
     with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD'}, clear=True):
         avail = r.available(pipe, plan)
         assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
-with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
-    r.mark(plan, 'codex', '401 revoked token')
-    assert r.route(pipe, {'kind': 'code'}, r.available(pipe, plan)) == ('claude', 'fallback: codex unavailable')
-    r.mark(plan, 'codex')
-    assert r.available(pipe, plan)['codex']['available']
-with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': ''}):
-    assert 'WARNING' in r.route(pipe, {'kind': 'code'}, r.available(pipe, plan))[1]
+if case == 'marks-and-empty':
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
+        r.mark(plan, 'codex', '401 revoked token')
+        assert r.route(pipe, {'kind': 'code'}, r.available(pipe, plan)) == ('claude', 'fallback: codex unavailable')
+        r.mark(plan, 'codex')
+        assert r.available(pipe, plan)['codex']['available']
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': ''}):
+        assert 'WARNING' in r.route(pipe, {'kind': 'code'}, r.available(pipe, plan))[1]
 import subprocess
 for label, payload, down in (
-    ('unauthorized', '{"result":{"codex":{"status":"error","error":"401 Unauthorized"}}}', True),
+    ('no-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}}), True),
+    ('system-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': True}}}}), False),
+    ('account-auth', json.dumps({'result': {'codex': {'accounts': [{}], 'systemDefault': {'hasAuth': False}}}}), False),
     ('malformed', '{"result":null}', False),
 ):
+    if case != 'orca-' + label:
+        continue
     with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
                                 'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
          patch('pipeline_route.shutil.which', return_value='/fake'), \
@@ -1274,11 +1289,12 @@ for label, payload, down in (
         avail = r.available(pipe, {'id': 'account-' + label})
         assert avail['claude']['available']
         assert avail['codex']['available'] != down
-with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
-                            'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
-     patch('pipeline_route.shutil.which', return_value='/fake'), \
-     patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
-    assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
+if case == 'orca-offline':
+    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
+        assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
 spec = importlib.util.spec_from_file_location('routing_pipeline', root + '/scripts/factory-pipeline.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -1287,16 +1303,17 @@ plan = {'schema': m.SCHEMA, 'id': 'route-validation', 'title': 'test', 'topic': 
         'repos': {'plugin': {'path': root}},
         'tasks': [{'id': 't', 'repo': 'plugin', 'kind': 'code', 'implementer': 'claude',
                    'objective': 'x', 'paths': ['scripts/'], 'acceptance': ['x']}]}
-assert any('without reason' in w for w in m.validate(plan, reg)['warnings'])
-plan['tasks'][0]['reason'] = 'expertise'
-assert not m.validate(plan, reg)['warnings']
-sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
-       {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': 'gpt'}]}
-assert any('implementer `gpt` is not' in e for e in m.validate_subplan(sub, plan, reg)['errors'])
-sub['subtasks'][0].update(implementer='claude', kind='code')
-assert any('without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
-sub['subtasks'][0]['reason'] = 'expertise'
-assert not m.validate_subplan(sub, plan, reg)['warnings']
+if case == 'validation':
+    assert any('without reason' in w for w in m.validate(plan, reg)['warnings'])
+    plan['tasks'][0]['reason'] = 'expertise'
+    assert not m.validate(plan, reg)['warnings']
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': 'gpt'}]}
+    assert any('implementer `gpt` is not' in e for e in m.validate_subplan(sub, plan, reg)['errors'])
+    sub['subtasks'][0].update(implementer='claude', kind='code')
+    assert any('without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
+    sub['subtasks'][0]['reason'] = 'expertise'
+    assert not m.validate_subplan(sub, plan, reg)['warnings']
 import subprocess
 project = pathlib.Path(tmp) / 'routing-project'
 (project / 'ProjectSettings').mkdir(parents=True, exist_ok=True)
@@ -1307,20 +1324,81 @@ planfile = pathlib.Path(tmp) / 'routing-command-plan.json'
 plan['tasks'][0].pop('implementer', None)
 planfile.write_text(json.dumps(plan))
 for sole in ('claude', 'codex'):
+    if case != 'dispatch-' + sole and case != 'status-' + sole:
+        continue
     env = dict(os.environ, RPG_FACTORY_AGENTS=sole)
+    if case == 'status-' + sole:
+        result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'status', str(planfile), '--json'], capture_output=True, text=True, encoding='utf-8', env=env)
+        models = json.loads(result.stdout)['models']['t']
+        assert all(x['agent'] == sole and x['why'] for x in models.values()), models
+        assert 'SAME_MODEL (fallback:' in models['review']['why']
+        continue
     for phase in ('lead', 'implement', 'review', 'qa'):
         args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'dispatch', str(planfile),
                 '--task', 't', '--phase', phase, '--runner', 'print']
+        if phase == 'lead':
+            args += ['--agent', 'codex' if sole == 'claude' else 'claude']
         if phase in ('review', 'qa'):
             args += ['--sha', 'abc1234']
         result = subprocess.run(args, capture_output=True, text=True, env=env)
         assert result.returncode == 0, result.stderr
         assert '# agent: ' + sole in result.stdout, result.stdout
         assert 'model: ' + phase + ' -> ' + sole in result.stderr, result.stderr
+        if phase == 'lead':
+            assert 'the task lead is ' + sole in result.stderr and 'always' not in result.stderr
+            if sole == 'codex':
+                assert 'fallback: claude unavailable' in result.stderr
+if case == 'registry-defaults':
+    custom = dict(pipe, available_agents=['claude'], agent_routing=dict(pipe['agent_routing'], default='codex'))
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
+        avail = r.available(custom, {'id': 'candidate-set'})
+        assert not avail['codex']['available']
+        assert avail['codex']['why'] == 'not in pipeline.available_agents'
+    assert r.route(custom, {}, both) == ('codex', 'agent_routing.default')
+if case == 'planned-warning':
+    sole = {a: {'available': a == 'claude'} for a in pipe['agents']}
+    assert not r.warnings(pipe, [{'kind': k} for k in ('code', 'docs', 'test')], sole)
+if case == 'subtask-kind':
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x']}]}
+    assert 'subtask s: missing implementer (or kind)' in m.validate_subplan(sub, plan, reg)['errors']
+    sub['subtasks'][0]['kind'] = 'code'
+    assert not m.validate_subplan(sub, plan, reg)['errors']
 print('routing assertions passed')
 ROUTING
-then pass=$((pass + 1)); echo "PASS  routing kinds, overrides, QA, fake PATH, marks and no-model fallback"
-else fail=$((fail + 1)); echo "FAIL  model routing assertions"; fi
+expect_route() {
+  local name="$1" out rc
+  out=$(python3 -B "$TMP/routing-cases.py" "$ROOT" "$TMP" "$name" 2>&1); rc=$?
+  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  routing $name"
+  else fail=$((fail + 1)); echo "FAIL  routing $name"; echo "$out"; fi
+}
+expect_route kind-lead
+expect_route kind-plan
+expect_route kind-docs
+expect_route kind-policy
+expect_route kind-design
+expect_route kind-code
+expect_route kind-test
+expect_route kind-fix
+expect_route kind-refactor
+expect_route kind-generated
+expect_route overrides-and-qa
+expect_route availability-claude
+expect_route availability-codex
+expect_route marks-and-empty
+expect_route orca-no-auth
+expect_route orca-system-auth
+expect_route orca-account-auth
+expect_route orca-malformed
+expect_route orca-offline
+expect_route validation
+expect_route dispatch-claude
+expect_route dispatch-codex
+expect_route status-claude
+expect_route status-codex
+expect_route registry-defaults
+expect_route planned-warning
+expect_route subtask-kind
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

@@ -74,7 +74,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Explains an implementer override or placement choice."
+            "description": "Explains an implementer override or placement choice; required (non-empty) when placement is child."
           },
           "checks": {
             "type": "array",
@@ -103,6 +103,10 @@
             ]
           }
         },
+        "anyOf": [
+          {"required": ["implementer"]},
+          {"required": ["kind"]}
+        ],
         "if": {
           "properties": {
             "placement": {

@@ -34,30 +34,26 @@ def available(pipe, plan):
     override = os.environ.get('RPG_FACTORY_AGENTS')
     chosen = {x.strip() for x in override.split(',')} if override is not None else None
     out = {}
+    candidates = pipe.get('available_agents', list(pipe['agents']))
     for agent, cfg in pipe['agents'].items():
+        if agent not in candidates:
+            out[agent] = {'available': False, 'why': 'not in pipeline.available_agents'}
+            continue
         yes = agent in chosen if chosen is not None else bool(shutil.which(cfg['bin']))
         out[agent] = {'available': yes, 'why': 'RPG_FACTORY_AGENTS override' if chosen is not None else
                       (cfg['bin'] + (' on PATH' if yes else ' missing from PATH'))}
     if chosen is None and any(k.startswith('ORCA_') for k in os.environ) and shutil.which('orca'):
         try:
-            p = subprocess.run(['orca', 'account', 'list', '--json'], capture_output=True, text=True, timeout=5)
+            p = subprocess.run(['orca', 'account', 'list', '--json'], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=5)
             data = json.loads(p.stdout) if p.returncode == 0 else {}
-            accounts = data.get('result', {}).get('accounts', data.get('result', {}))
-            def visit(node):
-                if isinstance(node, dict):
-                    for agent in out:
-                        row = node.get(agent)
-                        if isinstance(row, dict) and row.get('status') in ('unavailable', 'error'):
-                            # Network/usage probe errors alone do not prove a model cannot run.
-                            err = str(row.get('error', ''))
-                            if row.get('status') == 'unavailable' or any(s in err.lower() for s in ('401', 'revoked', 'unauthorized')):
-                                out[agent] = {'available': False, 'why': 'Orca account unavailable'}
-                    for value in node.values():
-                        visit(value)
-                elif isinstance(node, list):
-                    for value in node:
-                        visit(value)
-            visit(accounts)
+            accounts = data.get('result', {})
+            for agent in candidates:
+                row = accounts.get(agent)
+                if (isinstance(row, dict) and row.get('accounts') == []
+                        and isinstance(row.get('systemDefault'), dict)
+                        and row['systemDefault'].get('hasAuth') is False):
+                    out[agent] = {'available': False, 'why': 'Orca account unavailable'}
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             pass
     for agent, reason in fstate.read_json(marks_path(plan), {}).items():
@@ -76,8 +72,11 @@ def choose(agent, why, avail):
 
 def route(pipe, item, avail):
     kind = item.get('kind')
-    agent = item.get('implementer') or pipe.get('agent_routing', {}).get(kind if isinstance(kind, str) else None) or pipe['default_implementer']
-    why = 'explicit implementer' if item.get('implementer') else ('kind: ' + str(kind) if kind else 'default_implementer')
+    routing = pipe.get('agent_routing', {})
+    kind_agent = routing.get(kind if isinstance(kind, str) else None)
+    agent = item.get('implementer') or kind_agent or routing.get('default') or pipe['default_implementer']
+    why = ('explicit implementer' if item.get('implementer') else 'kind: ' + str(kind) if kind_agent
+           else 'agent_routing.default' if routing.get('default') else 'default_implementer')
     return choose(agent, why, avail)
 
 
@@ -108,6 +107,7 @@ def warnings(pipe, items, avail):
         expected = pipe.get('agent_routing', {}).get(kind)
         if expected and item.get('implementer') and item['implementer'] != expected and not (item.get('reason') or '').strip():
             out.append(str(item.get('id', '?')) + ': implementer overrides kind routing without reason')
-    if len(items) >= 3 and len({route(pipe, i, avail)[0] for i in items}) == 1:
+    planned = {a: {'available': True} for a in pipe['agents']}
+    if len(items) >= 3 and len({route(pipe, i, planned)[0] for i in items}) == 1:
         out.append('one-model plan: 3 or more tasks/subtasks use one model')
     return out
