@@ -55,8 +55,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    explicit release authorization in this task (`references/git-safety.md` rule 5).
 6. **Plan (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`, then a
    `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task:
-   `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one Claude task
-   lead per task worktree; Unity: main checkout, in sequence). Resume: `status plan.json`. How: `references/parallel-work.md` section 10.
+   `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one task lead per
+   task worktree: Claude, Codex only when Claude is unavailable; Unity: main checkout, in sequence).
+   Resume: `status plan.json`. How: `references/parallel-work.md` section 10.
    Give each task a `kind`; its model follows the "Which model" table there (parallel-work.md section 10).
 7. **Implement (M, task lead).** `subplan validate`, then one short, fresh sub-session per subtask
    (`--phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per its `placement`:

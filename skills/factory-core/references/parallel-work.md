@@ -329,7 +329,7 @@ A no-worktree (Unity) repo never gets a worktree; its task lead and all its sess
 
 **Which model.** Each plan task may carry a `kind`, and each subtask names an `implementer` or a `kind` (`subplan
 validate` errors on neither); the implementer is the explicit `implementer`, else registry
-`pipeline.agent_routing[kind]`, else `default_implementer`, then mapped through availability:
+`pipeline.agent_routing[kind]`, else `agent_routing.default`, else `default_implementer`, then mapped through availability:
 
 <!-- policy:which-model -->
 | Role or kind | Model | Registry |
@@ -342,7 +342,8 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
 | QA | the model that did not implement (`qa_prefer` codex when codex did not implement) | `qa_prefer` |
 
 - **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; full QA runs go
-  to Codex when Claude implemented (QA never runs on the implementer's model). An explicit `implementer` against
+  to Codex when Claude implemented (QA never runs on the implementer's model, except as a fallback: with one model
+  available, that model runs QA). An explicit `implementer` against
   the table needs a `reason`: `validate` and `subplan validate` warn without one, and warn when 3 or more tasks or
   subtasks all use one model (warnings, never errors).
 - **Availability never stops a task.** Available agents are detected: each `pipeline.agents.<a>.bin` on PATH,
@@ -352,11 +353,15 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
   the run. Every role falls back to the available model: with only Claude, Claude implements, reviews and runs QA;
   with only Codex, Codex does all of it and also leads. A fallback review carries
   `SAME_MODEL (fallback: <model> unavailable)` and the gate accepts it (step 4). `dispatch` and `status` print
-  each role's model and why (`model: <role> -> <agent> (<why>)`); no command fails because a model is missing.
+  each role's model and why (`dispatch`: `model: <role> -> <agent> (<why>)`; `status`: `model: <task> <role> -> <agent>
+  (<why>)`); no command fails because a model is missing.
 - **Recorded implementer.** `dispatch --phase implement` records the model it started, per task and per
   subtask. Review, QA, `verdict` and the gate pair against that recorded implementer (the planned routing when
   none is recorded), never against current availability: a model that comes back after a fallback does not change
-  who reviews.
+  who reviews. A subtask whose recorded implementer differs from the task implementer (or whose pair is the task
+  reviewer's own model) needs its own review: PASS by its pair, or a dispatch-recorded fallback review noted
+  `SAME_MODEL (fallback: <pair> unavailable)`. Without it the gate blocks, naming the subtask, its recorded
+  implementer and the reviewer it needs; the task review never covers it.
 
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L and the flow.
    S: the run lead writes a `plan.json` with one task and dispatches its task lead (step 3; the task worktree, or
