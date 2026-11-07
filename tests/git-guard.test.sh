@@ -27,15 +27,54 @@ LINKED="$TMP/linked-guard-wt"
 git -C "$SERVER" worktree add -q -b feat/guard/linked-check "$LINKED" develop
 
 pass=0; fail=0
+guard_command() { CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; }
 check() { # expected cwd command [env] [tool]
-  local expected="$1" cwd="$2" cmd="$3" envset="${4:-}" tool="${5:-Bash}" payload out got
+  local expected="$1" cwd="$2" cmd="$3" envset="${4:-}" tool="${5:-Bash}" payload out got rc
   payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')
-  if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload")
-  else out=$(CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload"); fi
+  # The hook fails open: an internal error can mean empty output, even with rc=0.
+  # Retry only a missing expected advisory, never a wrong/nonempty decision.
+  if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload"); rc=$?
+  else out=$(guard_command <<<"$payload"); rc=$?; fi
+  if [ -z "$out" ] && [ "$expected" != allow ]; then
+    printf 'RETRY %s: empty guard output (first try rc=%s)\n' "$cmd" "$rc"
+    if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload")
+    else out=$(guard_command <<<"$payload"); fi
+  fi
   got=$(jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${out:-{\}}" 2>/dev/null || echo "invalid-json")
   if [ "$got" = "$expected" ]; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
 }
+
+# Exercise the real case runner with deterministic empty-output stand-ins. Run in
+# subshells so intentionally failing cases cannot alter the suite's counters.
+retry_selftest() (
+  local mode="$1" count_file="$TMP/retry-$1" calls=0
+  pass=0; fail=0
+  guard_command() {
+    local n=0
+    [ ! -f "$count_file" ] || read -r n < "$count_file"
+    n=$((n + 1)); printf '%s\n' "$n" > "$count_file"
+    if [ "$mode" = recovered ] && [ "$n" -eq 2 ]; then
+      printf '%s\n' '{"hookSpecificOutput":{"additionalContext":"rpg-factory advisory (warn): stub"}}'
+    else return 7; fi
+  }
+  if [ "$mode" = allowed ]; then check allow "$SERVER" 'retry-selftest'
+  else check warn "$SERVER" 'retry-selftest'; fi
+  read -r calls < "$count_file"
+  printf 'RESULT calls=%s pass=%s fail=%s\n' "$calls" "$pass" "$fail"
+)
+for mode in recovered empty allowed; do
+  result=$(retry_selftest "$mode")
+  case "$mode" in
+    recovered) want='RESULT calls=2 pass=1 fail=0';;
+    empty) want='RESULT calls=2 pass=0 fail=1';;
+    allowed) want='RESULT calls=1 pass=1 fail=0';;
+  esac
+  if [[ "$result" == *"$want" ]] && {
+    [ "$mode" = allowed ] || [[ "$result" == *'RETRY retry-selftest: empty guard output (first try rc=7)'* ]]
+  }; then pass=$((pass + 1))
+  else fail=$((fail + 1)); printf 'FAIL retry self-test %s: %s\n' "$mode" "$result"; fi
+done
 
 # ---- a registered skill read as a file instead of loaded with the Skill tool: warn (dogfood found sessions doing it)
 check warn  "$SERVER" "cat $ROOT/skills/game-design/SKILL.md"
