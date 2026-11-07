@@ -177,7 +177,14 @@
   extends.
 - **Uncommitted approval message.** An approval record that is present but not committed and signed reads
   "approval present but not committed/signed" instead of "missing" in `gen-run-style`, graded `HUMAN_REQUIRED` like
-  the trace grades it.
+  the trace grades it. `artifact-trace` uses the same phrase (still `HUMAN_REQUIRED`) when the record file is on disk
+  but not committed, both with `run.md` uncommitted (it said "missing approval") and with `run.md` committed (it said
+  "approval is not immutable"); no record file for the artifact still reads "missing approval".
+- **`approve-record` immutability and line endings.** `approve-record` never overwrites an approval record: the same
+  approval again is a no-op, another one (by, date or note) for the same `run.md` revision is refused before `run.md`
+  is touched, and a changed `run.md` gets a new revision and a new record. A `run.md` with CRLF line endings parses
+  and keeps them, and the record's `rev` is what `git hash-object` gives the file in its repository (line-ending
+  filters such as `core.autocrlf` applied), so it is the blob the commit binds.
 - **Square size tolerance.** `sprite-2d` and `icon` square checks failed on real service outputs (1322x1190); the
   square purposes `icon`, `sprite-2d` and `texture-tileable` now set `square_tolerance` 0.15, and a landscape or portrait purpose can set `qa.size.allow_swap` to accept the
   swapped orientation (1024x1536 returned for 1536x1024; a boolean, default false, checked by `lint`), with these

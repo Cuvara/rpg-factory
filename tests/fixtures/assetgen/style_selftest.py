@@ -151,6 +151,55 @@ def _():
     assert again["rev"] == rev, "approving an approved run again changed run.md"
 
 
+@case("approve_record never overwrites a record: same approval is a no-op, another one for the rev is refused")
+def _():
+    a = repo("immutable")
+    rd = run_md(a, "r-001")
+    md = os.path.join(rd, "run.md")
+    first = approval.approve_record(rd, "Dana", note="ok", today="2026-11-08")
+    record = open(first["approval"], "rb").read()
+    approved = open(md, "rb").read()
+    same = approval.approve_record(rd, "Dana", note="ok", today="2026-11-08")
+    assert same["approval"] == first["approval"] and same["rev"] == first["rev"], same
+    for kw in ({"by": "Robin", "note": "ok", "today": "2026-11-08"}, {"by": "Dana", "note": "other", "today": "2026-11-08"},
+               {"by": "Dana", "note": "ok", "today": "2026-11-09"}, {"by": "Dana", "note": None, "today": "2026-11-08"}):
+        refused(lambda: approval.approve_record(rd, kw["by"], note=kw["note"], today=kw["today"]), "never overwritten")
+        assert open(first["approval"], "rb").read() == record, "a refused re-approval changed the record (%r)" % kw
+        assert open(md, "rb").read() == approved, "a refused re-approval changed run.md (%r)" % kw
+    # a changed run.md is another revision: a new record next to the old one, which stays as it was
+    with open(md, "wb") as f:
+        f.write(approved.replace(b'"title": "r-001"', b'"title": "r-001 v2"'))
+    second = approval.approve_record(rd, "Robin", today="2026-11-09")
+    assert second["rev"] != first["rev"] and os.path.isfile(second["approval"]), second
+    assert open(first["approval"], "rb").read() == record, "a new revision touched the old record"
+
+
+@case("approve_record parses a CRLF run.md, keeps CRLF, and rev = git hash-object with the repo's line-ending filter")
+def _():
+    for autocrlf in ("input", "false"):
+        a = repo("crlf-" + autocrlf)
+        git(a, "config", "core.autocrlf", autocrlf)
+        rd = run_md(a, "r-001")
+        md = os.path.join(rd, "run.md")
+        lf = open(md, "rb").read()
+        with open(md, "wb") as f:
+            f.write(lf.replace(b"\n", b"\r\n"))
+        out = approval.approve_record(rd, "Dana", today="2026-11-08")
+        data = open(md, "rb").read()
+        assert b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b""), "line endings not kept: %r" % data[:80]
+        front, body = approval.split_front(data.decode("utf-8"))
+        assert front["status"] == "approved" and "- Status: approved (approval is human-only)\r\n" in body, body
+        rel_md = "assetgen/runs/r-001/run.md"
+        rev = subprocess.run(["git", "-C", a, "hash-object", "--", rel_md], stdout=subprocess.PIPE, text=True).stdout.strip()
+        assert out["rev"] == rev, (autocrlf, out["rev"], rev)
+        assert (rev == approval.git_blob(data)) == (autocrlf == "false"), (autocrlf, rev)
+        if autocrlf == "input":
+            # committed, the blob is the LF text: the record's rev is that blob (what artifact-trace binds)
+            git(a, "-c", "core.autocrlf=input", "add", "-A")
+            git(a, "-c", "core.autocrlf=input", "commit", "-qm", "approve")
+            assert git(a, "rev-parse", "HEAD:" + rel_md) == out["rev"]
+
+
 # -- keep_status -----------------------------------------------------------------------------------------------
 
 def front(status, **spec):

@@ -4,9 +4,11 @@ approve_record(run_dir, by, note=None, today=None) -> {"run_md", "approval", "re
   For a person only: refuses an empty `by`, an agent or model name (stylelock.is_agent_name) and a name the run
   itself records as an agent (authors of kind agent, provenance.generated_by, spec.prompt_author, the reviewers).
   Sets the run.md front-matter status to approved (the JSON front matter is rewritten in the manifest's format,
-  indent 2, ASCII; the body is kept and only its "- Status:" line follows the new status), then writes
-  <authoring>/approvals/AGEN-<run id>/assetgen-approval-<rev>.json with rev = the git blob id of the updated run.md
-  (what `git hash-object` prints for it), in the shape scripts/checks/artifact-trace.py approval() reads:
+  indent 2, ASCII, in the file's own line endings, LF or CRLF; the body is kept and only its "- Status:" line follows
+  the new status), then writes <authoring>/approvals/AGEN-<run id>/assetgen-approval-<rev>.json with rev = the git
+  blob id of the updated run.md (what `git hash-object` prints for it, line-ending filters applied), in the shape
+  scripts/checks/artifact-trace.py approval() reads. A record is immutable: when the record of that rev exists, the
+  same record is a no-op and another one (by, date or note) is refused before run.md is touched. Record fields:
   {artifact, gate, scope, rev, date, by, note}. It never commits and never signs: the record binds only once the
   person commits run.md and the record in one signed commit (until then the checks say "approval present but not
   committed/signed"). A run whose status is not proposed, review, reviewed or approved is refused.
@@ -21,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 
 import layers
 import runfiles
@@ -28,7 +31,7 @@ import stylelock
 
 GATE = "assetgen-approval"  # registry domains.assetgen.human_gates
 APPROVABLE = ("proposed", "review", "reviewed", "approved")
-FRONT = re.compile(r"\A---json\s*\n(.*?)\n---(?:[ \t]*\n|\Z)", re.S)
+FRONT = re.compile(r"\A---json[ \t]*\r?\n(.*?)\r?\n---(?:[ \t]*\r?\n|\Z)", re.S)
 STATUS_LINE = re.compile(r"^- Status: \S+", re.M)
 RUN_ID = re.compile(r"\A[a-z0-9][a-z0-9-]*-[0-9]{3}\Z")
 # run.md spec fields an approval binds: a change in any of them makes the approved run another run
@@ -46,8 +49,22 @@ def git_blob(data):
     return hashlib.sha1(b"blob %d\x00" % len(data) + data).hexdigest()
 
 
+def blob_rev(repo, rel, data):
+    """The blob id git gives these bytes at repo/rel (`git hash-object --path`, so the repo's line-ending filters
+    apply: a CRLF run.md under core.autocrlf is committed as LF); git_blob(data) outside a git work tree."""
+    try:
+        r = subprocess.run(["git", "-C", repo, "hash-object", "--stdin", "--path=" + rel], input=data,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+        out = r.stdout.decode("ascii", "replace").strip()
+        if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", out):
+            return out
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return git_blob(data)
+
+
 def split_front(text):
-    """(front dict, body text) of a ---json front-matter document; raises ApprovalError."""
+    """(front dict, body text) of a ---json front-matter document (LF or CRLF line endings); raises ApprovalError."""
     m = FRONT.match(text)
     if not m:
         raise ApprovalError("run.md has no ---json front matter")
@@ -60,10 +77,12 @@ def split_front(text):
     return front, text[m.end():]
 
 
-def front_text(front, body):
-    """run.md text: the front matter in the manifest's format, then the body with its status line updated."""
+def front_text(front, body, newline="\n"):
+    """run.md text: the front matter in the manifest's format with `newline` line endings (those of the file it
+    rewrites), then the body (kept as it is) with its status line updated."""
     body = STATUS_LINE.sub(lambda _: "- Status: %s" % front.get("status"), body, count=1)
-    return "---json\n%s\n---\n%s" % (json.dumps(front, indent=2, ensure_ascii=True), body)
+    head = "---json\n%s\n---\n" % json.dumps(front, indent=2, ensure_ascii=True)
+    return head.replace("\n", newline) + body
 
 
 def run_agents(front):
@@ -111,16 +130,31 @@ def approve_record(run_dir, by, note=None, today=None):
     except (TypeError, ValueError):
         raise ApprovalError("date %r is not YYYY-MM-DD" % (today,))
     front["status"] = "approved"
-    data = front_text(front, body).encode("utf-8")
-    with open(path, "wb") as f:
-        f.write(data)
-    rev = git_blob(data)
+    newline = "\r\n" if text.split("\n", 1)[0].endswith("\r") else "\n"
+    data = front_text(front, body, newline).encode("utf-8")
+    rev = blob_rev(authoring, "assetgen/runs/%s/run.md" % run_id, data)
     record = {"artifact": aid, "gate": GATE, "scope": front.get("domain") or "assetgen", "rev": rev, "date": today,
               "by": by, "note": note.strip() if isinstance(note, str) and note.strip() else None}
+    content = json.dumps(record, indent=2, ensure_ascii=True) + "\n"
     target = os.path.join(authoring, "approvals", aid, "%s-%s.json" % (GATE, rev))
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(record, indent=2, ensure_ascii=True) + "\n")
+    if os.path.lexists(target):
+        # an approval record is immutable: the same approval again is a no-op, another one for this revision is refused
+        try:
+            with open(target, encoding="utf-8", newline="") as f:
+                existing = f.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ApprovalError("cannot read the existing approval record %s: %s" % (target.replace(os.sep, "/"), exc))
+        if existing != content:
+            raise ApprovalError("approval record %s already exists for this revision of run.md with other content "
+                                "(by, date or note): an approval record is never overwritten; a changed run.md gets "
+                                "a new revision and a new record" % target.replace(os.sep, "/"))
+    else:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "x", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+    if data != text.encode("utf-8"):
+        with open(path, "wb") as f:
+            f.write(data)
     return {"run_md": path, "approval": target, "rev": rev, "status": "approved", "record": record}
 
 
