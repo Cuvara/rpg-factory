@@ -180,6 +180,7 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
     so it reports with `--type status` (or asks with `--type question`).
   - `orca orchestration check --wait --types <types>` still returns heartbeats: a wait loop acks each batch and
     keeps waiting until a message of the wanted type arrives, instead of treating the heartbeat as the answer.
+    The run lead's single waiter is `scripts/orca-wait.sh --run <id>` (one instance per Run, by a lock file in the state dir).
   - A multi-line `--prompt` passed through `cmd.exe` (Windows) is cut at the first newline. Write the spec to a file
     and send a one-line prompt that names it (`factory-pipeline.py dispatch` does this).
   - After every worker start or launch with `--agent codex`, read the session's terminal
@@ -266,6 +267,16 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    read-only `worker-list`; no orca is NOT_AVAILABLE) and prints the commands; it must report CLEAN before the
    final report. The report's Cleanup column
    names what was removed and what was kept and why.
+
+### Run report and plan edits
+
+- **Run report in the repo.** At integration the run lead writes `docs/plans/<plan>/report.md` and commits it with
+  the integration: sessions per task (role, model, Orca Run), verdicts (phase, SHA, model, result), checks with exact
+  counts, and limitations. Verdicts and specs stay in the per-machine state dir; a new machine re-runs review and
+  QA instead of reusing them (`docs/plans/README.md`).
+- **Plan edits are atomic.** Write the edit to a copy, `factory-pipeline.py validate` the copy, then replace the
+  plan with it. Reason: on 2026-11-06 a run-lead edit left `plan.json` invalid for about a minute, and a task lead
+  read the invalid plan mid-dispatch.
 
 ### Session lifecycle
 

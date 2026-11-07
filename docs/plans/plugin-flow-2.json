@@ -1,0 +1,220 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "title": "Plugin batch 2: agent routing and follow-ups",
+  "id": "plugin-flow-2",
+  "topic": "plugin-flow-2",
+  "objective": "Second plugin batch: agent routing by model strength plus model fallback, work state in the repo, robust run-all, gate multi-wave fix, pipeline follow-ups.",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "agent-routing",
+      "repo": "plugin",
+      "objective": "Agent routing by model strength and model fallback, per the approved routing plan (each model takes the kinds it is strong at; changes: registry routing, fallback, plan fields, one route() helper, docs and tests). Registry pipeline.agent_routing (kind -> agent: code/test/fix/refactor/generated -> codex; docs/policy/design/lead -> claude), pipeline.qa_prefer codex, pipeline.available_agents + env RPG_FACTORY_AGENTS fallback with a SAME_MODEL (fallback: X unavailable) marker the gate accepts; optional kind and reason on plan tasks and subtasks; one route() helper replaces every default_implementer read; validate/subplan validate WARN on unexplained overrides and on one-model plans; QA model choice; parallel-work.md section 10 'Which model' table (single copy) and the token rule (Claude leads and plans, Codex implements code and runs long QA); SKILL.md and AGENTS.md pointers; tests and changelog fragment. Dogfood the rule in the subplan: code subtask implemented by codex, docs subtask by claude, placement shared. Availability must never stop a task: detect available agents automatically (each pipeline.agents.<a>.bin on PATH, plus the Orca agent list when Orca runs; env RPG_FACTORY_AGENTS overrides; a runtime MODEL_UNAVAILABLE such as a revoked token or 401 marks the model down for the run). With only claude on the machine every role (implement, review, QA, lead) routes to claude; with only codex every role routes to codex, including the task lead; reviews then carry SAME_MODEL (fallback: <model> unavailable) and the gate accepts them. dispatch and status print which model each role got and why; no command errors because a model is missing.",
+      "paths": [
+        "registry/core.json",
+        "registry.json",
+        "docs/registry.schema.json",
+        "docs/schemas/",
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "scripts/check-registry.sh",
+        "tests/pipeline.test.sh",
+        "tests/parallel-policy.test.sh",
+        "tests/registry-fragments.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        "skills/factory-core/SKILL.md",
+        "AGENTS.md",
+        "changelog.d/"
+      ],
+      "deps": [],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/registry-fragments.test.sh",
+        "python3 -B scripts/build-registry.py --check",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "routing, fallback and QA choice tested",
+        "validate warns on one-model plans and unexplained overrides",
+        "Which model table in parallel-work.md with a mutation test",
+        "full run-all 0 failed",
+        "only-claude and only-codex machines (fake PATH in tests) route every role to the available model, gate accepts the fallback reviews, nothing blocks"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "routing-followups",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Follow-ups of agent-routing (final review and QA of plugin-flow-2 agent-routing). Medium: dispatch writes implementer/reviewer model records even for a print-only preview (scripts/factory-pipeline.py ~1129, ~1294); a preview must write nothing. Medium: changelog.d/agent-routing.md lists never-shipped behaviour under Fixed: move it to Added. Low: add the agents verb to the factory-pipeline.py docstring; one kind list (registry/schema) instead of hard-coded copies; agents --down without --reason prints MODEL_UNAVAILABLE once; override warnings also for items without kind where the default routing differs. Owned here: scripts/factory-workflow.py:375 reads pipeline.default_implementer directly: use the routing helper (scripts/lib/pipeline_route.py); .claude/CLAUDE.md Commands lists the agents verb. Also the own-start-qa-only lows: legacy verdict suppression x.startswith(modern + '__') (~1183) matches a subtask id that extends it (match modern + '.json' or the archive regex, check the fingerprint); the ~1798 comment says QA PASS.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "scripts/factory-workflow.py",
+        "tests/pipeline.test.sh",
+        "tests/workflow.test.sh",
+        ".claude/CLAUDE.md",
+        "changelog.d/routing-followups.md"
+      ],
+      "exclusions": [
+        "registry/",
+        "registry.json"
+      ],
+      "deps": [
+        "agent-routing"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "env -u TMPDIR tests/workflow.test.sh",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "preview writes no record (test)",
+        "each item fixed or deferred with reason",
+        "full run-all 0 failed"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "work-state-in-repo",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Make the run state usable from another machine (user rule: everything in the plugin repo). (1) docs/plans/: README with the plan and backlog conventions; the current plan plugin-flow-2 (copy of the run lead's live plan file with portable paths: the pipeline accepts repos.<k>.path relative to the workspace (RPG_FACTORY_WORKSPACE) - that code change is a codex subtask, and it may need scripts/factory-pipeline.py: coordinate by deps, routing-followups owns that file, so put the path resolution in a new scripts/lib/plan_paths.py and leave a one-line call for gate-multiwave if needed); and the run lead's next-topic notes rewritten as docs/plans/backlog.md (portable, no machine paths). (2) scripts/orca-wait.sh: the run lead's single waiter (loop orca orchestration check --run <id> --wait --types worker_done,escalation,question; ack heartbeats; continue on timeout; print the first real message and exit; single instance by a lock file under the state dir) with tests/orca-wait.test.sh using a fake orca on PATH (codex subtask). (3) Run reports: parallel-work.md section 8 says the run lead writes docs/plans/<plan>/report.md at integration (sessions, verdicts, checks), plus the lesson 'plan edits are atomic: write a copy, validate, then replace'. Split by kind: code and test subtasks codex, docs claude.",
+      "paths": [
+        "docs/plans/",
+        "scripts/orca-wait.sh",
+        "scripts/lib/plan_paths.py",
+        "tests/orca-wait.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        "tests/parallel-policy.test.sh",
+        "changelog.d/work-state-in-repo.md"
+      ],
+      "exclusions": [
+        "registry/",
+        "registry.json"
+      ],
+      "deps": [
+        "agent-routing"
+      ],
+      "checks": [
+        "bash tests/orca-wait.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "no machine-specific absolute path under docs/plans (test)",
+        "orca-wait.sh tested with a fake orca",
+        "full run-all 0 failed"
+      ],
+      "implementer": "claude",
+      "reviewer": "codex"
+    },
+    {
+      "id": "run-all-robust",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "Make the full suite robust on a loaded machine. (1) tests/run-all.sh -j N hangs forever when a suite subshell dies without writing its .res file: detect a dead worker and grade the suite FAIL with a clear line; test in tests/run-all-parallel.test.sh with a stand-in suite that kills itself. (2) tests/git-guard.test.sh flaked under load (suite 1910s): case `git branch -D feat/old` expected warn got allow with EMPTY output: find why the guard printed nothing (timeout or crash) and make the test retry a case once on empty output, reporting the retry. (3) tests/ui-figma-env.test.sh:43 fixture heartbeat goes stale under heavy load: use a fake clock or a wider bound. (4) The shared .git/config check fails when ANOTHER session adds a worktree or branch mid-run: when the only change is added [branch \"...\"] or [worktree] sections of other branches, report WARN with the diff instead of FAIL; any other change stays FAIL.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/git-guard.test.sh",
+        "tests/ui-figma-env.test.sh",
+        "changelog.d/run-all-robust.md"
+      ],
+      "exclusions": [
+        "registry/",
+        "registry.json"
+      ],
+      "deps": [
+        "agent-routing"
+      ],
+      "checks": [
+        "bash tests/run-all-parallel.test.sh",
+        "tests/git-guard.test.sh",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "dead-suite test",
+        "each flake fixed or explained",
+        "full run-all 0 failed"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "checks-hygiene",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "Small checks fixes. (1) tests/facts.test.sh probes the working tree: an uncommitted Unity ProjectSettings/EditorSettings.asset change failed fact enter-playmode-options while develop matched. Probe the committed tree (git show HEAD:<file> or a temp export) and report uncommitted drift as a note, like pin-status. (2) scripts/lib/procrun.py POSIX kill-listing: the timed-out check kill must not depend on the ps listing (commit acf5c53 has a reverted fix to reuse); its regression test goes in tests/run-checks.test.sh; zombie reaping in t-timeout-tree. (3) scripts/ui/ui_catalog.py:152 ignores the git cat-file --batch return code. (4) Unused signal import in scripts/run-checks.py. (5) tests/orca-commands.test.sh covers worker-start --worktree new-child and orca worktree create --parent-worktree.",
+      "paths": [
+        "tests/facts.test.sh",
+        "scripts/lib/procrun.py",
+        "tests/run-checks.test.sh",
+        "scripts/ui/ui_catalog.py",
+        "tests/ui-catalog.test.sh",
+        "scripts/run-checks.py",
+        "tests/orca-commands.test.sh",
+        "changelog.d/checks-hygiene.md"
+      ],
+      "exclusions": [
+        "registry/",
+        "registry.json"
+      ],
+      "deps": [
+        "agent-routing"
+      ],
+      "checks": [
+        "tests/facts.test.sh",
+        "env -u TMPDIR tests/run-checks.test.sh",
+        "tests/ui-catalog.test.sh",
+        "tests/orca-commands.test.sh",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "each item has a test or a reason",
+        "full run-all 0 failed"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "gate-multiwave",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "Gate and status correctness for multi-wave plans (seen in plan plugin-flow; branch reviews under pipeline/plugin-flow/branch-review/ in the pipeline state dir). (1) A later wave editing an earlier task's paths turns the earlier task's review STALE and the gate NOT_READY forever: accept the earlier review when the later changes are covered by the later task's own review and QA (attribute commits to tasks by the merge commits on the topic) and still fail on unreviewed changes. (2) Record the true implementer model per task in the verdict and use it for the pairing check. (3) status marks a QA STALE right after recording it. (4) verdict --report accepts free text as a path: require an existing file or use --note. (5) gate STALE vs status disagreement on shared dependent paths. A test in tests/pipeline.test.sh for each.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/gate-multiwave.md"
+      ],
+      "exclusions": [
+        "registry/",
+        "registry.json"
+      ],
+      "deps": [
+        "agent-routing",
+        "routing-followups"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "gate READY on a two-wave fixture where wave 2 edits wave 1 paths with its own review",
+        "each item tested",
+        "full run-all 0 failed"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    }
+  ]
+}
