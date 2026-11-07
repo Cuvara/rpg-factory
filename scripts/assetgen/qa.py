@@ -8,6 +8,9 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       pixel count), orientation (landscape, portrait or square: qa.size.orientation, or "auto" to
                       take it from expect; square when the long side is at most square_tolerance, default 0.05,
                       longer than the short side), area (no aspect at all), any.
+                      qa.size.allow_swap (default false): for aspect and for a landscape or portrait orientation,
+                      true also accepts the swapped size (1024x1536 for 1536x1024); false fails it. Each purpose
+                      declares it: the service may return the other orientation (e2e: 1024x1536 for 1536x1024).
                       aspect, orientation and area also need the short side >= min_side (default 256) and, with
                       min_pixels, width x height >= min_pixels (absolute). expect defaults to the requested size
                       (workflow.json, else spec params); "auto" = any (orientation auto with expect auto too).
@@ -19,6 +22,11 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       neighbour difference (0..1 scale) must stay at or under the limit
   png-not-blank       qa.not_blank: luminance stddev >= min_stddev (0..255) and, with alpha, the share of
                       pixels with alpha > 8 >= min_coverage
+  png-edge-fringe     only for qa.alpha required: imaging.edge_fringe (soft edge pixels, alpha 1-31 next to the
+                      opaque body, whose RGB is far from the body colour, the speckled fringe of e2e barrel-prop-001;
+                      body alpha 251-254 is noted, never graded). Not a required check (runfiles.required_checks is
+                      unchanged), but a graded row: FAIL makes the qa state FAIL like any other row; NOT_AVAILABLE
+                      (no alpha) comes with a png-alpha FAIL anyway. assetgen.py defringe repairs it.
   purpose-qa          FAIL (one row for outputs/, nothing graded) when the purpose qa block is malformed
                       (runfiles.qa_errors; the same rules lint reports)
 Style consistency rows (only for a spec with style_lock; consistency.check_all over the style data spec.style.data,
@@ -34,6 +42,7 @@ import math
 import os
 
 import consistency
+import imaging
 import png
 import runfiles
 
@@ -94,6 +103,7 @@ def check_size(img, cfg, requested):
     if mode == "any" or expect is None:
         return "PASS", ["%s (size mode any%s)" % (got, "" if mode == "any" else ", expected size auto")]
     ew, eh = expect
+    swap = cfg.get("allow_swap") is True
     if mode == "exact":
         ok = (img.width, img.height) == expect
     elif mode == "min":
@@ -103,16 +113,20 @@ def check_size(img, cfg, requested):
         want = want_orient if want_orient != "auto" else orientation_of(ew, eh, tol)
         have = orientation_of(img.width, img.height, tol)
         ok, detail = floor_detail(img, cfg)
-        ok = ok and have == want
+        swapped = {"landscape": "portrait", "portrait": "landscape"}.get(want) == have
+        ok = ok and (have == want or (swapped and swap))
         source = "" if want_orient != "auto" else " (from %dx%d)" % (ew, eh)
+        if swapped:
+            source += ", swap %s (qa.size.allow_swap)" % ("accepted" if swap else "not accepted")
         return ("PASS" if ok else "FAIL"), ["%s is %s, expected orientation %s%s (square within %d%%): %s"
                                             % (got, have, want, source, round(tol * 100), ", ".join(detail))]
     else:
         tol, min_area = cfg.get("aspect_tolerance", 0.02), cfg.get("min_area")
         ratio, want = img.width / img.height, ew / eh
         ok, floors = floor_detail(img, cfg)
-        ok = ok and abs(ratio - want) <= tol * want and (min_area is None or img.width * img.height >= min_area * ew * eh)
-        detail = ["aspect %.3f (expected %.3f +/- %d%%)" % (ratio, want, round(tol * 100))]
+        fits = abs(ratio - want) <= tol * want or (swap and abs(1 / ratio - want) <= tol * want)
+        ok = ok and fits and (min_area is None or img.width * img.height >= min_area * ew * eh)
+        detail = ["aspect %.3f (expected %.3f +/- %d%%%s)" % (ratio, want, round(tol * 100), ", or swapped" if swap else "")]
         if min_area is not None:
             detail.append("area %d px (min %d%% of %d)" % (img.width * img.height, round(min_area * 100), ew * eh))
         detail += floors
@@ -242,6 +256,8 @@ def run_qa(run_dir, spec, requested_size):
                   "png-not-blank": lambda: check_not_blank(img, qa["not_blank"])}
         for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
             add(rel, name_, checks[name_]())
+        if qa.get("alpha") == "required":
+            add(rel, "png-edge-fringe", imaging.edge_fringe(img))
         if lock is not None:
             family = lock.get("family") if isinstance(lock.get("family"), str) else None
             for row, state, details in consistency.check_all(img, style_data, data, family, anchors):
