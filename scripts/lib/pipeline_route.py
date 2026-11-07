@@ -3,9 +3,11 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 import fstate
 
-KINDS = ('lead', 'plan', 'docs', 'policy', 'design', 'code', 'test', 'fix', 'refactor', 'generated')
+with (Path(__file__).resolve().parents[2] / 'docs/schemas/pipeline-plan.schema.json').open(encoding='utf-8') as _schema:
+    KINDS = tuple(json.load(_schema)['properties']['tasks']['items']['properties']['kind']['enum'])
 
 
 def _safe(x):
@@ -85,7 +87,7 @@ def available(pipe, plan):
             pass
     for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
         if agent in out:
-            out[agent] = {'available': False, 'why': 'MODEL_UNAVAILABLE: ' + reason}
+            out[agent] = {'available': False, 'why': 'MODEL_UNAVAILABLE' + (': ' + reason if reason else '')}
     _cache[key] = out
     return out
 
@@ -133,9 +135,10 @@ def warnings(pipe, items):
         kind = item.get('kind')
         if kind is not None and kind not in KINDS:
             continue
-        expected = pipe.get('agent_routing', {}).get(kind)
+        routing = pipe.get('agent_routing', {})
+        expected = routing.get(kind) or routing.get('default') or pipe['default_implementer']
         if expected and item.get('implementer') and item['implementer'] != expected and not (item.get('reason') or '').strip():
-            out.append(str(item.get('id', '?')) + ': implementer overrides kind routing without reason')
+            out.append(str(item.get('id', '?')) + ': implementer overrides ' + ('kind' if routing.get(kind) else 'default') + ' routing without reason')
     planned = {a: {'available': True} for a in pipe['agents']}
     if len(items) >= 3 and len({route(pipe, i, planned)[0] for i in items}) == 1:
         out.append('one-model plan: 3 or more tasks/subtasks use one model')

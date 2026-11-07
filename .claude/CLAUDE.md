@@ -132,7 +132,8 @@ python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   #
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 env -u TMPDIR tests/pipeline.test.sh       # delivery pipeline on a throwaway workspace (server + Unity client)
-python3 -B scripts/factory-pipeline.py tier|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (parallel-work.md section 10)
+python3 -B scripts/factory-pipeline.py tier|agents|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (parallel-work.md section 10)
+python3 -B scripts/factory-pipeline.py agents <plan> [--down A [--reason T] | --up A]  # per-run MODEL_UNAVAILABLE marks
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--domain <id>] [--explain] [--json]

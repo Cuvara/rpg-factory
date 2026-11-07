@@ -14,6 +14,7 @@ sys.path.insert(0, str(HERE / "lib"))
 from context import handoff_graph
 from artifacts import scan as artifacts, quality, upstream_changes
 import orca_cmd
+import pipeline_route as pr
 
 
 def die(message, code=2):
@@ -372,7 +373,9 @@ def main():
         body="Execute workflow node from this contract. Do not approve artifacts.\n"+json.dumps(contract,indent=2)
         if a.runner in ("orca","agent"):
             # Orca --task takes a task id; a spec text goes to --spec, and every start needs --agent.
-            agent=reg.get("pipeline",{}).get("default_implementer","claude")
+            pipe=reg["pipeline"]
+            # Workflow artifact kinds are not pipeline task kinds; use default routing and availability fallback.
+            agent,_=pr.route(pipe,{},pr.available(pipe,None))
             chosen=dict(x.split("=",1) for x in a.repos if "=" in x)  # the checkouts this run inspected
             place=orca_cmd.placement(reg,node.get("repo"),chosen.get(node.get("repo")))
             if a.runner=="orca":
