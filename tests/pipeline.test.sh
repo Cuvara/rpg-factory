@@ -610,6 +610,7 @@ expect "an unclean integration tree blocks" 1 "integration tree .* has uncommitt
 rm "$S/untracked.txt"
 SG2=$(git -C "$S" rev-parse HEAD)
 v --task gw --phase review --sha "$SG2" --by codex --state PASS
+v --task gw --phase review --sha "$SG2" --by claude --state PASS --subtask s2
 v --task integration:srv --phase qa --sha "$SG2" --by codex --state PASS
 N=$(plan none "$(sed 's/"deliver":"pr"/"deliver":"none"/' "$G")")
 expect "deliver none: READY but no push or PR command" 0 "deliver is not .pr.: stop here" gate "$N"
@@ -1296,6 +1297,22 @@ RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase review --sha "$RS2
 rv --task k --phase review --sha "$RS2" --by claude --state PASS --subtask s2
 expect "a dispatch-recorded SAME_MODEL fallback subtask review passes the gate" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
 expect "and the gate notes the subtask fallback" 0 "NOTE    k: subtask s2 SAME_MODEL \(fallback: codex unavailable\)" gate "$RSP" --no-run-checks
+# An ancestral PASS covers only unchanged reviewed paths; old records conservatively cover the whole task.
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s --subplan "$RSS"
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s2 --subplan "$RSS"
+echo c > "$R/code/a.cs"; gi "$R" commit -qam "fix: later subtask edit"; RS3=$(git -C "$R" rev-parse HEAD)
+rv --task k --phase review --sha "$RS3" --by claude --state PASS
+rv --task integration:rec --phase qa --sha "$RS3" --by codex --state PASS
+expect "a stale subtask PASS cannot cover the task reviewer's later edit: NOT_READY" 1 "BLOCKER k: subtask s .*changed paths code/a.cs; needs codex review" gate "$RSP" --no-run-checks
+rv --task k --phase review --sha "$RS3" --by codex --state PASS --subtask s --subplan "$RSS"
+expect "a fresh paired subtask review covers the later edit" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
+echo c > "$R/docs/a.md"; gi "$R" commit -qam "docs: outside code subtask"; RS4=$(git -C "$R" rev-parse HEAD)
+rv --task k --phase review --sha "$RS4" --by claude --state PASS
+rv --task integration:rec --phase qa --sha "$RS4" --by codex --state PASS
+rv --task k --phase review --sha "$RS4" --by codex --state PASS --subtask s2 --subplan "$RSS"
+expect "an edit outside subtask paths keeps its ancestral review valid" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
+# Restore the fixture candidate used by subsequent verdict routing checks.
+RS2=$RS4
 # verdict --subtask pairs against the subtask's routing: --subplan (docs subtask s3: claude), else its review dispatch
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s3 --subplan "$RSS"
 if jq -e '.implementer == "claude"' "$RSVD/k@s3__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verdict --subtask --subplan routes the implementer over the subtask's kind"

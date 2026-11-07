@@ -1327,8 +1327,8 @@ def subtask_implementers(plan, task_id):
     return out
 
 
-def subtask_reviews(plan, reg, task_id, sid, target):
-    """PASS review verdicts of one subtask of this version of the plan on the target or an ancestor of it."""
+def subtask_reviews(plan, reg, task_id, sid, target, stale=None):
+    """PASS reviews on the target or an ancestor whose reviewed paths are unchanged."""
     vdir = verdict_dir(plan)
     pre = f"{safe_name(task_id)}{SUB_SEP}{safe_name(sid)}__review"
     path = repo_info(plan, reg, find_task(plan, task_id)["repo"])["path"] or "."
@@ -1340,6 +1340,12 @@ def subtask_reviews(plan, reg, task_id, sid, target):
         if (isinstance(rec, dict) and rec.get("task") == task_id and rec.get("subtask") == sid
                 and rec.get("phase") == "review" and rec.get("state") == "PASS" and rec.get("fingerprint") == fp
                 and rec.get("sha") and (rec["sha"] == target or is_ancestor(path, rec["sha"], target))):
+            paths = rec.get("paths") or find_task(plan, task_id)["paths"]
+            changed, rc = git(path, "diff", "--name-only", rec["sha"], target, "--", *specs(paths))
+            if rc != 0 or changed:
+                if stale is not None:
+                    stale.update(changed.splitlines() if changed else paths)
+                continue
             out.append(rec)
     return out
 
@@ -1354,7 +1360,8 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
         want = pr.paired(pipe, t, x)
         if x == impl and (rv.get("by") == want or (rv.get("by") == x and (rv.get("fallback") == want or allow_same_model))):
             continue
-        recs = subtask_reviews(plan, reg, t["id"], sid, target)
+        stale = set()
+        recs = subtask_reviews(plan, reg, t["id"], sid, target, stale)
         if any(r.get("by") == want for r in recs):
             continue
         if any(r.get("by") == x and r.get("fallback") == want for r in recs):
@@ -1364,7 +1371,9 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
         else:
             blockers.append(f"{t['id']}: subtask {sid} recorded implementer {x}, but the task review by {rv.get('by')} "
                             f"pairs against {impl}: record `verdict --subtask {sid}` PASS by {want} (or a dispatch-"
-                            "recorded SAME_MODEL fallback review)")
+                            "recorded SAME_MODEL fallback review)"
+                            + (f"; stale subtask review: changed paths {', '.join(sorted(stale))}; needs {want} review"
+                               if stale else ""))
     return blockers, notes
 
 
@@ -1408,6 +1417,8 @@ def cmd_verdict(a, reg):
             die(f"--fallback {a.fallback} is available now")
         rec["fallback"] = a.fallback
     sub_item = load_subtask(a, plan, reg, task) if a.subplan else None
+    if a.subtask:
+        rec["paths"] = (sub_item or task)["paths"]
     if task is not None and a.phase == "review":
         # a fallback only when this candidate's review dispatch was one and started this reviewer
         disp = pr.recorded(plan, a.task, a.subtask, "reviewer", full)
