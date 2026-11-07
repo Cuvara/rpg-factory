@@ -530,6 +530,11 @@ refute "task a__sub-b is not blocked by subtask b of task a" "BLOCKER a__sub-b: 
 # an older <task>__sub-<id> record still counts for its own task and subtask
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r.update(subtask="c",state="FAIL"); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$CVD/a@b__review.json" "$CVD/a__sub-c__review.json"
 expect "a legacy subtask record of task a still blocks it" 1 "BLOCKER a: subtask c review FAIL" gate "$X" --no-run-checks
+python3 -B "$P" verdict "$X" --task a --phase review --sha "$SG" --by codex --state PASS --subtask c >/dev/null
+refute "a new-style subtask PASS supersedes the legacy FAIL for that phase" "subtask c review FAIL" gate "$X" --no-run-checks
+# Other phases retain their legacy evidence until that phase has a new-style record too.
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["phase"]="qa"; json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$CVD/a__sub-c__review.json" "$CVD/a__sub-c__qa.json"
+expect "a new-style review does not supersede a legacy QA FAIL" 1 "BLOCKER a: subtask c qa FAIL" gate "$X" --no-run-checks
 v --task gw --phase review --sha "$SG" --by codex --state PASS --subtask s2
 v --task gw --phase qa --sha "$SG" --by codex --state PASS --subtask s3
 # late results: a PASS on an older candidate (SG~1) never resolves a FAIL on the newer SG; a PASS on SG resolves it, and
@@ -869,6 +874,18 @@ assert "--task b --phase review" not in json.dumps(o), o' "$VA"
 then pass=$((pass + 1)); echo "PASS  status: a dependent no-worktree task with the same path is pending before its predecessor's QA (no review at a's commit)"
 else fail=$((fail + 1)); echo "FAIL  status no-worktree dependent before QA"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
 rm -f "$C/Assets/U/wip.cs"
+for failed_phase in review qa; do
+  python3 -B "$P" verdict "$X" --task a --phase review --sha "$VA" --by codex --state PASS >/dev/null
+  python3 -B "$P" verdict "$X" --task a --phase "$failed_phase" --sha "$VA" --by codex --state FAIL >/dev/null
+  echo "fix after $failed_phase FAIL" >> "$C/Assets/U/u.cs"
+  gi "$C" add Assets/U; gi "$C" commit -qm "fix: uov a after $failed_phase FAIL"; VA=$(git -C "$C" rev-parse HEAD)
+  if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
+assert r["a"]["phase"]=="candidate" and "--task a --phase review --sha "+sys.argv[1] in r["a"]["next"], r["a"]
+assert r["b"]["phase"]=="pending" and r["b"]["next"] is None and "waits for a" in r["b"]["notes"], r["b"]
+assert "--task b --phase review" not in json.dumps(o), o' "$VA"
+  then pass=$((pass + 1)); echo "PASS  status: predecessor fixes after $failed_phase FAIL keep the dependent pending without a review command"
+  else fail=$((fail + 1)); echo "FAIL  status dependent after predecessor $failed_phase FAIL"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
+done
 python3 -B "$P" verdict "$X" --task a --phase review --sha "$VA" --by codex --state PASS >/dev/null
 python3 -B "$P" verdict "$X" --task a --phase qa --sha "$VA" --by codex --state PASS >/dev/null
 echo b >> "$C/Assets/U/u.cs"; gi "$C" add Assets/U; gi "$C" commit -qm "feat: uov b"; VB=$(git -C "$C" rev-parse HEAD)
