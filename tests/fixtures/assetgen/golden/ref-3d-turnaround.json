@@ -1,0 +1,28 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Generate image"
+  },
+  "class_type": "NineRouterImage",
+  "inputs": {
+   "background": "opaque",
+   "model": "cx/gpt-5.6-sol-image",
+   "quality": "high",
+   "size": "1536x1024",
+   "user_prompt": "Test prompt for ref-3d-turnaround: one subject, centered."
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Save image"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-ref-3d-turnaround-001",
+   "images": [
+    "1",
+    0
+   ]
+  }
+ }
+}

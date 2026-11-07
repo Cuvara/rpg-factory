@@ -94,12 +94,12 @@ registry `human_gates`, risky file writes. Stage explicit paths only. Policy and
 
 ## Commands (read-only except `check`; `factory-cmd.py help [--json]` lists every verb with args and an example)
 Claude `/rpg-factory:<verb>`, Codex `python3 -B <plugin root>/scripts/factory-cmd.py <verb>`: `status`, `route`, `check`,
-`doctor`, `domain`, `workflow`, `pipeline`, `ui*`, `help`; `--json` for agents. Suggest them for "what is pending", "what would
+`doctor`, `domain`, `workflow`, `pipeline`, `ui*`, `assetgen`, `help`; `--json` for agents. Suggest them for "what is pending", "what would
 this touch", "is it validated", "is Factory healthy", "where does this domain stand".
 
 ## Skills
 
-Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`.
+Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`.
 
 | Situation | Lead skill |
 |---|---|
@@ -108,6 +108,7 @@ Engineering leads (the registry remains authoritative); supporting Engineering s
 | 2D art direction, concepts, asset specifications or runtime exports | `art-2d` (optional `authoring`; `artifact-lint`, `artifact-trace`, `art2d-quality`) |
 | Production 3D art specifications, assets and delivery | `art-3d` (optional Blender; quality plugin) |
 | VFX direction, specifications, budgets and delivery | `vfx` (optional Unity; quality plugin) |
+| AI image generation (concept, sprite, icon, UI part, texture, 3D reference) through ComfyUI, reviewed and human-approved | `asset-gen` (comfy-mcp, Codex review; `assetgen-quality`) |
 | wire message/field, protocol version, JSON encoding, JoinToken claims, Redis servers:id | `wire-contract` (server → Netcode → client) |
 | move a client pin (package / sgl tag) or the unity-build-workflows submodule | `pin-bump` |
 | C# game server, ECS systems, knobs, metrics, content, Shared.GameLogic | `server-realtime` |

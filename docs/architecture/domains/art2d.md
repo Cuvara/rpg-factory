@@ -20,10 +20,11 @@ Legacy `art2d-brief` and `art2d-asset` stay registered and valid. Every record u
 
 Create direction first, then concepts and specifications. Each asset spec cites an art-direction ID. A runtime export must cite its spec and point to a file in a registered repository. `scripts/checks/domains/art2d.py` rejects concept/reference promotion, requires specs to have runtime exports, verifies PNG/JPEG/WebP headers, SHA-256, dimensions, format, alpha and naming, and checks sprite dimensions and declared atlas constraints. Pillow is optional; unavailable palette inspection returns `NOT_AVAILABLE`. Checks are read-only and never write product repos.
 
-Optional image generation is a concept-only exploration step. Record `{generated_by, tool, model}` provenance and keep generated imagery at draft; availability never gates the normal authoring workflow. References require a rights basis and never qualify as deliverables.
+Generated images may become production sources only through a human-approved generation run: the [Asset generation](assetgen.md) domain records each run as a `gen-run` (reviewed prompt, image QA, output SHA-256, `{generated_by, tool, model}` provenance), a person approves it (gate `assetgen-approval`; agents never approve), and `assetgen-to-art2d` hands its images to 2D Art. The `asset-spec-2d` or `runtime-export-2d` that uses such an image cites the gen-run ID in its `sources`; a runtime export of the unchanged image carries the gen-run output's SHA-256. Generated imagery without an approved gen-run, including drafts from the optional `game-art-mcp` and `ai-pixel-art-image-generation` providers, stays a `concept-2d` draft with recorded provenance. Image generation availability never gates the normal authoring workflow. References require a rights basis and never qualify as deliverables.
 
 ## Handoffs
 
+- Asset generation → 2D Art: approved `gen-run` ID, output paths and SHA-256 through `assetgen-to-art2d`.
 - UI/UX → 2D Art: `ui-spec` ID/revision through `ui-spec-to-art2d-brief`.
 - 2D Art → UI/UX: illustration/icon runtime export IDs and usage constraints through `art2d-illustration-to-ui`.
 - 2D Art → Engineering: runtime export IDs, asset spec revisions, and paths under client `Assets/` using `art2d-asset-to-impl` and registered `client.unity-assets` routing. Checks only inspect; engineering performs imports.

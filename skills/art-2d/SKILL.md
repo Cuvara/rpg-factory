@@ -30,6 +30,7 @@ Repo `authoring`; registered paths under `art2d/`. Product files are owned by en
 
 1. **art-direction-2d:** define palette constraints, line, shading, proportions, and rights-cleared references. Human review confirms visual coherence.
 2. **concept-2d:** explore character, environment, prop/item, or UI illustration concepts. Concepts always remain `draft`/`proposed`; they are never production deliverables. Optional tools `game-art-mcp` and `ai-pixel-art-image-generation` may create concept drafts only. Record `{generated_by, tool, model}` provenance.
+   **Generated images as production sources:** only through a human-approved `gen-run` from the Asset generation domain (`rpg-factory:asset-gen`), handed off by `assetgen-to-art2d`. Cite the gen-run ID in the `sources` of the `asset-spec-2d` or `runtime-export-2d` that uses the image; a runtime export of the unchanged image carries the gen-run output's SHA-256. To inspect or regenerate how a gen-run image was made (template, params, the comfy-mcp run), invoke `rpg-factory:comfyui`; a new generation runs through `rpg-factory:asset-gen`. A gen-run that is not `approved` (a person approves; agents never do) and generated imagery outside a gen-run stay concept drafts.
 3. **asset-spec-2d:** cite the art-direction ID and upstream briefs/specs; specify purpose, pixel resolution, format, transparency, naming, export targets, and sprite frame count/fps when animated. Unresolved fields remain explicit unresolved. Draft/review/approved specs describe intended production and do not require a runtime export; create and validate a real linked export before claiming `in-implementation` or later.
 4. **runtime-export-2d:** record the product repo key, repo-relative file path, SHA-256, dimensions, format, alpha, and atlas metadata. This is a record, not permission to edit product repositories. Engineering imports through registered `client.unity-assets` routing.
 5. **reference-2d:** record source, rights/license, relevance, and provenance. Reference material is never a deliverable and cannot be verified or released.
@@ -39,6 +40,7 @@ Keep legacy `art2d-brief` and `art2d-asset` valid as compatibility kinds; new wo
 ## Handoffs
 
 - From UI/UX: `ui-spec` requirements by artifact ID and revision.
+- From Asset generation: approved `gen-run` records (ID, output paths, SHA-256, provenance) through `assetgen-to-art2d`.
 - To UI/UX: approved illustration/icon runtime export records and usage constraints.
 - To Engineering: verified runtime exports plus asset spec IDs/revisions and import targets. Do not copy or create engine files during checks.
 
@@ -50,6 +52,7 @@ Run `python3 -B scripts/checks/artifact-quality.py <authoring-repo> --registry r
 
 - IDs, schema version 2, sources, authors, and `spec` are present; upstream revisions are current.
 - Direction constraints are testable; concept/reference records do not claim production status.
+- A generated image used in production cites an approved `gen-run` (human approval); otherwise it stays a concept draft.
 - Spec values match upstream decisions or are marked unresolved/proposal.
 - Runtime export exists in the registered repo and its bytes, declared metadata, naming, frames, and atlas agree.
 - Rights and human visual acceptance are resolved before approval.

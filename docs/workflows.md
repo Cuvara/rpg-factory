@@ -22,7 +22,7 @@ Dispatch ready targets wave by wave. A changed upstream payload revision makes d
 
 ## Domain handoffs
 
-Each domain lead authors its registered kinds and prepares the next registered handoff. Game Design's `game-design` hands feature and system artifacts to UI, 2D/3D Art, VFX, and Engineering. `ui-ux` hands screen and UI records to Engineering and illustration briefs to `art-2d`; UI/VFX sync references use the non-ordering `ui-vfx-sync` contract. `art-2d` hands runtime export paths, hashes, and asset-spec revisions to Engineering. `art-3d` hands delivery records to VFX and Engineering. `vfx` hands approved specs and delivery records to Engineering. Engineering owns product-repository implementation and import work.
+Each domain lead authors its registered kinds and prepares the next registered handoff. Game Design's `game-design` hands feature and system artifacts to UI, 2D/3D Art, VFX, and Engineering. `ui-ux` hands screen and UI records to Engineering and illustration briefs to `art-2d`; UI/VFX sync references use the non-ordering `ui-vfx-sync` contract. `art-2d` hands runtime export paths, hashes, and asset-spec revisions to Engineering. `art-3d` hands delivery records to VFX and Engineering. `vfx` hands approved specs and delivery records to Engineering. `asset-gen` hands human-approved generation runs (`gen-run`) to 2D Art, 3D Art, UI/UX and VFX, which cite them as image sources. Engineering owns product-repository implementation and import work.
 
 ## Integration scenarios
 

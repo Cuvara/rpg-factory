@@ -326,6 +326,7 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "assetgen-to-ui",
         "feature-spec-to-ui-spec",
         "ui-spec-to-art2d-brief",
         "ui-spec-to-client",

@@ -47,6 +47,7 @@ cp "$TMP/reg.bak" "$P/registry.json"
 # scaffold a tech skill: registry entry exactly as asked, structure lint clean, author's work listed
 # orders and counts come from the registry under test, so adding skills does not break this suite
 next_order=$(jq '[.skills[].order] | max + 1' "$TMP/reg.bak"); tech_n=$(jq '[.skills[] | select(.kind == "tech")] | length' "$TMP/reg.bak")
+lead_n=$(jq '[.skills[] | select(.kind == "repo" or .kind == "cross-repo")] | length' "$TMP/reg.bak")
 out=$(ns --name demo-tech --kind tech --repos server --used-by server-services,wire-contract --tools go,lsp-go \
         --summary "How the demo Go code works" --cite-root "=server:backend/gateway"); rc=$?
 [ $rc -eq 0 ] && grep -qF "wrote skills/demo-tech/SKILL.md and registry skills.demo-tech (order $next_order)" <<<"$out" && ok "tech skill scaffolded with the next tech order" || no "scaffold tech (rc=$rc)" "$out"
@@ -78,7 +79,7 @@ out=$(creg); [ $? -eq 0 ] && ok "check-registry accepts the scaffolded lead" || 
 out=$(ns --name demo-domain --kind repo --repos authoring --summary "Demo design lead" --owns-modules authoring.root --domain design); rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '.skills["demo-domain"].domain' "$P/registry.json")" = design ] && ok "--domain assigns a registered domain to the scaffolded skill" || no "--domain assignment (rc=$rc)" "$out"
 out=$(tp demo-lead); grep -q "factory-core SKILL.md 'Skills' table has no row for this lead" <<<"$out" && grep -q 'README skill map table has no row' <<<"$out" \
-  && grep -q 'description says 13 specialised skills, the registry has 15' <<<"$out" \
+  && grep -qF "description says $lead_n specialised skills, the registry has $((lead_n + 2))" <<<"$out" \
   && ok "touchpoints for a lead: Skills table row, README skill map, plugin.json lead count" || no "touchpoints after lead scaffold" "$out"
 
 echo "new-skill tests: $((pass + fail)) run, $pass passed, $fail failed"

@@ -160,6 +160,9 @@ PROMPT[ui-figma]="Plan only, do not edit anything: how would you import this Fig
 EXPECT[ui-figma]="factory-core client-integration ui-orchestrator ui-figma-import ui-component-selection ui-toolkit-screen ui-validation"; HANDOFF[ui-figma]=""; SHOWS[ui-figma]="FIG023|HUMAN_REQUIRED|NOT_RUN"
 PROMPT[ui-not-ui]="Change the Go gateway in rpg-mmo-server so its TLS listener accepts TLS 1.3 only."
 EXPECT[ui-not-ui]="factory-core server-services"; HANDOFF[ui-not-ui]=""; NOTEXPECT[ui-not-ui]="ui-orchestrator ui-component-selection ui-figma-import ui-toolkit-screen ui-validation"
+# asset generation: routes to asset-gen, loads comfyui for the ComfyUI side; plan only (no generation, no credits)
+PROMPT[asset-gen]="Plan only, do not generate or edit anything: how would you generate a transparent iron sword item icon in a pixel-art style for the game with ComfyUI, get it reviewed and hand it to 2D art?"
+EXPECT[asset-gen]="factory-core asset-gen comfyui"; HANDOFF[asset-gen]="art-2d"; SHOWS[asset-gen]="review-cmd|SAME_MODEL|assetgen-approval"
 
 # WRITE scenarios use an isolated game-authoring repository per session. The helper creates
 # registry-routed folders, commits the empty layout, and grades disk state plus transcript.
@@ -234,7 +237,7 @@ if $write_mode; then
   scenarios=()
 fi
 
-[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui asset-gen)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")

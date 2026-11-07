@@ -1,0 +1,17 @@
+{
+ "schema": "rpg-factory.assetgen-style/1",
+ "title": "Pixel art",
+ "prefix": "Clean pixel art game asset,",
+ "suffix": "crisp pixels, limited palette, no anti-aliasing blur.",
+ "avoid": [
+  "gradients",
+  "blurry edges",
+  "sub-pixel detail",
+  "painterly texture"
+ ],
+ "palette": "Limited palette (16-32 colors) with clear value steps.",
+ "lighting": "Simple top-left light, flat shading bands.",
+ "params": {
+  "quality": "medium"
+ }
+}

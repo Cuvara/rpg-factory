@@ -12,7 +12,9 @@
       ],
       "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
-      "rules": [],
+      "rules": [
+        "Generated images become production sources only through a human-approved gen-run handed off by assetgen-to-art2d: the asset spec or runtime export cites the gen-run id in its sources; agents never approve. Generated imagery without an approved gen-run (including optional concept providers) stays a concept-2d draft."
+      ],
       "generated": [],
       "tools": [],
       "checks": {
@@ -53,7 +55,9 @@
       ],
       "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
-      "rules": [],
+      "rules": [
+        "Generated images become production sources only through a human-approved gen-run handed off by assetgen-to-art2d: the asset spec or runtime export cites the gen-run id in its sources; agents never approve. Generated imagery without an approved gen-run (including optional concept providers) stays a concept-2d draft."
+      ],
       "generated": [],
       "tools": [],
       "checks": {
@@ -148,6 +152,7 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "assetgen-to-art2d",
         "ui-spec-to-art2d-brief",
         "art2d-asset-to-impl"
       ],

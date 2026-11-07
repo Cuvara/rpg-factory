@@ -1,0 +1,56 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "3D reference turnaround",
+ "description": "Orthographic front/side/back reference sheet for 3D modelling.",
+ "handoff_domain": "art3d",
+ "default_template": "image-generate",
+ "params": {
+  "size": "1536x1024",
+  "background": "opaque",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Ask for an orthographic turnaround: front, side and back views side by side.",
+   "Same scale, same pose (A-pose or T-pose for characters) and aligned baselines in every view.",
+   "Plain light neutral background, flat lighting, no perspective."
+  ],
+  "must_include": [
+   "turnaround",
+   "front side back",
+   "orthographic",
+   "neutral background"
+  ],
+  "avoid": [
+   "perspective",
+   "dramatic lighting",
+   "cropped views",
+   "text labels"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt fixes orthographic views, pose and scale consistency."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "All requested views are present and consistent in proportions.",
+  "Views share scale and baseline; no perspective distortion."
+ ],
+ "qa": {
+  "size": {
+   "mode": "min",
+   "expect": "1024x1024"
+  },
+  "alpha": "any",
+  "not_blank": {
+   "min_stddev": 4.0
+  }
+ }
+}

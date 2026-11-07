@@ -1,0 +1,55 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "UI element part",
+ "description": "Button, frame, panel or ornament part for UI Toolkit skins; transparent background.",
+ "handoff_domain": "ui",
+ "default_template": "image-generate",
+ "params": {
+  "size": "1024x1024",
+  "background": "transparent",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "Name the element (button, panel frame, divider) and its state (normal, hover, pressed).",
+   "Flat front view, no perspective, so it can be nine-sliced.",
+   "Keep corners and edges consistent so the center can stretch."
+  ],
+  "must_include": [
+   "element type",
+   "state",
+   "front view"
+  ],
+  "avoid": [
+   "text labels",
+   "perspective",
+   "drop shadow outside the element"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt asks for a flat front view suitable for nine-slicing."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "Borders are even so the element can be nine-sliced.",
+  "No baked-in label text."
+ ],
+ "qa": {
+  "size": {
+   "mode": "min",
+   "expect": "256x256"
+  },
+  "alpha": "required",
+  "not_blank": {
+   "min_stddev": 2.0,
+   "min_coverage": 0.02
+  }
+ }
+}

@@ -31,6 +31,7 @@ installed plugin root (the directory that holds `skills/`). `python3 -B <plugin 
 | workflow | `/rpg-factory:workflow ...` | `workflow plan\|status\|dispatch\|report <spec> [--json]` | yes |
 | pipeline | `/rpg-factory:pipeline ...` | `pipeline tier\|validate\|planner\|dispatch\|verdict\|gate\|cleanup [args]` | no (`verdict`, `cleanup` record state) |
 | ui, ui-figma, ui-components, ui-screen, ui-review | `/rpg-factory:ui <request>` ... | `ui [--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>` | yes |
+| assetgen | `/rpg-factory:assetgen ...` | `assetgen list\|show\|resolve\|lint\|review-cmd [args]` | yes (`render`, `qa`, `manifest` are refused: the asset-gen skill runs them) |
 | help | none | `help [--json]` | yes |
 
 ## Hook adapter contract

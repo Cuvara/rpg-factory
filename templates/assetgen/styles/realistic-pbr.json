@@ -1,0 +1,16 @@
+{
+ "schema": "rpg-factory.assetgen-style/1",
+ "title": "Realistic PBR",
+ "prefix": "Realistic physically based game asset,",
+ "suffix": "accurate materials, natural roughness variation, neutral color balance.",
+ "avoid": [
+  "cartoon outlines",
+  "oversaturated colors",
+  "stylized proportions"
+ ],
+ "palette": "Natural, measured albedo values.",
+ "lighting": "Neutral studio lighting, no color cast.",
+ "params": {
+  "quality": "high"
+ }
+}

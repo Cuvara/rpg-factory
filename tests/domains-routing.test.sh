@@ -94,7 +94,7 @@ if [ "$rc" -eq 0 ]; then
 import sys
 order=sys.argv[1].split(" -> ")
 assert len(order) == len(set(order)), order
-for before, after in (("design","ui"),("ui","art2d"),("art2d","engineering"),("art3d","engineering"),("art3d","vfx"),("vfx","engineering")):
+for before, after in (("design","ui"),("ui","art2d"),("art2d","engineering"),("art3d","engineering"),("art3d","vfx"),("vfx","engineering"),("assetgen","art2d"),("assetgen","art3d"),("assetgen","ui"),("assetgen","vfx")):
     assert order.index(before) < order.index(after), (before, after, order)
 PY
   [ $? -eq 0 ] && ok "live graph is acyclic and honors domain ordering" || no "live graph ordering: $out"
