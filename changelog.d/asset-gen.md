@@ -80,6 +80,10 @@
   gen-runs, anchors and rejections recorded on an older style version, a changed style hash or a missing style.
   `/rpg-factory:assetgen drift` forwards it; `factory-cmd.py assetgen` refuses `promote-anchor` and `reject`,
   because they write into the authoring repo.
+- **Style lock: quality checks.** The quality plugin adds `gen-run-style` (style reference, recorded anchors exist,
+  are active, approved by a person, with matching image bytes and an approved source gen-run; an active anchor
+  promoted from an unapproved run fails; image reviews bind the style reference and anchors). The new fast check
+  `assetgen-lint` (`assetgen.py lint --authoring .`) lints the game layer, `project.json`, anchors and rejections.
 - **Style lock docs and skills.** `docs/architecture/domains/assetgen.md` section "Style lock"; `asset-gen` gains
   the family, override, anchor upload, style-row and rejection steps and a reference
   `references/style-lock.md` (bootstrap a new game style: exploration `concept-2d` runs, a person picks,

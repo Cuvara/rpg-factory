@@ -120,7 +120,7 @@ Drives the handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`; the receivi
 
 ## Validation delta
 
-- Fast: `artifact-lint`, `artifact-trace`, `assetgen-quality`
+- Fast: `artifact-lint`, `artifact-trace`, `assetgen-quality`, `assetgen-lint` (`assetgen.py lint --authoring <A>`)
   (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py <A> --registry ${CLAUDE_PLUGIN_ROOT}/registry.json --domain assetgen --json`).
   Read `gen-run-prompt-review`, `-image-review`, `-claude-review`, `-qa`, `-outputs`, `-provenance`, `-style`, `-refs`;
   resolve every `FAIL` (`-claude-review` only WARNs when your visual review is missing or stale).

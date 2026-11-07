@@ -8,7 +8,7 @@ The `assetgen` domain owns AI image generation: the game layer of generation dat
 |---|---|---|
 | `authoring.assetgen` | `assetgen/` | Game layer `assetgen/{purposes,styles,templates}/`, which overrides or extends the core data under the plugin's `templates/assetgen/`, run directories `assetgen/runs/<run_id>/`, the style lock's `assetgen/project.json`, and anchors and rejections under `assetgen/styles/<style-id>/` |
 
-Fast checks: `artifact-lint`, `artifact-trace`, and `assetgen-quality` (`artifact-quality.py --domain assetgen`). The engine is `scripts/assetgen/assetgen.py`. Its module docstring documents the data layers, the commands and the run directory.
+Fast checks: `artifact-lint`, `artifact-trace`, `assetgen-quality` (`artifact-quality.py --domain assetgen`), and `assetgen-lint` (`assetgen.py lint --authoring .`: the game-layer data, `assetgen/project.json`, anchors and rejections, so an active anchor whose source run has no `run.md` fails too). The engine is `scripts/assetgen/assetgen.py`. Its module docstring documents the data layers, the commands and the run directory.
 
 ## Kind and lifecycle
 
