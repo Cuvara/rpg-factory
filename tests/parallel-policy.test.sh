@@ -211,6 +211,40 @@ s_mutate "step 4 child exception dropped" "section 10 step 4 lacks the child exc
 s_mutate "step 4 says implement never commits" "retired shortcut phrasing 'always starts a sub-session that does not commit'" \
   'sed -i "s/^   \`--phase implement\` in the shared placement starts a sub-session that does not commit/   \`--phase implement\` always starts a sub-session that does not commit/" "$F"'
 
+# Section 5 keeps the Orca-first runner rule: inside Orca, planner/dispatch refuse --runner agent without
+# --orca-unavailable, and the reason (Agent-tool task leads are invisible in Orca) stays with it. Phrases are
+# matched in section 5 only, with its lines joined. Prints each problem; rc 1.
+ORCA_FIRST_REQUIRED=('ORCA_WORKTREE_ID' 'ORCA_AGENT_HOOK_ENDPOINT' 'default to `--runner orca`'
+  'refuse `--runner agent`' '`--orca-unavailable <reason>`' 'into the session prompt'
+  'Agent-tool task leads with plain git worktrees are invisible in Orca')
+orca_first() {
+  local f="$1" p sec errs=()
+  sec=$(awk '/^## 5\. / { f = 1 } f && /^## 6\. / { exit } f' "$f" | tr '\n' ' ' | tr -s ' ')
+  if [ -z "$sec" ]; then echo "section 5 (Orca) missing"; return 1; fi
+  for p in "${ORCA_FIRST_REQUIRED[@]}"; do grep -qF -- "$p" <<<"$sec" || errs+=("section 5 lacks the Orca-first rule: '$p'"); done
+  [ ${#errs[@]} -eq 0 ] && return 0
+  printf '%s\n' "${errs[@]}"; return 1
+}
+o_out=$(orca_first "$ROOT/$PW" 2>&1); o_rc=$?
+[ $o_rc -eq 0 ] && ok "section 5 keeps the Orca-first runner rule" || no "section 5 Orca-first rule (rc=$o_rc)" "$o_out"
+o_mutate() { # <name> <expected text> <commands in a copy of the policy file $F>
+  local F="$TMP/pw-orca-mut.md" merr out rc
+  cp "$ROOT/$PW" "$F" && chmod u+w "$F"
+  if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
+  out=$(orca_first "$F" 2>&1); rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> Orca-first check FAIL: $2"
+  else no "$1: Orca-first check did not fail with '$2' (rc=$rc)" "$out"; fi
+}
+o_mutate "--orca-unavailable flag dropped" "lacks the Orca-first rule: '\`--orca-unavailable <reason>\`'" \
+  'sed -i "s/--orca-unavailable <reason>/a reason/g" "$F"'
+o_mutate "invisible-in-Orca reason dropped" "lacks the Orca-first rule: 'Agent-tool task leads with plain git worktrees are invisible in Orca'" \
+  'sed -i "s/are invisible in Orca/are fine/" "$F"'
+o_mutate "refusal softened to a preference" "lacks the Orca-first rule: 'refuse \`--runner agent\`'" \
+  'sed -i "s/and refuse\$/and prefer over/" "$F"'
+o_mutate "rule moved out of section 5" "lacks the Orca-first rule: 'ORCA_WORKTREE_ID'" \
+  'sed -i "/^- \*\*Orca first inside Orca\.\*\*/,/^  Agent-tool task leads/d" "$F"'
+
 # AGENTS.md (the Codex entry) never makes Codex the run lead or a task lead: the run lead is the main Claude Code
 # session and the task lead is always Claude (policy:task-lead-claude). Prints each problem; rc 1.
 AGENTS_REQUIRED=('the task lead is always Claude' 'only as a session a Claude task lead starts')

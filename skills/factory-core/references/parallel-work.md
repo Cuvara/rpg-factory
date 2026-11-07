@@ -193,10 +193,16 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
 - Never use `orca orchestration gate-create` for routine work: a decision gate blocks a task, and this
   plugin adds no blocking step.
 - Runs you did not create belong to other coordinators (section 2).
-- **Fallback:** when Orca is unavailable or cannot do an operation, use Claude Code background agents
-  (`--runner agent`; `isolation: "worktree"` only where section 4 creates a worktree) and name the limitation in
-  the report. The Agent tool starts Claude sessions only: a session planned for Codex runs as Claude and its
-  review counts as SAME_MODEL (section 10 step 4). The absence of Orca never blocks progress.
+- **Orca first inside Orca.** In an Orca session (`ORCA_WORKTREE_ID` or `ORCA_AGENT_HOOK_ENDPOINT` set) with the
+  runtime reachable, `factory-pipeline.py planner` and `dispatch` default to `--runner orca` and refuse
+  `--runner agent` (exit 2, naming `--runner orca`) unless `--orca-unavailable <reason>` is given; the reason goes
+  into the session prompt so its report names it. Reason (user feedback 2026-11-07): the user works in Orca, and
+  Agent-tool task leads with plain git worktrees are invisible in Orca.
+- **Fallback:** outside Orca, or when Orca is unavailable or cannot do an operation (inside Orca: with
+  `--orca-unavailable <reason>`), use Claude Code background agents (`--runner agent`; `isolation: "worktree"`
+  only where section 4 creates a worktree) and name the limitation in the report. The Agent tool starts Claude
+  sessions only: a session planned for Codex runs as Claude and its review counts as SAME_MODEL (section 10
+  step 4). The absence of Orca never blocks progress.
 
 ## 6. Parallel QA and review
 
