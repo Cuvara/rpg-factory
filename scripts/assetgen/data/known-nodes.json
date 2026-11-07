@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.comfy-known-nodes/1",
- "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes). Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json.",
+ "note": "Offline snapshot of the ComfyUI node inputs and outputs the asset-gen templates use (comfyui_9router custom node and core nodes; ImageBatch, deprecated in the frontend but stable in API format, chains style-lock anchors into reference_images). Inputs are listed in the order ComfyUI declares them (required, then optional): the UI workflow (uiworkflow.py) writes widgets_values in that order. assetgen.py lint checks templates and rendered workflows against it; the live check stays with comfy-mcp validate_workflow. warn_values flags input values known to fail at run time; ui holds the canvas node size and extra widget values (LoadImage's upload button) of workflow.ui.json.",
  "nodes": {
   "NineRouterImage": {
    "inputs": {
@@ -158,6 +158,27 @@
     "size": [
      400,
      240
+    ]
+   }
+  },
+  "ImageBatch": {
+   "inputs": {
+    "image1": {
+     "type": "IMAGE",
+     "required": true
+    },
+    "image2": {
+     "type": "IMAGE",
+     "required": true
+    }
+   },
+   "outputs": [
+    "IMAGE"
+   ],
+   "ui": {
+    "size": [
+     320,
+     120
     ]
    }
   }

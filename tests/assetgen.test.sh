@@ -10,7 +10,14 @@
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
-# manifest-produced run.md,
+# manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
+# deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
+# the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
+# and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
+# manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
+# the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
+# anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
+# by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -415,7 +422,7 @@ expect_lint link--1 FAIL "node 1 has no output -1" "link output index -1: FAIL (
 expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAIL, no traceback"
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
-AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "19 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "core + game layer lint clean (19 files)" || no "full lint" "$(tail -5 "$TMP/o")"
+AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "19 PASS, 1 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o"   && ok "core + game layer lint clean (19 files; WARN: no assetgen/project.json)" || no "full lint" "$(tail -5 "$TMP/o")"
 
 echo "-- fixture PNGs"
 FX="$TMP/png"; mkdir -p "$FX"
@@ -941,6 +948,22 @@ variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = jso
 variant qp-qapurp-001; qaset qp-qapurp-001 'obj["purpose_sha256"] = "0" * 64'; AG manifest --run "$RUNS/qp-qapurp-001" >/dev/null
 variant qp-qasize-001; python3 -B -c 'import json, sys; p = sys.argv[1]; w = json.load(open(p)); [n["inputs"].__setitem__("size", "1024x1536") for n in w.values() if n.get("class_type") == "NineRouterImage"]; json.dump(w, open(p, "w"))' "$RUNS/qp-qasize-001/workflow.json"
 AG manifest --run "$RUNS/qp-qasize-001" >/dev/null
+# style-* rows (style lock consistency signals): WARN and NOT_AVAILABLE neither grade nor contradict; a FAIL must agree
+[ "$(jq -r '[.results[] | select(.check | startswith("style-")) | .check + "=" + .state] | join(",")' "$good/qa.json")" \
+  = "style-palette=NOT_AVAILABLE,style-tone=NOT_AVAILABLE,style-edges=NOT_AVAILABLE,style-canvas=NOT_AVAILABLE" ] \
+  && [ "$(jq -r .state "$good/qa.json")" = PASS ] && ok "qa: a style-locked run without style data gets four NOT_AVAILABLE style rows, state PASS" \
+  || no "good run style rows" "$(jq -c '[.state, .results]' "$good/qa.json")"
+variant qp-qastylewarn-001; qaset qp-qastylewarn-001 '[r.__setitem__("state", "WARN") for r in obj["results"] if r["check"] in ("style-palette", "style-tone")]'
+AG manifest --run "$RUNS/qp-qastylewarn-001" >/dev/null
+variant qp-qastylefail-001; qaset qp-qastylefail-001 '[r.__setitem__("state", "FAIL") for r in obj["results"] if r["check"] == "style-palette"]'
+AG manifest --run "$RUNS/qp-qastylefail-001" >/dev/null
+variant qp-qastyleagree-001; qaset qp-qastyleagree-001 'obj["state"] = "FAIL"; [r.__setitem__("state", "FAIL") for r in obj["results"] if r["check"] == "style-palette"]'
+AG manifest --run "$RUNS/qp-qastyleagree-001" >/dev/null
+# with spec.style_lock the image reviews bind the style ref and the anchors shown
+variant qp-stylebind-001; bound "$RUNS/qp-stylebind-001" image PASS codex | jq -c '.style.version = 99' > "$RUNS/qp-stylebind-001/review-image.json"
+AG manifest --run "$RUNS/qp-stylebind-001" >/dev/null
+variant qp-stylebindc-001; bound "$RUNS/qp-stylebindc-001" image PASS claude | jq -c 'del(.style, .anchors)' > "$RUNS/qp-stylebindc-001/review-image-claude.json"
+AG manifest --run "$RUNS/qp-stylebindc-001" >/dev/null
 # Claude's own visual review (review-image-claude.json): recorded, WARN when missing, never replaces the Codex review
 variant qp-noclaude-001; rm -f "$RUNS/qp-noclaude-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-noclaude-001" >/dev/null
 variant qp-claudeonly-001; rm -f "$RUNS/qp-claudeonly-001/review-image.json"; AG manifest --run "$RUNS/qp-claudeonly-001" >/dev/null
@@ -964,6 +987,8 @@ variant qp-rubric-001; AG resolve --purpose sprite-2d --style stylized-painterly
 AG qa --run "$RUNS/qp-rubric-001" >/dev/null; AG manifest --run "$RUNS/qp-rubric-001" >/dev/null
 variant qp-rsize-001; rebase qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
 AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-001" >/dev/null
+# a rejection recorded after the reviews joins spec.style_lock (re-resolve): both reviews are stale
+variant qp-rejbind-001; jq '.style_lock.rejections += [{"id": "r-late", "type": "direction", "reason": "too_detailed", "text": "No rivets."}]'   "$RUNS/qp-rejbind-001/spec.json" > "$TMP/s" && mv "$TMP/s" "$RUNS/qp-rejbind-001/spec.json"; AG manifest --run "$RUNS/qp-rejbind-001" >/dev/null
 variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
 variant qp-rqual-001; rebase qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
@@ -987,7 +1012,7 @@ cp -R "$good" "$RUNS/qp-fallback-001" "$QAUTH/assetgen/runs/"; git init -q -b ma
 python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$QAUTH" --registry "$ROOT/registry.json" --domain assetgen --json > "$TMP/aq.json" 2>"$TMP/err"; rc=$?
 st() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .state] | join(",")' "$TMP/aq.json"; }
 why() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .reasons[]] | join("; ")' "$TMP/aq.json"; }
-plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-claude-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs"
+plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-claude-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs gen-run-style"
 got=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-icon-001 "$c")"; done)
 want=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=PASS ' "$c"; done)
 [ $rc -eq 0 ] && [ "$got" = "$want" ] && ok "artifact-quality --domain assetgen: complete run (codex reviews, QA PASS, hashes, provenance, game-layer refs) all PASS" \
@@ -1041,6 +1066,14 @@ case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAIL
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"
 case_ qp-qasize-001 gen-run-qa FAIL 'graded for requested size' "requested size changed after QA: FAIL"
+case_ qp-qastylewarn-001 gen-run-qa WARN 'style consistency outputs/qp-icon.png: style-palette WARN' "style-* WARN rows in a PASS qa.json stay WARN (soft signal), never FAIL"
+[ "$(st AGEN-qp-qastylewarn-001 gen-run-qa)" = WARN ] && ! why AGEN-qp-qastylewarn-001 gen-run-qa | grep -q contradicts && ok "style-* WARN rows do not contradict a PASS qa.json" \
+  || no "style WARN rows: $(st AGEN-qp-qastylewarn-001 gen-run-qa)" "$(why AGEN-qp-qastylewarn-001 gen-run-qa)"
+case_ qp-stylebind-001 gen-run-image-review FAIL 'is not bound to the style lock' "image review bound to another style ref than spec.style_lock: stale, FAIL"
+case_ qp-stylebindc-001 gen-run-claude-review WARN 'outputs and style lock' "Claude review without the style lock binding (style ref, anchors): WARN"
+[ "$(st AGEN-qp-stylebind-001 gen-run-prompt-review)" = PASS ] && ok "style lock binding: the prompt review is unaffected" || no "stylebind prompt review: $(st AGEN-qp-stylebind-001 gen-run-prompt-review)"
+case_ qp-qastylefail-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows' "a style-* FAIL row in a PASS qa.json contradicts it: FAIL"
+case_ qp-qastyleagree-001 gen-run-qa FAIL 'QA is FAIL' "a style-* FAIL row with a FAIL qa state: the run is not done (FAIL on a proposed run)"
 case_ qp-noclaude-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "no Claude visual review file: WARN"
 [ "$(st AGEN-qp-noclaude-001 gen-run-image-review)" = PASS ] && ok "a missing Claude review leaves the Codex image review PASS" || no "noclaude image review: $(st AGEN-qp-noclaude-001 gen-run-image-review)"
 case_ qp-claudeonly-001 gen-run-image-review FAIL 'review-image.json is missing' "a Claude PASS never replaces the missing Codex image review: FAIL"
@@ -1065,6 +1098,8 @@ case_ qp-rsize-001 gen-run-image-review FAIL 'bound to other requirements' "rend
 case_ qp-wfprompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' "workflow.json prompt edited after the record: provenance FAIL"
 case_ qp-wfprompt-001 gen-run-image-review FAIL 'bound to other requirements' "workflow.json prompt edited after the image review: FAIL (prompts are bound)"
 case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
+case_ qp-rejbind-001 gen-run-prompt-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the prompt review: FAIL (rejections are bound)"
+case_ qp-rejbind-001 gen-run-image-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the image review: FAIL"
 [ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
   || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
 got=$(for c in $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-edit-001 "$c")"; done)
@@ -1084,6 +1119,805 @@ grep -q '^FAIL AGEN-qp-escape-001 .*does not match pattern' "$TMP/lint" && ok "k
 T2="$TMP/tmpl"; mkdir -p "$T2" && cp "$ROOT/templates/assetgen/gen-run.md" "$T2/" && git init -q "$T2"
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T2" --registry "$ROOT/registry.json" | grep -q '^PASS AGEN-example-icon-001$' \
   && ok "kind template templates/assetgen/gen-run.md is a schema-valid draft" || no "gen-run template lint"
+
+echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
+SL="$TMP/stylelock-authoring"
+python3 -B - "$ROOT" "$SL" > "$TMP/sl" 2>&1 <<'EOF'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, lint, stylelock
+A = sys.argv[2]
+G = os.path.join(A, "assetgen")
+def w(rel, obj):
+    p = os.path.join(G, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(obj if isinstance(obj, str) else json.dumps(obj))
+    return p
+def check(cond, label, detail=""):
+    print(("ok " if cond else "no ") + label + ("" if cond else " :: " + str(detail)[:600]))
+def refused(fn, text):
+    try:
+        fn()
+    except stylelock.StyleLockError as exc:
+        return text in str(exc), str(exc)
+    return False, "not refused"
+def lint_of(*rel):
+    return lint.lint_file(os.path.join(G, *rel), A)
+def failed(res, *texts):
+    return res["state"] == "FAIL" and all(any(t in x for x in res["reasons"]) for t in texts)
+
+# a game style family: rpg-base v2 (active, structured fields), rpg-chars extends it, rpg-old deprecated
+w("styles/rpg-base.json", {"schema": "rpg-factory.assetgen-style/1", "title": "RPG base", "version": 2, "status": "active",
+  "palette": {"text": "Warm earthy palette.", "colors": [{"hex": "#aa5533", "role": "primary"}], "max_distance": 40},
+  "lighting": "Soft top light.", "outline": {"text": "Dark 2px outline.", "edge_darkness": {"max_luminance": 70, "min_ratio": 0.5}},
+  "forbidden": ["photo texture"], "canvas": {"props": {"aspect": "1:1", "min_side": 512}}, "tone": {"tolerance": 0.05}})
+w("styles/rpg-chars.json", {"extends": "rpg-base", "title": "RPG characters"})
+w("styles/rpg-old.json", {"schema": "rpg-factory.assetgen-style/1", "title": "RPG old", "version": 1, "status": "deprecated"})
+proj = {"schema": "rpg-factory.assetgen-project/1", "style": {"id": "rpg-base", "version": 2}, "allowed_styles": ["pixel-art", "rpg-old"],
+        "families": {"characters": "rpg-chars"}, "art_direction": [{"artifact": "ART2D-DIR-001", "rev": 3}]}
+w("project.json", proj)
+icon, sprite, edit = (layers.load("purpose", p, A) for p in ("icon", "sprite-2d", "image-edit"))
+
+# project precedence, refusal, override
+c = stylelock.choose(icon, A)
+check((c["family"], c["family_source"], c["style_id"], c["override"]) == ("props", "purpose", "rpg-base", None)
+      and c["project"]["path"] == "assetgen/project.json" and len(c["project"]["sha256"]) == 64,
+      "project: purpose default_family props, project default style rpg-base", c)
+c = stylelock.choose(sprite, A)
+check((c["family"], c["style_id"]) == ("characters", "rpg-chars"), "project: families[characters] picks the sub-style", c)
+c = stylelock.choose(icon, A, family="characters")
+check((c["family"], c["family_source"], c["style_id"]) == ("characters", "flag", "rpg-chars"), "project: --family beats the purpose default_family", c)
+c = stylelock.choose(edit, A)
+check((c["family"], c["family_source"], c["style_id"]) == (None, None, "rpg-base"), "project: purpose without default_family -> no family, project style", c)
+c = stylelock.choose(icon, A, style="pixel-art")
+check(c["style_id"] == "pixel-art" and c["override"] is None, "project: --style in allowed_styles is accepted", c)
+check(stylelock.choose(icon, A, style="rpg-chars")["style_id"] == "rpg-chars", "project: --style naming a family sub-style is accepted")
+r = refused(lambda: stylelock.choose(icon, A, style="anime-cel"), "is not allowed by assetgen/project.json")
+check(r[0], "project: --style outside allowed_styles is refused", r[1])
+c = stylelock.choose(icon, A, style="anime-cel", override="one-off key art")
+check(c["style_id"] == "anime-cel" and c["override"] == "one-off key art", "project: --style-override REASON accepts and records the reason", c)
+r = refused(lambda: stylelock.choose(icon, A, style="rpg-old"), "is deprecated")
+check(r[0], "deprecated style is refused even when allowed", r[1])
+check(stylelock.choose(icon, A, style="rpg-old", override="legacy fix")["override"] == "legacy fix", "deprecated style with an override reason is accepted")
+w("project.json", dict(proj, style={"id": "rpg-base", "version": 1}))
+r = refused(lambda: stylelock.choose(icon, A), "pins style rpg-base version 1")
+check(r[0], "project style version must equal the style file's version (resolve refuses)", r[1])
+check(failed(lint_of("project.json"), "project version 1 is not the style's version 2"), "lint: project version mismatch FAIL", lint_of("project.json"))
+w("project.json", dict(proj, families={"characters": "pixel-art"}, allowed_styles="all"))
+check(failed(lint_of("project.json"), "must extend the project style", "allowed_styles must be a list"),
+      "lint: family style not extending the base, malformed allowed_styles FAIL", lint_of("project.json"))
+w("project.json", {"schema": "x"})
+r = refused(lambda: stylelock.choose(icon, A), "assetgen/project.json")
+check(r[0], "malformed project.json is refused by resolve", r[1])
+w("project.json", proj)
+check(lint_of("project.json")["state"] == "PASS", "lint: valid project.json PASS", lint_of("project.json"))
+
+# without project.json: today's behaviour
+B = os.path.join(os.path.dirname(A), "stylelock-none")
+os.makedirs(os.path.join(B, "assetgen"), exist_ok=True)
+c = stylelock.choose(layers.load("purpose", "icon", B), B, style="pixel-art")
+check(c["project"] is None and c["style_id"] == "pixel-art" and c["family"] == "props", "no project.json: --style as today, project null", c)
+r = refused(lambda: stylelock.choose(layers.load("purpose", "icon", B), B), "pass --style")
+check(r[0], "no project.json and no default_style: refused as today", r[1])
+res = lint.lint_file(stylelock.project_path(B), B)
+check(res["state"] == "WARN" and "no assetgen/project.json" in res["reasons"][0], "lint: WARN without assetgen/project.json", res)
+check(os.path.abspath(stylelock.project_path(B)) in map(os.path.abspath, lint.default_paths(B)), "lint default paths include assetgen/project.json")
+
+# style refs, hints from structured fields, style and purpose lint
+base = layers.load("style", "rpg-base", A)
+ref = stylelock.style_ref(base)
+check(ref == {"style_id": "rpg-base", "version": 2, "sha256": layers.content_hash(base["data"])}, "style ref {style_id, version, sha256}", ref)
+spec = layers.resolve("icon", "rpg-base", authoring=A)
+check(spec["hints"]["palette"] == {"text": "Warm earthy palette.", "from": "style", "source": "game:assetgen/styles/rpg-base.json"},
+      "hints: an object palette gives its text and source", spec["hints"].get("palette"))
+check(stylelock.style_ref(layers.load("style", "rpg-chars", A))["version"] == 2, "an extending style inherits the version")
+for name, data, text in (
+        ("bad-version", {"version": 0}, "version must be an integer >= 1"),
+        ("bad-status", {"status": "live"}, "status must be one of"),
+        ("bad-palette", {"palette": {"text": "x", "colors": [{"hex": "red"}], "max_distance": 500}}, "palette.colors must be"),
+        ("bad-share", {"palette": {"text": "x", "min_share": 2}}, "palette.min_share must be"),
+        ("bad-text", {"lighting": {"severity": "warn"}}, "lighting.text must be a non-empty string"),
+        ("bad-edges", {"outline": {"text": "x", "edge_darkness": {"max_luminance": 300}}}, "max_luminance must be a number from 0 to 255"),
+        ("bad-canvas", {"canvas": {"props": {"aspect": "1x1"}}}, "canvas.props.aspect must be W:H"),
+        ("bad-pixels", {"canvas": {"props": {"aspect": "1:1", "width": 512}}}, "an exact pixel canvas is never set"),
+        ("bad-canvas-sev", {"canvas": {"props": {"aspect": "1:1", "severity": "loud"}}}, "canvas.props.severity must be warn or fail"),
+        ("bad-forbidden", {"forbidden": "text"}, "forbidden must be a list"),
+        ("bad-tone", {"tone": {"tolerance": 3}}, "tone.tolerance must be a number from 0 to 1")):
+    p = w("styles/%s.json" % name, dict({"schema": "rpg-factory.assetgen-style/1", "title": name}, **data))
+    res = lint.lint_file(p, A)
+    check(failed(res, text), "lint style: " + text, res)
+    os.remove(p)
+check(lint_of("styles", "rpg-base.json")["state"] == "PASS", "lint: structured style fields PASS", lint_of("styles", "rpg-base.json"))
+for sev in ("warn", "fail"):
+    p = w("styles/canvas-%s.json" % sev, {"schema": "rpg-factory.assetgen-style/1", "title": sev,
+                                         "canvas": {"props": {"aspect": "1:1", "min_side": 256, "severity": sev}}})
+    res = lint.lint_file(p, A)
+    check(res["state"] == "PASS", "lint style: canvas severity %s is accepted (consistency.check_canvas grades it)" % sev, res)
+    os.remove(p)
+p = w("purposes/bad-dims.json", {"extends": "icon", "dimensions": ["palette", "smell"], "max_references": -1, "default_family": "Props!", "qa": {"outlines": "yes"}})
+res = lint.lint_file(p, A)
+check(failed(res, "dimensions must be", "max_references must be", "default_family must be", "qa.outlines must be"),
+      "lint purpose: dimensions, max_references, default_family, qa.outlines", res)
+os.remove(p)
+
+# anchors: validity in the engine view
+PNG = b"\x89PNG\r\n\x1a\nanchor-bytes"
+PNG_SHA = hashlib.sha256(PNG).hexdigest()
+def anchor(aid, family, dims, strength, status="active", version=2, run="good-001", by="Dana", sha=None):
+    d = os.path.join(G, "styles", "rpg-base", "anchors")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, aid + ".png"), "wb") as f:
+        f.write(PNG)
+    w("styles/rpg-base/anchors/%s.json" % aid, {
+        "schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": status,
+        "style": {"style_id": "rpg-base", "version": version, "sha256": sha or ref["sha256"]}, "family": family,
+        "dimensions": dims, "strength": strength, "image": aid + ".png", "image_sha256": PNG_SHA,
+        "source_run": {"run_id": run, "output": "outputs/a.png", "sha256": "0" * 64},
+        "approved_by": by if status == "active" else None, "approved_on": "2026-11-01" if status == "active" else None})
+def run(rid, status, style_ref):
+    front = {"id": "AGEN-" + rid, "status": status, "spec": {"style": {"id": style_ref["style_id"], "sha256": style_ref["sha256"]},
+                                                              "style_lock": {"style": style_ref}}}
+    w("runs/%s/run.md" % rid, "---json\n%s\n---\n# run\n" % json.dumps(front))
+def anchors():
+    return {r["id"]: r for r in stylelock.load_anchors(A, "rpg-base")}
+run("good-001", "approved", ref)
+run("draft-001", "proposed", ref)
+anchor("a-canon", "props", ["palette", "line"], "canonical")
+anchor("a-strong", "props", ["palette", "shape", "line"], "strong")
+anchor("b-strong", "props", ["palette", "shape", "line"], "strong")
+anchor("c-chars", "characters", ["palette", "shape", "line"], "canonical")
+anchor("d-props-tex", "props", ["texture"], "supporting")
+anchor("p-proposed", "props", ["palette", "shape", "line"], "canonical", status="proposed")
+anchor("u-unapproved", "props", ["palette", "shape", "line"], "canonical", run="draft-001")
+anchor("v-old", "props", ["palette", "shape", "line"], "canonical", version=1, sha="1" * 64)
+v = {k: stylelock.anchor_validity(r, A) for k, r in anchors().items()}
+check(not v["p-proposed"][0] and "status proposed" in v["p-proposed"][1], "anchor: proposed is not valid", v["p-proposed"])
+check(not v["u-unapproved"][0] and "draft-001 is proposed, not approved" in v["u-unapproved"][1], "anchor: active with an unapproved source run is not valid", v["u-unapproved"])
+check(v["a-canon"][0], "anchor: active with an approved source run is valid", v["a-canon"])
+check(v["v-old"][0], "anchor: an older style version stays valid", v["v-old"])
+valid = stylelock.valid_anchors(A, "rpg-base")
+check(sorted(a["id"] for a in valid) == ["a-canon", "a-strong", "b-strong", "c-chars", "d-props-tex", "v-old"], "valid_anchors keeps only valid active anchors", [a["id"] for a in valid])
+check(failed(lint_of("styles", "rpg-base", "anchors", "u-unapproved.json"), "not approved"), "lint: active anchor with an unapproved source run FAIL",
+      lint_of("styles", "rpg-base", "anchors", "u-unapproved.json"))
+check(lint_of("styles", "rpg-base", "anchors", "p-proposed.json")["state"] == "PASS", "lint: proposed anchor PASS", lint_of("styles", "rpg-base", "anchors", "p-proposed.json"))
+check(lint_of("styles", "rpg-base", "anchors", "a-canon.json")["state"] == "PASS", "lint: approved active anchor PASS", lint_of("styles", "rpg-base", "anchors", "a-canon.json"))
+anchor("x-agent", "props", ["palette"], "strong", by="claude")
+check(failed(lint_of("styles", "rpg-base", "anchors", "x-agent.json"), "is an agent or model"), "lint: anchor approved_by an agent FAIL")
+check(not stylelock.anchor_validity(anchors()["x-agent"], A)[0], "anchor approved by an agent is never valid")
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "x-agent.json"))
+with open(os.path.join(G, "styles", "rpg-base", "anchors", "b-strong.png"), "wb") as f:
+    f.write(b"changed")
+check(failed(lint_of("styles", "rpg-base", "anchors", "b-strong.json"), "does not match image_sha256"), "lint: anchor image changed after promotion FAIL")
+with open(os.path.join(G, "styles", "rpg-base", "anchors", "b-strong.png"), "wb") as f:
+    f.write(PNG)
+w("styles/rpg-base/anchors/m-bad.json", {"schema": "rpg-factory.assetgen-anchor/1", "id": "other", "status": "active", "style": {"style_id": "rpg-chars"},
+                                         "family": "props", "dimensions": ["smell"], "strength": "huge"})
+res = lint_of("styles", "rpg-base", "anchors", "m-bad.json")
+check(failed(res, "is not the file name", "is not the style directory", "dimensions must be", "strength must be", "needs approved_by"),
+      "lint: malformed anchor names every bad field", res)
+check(not stylelock.anchor_validity(anchors()["m-bad"], A)[0], "malformed anchor is never valid")
+check(os.path.abspath(os.path.join(G, "styles", "rpg-base", "anchors", "m-bad.json")) in map(os.path.abspath, lint.default_paths(A)), "lint default paths include anchors")
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "m-bad.json"))
+
+# deterministic selection: family, dimension overlap, strength, id; cap; style version
+dims = icon["data"]["dimensions"]
+picks = stylelock.select_references(valid, ref, "props", dims, 3)
+check([p["anchor_id"] for p in picks] == ["a-strong", "b-strong", "a-canon"], "selection order: family, then dimension overlap, then strength, then id", [p["anchor_id"] for p in picks])
+check(picks[0] == {"anchor_id": "a-strong", "family": "props", "strength": "strong", "dimensions": ["palette", "shape", "line"],
+                   "image": "references/anchor-a-strong.png", "sha256": PNG_SHA,
+                   "reason": ["family match", "dimensions: palette, shape, line", "strength strong"]}, "pick record with reasons", picks[0])
+allp = stylelock.select_references(valid, ref, "props", dims, 10)
+check([p["anchor_id"] for p in allp] == ["a-strong", "b-strong", "a-canon", "d-props-tex", "c-chars"] and allp[-1]["reason"][0] == "same style"
+      and allp[3]["reason"] == ["family match", "strength supporting"], "selection: other family last as same style, older version excluded",
+      [(p["anchor_id"], p["reason"]) for p in allp])
+check(len(stylelock.select_references(valid, ref, "props", dims, 2)) == 2 and stylelock.select_references(valid, ref, "props", dims, 0) == [], "selection cap")
+check(stylelock.select_references(list(reversed(valid)), ref, "props", dims, 3) == picks, "same inputs in another order -> same selection")
+old_ref = {"style_id": "rpg-base", "version": 1, "sha256": "1" * 64}
+check([p["anchor_id"] for p in stylelock.select_references(valid, old_ref, "props", dims, 3)] == ["v-old"], "an older style version selects only its own anchors")
+check(stylelock.max_references({"max_references": 3}, {"max_references": 2}) == 2 and stylelock.max_references({}, {}) == 3
+      and stylelock.max_references({"max_references": 1}, None) == 1, "max_references: the smaller of purpose and template, default 3")
+core_p = {p: layers.load("purpose", p)["data"] for p in ("icon", "sprite-2d", "concept-2d", "ui-element", "texture-tileable", "ref-3d-turnaround", "image-edit")}
+check(all(isinstance(d.get("dimensions"), list) and d.get("max_references") == 3 for d in core_p.values())
+      and core_p["icon"]["default_family"] == "props" and core_p["sprite-2d"]["default_family"] == "characters"
+      and "default_family" not in core_p["image-edit"], "core purposes declare dimensions, max_references and default_family (none for image-edit)")
+check(all(layers.load("style", s)["data"].get("version") == 1 and layers.load("style", s)["data"].get("status") == "active"
+          for s in ("anime-cel", "flat-ui", "low-poly", "pixel-art", "realistic-pbr", "stylized-painterly")), "core styles are version 1, active")
+
+# rejections: relevance by style, family and version
+def rej(rid, **kw):
+    return w("styles/rpg-base/rejections/%s.json" % rid, dict({"schema": "rpg-factory.assetgen-rejection/1", "id": rid, "type": "direction",
+             "style": dict(ref), "family": None, "reason": "too_detailed", "text": "No fine filigree."}, **kw))
+ASSET_RUN = {"run_id": "good-001", "output": "outputs/a.png", "sha256": "0" * 64}
+rej("r-all")
+rej("r-props", family="props", reason="palette_off", text="Neon green.")
+rej("r-chars", family="characters")
+rej("r-anyver", style={"style_id": "rpg-base", "version": None, "sha256": "2" * 64})
+rej("r-oldver", style={"style_id": "rpg-base", "version": 1, "sha256": "1" * 64})
+rej("r-asset", type="asset", reason="anatomy", text=None, run=ASSET_RUN)
+rel = stylelock.relevant_rejections(stylelock.load_rejections(A, "rpg-base"), ref, "props")
+check([r["id"] for r in rel] == ["r-all", "r-anyver", "r-asset", "r-props"], "rejections: same style, family null or equal, version null or equal", [r["id"] for r in rel])
+check(rel[3] == {"id": "r-props", "type": "direction", "reason": "palette_off", "text": "Neon green."} and rel[2]["run"] == ASSET_RUN and "text" not in rel[2],
+      "rejection item carries its text or run", rel)
+other = {"style_id": "rpg-chars", "version": 2, "sha256": ref["sha256"]}
+check(stylelock.relevant_rejections(stylelock.load_rejections(A, "rpg-base"), other, "props") == [], "rejections of another style id are not relevant")
+for rid, kw, text in (("bad-1", {"text": ""}, "text is required"), ("bad-2", {"reason": "ugly"}, "reason must be one of"),
+                      ("bad-3", {"type": "asset", "run": {"run_id": "x"}}, "run must be"),
+                      ("bad-4", {"reason": "other", "type": "asset", "text": None, "run": ASSET_RUN}, "text is required")):
+    check(failed(lint.lint_file(rej(rid, **kw), A), text), "lint rejection: " + text, lint_of("styles", "rpg-base", "rejections", rid + ".json"))
+    os.remove(os.path.join(G, "styles", "rpg-base", "rejections", rid + ".json"))
+check(lint_of("styles", "rpg-base", "rejections", "r-asset.json")["state"] == "PASS", "lint: valid asset rejection PASS", lint_of("styles", "rpg-base", "rejections", "r-asset.json"))
+
+# drift: older version, hash changed, style missing (read-only)
+run("old-001", "approved", {"style_id": "rpg-base", "version": 1, "sha256": "1" * 64})
+run("hash-001", "approved", {"style_id": "rpg-base", "version": 2, "sha256": "3" * 64})
+run("gone-001", "approved", {"style_id": "rpg-gone", "version": 1, "sha256": "4" * 64})
+d = stylelock.drift(A)
+got = sorted((i["kind"], i["id"], i["state"]) for i in d["items"])
+want = sorted([("gen-run", "AGEN-old-001", "older-version"), ("gen-run", "AGEN-hash-001", "hash-changed"), ("gen-run", "AGEN-gone-001", "style-missing"),
+               ("anchor", "v-old", "older-version"), ("rejection", "r-oldver", "older-version"), ("rejection", "r-anyver", "hash-changed")])
+check(d["schema"] == "rpg-factory.assetgen-drift/1" and got == want, "drift lists older-version, hash-changed and style-missing only", got)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "style lock: unexpected output" "$line" ;; esac
+done < "$TMP/sl"
+grep -qE '^(ok|no) drift' "$TMP/sl" && ok "style lock cases ran to the end" || no "style lock cases stopped early" "$(tail -5 "$TMP/sl")"
+
+echo "-- style lock through the CLI: resolve --family/--style-override, render wiring, promote-anchor, reject, drift"
+SC="$TMP/stylelock-cli"; SG="$SC/assetgen"; SR="$SG/runs"
+mkdir -p "$SG/styles" "$SG/purposes" "$SR"
+cat > "$SG/styles/rpg-base.json" <<'EOF'
+{"schema": "rpg-factory.assetgen-style/1", "title": "RPG base", "version": 2, "status": "active", "prefix": "RPG base art,",
+ "palette": {"text": "Warm earthy palette.", "colors": [{"hex": "#aa5533", "role": "primary"}]}}
+EOF
+echo '{"extends": "rpg-base", "title": "RPG characters"}' > "$SG/styles/rpg-chars.json"
+cat > "$SG/project.json" <<'EOF'
+{"schema": "rpg-factory.assetgen-project/1", "style": {"id": "rpg-base", "version": 2}, "allowed_styles": ["pixel-art"],
+ "families": {"characters": "rpg-chars"}, "art_direction": []}
+EOF
+echo '{"extends": "icon", "title": "Icon, one reference", "max_references": 1}' > "$SG/purposes/icon-one.json"
+# approved seed run + anchors of rpg-base v2 (props x3, characters x1, one proposed, one with an unapproved run)
+python3 -B - "$ROOT" "$SC" "$FX/icon-ok.png" > "$TMP/o" 2>&1 <<'EOF'
+import hashlib, json, os, shutil, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, stylelock
+A, png = sys.argv[2], sys.argv[3]
+G = os.path.join(A, "assetgen")
+ref = stylelock.style_ref(layers.load("style", "rpg-base", A))
+for rid, status in (("seed-001", "approved"), ("draft-001", "proposed")):
+    os.makedirs(os.path.join(G, "runs", rid), exist_ok=True)
+    with open(os.path.join(G, "runs", rid, "run.md"), "w", encoding="utf-8") as f:
+        f.write("---json\n%s\n---\n# seed\n" % json.dumps({"id": "AGEN-" + rid, "status": status, "spec": {"style_lock": {"style": ref}}}))
+d = os.path.join(G, "styles", "rpg-base", "anchors")
+os.makedirs(d, exist_ok=True)
+for n, (aid, fam, dims, strength, status, run) in enumerate((
+        ("a-canon", "props", ["palette", "line"], "canonical", "active", "seed-001"),
+        ("b-strong", "props", ["palette", "shape", "line"], "strong", "active", "seed-001"),
+        ("c-supp", "props", ["texture"], "supporting", "active", "seed-001"),
+        ("d-chars", "characters", ["palette", "shape", "line"], "canonical", "active", "seed-001"),
+        ("e-proposed", "props", ["palette", "shape", "line"], "canonical", "proposed", "seed-001"),
+        ("f-unapproved", "props", ["palette", "shape", "line"], "canonical", "active", "draft-001"))):
+    data = open(png, "rb").read() + bytes([n])  # distinct bytes per anchor (trailing byte: content only, never decoded)
+    open(os.path.join(d, aid + ".png"), "wb").write(data)
+    json.dump({"schema": stylelock.ANCHOR_SCHEMA, "id": aid, "status": status, "style": ref, "family": fam, "dimensions": dims,
+               "strength": strength, "image": aid + ".png", "image_sha256": hashlib.sha256(data).hexdigest(),
+               "source_run": {"run_id": run, "output": "outputs/a.png", "sha256": "0" * 64},
+               "approved_by": "Dana" if status == "active" else None, "approved_on": "2026-11-01" if status == "active" else None},
+              open(os.path.join(d, aid + ".json"), "w", encoding="utf-8"))
+r = os.path.join(G, "styles", "rpg-base", "rejections")
+os.makedirs(r, exist_ok=True)
+for rid, fam in (("r-props", "props"), ("r-chars", "characters")):
+    json.dump({"schema": stylelock.REJECTION_SCHEMA, "id": rid, "type": "direction", "style": ref, "family": fam,
+               "reason": "too_detailed", "text": "No fine filigree on " + fam + "."}, open(os.path.join(r, rid + ".json"), "w", encoding="utf-8"))
+print("ok")
+EOF
+grep -qx ok "$TMP/o" || no "style lock CLI fixture" "$(cat "$TMP/o")"
+git init -q -b main "$SC" && git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "style lock fixture"
+slrun() { # slrun NAME PURPOSE [resolve args...]: resolve into a run of the style lock repo, with a prompt
+  local d="$SR/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
+  AG resolve --purpose "$p" --authoring "$SC" "$@" --out "$d/spec.json" > "$TMP/slr.out" 2>"$TMP/err" || return 1
+  printf 'Style lock prompt for %s.\n' "$p" > "$d/prompt.md"
+}
+lk() { jq -r "$1" "$SR/$2/spec.json"; }
+
+# resolve: project style, family, selection with reasons, relevant rejections
+slrun sl-icon-001 icon || no "resolve icon in the style lock repo" "$(cat "$TMP/err")"
+[ "$(lk '.style.id + "|" + .style_lock.style.style_id + "|" + (.style_lock.style.version | tostring) + "|" + .style_lock.family + "|" + .style_lock.family_source + "|" + .style_lock.project.path + "|" + (.style_lock.override | tostring)' sl-icon-001)" \
+  = "rpg-base|rpg-base|2|props|purpose|assetgen/project.json|null" ] && [ "$(lk '.style_lock.style.sha256 == .style.sha256' sl-icon-001)" = true ] \
+  && ok "resolve: project style rpg-base v2, purpose family props, project recorded, no override" || no "resolve style_lock" "$(lk .style_lock sl-icon-001)"
+[ "$(lk '[.style_lock.references[].anchor_id] | join(",")' sl-icon-001)" = "b-strong,a-canon,c-supp" ] \
+  && [ "$(lk '.style_lock.references[0].reason | join("; ")' sl-icon-001)" = "family match; dimensions: palette, shape, line; strength strong" ] \
+  && [ "$(lk '.style_lock.references[0].image + " " + (.style_lock.max_references | tostring)' sl-icon-001)" = "references/anchor-b-strong.png 3" ] \
+  && ok "resolve: 3 valid anchors (overlap, then strength), each with reason[]; proposed and unapproved-run anchors left out" \
+  || no "resolve references" "$(lk '.style_lock.references' sl-icon-001)"
+[ "$(lk '[.style_lock.rejections[] | .id + ":" + .text] | join(",")' sl-icon-001)" = "r-props:No fine filigree on props." ] \
+  && ok "resolve: only the rejections relevant to the family are recorded" || no "resolve rejections" "$(lk .style_lock.rejections sl-icon-001)"
+grep -q "^style lock: style rpg-base v2 (sha256 [0-9a-f]\{12\}), family props \[purpose\], project assetgen/project.json$" "$TMP/slr.out" \
+  && grep -q "^reference b-strong  \[family match; dimensions: palette, shape, line; strength strong\]$" "$TMP/slr.out" \
+  && grep -q "^rejection r-props direction too_detailed: No fine filigree on props.$" "$TMP/slr.out" \
+  && ok "resolve text: style lock, references with reasons, rejections" || no "resolve text" "$(cat "$TMP/slr.out")"
+slrun sl-icon-002 icon && [ "$(jq -S .style_lock "$SR/sl-icon-001/spec.json")" = "$(jq -S .style_lock "$SR/sl-icon-002/spec.json")" ] \
+  && ok "resolve: same inputs -> same style lock and selection" || no "resolve determinism"
+slrun sl-chars-001 icon --family characters
+[ "$(lk '.style.id + "|" + .style_lock.family + "|" + .style_lock.family_source + "|" + (.style_lock.references | length | tostring)' sl-chars-001)" = "rpg-chars|characters|flag|0" ] \
+  && ok "resolve --family characters: families sub-style rpg-chars (its own anchors: none)" || no "resolve --family" "$(lk .style_lock sl-chars-001)"
+AG resolve --purpose icon --authoring "$SC" --family Props! >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "must be a lowercase id" "$TMP/err" && ok "resolve --family: not a lowercase id, usage error" || no "bad --family rc=$rc" "$(cat "$TMP/err")"
+slrun sl-one-001 icon-one && [ "$(lk '[.style_lock.max_references, (.style_lock.references | length)] | join(",")' sl-one-001)" = "1,1" ] \
+  && [ "$(lk '.style_lock.references[0].anchor_id' sl-one-001)" = b-strong ] && ok "resolve: purpose max_references 1 caps the selection" \
+  || no "resolve cap" "$(lk .style_lock sl-one-001)"
+slrun sl-pixel-001 icon --style pixel-art && [ "$(lk '.style.id + "|" + (.style_lock.references | length | tostring) + "|" + (.style_lock.override | tostring)' sl-pixel-001)" = "pixel-art|0|null" ] \
+  && ok "resolve --style in allowed_styles: accepted, no anchors of that style" || no "resolve allowed style" "$(cat "$TMP/err")"
+AG resolve --purpose icon --authoring "$SC" --style anime-cel >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "is not allowed by assetgen/project.json" "$TMP/err" && grep -q "style-override REASON" "$TMP/err" \
+  && ok "resolve --style outside allowed_styles: refused (exit 1)" || no "refusal rc=$rc" "$(cat "$TMP/err")"
+slrun sl-override-001 icon --style anime-cel --style-override "one-off key art" \
+  && [ "$(lk '.style.id + "|" + .style_lock.override' sl-override-001)" = "anime-cel|one-off key art" ] && grep -q "^style override: one-off key art$" "$TMP/slr.out" \
+  && ok "resolve --style-override REASON: accepted, reason recorded in spec.style_lock.override" || no "override" "$(cat "$TMP/err")"
+
+# render: anchors as LoadImage + ImageBatch chain into reference_images, in workflow.json and workflow.ui.json
+wiring() { # wiring WORKFLOW: NineRouterImage reference chain as "img1>img2>..." of LoadImage image names
+  python3 -B - "$1" <<'EOF'
+import json, sys
+wf = json.load(open(sys.argv[1], encoding="utf-8"))
+node = [n for n in wf.values() if n["class_type"] == "NineRouterImage"][0]
+def walk(link):
+    if link is None:
+        return []
+    n = wf[link[0]]
+    if n["class_type"] == "ImageBatch":
+        return walk(n["inputs"]["image1"]) + walk(n["inputs"]["image2"])
+    return [n["inputs"]["image"]]
+print(">".join(walk(node["inputs"].get("reference_images"))) or "none")
+EOF
+}
+d="$SR/sl-icon-001"
+AG render --run "$d" > "$TMP/o" 2>&1 || no "render with 3 anchors" "$(cat "$TMP/o")"
+[ "$(wiring "$d/workflow.json")" = "anchor-b-strong.png>anchor-a-canon.png>anchor-c-supp.png" ] \
+  && [ "$(jq -r '[.[] | select(.class_type == "ImageBatch")] | length' "$d/workflow.json")" = 2 ] \
+  && [ "$(jq -r '[to_entries[] | select(.value.class_type == "LoadImage") | .key + ":" + .value._meta.title] | join(",")' "$d/workflow.json")" \
+       = "4:Anchor b-strong (strong),5:Anchor a-canon (canonical),6:Anchor c-supp (supporting)" ] \
+  && ok "render 3 anchors: LoadImage per anchor (next free ids, titled) and an ImageBatch chain in selection order" \
+  || no "render wiring 3" "$(jq -c . "$d/workflow.json")"
+same=true; for a in b-strong a-canon c-supp; do
+  cmp -s "$d/references/anchor-$a.png" "$SG/styles/rpg-base/anchors/$a.png" || same=false; done
+$same && [ "$(ls "$d/references" | wc -l | tr -d ' ')" = 3 ] && ok "render --run copies each selected anchor to references/anchor-<id>.png" \
+  || no "anchor copies" "$(ls -la "$d/references" 2>&1)"
+out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+[ "$out" = ok ] && [ "$(jq -r '[.nodes[] | select(.type == "ImageBatch")] | length' "$d/workflow.ui.json")" = 2 ] \
+  && ok "workflow.ui.json with anchors: ImageBatch nodes, converts back to workflow.json" || no "ui with anchors" "$out"
+AG lint "$d/workflow.json" > "$TMP/o" 2>&1 && grep -q "1 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "rendered workflow with anchors lints clean (ImageBatch is a known node)" || no "lint anchors" "$(cat "$TMP/o")"
+d1="$SR/sl-one-001"; AG render --run "$d1" >/dev/null 2>&1
+[ "$(wiring "$d1/workflow.json")" = "anchor-b-strong.png" ] && [ "$(jq -c '.["1"].inputs.reference_images' "$d1/workflow.json")" = '["4",0]' ] \
+  && [ "$(jq -r '[.[] | select(.class_type == "ImageBatch")] | length' "$d1/workflow.json")" = 0 ] \
+  && ok "render 1 anchor: LoadImage linked straight into reference_images (no batch)" || no "render wiring 1" "$(jq -c . "$d1/workflow.json")"
+d0="$SR/sl-pixel-001"; AG render --run "$d0" >/dev/null 2>&1
+[ "$(wiring "$d0/workflow.json")" = none ] && [ "$(jq 'length' "$d0/workflow.json")" = 3 ] && [ ! -d "$d0/references" ] \
+  && ok "render 0 anchors: the template graph unchanged, no references/" || no "render wiring 0" "$(jq -c . "$d0/workflow.json")"
+slrun sl-edit-001 image-edit && AG render --run "$SR/sl-edit-001" --param reference_image=ref.png >/dev/null 2>"$TMP/err"
+de="$SR/sl-edit-001"
+[ "$(wiring "$de/workflow.json")" = "ref.png>anchor-a-canon.png>anchor-d-chars.png>anchor-b-strong.png" ] \
+  && [ "$(jq -c '[.["8"].inputs.image1, .["2"].inputs.reference_images]' "$de/workflow.json")" = '[["1",0],["10",0]]' ] \
+  && ok "render image-edit: its own reference stays first, anchors follow (family none: same style, overlap order)" \
+  || no "render image-edit wiring" "$(cat "$TMP/err"; jq -c . "$de/workflow.json")"
+AG render --spec "$d/spec.json" --prompt-file "$d/prompt.md" --out "$TMP/sl-wf.json" >/dev/null 2>&1
+[ "$(wiring "$TMP/sl-wf.json")" = "anchor-b-strong.png>anchor-a-canon.png>anchor-c-supp.png" ] && [ -f "$TMP/sl-wf.ui.json" ] \
+  && ok "render --spec wires the same anchors (no copy outside a run)" || no "render --spec wiring" "$(jq -c . "$TMP/sl-wf.json")"
+cp -R "$d" "$SR/sl-changed-001"; dc="$SR/sl-changed-001"; rm -rf "$dc/references" "$dc/workflow.json"
+jq '.params.filename_prefix = "assetgen/sl-changed-001"' "$dc/spec.json" > "$TMP/s" && mv "$TMP/s" "$dc/spec.json"
+printf 'x' >> "$SG/styles/rpg-base/anchors/a-canon.png"
+out=$(AG render --run "$dc" 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "anchor a-canon image changed since resolve" <<<"$out" && [ ! -f "$dc/workflow.json" ] && [ ! -d "$dc/references" ] \
+  && ok "render --run: an anchor image changed after resolve is refused, nothing written" || no "changed anchor rc=$rc" "$out"
+git -C "$SC" checkout -q -- assetgen/styles/rpg-base/anchors/a-canon.png
+
+# hashes: style ref and anchor hashes bound only when style_lock is present; an old spec renders and hashes as before
+python3 -B - "$ROOT" "$d/spec.json" "$d/workflow.json" "$d" > "$TMP/o" 2>&1 <<'EOF'
+import copy, hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+spec = json.load(open(sys.argv[2], encoding="utf-8"))
+wf = json.load(open(sys.argv[3], encoding="utf-8"))
+locate = lambda n: os.path.join(sys.argv[4], "references", n)
+old = copy.deepcopy(spec); del old["style_lock"]
+legacy = hashlib.sha256(json.dumps({"purpose": old["purpose"]["sha256"], "style": old["style"]["sha256"], "template": old["template"]["sha256"],
+                                    "params": old["params"], "generation": None}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+assert runfiles.requirements_sha256(old) == legacy, "old spec hash changed"
+assert runfiles.requirements_sha256(spec) != legacy, "style_lock not bound"
+gen = runfiles.generation_inputs(wf, spec, locate)
+assert gen["anchors"] == [{"anchor_id": r["anchor_id"], "sha256": r["sha256"]} for r in spec["style_lock"]["references"]], gen.get("anchors")
+assert gen["references"]["anchor-b-strong.png"] == spec["style_lock"]["references"][0]["sha256"], gen["references"]
+assert "anchors" not in runfiles.generation_inputs(wf, old, locate)
+other = copy.deepcopy(spec); other["style_lock"]["references"][0]["sha256"] = "f" * 64
+assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "anchor hash not bound"
+other = copy.deepcopy(spec); other["style_lock"]["style"]["version"] = 3
+assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "style ref not bound"
+other = copy.deepcopy(spec); other["style_lock"]["override"] = "x"; other["style_lock"]["max_references"] = 9
+assert runfiles.requirements_sha256(other) == runfiles.requirements_sha256(spec), "override and max_references are not bound"
+rej = {"id": "r-new", "type": "direction", "reason": "too_detailed", "text": "No rivets."}
+other = copy.deepcopy(spec); other["style_lock"]["rejections"] = spec["style_lock"]["rejections"] + [rej]
+assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "an added rejection not bound"
+changed = copy.deepcopy(other); changed["style_lock"]["rejections"][-1]["text"] = "No bolts."
+assert runfiles.requirements_sha256(changed) != runfiles.requirements_sha256(other), "rejection content not bound"
+assert runfiles.style_lock_binding(other)["rejections"][-1] == {"id": "r-new", "sha256": hashlib.sha256(json.dumps(
+    rej, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}, runfiles.style_lock_binding(other)
+other = copy.deepcopy(spec); other["style_lock"]["family"] = "characters"
+assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "family not bound"
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "requirements_sha256/generation_inputs: style ref, family, anchor hashes and rejections (id + content) bound with style_lock only; old spec hash unchanged" || no "style lock hashes" "$(cat "$TMP/o")"
+dg="$RUNS/golden-icon-001"; jq 'del(.style_lock)' "$dg/spec.json" > "$TMP/old-spec.json"
+AG render --spec "$TMP/old-spec.json" --prompt-file "$dg/prompt.md" --out "$TMP/old-wf.json" >/dev/null 2>&1
+[ "$(jq -S . "$TMP/old-wf.json")" = "$(jq -S . "$GOLD/icon.json")" ] \
+  && ok "old spec.json without style_lock renders as before (golden icon)" || no "old spec render" "$(diff <(jq -S . "$TMP/old-wf.json") <(jq -S . "$GOLD/icon.json"))"
+
+# manifest: spec.style_lock and the override in run.md
+do_="$SR/sl-override-001"; AG render --run "$do_" >/dev/null && cp "$FX/icon-ok.png" "$do_/outputs/out.png" && AG qa --run "$do_" >/dev/null
+AG manifest --run "$do_" >/dev/null 2>"$TMP/err"
+fm() { python3 -B -c 'import json, re, sys; m = re.match(r"\A---json\s*\n(.*?)\n---", open(sys.argv[1], encoding="utf-8").read(), re.S); print(json.dumps(json.loads(m.group(1))))' "$1/run.md"; }
+[ "$(fm "$do_" | jq -c --slurpfile s "$do_/spec.json" '.spec.style_lock == $s[0].style_lock')" = true ] \
+  && grep -q "^- Style override: one-off key art$" "$do_/run.md" && grep -q "^- Style lock: style \`anime-cel\` v1, family props, project assetgen/project.json, references: none$" "$do_/run.md" \
+  && ok "manifest: run.md records spec.style_lock and prints the style lock and the override" || no "manifest style lock" "$(cat "$TMP/err"; sed -n '/^# /,$p' "$do_/run.md")"
+fm "$RUNS/qp-icon-001" | jq -e '.spec | has("style_lock")' >/dev/null && ok "manifest: a run resolved with the style lock records it (no project.json)" || no "style_lock missing in run.md"
+jq 'del(.style_lock)' "$dg/spec.json" > "$TMP/s" && cp -R "$dg" "$RUNS/legacy-icon-001" && mv "$TMP/s" "$RUNS/legacy-icon-001/spec.json"
+jq '.params.filename_prefix = "assetgen/legacy-icon-001"' "$RUNS/legacy-icon-001/spec.json" > "$TMP/s" && mv "$TMP/s" "$RUNS/legacy-icon-001/spec.json"
+AG manifest --run "$RUNS/legacy-icon-001" >/dev/null 2>&1
+fm "$RUNS/legacy-icon-001" | jq -e '.spec | has("style_lock") | not' >/dev/null && ! grep -q "Style lock" "$RUNS/legacy-icon-001/run.md" \
+  && ok "manifest: an old spec without style_lock keeps the old run.md shape" || no "legacy manifest"
+
+# promote-anchor: proposed only, output bound to run.md and qa.json, refusals
+dp="$SR/sl-icon-001"; cp "$FX/icon-ok.png" "$dp/outputs/out.png"; AG qa --run "$dp" >/dev/null; AG manifest --run "$dp" >/dev/null
+AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette,line --strength strong --json > "$TMP/pa.json" 2>"$TMP/err"; rc=$?
+pa="$SG/styles/rpg-base/anchors/sl-icon-001-1"
+[ $rc -eq 0 ] && [ "$(jq -r '[.status, (.approved_by | tostring), (.approved_on | tostring), .family, (.dimensions | join(",")), .strength, .source_run.run_id, .source_run.output, .style.style_id, (.style.version | tostring)] | join("|")' "$pa.json")" \
+  = "proposed|null|null|props|palette,line|strong|sl-icon-001|outputs/out.png|rpg-base|2" ] \
+  && [ "$(jq -r '.image_sha256 == .source_run.sha256' "$pa.json")" = true ] && cmp -s "$pa.png" "$dp/outputs/out.png" \
+  && [ "$(jq -r .path "$TMP/pa.json")" = "assetgen/styles/rpg-base/anchors/sl-icon-001-1.json" ] \
+  && ok "promote-anchor: writes a proposed anchor (approved_by null), copies the output PNG, records the run's style ref" \
+  || no "promote-anchor rc=$rc" "$(cat "$TMP/err"; cat "$pa.json" 2>/dev/null)"
+AG lint "$pa.json" --authoring "$SC" > "$TMP/o" 2>&1 && ok "promote-anchor: the proposed anchor lints clean" || no "promoted anchor lint" "$(cat "$TMP/o")"
+slrun sl-icon-003 icon && [ "$(jq -S .style_lock.references "$SR/sl-icon-003/spec.json")" = "$(jq -S .style_lock.references "$SR/sl-icon-001/spec.json")" ] \
+  && ok "a proposed anchor is never selected" || no "proposed anchor selected" "$(lk .style_lock.references sl-icon-003)"
+AG promote-anchor --run "$dp" --output outputs/out.png --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "anchor sl-icon-001-1 already exists" "$TMP/err" && ok "promote-anchor: an existing id is refused" || no "existing anchor rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --run "$dp" --output out.png --family props --dimensions palette,smell --strength strong --id x-1 >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "dimensions must be" "$TMP/err" && [ ! -e "$SG/styles/rpg-base/anchors/x-1.json" ] && ok "promote-anchor: unknown dimension refused, nothing written" || no "bad dims rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --strength huge >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && ok "promote-anchor: unknown strength is a usage error" || no "bad strength rc=$rc"
+AG promote-anchor --run "$dp" --output 2 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "run.md records 1 output" "$TMP/err" && ok "promote-anchor: output index out of range refused" || no "index rc=$rc" "$(cat "$TMP/err")"
+printf 'x' >> "$dp/outputs/out.png"
+AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --strength strong --id y-1 >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "does not match run.md" "$TMP/err" && [ ! -e "$SG/styles/rpg-base/anchors/y-1.json" ] \
+  && ok "promote-anchor: output changed after manifest (sha256 mismatch with run.md) refused" || no "sha mismatch rc=$rc" "$(cat "$TMP/err")"
+AG manifest --run "$dp" >/dev/null
+AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --strength strong --id y-1 >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "does not match qa.json" "$TMP/err" && ok "promote-anchor: output not the one qa.json graded refused" || no "qa mismatch rc=$rc" "$(cat "$TMP/err")"
+AG promote-anchor --run "$TMP/sl-wf-run-001" --output 1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "must be <authoring>/assetgen/runs/<slug>-NNN" "$TMP/err" && ok "promote-anchor: a run outside <authoring>/assetgen/runs refused" || no "run layout rc=$rc" "$(cat "$TMP/err")"
+grep -rq '"status": "active"' "$pa.json" && no "promote-anchor wrote an active anchor" || ok "promote-anchor never writes status active"
+
+# reject: validation, deterministic ids, asset rejections bound to a recorded output
+AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --family props >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "text is required" "$TMP/err" && ok "reject direction without text refused" || no "reject no text rc=$rc" "$(cat "$TMP/err")"
+AG reject --type direction --reason ugly --authoring "$SC" --style rpg-base --text x >/dev/null 2>&1; rc=$?
+[ $rc -eq 2 ] && ok "reject: a reason outside the fixed list is a usage error" || no "reject bad reason rc=$rc"
+AG reject --type direction --reason too_detailed --authoring "$SC" --text x >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "needs --authoring DIR and --style S" "$TMP/err" && ok "reject direction without --style: usage error" || no "reject no style rc=$rc" "$(cat "$TMP/err")"
+AG reject --type asset --reason anatomy --authoring "$SC" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "needs --run DIR and --output" "$TMP/err" && ok "reject asset without --run/--output: usage error" || no "reject asset no run rc=$rc" "$(cat "$TMP/err")"
+AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --family props --text "No gold trim." --json > "$TMP/rj1.json" 2>"$TMP/err" \
+  && AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --any-version --text "No noise." --json > "$TMP/rj2.json" 2>>"$TMP/err"
+[ "$(jq -r '.id + "|" + .path + "|" + .family + "|" + (.style.version | tostring)' "$TMP/rj1.json")" = "too-detailed-001|assetgen/styles/rpg-base/rejections/too-detailed-001.json|props|2" ] \
+  && [ "$(jq -r '.id + "|" + (.family | tostring) + "|" + (.style.version | tostring)' "$TMP/rj2.json")" = "too-detailed-002|null|null" ] \
+  && ok "reject direction: written with the current style ref, next free <reason>-NNN id, --any-version records version null" \
+  || no "reject direction" "$(cat "$TMP/err" "$TMP/rj1.json" "$TMP/rj2.json" 2>/dev/null)"
+AG manifest --run "$dp" >/dev/null; AG qa --run "$dp" >/dev/null; AG manifest --run "$dp" >/dev/null
+AG reject --type asset --reason palette_off --run "$dp" --output out.png --json > "$TMP/rj3.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.id + "|" + .family + "|" + .run.run_id + "|" + .run.output + "|" + .style.style_id' "$TMP/rj3.json")" = "palette-off-001|props|sl-icon-001|outputs/out.png|rpg-base" ] \
+  && [ "$(jq -r .run.sha256 "$TMP/rj3.json")" = "$(sha256sum "$dp/outputs/out.png" | cut -d' ' -f1)" ] \
+  && ok "reject asset: run output, its sha256, the run's style ref and family" || no "reject asset rc=$rc" "$(cat "$TMP/err" "$TMP/rj3.json")"
+AG reject --type direction --reason too_detailed --authoring "$SC" --style rpg-base --text "Again." --id too-detailed-001 >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "already exists" "$TMP/err" && ok "reject: an existing id is refused" || no "reject existing rc=$rc" "$(cat "$TMP/err")"
+AG lint --authoring "$SC" "$SG/styles/rpg-base/rejections/too-detailed-001.json" "$SG/styles/rpg-base/rejections/palette-off-001.json" > "$TMP/o" 2>&1 \
+  && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "reject: written rejections lint clean" || no "rejection lint" "$(cat "$TMP/o")"
+slrun sl-icon-004 icon && [ "$(lk '[.style_lock.rejections[].id] | join(",")' sl-icon-004)" = "palette-off-001,r-props,too-detailed-001,too-detailed-002" ] \
+  && ok "resolve records the new relevant rejections (family props, any version)" || no "rejections after reject" "$(lk .style_lock.rejections sl-icon-004)"
+
+echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
+# fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc
+python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+out = sys.argv[2]
+def disc(name, a, b, ring=None, w=256, h=256):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            r = min(w, h) * 0.3
+            if d < r - 6 or (ring is None and d < r):
+                px += bytes((a if x < w // 2 else b) + (255,))
+            elif ring is not None and d < r:
+                px += bytes(ring + (255,))
+            else:
+                px += bytes((0, 0, 0, 0))
+    open(os.path.join(out, name), "wb").write(png.encode(w, h, bytes(px)))
+disc("sl-warm.png", (170, 85, 51), (190, 105, 71))            # inside 48 of #aa5533
+disc("sl-blue.png", (40, 60, 200), (60, 80, 220))             # far from #aa5533
+disc("sl-dark.png", (20, 20, 30), (35, 35, 45))               # tone far below the icon-ok anchors
+disc("sl-outlined.png", (230, 200, 120), (240, 210, 130), ring=(10, 10, 10))
+disc("sl-wide.png", (170, 85, 51), (190, 105, 71), w=384, h=256)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" || no "style QA fixtures" "$(cat "$TMP/o")"
+sq="$SR/sl-qa-001"; slrun sl-qa-001 icon && AG render --run "$sq" >/dev/null 2>"$TMP/err" || no "style QA run" "$(cat "$TMP/err")"
+cp "$sq/spec.json" "$TMP/sq-spec.json"
+sqa() { # sqa PNG JQ-EDIT: the style QA run with outputs/out.png = PNG and spec.json = the resolved spec edited by JQ-EDIT
+  rm -f "$sq/outputs/"*.png; cp "$FX/$1" "$sq/outputs/out.png"
+  jq "$2" "$TMP/sq-spec.json" > "$sq/spec.json"
+  AG qa --run "$sq" --json > "$TMP/sq.json" 2>"$TMP/err"; rc=$?
+}
+sst() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/sq.json"; }
+swhy() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .reasons[]] | join("; ")' "$TMP/sq.json"; }
+PAL='.style.data.palette = {"text": "Warm earthy palette.", "colors": [{"hex": "#aa5533", "role": "primary"}]}'
+sqa sl-warm.png "$PAL"
+[ $rc -eq 0 ] && [ "$(sst style-palette)" = PASS ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] && swhy style-palette | grep -q "100.0% of opaque pixels within 48 of 1 palette colours" \
+  && ok "qa style-palette PASS: every opaque pixel near the palette" || no "palette PASS rc=$rc $(sst style-palette)" "$(swhy style-palette; cat "$TMP/err")"
+sqa sl-blue.png "$PAL"
+[ $rc -eq 0 ] && [ "$(sst style-palette)" = WARN ] && [ "$(jq -r '.state + " " + (.summary.WARN | tostring)' "$TMP/sq.json")" = "PASS 1" ] \
+  && ok "qa style-palette WARN (default severity): the qa state stays PASS, exit 0, summary counts the WARN" || no "palette WARN rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
+AG qa --run "$sq" > "$TMP/o" 2>&1; grep -q "^WARN outputs/out.png style-palette: " "$TMP/o" && grep -q "^assetgen qa: PASS ([0-9]* PASS, 1 WARN, 0 FAIL, [0-9]* NOT_AVAILABLE)$" "$TMP/o" \
+  && ok "qa text: the WARN row and the WARN count" || no "qa text WARN" "$(cat "$TMP/o")"
+sqa sl-blue.png "$PAL | .style.data.palette.severity = \"fail\""
+[ $rc -eq 1 ] && [ "$(sst style-palette)" = FAIL ] && [ "$(jq -r .state "$TMP/sq.json")" = FAIL ] \
+  && ok "qa style-palette FAIL (palette severity fail): the qa state is FAIL, exit 1" || no "palette FAIL rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
+sqa sl-blue.png '.style.data.palette = "Warm earthy palette."'
+[ $rc -eq 0 ] && [ "$(sst style-palette)" = NOT_AVAILABLE ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] \
+  && ok "qa style-palette NOT_AVAILABLE (prose palette): the qa state stays PASS, exit 0 (not 3)" || no "palette NA rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
+req=$(jq -r '[.results[] | select(.check | startswith("png-")) | .check] | unique | join(",")' "$TMP/sq.json")
+[ "$req" = "png-alpha,png-corners,png-not-blank,png-size,png-valid" ] && [ "$(jq -r '[.results[].check] | map(select(startswith("style-"))) | join(",")' "$TMP/sq.json")" = "style-palette,style-tone,style-edges,style-canvas" ] \
+  && python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import runfiles, json; q = json.load(open(sys.argv[2]))["purpose"]["data"]["qa"]; sys.exit(0 if not any(c.startswith("style-") for c in runfiles.required_checks(q)) else 1)' "$ROOT/scripts/assetgen" "$sq/spec.json" \
+  && ok "style rows come after the required checks and are never required checks (runfiles.required_checks)" || no "style rows order/required: $req"
+# tone against the selected anchors (references/anchor-*.png copies of icon-ok.png)
+sqa icon-ok.png '.style.data.tone = {"tolerance": 0.05}'
+[ $rc -eq 0 ] && [ "$(sst style-tone)" = PASS ] && swhy style-tone | grep -q "inside .* of 3 anchor(s)" \
+  && ok "qa style-tone PASS: the output's luminance and saturation inside the 3 anchors' range" || no "tone PASS rc=$rc $(sst style-tone)" "$(swhy style-tone)"
+sqa sl-dark.png '.style.data.tone = {"tolerance": 0.05}'
+[ $rc -eq 0 ] && [ "$(sst style-tone)" = WARN ] && swhy style-tone | grep -q "mean luminance [0-9.]* outside" \
+  && ok "qa style-tone WARN: a far darker output than the anchors" || no "tone WARN rc=$rc $(sst style-tone)" "$(swhy style-tone)"
+sqa sl-dark.png '.style.data.tone = {"tolerance": 0.05, "severity": "fail"}'
+[ $rc -eq 1 ] && [ "$(sst style-tone)" = FAIL ] && ok "qa style-tone FAIL with severity fail" || no "tone FAIL rc=$rc $(sst style-tone)"
+mv "$sq/references" "$TMP/sq-refs"
+sqa sl-dark.png '.style.data.tone = {"tolerance": 0.05}'
+[ $rc -eq 0 ] && [ "$(sst style-tone)" = NOT_AVAILABLE ] && swhy style-tone | grep -q "no anchors" \
+  && ok "qa style-tone NOT_AVAILABLE without the run's anchor copies" || no "tone NA rc=$rc $(sst style-tone)" "$(swhy style-tone)"
+mv "$TMP/sq-refs" "$sq/references"
+# edges (purpose qa.outlines + outline.edge_darkness) and canvas (style.canvas[family])
+EDGE='.purpose.data.qa.outlines = true | .style.data.outline = {"text": "Dark outlines.", "edge_darkness": {"max_luminance": 80, "min_ratio": 0.5}}'
+sqa sl-outlined.png "$EDGE"
+[ $rc -eq 0 ] && [ "$(sst style-edges)" = PASS ] && ok "qa style-edges PASS: an outlined icon" || no "edges PASS rc=$rc $(sst style-edges)" "$(swhy style-edges)"
+sqa sl-outlined.png '.style.data.outline = {"text": "x", "edge_darkness": {}}'
+[ "$(sst style-edges)" = NOT_AVAILABLE ] && swhy style-edges | grep -q "qa.outlines" && ok "qa style-edges NOT_AVAILABLE for a purpose without qa.outlines" || no "edges NA $(sst style-edges)"
+sqa sl-warm.png '.style.data.canvas = {"props": {"aspect": "1:1", "min_side": 128}}'
+[ $rc -eq 0 ] && [ "$(sst style-canvas)" = PASS ] && swhy style-canvas | grep -q "^family props: 256x256" && ok "qa style-canvas PASS for the run's family (props)" || no "canvas PASS $(sst style-canvas)" "$(swhy style-canvas)"
+sqa sl-wide.png '.style.data.canvas = {"props": {"aspect": "1:1"}} | .purpose.data.qa.size = {"mode": "any"}'
+[ $rc -eq 0 ] && [ "$(sst style-canvas)" = WARN ] && ok "qa style-canvas WARN: 3:2 output for a 1:1 family canvas" || no "canvas WARN rc=$rc $(sst style-canvas)" "$(swhy style-canvas)"
+sqa sl-warm.png '.style.data.canvas = {"characters": {"aspect": "1:1"}}'
+[ "$(sst style-canvas)" = NOT_AVAILABLE ] && ok "qa style-canvas NOT_AVAILABLE without a canvas entry for the family" || no "canvas NA $(sst style-canvas)"
+# old runs: a spec without style_lock gets exactly the old rows
+sqa sl-blue.png "del(.style_lock) | $PAL"
+[ $rc -eq 0 ] && [ "$(jq -r '[.results[] | select(.check | startswith("style-"))] | length' "$TMP/sq.json")" = 0 ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] \
+  && ok "qa: a spec without style_lock (older run) gets no style rows" || no "old run style rows" "$(jq -c .results "$TMP/sq.json")"
+
+# review-cmd --phase image: anchors attached after outputs, anchor rubric item, rejection items, binding style + anchors
+cp "$TMP/sq-spec.json" "$sq/spec.json"; rm -f "$sq/outputs/"*.png; cp "$FX/sl-warm.png" "$sq/outputs/out.png"; AG qa --run "$sq" >/dev/null
+AG review-cmd --phase image --run "$sq" --codex codex --json > "$TMP/rv.json" 2>"$TMP/err"; rc=$?
+sqabs=$(cd "$sq" && { pwd -W 2>/dev/null || pwd; })
+want="$sqabs/outputs/out.png $sqabs/references/anchor-b-strong.png $sqabs/references/anchor-a-canon.png $sqabs/references/anchor-c-supp.png"
+[ $rc -eq 0 ] && [ "$(jq -r '[.argv | to_entries[] | select(.value == "-i") | .key + 1] as $i | [.argv[$i[]]] | join(" ")' "$TMP/rv.json")" = "$want" ] \
+  && [ "$(jq -r '.anchors | join(",")' "$TMP/rv.json")" = "references/anchor-b-strong.png,references/anchor-a-canon.png,references/anchor-c-supp.png" ] \
+  && ok "review-cmd image: -i outputs first, then the selected anchors in selection order" || no "review argv rc=$rc" "$(cat "$TMP/err"; jq -c .argv "$TMP/rv.json")"
+jq -r .stdin "$TMP/rv.json" > "$TMP/rv.txt"
+grep -qF "The image matches the attached anchors in palette, lighting, line, detail density and rendering." "$TMP/rv.txt" \
+  && grep -qF "Not repeated: too_detailed - No fine filigree on props." "$TMP/rv.txt" \
+  && grep -q "^Attached images (one per -i): outputs/out.png, references/anchor-b-strong.png, references/anchor-a-canon.png, references/anchor-c-supp.png$" "$TMP/rv.txt" \
+  && grep -q "^references/anchor-b-strong.png is not an output: style anchor b-strong (strong; palette, shape, line) of style rpg-base" "$TMP/rv.txt" \
+  && ok "review-cmd image: anchor rubric item, one item per relevant rejection, anchors named as not outputs" || no "review rubric" "$(cat "$TMP/rv.txt")"
+n_rub=$(jq '.purpose.data.image_rubric | length' "$sq/spec.json")
+[ "$(jq -r --argjson n "$n_rub" '.rubric[$n:] | join("|")' "$TMP/rv.json")" = "The image matches the attached anchors in palette, lighting, line, detail density and rendering.|Not repeated: palette_off - the rejected asset sl-icon-001 outputs/out.png|Not repeated: too_detailed - No fine filigree on props.|Not repeated: too_detailed - No gold trim.|Not repeated: too_detailed - No noise." ] \
+  && grep -q "^$((n_rub + 2))\. Not repeated: palette_off" "$TMP/rv.txt" \
+  && ok "review-cmd --json prints the same rubric items (purpose rubric, then anchor and rejection items) for Claude's own review" || no "rubric json" "$(jq -c .rubric "$TMP/rv.json")"
+[ "$(jq -c '.binding.style == ($s[0].style_lock.style)' --slurpfile s "$sq/spec.json" "$TMP/rv.json")" = true ] \
+  && [ "$(jq -c '[.binding.anchors[] | .anchor_id] | join(",")' -r "$TMP/rv.json")" = "b-strong,a-canon,c-supp" ] \
+  && [ "$(jq -c --slurpfile s "$sq/spec.json" '[.binding.anchors[].sha256] == [$s[0].style_lock.references[].sha256]' "$TMP/rv.json")" = true ] \
+  && grep -qF '"style": {"sha256": ' "$TMP/rv.txt" \
+  && ok "review-cmd image binding: style ref and [{anchor_id, sha256}] of the attached anchors (also in the prompt)" || no "binding" "$(jq -c .binding "$TMP/rv.json")"
+bound "$sq" image PASS codex > "$sq/review-image.json"
+python3 -B - "$ROOT" "$sq/review-image.json" "$TMP/rv.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/scripts/assetgen")
+import runfiles
+v = runfiles.read_verdict(sys.argv[2], "image")
+b = json.load(open(sys.argv[3], encoding="utf-8"))["binding"]
+assert v["style"] == b["style"] and v["anchors"] == b["anchors"], v
+assert "style" not in runfiles.read_verdict(sys.argv[2], "prompt"), "prompt phase keeps no image binding"
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "read_verdict keeps the style and anchors of an image verdict" || no "read_verdict style lock" "$(cat "$TMP/o")"
+mv "$sq/references/anchor-a-canon.png" "$TMP/a-canon.png"
+AG review-cmd --phase image --run "$sq" --codex codex --json > /dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "references/anchor-a-canon.png is missing: run .*render --run" "$TMP/err" && ok "review-cmd image: a selected anchor copy missing is refused (render --run copies it)" || no "missing anchor rc=$rc" "$(cat "$TMP/err")"
+mv "$TMP/a-canon.png" "$sq/references/anchor-a-canon.png"
+# prompt phase: direction rejections join Must avoid; no anchors and no style binding there
+AG review-cmd --phase prompt --run "$sq" --codex codex --json > "$TMP/rp.json" 2>"$TMP/err"
+jq -r .stdin "$TMP/rp.json" | grep -q "^Must avoid: .*, No fine filigree on props. (rejected direction r-props), No gold trim. (rejected direction too-detailed-001), No noise. (rejected direction too-detailed-002)$" \
+  && [ "$(jq -r '(.binding | has("style") or has("anchors")) or (.argv | index("-i") != null) or (.rubric | map(startswith("Not repeated")) | any)' "$TMP/rp.json")" = false ] \
+  && ok "review-cmd prompt: direction rejections in Must avoid; no -i, no anchor binding, no rejection rubric items" || no "prompt review" "$(cat "$TMP/err"; jq -r .stdin "$TMP/rp.json")"
+# both phases name the style's forbidden list and the resolved outline and shape_language text (lighting, palette as hints)
+sr_="$SR/sl-rules-001"; rm -rf "$sr_"; cp -R "$sq" "$sr_"
+jq '.style.data.forbidden = ["photo texture", "lens flare"] | .style.data.outline = {"text": "Dark 2px outline.", "severity": "warn"}
+    | .style.data.shape_language = "Chunky rounded silhouettes."' "$sq/spec.json" > "$sr_/spec.json"
+for ph in prompt image; do
+  AG review-cmd --phase $ph --run "$sr_" --codex codex --json > "$TMP/rr.json" 2>"$TMP/err"; rc=$?
+  jq -r .stdin "$TMP/rr.json" > "$TMP/rr.txt"
+  [ $rc -eq 0 ] && grep -qx "Style forbidden (never in the prompt or the image): photo texture, lens flare" "$TMP/rr.txt"     && grep -qx "Style outline: Dark 2px outline." "$TMP/rr.txt" && grep -qx "Style shape language: Chunky rounded silhouettes." "$TMP/rr.txt"     && grep -q "^Hints (the purpose wins for technical constraints): .*palette: " "$TMP/rr.txt"     && ok "review-cmd $ph: style forbidden list, outline and shape_language text for the reviewer" || no "review rules $ph rc=$rc" "$(cat "$TMP/err" "$TMP/rr.txt")"
+done
+# old runs: a spec without style_lock reviews exactly as before
+sl_="$SR/sl-legacy-001"; cp -R "$sq" "$sl_"; jq 'del(.style_lock)' "$sq/spec.json" > "$sl_/spec.json"; rm -rf "$sl_/references"
+AG review-cmd --phase image --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '(.binding | keys | join(",")) + " " + (.anchors | length | tostring) + " " + ([.argv[] | select(. == "-i")] | length | tostring)' "$TMP/rl.json")" = "outputs,prompt_sha256,requirements_sha256 0 1" ] \
+  && ! jq -r .stdin "$TMP/rl.json" | grep -q "attached anchors\|Not repeated" \
+  && ok "review-cmd image on an old spec without style_lock: old binding keys, no anchors, no style rubric items" || no "legacy review rc=$rc" "$(cat "$TMP/err"; jq -c '[.binding, .argv]' "$TMP/rl.json")"
+jq 'del(.style.data.forbidden, .style.data.outline, .style.data.shape_language)' "$sl_/spec.json" > "$TMP/s" && mv "$TMP/s" "$sl_/spec.json"
+AG review-cmd --phase prompt --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; jq -r .stdin "$TMP/rl.json" > "$TMP/rr.txt"
+grep -qx "Style forbidden (never in the prompt or the image): none" "$TMP/rr.txt" && grep -qx "Style outline: none" "$TMP/rr.txt" && grep -qx "Style shape language: none" "$TMP/rr.txt"   && ok "review-cmd: a style without forbidden, outline or shape_language says none" || no "review rules none" "$(cat "$TMP/err" "$TMP/rr.txt")"
+
+# drift (read-only): older version and hash changed
+git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "runs and records"
+AG drift --authoring "$SC" --json > "$TMP/dr.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq '.items | length' "$TMP/dr.json")" = 0 ] && ok "drift: nothing behind the current style" || no "drift clean rc=$rc" "$(cat "$TMP/err" "$TMP/dr.json")"
+jq '.version = 3' "$SG/styles/rpg-base.json" > "$TMP/s" && mv "$TMP/s" "$SG/styles/rpg-base.json"
+git -C "$SC" "${G[@]}" commit -qam "style v3"
+AG drift --authoring "$SC" --json > "$TMP/dr.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '[.items[] | select(.style.style_id == "rpg-base" and .id != "too-detailed-002") | .state] | unique | join(",")' "$TMP/dr.json")" = older-version ] \
+  && jq -e '[.items[] | select(.kind == "gen-run" and .id == "AGEN-sl-icon-001")] | length == 1' "$TMP/dr.json" >/dev/null \
+  && jq -e '[.items[] | select(.kind == "anchor" and .id == "sl-icon-001-1")] | length == 1' "$TMP/dr.json" >/dev/null \
+  && [ "$(jq -r '[.items[] | select(.kind == "rejection" and .id == "too-detailed-002") | .state] | join(",")' "$TMP/dr.json")" = hash-changed ] \
+  && [ -z "$(git -C "$SC" status --porcelain)" ] \
+  && ok "drift: gen-runs, anchors and rejections on version 2 listed older-version (version-free rejection hash-changed only), nothing written" \
+  || no "drift older-version rc=$rc" "$(cat "$TMP/err"; jq -c '[.items[] | [.kind, .id, .state]]' "$TMP/dr.json"; git -C "$SC" status --porcelain)"
+jq '.version = 2' "$SG/styles/rpg-base.json" > "$TMP/s" && mv "$TMP/s" "$SG/styles/rpg-base.json"
+jq '.prefix = "RPG base art, revised,"' "$SG/styles/rpg-base.json" > "$TMP/s" && mv "$TMP/s" "$SG/styles/rpg-base.json"
+AG drift --authoring "$SC" > "$TMP/dr.txt" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && grep -q "^hash-changed anchor a-canon (assetgen/styles/rpg-base/anchors/a-canon.json): recorded rpg-base v2 [0-9a-f]\{12\}, current v2 [0-9a-f]\{12\}$" "$TMP/dr.txt" \
+  && grep -q "^hash-changed gen-run AGEN-sl-icon-001 " "$TMP/dr.txt" && ! grep -q "^older-version" "$TMP/dr.txt" && grep -q "^assetgen drift: [1-9][0-9]* item(s) behind the current style$" "$TMP/dr.txt" \
+  && ok "drift text: same version, changed style data -> hash-changed" || no "drift hash-changed rc=$rc" "$(cat "$TMP/err" "$TMP/dr.txt")"
+git -C "$SC" checkout -q -- .
+
+echo "-- gen-run-style (quality plugin): style lock refs, anchor approval, image bytes, source runs, override"
+python3 -B - "$ROOT" "$TMP/style-plugin" "$FX/icon-ok.png" > "$TMP/gs" 2>&1 <<'EOF'
+import hashlib, importlib.util, json, os, sys
+root, A, png = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, os.path.join(root, "scripts", "checks"))
+from domains._api import Context
+spec_ = importlib.util.spec_from_file_location("assetgen_plugin_style", os.path.join(root, "scripts", "checks", "domains", "assetgen.py"))
+plugin = importlib.util.module_from_spec(spec_); spec_.loader.exec_module(plugin)
+layers, stylelock = plugin.engine("layers"), plugin.engine("stylelock")
+G = os.path.join(A, "assetgen")
+os.makedirs(os.path.join(G, "styles"), exist_ok=True)
+v1 = {"schema": "rpg-factory.assetgen-style/1", "title": "RPG base", "version": 1, "status": "active", "prefix": "RPG base art,"}
+v2 = dict(v1, version=2, prefix="RPG base art, warmer,")
+json.dump(v2, open(os.path.join(G, "styles", "rpg-base.json"), "w", encoding="utf-8"))
+ref2 = stylelock.style_ref(layers.load("style", "rpg-base", A))
+ref1 = {"style_id": "rpg-base", "version": 1, "sha256": layers.content_hash(v1)}
+img = open(png, "rb").read()
+SIGNED = {"seed-001", "src-ok-001", "src-agent-001"}  # runs whose signed approval verifies (ctx.approval stub)
+
+
+class Ctx(Context):
+    def approval(self, artifact_id):
+        ok = artifact_id[len("AGEN-"):] in SIGNED
+        return {"state": "verified" if ok else "missing", "reasons": [] if ok else ["no signed approval"]}
+
+
+for rid, status in (("seed-001", "approved"), ("seed2-001", "approved"), ("draft-001", "proposed")):
+    os.makedirs(os.path.join(G, "runs", rid), exist_ok=True)
+    with open(os.path.join(G, "runs", rid, "run.md"), "w", encoding="utf-8") as f:
+        f.write("---json\n%s\n---\n" % json.dumps({"id": "AGEN-" + rid, "status": status}))
+
+
+def anchor(aid, ref, run="seed-001", status="active", by="Dana", n=0, output="outputs/a.png"):
+    d = os.path.join(G, "styles", "rpg-base", "anchors"); os.makedirs(d, exist_ok=True)
+    data = img + bytes([n])  # distinct bytes per anchor (a trailing byte, never decoded)
+    open(os.path.join(d, aid + ".png"), "wb").write(data)
+    sha = hashlib.sha256(data).hexdigest()
+    json.dump({"schema": stylelock.ANCHOR_SCHEMA, "id": aid, "status": status, "style": ref, "family": "props",
+               "dimensions": ["palette"], "strength": "canonical", "image": aid + ".png", "image_sha256": sha,
+               "source_run": {"run_id": run, "output": output, "sha256": sha},
+               "approved_by": by if status == "active" else None, "approved_on": "2026-11-01" if status == "active" else None},
+              open(os.path.join(d, aid + ".json"), "w", encoding="utf-8"))
+    return sha
+
+
+shas = {"a-good": anchor("a-good", ref2, n=1), "a-agent": anchor("a-agent", ref2, by="claude-opus", n=2),
+        "a-old": anchor("a-old", ref1, n=3), "a-noimg": anchor("a-noimg", ref2, n=4),
+        "a-draftsrc": anchor("a-draftsrc", ref2, run="draft-001", n=5), "a-unsigned": anchor("a-unsigned", ref2, run="seed2-001", n=6),
+        "a-proposed": anchor("a-proposed", ref2, status="proposed", n=7), "a-retired": anchor("a-retired", ref2, status="retired", n=8),
+        "a-bytes": anchor("a-bytes", ref2, n=9)}
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "a-noimg.png"))
+open(os.path.join(G, "styles", "rpg-base", "anchors", "a-bytes.png"), "ab").write(b"x")
+reg = json.load(open(os.path.join(root, "registry.json"), encoding="utf-8"))
+
+
+def style_rows(rid, status="proposed", refs=(), ref=ref2, override=None, lock=True, outputs=()):
+    spec = {"run_id": rid, "style": {"id": ref["style_id"], "layer": "game", "sha256": ref["sha256"]},
+            "outputs": [{"path": p, "sha256": s} for p, s in outputs]}
+    if lock:
+        spec["style_lock"] = {"project": None, "family": "props", "family_source": "purpose", "style": ref, "override": override,
+                              "max_references": 3, "rejections": [],
+                              "references": [{"anchor_id": a, "sha256": shas.get(a, "0" * 64)} for a in refs]}
+    obj = {"id": "AGEN-" + rid, "kind": "gen-run", "status": status, "spec": spec}
+    rows = plugin.check(obj, Ctx(A, reg, "assetgen/runs/%s/run.md" % rid, {}, None, {"authoring": A}))
+    return [r for r in rows if r.check == "gen-run-style"], [r.check for r in rows]
+
+
+def case(rid, want, needles, label, **kw):
+    rows, _ = style_rows(rid, **kw)
+    text = "; ".join(sum((r.reasons for r in rows), []))
+    good = len(rows) == 1 and rows[0].state == want and all(n in text for n in needles)
+    print(("ok " if good else "no ") + label + ("" if good else " | %s %s" % ([r.state for r in rows], text)))
+
+
+case("u-good-001", "PASS", [], "gen-run-style: a human-approved active anchor (approved source run, signed approval, bytes match) PASS", refs=["a-good"])
+case("u-agent-001", "FAIL", ["is an agent or model"], "gen-run-style: an active anchor approved_by an agent/model name FAIL", refs=["a-agent"])
+case("u-old-001", "WARN", ["changed since the run"], "gen-run-style: an anchor of an older style version stays valid (style drift WARN only)", refs=["a-old"], ref=ref1)
+case("u-gone-001", "FAIL", ["a-gone is not in assetgen/styles/rpg-base/anchors/"], "gen-run-style: a recorded anchor without its JSON FAIL", refs=["a-gone"])
+case("u-noimg-001", "FAIL", ["a-noimg image a-noimg.png is missing"], "gen-run-style: a recorded anchor without its image file FAIL", refs=["a-noimg"])
+case("u-bytes-001", "FAIL", ["sha256 on disk differs from image_sha256"], "gen-run-style: anchor image bytes changed FAIL", refs=["a-bytes"])
+case("u-draftsrc-001", "FAIL", ["source gen-run draft-001 is proposed, not approved"], "gen-run-style: an anchor whose source run is not approved FAIL", refs=["a-draftsrc"])
+case("u-unsigned-001", "FAIL", ["approval of source gen-run AGEN-seed2-001 is missing"],
+     "gen-run-style: source run approved in run.md without a verified signed approval FAIL", refs=["a-unsigned"])
+case("u-proposed-001", "FAIL", ["is proposed, not active"], "gen-run-style: a proposed anchor in the references FAIL", refs=["a-proposed"])
+case("u-retired-001", "WARN", ["retired since the run"], "gen-run-style: an anchor retired after the run WARN", refs=["a-retired"])
+case("u-override-001", "WARN", ["style override recorded: one-off key art"], "gen-run-style: an override with a reason WARN", override="one-off key art")
+case("u-blank-001", "FAIL", ["override must be null or a non-empty reason"], "gen-run-style: an override without a reason FAIL", override="  ")
+case("u-noref-001", "FAIL", ["does not resolve"], "gen-run-style: a style ref that does not resolve FAIL",
+     ref={"style_id": "no-such-style", "version": 1, "sha256": "1" * 64})
+rows, names = style_rows("legacy-001", lock=False)
+print(("ok " if not rows and "gen-run-refs" in names else "no ") + "gen-run-style: an old run without style_lock and no promoted anchor gets no row (unchanged)")
+# anchors promoted from the run itself
+sha = anchor("s-active", ref2, run="src-001", n=10, output="outputs/s.png")
+case("src-001", "FAIL", ["is active but its source gen-run AGEN-src-001 is proposed, not approved"],
+     "gen-run-style: an active anchor whose source run (this run) is not approved FAIL", lock=False, outputs=[("outputs/s.png", sha)])
+sha = anchor("s-ok", ref2, run="src-ok-001", n=11, output="outputs/s.png")
+case("src-ok-001", "PASS", [], "gen-run-style: an active anchor promoted from this approved run PASS", status="approved", lock=False,
+     outputs=[("outputs/s.png", sha)])
+sha = anchor("s-agent", ref2, run="src-agent-001", by="codex", n=12, output="outputs/s.png")
+case("src-agent-001", "FAIL", ["without a person's approval", "codex"], "gen-run-style: an active anchor of this run approved by an agent FAIL",
+     status="approved", lock=False, outputs=[("outputs/s.png", sha)])
+case("src-agent-001", "FAIL", ["which this run does not record"], "gen-run-style: an anchor naming output bytes the run does not record FAIL",
+     status="approved", lock=False, outputs=[("outputs/s.png", "0" * 64)])
+print("ok gen-run-style cases ran to the end")
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "gen-run-style: unexpected output" "$line" ;; esac
+done < "$TMP/gs"
+grep -qx "ok gen-run-style cases ran to the end" "$TMP/gs" || no "gen-run-style cases stopped early" "$(tail -5 "$TMP/gs")"
+# registry fast check assetgen-lint: catches an active anchor whose source gen-run has no run.md (no gen-run to check)
+cmd=$(jq -r '.modules[] | select(.id == "authoring.assetgen") | .checks.fast[] | select(.id == "assetgen-lint") | .run' "$ROOT/registry.json")
+[ -n "$cmd" ] && jq -e '.domains.assetgen.quality_gates | index("assetgen-lint")' "$ROOT/registry.json" >/dev/null \
+  && ok "registry: authoring.assetgen fast check assetgen-lint is a quality gate of the assetgen domain" || no "registry assetgen-lint" "$cmd"
+SP="$TMP/style-plugin"; rm -rf "$SP/assetgen/runs/seed-001"
+(cd "$SP" && eval "${cmd//\{plugin_root\}/\"$ROOT\"}") > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "a-good.json: .*seed-001 is missing" "$TMP/o" \
+  && ok "assetgen-lint (registry command, in the authoring repo): an active anchor whose source run.md is gone FAILS" || no "assetgen-lint rc=$rc" "$(grep -v '^PASS' "$TMP/o")"
+
+echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
+python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
+n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
+[ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "consistency self-test: $n_ok cases passed" || no "consistency self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
 
 echo "-- no endpoints or credentials in core data or engine"
 hits=$(grep -rnIE '://|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost:[0-9]|Bearer [A-Za-z0-9]|sk-[A-Za-z0-9]{12}|"(api[_-]?key|authorization|base_url)" *:' \

@@ -31,6 +31,11 @@
             "id": "assetgen-quality",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain assetgen",
             "evidence": "Generation runs: reviewer model differs from the prompt author, QA PASS recorded, output hashes match the files, provenance complete, purpose/style/template refs resolve."
+          },
+          {
+            "id": "assetgen-lint",
+            "run": "python3 -B {plugin_root}/scripts/assetgen/assetgen.py lint --authoring .",
+            "evidence": "Game-layer asset-gen data offline: purposes, styles, templates, assetgen/project.json, anchors (an active anchor needs a person's approval, its image hash and an approved source gen-run with a run.md) and rejections; no URL or credential."
           }
         ],
         "extended": [],
@@ -171,7 +176,8 @@
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
-        "assetgen-quality"
+        "assetgen-quality",
+        "assetgen-lint"
       ],
       "human_gates": [
         "assetgen-approval"

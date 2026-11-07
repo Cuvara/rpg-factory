@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asset-gen style anchor (<authoring>/assetgen/styles/<style-id>/anchors/<id>.json; scripts/assetgen/stylelock.py)",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "status",
+    "style",
+    "family",
+    "dimensions",
+    "strength",
+    "image",
+    "image_sha256",
+    "source_run",
+    "approved_by",
+    "approved_on"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rpg-factory.assetgen-anchor/1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "active",
+        "retired"
+      ],
+      "description": "promote-anchor writes proposed; only a person sets active."
+    },
+    "style": {
+      "type": "object",
+      "required": [
+        "style_id",
+        "version",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "description": "Style reference: the style id, its version (null for a style without one) and layers.content_hash of the merged style data.",
+      "properties": {
+        "style_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "family": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "palette",
+          "lighting",
+          "shape",
+          "texture",
+          "composition",
+          "line"
+        ]
+      }
+    },
+    "strength": {
+      "enum": [
+        "canonical",
+        "strong",
+        "supporting"
+      ]
+    },
+    "image": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+\\.png$"
+    },
+    "image_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_run": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "output",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "output": {
+          "type": "string",
+          "pattern": "^outputs/[^/]+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "approved_by": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "A person; never an agent or model name (claude, codex, gpt*, SAME_MODEL:*)."
+    },
+    "approved_on": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    }
+  },
+  "if": {
+    "properties": {
+      "status": {
+        "const": "active"
+      }
+    }
+  },
+  "then": {
+    "properties": {
+      "approved_by": {
+        "type": "string",
+        "minLength": 1
+      },
+      "approved_on": {
+        "type": "string"
+      }
+    }
+  }
+}

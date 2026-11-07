@@ -4,6 +4,14 @@
  "description": "Button, frame, panel or ornament part for UI Toolkit skins; transparent background.",
  "handoff_domain": "ui",
  "default_template": "image-generate",
+ "default_family": "ui",
+ "dimensions": [
+  "palette",
+  "shape",
+  "line",
+  "texture"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1024x1024",
   "background": "transparent",

@@ -4,6 +4,14 @@
  "description": "Exploration image for a character, prop or environment; feeds art2d concept artifacts.",
  "handoff_domain": "art2d",
  "default_template": "image-generate",
+ "default_family": "characters",
+ "dimensions": [
+  "palette",
+  "lighting",
+  "shape",
+  "composition"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1536x1024",
   "background": "opaque",

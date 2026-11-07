@@ -29,10 +29,22 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        purpose, whose content hash must equal spec.purpose.sha256). NOT_AVAILABLE never grades PASS:
                        it is missing work (install Pillow, re-run qa). A report that claims PASS while a row is not
                        PASS or a required check is missing contradicts itself and always FAILS; rows for unrecorded
-                       outputs FAIL.
+                       outputs FAIL. Style consistency rows (style-*, never required checks) are graded as qa.json says:
+                       WARN stays WARN (a soft signal, never FAIL), NOT_AVAILABLE neither grades nor contradicts, and a
+                       style-* FAIL row must agree with a FAIL qa state.
   gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present
+  gen-run-style        the style lock (spec.style_lock, resolve with project.json, anchors and rejections): the style ref
+                       is well formed, names the run's style and resolves (a newer version or another hash is a WARN:
+                       anchors of the recorded version stay valid), run.md equals spec.json, an override carries a
+                       reason (WARN, the approver weighs it). Every recorded reference names an anchor that exists, is
+                       well formed and active (retired since the run: WARN), approved by a person (not an agent or
+                       model name), whose image bytes equal image_sha256, the run's pick and the source output, and
+                       whose source gen-run is approved in run.md and by its signed approval (ctx.approval). An active
+                       anchor promoted from this run FAILS while this run is not approved. With the style lock the
+                       image reviews also bind the style ref and the anchors shown (else stale). A run recorded before
+                       the style lock with no anchor promoted from it gets no row.
   gen-run-refs         purpose, style and template resolve in the core + game layers (content drift = WARN, the
                        record keeps what was used), prompt_sha256 and prompt.md match the recorded prompt, and a
                        handoff contract assetgen-to-<handoff_domain> is registered
@@ -46,6 +58,7 @@ import importlib.util
 import json
 import os
 import re
+import sys
 from pathlib import Path, PurePosixPath
 
 from domains._api import Result
@@ -59,11 +72,25 @@ _engine = {}
 
 
 def engine(name):
-    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules), loaded once under a private name."""
+    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules; stylelock: anchors and style refs),
+    loaded once under a private name. stylelock's `import layers` is bound to the private layers module for the load
+    only, so sys.modules keeps no engine module under its plain name."""
     if name not in _engine:
         spec = importlib.util.spec_from_file_location("assetgen_" + name, ROOT / "scripts" / "assetgen" / (name + ".py"))
-        _engine[name] = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_engine[name])
+        module = importlib.util.module_from_spec(spec)
+        if name == "stylelock":
+            saved = sys.modules.get("layers")
+            sys.modules["layers"] = engine("layers")
+            try:
+                spec.loader.exec_module(module)
+            finally:
+                if saved is None:
+                    del sys.modules["layers"]
+                else:
+                    sys.modules["layers"] = saved
+        else:
+            spec.loader.exec_module(module)
+        _engine[name] = module
     return _engine[name]
 
 
@@ -136,6 +163,15 @@ def check(artifact, ctx):
     requirements = {"prompt": runfiles.requirements_sha256(spec, None), "image": runfiles.requirements_sha256(
         spec, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec,
                                     lambda name: resolve("references/" + name)))}
+    lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else None
+
+    def lock_stale(disk):
+        """With spec.style_lock an image verdict names the style ref and the anchors it was shown (review-cmd binding)."""
+        if lock is None:
+            return False
+        want = [{"anchor_id": r.get("anchor_id"), "sha256": r.get("sha256")} for r in runfiles.style_lock_references(spec)]
+        return disk.get("style") != lock.get("style") or disk.get("anchors") != want
+
     author = spec.get("prompt_author") or ""
     for phase in ("prompt", "image"):
         rv = spec.get(phase + "_review") if isinstance(spec.get(phase + "_review"), dict) else {}
@@ -159,6 +195,10 @@ def check(artifact, ctx):
             elif disk["requirements_sha256"] != requirements[phase]:
                 todo.append("%s is bound to other requirements (purpose, style, template or params changed since the "
                             "review%s): re-run the review" % (name, ", or the generation inputs" if phase == "image" else ""))
+            elif phase == "image" and lock_stale(disk):
+                todo.append("%s is not bound to the style lock (its style ref and anchors differ from spec.style_lock: "
+                            "%s with %d anchor(s)): re-run the image review with review-cmd" % (
+                                name, (lock.get("style") or {}).get("style_id"), len(runfiles.style_lock_references(spec))))
         if state != "PASS":
             todo.append("%s review is %s%s (evidence review-%s.json)" % (
                 phase, state or "missing", ", %s finding(s)" % rv.get("findings") if rv.get("findings") else "", phase))
@@ -197,8 +237,8 @@ def check(artifact, ctx):
                          % (CLAUDE_REVIEW, disk["state"], disk["by"] or "-"))
         if disk["state"] == "INVALID":
             warns.append("%s holds no JSON verdict with state PASS or FAIL" % CLAUDE_REVIEW)
-        elif disk["prompt_sha256"] != spec.get("prompt_sha256") or disk["requirements_sha256"] != requirements["image"]                 or {o["path"]: o["sha256"] for o in disk["outputs"]} != recorded:
-            warns.append("%s is not bound to the current prompt, requirements and outputs: review the images again "
+        elif disk["prompt_sha256"] != spec.get("prompt_sha256") or disk["requirements_sha256"] != requirements["image"]                 or {o["path"]: o["sha256"] for o in disk["outputs"]} != recorded or lock_stale(disk):
+            warns.append("%s is not bound to the current prompt, requirements, outputs and style lock: review the images again "
                          "with the binding of review-cmd --phase image --json" % CLAUDE_REVIEW)
         elif disk["state"] == "FAIL":
             todo.append("Claude's visual review is FAIL (%d finding(s)): regenerate, or keep the run draft"
@@ -246,7 +286,8 @@ def check(artifact, ctx):
     else:
         todo.append("qa.json is missing from the run directory (assetgen.py qa)")
     state = disk.get("state") if disk is not None else None
-    rows = [r for r in (disk or {}).get("results") or [] if isinstance(r, dict)]
+    all_rows = [r for r in (disk or {}).get("results") or [] if isinstance(r, dict)]
+    rows = [r for r in all_rows if not (str(r.get("check", "")).startswith("style-") and r.get("state") in ("WARN", "NOT_AVAILABLE"))]
     required, problems = None, []
     rec_purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
     if purpose is None:
@@ -283,14 +324,17 @@ def check(artifact, ctx):
                 problems.append("QA of %s: %s" % (path, ", ".join(bad)))
             if mine and missing:
                 problems.append("QA of %s lacks the required check(s) %s" % (path, ", ".join(missing)))
-        stale = sorted({str(r.get("output")) for r in rows} - set(recorded) - {"outputs/"})
+        stale = sorted({str(r.get("output")) for r in all_rows} - set(recorded) - {"outputs/"})
         if stale:
             fails.append("QA results name outputs that are not recorded: " + ", ".join(stale))
         if state == "PASS" and (problems or any(r.get("state") != "PASS" for r in rows)):
             fails.append("qa.json claims PASS but contradicts its own rows: " + ("; ".join(problems) or "a row is not PASS"))
         else:
             todo += problems
-    grade("gen-run-qa", fails, todo)
+    style_warns = ["style consistency %s: %s %s%s" % (r.get("output"), r.get("check"), r.get("state"),
+                                                       " (%s)" % "; ".join(map(str, r.get("reasons") or [])) if r.get("reasons") else "")
+                   for r in all_rows if str(r.get("check", "")).startswith("style-") and r.get("state") == "WARN"]
+    grade("gen-run-qa", fails, todo, style_warns)
 
     prov = artifact.get("provenance") if isinstance(artifact.get("provenance"), dict) else {}
     gen = spec.get("generation") if isinstance(spec.get("generation"), dict) else {}
@@ -343,11 +387,128 @@ def check(artifact, ctx):
     if not any(c.get("id") == "assetgen-to-%s" % target and c.get("kind") == "handoff" for c in ctx.registry.get("contracts", [])):
         fails.append("no handoff contract assetgen-to-%s is registered for handoff_domain %r" % (target, target))
     grade("gen-run-refs", fails, todo, warns)
+    style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade)
     return results
 
 
+def anchor_problems(rec, stylelock, ctx, authoring):
+    """(fails, warns) of one anchor record: well formed, a person approved it, image bytes, source gen-run approved
+    in the engine view (run.md status) and by its signed approval. A retired anchor only warns."""
+    data, fails, warns = rec["data"], [], []
+    aid = rec["id"]
+    if rec["errors"]:
+        return ["anchor %s is malformed: %s" % (aid, "; ".join(rec["errors"]))], []
+    if data["status"] == "retired":
+        warns.append("anchor %s is retired since the run; the record keeps what was used" % aid)
+    elif data["status"] != "active":
+        fails.append("anchor %s is %s, not active: only a person activates an anchor (status active, approved_by, "
+                     "approved_on)" % (aid, data["status"]))
+    image = os.path.join(os.path.dirname(rec["path"]), data["image"])
+    if not os.path.isfile(image):
+        fails.append("anchor %s image %s is missing" % (aid, data["image"]))
+    elif sha256_file(image) != data["image_sha256"]:
+        fails.append("anchor %s image %s: sha256 on disk differs from image_sha256" % (aid, data["image"]))
+    if data["image_sha256"] != data["source_run"]["sha256"]:
+        fails.append("anchor %s image_sha256 is not the sha256 of its source output %s"
+                     % (aid, data["source_run"]["output"]))
+    source = data["source_run"]["run_id"]
+    status = stylelock.run_status(authoring, source)
+    if status != "approved":
+        fails.append("anchor %s: source gen-run %s is %s, not approved" % (aid, source, status or "missing (no run.md)"))
+    else:
+        verdict = ctx.approval("AGEN-" + source)
+        if not isinstance(verdict, dict) or verdict.get("state") != "verified":
+            fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
+                aid, source, (verdict or {}).get("state", "missing"), "; ".join((verdict or {}).get("reasons") or [])))
+    return fails, warns
+
+
+def style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade):
+    """gen-run-style: the style lock of the run (style ref, recorded anchors, override) and the anchors promoted from
+    this run's outputs. A run recorded before the style lock with no anchor promoted from it gets no row."""
+    stylelock = engine("stylelock")
+    authoring = (ctx.repo_roots or {}).get("authoring") or ctx.repo
+    sourced = []
+    for _, kind, path in stylelock.anchor_files(authoring):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        src = data.get("source_run") if kind == "anchor" and isinstance(data, dict) else None
+        if isinstance(src, dict) and src.get("run_id") == run_id:
+            sourced.append((path, data))
+    if lock is None and not sourced:
+        return
+    fails, warns = [], []
+    if lock is not None:
+        ref = lock.get("style")
+        errs = stylelock.ref_errors(ref, "spec.style_lock.style")
+        fails += errs
+        st = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+        if not errs:
+            if ref["style_id"] != st.get("id") or ref["sha256"] != st.get("sha256"):
+                fails.append("spec.style_lock.style (%s %s) is not the run's style (%s %s)" % (
+                    ref["style_id"], ref["sha256"][:12], st.get("id"), str(st.get("sha256"))[:12]))
+            lay = layers()
+            try:
+                now = stylelock.style_ref(lay.load("style", ref["style_id"], authoring))
+            except lay.SpecError as exc:
+                fails.append("style %s of the style lock does not resolve: %s" % (ref["style_id"], exc))
+            else:
+                if now != ref:
+                    warns.append("style %s changed since the run (recorded v%s %s, now v%s %s); anchors of the recorded "
+                                 "version stay valid, the record keeps what was used" % (
+                                     ref["style_id"], ref.get("version"), ref["sha256"][:12], now["version"], now["sha256"][:12]))
+        if isinstance(spec_json, dict) and spec_json.get("style_lock") != lock:
+            fails.append("run.md spec.style_lock differs from spec.json; re-run assetgen.py manifest")
+        override = lock.get("override")
+        if override is not None:
+            if isinstance(override, str) and override.strip():
+                warns.append("style override recorded: %s (the human approver weighs it)" % override.strip())
+            else:
+                fails.append("spec.style_lock.override must be null or a non-empty reason")
+        refs = lock.get("references")
+        picks = [r for r in refs if isinstance(r, dict)] if isinstance(refs, list) else []
+        if refs is not None and (not isinstance(refs, list) or len(picks) != len(refs)):
+            fails.append("spec.style_lock.references must be a list of anchor picks")
+        cap = lock.get("max_references")
+        if isinstance(cap, int) and len(picks) > cap:
+            fails.append("spec.style_lock.references holds %d anchors, more than max_references %d" % (len(picks), cap))
+        sid = ref.get("style_id") if isinstance(ref, dict) else None
+        records = {r["id"]: r for r in stylelock.load_anchors(authoring, sid)} if not errs else {}
+        for pick in picks:
+            aid = pick.get("anchor_id")
+            rec = records.get(aid) if isinstance(aid, str) else None
+            if rec is None:
+                fails.append("anchor %s is not in assetgen/styles/%s/anchors/" % (aid, sid))
+                continue
+            f, w = anchor_problems(rec, stylelock, ctx, authoring)
+            if not rec["errors"] and pick.get("sha256") != rec["data"]["image_sha256"]:
+                f.append("anchor %s: the run used image sha256 %s, the anchor now holds %s" % (
+                    aid, str(pick.get("sha256"))[:12], rec["data"]["image_sha256"][:12]))
+            fails += f
+            warns += w
+    for path, data in sourced:
+        aid = data.get("id") or os.path.basename(path)[:-5]
+        if data.get("status") != "active":
+            continue
+        if artifact.get("status") != "approved":
+            fails.append("anchor %s is active but its source gen-run AGEN-%s is %s, not approved: retire the anchor or "
+                         "have a person approve the run" % (aid, run_id, artifact.get("status")))
+        by = data.get("approved_by")
+        if not isinstance(by, str) or not by.strip() or stylelock.is_agent_name(by):
+            fails.append("anchor %s is active without a person's approval (approved_by %r): only a person activates an "
+                         "anchor" % (aid, by))
+        src = data.get("source_run")
+        if not isinstance(src, dict) or recorded.get(src.get("output")) != src.get("sha256"):
+            src = src if isinstance(src, dict) else {}
+            fails.append("anchor %s names output %s sha256 %s, which this run does not record" % (
+                aid, src.get("output"), str(src.get("sha256"))[:12]))
+    grade("gen-run-style", fails, (), warns)
+
+
 if __name__ == "__main__":
-    import sys
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")

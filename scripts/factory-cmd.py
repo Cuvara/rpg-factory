@@ -23,11 +23,12 @@
   ui-figma | ui-components | ui-screen | ui-review  [same options] <request...>
                                           the same plan with the intent family forced (Figma import,
                                           component selection, screen implementation, review)
-  assetgen list|show|resolve|lint|review-cmd [args]
+  assetgen list|show|resolve|lint|review-cmd|drift [args]
                                           scripts/assetgen/assetgen.py, read-only verbs: asset-gen purposes, styles
                                           and ComfyUI templates (core + game layer), a resolved spec, data lint,
-                                          the Codex review command (printed, never run); --authoring defaults to
-                                          the workspace authoring repo when it has assetgen/
+                                          the Codex review command (printed, never run), style drift of gen-runs
+                                          and anchors; --authoring defaults to the workspace authoring repo when
+                                          it has assetgen/
   help [--json]                           every command with its arguments, an example, the Claude form
                                           (/rpg-factory:<verb>) and the Codex form (python3 -B ...)
 
@@ -255,16 +256,20 @@ def cmd_ui(verb, raw):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "ui", "ui_plan.py"), "--verb", verb, *opts, text])
 
 
-ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd")
+ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd", "drift")
 
 
 def cmd_assetgen(raw):
-    """Read-only assetgen.py verbs; render, embed, qa and manifest write into a run directory and publish uploads to
-    ComfyUI: they stay with the asset-gen skill."""
+    """Read-only assetgen.py verbs; render, embed, qa and manifest write into a run directory, promote-anchor and reject
+    write style-lock records into the authoring repo and publish uploads to ComfyUI: they stay with the asset-gen
+    skill."""
     args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
     if not args or args[0] not in ASSETGEN_VERBS:
         hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
                 if args and args[0] in ("render", "embed", "qa", "manifest") else
+                " (%s writes a style-lock record into the authoring repo: the asset-gen skill runs "
+                "scripts/assetgen/assetgen.py directly)" % args[0]
+                if args and args[0] in ("promote-anchor", "reject") else
                 " (publish uploads to ComfyUI: the asset-gen skill runs scripts/assetgen/assetgen.py directly)"
                 if args and args[0] == "publish" else "")
         raise ValueError("assetgen needs " + "|".join(ASSETGEN_VERBS) + hint)
@@ -273,7 +278,7 @@ def cmd_assetgen(raw):
     if any(len(a.split("=", 1)[0]) >= 3 and "--out".startswith(a.split("=", 1)[0]) for a in args):
         raise ValueError("assetgen --out (or an abbreviation of it) writes a file: run scripts/assetgen/assetgen.py directly "
                          "(the asset-gen skill)")
-    if args[0] in ("list", "show", "resolve", "lint") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
+    if args[0] in ("list", "show", "resolve", "lint", "drift") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
         reg = registry()
         game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
         if os.path.isdir(os.path.join(game, "assetgen")):
@@ -423,9 +428,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "UI plan forced to screen implementation"},
     {"verb": "ui-review", "args": "[ui options] <request>", "read_only": True, "example": "ui-review Review the HUD",
      "summary": "UI plan forced to review"},
-    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd [args]", "read_only": True,
+    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd|drift [args]", "read_only": True,
      "example": "assetgen list --kind purpose",
-     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed)"},
+     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed), style drift"},
     {"verb": "help", "args": "[--json]", "read_only": True, "example": "help --json",
      "summary": "this list; no slash command - agents and Codex discover the commands here"},
 ]

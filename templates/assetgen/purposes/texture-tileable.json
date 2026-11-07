@@ -4,6 +4,12 @@
  "description": "Seamless, opaque surface texture (albedo reference) for materials.",
  "handoff_domain": "art3d",
  "default_template": "image-generate",
+ "default_family": "environment",
+ "dimensions": [
+  "palette",
+  "texture"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1024x1024",
   "background": "opaque",

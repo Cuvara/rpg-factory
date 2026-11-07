@@ -4,6 +4,13 @@
  "description": "Item, skill or status icon; readable at small sizes, transparent background.",
  "handoff_domain": "art2d",
  "default_template": "image-generate",
+ "default_family": "props",
+ "dimensions": [
+  "palette",
+  "shape",
+  "line"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1024x1024",
   "background": "transparent",

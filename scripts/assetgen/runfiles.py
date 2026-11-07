@@ -7,17 +7,28 @@ read_verdict(path, phase) -> {by, state, findings, prompt_sha256, requirements_s
   PASS or FAIL is found. The binding fields are what review-cmd told the reviewer to copy back unchanged: the
   sha256 of the prompt it reviewed and the requirements_sha256 it judged against (both phases) and, for the image
   phase, [{path, sha256}] of the images it saw. A verdict without them, or with other values than the run's
-  current prompt, requirements and outputs, is unbound or stale.
+  current prompt, requirements and outputs, is unbound or stale. With the style lock the image binding also names
+  "style" (the style ref) and "anchors" ([{anchor_id, sha256}] of the anchors attached); an image verdict that carries
+  them keeps them ({"style": dict or None, "anchors": [...]}), a verdict without them has neither key (older runs keep
+  their shape).
 requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sorted keys, compact separators) of
   {purpose, style, template: their content sha256, params: the resolved params, generation: generation}. generation
   is None for the prompt review and generation_inputs(workflow, spec) for the image review. Works on spec.json
   (resolved refs carry sha256) and on run.md's spec block (manifest copies the refs and params); malformed input
   still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
-  params or the rendered generation inputs changed is stale.
+  params or the rendered generation inputs changed is stale. Only when the spec carries style_lock (resolve with the
+  style lock) does the object also hold {"style_lock": style_lock_binding(spec)}: the style ref, the family, the anchor
+  hashes and the relevant rejections (id and content hash), so a review made before the family or the rejection set
+  changed is stale too; a spec or run.md written before the style lock hashes exactly as it did.
 generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
   workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
   that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
-  path of the run's copy references/<name> (None or a missing file -> null). Without a workflow: the spec params.
+  path of the run's copy references/<name> (None or a missing file -> null); style-lock anchors are LoadImage inputs
+  anchor-<id>.png, so their copies are bound by content. With spec.style_lock it also holds {"anchors": [{anchor_id,
+  sha256}]} of the selected references (absent otherwise). Without a workflow: the spec params.
+style_lock_binding(spec) -> {"style", "family", "references": [anchor sha256...], "rejections": [{id, sha256}]} of
+  spec.style_lock (sha256 of a rejection: canonical JSON of its spec.style_lock entry), or None for a spec without it.
+style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] without it).
 workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
   (PrimitiveStringMultiline) it links to.
 run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
@@ -159,9 +170,34 @@ def generation_inputs(workflow, spec, locate=None):
                 refs[name] = _file_sha256(locate(os.path.basename(name)) if locate else None)
             except (OSError, TypeError, ValueError):
                 refs[name] = None
-        return {"graph": graph, "references": refs}
+        out = {"graph": graph, "references": refs}
+        lock = style_lock_binding(spec)
+        if lock is not None:
+            out["anchors"] = [{"anchor_id": r.get("anchor_id"), "sha256": r.get("sha256")} for r in style_lock_references(spec)]
+        return out
     params = spec.get("params") if isinstance(spec, dict) else None
     return params if isinstance(params, dict) else {}
+
+
+def style_lock_references(spec):
+    lock = spec.get("style_lock") if isinstance(spec, dict) else None
+    refs = lock.get("references") if isinstance(lock, dict) else None
+    return [r for r in refs if isinstance(r, dict)] if isinstance(refs, list) else []
+
+
+def _canonical_sha256(obj):
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def style_lock_binding(spec):
+    lock = spec.get("style_lock") if isinstance(spec, dict) else None
+    if not isinstance(lock, dict):
+        return None
+    rej = lock.get("rejections")
+    rejections = [{"id": r.get("id"), "sha256": _canonical_sha256(r)} for r in rej if isinstance(r, dict)]         if isinstance(rej, list) else []
+    return {"style": lock.get("style"), "family": lock.get("family"),
+            "references": [r.get("sha256") for r in style_lock_references(spec)], "rejections": rejections}
 
 
 def requirements_sha256(spec, generation=None):
@@ -173,8 +209,10 @@ def requirements_sha256(spec, generation=None):
     params = spec.get("params")
     obj = {"purpose": ref("purpose"), "style": ref("style"), "template": ref("template"),
            "params": params if isinstance(params, dict) else {}, "generation": generation}
-    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    lock = style_lock_binding(spec)
+    if lock is not None:  # only with the style lock: older specs keep their hash
+        obj["style_lock"] = lock
+    return _canonical_sha256(obj)
 
 
 def requested_size(workflow, spec):
@@ -217,7 +255,18 @@ def read_verdict(path, phase):
         v = obj.get(key)
         return v if isinstance(v, str) and SHA256.match(v) else None
     findings = obj.get("findings")
-    return {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
-            "findings": len(findings) if isinstance(findings, list) else 0,
-            "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
-            "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}
+    out = {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
+           "findings": len(findings) if isinstance(findings, list) else 0,
+           "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
+           "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}
+    if phase == "image" and ("style" in obj or "anchors" in obj):
+        out["style"] = obj.get("style") if isinstance(obj.get("style"), dict) else None
+        out["anchors"] = _anchors(obj.get("anchors"))
+    return out
+
+
+def _anchors(value):
+    if not isinstance(value, list):
+        return []
+    return [{"anchor_id": a.get("anchor_id"), "sha256": a.get("sha256")} for a in value
+            if isinstance(a, dict) and isinstance(a.get("anchor_id"), str) and isinstance(a.get("sha256"), str)]
