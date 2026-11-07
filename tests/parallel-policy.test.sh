@@ -102,16 +102,17 @@ grade
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
-  child-merge-remove child-no-run-all)
+  child-merge-remove child-no-run-all which-model)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
   [no-worktree-repo]='A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.'
-  [task-lead-claude]="The task lead is always a Claude session (registry pipeline.lead_agent), whatever the task's implementer; implementation, review and QA sessions keep the cross-model pairing."
+  [task-lead-claude]="The task lead is a Claude session (registry pipeline.lead_agent), whatever the task's implementer, and Codex only when Claude is unavailable; implementation, review and QA sessions keep the cross-model pairing."
   [speed-rule]='Prefer many short, focused parallel sessions over one long session; every spec stays short: objective, owned paths, checks, report format.'
   [placement-table]='| Placement | When | How |'
   [child-merge-remove]='The owner merges a child'"'"'s branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).'
   [child-no-run-all]='Never create or remove a child worktree while a full tests/run-all.sh runs: every checkout shares one .git/config.'
+  [which-model]='| Role or kind | Model | Registry |'
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
 PLACEMENT_ROWS=('| shared (default) |' '| child |')
@@ -178,7 +179,7 @@ for id in "${POLICY_IDS[@]}"; do
     "printf '\n<!-- policy:$id -->\n%s\n' $(printf %q "${POLICY_SENTENCE[$id]}") >> \"\$F\""
 done
 s_mutate "canonical sentence changed (task lead follows the implementer)" "sentence changed under policy:task-lead-claude" \
-  'sed -i "s/^The task lead is always a Claude session (registry pipeline\.lead_agent), whatever/The task lead runs on the implementer model, whatever/" "$F"'
+  'sed -i "s/^The task lead is a Claude session (registry pipeline\.lead_agent), whatever/The task lead runs on the implementer model, whatever/" "$F"'
 s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence changed under policy:run-lead-never-implements" \
   'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
 s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \
@@ -210,6 +211,62 @@ s_mutate "step 4 child exception dropped" "section 10 step 4 lacks the child exc
   'sed -i "s/the session commits on its own child branch only/the session works in the child/" "$F"'
 s_mutate "step 4 says implement never commits" "retired shortcut phrasing 'always starts a sub-session that does not commit'" \
   'sed -i "s/^   \`--phase implement\` in the shared placement starts a sub-session that does not commit/   \`--phase implement\` always starts a sub-session that does not commit/" "$F"'
+
+# The "Which model" table (section 10) is the only copy of the routing rule: under policy:which-model it keeps one row
+# per role or kind, at most 8 table lines, the code kinds on codex (never claude), next to the token rule and the
+# availability fallback; no other Markdown file in the tree carries its header.
+# which_model <policy file> [<tree root>]: prints each problem; rc 1.
+WHICH_MODEL_ROWS=('| lead, plan, orchestration | claude |' '| docs, policy ' '| design '
+  '| code, test, fix, refactor, generated | codex |' '| review | the other model |'
+  '| QA | the model that did not implement; long full-suite QA prefers codex |')
+WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'full QA runs go to Codex' 'RPG_FACTORY_AGENTS'
+  '--down <agent>' 'SAME_MODEL (fallback: <model> unavailable)' 'no command fails because a model is missing')
+which_model() {
+  local f="$1" root="${2:-}" p x table code sec copies errs=()
+  table=$(awk '$0 == "<!-- policy:which-model -->" { f = 1; next } f && /^\|/ { print; t = 1; next } f && t { exit }' "$f")
+  if [ -z "$table" ]; then echo "which-model table missing"; return 1; fi
+  for p in "${WHICH_MODEL_ROWS[@]}"; do grep -qF -- "$p" <<<"$table" || errs+=("which-model table row missing: '$p'"); done
+  [ "$(wc -l <<<"$table")" -le 8 ] || errs+=("which-model table longer than 8 lines")
+  code=$(grep -F '| code' <<<"$table")
+  ! grep -qi 'claude' <<<"$code" || errs+=("which-model table names claude for code: '$code'")
+  sec=$(awk '/^## 10\. / { f = 1 } f' "$f" | tr '\n' ' ' | tr -s ' ')
+  for p in "${WHICH_MODEL_REQUIRED[@]}"; do grep -qF -- "$p" <<<"$sec" || errs+=("section 10 lacks the routing rule: '$p'"); done
+  if [ -n "$root" ]; then
+    copies=$(grep -rlF --include='*.md' -- "${POLICY_SENTENCE[which-model]}" "$root" 2>/dev/null \
+      | while IFS= read -r x; do printf '%s\n' "${x#"$root"/}"; done | grep -vxF "$PW")
+    [ -z "$copies" ] || errs+=("which-model table copied outside $PW: $(echo $copies)")
+  fi
+  [ ${#errs[@]} -eq 0 ] && return 0
+  printf '%s\n' "${errs[@]}"; return 1
+}
+w_out=$(which_model "$ROOT/$PW" "$P" 2>&1); w_rc=$?
+[ $w_rc -eq 0 ] && ok "which-model table intact, single copy" || no "which-model table (rc=$w_rc)" "$w_out"
+w_mutate() { # <name> <expected text> <commands run in a fresh copy $T of the tree; $F is its policy file>
+  local T="$TMP/wm" merr out rc
+  rm -rf "$T"; cp -r "$P" "$T"
+  if ! merr=$(cd "$T" && F="$T/$PW" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if diff -rq "$P" "$T" >/dev/null; then no "$1: mutation changed nothing"; return; fi
+  out=$(which_model "$T/$PW" "$T" 2>&1); rc=$?
+  if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> which-model check FAIL: $2"
+  else no "$1: which-model check did not fail with '$2' (rc=$rc)" "$out"; fi
+  rm -rf "$T"
+}
+w_mutate "which-model code row removed" "which-model table row missing: '| code, test, fix, refactor, generated | codex |'" \
+  'sed -i "/^| code, test, fix, refactor, generated |/d" "$F"'
+w_mutate "which-model review row removed" "which-model table row missing: '| review | the other model |'" \
+  'sed -i "/^| review | the other model |/d" "$F"'
+w_mutate "which-model names claude for code" "which-model table names claude for code" \
+  'sed -i "s/^| code, test, fix, refactor, generated | codex |/| code, test, fix, refactor, generated | claude |/" "$F"'
+w_mutate "which-model table grows past 8 lines" "which-model table longer than 8 lines" \
+  'sed -i "/^| review | the other model |/i | asset | claude | x |\n| data | codex | x |" "$F"'
+w_mutate "token rule dropped" "section 10 lacks the routing rule: 'delegates code to Codex and does not implement'" \
+  'sed -i "s/delegates code to Codex and does not implement/may implement/" "$F"'
+w_mutate "fallback marker dropped" "section 10 lacks the routing rule: 'SAME_MODEL (fallback: <model> unavailable)'" \
+  'sed -i "s/SAME_MODEL (fallback: <model> unavailable)/SAME_MODEL/g" "$F"'
+w_mutate "which-model table copied into docs" "which-model table copied outside $PW: docs/zz-models.md" \
+  'mkdir -p docs && sed -n "/^| Role or kind |/,/^| QA |/p" "$F" > docs/zz-models.md'
+w_mutate "which-model table copied into a skill" "which-model table copied outside $PW: skills/client-integration/SKILL.md" \
+  'printf "\n| Role or kind | Model | Registry |\n|---|---|---|\n| code | codex | x |\n" >> skills/client-integration/SKILL.md'
 
 # Section 5 keeps the Orca-first runner rule: inside Orca, planner/dispatch refuse --runner agent without
 # --orca-unavailable, and the reason (Agent-tool task leads are invisible in Orca) stays with it. Phrases are
@@ -245,9 +302,10 @@ o_mutate "refusal softened to a preference" "lacks the Orca-first rule: 'refuse 
 o_mutate "rule moved out of section 5" "lacks the Orca-first rule: 'ORCA_WORKTREE_ID'" \
   'sed -i "/^- \*\*Orca first inside Orca\.\*\*/,/^  Agent-tool task leads/d" "$F"'
 
-# AGENTS.md (the Codex entry) never makes Codex the run lead or a task lead: the run lead is the main Claude Code
-# session and the task lead is always Claude (policy:task-lead-claude). Prints each problem; rc 1.
-AGENTS_REQUIRED=('the task lead is always Claude' 'only as a session a Claude task lead starts')
+# AGENTS.md (the Codex entry) never makes Codex the run lead, and a task lead only when Claude is unavailable
+# (policy:task-lead-claude); Codex is the default implementer of the code kinds. Prints each problem; rc 1.
+AGENTS_REQUIRED=('Codex leads a task only when Claude is unavailable' 'as a session a task lead starts'
+  'default implementer for the code, test, fix, refactor and generated kinds')
 AGENTS_FORBIDDEN=('as a task lead' 'as the main session (run lead)' 'as the run lead' 'drive it through factory-core'
   'codex is the run lead' 'codex is the task lead')
 agents_roles() {
@@ -276,8 +334,10 @@ a_mutate "Codex as task lead re-added" "names Codex as a lead: 'as a task lead'"
   'printf "\n- Codex follows the same flow as a task lead or as a session a task lead starts.\n" >> "$F"'
 a_mutate "Codex as run lead re-added" "names Codex as a lead: 'as the main session (run lead)'" \
   'printf "\nAs the main session (run lead), drive it through factory-core steps 6, 7, 11 and 12.\n" >> "$F"'
-a_mutate "Claude task-lead rule dropped" "AGENTS.md lacks: 'the task lead is always Claude'" \
-  'sed -i "s/the task lead is always Claude/the task lead may be any model/" "$F"'
+a_mutate "Claude task-lead rule dropped" "AGENTS.md lacks: 'Codex leads a task only when Claude is unavailable'" \
+  'sed -i "s/Codex leads a task only when Claude is unavailable/Codex may lead any task/" "$F"'
+a_mutate "Codex default implementer dropped" "AGENTS.md lacks: 'default implementer for the code, test, fix, refactor and generated kinds'" \
+  'sed -i "s/Codex is the default implementer for the code, test, fix, refactor and generated kinds/Codex implements when asked/" "$F"'
 
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

@@ -46,7 +46,7 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
 It never pushes, merges, tags or removes its worktree.
 
 <!-- policy:task-lead-claude -->
-The task lead is always a Claude session (registry pipeline.lead_agent), whatever the task's implementer; implementation, review and QA sessions keep the cross-model pairing.
+The task lead is a Claude session (registry pipeline.lead_agent), whatever the task's implementer, and Codex only when Claude is unavailable; implementation, review and QA sessions keep the cross-model pairing.
 
 **Implementation sub-session** - edits only its subtask's paths in the task worktree, runs the targeted checks
 from its spec, and reports to the task lead. It does not commit, stage or stash: the worktree has one shared
@@ -187,9 +187,10 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
     a Codex CLI (v0.166) once sat idle at an empty prompt.
 - **Codex, else Claude.** Codex runs the rpg-factory hooks only after the user has trusted them once in Codex (a
   one-time step outside the run; `AGENTS.md`). When a Codex session cannot start or never picks up its prompt
-  (trust prompt, CLI error, quota, idle terminal), the lead starts a Claude session for the same role instead, a
-  review by it is marked SAME_MODEL (section 10 step 4), and the report names the substitution. Codex never blocks
-  the run. There is no registry `fallback_agent` setting: the lead makes the switch with `--agent claude`.
+  (trust prompt, CLI error, quota, idle terminal, a 401), the lead marks it down for the run
+  (`factory-pipeline.py agents plan.json --down codex --reason <text>`) and dispatches the role again: it routes to
+  Claude, a review by it carries the recorded fallback (section 10 "Which model", step 4), and the report names the
+  substitution. Codex never blocks the run; the same holds the other way round when Claude is down.
 - Never use `orca orchestration gate-create` for routine work: a decision gate blocks a task, and this
   plugin adds no blocking step.
 - Runs you did not create belong to other coordinators (section 2).
@@ -326,6 +327,31 @@ review pairing and exclusive resources live in registry `pipeline`; the plan for
 <!-- policy:no-worktree-repo -->
 A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.
 
+**Which model.** Each plan task and subtask may carry a `kind`; the implementer is the explicit `implementer`, else
+registry `pipeline.agent_routing[kind]`, else `default_implementer`, then mapped through availability:
+
+<!-- policy:which-model -->
+| Role or kind | Model | Registry |
+|---|---|---|
+| lead, plan, orchestration | claude | `lead_agent`, `agent_routing` |
+| docs, policy (skill and reference prose) | claude | `agent_routing` |
+| design (cross-file design, domain content) | claude | `agent_routing` |
+| code, test, fix, refactor, generated | codex | `agent_routing` |
+| review | the other model | `review_pairing` |
+| QA | the model that did not implement; long full-suite QA prefers codex | `qa_prefer` |
+
+- **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; full QA runs go
+  to Codex. An explicit `implementer` against the table needs a `reason`: `validate` and `subplan validate` warn
+  without one, and warn when 3 or more tasks or subtasks all use one model (warnings, never errors).
+- **Availability never stops a task.** Available agents are detected: each `pipeline.agents.<a>.bin` on PATH,
+  refined by the Orca account list when Orca runs; `RPG_FACTORY_AGENTS` (comma list) overrides the detection. A
+  runtime MODEL_UNAVAILABLE (revoked token, 401) is recorded with
+  `factory-pipeline.py agents plan.json --down <agent> --reason <text>` (`--up <agent>` clears it) and holds for
+  the run. Every role falls back to the available model: with only Claude, Claude implements, reviews and runs QA;
+  with only Codex, Codex does all of it and also leads. A fallback review carries
+  `SAME_MODEL (fallback: <model> unavailable)` and the gate accepts it (step 4). `dispatch` and `status` print
+  each role's model and why (`model: <role> -> <agent> (<why>)`); no command fails because a model is missing.
+
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L and the flow.
    S: the run lead writes a `plan.json` with one task and dispatches its task lead (step 3; the task worktree, or
    the main checkout of a no-worktree repo); the run lead never implements it in its own session. Steps 4-8 follow
@@ -365,9 +391,11 @@ A no-worktree (Unity) repo never gets a worktree; its task lead and all its sess
    `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
    `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
    merges that branch and removes the child (section 4); `--paths` inside the
-   task's exclusions is refused. When the paired model is unavailable, a fresh session of the same model reviews, the report names it
-   SAME_MODEL, and the gate accepts it only with `--allow-same-model`; `--runner agent` (Claude only) marks a
-   session planned for Codex SAME_MODEL in its prompt. The task lead also runs the per-task QA
+   task's exclusions is refused. When the paired model is unavailable ("Which model" above), a fresh session of
+   the same model reviews, its prompt and report carry `SAME_MODEL (fallback: <model> unavailable)`, and `verdict`
+   records the fallback (`--fallback <model>`, automatic when the pair is unavailable now); the gate accepts a
+   recorded fallback and needs `--allow-same-model` only for an unrecorded SAME_MODEL review. `--runner agent`
+   (Claude only) marks a session planned for Codex SAME_MODEL in its prompt. The task lead also runs the per-task QA
    (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`. The run lead
    follows the tasks with `factory-pipeline.py status plan.json`. A recorded verdict holds for its task's

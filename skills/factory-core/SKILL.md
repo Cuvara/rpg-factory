@@ -57,9 +57,11 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task:
    `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one Claude task
    lead per task worktree; Unity: main checkout, in sequence). Resume: `status plan.json`. How: `references/parallel-work.md` section 10.
+   Give each task a `kind`; its model follows the "Which model" table there (parallel-work.md section 10).
 7. **Implement (M, task lead).** `subplan validate`, then one short, fresh sub-session per subtask
    (`--phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per its `placement`:
    parallel-work.md section 4); the task lead commits or merges each. Requested scope only; module rules; generated paths via their generator.
+   Code goes to Codex, prose to Claude: the "Which model" table (parallel-work.md section 10); the task lead does not implement.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
    both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
 9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
@@ -68,7 +70,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
 11. **Review + QA (M, task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: Codex reviews Claude's
-    code and Claude reviews Codex's; Codex unavailable: a fresh Claude session, marked SAME_MODEL (gate: `--allow-same-model`).
+    code and Claude reviews Codex's; pair unavailable: the same model, `SAME_MODEL (fallback: <model> unavailable)`, gate accepts it.
     Use the lead's checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist); then `--phase qa`.
     Record each `verdict`. The run lead integrates (section 7) and runs QA on the integration HEAD.
 12. **Gate, PR, cleanup, report (M, run lead).** `gate` READY_FOR_PR + user's `deliver: pr`: push, open the PR (no merge).

@@ -15,9 +15,11 @@ Codex-specific notes and does not restate those rules.
 - **Hooks need a trust review:** Codex runs the plugin hooks (`hooks/codex-hooks.json` through
   `scripts/codex_hook.py`) only after you review and trust them. They are advisory only.
 - **Plugin tasks:** Codex takes part in the plugin-development flow (`.claude/CLAUDE.md` "Developing this plugin")
-  only as a session a Claude task lead starts in the task worktree: an implementation sub-session, a cross-model
-  reviewer or a QA worker. The run lead is the main Claude Code session and the task lead is always Claude (registry
-  `pipeline.lead_agent`); the roles and rules are in `skills/factory-core/references/parallel-work.md`. Follow the
+  as a session a task lead starts in the task worktree: an implementation sub-session, a cross-model reviewer or a
+  QA worker. Codex is the default implementer for the code, test, fix, refactor and generated kinds (registry
+  `pipeline.agent_routing`) and runs the long full-suite QA. The run lead is the main Claude Code session; the task
+  lead is Claude (registry `pipeline.lead_agent`), and Codex leads a task only when Claude is unavailable. The roles,
+  the "Which model" table and the fallback rules are in `skills/factory-core/references/parallel-work.md`. Follow the
   spec you were given: edit only its paths, commit only where it says so, and report to the task lead.
 - **Skills:** the factory-core skill names how to resolve the plugin root and load routed skills on Codex.
 
