@@ -1200,7 +1200,8 @@ def subtask_failures(plan, reg, task_id, target):
     when its commit is the target or an ancestor of it: a PASS on a fix left on an unmerged child branch never resolves
     a FAIL. Per subtask and phase, a candidate's own verdict is its current record (else its latest archive, a tie keeps
     the non-PASS) and only applicable candidates that no other applicable one contains decide: a PASS on a newer commit
-    resolves an older FAIL, a late PASS on an older candidate never resolves a newer FAIL."""
+    resolves an older FAIL, a late PASS on an older candidate never resolves a newer FAIL. New-style records supersede
+    legacy records for the same subtask and phase."""
     vdir = verdict_dir(plan)
     # legacy <task>__sub-<id> records count only when their own task and subtask fields name this task's subtask: task
     # "<task>__sub-<id>" wrote the same names
@@ -1215,6 +1216,9 @@ def subtask_failures(plan, reg, task_id, target):
         if (not isinstance(rec, dict) or rec.get("task") != task_id or not rec.get("subtask")
                 or rec.get("phase") not in ("review", "qa") or not rec.get("sha")
                 or not n.startswith(f"{pre}{safe_name(rec['subtask'])}__")):
+            continue
+        modern = f"{pres[0]}{safe_name(rec['subtask'])}__{rec['phase']}"
+        if pre == pres[1] and any(x == modern + ".json" or x.startswith(modern + "__") for x in names):
             continue
         fp = fp or scope_fingerprint(plan, reg, task_id)
         if rec.get("fingerprint") != fp:
@@ -1773,16 +1777,15 @@ def own_start(plan, reg, info, task, head):
     """Where the task's own commits start on `head`, or None when it has none yet. Dependent tasks may own the same
     paths, so the repo base is not enough: a branch cut from plan.topic starts at its fork point (none while it is still
     on the topic's first-parent chain: cut there, nothing of its own), and a no-worktree task, which shares the topic,
-    starts after its serial predecessor's last recorded verdict (none yet: it has not started, the predecessor's commits
-    are not its own)."""
+    starts only after its serial predecessor's current QA PASS on an ancestor of head (otherwise it has not started,
+    and the predecessor's commits are not its own)."""
     base = info["base_sha"] or info["base"]
     if not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
         if not prev:
             return base
-        recs = [verdict_of(plan, reg, prev, ph)[0] for ph in ("qa", "review")]
-        marks = [r["sha"] for r in recs if r and is_ancestor(info["path"], r["sha"], head)]
-        return marks[0] if marks else None
+        rec = verdict_of(plan, reg, prev, "qa")[0]
+        return rec["sha"] if rec and rec.get("state") == "PASS" and is_ancestor(info["path"], rec["sha"], head) else None
     start = start_base(plan, info, task)
     if start != plan["topic"]:
         return base
