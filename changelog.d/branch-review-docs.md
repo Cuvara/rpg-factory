@@ -2,7 +2,7 @@
 
 - **Codex role.** `AGENTS.md` no longer lets Codex act as the run lead or a task lead: Codex runs only as a session a
   Claude task lead starts (implementer, cross-model reviewer, QA); the run lead is the main Claude Code session and the
-  task lead is always Claude (registry `pipeline.lead_agent`). `AGENTS.md` points to the `.claude/CLAUDE.md` operating
+  task lead is Claude (registry `pipeline.lead_agent`). `AGENTS.md` points to the `.claude/CLAUDE.md` operating
   lessons for Git Bash instead of restating the WSL lesson. `tests/parallel-policy.test.sh` fails when `AGENTS.md`
   names Codex as run lead or task lead.
 - **Child implement sessions.** `parallel-work.md` section 10 step 4 states the child exception: a shared-placement

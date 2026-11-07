@@ -253,6 +253,28 @@
         "type": "string"
       },
       "description": "Plan-level commands (validate when invalid, gate when every task has QA)."
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "required": [
+            "agent",
+            "why"
+          ],
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
     }
   },
   "additionalProperties": false,

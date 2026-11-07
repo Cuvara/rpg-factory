@@ -7,6 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 P="$ROOT/scripts/factory-pipeline.py"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
 # (the Orca-first cases below set them on purpose)
@@ -250,7 +251,7 @@ refute "the task lead is no nested Orca worker (no worker-start)" "^orca orchest
 expect "task lead of a claude-implementer task is claude" 0 "--no-parent --agent claude --prompt " dispatch "$OK" --task gw --phase lead --runner orca
 expect "task lead of a codex-implementer task is still claude (pipeline.lead_agent)" 0 "^orca agent launch --agent claude " dispatch "$OK" --task c2 --phase lead --runner orca
 refute "task lead of a codex-implementer task is never codex" "^orca .*--agent codex" dispatch "$OK" --task c2 --phase lead --runner orca
-expect "--agent codex on --phase lead warns" 0 "the task lead is always claude \(registry pipeline.lead_agent\); --agent codex is ignored" dispatch "$OK" --task gw --phase lead --runner orca --agent codex
+expect "--agent codex on --phase lead warns" 0 "the task lead is claude \(lead_agent\); --agent codex is ignored" dispatch "$OK" --task gw --phase lead --runner orca --agent codex
 expect "--agent codex on --phase lead still prints --agent claude" 0 "--no-parent --agent claude --prompt " dispatch "$OK" --task gw --phase lead --runner orca --agent codex
 refute "--agent codex on --phase lead never launches codex" "^orca .*--agent codex" dispatch "$OK" --task gw --phase lead --runner orca --agent codex
 expect "the codex task's implement session keeps its implementer" 0 "^orca orchestration worker-start .*--agent codex" dispatch "$OK" --task c2 --phase implement --runner orca
@@ -538,7 +539,7 @@ refute "a new-style subtask PASS supersedes the legacy FAIL for that phase" "sub
 # Other phases retain their legacy evidence until that phase has a new-style record too.
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["phase"]="qa"; json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$CVD/a__sub-c__review.json" "$CVD/a__sub-c__qa.json"
 expect "a new-style review does not supersede a legacy QA FAIL" 1 "BLOCKER a: subtask c qa FAIL" gate "$X" --no-run-checks
-v --task gw --phase review --sha "$SG" --by codex --state PASS --subtask s2
+v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s2
 v --task gw --phase qa --sha "$SG" --by codex --state PASS --subtask s3
 # late results: a PASS on an older candidate (SG~1) never resolves a FAIL on the newer SG; a PASS on SG resolves it, and
 # a late FAIL on the older candidate then changes nothing
@@ -559,6 +560,38 @@ expect "status keeps the subtask FAIL while its fix is on an unmerged child" 0 "
 git -C "$S" branch -q -D gw-child-fix
 v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s5
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
+expect "manual fallback for an available model is refused" 2 "fallback codex is available now" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS --fallback codex
+expect "refused fallback leaves paired evidence intact" 0 "^Gate: READY_FOR_PR" gate "$G"
+expect "mark codex down after its implementation was reviewed" 0 "MODEL_UNAVAILABLE" agents "$G" --down codex --reason 401
+expect "cross-model review survives implementer becoming unavailable" 0 "^Gate: READY_FOR_PR" gate "$G"
+expect "clear codex runtime failure" 0 "codex: available" agents "$G" --up codex
+# a fallback is stamped only from the review dispatch of that candidate, never from availability at verdict time
+RPG_FACTORY_AGENTS=claude v --task c1 --phase review --sha "$C1" --by claude --state PASS
+if ! grep -q '"fallback"' "$VD/c1__review__${C1:0:12}__claude.json"; then pass=$((pass + 1)); echo "PASS  single claude verdict without a fallback review dispatch stamps no fallback"
+else fail=$((fail + 1)); echo "FAIL  single claude verdict without a fallback review dispatch stamps no fallback"; fi
+# dr <task> <sha>: dispatch the review (records the reviewer and any fallback); gw joins a temporary task worktree
+dr() {
+  if [ "$1" = gw ]; then gi "$S" worktree add -q -b feat/core/demo-gw "$TMP/gate-gw" "$2"; fi
+  python3 -B "$P" dispatch "$G" --task "$1" --phase review --sha "$2" --runner print >/dev/null 2>&1 || echo "dispatch failed: $*"
+  if [ "$1" = gw ]; then gi "$S" worktree remove --force "$TMP/gate-gw"; gi "$S" branch -q -D feat/core/demo-gw; fi
+}
+RPG_FACTORY_AGENTS=claude dr gw "$SG"; RPG_FACTORY_AGENTS=claude dr c1 "$C1"; RPG_FACTORY_AGENTS=claude dr c2 "$C2"
+RPG_FACTORY_AGENTS=claude expect "single claude records the dispatched fallback" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS
+RPG_FACTORY_AGENTS=claude v --task c1 --phase review --sha "$C1" --by claude --state PASS
+RPG_FACTORY_AGENTS=claude v --task c2 --phase review --sha "$C2" --by claude --state PASS
+RPG_FACTORY_AGENTS=claude expect "single claude fallback gate accepted" 0 "SAME_MODEL \(fallback: codex unavailable\)" gate "$G"
+expect "fallback evidence stays SAME_MODEL when both models return" 0 "SAME_MODEL \(fallback: codex unavailable\)" gate "$G"
+RPG_FACTORY_AGENTS=codex dr gw "$SG"; RPG_FACTORY_AGENTS=codex dr c1 "$C1"; RPG_FACTORY_AGENTS=codex dr c2 "$C2"
+RPG_FACTORY_AGENTS=codex expect "single codex records the dispatched fallback" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by codex --state PASS
+RPG_FACTORY_AGENTS=codex v --task c1 --phase review --sha "$C1" --by codex --state PASS
+RPG_FACTORY_AGENTS=codex v --task c2 --phase review --sha "$C2" --by codex --state PASS
+RPG_FACTORY_AGENTS=codex expect "single codex fallback gate accepted" 0 "SAME_MODEL \(fallback: claude unavailable\)" gate "$G"
+v --task c1 --phase review --sha "$C1" --by codex --state PASS
+v --task c2 --phase review --sha "$C2" --by claude --state PASS
+expect "restore paired review" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by codex --state PASS
+expect "mark model down" 0 "MODEL_UNAVAILABLE: revoked" agents "$G" --down codex --reason revoked
+expect "restore model availability" 0 "codex: available" agents "$G" --up codex
+
 expect "READY prints the PR command against the base branch" 0 "gh pr create --base develop --head feat/core/demo" gate "$G"
 cp "$G" "$TMP/gate.bak"; sed -i 's/"objective":"o","paths":\["backend/"objective":"changed","paths":["backend/' "$G"
 expect "a changed task in the plan makes its verdicts STALE" 1 "gw: review verdict is STALE - the plan" gate "$G"
@@ -577,6 +610,7 @@ expect "an unclean integration tree blocks" 1 "integration tree .* has uncommitt
 rm "$S/untracked.txt"
 SG2=$(git -C "$S" rev-parse HEAD)
 v --task gw --phase review --sha "$SG2" --by codex --state PASS
+v --task gw --phase review --sha "$SG2" --by claude --state PASS --subtask s2
 v --task integration:srv --phase qa --sha "$SG2" --by codex --state PASS
 N=$(plan none "$(sed 's/"deliver":"pr"/"deliver":"none"/' "$G")")
 expect "deliver none: READY but no push or PR command" 0 "deliver is not .pr.: stop here" gate "$N"
@@ -1205,6 +1239,334 @@ grade "grader: --runner orca dispatch: FAIL" 1 "FAIL: no successful factory-pipe
 grade "grader: missing transcript: FAIL" 1 "FAIL: no transcript" "$TMP/tl-none.jsonl"
 if tail -n 1 "$ROOT/tests/dogfood.sh" | grep -qF '"${tl_fail:-0}" -eq 0'; then pass=$((pass + 1)); echo "PASS  dogfood --all exit status includes the two-level result"
 else fail=$((fail + 1)); echo "FAIL  dogfood --all exit status includes the two-level result (last line of tests/dogfood.sh)"; fi
+
+echo "-- recorded implementer"
+# a fallback implementation is recorded: after the model returns, review pairs against the recorded implementer
+R="$TMP/rec"; mkdir -p "$R/ProjectSettings" "$R/code" "$R/docs"; echo 'm_EditorVersion: 6000.0.0f1' > "$R/ProjectSettings/ProjectVersion.txt"
+git init -q -b develop "$R"; echo a > "$R/code/a.cs"; echo a > "$R/docs/a.md"; gi "$R" add -A; gi "$R" commit -qm init
+gi "$R" checkout -qb feat/core/rec; echo b > "$R/code/a.cs"; echo b > "$R/docs/a.md"; gi "$R" commit -qam "feat: b"; RS=$(git -C "$R" rev-parse HEAD)
+RP=$(plan rec '{"schema":"rpg-factory.pipeline-plan/1","id":"rec","title":"Recorded","topic":"feat/core/rec","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[
+ {"id":"k","repo":"rec","kind":"code","objective":"o","paths":["code/"],"acceptance":["a"]},
+ {"id":"d","repo":"rec","kind":"docs","objective":"o","paths":["docs/"],"acceptance":["a"]},
+ {"id":"q","repo":"rec","kind":"code","objective":"o","paths":["ProjectSettings/"],"acceptance":["a"]}]}')
+RVD="$RPG_FACTORY_STATE_DIR/pipeline/rec"
+RPG_FACTORY_AGENTS=claude expect "claude-only: the code task is implemented by claude (fallback)" 0 "^# agent: claude" dispatch "$RP" --task k --phase implement --runner print
+expect "codex back: the review pairs against the recorded claude implementer" 0 "implement -> claude \(recorded implementer: fallback: codex unavailable\)" dispatch "$RP" --task k --phase review --sha "$RS" --runner print
+expect "codex back: the review of the recorded claude implementation goes to codex" 0 "^# agent: codex" dispatch "$RP" --task k --phase review --sha "$RS" --runner print
+expect "verdict records the recorded implementer" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS
+expect "a claude review of the recorded claude implementation is not cross-model" 1 "BLOCKER k: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
+RPG_FACTORY_AGENTS=codex expect "codex-only: the docs task is implemented by codex (fallback)" 0 "^# agent: codex" dispatch "$RP" --task d --phase implement --runner print
+expect "claude back: the review of the recorded codex implementation goes to claude" 0 "^# agent: claude" dispatch "$RP" --task d --phase review --sha "$RS" --runner print
+python3 -B "$P" verdict "$RP" --task d --phase review --sha "$RS" --by codex --state PASS >/dev/null
+expect "a codex review of the recorded codex implementation is not cross-model" 1 "BLOCKER d: reviewed by codex, cross-model review needs claude" gate "$RP" --no-run-checks
+expect "per-task QA pairs against the recorded implementer too" 0 "qa -> codex" dispatch "$RP" --task k --phase qa --sha "$RS" --runner print
+RPG_FACTORY_AGENTS=claude expect "no record: review pairs against the planned implementer, not availability" 0 "implement -> codex \(planned implementer: kind: code\)" dispatch "$RP" --task q --phase review --sha "$RS" --runner print
+# verdict stamps a fallback only from this candidate's review dispatch and only for its reviewer
+RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS >/dev/null
+expect "claude-only verdict with no fallback review dispatch: still NOT_READY" 1 "BLOCKER k: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
+RPG_FACTORY_AGENTS=claude expect "claude-only review dispatch of the claude implementation is a SAME_MODEL fallback" 0 "review -> claude \(SAME_MODEL \(fallback: codex unavailable\)\)" dispatch "$RP" --task k --phase review --sha "$RS" --runner print
+python3 -B "$P" verdict "$RP" --task k --phase review --sha "$RS" --by codex --state FAIL >/dev/null
+if ! grep -q '"fallback": "' "$RVD/k__review.json"; then pass=$((pass + 1)); echo "PASS  a verdict by another model than the dispatched fallback reviewer stamps no fallback"
+else fail=$((fail + 1)); echo "FAIL  a verdict by another model than the dispatched fallback reviewer stamps no fallback"; fi
+expect "the dispatched fallback reviewer's verdict is stamped (both models back)" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS
+expect "gate accepts the dispatched fallback" 1 "NOTE    k: SAME_MODEL \(fallback: codex unavailable\)" gate "$RP" --no-run-checks
+gi "$R" commit -q --allow-empty -m "chore: next"; RS2=$(git -C "$R" rev-parse HEAD)
+RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task k --phase review --sha "$RS2" --by claude --state PASS >/dev/null
+if ! grep -q '"fallback": "' "$RVD/k__review__${RS2:0:12}__claude.json"; then pass=$((pass + 1)); echo "PASS  a fallback dispatch of another candidate stamps no fallback"
+else fail=$((fail + 1)); echo "FAIL  a fallback dispatch of another candidate stamps no fallback"; fi
+# a subtask fallback is never laundered by the task review: subtask s by claude (codex down), codex back, task review by
+# claude paired against the planned codex implementer
+RSP=$(plan recsub '{"schema":"rpg-factory.pipeline-plan/1","id":"recsub","title":"Recorded subtasks","topic":"feat/core/rec","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[
+ {"id":"k","repo":"rec","kind":"code","objective":"o","paths":["code/","docs/"],"acceptance":["a"]}]}')
+RSS="$TMP/sub-recsub.json"
+printf '%s\n' '{"schema":"rpg-factory.pipeline-subplan/1","plan":"recsub.json","task":"k","subtasks":[
+ {"id":"s","objective":"o","kind":"code","paths":["code/"]},{"id":"s2","objective":"o","kind":"code","paths":["docs/a.md"]},
+ {"id":"s3","objective":"o","kind":"docs","paths":["docs/b/"]}]}' > "$RSS"
+RSVD="$RPG_FACTORY_STATE_DIR/pipeline/recsub"
+rs() { python3 -B "$P" "$@" --runner print >/dev/null 2>&1 || echo "dispatch failed: $*"; }
+rv() { python3 -B "$P" verdict "$RSP" "$@" >/dev/null || echo "verdict failed: $*"; }
+RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s
+RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s2
+rs dispatch "$RSP" --task k --phase review --sha "$RS2"
+rv --task k --phase review --sha "$RS2" --by claude --state PASS
+rv --task integration:rec --phase qa --sha "$RS2" --by codex --state PASS
+expect "a claude fallback subtask is not laundered by the claude task review once codex is back" 1 "BLOCKER k: subtask s recorded implementer claude, but the task review by claude pairs against codex: record .verdict --subtask s. PASS by codex" gate "$RSP" --no-run-checks
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s
+refute "a subtask review by its implementer's pair covers that subtask" "BLOCKER k: subtask s recorded" gate "$RSP" --no-run-checks
+RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase review --sha "$RS2" --subplan "$RSS" --subtask s2
+rv --task k --phase review --sha "$RS2" --by claude --state PASS --subtask s2
+expect "a dispatch-recorded SAME_MODEL fallback subtask review passes the gate" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
+expect "and the gate notes the subtask fallback" 0 "NOTE    k: subtask s2 SAME_MODEL \(fallback: codex unavailable\)" gate "$RSP" --no-run-checks
+# An ancestral PASS covers only unchanged reviewed paths; old records conservatively cover the whole task.
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s --subplan "$RSS"
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s2 --subplan "$RSS"
+echo c > "$R/code/a.cs"; gi "$R" commit -qam "fix: later subtask edit"; RS3=$(git -C "$R" rev-parse HEAD)
+rv --task k --phase review --sha "$RS3" --by claude --state PASS
+rv --task integration:rec --phase qa --sha "$RS3" --by codex --state PASS
+expect "a stale subtask PASS cannot cover the task reviewer's later edit: NOT_READY" 1 "BLOCKER k: subtask s .*changed paths code/a.cs; needs codex review" gate "$RSP" --no-run-checks
+rv --task k --phase review --sha "$RS3" --by codex --state PASS --subtask s --subplan "$RSS"
+expect "a fresh paired subtask review covers the later edit" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
+echo c > "$R/docs/a.md"; gi "$R" commit -qam "docs: outside code subtask"; RS4=$(git -C "$R" rev-parse HEAD)
+rv --task k --phase review --sha "$RS4" --by claude --state PASS
+rv --task integration:rec --phase qa --sha "$RS4" --by codex --state PASS
+rv --task k --phase review --sha "$RS4" --by codex --state PASS --subtask s2 --subplan "$RSS"
+expect "an edit outside subtask paths keeps its ancestral review valid" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
+# Restore the fixture candidate used by subsequent verdict routing checks.
+RS2=$RS4
+# verdict --subtask pairs against the subtask's routing: --subplan (docs subtask s3: claude), else its review dispatch
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s3 --subplan "$RSS"
+if jq -e '.implementer == "claude"' "$RSVD/k@s3__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verdict --subtask --subplan routes the implementer over the subtask's kind"
+else fail=$((fail + 1)); echo "FAIL  verdict --subtask --subplan routes the implementer over the subtask's kind"; fi
+rs dispatch "$RSP" --task k --phase review --sha "$RS" --subplan "$RSS" --subtask s3
+rv --task k --phase review --sha "$RS" --by codex --state PASS --subtask s3
+if jq -e '.implementer == "claude"' "$RSVD/k@s3__review__${RS:0:12}__codex.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verdict --subtask takes the implementer its review dispatch routed"
+else fail=$((fail + 1)); echo "FAIL  verdict --subtask takes the implementer its review dispatch routed"; fi
+expect "verdict --fallback refuses an unknown agent" 2 "--fallback must be one of claude, codex" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --fallback gemini
+expect "verdict --fallback goes with review only" 2 "--fallback .* goes with --phase review" verdict "$RSP" --task k --phase qa --sha "$RS2" --by claude --state PASS --fallback codex
+NOID=$(plan noid '{"schema":"rpg-factory.pipeline-plan/1","id":"noid","title":"t","topic":"feat/core/noid","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[{"repo":"rec","objective":"o","paths":["x/"],"acceptance":["a"]}]}')
+expect "status of a task without id: INVALID" 1 "INVALID" status "$NOID"
+refute "status of a task without id: no traceback" "Traceback" status "$NOID"
+jq 'del(.pipeline.qa_prefer)' "$ROOT/registry.json" > "$TMP/reg-noqa.json"
+out=$("$ROOT/scripts/check-registry.sh" --structure-only --registry "$TMP/reg-noqa.json" 2>&1)
+if ! grep -qE "jq: error|qa_prefer" <<<"$out"; then pass=$((pass + 1)); echo "PASS  check-registry without pipeline.qa_prefer: no jq error"
+else fail=$((fail + 1)); echo "FAIL  check-registry without pipeline.qa_prefer: no jq error"; echo "$out" | head -5; fi
+# check_reg <name> <jq mutation> <problem regex>: check-registry.sh fails on the mutated registry and names the problem
+check_reg() {
+  local out rc; jq "$2" "$ROOT/registry.json" > "$TMP/reg-bad.json"
+  out=$("$ROOT/scripts/check-registry.sh" --structure-only --registry "$TMP/reg-bad.json" 2>&1); rc=$?
+  if [ "$rc" != 0 ] && grep -qE -- "$3" <<<"$out"; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1 (rc=$rc)"; echo "$out" | head -5; fi
+}
+check_reg "check-registry: unknown agent in agent_routing fails" '.pipeline.agent_routing.code = "gpt"' "pipeline.agent_routing: invalid kind or agent code"
+check_reg "check-registry: unknown kind in agent_routing fails" '.pipeline.agent_routing.bogus = "claude"' "pipeline.agent_routing: invalid kind or agent bogus"
+check_reg "check-registry: unknown agent in qa_prefer fails" '.pipeline.qa_prefer = "gpt"' "pipeline.qa_prefer: unknown agent"
+check_reg "check-registry: unknown agent in available_agents fails" '.pipeline.available_agents = ["gpt"]' "pipeline.available_agents: unknown agent gpt"
+
+echo "-- model routing"
+cat > "$TMP/routing-cases.py" <<'ROUTING'
+import importlib.util, json, os, pathlib, sys
+from unittest.mock import patch
+root, tmp, case = sys.argv[1:]
+sys.path.insert(0, root + '/scripts/lib')
+import pipeline_route as r
+pipe = json.loads(pathlib.Path(root + '/registry.json').read_text())['pipeline']
+both = {a: {'available': True} for a in pipe['agents']}
+if case.startswith('kind-'):
+    kind = case[len('kind-'):]
+    assert kind in r.KINDS
+    assert r.route(pipe, {'kind': kind}, both)[0] == pipe['agent_routing'][kind]
+if case == 'overrides-and-qa':
+    assert r.route(pipe, {'kind': 'code', 'implementer': 'claude'}, both)[0] == 'claude'
+    assert r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude'}])
+    assert not r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude', 'reason': 'special expertise'}])
+    assert r.warnings(pipe, [{'kind': 'code'}] * 3)
+    assert r.roles(pipe, {'kind': 'code'}, both)['qa'][0] == 'claude'
+    assert r.roles(pipe, {'kind': 'docs'}, both)['qa'][0] == 'codex'
+plan = {'id': 'routing-unit'}
+for sole in ('claude', 'codex'):
+    if case != 'availability-' + sole:
+        continue
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': sole}):
+        avail = r.available(pipe, plan)
+        for kind in r.KINDS:
+            roles = r.roles(pipe, {'kind': kind}, avail)
+            assert all(agent == sole for agent, why in roles.values()), roles
+            assert 'SAME_MODEL (fallback:' in roles['review'][1]
+    bindir = pathlib.Path(tmp) / ('only-' + sole)
+    bindir.mkdir(exist_ok=True)
+    binary = bindir / (pipe['agents'][sole]['bin'] + ('.exe' if os.name == 'nt' else ''))
+    binary.write_text('fixture')
+    binary.chmod(0o755)
+    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD'}, clear=True):
+        avail = r.available(pipe, plan)
+        assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
+if case == 'marks-and-empty':
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
+        r.mark(plan, 'codex', '401 revoked token')
+        assert r.route(pipe, {'kind': 'code'}, r.available(pipe, plan)) == ('claude', 'fallback: codex unavailable')
+        r.mark(plan, 'codex')
+        assert r.available(pipe, plan)['codex']['available']
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': ''}):
+        assert 'WARNING' in r.route(pipe, {'kind': 'code'}, r.available(pipe, plan))[1]
+import subprocess
+for label, payload, down in (
+    ('no-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}}), True),
+    ('system-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': True}}}}), False),
+    ('account-auth', json.dumps({'result': {'codex': {'accounts': [{}], 'systemDefault': {'hasAuth': False}}}}), False),
+    ('malformed', '{"result":null}', False),
+):
+    if case != 'orca-' + label:
+        continue
+    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)):
+        avail = r.available(pipe, {'id': 'account-' + label})
+        assert avail['claude']['available']
+        assert avail['codex']['available'] != down
+if case == 'orca-offline':
+    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
+        assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
+spec = importlib.util.spec_from_file_location('routing_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+plan = {'schema': m.SCHEMA, 'id': 'route-validation', 'title': 'test', 'topic': 'test',
+        'repos': {'plugin': {'path': root}},
+        'tasks': [{'id': 't', 'repo': 'plugin', 'kind': 'code', 'implementer': 'claude',
+                   'objective': 'x', 'paths': ['scripts/'], 'acceptance': ['x']}]}
+if case == 'validation':
+    assert any('without reason' in w for w in m.validate(plan, reg)['warnings'])
+    plan['tasks'][0]['reason'] = 'expertise'
+    assert not m.validate(plan, reg)['warnings']
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': 'gpt'}]}
+    assert any('implementer `gpt` is not' in e for e in m.validate_subplan(sub, plan, reg)['errors'])
+    sub['subtasks'][0].update(implementer='claude', kind='code')
+    assert any('without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
+    sub['subtasks'][0]['reason'] = 'expertise'
+    assert not m.validate_subplan(sub, plan, reg)['warnings']
+import subprocess
+project = pathlib.Path(tmp) / 'routing-project'
+(project / 'ProjectSettings').mkdir(parents=True, exist_ok=True)
+(project / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
+plan['repos']['plugin']['path'] = str(project)
+plan['repos']['plugin']['base'] = 'main'
+planfile = pathlib.Path(tmp) / 'routing-command-plan.json'
+plan['tasks'][0].pop('implementer', None)
+planfile.write_text(json.dumps(plan))
+for sole in ('claude', 'codex'):
+    if case != 'dispatch-' + sole and case != 'status-' + sole:
+        continue
+    # own state per case: an implement dispatch records its model, which later review/QA dispatches pair against
+    env = dict(os.environ, RPG_FACTORY_AGENTS=sole, RPG_FACTORY_STATE_DIR=tmp + '/state-' + case)
+    if case == 'status-' + sole:
+        result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'status', str(planfile), '--json'], capture_output=True, text=True, encoding='utf-8', env=env)
+        models = json.loads(result.stdout)['models']['t']
+        assert all(x['agent'] == sole and x['why'] for x in models.values()), models
+        assert 'SAME_MODEL (fallback:' in models['review']['why']
+        continue
+    for phase in ('lead', 'implement', 'review', 'qa'):
+        args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'dispatch', str(planfile),
+                '--task', 't', '--phase', phase, '--runner', 'print']
+        if phase == 'lead':
+            args += ['--agent', 'codex' if sole == 'claude' else 'claude']
+        if phase in ('review', 'qa'):
+            args += ['--sha', 'abc1234']
+        result = subprocess.run(args, capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        assert '# agent: ' + sole in result.stdout, result.stdout
+        assert 'model: ' + phase + ' -> ' + sole in result.stderr, result.stderr
+        if phase == 'lead':
+            assert 'the task lead is ' + sole in result.stderr and 'always' not in result.stderr
+            if sole == 'codex':
+                assert 'fallback: claude unavailable' in result.stderr
+if case == 'registry-defaults':
+    custom = dict(pipe, available_agents=['claude'], agent_routing=dict(pipe['agent_routing'], default='codex'))
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
+        avail = r.available(custom, {'id': 'candidate-set'})
+        assert not avail['codex']['available']
+        assert avail['codex']['why'] == 'not in pipeline.available_agents'
+    assert r.route(custom, {}, both) == ('codex', 'agent_routing.default')
+if case == 'planned-warning':
+    assert not r.warnings(pipe, [{'kind': k} for k in ('code', 'docs', 'test')])
+if case == 'subtask-kind':
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x']}]}
+    assert 'subtask s: missing implementer (or kind)' in m.validate_subplan(sub, plan, reg)['errors']
+    sub['subtasks'][0]['kind'] = 'code'
+    assert not m.validate_subplan(sub, plan, reg)['errors']
+if case == 'no-probe':
+    import shutil
+    orig_run, orig_which, started = subprocess.run, shutil.which, []
+    def spy(args, *k, **kw):
+        if isinstance(args, (list, tuple)) and list(args[:1]) == ['orca']:
+            started.append(args)
+            return subprocess.CompletedProcess(args, 0, '{}')
+        return orig_run(args, *k, **kw)
+    env = {k: v for k, v in os.environ.items() if k != 'RPG_FACTORY_AGENTS'}
+    env['ORCA_WORKTREE_ID'] = 'fixture'
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'kind': 'code'}]}
+    with patch.dict(os.environ, env, clear=True), patch('subprocess.run', spy), \
+         patch('shutil.which', lambda n, *a, **k: '/fake' if n == 'orca' else orig_which(n, *a, **k)):
+        m.validate(plan, reg)
+        m.validate_subplan(sub, plan, reg)
+        assert not started, started
+        r.available(pipe, {'id': 'probe-control'})
+        assert started, 'control: available() starts the orca account probe'
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}), \
+         patch('pipeline_route.fstate.read_json', side_effect=AssertionError('marks read')):
+        r.available(pipe, None)  # the planner: no per-run marks
+        try:
+            r.available(pipe, {'id': 'marks-control'})
+            raise RuntimeError('control: a plan reads its marks')
+        except AssertionError as e:
+            assert 'marks read' in str(e)
+if case == 'kinds-single-list':
+    import re
+    kinds = list(r.KINDS)
+    assert set(kinds) == set(pipe['agent_routing']) - {'default'}, pipe['agent_routing']
+    def find(node, key, out):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == key:
+                    out.append(v)
+                find(v, key, out)
+        elif isinstance(node, list):
+            for v in node:
+                find(v, key, out)
+        return out
+    for name in ('pipeline-plan', 'pipeline-subplan'):
+        schema = json.loads(pathlib.Path(root + '/docs/schemas/' + name + '.schema.json').read_text(encoding='utf-8'))
+        found = [v['enum'] for v in find(schema, 'kind', []) if isinstance(v, dict) and 'enum' in v]
+        assert found and all(e == kinds for e in found), (name, found)
+    schema = json.loads(pathlib.Path(root + '/docs/registry.schema.json').read_text(encoding='utf-8'))
+    found = [v['propertyNames']['enum'] for v in find(schema, 'agent_routing', []) if isinstance(v, dict) and 'propertyNames' in v]
+    assert found and all(e == kinds + ['default'] for e in found), found
+    text = pathlib.Path(root + '/scripts/check-registry.sh').read_text(encoding='utf-8')
+    listed = re.search(r'agent_routing // \{\}\) \| to_entries\[\]\s*\|\s*select\(\(\.key \| IN\(([^)]*)\)', text)
+    assert listed and [x.strip().strip('"') for x in listed.group(1).split(',')] == kinds + ['default'], listed
+print('routing assertions passed')
+ROUTING
+expect_route() {
+  local name="$1" out rc
+  out=$(python3 -B "$TMP/routing-cases.py" "$ROOT" "$TMP" "$name" 2>&1); rc=$?
+  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  routing $name"
+  else fail=$((fail + 1)); echo "FAIL  routing $name"; echo "$out"; fi
+}
+expect_route kind-lead
+expect_route kind-plan
+expect_route kind-docs
+expect_route kind-policy
+expect_route kind-design
+expect_route kind-code
+expect_route kind-test
+expect_route kind-fix
+expect_route kind-refactor
+expect_route kind-generated
+expect_route overrides-and-qa
+expect_route availability-claude
+expect_route availability-codex
+expect_route marks-and-empty
+expect_route orca-no-auth
+expect_route orca-system-auth
+expect_route orca-account-auth
+expect_route orca-malformed
+expect_route orca-offline
+expect_route validation
+expect_route dispatch-claude
+expect_route dispatch-codex
+expect_route status-claude
+expect_route status-codex
+expect_route registry-defaults
+expect_route planned-warning
+expect_route subtask-kind
+expect_route no-probe
+expect_route kinds-single-list
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

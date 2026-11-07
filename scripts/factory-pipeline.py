@@ -49,6 +49,9 @@ docs/schemas/pipeline-plan.schema.json.
         default (accepted, same result).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
   dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID]
+        implement records the model it started per task/subtask (<task>[@<subtask>]__implementer.model.json); review
+        and QA pair against it (else the planned routing), never current availability. review records its reviewer
+        and any SAME_MODEL fallback per candidate SHA: the only source `verdict` stamps a fallback from.
   ... [--subplan FILE --subtask ID] [--placement shared|child]
         --subplan/--subtask (a valid subplan of the task) default --paths to the subtask's paths, --agent to its
         implementer (implement) or reviewer (review), and --placement to its placement. --placement child runs the
@@ -76,17 +79,21 @@ docs/schemas/pipeline-plan.schema.json.
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
-          [--subtask ID]
+          [--subtask ID [--subplan FILE]] [--fallback AGENT]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
         --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
         per candidate (<task>__<phase>__<sha12>__<by>.json). A task review by a model other than the task's paired
-        reviewer never replaces the pair's record for the same SHA (stderr note).
+        reviewer never replaces the pair's record for the same SHA (stderr note). A subtask review pairs against the
+        subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
+        --fallback (review only, a pipeline agent that is unavailable now) marks a SAME_MODEL fallback by hand.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
         fast checks are PASS and not STALE, every change sits in some task's owned paths, verdicts match the
-        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. With
+        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
+        whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
+        model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push and `gh pr create` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -127,6 +134,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.append(os.path.join(HERE, "lib"))
 import fstate  # noqa: E402
+import pipeline_route as pr  # noqa: E402
 import orca_cmd  # noqa: E402
 from shells import find_bash  # noqa: E402
 
@@ -351,7 +359,9 @@ def path_problem(p):
 def task_fingerprint(task, pipe):
     """What a verdict vouches for: a changed objective, owned paths, acceptance, checks or agents invalidate it."""
     keys = {k: task.get(k) for k in ("repo", "objective", "paths", "exclusions", "acceptance", "checks", "reviewer")}
-    keys["implementer"] = task.get("implementer") or pipe["default_implementer"]
+    keys["implementer"] = pr.route(pipe, task, {a: {"available": True} for a in pipe["agents"]})[0]
+    if "kind" in task:
+        keys["kind"] = task["kind"]
     return hashlib.sha256(json.dumps(keys, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -414,7 +424,7 @@ def serialize(waves, tasks, reg, plan):
 
 def validate(plan, reg):
     pipe = settings(reg)
-    errors, warnings = [], []
+    errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
     if plan.get("schema") != SCHEMA:
         errors.append(f"schema must be {SCHEMA}")
     for k in ("id", "title", "topic", "tasks"):
@@ -443,13 +453,17 @@ def validate(plan, reg):
     agents = pipe["agents"]
     for t in tasks:
         tid = t.get("id", "?")
+        if t.get("kind") is not None and t["kind"] not in pr.KINDS:
+            errors.append(f"task {tid}: unknown kind {t['kind']}")
+        if t.get("implementer") and t["implementer"] not in agents:
+            errors.append(f"task {tid}: unknown implementer {t['implementer']}")
         for k in ("id", "repo", "objective", "paths", "acceptance"):
             if not t.get(k):
                 errors.append(f"task {tid}: missing `{k}`")
         info = repo_info(plan, reg, t.get("repo"))
         if not info["path"]:
             errors.append(f"task {tid}: repo `{t.get('repo')}` is neither a registry repo nor in plan.repos with a path")
-        impl = t.get("implementer") or pipe["default_implementer"]
+        impl = pr.route(pipe, t, {a: {"available": True} for a in agents})[0]
         if impl not in agents:
             errors.append(f"task {tid}: implementer `{impl}` is not a pipeline agent ({', '.join(agents)})")
         reviewer = t.get("reviewer") or pipe["review_pairing"].get(impl)
@@ -504,7 +518,7 @@ def cmd_validate(a, reg):
     else:
         for e in out["errors"]:
             print("ERROR " + e)
-        for w in out["warnings"]:
+        for w in out.get("warnings", []):
             print("WARN  " + w)
         for n, w in enumerate(out["waves"], 1):
             print(f"Wave {n}: {', '.join(w)}")
@@ -520,7 +534,7 @@ SUBPLAN_SCHEMA = "rpg-factory.pipeline-subplan/1"
 PLACEMENTS = ("shared", "child")  # a subtask's session: the shared task worktree (default) or an Orca child of it
 SUBPLAN_KEYS = ("schema", "plan", "task", "subtasks")  # the schema's additionalProperties: false, here and per subtask
 SUBTASK_KEYS = ("id", "task", "objective", "paths", "deps", "implementer", "reviewer", "placement", "reason", "checks",
-                "acceptance")
+                "acceptance", "kind")
 
 
 def validate_subplan(sub, plan, reg):
@@ -584,7 +598,7 @@ def validate_subplan(sub, plan, reg):
             if info is not None and not info["worktrees"]:
                 errors.append(f"subtask {sid}: placement child in repo `{task['repo']}`, which takes no worktree "
                               f"({info['reason']}): use shared")
-        for k in ("id", "objective", "paths", "implementer"):
+        for k in ("id", "objective", "paths"):
             if not s.get(k):
                 errors.append(f"subtask {sid}: missing `{k}`")
         if s.get("task") not in (None, tid):
@@ -599,7 +613,13 @@ def validate_subplan(sub, plan, reg):
                     errors.append(f"subtask {sid}: path {p} is outside the owned paths of task {tid} ({', '.join(owned)})")
                 elif excluded_by(p, excluded):
                     errors.append(f"subtask {sid}: path {p} overlaps an exclusion of task {tid}")
-        impl = s.get("implementer")
+        if s.get("kind") is not None and s["kind"] not in pr.KINDS:
+            errors.append(f"subtask {sid}: unknown kind {s['kind']}")
+        if not s.get("implementer") and not s.get("kind"):
+            errors.append(f"subtask {sid}: missing implementer (or kind)")
+        if s.get("implementer") and s["implementer"] not in agents:
+            errors.append(f"subtask {sid}: implementer `{s['implementer']}` is not a pipeline agent ({', '.join(agents)})")
+        impl = pr.route(pipe, s, {a: {"available": True} for a in agents})[0]
         if impl and impl not in agents:
             errors.append(f"subtask {sid}: implementer `{impl}` is not a pipeline agent ({', '.join(agents)})")
         reviewer = s.get("reviewer") or pairing.get(impl)
@@ -628,7 +648,7 @@ def validate_subplan(sub, plan, reg):
         if not info["worktrees"]:  # Unity project: never two sub-sessions editing or importing it at once
             serial = info["reason"]
             waves = [[sid] for w in waves for sid in w]
-    return {"plan": plan.get("_path"), "task": tid, "errors": errors, "waves": waves, "serial": serial}
+    return {"plan": plan.get("_path"), "task": tid, "errors": errors, "warnings": pr.warnings(pipe, subs), "waves": waves, "serial": serial}
 
 
 def subplan_plan_path(sub, sub_path, override=None):
@@ -652,6 +672,8 @@ def cmd_subplan(a, reg):
     else:
         for e in out["errors"]:
             print("ERROR " + e)
+        for w in out.get("warnings", []):
+            print("WARN  " + w)
         for n, w in enumerate(out["waves"], 1):
             print(f"Wave {n}: {', '.join(w)}")
         if out["serial"]:
@@ -751,12 +773,28 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
     if not shutil.which(pipe["agents"][agent]["bin"]):
         print(f"factory-pipeline: `{pipe['agents'][agent]['bin']}` is not on PATH here: the {agent} worker may be "
               f"unavailable (fallback: references/parallel-work.md, report the review as SAME_MODEL)", file=sys.stderr)
+    return agent
+
+
+def implementer_of(pipe, plan, task, subtask=None, item=None):
+    """(agent, why) a review or QA pairs against: the model `dispatch --phase implement` recorded for this task or
+    subtask, else the planned routing with every agent available; never the current availability."""
+    rec = pr.recorded(plan, task["id"], subtask, "implementer")
+    if rec:
+        return rec["agent"], "recorded implementer" + (f": {rec['why']}" if rec.get("why") else "")
+    agent, why = pr.planned(pipe, item or task)
+    return agent, "planned implementer: " + why
+
+
+def now_utc():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def cmd_planner(a, reg):
     resolve_runner(a)
     pipe = settings(reg)
-    agent = a.agent or pipe["default_implementer"]
+    agent, why = pr.route(pipe, {"kind": "plan", "implementer": a.agent}, pr.available(pipe, None))
+    print(f"model: plan -> {agent} ({why})", file=sys.stderr)
     prompt = ("You are the planner of a Factory delivery pipeline. Read-only: change no file except the plan file.\n"
               f"Request: {a.request}\n"
               "1. Run the Factory route for the files the request will write and read the routed lead skill.\n"
@@ -936,8 +974,12 @@ def cmd_dispatch(a, reg):
             die(f"--placement child: repo {key} takes no worktree ({info['reason']}); nothing was printed")
         if not a.sha:
             die("qa needs --sha <candidate commit>")
-        impls = {t.get("implementer") or pipe["default_implementer"] for t in tasks}
-        agent = a.agent or (pipe["review_pairing"].get(next(iter(impls))) if len(impls) == 1 else pipe["default_implementer"])
+        impls = {implementer_of(pipe, plan, t) for t in tasks}
+        avail = pr.available(pipe, plan)
+        agent, why = (pr.choose(a.agent, "explicit --agent", avail) if a.agent else
+                      pr.roles(pipe, {}, avail, next(iter(impls)))["qa"] if len({i[0] for i in impls}) == 1 else
+                      pr.choose(pipe.get("qa_prefer", "codex"), "integration qa_prefer", avail))
+        print(f"model: qa -> {agent} ({why})", file=sys.stderr)
         at_head = None
         if info["worktrees"]:
             # the integrated tree is the checkout of plan.topic (where the run lead merges): QA joins it or a child of it
@@ -971,8 +1013,14 @@ def cmd_dispatch(a, reg):
         return 0
     task = find_task(plan, a.task)
     info = repo_info(plan, reg, task["repo"])
-    impl = task.get("implementer") or pipe["default_implementer"]
+    impl = pr.route(pipe, task, pr.available(pipe, plan))[0]
     sub = load_subtask(a, plan, reg, task)
+    sid = sub["id"] if sub else None
+    # review and QA pair against the recorded (else planned) implementer; implement and lead forecast from availability
+    model_roles = pr.roles(pipe, sub or task, pr.available(pipe, plan),
+                           implementer_of(pipe, plan, task, sid, sub) if a.phase in ("review", "qa") else None)
+    for role, (model, why) in model_roles.items():
+        print(f"model: {role} -> {model} ({why})", file=sys.stderr)
     placement = a.placement or (sub or {}).get("placement") or "shared"
     if placement == "child" and not info["worktrees"]:
         die(f"--placement child: repo {task['repo']} takes no worktree ({info['reason']}); nothing was printed")
@@ -1009,10 +1057,9 @@ def cmd_dispatch(a, reg):
                           "checked out: the task worktree is created with --no-parent (no Orca parent)", file=sys.stderr)
             where = "this task worktree"
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
-        # the task lead is always the registry's lead agent (Claude), whatever the task's implementer
-        lead = pipe.get("lead_agent") or "claude"
+        lead = model_roles["lead"][0]
         if a.agent and a.agent != lead:
-            print(f"factory-pipeline: the task lead is always {lead} (registry pipeline.lead_agent); --agent {a.agent} "
+            print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
             emit_lead_handoff(reg, lead, orca_prompt(a, prompt, plan), place, branch)
@@ -1035,7 +1082,7 @@ def cmd_dispatch(a, reg):
             die(f"--paths {', '.join(excluded)} overlap the exclusions of task {task['id']}: "
                 f"{', '.join(task.get('exclusions') or [])}")
         spec["subtask_paths"] = paths
-    elif a.phase == "implement" and a.agent and a.agent != impl:
+    elif a.phase == "implement" and a.agent and pr.choose(a.agent, "explicit", pr.available(pipe, plan))[0] != impl:
         die(f"task {task['id']} is planned for {impl}; set `implementer: {a.agent}` in the plan (the reviewer pairing "
             "follows it) instead of --agent (a subtask session with --paths may name its own model)")
     if sub:
@@ -1056,7 +1103,7 @@ def cmd_dispatch(a, reg):
         joined = {"worktree": f"path:{home}", "new": False, "reason": "the task lead's worktree"} if home else None
     if a.phase == "implement":
         sub_impl = (sub or {}).get("implementer") if sub else None
-        agent = a.agent or sub_impl or impl
+        agent = pr.choose(a.agent, "explicit --agent", pr.available(pipe, plan))[0] if a.agent else model_roles["implement"][0]
         place = joined or orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
         edit = "the subtask_paths" if paths else "the owned paths"
         report = ("Report to the task lead: changed paths, each check with exact counts (or NOT_RUN with command and "
@@ -1077,7 +1124,13 @@ def cmd_dispatch(a, reg):
                       + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan)
+        why = "explicit --agent" if a.agent else model_roles["implement"][1]
+        started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan)
+        # an ad hoc --paths session of its own model (no subtask id) is a slice: the task's record keeps its implementer
+        if sub or not (a.paths and a.agent):
+            pr.record(plan, task["id"], sid, "implementer",
+                      {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
+                       "timestamp": now_utc()})
         child_note(place)
         return 0
     if placement == "child":
@@ -1086,9 +1139,8 @@ def cmd_dispatch(a, reg):
         at_head = (f"Candidate SHA: {a.sha}. You share the task worktree {home} with the task lead, who keeps HEAD at "
                    "the candidate: first check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. "
                    "Never check out, stage, commit or stash." if home else None)
-    sub_impl = (sub or {}).get("implementer") or impl
-    sub_reviewer = ((sub or {}).get("reviewer") or pipe["review_pairing"].get(sub_impl)) if sub else None
-    agent = a.agent or (sub_reviewer if a.phase == "review" else None) or task.get("reviewer") or pipe["review_pairing"].get(impl)
+    sub_impl = model_roles["implement"][0]
+    agent = pr.choose(a.agent, "explicit --agent", pr.available(pipe, plan))[0] if a.agent else model_roles[a.phase][0]
     place = joined or {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
@@ -1114,7 +1166,17 @@ def cmd_dispatch(a, reg):
               + spec_json(spec)
               + "\nReport: `path:line severity problem fix` per finding, then `VERDICT: PASS|FAIL`."
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
-    emit(a, reg, agent, prompt, place, title, plan)
+    fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
+    if fallback:
+        prompt = model_roles["review"][1] + "\n" + prompt
+    started = emit(a, reg, agent, prompt, place, title, plan)
+    full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
+    sha = full if rc == 0 and full else a.sha
+    # what verdict reads: a fallback is stamped only for this reviewer on this candidate, never from availability later
+    pr.record(plan, task["id"], sid, "reviewer",
+              {"agent": started, "sha": sha, "implementer": sub_impl,
+               "fallback": pr.paired(pipe, sub or task, sub_impl) if fallback and started == agent else None,
+               "timestamp": now_utc()}, sha)
     child_note(place)
     return 0
 
@@ -1249,6 +1311,72 @@ def subtask_failures(plan, reg, task_id, target):
     return out
 
 
+IMPL_TAIL = "__implementer.model.json"
+
+
+def subtask_implementers(plan, task_id):
+    """{subtask id: recorded implementer agent} from `dispatch --phase implement --subtask` records of a task."""
+    vdir = verdict_dir(plan)
+    pre = f"{safe_name(task_id)}{SUB_SEP}"
+    out = {}
+    for n in sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []:
+        if n.startswith(pre) and n.endswith(IMPL_TAIL) and len(n) > len(pre) + len(IMPL_TAIL):
+            rec = fstate.read_json(os.path.join(vdir, n))
+            if isinstance(rec, dict) and rec.get("agent"):
+                out[n[len(pre):-len(IMPL_TAIL)]] = rec["agent"]
+    return out
+
+
+def subtask_reviews(plan, reg, task_id, sid, target, stale=None):
+    """PASS reviews on the target or an ancestor whose reviewed paths are unchanged."""
+    vdir = verdict_dir(plan)
+    pre = f"{safe_name(task_id)}{SUB_SEP}{safe_name(sid)}__review"
+    path = repo_info(plan, reg, find_task(plan, task_id)["repo"])["path"] or "."
+    fp, out = scope_fingerprint(plan, reg, task_id), []
+    for n in sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []:
+        if not (n == pre + ".json" or (n.startswith(pre + "__") and n.endswith(".json") and not n.endswith(".model.json"))):
+            continue
+        rec = fstate.read_json(os.path.join(vdir, n))
+        if (isinstance(rec, dict) and rec.get("task") == task_id and rec.get("subtask") == sid
+                and rec.get("phase") == "review" and rec.get("state") == "PASS" and rec.get("fingerprint") == fp
+                and rec.get("sha") and (rec["sha"] == target or is_ancestor(path, rec["sha"], target))):
+            paths = rec.get("paths") or find_task(plan, task_id)["paths"]
+            changed, rc = git(path, "diff", "--name-only", rec["sha"], target, "--", *specs(paths))
+            if rc != 0 or changed:
+                if stale is not None:
+                    stale.update(changed.splitlines() if changed else paths)
+                continue
+            out.append(rec)
+    return out
+
+
+def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
+    """(blockers, notes) for subtasks whose recorded implementer the task review (by rv["by"], paired against impl)
+    does not cover: a subtask by another model than impl, or by the task reviewer's own model, needs its own PASS review
+    by its pair or a dispatch-recorded SAME_MODEL fallback review; a subtask fallback is never laundered by the task
+    review."""
+    blockers, notes = [], []
+    for sid, x in sorted(subtask_implementers(plan, t["id"]).items()):
+        want = pr.paired(pipe, t, x)
+        if x == impl and (rv.get("by") == want or (rv.get("by") == x and (rv.get("fallback") == want or allow_same_model))):
+            continue
+        stale = set()
+        recs = subtask_reviews(plan, reg, t["id"], sid, target, stale)
+        if any(r.get("by") == want for r in recs):
+            continue
+        if any(r.get("by") == x and r.get("fallback") == want for r in recs):
+            notes.append(f"{t['id']}: subtask {sid} SAME_MODEL (fallback: {want} unavailable)")
+        elif allow_same_model and any(r.get("by") == x for r in recs + [rv]):
+            notes.append(f"{t['id']}: subtask {sid} review SAME_MODEL ({x}) accepted by --allow-same-model")
+        else:
+            blockers.append(f"{t['id']}: subtask {sid} recorded implementer {x}, but the task review by {rv.get('by')} "
+                            f"pairs against {impl}: record `verdict --subtask {sid}` PASS by {want} (or a dispatch-"
+                            "recorded SAME_MODEL fallback review)"
+                            + (f"; stale subtask review: changed paths {', '.join(sorted(stale))}; needs {want} review"
+                               if stale else ""))
+    return blockers, notes
+
+
 def cmd_verdict(a, reg):
     pipe = settings(reg)
     plan = read_plan(a.plan)
@@ -1277,19 +1405,44 @@ def cmd_verdict(a, reg):
     rec = {"plan": plan.get("id"), "task": a.task, "phase": a.phase, "sha": full, "by": a.by, "state": a.state,
            "fingerprint": scope_fingerprint(plan, reg, a.task),
            "report": os.path.abspath(a.report) if a.report else None,
-           "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+           "timestamp": now_utc()}
     if a.subtask:
         rec["subtask"] = a.subtask
+    if a.fallback:
+        if a.phase != "review":
+            die("--fallback (the unavailable paired reviewer) goes with --phase review")
+        if a.fallback not in pipe["agents"]:
+            die(f"--fallback must be one of {', '.join(pipe['agents'])}")
+        if pr.available(pipe, plan).get(a.fallback, {}).get("available"):
+            die(f"--fallback {a.fallback} is available now")
+        rec["fallback"] = a.fallback
+    sub_item = load_subtask(a, plan, reg, task) if a.subplan else None
+    if a.subtask:
+        rec["paths"] = (sub_item or task)["paths"]
+    if task is not None and a.phase == "review":
+        # a fallback only when this candidate's review dispatch was one and started this reviewer
+        disp = pr.recorded(plan, a.task, a.subtask, "reviewer", full)
+        # the implementer: the recorded one, else what this candidate's review dispatch paired against (routed over
+        # the subtask), else the planned routing of the subtask (--subplan) or the task
+        impl = (disp["implementer"] if disp and disp.get("implementer") in pipe["agents"]
+                and not pr.recorded(plan, a.task, a.subtask, "implementer") and full.startswith(str(disp.get("sha")))
+                else implementer_of(pipe, plan, task, a.subtask, sub_item)[0])
+        rec["implementer"] = impl
+        if (not a.fallback and disp and disp.get("fallback") and disp["agent"] == a.by == impl
+                and full.startswith(str(disp.get("sha")))):
+            rec["fallback"] = disp["fallback"]
     kept = candidate_file(plan, a.task, a.phase, full, a.by, a.subtask)
     fstate.write_json(kept, rec, indent=2)
     path = verdict_file(plan, a.task, a.phase, a.subtask)
     if task is not None and a.phase == "review" and not a.subtask:
         # the task review the gate reads: a review by another model (a paired review of a Codex subtask recorded
         # without --subtask) never replaces the paired reviewer's record for the same candidate
-        impl = task.get("implementer") or pipe["default_implementer"]
-        want = task.get("reviewer") or pipe["review_pairing"].get(impl)
         old = fstate.read_json(path)
-        if (a.by != want and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
+        old_impl = (old.get("implementer") or pr.route(pipe, task, {x: {"available": True} for x in pipe["agents"]})[0]) if isinstance(old, dict) else impl
+        want = pr.paired(pipe, task, old_impl)
+        new_pair = pr.paired(pipe, task, rec["implementer"])
+        new_paired = a.by == new_pair or (a.by == rec["implementer"] and rec.get("fallback") == new_pair)
+        if (not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
                 and old.get("fingerprint") == rec["fingerprint"]):
             print(f"factory-pipeline: kept the {want} review of {a.task} at {a.sha[:10]} (the task's paired reviewer); "
                   f"this {a.by} review is kept per candidate only: {kept}. A subtask review takes --subtask <id>.",
@@ -1394,22 +1547,27 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         if key not in heads:
             continue
         info = repo_info(plan, reg, key)
-        impl = t.get("implementer") or pipe["default_implementer"]
-        want = t.get("reviewer") or pipe["review_pairing"].get(impl)
         blockers += [f"{t['id']}: {f}" for f in subtask_failures(plan, reg, t["id"], heads[key])]
         rv = read_verdict(plan, reg, t["id"], "review", blockers)
         if not rv:
             continue
+        impl = rv.get("implementer") or pr.route(pipe, t, {a: {"available": True} for a in pipe["agents"]})[0]
+        want = pr.paired(pipe, t, impl)
         if rv.get("state") != "PASS":
             blockers.append(f"{t['id']}: review {rv.get('state')} at {rv.get('sha', '')[:10]}")
             continue
         if rv.get("by") != want:
-            if rv.get("by") == impl and allow_same_model:
+            if rv.get("by") == impl and rv.get("fallback") == want:
+                notes.append(f"{t['id']}: SAME_MODEL (fallback: {want} unavailable)")
+            elif rv.get("by") == impl and allow_same_model:
                 notes.append(f"{t['id']}: review SAME_MODEL ({impl}) accepted by --allow-same-model")
             else:
                 blockers.append(f"{t['id']}: reviewed by {rv.get('by')}, cross-model review needs {want}"
                                 + (" (or --allow-same-model when it is unavailable)" if rv.get("by") == impl else ""))
                 continue
+        sub_blockers, sub_notes = subtask_coverage(plan, reg, pipe, t, rv, impl, heads[key], allow_same_model)
+        blockers += sub_blockers
+        notes += sub_notes
         if not info["worktrees"] and serial_count(plan, reg, key) > 1:
             tq = read_verdict(plan, reg, t["id"], "qa", blockers)  # missing: "<id>: no qa verdict"
             if tq and tq.get("state") != "PASS":
@@ -2010,7 +2168,21 @@ def status(plan, reg, orca_run=None):
 def cmd_status(a, reg):
     plan = read_plan(a.plan)
     plan["_path"] = a.plan
+    pipe = settings(reg)
+    tasks = plan.get("tasks") if isinstance(plan.get("tasks"), list) else []
+    # a task without an id (an INVALID plan) is still shown: status reports the error, never a traceback
+    models = {str(task.get("id", "?")): {role: {"agent": agent, "why": why} for role, (agent, why) in pr.roles(
+              pipe, task, pr.available(pipe, plan),
+              implementer_of(pipe, plan, task) if isinstance(task.get("id"), str)
+              and pr.recorded(plan, task["id"], None, "implementer") else None).items()}
+              for task in tasks if isinstance(task, dict)}
+    if not a.json:
+        for tid, roles in models.items():
+            for role, model in roles.items():
+                print(f"model: {tid} {role} -> {model['agent']} ({model['why']})")
     out = status(plan, reg, a.orca_run)
+    if a.json:
+        out["models"] = models
     workers = out.pop("_workers", [])
     if a.json:
         print(json.dumps(out, indent=2))
@@ -2039,6 +2211,23 @@ def cmd_status(a, reg):
     for c in out["next"]:
         print("Next: " + c)
     return 0 if out["valid"] else 1
+
+
+def cmd_agents(a, reg):
+    pipe = settings(reg)
+    plan = read_plan(a.plan)
+    agent = a.down or a.up
+    if agent and agent not in pipe["agents"]:
+        die("unknown agent " + agent)
+    if agent:
+        pr.mark(plan, agent, a.reason if a.down else None)
+    out = pr.available(pipe, plan)
+    if a.json:
+        print(json.dumps(out, indent=2))
+    else:
+        for agent, state in out.items():
+            print(f"{agent}: {'available' if state['available'] else 'unavailable'} ({state['why']})")
+    return 0
 
 
 def main():
@@ -2086,6 +2275,15 @@ def main():
     v.add_argument("--state", required=True)
     v.add_argument("--report")
     v.add_argument("--subtask")
+    v.add_argument("--subplan")
+    v.add_argument("--fallback")
+    ag = sub.add_parser("agents")
+    ag.add_argument("plan")
+    change = ag.add_mutually_exclusive_group()
+    change.add_argument("--down")
+    change.add_argument("--up")
+    ag.add_argument("--reason", default="MODEL_UNAVAILABLE")
+    ag.add_argument("--json", action="store_true")
     st = sub.add_parser("status")
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
@@ -2105,7 +2303,7 @@ def main():
     reg = load_registry(a.registry)
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
-    return {"tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
+    return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
             "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status}[a.cmd](a, reg)
 
 
