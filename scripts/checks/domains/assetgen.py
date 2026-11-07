@@ -61,6 +61,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -120,11 +121,14 @@ def check(artifact, ctx):
     lenient = artifact.get("status") in LENIENT
     results = []
 
-    def grade(name, fails, todo=(), warns=()):
-        """fails: always FAIL; todo: FAIL unless the status is lenient (then WARN); warns: WARN."""
-        fails, todo, warns = list(fails), list(todo), list(warns)
+    def grade(name, fails, todo=(), warns=(), human=()):
+        """fails: always FAIL; todo: FAIL unless the status is lenient (then WARN); human: HUMAN_REQUIRED (a person
+        must act, nothing is wrong); warns: WARN."""
+        fails, todo, warns, human = list(fails), list(todo), list(warns), list(human)
         if fails or (todo and not lenient):
-            results.append(Result(name, "FAIL", fails + todo + warns))
+            results.append(Result(name, "FAIL", fails + todo + human + warns))
+        elif human:
+            results.append(Result(name, "HUMAN_REQUIRED", human + todo + warns))
         elif todo or warns:
             results.append(Result(name, "WARN", todo + warns))
         else:
@@ -404,13 +408,45 @@ def check(artifact, ctx):
     return results
 
 
+def _git(root, *args):
+    try:
+        r = subprocess.run(["git", "-C", str(root), *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           text=True, encoding="utf-8")
+    except OSError:
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def pending_approval(authoring, run_id):
+    """(path, committed) of the gen-run approval record on disk for run.md as it is now (or as committed), or None.
+    committed: run.md and the record are both in HEAD as they are on disk (the signature is ctx.approval's)."""
+    rel_md = "assetgen/runs/%s/run.md" % run_id
+    md = Path(authoring) / rel_md
+    if not md.is_file():
+        return None
+    disk = _git(authoring, "hash-object", "--", rel_md)
+    if not disk:
+        data = md.read_bytes()
+        disk = hashlib.sha1(b"blob %d\x00" % len(data) + data).hexdigest()
+    head = _git(authoring, "rev-parse", "HEAD:" + rel_md)
+    for rev in dict.fromkeys(r for r in (disk, head) if r):
+        rel = "approvals/AGEN-%s/assetgen-approval-%s.json" % (run_id, rev)
+        if (Path(authoring) / rel).is_file():
+            added = _git(authoring, "log", "--no-renames", "--diff-filter=A", "--format=%H", "--", rel)
+            dirty = _git(authoring, "status", "--porcelain", "--", rel, rel_md)
+            return rel, bool(added) and dirty == "" and head == disk
+    return None
+
+
 def anchor_problems(rec, stylelock, ctx, authoring):
-    """(fails, warns) of one anchor record: well formed, a person approved it, image bytes, source gen-run approved
-    in the engine view (run.md status) and by its signed approval. A retired anchor only warns."""
-    data, fails, warns = rec["data"], [], []
+    """(fails, warns, human) of one anchor record: well formed, a person approved it, image bytes, source gen-run
+    approved in the engine view (run.md status) and by its signed approval. A retired anchor only warns. An approval
+    record that is on disk but not committed or not signed is HUMAN_REQUIRED (the person commits and signs it), the
+    grade the trace check gives."""
+    data, fails, warns, human = rec["data"], [], [], []
     aid = rec["id"]
     if rec["errors"]:
-        return ["anchor %s is malformed: %s" % (aid, "; ".join(rec["errors"]))], []
+        return ["anchor %s is malformed: %s" % (aid, "; ".join(rec["errors"]))], [], []
     if data["status"] == "retired":
         warns.append("anchor %s is retired since the run; the record keeps what was used" % aid)
     elif data["status"] != "active":
@@ -430,10 +466,16 @@ def anchor_problems(rec, stylelock, ctx, authoring):
         fails.append("anchor %s: source gen-run %s is %s, not approved" % (aid, source, status or "missing (no run.md)"))
     else:
         verdict = ctx.approval("AGEN-" + source)
-        if not isinstance(verdict, dict) or verdict.get("state") != "verified":
-            fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
-                aid, source, (verdict or {}).get("state", "missing"), "; ".join((verdict or {}).get("reasons") or [])))
-    return fails, warns
+        state = (verdict or {}).get("state", "missing") if isinstance(verdict, dict) else "missing"
+        if state != "verified":
+            pending = pending_approval(authoring, source)
+            if pending and (not pending[1] or state in ("missing", "untrusted")):
+                human.append("anchor %s: the approval of source gen-run AGEN-%s is present but not committed/signed (%s): "
+                             "the person commits run.md and the record in one signed commit" % (aid, source, pending[0]))
+            else:
+                fails.append("anchor %s: the approval of source gen-run AGEN-%s is %s (%s)" % (
+                    aid, source, state, "; ".join((verdict or {}).get("reasons") or [] if isinstance(verdict, dict) else [])))
+    return fails, warns, human
 
 
 def style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade):
@@ -453,7 +495,7 @@ def style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade):
             sourced.append((path, data))
     if lock is None and not sourced:
         return
-    fails, warns = [], []
+    fails, warns, human = [], [], []
     if lock is not None:
         ref = lock.get("style")
         errs = stylelock.ref_errors(ref, "spec.style_lock.style")
@@ -496,12 +538,13 @@ def style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade):
             if rec is None:
                 fails.append("anchor %s is not in assetgen/styles/%s/anchors/" % (aid, sid))
                 continue
-            f, w = anchor_problems(rec, stylelock, ctx, authoring)
+            f, w, h = anchor_problems(rec, stylelock, ctx, authoring)
             if not rec["errors"] and pick.get("sha256") != rec["data"]["image_sha256"]:
                 f.append("anchor %s: the run used image sha256 %s, the anchor now holds %s" % (
                     aid, str(pick.get("sha256"))[:12], rec["data"]["image_sha256"][:12]))
             fails += f
             warns += w
+            human += h
     for path, data in sourced:
         aid = data.get("id") or os.path.basename(path)[:-5]
         if data.get("status") != "active":
@@ -518,7 +561,7 @@ def style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade):
             src = src if isinstance(src, dict) else {}
             fails.append("anchor %s names output %s sha256 %s, which this run does not record" % (
                 aid, src.get("output"), str(src.get("sha256"))[:12]))
-    grade("gen-run-style", fails, (), warns)
+    grade("gen-run-style", fails, (), warns, human)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,9 @@ layer merged in), so a bad game value is reported on the game file that holds it
 Style lock (stylelock.py): style version, status and structured fields, purpose default_family/dimensions/
 max_references, <authoring>/assetgen/project.json (styles it names, version match), anchors (structure, image file
 and hash, an active anchor needs a person's approval and an approved source gen-run) and rejections. With an
-authoring repo and no project.json, lint adds a WARN row for assetgen/project.json (style lock off).
+authoring repo and no project.json, lint adds a WARN row for assetgen/project.json (style lock off). An active game
+style without structured style fields (palette.colors, tone, canvas, outline.edge_darkness) is a WARN: every style-*
+QA row would be NOT_AVAILABLE.
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
 """
 import json
@@ -216,6 +218,18 @@ def style_errors(data):
     return errs + stylelock.style_errors(data)
 
 
+def style_warnings(data, layer):
+    """An active game style (merged) without structured palette colours, tone, canvas or outline edge_darkness gets
+    no style QA: a WARN."""
+    if not layer.startswith("game") or stylelock.style_status(data) != "active":
+        return []
+    pal, out = data.get("palette"), data.get("outline")
+    if (isinstance(pal, dict) and pal.get("colors")) or isinstance(data.get("tone"), dict)             or isinstance(data.get("canvas"), dict) or (isinstance(out, dict) and isinstance(out.get("edge_darkness"), dict)):
+        return []
+    return ["active game style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness): "
+            "every style-* QA row would be NOT_AVAILABLE, so qa checks nothing of the style; add them"]
+
+
 def anchor_lint(raw, style_id, ident, path, authoring):
     errs = stylelock.anchor_errors(raw, style_id, ident)
     if errs:
@@ -287,6 +301,7 @@ def lint_data(path, raw, authoring):
             errs += purpose_errors(data, ident, authoring)
         else:
             errs += style_errors(data)
+            warns += style_warnings(data, entry["layer"])
     elif isinstance(raw, dict) and raw.get("schema") == layers.KINDS["template"]["schema"]:
         errs, warns = template_errors(raw, os.path.basename(path))
     elif isinstance(raw, dict) and raw and all(isinstance(n, dict) and "class_type" in n for n in raw.values()):
