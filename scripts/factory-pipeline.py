@@ -79,17 +79,21 @@ docs/schemas/pipeline-plan.schema.json.
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
-          [--subtask ID]
+          [--subtask ID [--subplan FILE]] [--fallback AGENT]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
         --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
         per candidate (<task>__<phase>__<sha12>__<by>.json). A task review by a model other than the task's paired
-        reviewer never replaces the pair's record for the same SHA (stderr note).
+        reviewer never replaces the pair's record for the same SHA (stderr note). A subtask review pairs against the
+        subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
+        --fallback (review only, a pipeline agent that is unavailable now) marks a SAME_MODEL fallback by hand.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
         fast checks are PASS and not STALE, every change sits in some task's owned paths, verdicts match the
-        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. With
+        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
+        whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
+        model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push and `gh pr create` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -1307,6 +1311,63 @@ def subtask_failures(plan, reg, task_id, target):
     return out
 
 
+IMPL_TAIL = "__implementer.model.json"
+
+
+def subtask_implementers(plan, task_id):
+    """{subtask id: recorded implementer agent} from `dispatch --phase implement --subtask` records of a task."""
+    vdir = verdict_dir(plan)
+    pre = f"{safe_name(task_id)}{SUB_SEP}"
+    out = {}
+    for n in sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []:
+        if n.startswith(pre) and n.endswith(IMPL_TAIL) and len(n) > len(pre) + len(IMPL_TAIL):
+            rec = fstate.read_json(os.path.join(vdir, n))
+            if isinstance(rec, dict) and rec.get("agent"):
+                out[n[len(pre):-len(IMPL_TAIL)]] = rec["agent"]
+    return out
+
+
+def subtask_reviews(plan, reg, task_id, sid, target):
+    """PASS review verdicts of one subtask of this version of the plan on the target or an ancestor of it."""
+    vdir = verdict_dir(plan)
+    pre = f"{safe_name(task_id)}{SUB_SEP}{safe_name(sid)}__review"
+    path = repo_info(plan, reg, find_task(plan, task_id)["repo"])["path"] or "."
+    fp, out = scope_fingerprint(plan, reg, task_id), []
+    for n in sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []:
+        if not (n == pre + ".json" or (n.startswith(pre + "__") and n.endswith(".json") and not n.endswith(".model.json"))):
+            continue
+        rec = fstate.read_json(os.path.join(vdir, n))
+        if (isinstance(rec, dict) and rec.get("task") == task_id and rec.get("subtask") == sid
+                and rec.get("phase") == "review" and rec.get("state") == "PASS" and rec.get("fingerprint") == fp
+                and rec.get("sha") and (rec["sha"] == target or is_ancestor(path, rec["sha"], target))):
+            out.append(rec)
+    return out
+
+
+def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
+    """(blockers, notes) for subtasks whose recorded implementer the task review (by rv["by"], paired against impl)
+    does not cover: a subtask by another model than impl, or by the task reviewer's own model, needs its own PASS review
+    by its pair or a dispatch-recorded SAME_MODEL fallback review; a subtask fallback is never laundered by the task
+    review."""
+    blockers, notes = [], []
+    for sid, x in sorted(subtask_implementers(plan, t["id"]).items()):
+        want = pr.paired(pipe, t, x)
+        if x == impl and (rv.get("by") == want or (rv.get("by") == x and (rv.get("fallback") == want or allow_same_model))):
+            continue
+        recs = subtask_reviews(plan, reg, t["id"], sid, target)
+        if any(r.get("by") == want for r in recs):
+            continue
+        if any(r.get("by") == x and r.get("fallback") == want for r in recs):
+            notes.append(f"{t['id']}: subtask {sid} SAME_MODEL (fallback: {want} unavailable)")
+        elif allow_same_model and any(r.get("by") == x for r in recs + [rv]):
+            notes.append(f"{t['id']}: subtask {sid} review SAME_MODEL ({x}) accepted by --allow-same-model")
+        else:
+            blockers.append(f"{t['id']}: subtask {sid} recorded implementer {x}, but the task review by {rv.get('by')} "
+                            f"pairs against {impl}: record `verdict --subtask {sid}` PASS by {want} (or a dispatch-"
+                            "recorded SAME_MODEL fallback review)")
+    return blockers, notes
+
+
 def cmd_verdict(a, reg):
     pipe = settings(reg)
     plan = read_plan(a.plan)
@@ -1339,14 +1400,23 @@ def cmd_verdict(a, reg):
     if a.subtask:
         rec["subtask"] = a.subtask
     if a.fallback:
+        if a.phase != "review":
+            die("--fallback (the unavailable paired reviewer) goes with --phase review")
+        if a.fallback not in pipe["agents"]:
+            die(f"--fallback must be one of {', '.join(pipe['agents'])}")
         if pr.available(pipe, plan).get(a.fallback, {}).get("available"):
             die(f"--fallback {a.fallback} is available now")
         rec["fallback"] = a.fallback
+    sub_item = load_subtask(a, plan, reg, task) if a.subplan else None
     if task is not None and a.phase == "review":
-        impl = implementer_of(pipe, plan, task, a.subtask)[0]
-        rec["implementer"] = impl
         # a fallback only when this candidate's review dispatch was one and started this reviewer
         disp = pr.recorded(plan, a.task, a.subtask, "reviewer", full)
+        # the implementer: the recorded one, else what this candidate's review dispatch paired against (routed over
+        # the subtask), else the planned routing of the subtask (--subplan) or the task
+        impl = (disp["implementer"] if disp and disp.get("implementer") in pipe["agents"]
+                and not pr.recorded(plan, a.task, a.subtask, "implementer") and full.startswith(str(disp.get("sha")))
+                else implementer_of(pipe, plan, task, a.subtask, sub_item)[0])
+        rec["implementer"] = impl
         if (not a.fallback and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
@@ -1484,6 +1554,9 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                 blockers.append(f"{t['id']}: reviewed by {rv.get('by')}, cross-model review needs {want}"
                                 + (" (or --allow-same-model when it is unavailable)" if rv.get("by") == impl else ""))
                 continue
+        sub_blockers, sub_notes = subtask_coverage(plan, reg, pipe, t, rv, impl, heads[key], allow_same_model)
+        blockers += sub_blockers
+        notes += sub_notes
         if not info["worktrees"] and serial_count(plan, reg, key) > 1:
             tq = read_verdict(plan, reg, t["id"], "qa", blockers)  # missing: "<id>: no qa verdict"
             if tq and tq.get("state") != "PASS":
@@ -2191,6 +2264,7 @@ def main():
     v.add_argument("--state", required=True)
     v.add_argument("--report")
     v.add_argument("--subtask")
+    v.add_argument("--subplan")
     v.add_argument("--fallback")
     ag = sub.add_parser("agents")
     ag.add_argument("plan")

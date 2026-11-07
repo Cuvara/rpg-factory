@@ -539,7 +539,7 @@ refute "a new-style subtask PASS supersedes the legacy FAIL for that phase" "sub
 # Other phases retain their legacy evidence until that phase has a new-style record too.
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["phase"]="qa"; json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$CVD/a__sub-c__review.json" "$CVD/a__sub-c__qa.json"
 expect "a new-style review does not supersede a legacy QA FAIL" 1 "BLOCKER a: subtask c qa FAIL" gate "$X" --no-run-checks
-v --task gw --phase review --sha "$SG" --by codex --state PASS --subtask s2
+v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s2
 v --task gw --phase qa --sha "$SG" --by codex --state PASS --subtask s3
 # late results: a PASS on an older candidate (SG~1) never resolves a FAIL on the newer SG; a PASS on SG resolves it, and
 # a late FAIL on the older candidate then changes nothing
@@ -1273,6 +1273,39 @@ gi "$R" commit -q --allow-empty -m "chore: next"; RS2=$(git -C "$R" rev-parse HE
 RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task k --phase review --sha "$RS2" --by claude --state PASS >/dev/null
 if ! grep -q '"fallback": "' "$RVD/k__review__${RS2:0:12}__claude.json"; then pass=$((pass + 1)); echo "PASS  a fallback dispatch of another candidate stamps no fallback"
 else fail=$((fail + 1)); echo "FAIL  a fallback dispatch of another candidate stamps no fallback"; fi
+# a subtask fallback is never laundered by the task review: subtask s by claude (codex down), codex back, task review by
+# claude paired against the planned codex implementer
+RSP=$(plan recsub '{"schema":"rpg-factory.pipeline-plan/1","id":"recsub","title":"Recorded subtasks","topic":"feat/core/rec","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[
+ {"id":"k","repo":"rec","kind":"code","objective":"o","paths":["code/","docs/"],"acceptance":["a"]}]}')
+RSS="$TMP/sub-recsub.json"
+printf '%s\n' '{"schema":"rpg-factory.pipeline-subplan/1","plan":"recsub.json","task":"k","subtasks":[
+ {"id":"s","objective":"o","kind":"code","paths":["code/"]},{"id":"s2","objective":"o","kind":"code","paths":["docs/a.md"]},
+ {"id":"s3","objective":"o","kind":"docs","paths":["docs/b/"]}]}' > "$RSS"
+RSVD="$RPG_FACTORY_STATE_DIR/pipeline/recsub"
+rs() { python3 -B "$P" "$@" --runner print >/dev/null 2>&1 || echo "dispatch failed: $*"; }
+rv() { python3 -B "$P" verdict "$RSP" "$@" >/dev/null || echo "verdict failed: $*"; }
+RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s
+RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s2
+rs dispatch "$RSP" --task k --phase review --sha "$RS2"
+rv --task k --phase review --sha "$RS2" --by claude --state PASS
+rv --task integration:rec --phase qa --sha "$RS2" --by codex --state PASS
+expect "a claude fallback subtask is not laundered by the claude task review once codex is back" 1 "BLOCKER k: subtask s recorded implementer claude, but the task review by claude pairs against codex: record .verdict --subtask s. PASS by codex" gate "$RSP" --no-run-checks
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s
+refute "a subtask review by its implementer's pair covers that subtask" "BLOCKER k: subtask s recorded" gate "$RSP" --no-run-checks
+RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase review --sha "$RS2" --subplan "$RSS" --subtask s2
+rv --task k --phase review --sha "$RS2" --by claude --state PASS --subtask s2
+expect "a dispatch-recorded SAME_MODEL fallback subtask review passes the gate" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
+expect "and the gate notes the subtask fallback" 0 "NOTE    k: subtask s2 SAME_MODEL \(fallback: codex unavailable\)" gate "$RSP" --no-run-checks
+# verdict --subtask pairs against the subtask's routing: --subplan (docs subtask s3: claude), else its review dispatch
+rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s3 --subplan "$RSS"
+if jq -e '.implementer == "claude"' "$RSVD/k@s3__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verdict --subtask --subplan routes the implementer over the subtask's kind"
+else fail=$((fail + 1)); echo "FAIL  verdict --subtask --subplan routes the implementer over the subtask's kind"; fi
+rs dispatch "$RSP" --task k --phase review --sha "$RS" --subplan "$RSS" --subtask s3
+rv --task k --phase review --sha "$RS" --by codex --state PASS --subtask s3
+if jq -e '.implementer == "claude"' "$RSVD/k@s3__review__${RS:0:12}__codex.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verdict --subtask takes the implementer its review dispatch routed"
+else fail=$((fail + 1)); echo "FAIL  verdict --subtask takes the implementer its review dispatch routed"; fi
+expect "verdict --fallback refuses an unknown agent" 2 "--fallback must be one of claude, codex" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --fallback gemini
+expect "verdict --fallback goes with review only" 2 "--fallback .* goes with --phase review" verdict "$RSP" --task k --phase qa --sha "$RS2" --by claude --state PASS --fallback codex
 NOID=$(plan noid '{"schema":"rpg-factory.pipeline-plan/1","id":"noid","title":"t","topic":"feat/core/noid","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[{"repo":"rec","objective":"o","paths":["x/"],"acceptance":["a"]}]}')
 expect "status of a task without id: INVALID" 1 "INVALID" status "$NOID"
 refute "status of a task without id: no traceback" "Traceback" status "$NOID"
@@ -1280,6 +1313,17 @@ jq 'del(.pipeline.qa_prefer)' "$ROOT/registry.json" > "$TMP/reg-noqa.json"
 out=$("$ROOT/scripts/check-registry.sh" --structure-only --registry "$TMP/reg-noqa.json" 2>&1)
 if ! grep -qE "jq: error|qa_prefer" <<<"$out"; then pass=$((pass + 1)); echo "PASS  check-registry without pipeline.qa_prefer: no jq error"
 else fail=$((fail + 1)); echo "FAIL  check-registry without pipeline.qa_prefer: no jq error"; echo "$out" | head -5; fi
+# check_reg <name> <jq mutation> <problem regex>: check-registry.sh fails on the mutated registry and names the problem
+check_reg() {
+  local out rc; jq "$2" "$ROOT/registry.json" > "$TMP/reg-bad.json"
+  out=$("$ROOT/scripts/check-registry.sh" --structure-only --registry "$TMP/reg-bad.json" 2>&1); rc=$?
+  if [ "$rc" != 0 ] && grep -qE -- "$3" <<<"$out"; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1 (rc=$rc)"; echo "$out" | head -5; fi
+}
+check_reg "check-registry: unknown agent in agent_routing fails" '.pipeline.agent_routing.code = "gpt"' "pipeline.agent_routing: invalid kind or agent code"
+check_reg "check-registry: unknown kind in agent_routing fails" '.pipeline.agent_routing.bogus = "claude"' "pipeline.agent_routing: invalid kind or agent bogus"
+check_reg "check-registry: unknown agent in qa_prefer fails" '.pipeline.qa_prefer = "gpt"' "pipeline.qa_prefer: unknown agent"
+check_reg "check-registry: unknown agent in available_agents fails" '.pipeline.available_agents = ["gpt"]' "pipeline.available_agents: unknown agent gpt"
 
 echo "-- model routing"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
@@ -1418,6 +1462,57 @@ if case == 'subtask-kind':
     assert 'subtask s: missing implementer (or kind)' in m.validate_subplan(sub, plan, reg)['errors']
     sub['subtasks'][0]['kind'] = 'code'
     assert not m.validate_subplan(sub, plan, reg)['errors']
+if case == 'no-probe':
+    import shutil
+    orig_run, orig_which, started = subprocess.run, shutil.which, []
+    def spy(args, *k, **kw):
+        if isinstance(args, (list, tuple)) and list(args[:1]) == ['orca']:
+            started.append(args)
+            return subprocess.CompletedProcess(args, 0, '{}')
+        return orig_run(args, *k, **kw)
+    env = {k: v for k, v in os.environ.items() if k != 'RPG_FACTORY_AGENTS'}
+    env['ORCA_WORKTREE_ID'] = 'fixture'
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'kind': 'code'}]}
+    with patch.dict(os.environ, env, clear=True), patch('subprocess.run', spy), \
+         patch('shutil.which', lambda n, *a, **k: '/fake' if n == 'orca' else orig_which(n, *a, **k)):
+        m.validate(plan, reg)
+        m.validate_subplan(sub, plan, reg)
+        assert not started, started
+        r.available(pipe, {'id': 'probe-control'})
+        assert started, 'control: available() starts the orca account probe'
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}), \
+         patch('pipeline_route.fstate.read_json', side_effect=AssertionError('marks read')):
+        r.available(pipe, None)  # the planner: no per-run marks
+        try:
+            r.available(pipe, {'id': 'marks-control'})
+            raise RuntimeError('control: a plan reads its marks')
+        except AssertionError as e:
+            assert 'marks read' in str(e)
+if case == 'kinds-single-list':
+    import re
+    kinds = list(r.KINDS)
+    assert set(kinds) == set(pipe['agent_routing']) - {'default'}, pipe['agent_routing']
+    def find(node, key, out):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == key:
+                    out.append(v)
+                find(v, key, out)
+        elif isinstance(node, list):
+            for v in node:
+                find(v, key, out)
+        return out
+    for name in ('pipeline-plan', 'pipeline-subplan'):
+        schema = json.loads(pathlib.Path(root + '/docs/schemas/' + name + '.schema.json').read_text(encoding='utf-8'))
+        found = [v['enum'] for v in find(schema, 'kind', []) if isinstance(v, dict) and 'enum' in v]
+        assert found and all(e == kinds for e in found), (name, found)
+    schema = json.loads(pathlib.Path(root + '/docs/registry.schema.json').read_text(encoding='utf-8'))
+    found = [v['propertyNames']['enum'] for v in find(schema, 'agent_routing', []) if isinstance(v, dict) and 'propertyNames' in v]
+    assert found and all(e == kinds + ['default'] for e in found), found
+    text = pathlib.Path(root + '/scripts/check-registry.sh').read_text(encoding='utf-8')
+    listed = re.search(r'agent_routing // \{\}\) \| to_entries\[\]\s*\|\s*select\(\(\.key \| IN\(([^)]*)\)', text)
+    assert listed and [x.strip().strip('"') for x in listed.group(1).split(',')] == kinds + ['default'], listed
 print('routing assertions passed')
 ROUTING
 expect_route() {
@@ -1453,6 +1548,8 @@ expect_route status-codex
 expect_route registry-defaults
 expect_route planned-warning
 expect_route subtask-kind
+expect_route no-probe
+expect_route kinds-single-list
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
