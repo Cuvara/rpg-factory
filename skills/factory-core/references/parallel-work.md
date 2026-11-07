@@ -358,7 +358,7 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
 - **Recorded implementer.** `dispatch --phase implement` records the model it started, per task and per
   subtask. Review, QA, `verdict` and the gate pair against that recorded implementer (the planned routing when
   none is recorded), never against current availability: a model that comes back after a fallback does not change
-  who reviews. A subtask whose recorded implementer differs from the task implementer (or whose pair is the task
+  who reviews. A subtask whose recorded implementer differs from the task implementer (or that is the task
   reviewer's own model) needs its own review: PASS by its pair, or a dispatch-recorded fallback review noted
   `SAME_MODEL (fallback: <pair> unavailable)`. Without it the gate blocks, naming the subtask, its recorded
   implementer and the reviewer it needs; the task review never covers it.

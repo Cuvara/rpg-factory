@@ -71,7 +71,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
 11. **Review + QA (M, task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: Codex reviews Claude's
-    code and Claude reviews Codex's; pair unavailable: the same model, `SAME_MODEL (fallback: <model> unavailable)`, gate accepts it.
+    code and Claude reviews Codex's; pair unavailable: the same model, `SAME_MODEL (fallback: <model> unavailable)`, gate accepts a dispatch-recorded fallback.
     Use the lead's checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist); then `--phase qa`.
     Record each `verdict`. The run lead integrates (section 7) and runs QA on the integration HEAD.
 12. **Gate, PR, cleanup, report (M, run lead).** `gate` READY_FOR_PR + user's `deliver: pr`: push, open the PR (no merge).
