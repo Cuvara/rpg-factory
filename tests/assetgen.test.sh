@@ -17,7 +17,9 @@
 # manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
 # the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
-# by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
+# by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
+# the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
+# resolve summary and --verbose, the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -127,7 +129,7 @@ AG resolve --purpose texture-tileable --style low-poly --json | jq -e '.hints.li
   && ok "texture + low-poly: even lighting beats the single directional light" || no "texture/low-poly hints"
 AG resolve --purpose icon --style stylized-painterly --json | jq -e '.hints.lighting.from == "style" and (.hints.lighting | has("overrides") | not)' >/dev/null \
   && ok "a purpose without a lighting constraint keeps the style's lighting hint" || no "icon/painterly hints"
-out=$(AG resolve --purpose ref-3d-turnaround --style low-poly)
+out=$(AG resolve --purpose ref-3d-turnaround --style low-poly --verbose)
 grep -q "^hint lighting = Flat, even lighting.*style hint overridden by the purpose\]$" <<<"$out" && ! grep -q "Single soft directional light" <<<"$out" \
   && ok "resolve text: one lighting hint (the purpose's), marked as overriding the style; the style text is not shown" || no "resolve text hints" "$(grep hint <<<"$out")"
 HA="$TMP/hint-authoring"; mkdir -p "$HA/assetgen/purposes"
@@ -757,6 +759,75 @@ AG review-cmd --phase image --run "$RUNS/qa-tile-two-001" --json > "$TMP/rt.json
   && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-a.png" ] && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-b.png" ] \
   && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rt.json")" = 4 ] \
   && ok "several outputs: one tile per output (review/tile-2x2-<stem>.png)" || no "two tiles rc=$rc" "$(jq -c .tiles "$TMP/rt.json")"
+
+echo "-- review prompts: params as rendered, QA owns the deterministic checks, --run takes a run id (e2e2)"
+sr="$RUNS/qa-svc-concept-1024-001"  # resolved with size 1536x1024, rendered with --param size=1024x1024
+AG review-cmd --phase image --run "$sr" --json 2>"$TMP/err" | jq -r .stdin > "$TMP/ri.txt"
+AG review-cmd --phase prompt --run "$sr" --json 2>>"$TMP/err" | jq -r .stdin > "$TMP/rp.txt"
+{ [ "$(jq -r .params.size "$sr/spec.json")" = 1536x1024 ] \
+  && grep -q "^Requested params (workflow.json): .*size=1024x1024" "$TMP/ri.txt" && grep -q "^Requested params (workflow.json): .*size=1024x1024" "$TMP/rp.txt" \
+  && grep -qF "1672x941 (requested 1024x1024)" "$TMP/ri.txt" && ! grep -q "1536x1024" "$TMP/ri.txt" "$TMP/rp.txt"; } \
+  && ok "render --param size=1024x1024: both review prompts request only 1024x1024 (params read back from workflow.json, not spec.json)" \
+  || no "rendered params in review prompts" "$(cat "$TMP/err"; grep -n "equested" "$TMP/ri.txt" "$TMP/rp.txt")"
+mkrun review-unrendered-001 concept-2d --style stylized-painterly
+AG review-cmd --phase prompt --run "$RUNS/review-unrendered-001" --json | jq -r .stdin \
+  | grep -q "^Requested params (spec.json): .*size=1536x1024" && ok "review prompt before render: spec.json params, named as such" || no "unrendered params"
+python3 -B - "$ROOT" "$TMP/rparams" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import assetgen
+run = sys.argv[2]; os.makedirs(run, exist_ok=True)
+spec = {"params": {"size": "1024x1024", "tag": "a", "count": 1, "extra": "kept"},
+        "template": {"data": {"params": {"size": {"type": "string"}, "tag": {"type": "string"}, "count": {"type": "int"},
+                                         "extra": {"type": "string"}, "prompt": {"type": "string"}},
+                              "workflow": {"1": {"class_type": "X", "inputs": {"size": "{{size}}", "count": "{{ count }}",
+                                                                              "text": "{{prompt}}", "name": "run/{{tag}}-v{{count}}"}}}}}}
+assert assetgen.rendered_params(run, spec) == (spec["params"], "spec.json")
+json.dump({"1": {"class_type": "X", "inputs": {"size": "640x480", "count": 3, "text": "the prompt", "name": "run/hero-v3"}},
+           "9": {"class_type": "LoadImage", "inputs": {"image": "anchor-a.png"}}}, open(os.path.join(run, "workflow.json"), "w"))
+got = assetgen.rendered_params(run, spec)
+assert got == ({"size": "640x480", "tag": "hero", "count": 3, "extra": "kept"}, "workflow.json"), got
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "rendered_params: whole placeholders, placeholders inside strings and typed values come from workflow.json; prompt left out" \
+  || no "rendered_params" "$(cat "$TMP/o")"
+qarun review-qafail-001 concept-2d svc-tiny.png
+AG review-cmd --phase image --run "$RUNS/review-qafail-001" --json | jq -r .stdin > "$TMP/ri.txt"
+mkrun review-noqa-001 icon --style stylized-painterly && AG render --run "$RUNS/review-noqa-001" >/dev/null \
+  && cp "$FX/icon-ok.png" "$RUNS/review-noqa-001/outputs/"
+AG review-cmd --phase image --run "$RUNS/review-noqa-001" --json | jq -r .stdin > "$TMP/rn.txt"
+{ grep -q "^Deterministic QA: FAIL (FAIL outputs/svc-tiny.png png-size.*); context only, qa.json is graded separately$" "$TMP/ri.txt" \
+  && grep -qF "Deterministic checks (size, alpha, corners, tileable, blank) belong to QA only: do not re-grade them." "$TMP/ri.txt" \
+  && grep -qF "never fail a rubric item, or report a finding, for a size or another deterministic check" "$TMP/ri.txt" \
+  && grep -q "^Deterministic QA: NOT_RUN; it is graded separately (qa.json)$" "$TMP/rn.txt" \
+  && grep -qF "belong to QA only: do not re-grade them." "$TMP/rn.txt"; } \
+  && ok "image review prompt: QA's verdict (FAIL or NOT_RUN) is context only; the reviewer must not re-grade size, alpha, corners, tileable, blank" \
+  || no "QA owns deterministic checks" "$(grep -n "QA\|Deterministic" "$TMP/ri.txt" "$TMP/rn.txt")"
+# --run RUN-ID: under <authoring>/assetgen/runs/, with --authoring from anywhere or from inside the authoring repo
+d="$RUNS/qa-icon-ok-001"
+(cd "$TMP" && AG review-cmd --phase prompt --run qa-icon-ok-001 --authoring "$AUTH" --json) > "$TMP/rid.json" 2>"$TMP/err"; rc1=$?
+(cd "$AUTH/assetgen" && AG review-cmd --phase prompt --run qa-icon-ok-001 --json) > "$TMP/rid2.json" 2>>"$TMP/err"; rc2=$?
+AG review-cmd --phase prompt --run "$d" --json > "$TMP/rid3.json"
+[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -r .verdict "$TMP/rid.json")" = "$d/review-prompt.json" ] \
+  && cmp -s "$TMP/rid.json" "$TMP/rid3.json" && cmp -s "$TMP/rid2.json" "$TMP/rid3.json" \
+  && ok "--run qa-icon-ok-001 (a run id): resolved with --authoring from another directory and from inside the authoring repo, same command as the path" \
+  || no "--run id rc=$rc1/$rc2" "$(cat "$TMP/err"; jq -r .verdict "$TMP/rid.json")"
+(cd "$AUTH" && AG qa --run qa-icon-ok-001 --json) > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .run "$TMP/q.json")" = qa-icon-ok-001 ] && [ -f "$d/qa.json" ] && ok "qa --run RUN-ID inside the authoring repo grades that run" \
+  || no "qa --run id rc=$rc" "$(cat "$TMP/err")"
+(cd "$AUTH" && AG manifest --run nope-icon-001) >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "no run directory at nope-icon-001 or $AUTH/assetgen/runs/nope-icon-001" "$TMP/err" \
+  && ok "--run with an unknown run id: exit 2 naming the tried paths" || no "unknown run id rc=$rc" "$(cat "$TMP/err")"
+NG="$TMP/not-a-repo"; mkdir -p "$NG"
+if ! git -C "$NG" rev-parse --show-toplevel >/dev/null 2>&1; then
+  (cd "$NG" && AG qa --run qa-icon-ok-001) >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "no --authoring and the current directory is not in a git repository" "$TMP/err" \
+    && ok "--run RUN-ID outside any git repository without --authoring: exit 2, says why" || no "run id outside repo rc=$rc" "$(cat "$TMP/err")"
+fi
+AG embed --run "$TMP/missing/dir-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "no run directory at $TMP/missing/dir-001 (" "$TMP/err" && ok "--run with a missing path (not a run id): exit 2 naming the path" \
+  || no "missing run path rc=$rc" "$(cat "$TMP/err")"
+AG qa --help | grep -q "run id <slug>-NNN" && AG resolve --help | grep -q -- "--verbose" && ok "CLI help documents --run RUN-ID and resolve --verbose" || no "CLI help"
 
 echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
 ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly && AG render --run "$ed" >/dev/null
@@ -1447,7 +1518,7 @@ grep -qx ok "$TMP/o" || no "style lock CLI fixture" "$(cat "$TMP/o")"
 git init -q -b main "$SC" && git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "style lock fixture"
 slrun() { # slrun NAME PURPOSE [resolve args...]: resolve into a run of the style lock repo, with a prompt
   local d="$SR/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
-  AG resolve --purpose "$p" --authoring "$SC" "$@" --out "$d/spec.json" > "$TMP/slr.out" 2>"$TMP/err" || return 1
+  AG resolve --purpose "$p" --authoring "$SC" "$@" --out "$d/spec.json" --verbose > "$TMP/slr.out" 2>"$TMP/err" || return 1
   printf 'Style lock prompt for %s.\n' "$p" > "$d/prompt.md"
 }
 lk() { jq -r "$1" "$SR/$2/spec.json"; }
@@ -1468,6 +1539,26 @@ grep -q "^style lock: style rpg-base v2 (sha256 [0-9a-f]\{12\}), family props \[
   && grep -q "^reference b-strong  \[family match; dimensions: palette, shape, line; strength strong\]$" "$TMP/slr.out" \
   && grep -q "^rejection r-props direction too_detailed: No fine filigree on props.$" "$TMP/slr.out" \
   && ok "resolve text: style lock, references with reasons, rejections" || no "resolve text" "$(cat "$TMP/slr.out")"
+# e2e2: resolve prints a short summary by default; --verbose adds every source, --json is the whole spec
+AG resolve --purpose icon --authoring "$SC" > "$TMP/short.out" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --authoring "$SC" --verbose > "$TMP/long.out" 2>>"$TMP/err"
+cmp -s <(AG resolve --purpose icon --authoring "$SC" --json) <(AG resolve --purpose icon --authoring "$SC" --json --verbose); same=$?
+{ [ $rc -eq 0 ] && [ "$(wc -l < "$TMP/short.out")" -le 12 ] \
+  && grep -q "^params: .*size=" "$TMP/short.out" && grep -q "^hints: " "$TMP/short.out" \
+  && grep -q "^style lock: style rpg-base v2 (sha256 [0-9a-f]\{12\}), family props \[purpose\], project assetgen/project.json$" "$TMP/short.out" \
+  && grep -q "^references: b-strong, a-canon, c-supp (max 3)$" "$TMP/short.out" \
+  && grep -q "^rejections: r-props (direction too_detailed)$" "$TMP/short.out" \
+  && grep -q "^warning: filename_prefix assetgen/run is not bound to a run" "$TMP/short.out" \
+  && ! grep -q "  \[core:\|  \[game:" "$TMP/short.out" && grep -q -- "--verbose or --json" "$TMP/short.out" \
+  && grep -q "^param size = .*  \[core:templates/assetgen/purposes/icon.json\]$" "$TMP/long.out" \
+  && grep -q "^purpose.title  \[core:" "$TMP/long.out" && [ "$(wc -l < "$TMP/long.out")" -gt 30 ] && [ $same -eq 0 ]; } \
+  && ok "resolve: short summary by default (params, hints, style lock, references, rejections, warnings, no field sources); --verbose lists the sources; --json unchanged by --verbose" \
+  || no "resolve summary rc=$rc same=$same" "$(cat "$TMP/err" "$TMP/short.out")"
+AG resolve --purpose icon --authoring "$SC" --style anime-cel --style-override "one-off key art" > "$TMP/short.out" 2>"$TMP/err"
+grep -q "^warning: style override: one-off key art$" "$TMP/short.out" && ! grep -q "no assetgen/project.json" "$TMP/short.out" \
+  && AG resolve --purpose icon --style pixel-art --authoring "$AUTH" | grep -q "^warning: no assetgen/project.json" \
+  && ! AG resolve --purpose icon --style pixel-art | grep -q "project.json" \
+  && ok "resolve summary warnings: style override, a game layer without project.json (none for the core only)" || no "resolve warnings" "$(cat "$TMP/err" "$TMP/short.out")"
 slrun sl-icon-002 icon && [ "$(jq -S .style_lock "$SR/sl-icon-001/spec.json")" = "$(jq -S .style_lock "$SR/sl-icon-002/spec.json")" ] \
   && ok "resolve: same inputs -> same style lock and selection" || no "resolve determinism"
 slrun sl-chars-001 icon --family characters
@@ -1625,7 +1716,7 @@ AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --s
 AG manifest --run "$dp" >/dev/null
 AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --strength strong --id y-1 >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "does not match qa.json" "$TMP/err" && ok "promote-anchor: output not the one qa.json graded refused" || no "qa mismatch rc=$rc" "$(cat "$TMP/err")"
-AG promote-anchor --run "$TMP/sl-wf-run-001" --output 1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+mkdir -p "$TMP/sl-wf-run-001"; AG promote-anchor --run "$TMP/sl-wf-run-001" --output 1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <authoring>/assetgen/runs/<slug>-NNN" "$TMP/err" && ok "promote-anchor: a run outside <authoring>/assetgen/runs refused" || no "run layout rc=$rc" "$(cat "$TMP/err")"
 grep -rq '"status": "active"' "$pa.json" && no "promote-anchor wrote an active anchor" || ok "promote-anchor never writes status active"
 

@@ -189,6 +189,18 @@ python3 -B "$CMD" assetgen publish --run "$TMP/x-001" --comfy-url y >/dev/null 2
 python3 -B "$CMD" assetgen embed --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -q "embed writes into a run directory" "$TMP/err" && ok "assetgen embed is not exposed through factory-cmd (exit 2)" || no "assetgen embed rc=$rc: $(head -2 "$TMP/err")"
 # style lock: drift is read-only and forwarded (--authoring defaults to the workspace authoring repo);
+# review-cmd --run RUN-ID resolves under the workspace authoring repo (--authoring defaulted), from any directory
+rd="$WS/game-authoring/assetgen/runs/cmd-icon-001"; mkdir -p "$rd"
+python3 -B "$ROOT/scripts/assetgen/assetgen.py" resolve --purpose icon --style house --authoring "$WS/game-authoring" --out "$rd/spec.json" >/dev/null 2>&1
+echo "Command test prompt." > "$rd/prompt.md"
+out=$(cd "$TMP" && python3 -B "$CMD" assetgen review-cmd --phase prompt --run cmd-icon-001 --json); rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .verdict <<<"$out")" = "$rd/review-prompt.json" ] && [ ! -e "$rd/review-prompt.json" ] \
+  && ok "assetgen review-cmd --run RUN-ID: resolved in the workspace authoring repo (exit 0, nothing written)" || no "assetgen review-cmd run id rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" assetgen resolve --purpose icon --style house); rc=$?
+[ $rc -eq 0 ] && grep -q "^params: " <<<"$out" && ! grep -q "^purpose.title  \[" <<<"$out" \
+  && python3 -B "$CMD" assetgen resolve --purpose icon --style house --verbose | grep -q "^purpose.title  \[" \
+  && ok "assetgen resolve: short summary through factory-cmd, --verbose forwarded" || no "assetgen resolve summary rc=$rc: $(head -5 <<<"$out")"
+rm -rf "$rd"
 # promote-anchor and reject write records into the authoring repo, so they stay assetgen.py verbs
 out=$(python3 -B "$CMD" assetgen drift --json); rc=$?
 [ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-drift/1" and (.items | type == "array")' <<<"$out" >/dev/null \
