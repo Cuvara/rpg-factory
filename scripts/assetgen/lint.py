@@ -56,6 +56,8 @@ def check_graph(graph, params=None):
     if not isinstance(graph, dict) or not graph:
         return ["workflow must be a non-empty object of nodes"], []
     for nid, node in graph.items():
+        if not nid.isdigit():
+            errs.append("node id %r: must be digits (workflow.ui.json, the ComfyUI frontend workflow, needs numeric ids)" % nid)
         if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) or not isinstance(node.get("inputs"), dict):
             errs.append("node %s: needs class_type and an inputs object" % nid)
             continue

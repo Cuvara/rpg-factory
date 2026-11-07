@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # asset-gen engine (scripts/assetgen/): list/show/resolve with core + game layers (override, extends, per-field
 # source, param precedence), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
+# the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
+# workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
 # lint errors and warnings, review-cmd output (prints, never runs Codex), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings), the gen-run quality plugin (pass and fail cases: review files and their
@@ -122,7 +124,7 @@ for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround
 $(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$p.json" 2>/dev/null))"; fi
 done
 w="$RUNS/golden-icon-001/workflow.json"
-[ "$(jq -r '.["1"].inputs.user_prompt' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
+[ "$(jq -r '.["3"].inputs.value' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
   && [ "$(jq -r '.["1"].inputs.background' "$w")" = transparent ] && ok "icon workflow: prompt verbatim (trimmed), link kept, transparent background" || no "icon workflow content"
 [ "$(jq -c '.["2"].inputs.reference_images' "$RUNS/golden-image-edit-001/workflow.json")/$(jq -r '.["1"].inputs.image' "$RUNS/golden-image-edit-001/workflow.json")" = '["1",0]/ref.png' ] \
   && ok "image-edit: LoadImage -> reference_images" || no "image-edit links"
@@ -140,6 +142,129 @@ out=$(AG render --run "$d" --param reference_image=r.png --param size=999x999 --
 [ $rc -eq 1 ] && grep -q "is empty" <<<"$out" && ok "empty prompt file: error" || no "empty prompt rc=$rc" "$out"
 AG render --spec "$RUNS/golden-icon-001/spec.json" --prompt-file "$RUNS/golden-icon-001/prompt.md" --out "$TMP/wf.json" >/dev/null && [ -f "$TMP/wf.json" ] \
   && ok "render --spec/--prompt-file/--out" || no "render explicit paths"
+printf 'Test prompt for image-edit: one subject, centered.
+' > "$d/prompt.md"; AG render --run "$d" --param reference_image=ref.png >/dev/null
+# item 1: the prompt is a visible PrimitiveStringMultiline node linked into NineRouterImage.user_prompt
+for pw in "golden-icon-001 1 3" "golden-image-edit-001 2 4"; do
+  set -- $pw; f="$RUNS/$1/workflow.json"
+  [ "$(jq -c --arg n "$2" '.[$n].inputs.user_prompt' "$f")" = "[\"$3\",0]" ] \
+    && [ "$(jq -r --arg n "$3" '.[$n].class_type + "|" + .[$n]._meta.title' "$f")" = "PrimitiveStringMultiline|Prompt (Claude, Codex review NOT_RUN)" ] \
+    && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
+    && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
+done
+for t in image-generate image-edit; do
+  jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
+    && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
+done
+python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+wf = json.load(open(sys.argv[2], encoding="utf-8"))
+assert runfiles.workflow_prompts(wf) == [wf["3"]["inputs"]["value"]], runfiles.workflow_prompts(wf)
+inline = {"1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": "inline text"}}}
+assert runfiles.workflow_prompts(inline) == ["inline text"]
+chat = {"1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": ["2", 0]}}, "2": {"class_type": "NineRouterChat", "inputs": {"user_prompt": "idea"}}}
+assert runfiles.workflow_prompts(chat) == [["2", 0], "idea"], runfiles.workflow_prompts(chat)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "runfiles.workflow_prompts follows the link to the prompt node (inline and other links unchanged)" || no "workflow_prompts" "$(cat "$TMP/o")"
+# the prompt node's title carries the prompt review state of this prompt (PASS, STALE when the prompt changed)
+mkrun title-icon-001 icon --style stylized-painterly; td="$RUNS/title-icon-001"
+bound "$td" prompt PASS codex > "$td/review-prompt.json"
+AG render --run "$td" >/dev/null && t1=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+echo "Another prompt." > "$td/prompt.md"; AG render --run "$td" >/dev/null && t2=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+[ "$t1|$t2" = "Prompt (Claude, Codex review PASS)|Prompt (Claude, Codex review STALE)" ] \
+  && ok "prompt node title: Codex review PASS, STALE once the prompt changed" || no "prompt node title: $t1|$t2"
+# the image review binding covers the prompt node: another prompt value is another requirements hash
+jq '.["3"].inputs.value = "changed"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/changed-wf.json"
+python3 -B - "$ROOT" "$RUNS/golden-icon-001/spec.json" "$RUNS/golden-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+spec = json.load(open(sys.argv[2], encoding="utf-8"))
+a, b = (runfiles.requirements_sha256(spec, runfiles.generation_inputs(json.load(open(f, encoding="utf-8")), spec)) for f in sys.argv[3:5])
+assert a != b
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "image review requirements hash covers the prompt node value (whole rendered graph)" || no "binding covers prompt node" "$(cat "$TMP/o")"
+
+echo "-- workflow.ui.json: the same graph for the ComfyUI frontend"
+# stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
+# input order, then each linked socket; the result must equal workflow.json
+cat > "$TMP/ui2api.py" <<'EOF'
+import json, sys
+known = json.load(open(sys.argv[1], encoding="utf-8"))["nodes"]
+ui = json.load(open(sys.argv[2], encoding="utf-8"))
+api = json.load(open(sys.argv[3], encoding="utf-8"))
+WIDGETS = ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO")
+by_id = {n["id"]: n for n in ui["nodes"]}
+links = {l[0]: l for l in ui["links"]}
+assert len(links) == len(ui["links"]) and ui["last_link_id"] == max(links, default=0) and ui["last_node_id"] == max(by_id)
+assert sorted(n["order"] for n in ui["nodes"]) == list(range(len(ui["nodes"])))
+graph = {}
+for node in ui["nodes"]:
+    spec = known[node["type"]]
+    assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
+    values, inputs = iter(node["widgets_values"]), {}
+    for name, decl in spec["inputs"].items():
+        if decl["type"] in WIDGETS:
+            try:
+                inputs[name] = next(values)
+            except StopIteration:
+                if decl.get("required"):
+                    raise ValueError("missing widget %s.%s" % (node["type"], name))
+    for i, socket in enumerate(node.get("inputs", [])):
+        if socket.get("link") is None:
+            continue
+        link = links[socket["link"]]
+        assert link[3] == node["id"] and link[4] == i, link
+        src = by_id[link[1]]
+        assert src["outputs"][link[2]]["type"] == link[5] and link[0] in src["outputs"][link[2]]["links"], link
+        inputs[socket["name"]] = [str(link[1]), link[2]]
+    graph[str(node["id"])] = {"class_type": node["type"], "inputs": inputs, "_meta": {"title": node["title"]}}
+for nid in api:
+    api[nid].setdefault("_meta", {"title": api[nid]["class_type"]})
+assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent=1, sort_keys=True)
+print("ok")
+EOF
+KN="$ROOT/scripts/assetgen/data/known-nodes.json"
+for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit; do
+  d="$RUNS/golden-$p-001"; [ "$p" = icon ] && AG render --run "$d" >/dev/null
+  [ "$p" = image-edit ] && AG render --run "$d" --param reference_image=ref.png >/dev/null
+  out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+  [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
+    && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
+done
+u="$RUNS/golden-image-edit-001/workflow.ui.json"
+[ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
+  && [ "$(jq -c '[.nodes[] | select(.type == "NineRouterImage") | .inputs[] | {name, link: (.link != null), widget: (.widget.name // null)}]' "$u")" = \
+       '[{"name":"user_prompt","link":true,"widget":"user_prompt"},{"name":"reference_images","link":true,"widget":null}]' ] \
+  && [ "$(jq -r '[.nodes[] | select(.type == "PrimitiveStringMultiline") | .title][0]' "$u")" = "Prompt (Claude, Codex review NOT_RUN)" ] \
+  && ok "workflow.ui.json image-edit: LoadImage upload widget, linked prompt widget socket, prompt node title" || no "ui image-edit" "$(jq -c .nodes "$u")"
+[ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/golden-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
+  && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/golden-icon-001/workflow.ui.json")"
+[ -f "$TMP/wf.ui.json" ] && [ "$(jq -r '.extra.assetgen.run_id' "$TMP/wf.ui.json")" = null ] \
+  && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
+  && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
+
+echo "-- filename_prefix: one value in spec.json, workflow.json, review prompts and run.md"
+mkrun prefix-icon-001 icon --style stylized-painterly; pd="$RUNS/prefix-icon-001"; want=assetgen/prefix-icon-001
+AG render --run "$pd" >/dev/null 2>"$TMP/err" && AG manifest --run "$pd" >/dev/null 2>>"$TMP/err"
+got="$(jq -r .params.filename_prefix "$pd/spec.json")|$(jq -r '[.[] | select(.class_type == "SaveImage")][0].inputs.filename_prefix' "$pd/workflow.json")"
+got="$got|$(sed -n '/^---json$/,/^---$/p' "$pd/run.md" | sed '1d;$d' | jq -r .spec.params.filename_prefix)"
+AG review-cmd --phase prompt --run "$pd" --json | jq -r .stdin > "$TMP/rp.txt"
+[ "$got" = "$want|$want|$want" ] && grep -q "filename_prefix=$want" "$TMP/rp.txt" && ! grep -q 'assetgen/run\b' "$pd/workflow.json" "$pd/workflow.ui.json" "$pd/run.md" "$TMP/rp.txt" \
+  && [ "$(jq -r .param_sources.filename_prefix "$pd/spec.json")" = "run id prefix-icon-001" ] \
+  && ok "filename_prefix $want in spec.json, workflow.json, run.md and the review prompt (never assetgen/run)" || no "filename_prefix: $got" "$(cat "$TMP/err"; grep -n filename_prefix "$TMP/rp.txt")"
+mkdir -p "$RUNS/prefix-copy-001"; cp "$TMP/spec-out.json" "$RUNS/prefix-copy-001/spec.json"; cp "$pd/prompt.md" "$RUNS/prefix-copy-001/"
+[ "$(jq -r .params.filename_prefix "$TMP/spec-out.json")" = assetgen/run ] && ok "resolve --out outside a run dir keeps the template default prefix" || no "default prefix"
+out=$(AG render --run "$RUNS/prefix-copy-001" 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "spec.json records filename_prefix 'assetgen/run', run prefix-copy-001 needs 'assetgen/prefix-copy-001'" <<<"$out" \
+  && [ ! -f "$RUNS/prefix-copy-001/workflow.json" ] && ok "render --run refuses a spec.json resolved for another prefix, nothing written" || no "foreign spec rc=$rc" "$out"
+out=$(AG render --run "$pd" --param filename_prefix=elsewhere 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "a run's prefix is $want" <<<"$out" && ok "render --run refuses --param filename_prefix" || no "prefix override rc=$rc" "$out"
+rm -rf "$RUNS/prefix-copy-001"
 
 echo "-- lint: errors and warnings"
 LA="$TMP/lint-authoring"; mkdir -p "$LA/assetgen/templates" "$LA/assetgen/purposes"
@@ -167,6 +292,8 @@ expect_lint bad-combo FAIL "'999x999' is not one of" "combo value outside the no
 expect_lint undeclared FAIL "placeholder {{mood}} is not a declared param" "undeclared placeholder"
 expect_lint unsupported-model WARN "cx/gpt-image-2.5 is unsupported by the 9router gateway" "known unsupported model id (warning)"
 expect_lint endpoint FAIL "contains a URL" "URL in a template"
+tmpl named-ids '' "{\"gen\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, \"2\": {\"class_type\": \"SaveImage\", \"inputs\": {\"filename_prefix\": \"x\", \"images\": [\"gen\", 0]}}}"
+expect_lint named-ids FAIL "node id 'gen': must be digits" "non-numeric node id (workflow.ui.json needs numeric ids)"
 AG lint "$LA/assetgen/templates/unsupported-model.json" --authoring "$LA" >/dev/null 2>&1 && ok "warnings alone exit 0" || no "warn exit code"
 AG lint "$LA/assetgen/templates/unknown-node.json" --authoring "$LA" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a FAIL exits 1" || no "fail exit code"
 echo '{"extends": "icon", "handoff_domain": "audio", "qa": {"size": {"mode": "huge"}, "alpha": "maybe"}, "prompt_rubric": []}' > "$LA/assetgen/purposes/icon.json"
@@ -426,7 +553,8 @@ spec = json.load(open(os.path.join(run, "spec.json"), encoding="utf-8"))
 gen = runfiles.generation_inputs(json.load(open(os.path.join(run, "workflow.json"), encoding="utf-8")), spec,
                                  lambda n: os.path.join(run, "references", n))
 img = [n["inputs"] for n in gen["graph"].values() if n["class_type"] == "NineRouterImage"][0]
-assert img["user_prompt"] == open(os.path.join(run, "prompt.md"), encoding="utf-8").read().strip() and "size" in img and "quality" in img and gen["references"] == {}, gen
+assert runfiles.workflow_prompts(gen["graph"]) == [open(os.path.join(run, "prompt.md"), encoding="utf-8").read().strip()], gen
+assert img["user_prompt"] == ["3", 0] and "size" in img and "quality" in img and gen["references"] == {}, gen
 want = runfiles.requirements_sha256(spec, gen)
 assert image["binding"]["requirements_sha256"] == want, (image["binding"], want)
 assert runfiles.SHA256.match(want) and want != runfiles.requirements_sha256(spec, None)
@@ -507,6 +635,12 @@ variant() { # variant NAME [prompt-review-by]: a copy of the good run, re-manife
   [ -n "${2:-}" ] && bound "$d" prompt PASS "$2" > "$d/review-prompt.json"
   AG manifest --run "$d" >/dev/null
 }
+rebase() { # rebase NAME [render args...]: a copied run's spec.json takes its own filename_prefix, re-rendered and re-reviewed
+  local d="$RUNS/$1"; shift
+  python3 -B -c 'import json, os, sys; p = os.path.join(sys.argv[1], "spec.json"); s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + os.path.basename(sys.argv[1]); json.dump(s, open(p, "w"))' "$d"
+  AG render --run "$d" "$@" >/dev/null && AG qa --run "$d" >/dev/null
+  bound "$d" prompt PASS codex > "$d/review-prompt.json"; bound "$d" image PASS codex > "$d/review-image.json"
+}
 qaset() { # qaset NAME PYTHON-STATEMENT: edit the run's qa.json (obj) in place
   python3 -B -c 'import json, sys; p = sys.argv[1]; obj = json.load(open(p, encoding="utf-8")); exec(sys.argv[2], {"obj": obj}); json.dump(obj, open(p, "w", encoding="utf-8"))' "$RUNS/$1/qa.json" "$2"
 }
@@ -553,10 +687,10 @@ echo '{"extends": "sprite-2d", "prompt_rubric": ["Names one subject only."], "im
   > "$RUBA/assetgen/purposes/sprite-2d.json"
 variant qp-rubric-001; AG resolve --purpose sprite-2d --style stylized-painterly --authoring "$RUBA" --out "$RUNS/qp-rubric-001/spec.json" >/dev/null
 AG qa --run "$RUNS/qp-rubric-001" >/dev/null; AG manifest --run "$RUNS/qp-rubric-001" >/dev/null
-variant qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
+variant qp-rsize-001; rebase qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
 AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-001" >/dev/null
 variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
-variant qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
+variant qp-rqual-001; rebase qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # image-edit: the reference image is bound by name and content (references/<name> in the run directory)
@@ -566,7 +700,7 @@ AG render --run "$edit" --param reference_image=ref-a.png >/dev/null && cp "$FX/
 bound "$edit" prompt PASS codex > "$edit/review-prompt.json"; bound "$edit" image PASS codex > "$edit/review-image.json"
 AG manifest --run "$edit" >/dev/null
 evariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$edit" "$d"; rm -f "$d/run.md"; }
-evariant qp-eswap-001; cp "$FX/icon-opaque.png" "$RUNS/qp-eswap-001/references/ref-b.png"
+evariant qp-eswap-001; rebase qp-eswap-001 --param reference_image=ref-a.png; cp "$FX/icon-opaque.png" "$RUNS/qp-eswap-001/references/ref-b.png"
 AG render --run "$RUNS/qp-eswap-001" --param reference_image=ref-b.png >/dev/null; AG qa --run "$RUNS/qp-eswap-001" >/dev/null; AG manifest --run "$RUNS/qp-eswap-001" >/dev/null
 evariant qp-ebytes-001; cp "$FX/icon-opaque.png" "$RUNS/qp-ebytes-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-ebytes-001" >/dev/null
 evariant qp-enoref-001; rm -f "$RUNS/qp-enoref-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-enoref-001" >/dev/null

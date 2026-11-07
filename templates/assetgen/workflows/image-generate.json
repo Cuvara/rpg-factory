@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.comfy-template/1",
- "title": "Image generation (NineRouterImage + SaveImage)",
+ "title": "Image generation (PrimitiveStringMultiline prompt -> NineRouterImage + SaveImage)",
  "description": "Text-to-image through the 9router image node; credentials are read by the node at run time, never stored here.",
  "params": {
   "prompt": {
@@ -56,7 +56,10 @@
   "1": {
    "class_type": "NineRouterImage",
    "inputs": {
-    "user_prompt": "{{prompt}}",
+    "user_prompt": [
+     "3",
+     0
+    ],
     "model": "{{model}}",
     "size": "{{size}}",
     "quality": "{{quality}}",
@@ -77,6 +80,15 @@
    },
    "_meta": {
     "title": "Save image"
+   }
+  },
+  "3": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
    }
   }
  }

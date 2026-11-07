@@ -1,6 +1,6 @@
 {
  "schema": "rpg-factory.comfy-template/1",
- "title": "Image edit (LoadImage -> NineRouterImage reference_images + SaveImage)",
+ "title": "Image edit (PrimitiveStringMultiline prompt + LoadImage -> NineRouterImage reference_images + SaveImage)",
  "description": "Edits a reference image through the 9router image node's reference_images input.",
  "params": {
   "prompt": {
@@ -70,7 +70,10 @@
   "2": {
    "class_type": "NineRouterImage",
    "inputs": {
-    "user_prompt": "{{prompt}}",
+    "user_prompt": [
+     "4",
+     0
+    ],
     "model": "{{model}}",
     "size": "{{size}}",
     "quality": "{{quality}}",
@@ -95,6 +98,15 @@
    },
    "_meta": {
     "title": "Save image"
+   }
+  },
+  "4": {
+   "class_type": "PrimitiveStringMultiline",
+   "inputs": {
+    "value": "{{prompt}}"
+   },
+   "_meta": {
+    "title": "Prompt (Claude, Codex review <state>)"
    }
   }
  }

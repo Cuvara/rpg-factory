@@ -19,9 +19,16 @@ Param precedence, low to high: template default < style params < purpose params 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
   prompt.md           the final prompt text only (written by the prompt author; sent verbatim, reviewed verbatim)
+  spec.json           resolve --out <run>/spec.json also sets the filename_prefix param to assetgen/<run-id>
+                      (runfiles.run_filename_prefix): the one value render, the review prompts and run.md record
   workflow.json       render: ComfyUI API-format graph {"<id>": {"class_type", "inputs"}}, links [node_id, index];
-                      runnable as is by comfy-mcp run_workflow; render --run sets filename_prefix=assetgen/<run-id>
-                      unless --param filename_prefix=... is given
+                      runnable as is by comfy-mcp run_workflow. The prompt is the value of a PrimitiveStringMultiline
+                      node titled "Prompt (Claude, Codex review <state>)" (state of review-prompt.json for this
+                      prompt: PASS, FAIL, STALE, INVALID or NOT_RUN) linked into NineRouterImage.user_prompt.
+                      render --run refuses a spec.json whose filename_prefix is not assetgen/<run-id> and a
+                      --param filename_prefix
+  workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
+                      (uiworkflow.py); written next to workflow.json (render --out X.json: X.ui.json)
   outputs/*.png       comfy-mcp fetch_outputs out_dir
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
@@ -35,7 +42,7 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       requested size it graded with (purpose_sha256, requested_size)
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
 
-Read-only except: resolve/render --out, render --run (workflow.json), qa (qa.json) and manifest (run.md) in the
+Read-only except: resolve/render --out, render --run (workflow.json, workflow.ui.json), qa (qa.json) and manifest (run.md) in the
 given run dir. review-cmd only prints a `codex exec --sandbox read-only` command; this script never runs agents,
 ComfyUI or the network. Model ids, sizes and other values live in template params data, not here.
 Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa). Options are never abbreviated (--ou is
@@ -55,6 +62,7 @@ import layers  # noqa: E402
 import lint  # noqa: E402
 import qa  # noqa: E402
 import runfiles  # noqa: E402
+import uiworkflow  # noqa: E402
 
 RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{3}$")
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
@@ -136,21 +144,41 @@ def fill(node, values):
     return node
 
 
-def render(spec, prompt, overrides, run_id=None):
+def bind_run(spec, run_id):
+    """spec with the run's filename_prefix (resolve --out <run>/spec.json), when the template declares the param."""
+    if "filename_prefix" in spec["template"]["data"].get("params", {}):
+        spec["params"]["filename_prefix"] = runfiles.run_filename_prefix(run_id)
+        spec["param_sources"]["filename_prefix"] = "run id " + run_id
+    return spec
+
+
+def prompt_review_state(run_dir, prompt):
+    """State of review-prompt.json for this prompt: PASS/FAIL when bound to it, STALE when bound to another prompt."""
+    v = runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt")
+    if v["state"] in ("PASS", "FAIL") and v["prompt_sha256"] != hashlib.sha256(prompt.encode("utf-8")).hexdigest():
+        return "STALE"
+    return v["state"]
+
+
+def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN"):
     """(workflow, errors). Strict: undeclared params, missing required params and leftover placeholders are errors.
-    run_id (render --run) sets filename_prefix to assetgen/<run_id> when the template declares it."""
+    run_id (render --run): spec.json must carry filename_prefix assetgen/<run_id> (bind_run) and --param may not
+    change it. review_state replaces <state> in node titles (the prompt node's title)."""
     tmpl = spec["template"]["data"]
     declared = tmpl.get("params", {})
     values, errors = dict(spec.get("params", {})), []
     values["prompt"] = prompt
-    if run_id and "filename_prefix" in declared:
-        values["filename_prefix"] = "assetgen/" + run_id
+    if run_id and "filename_prefix" in declared and values.get("filename_prefix") != runfiles.run_filename_prefix(run_id):
+        errors.append("spec.json records filename_prefix %r, run %s needs %r: resolve again with --out <run>/spec.json"
+                      % (values.get("filename_prefix"), run_id, runfiles.run_filename_prefix(run_id)))
     for item in overrides:
         name, sep, value = item.partition("=")
         if not sep:
             errors.append("--param %r: expected NAME=VALUE" % item)
         elif name == "prompt":
             errors.append("--param prompt: the prompt comes from the prompt file only")
+        elif name == "filename_prefix" and run_id:
+            errors.append("--param filename_prefix: a run's prefix is %s, recorded in spec.json" % runfiles.run_filename_prefix(run_id))
         else:
             values[name] = value
     for name in sorted(values):
@@ -165,8 +193,16 @@ def render(spec, prompt, overrides, run_id=None):
     if errors:
         return None, errors
     workflow = fill(tmpl.get("workflow", {}), values)
+    for node in workflow.values():
+        meta = node.get("_meta") if isinstance(node, dict) else None
+        if isinstance(meta, dict) and isinstance(meta.get("title"), str):
+            meta["title"] = meta["title"].replace("<state>", review_state)
     e, _ = lint.check_graph(workflow, None)
     return workflow, e
+
+
+def ui_path(out):
+    return (out[:-5] if out.endswith(".json") else out) + ".ui.json"
 
 
 def generation_inputs(run_dir, spec):
@@ -359,6 +395,9 @@ def main(argv=None):
             return 0
         if a.cmd == "resolve":
             spec = layers.resolve(a.purpose, a.style, a.template, authoring)
+            run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
+            if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
+                spec = bind_run(spec, os.path.basename(run_dir))
             if a.out:
                 write_json(a.out, spec)
             emit(spec, a.json, "\n".join(
@@ -375,12 +414,22 @@ def main(argv=None):
             else:
                 fail("render needs --run DIR or --spec, --prompt-file and --out", 2)
             run_id = os.path.basename(os.path.normpath(a.run)) if a.run else None
-            workflow, errors = render(load_spec(spec_path), read_prompt(prompt_path), a.param, run_id)
+            prompt = read_prompt(prompt_path)
+            state = prompt_review_state(a.run, prompt) if a.run else "NOT_RUN"
+            workflow, errors = render(load_spec(spec_path), prompt, a.param, run_id, state)
+            ui = None
+            if not errors:
+                try:
+                    ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
+                                          {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}})
+                except ValueError as exc:
+                    errors.append("workflow.ui.json: %s" % exc)
             if errors:
                 print("\n".join("FAIL " + e for e in errors))
                 return 1
             write_json(out, workflow)
-            print("rendered %s (%d nodes)" % (out, len(workflow)))
+            write_json(ui_path(out), ui)
+            print("rendered %s (%d nodes) and %s" % (out, len(workflow), ui_path(out)))
             return 0
         if a.cmd == "lint":
             results = [lint.lint_file(p, authoring) for p in (a.paths or lint.default_paths(authoring))]

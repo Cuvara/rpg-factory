@@ -18,6 +18,9 @@ generation_inputs(workflow, spec, locate=None) -> the effective inputs the image
   workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
   that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
   path of the run's copy references/<name> (None or a missing file -> null). Without a workflow: the spec params.
+workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
+  (PrimitiveStringMultiline) it links to.
+run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
   exactly these; the plugin requires a PASS row for each). Malformed input never raises.
@@ -94,14 +97,31 @@ def qa_errors(qa):
 
 
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
+TEXT_NODES = ("PrimitiveStringMultiline", "PrimitiveString")  # a prompt node: its "value" is the text it outputs
+RUN_PREFIX = "assetgen/"
+
+
+def run_filename_prefix(run_id):
+    """The one filename_prefix of a run: resolve writes it into <run>/spec.json, render, the review prompts and run.md
+    read it from there."""
+    return RUN_PREFIX + run_id
 
 
 def workflow_prompts(workflow):
-    """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent)."""
+    """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent); a link to a prompt node
+    (TEXT_NODES) gives that node's value, any other link stays as the link."""
     if not isinstance(workflow, dict):
         return []
-    return [n["inputs"].get("user_prompt") for n in workflow.values() if isinstance(n, dict)
-            and n.get("class_type") in PROMPT_NODES and isinstance(n.get("inputs"), dict)]
+    out = []
+    for n in workflow.values():
+        if not (isinstance(n, dict) and n.get("class_type") in PROMPT_NODES and isinstance(n.get("inputs"), dict)):
+            continue
+        v = n["inputs"].get("user_prompt")
+        src = workflow.get(v[0]) if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str) else None
+        if isinstance(src, dict) and src.get("class_type") in TEXT_NODES and isinstance(src.get("inputs"), dict):
+            v = src["inputs"].get("value")
+        out.append(v)
+    return out
 
 
 def reference_names(workflow):
