@@ -79,6 +79,8 @@ lead's workflow asks for in a run directory or the game layer.
   `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
 - **Node pack version:** read the `comfyui_9router` pack in `server_info`; when it is outdated, report it with its
   version and let the user update it - never `update_comfyui`, `install_node` or any other update yourself.
+  The outdated flag compares the pack's hash with ComfyUI's own commit, so it is unreliable for a pack inside the
+  ComfyUI checkout: report it as unverified, and never prompt or perform an update on that signal alone.
 - **See the run in ComfyUI:** `assetgen.py publish --run <run> --comfy-url <URL>` (optional, only when ComfyUI is
   reachable) uploads `workflow.ui.json` through ComfyUI's userdata API, so it shows under Workflows > assetgen.
   Exit 0 PASS, 1 FAIL (an HTTP error), 2 usage (bad run id or URL), 3 `NOT_AVAILABLE` (connection refused); it
@@ -89,8 +91,9 @@ lead's workflow asks for in a run directory or the game layer.
   MCP server loads only in a new session.
 - **Add a purpose:** copy the closest `templates/assetgen/purposes/*.json` (game layer for one game, core for all),
   keep the schema id, write guidance, both rubrics, `constraints` (only the technical hints of
-  `data/precedence.json`; lint fails any other), `qa` (size `mode` exact|min|aspect|any, for aspect
-  `aspect_tolerance`, `min_side` and `min_area`, the share of the expected pixel count; `alpha`
+  `data/precedence.json`; lint fails any other), `qa` (size `mode` exact|min|aspect|orientation|area|any;
+  aspect, orientation and area take the floors `min_side` and `min_pixels`, aspect `aspect_tolerance` and `min_area`
+  (the share of the expected pixel count), orientation `orientation` and `square_tolerance`; `alpha`
   required|forbidden|any, `transparent_corners`, `tileable`, `not_blank`) and `handoff_domain`. `lint` reports a bad
   game value on the game file that holds it, never on the core file it extends. Add a style the
   same way. **Add a template:** API-format graph with placeholders, every placeholder a declared param, `output_node`
@@ -103,11 +106,14 @@ lead's workflow asks for in a run directory or the game layer.
 
 ## Pitfalls
 
-- **The returned size can differ from the requested one:** the gateway has answered a square request with a
-  landscape image, and a 1536x1024 turnaround request with a 2172x724 strip (same pixel count). The purpose QA's
-  size mode handles it: `ref-3d-turnaround` checks aspect with a tolerance plus a minimum area, so the strip fails;
-  `exact` is opt-in (`scripts/assetgen/qa.py` docstring, `size` param description in
-  `templates/assetgen/workflows/image-generate.json`). `review-cmd --phase image` states each output's true size.
+- **The returned size can differ from the requested one, or ignore it entirely** (known issue): the gateway has
+  answered a square request with a landscape image, and a 1536x1024 turnaround request with a 2172x724 strip (same
+  pixel count); in the live style-lock e2e of 2026-11-08 it returned 1672x941 for both a 1536x1024 and a 1024x1024
+  request. So no core purpose's size QA grades the exact size: it grades orientation, aspect or area, a minimum area and a
+  minimum short side that real outputs meet, per purpose in data; `exact` is opt-in (`scripts/assetgen/qa.py`
+  docstring, `size` param description in `templates/assetgen/workflows/image-generate.json`). A size FAIL from the
+  service is not fixed by a new prompt: `asset-gen` stops regenerating. `review-cmd --phase image` states each
+  output's true size and QA's verdict; the reviewer does not grade size again.
 - **A model id the gateway does not serve passes `validate_workflow`** (the `model` input is a free STRING) and fails
   only at run time. Known bad ids are `warn_values` in `scripts/assetgen/data/known-nodes.json`; the working default
   is the template's `model` param - never hard-code an id in a prompt or skill.

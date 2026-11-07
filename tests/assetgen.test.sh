@@ -6,7 +6,7 @@
 # lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
 # the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
-# (alpha, corners, seam, blank, size modes incl. aspect + min area, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
+# (alpha, corners, seam, blank, size modes incl. aspect + min area, orientation, area + min pixels, real 9router sizes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
@@ -17,7 +17,9 @@
 # manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
 # the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
 # anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
-# by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
+# by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
+# the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
+# resolve summary and --verbose, the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -127,7 +129,7 @@ AG resolve --purpose texture-tileable --style low-poly --json | jq -e '.hints.li
   && ok "texture + low-poly: even lighting beats the single directional light" || no "texture/low-poly hints"
 AG resolve --purpose icon --style stylized-painterly --json | jq -e '.hints.lighting.from == "style" and (.hints.lighting | has("overrides") | not)' >/dev/null \
   && ok "a purpose without a lighting constraint keeps the style's lighting hint" || no "icon/painterly hints"
-out=$(AG resolve --purpose ref-3d-turnaround --style low-poly)
+out=$(AG resolve --purpose ref-3d-turnaround --style low-poly --verbose)
 grep -q "^hint lighting = Flat, even lighting.*style hint overridden by the purpose\]$" <<<"$out" && ! grep -q "Single soft directional light" <<<"$out" \
   && ok "resolve text: one lighting hint (the purpose's), marked as overriding the style; the style text is not shown" || no "resolve text hints" "$(grep hint <<<"$out")"
 HA="$TMP/hint-authoring"; mkdir -p "$HA/assetgen/purposes"
@@ -384,6 +386,9 @@ mal mal-zero '{"extends": "icon", "qa": {"size": {"mode": "aspect", "expect": "1
 mal mal-zerow '{"extends": "icon", "qa": {"size": {"mode": "min", "expect": "0x1024"}}}'
 mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "default_style": 7}'
 mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}}'
+mal mal-orient '{"extends": "icon", "qa": {"size": {"mode": "orientation", "orientation": "wide"}}}'
+mal mal-pixels '{"extends": "concept-2d", "qa": {"size": {"mode": "area", "min_pixels": 0}}}'
+mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
   local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
@@ -403,6 +408,9 @@ expect_mal mal-zero "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: ze
 expect_mal mal-zerow "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero width in qa.size.expect -> FAIL row"
 expect_mal mal-prompt "prompt.must_include must be a list of strings" "malformed purpose: prompt guidance and default_style types -> FAIL row"
 expect_mal mal-area "qa.size.min_area must be a number above 0 and at most 1" "malformed purpose: qa.size.min_area above 1 -> FAIL row"
+expect_mal mal-orient "qa.size.orientation must be one of" "malformed purpose: unknown qa.size.orientation -> FAIL row"
+expect_mal mal-pixels "qa.size.min_pixels must be a number >= 1" "malformed purpose: qa.size.min_pixels 0 -> FAIL row"
+expect_mal mal-sqtol "qa.size.square_tolerance must be a number between 0 and 1" "malformed purpose: qa.size.square_tolerance 1.5 -> FAIL row"
 python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -442,23 +450,30 @@ def disc(w, h, bg):
         inside = (x - w / 2) ** 2 + (y - h / 2) ** 2 < (min(w, h) * 0.3) ** 2
         return (200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if inside else bg
     return f
-save("icon-ok.png", 256, 256, disc(256, 256, (0, 0, 0, 0)))
-save("icon-opaque.png", 256, 256, disc(256, 256, (30, 30, 30, 255)), alpha=False)
+save("icon-ok.png", 512, 512, disc(512, 512, (0, 0, 0, 0)))  # 512x512: the icon, sprite and texture floors
+save("icon-small.png", 256, 256, disc(256, 256, (0, 0, 0, 0)))  # under every core purpose floor
+save("icon-opaque.png", 512, 512, disc(512, 512, (30, 30, 30, 255)), alpha=False)
 save("icon-wide.png", 384, 256, disc(384, 256, (0, 0, 0, 0)))
 save("empty.png", 256, 256, lambda x, y: (0, 0, 0, 0))
 save("flat.png", 256, 256, lambda x, y: (90, 90, 90, 255), alpha=False)
 def wave(x, y):
     v = int(128 + 60 * math.sin(2 * math.pi * x / 256) * math.cos(2 * math.pi * y / 256))
     return (v, v // 2 + 40, 255 - v, 255)
-save("tile-ok.png", 256, 256, wave, alpha=False)
-save("tile-bad.png", 256, 256, lambda x, y: (x, x, 128, 255), alpha=False)
+save("tile-ok.png", 512, 512, wave, alpha=False)
+save("tile-small.png", 256, 256, wave, alpha=False)
+save("tile-bad.png", 512, 512, lambda x, y: (x // 2, x // 2, 128, 255), alpha=False)
 row = bytes(c for x in range(1536) for c in (x % 256, (x // 6) % 256, 100))
 open(os.path.join(out, "big.png"), "wb").write(png.encode_raw(1536, 1024, 8, 2, [row] * 1024))
-for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940)):
+for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940),
+                   ("svc-wide.png", 1672, 941), ("svc-tiny.png", 512, 288)):  # real 9router sizes (e2e2) + too small
     r = bytes(c for x in range(w) for c in (x % 256, (x // 6) % 256, 100))
     open(os.path.join(out, name), "wb").write(png.encode_raw(w, h, 8, 2, [r] * h))
-row16 = bytes(b for x in range(256) for b in (x, 0, 255 - x, 0, 60, 0))
-open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(256, 256, 16, 2, [row16] * 256))
+row16 = bytes(b for x in range(512) for b in (x % 256, 0, 255 - x % 256, 0, 60, 0))
+def disc_rows(w, h):
+    return [bytes(c for x in range(w) for c in ((200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.3) ** 2 else (0, 0, 0, 0)))
+            for y in range(h)]
+open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
+open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row16] * 512))
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
 open(os.path.join(out, "corrupt.png"), "wb").write(bytes(data))
 open(os.path.join(out, "not-a-png.png"), "wb").write(b"GIF89a not a png")
@@ -502,25 +517,55 @@ qarun qa-tile-flat-001 texture-tileable flat.png
 qarun qa-tile-alpha-001 texture-tileable icon-ok.png
 [ $rc -eq 1 ] && [ "$(st png-alpha)" = FAIL ] && ok "texture: transparency fails alpha forbidden" || no "alpha forbidden rc=$rc $(st png-alpha)"
 qarun qa-concept-big-001 concept-2d big.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "concept-2d: 1536x1024 passes size mode min 1024x1024 (gateway size drift)" || no "concept big rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "concept-2d: 1536x1024 passes size mode area (gateway size drift)" || no "concept big rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-icon-big-001 icon big.png
-[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "icon: 1536x1024 returned for a square request fails aspect" || no "icon big rc=$rc $(st png-size)"
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "icon: 1536x1024 returned for a square request fails orientation square" || no "icon big rc=$rc $(st png-size)"
 qarun qa-turn-ok-001 ref-3d-turnaround big.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1536x1024 for a 1536x1024 request passes aspect + min area" || no "turnaround ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1536x1024 (real e2e size) passes orientation landscape + min pixels" || no "turnaround ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-turn-near-001 ref-3d-turnaround sheet-near.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1700x940 (aspect within the tolerance, more pixels) passes" || no "turnaround near rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1700x940 passes" || no "turnaround near rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-turn-strip-001 ref-3d-turnaround strip.png
-[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "2172x724, expected aspect 1536x1024: aspect 3.000 (expected 1.500" \
-  && ok "ref-3d-turnaround: the e2e 2172x724 strip (same pixel count, 3:1) fails the aspect check" || no "turnaround strip rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" \
+  | grep -qF "2172x724 is landscape, expected orientation landscape (square within 5%): short side 724 (min 512), area 1572528 px (min 1000000)" \
+  && ok "ref-3d-turnaround: the real e2e 2172x724 strip passes orientation landscape, detail names the floors" || no "turnaround strip rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-turn-small-001 ref-3d-turnaround sheet-small.png
-[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "area 393216 px (min 90% of 1572864)" \
-  && ok "ref-3d-turnaround: 768x512 (right aspect, a quarter of the pixels) fails the min area" || no "turnaround small rc=$rc" "$(jq -c .results "$TMP/q.json")"
-qarun qa-edit-any-001 image-edit icon-wide.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "image-edit: size mode any" || no "edit any rc=$rc $(st png-size)"
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "area 393216 px (min 1000000)" \
+  && ok "ref-3d-turnaround: 768x512 (right orientation, a quarter of the pixels) fails min_pixels" || no "turnaround small rc=$rc" "$(jq -c .results "$TMP/q.json")"
+# e2e2: the 9router image service ignores the requested size; every real size passes its core purpose
+for req in 1536x1024 1024x1024; do
+  sr="$RUNS/qa-svc-concept-${req%%x*}-001"; mkrun "$(basename "$sr")" concept-2d --style stylized-painterly \
+    && AG render --run "$sr" --param size=$req >/dev/null 2>&1 && cp "$FX/svc-wide.png" "$sr/outputs/"
+  AG qa --run "$sr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && [ "$(jq -r .requested_size "$sr/qa.json")" = "$req" ] \
+    && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1672x941, expected area (any aspect): short side 941 (min 768), area 1573352 px (min 1000000)" \
+    && ok "concept-2d: real 1672x941 for a $req request passes png-size (area mode)" || no "concept svc $req rc=$rc" "$(cat "$TMP/err"; jq -c .results "$TMP/q.json")"
+done
+qarun qa-svc-tiny-001 concept-2d svc-tiny.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "short side 288 (min 768), area 147456 px (min 1000000)" \
+  && ok "concept-2d: 512x288 fails png-size (short side and min pixels)" || no "concept tiny rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-svc-turn-tiny-001 ref-3d-turnaround svc-tiny.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "ref-3d-turnaround: 512x288 fails png-size" || no "turnaround tiny rc=$rc $(st png-size)"
+qarun qa-svc-icon-001 icon svc-square.png
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1254x1254 is square, expected orientation square (from 1024x1024)" \
+  && ok "icon: real 1254x1254 passes png-size (orientation square)" || no "icon svc rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-svc-icon-wide-001 icon svc-wide.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1672x941 is landscape, expected orientation square" \
+  && ok "icon: 1672x941 fails orientation square" || no "icon svc wide rc=$rc $(st png-size)"
+# e2e2 review: every core purpose has a short side and an area floor; 256x256 fails each, the real sizes pass
+for pf in icon:icon-small.png sprite-2d:icon-small.png texture-tileable:tile-small.png ui-element:icon-small.png image-edit:icon-small.png; do
+  qarun "qa-floor-${pf%%:*}-001" "${pf%%:*}" "${pf#*:}"
+  [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "short side 256 (min 512), area 65536 px (min 262144)"     && ok "${pf%%:*}: 256x256 fails png-size (short side and area floors)" || no "${pf%%:*} floor rc=$rc $(st png-size)" "$(jq -c .results "$TMP/q.json")"
+done
+for pf in sprite-2d:svc-square.png texture-tileable:svc-square.png ui-element:svc-square.png ui-element:svc-wide.png image-edit:svc-wide.png image-edit:svc-square.png; do
+  qarun "qa-real-${pf%%:*}-$(echo "${pf#*:}" | tr -dc a-z)-001" "${pf%%:*}" "${pf#*:}"
+  [ "$(st png-size)" = PASS ] && ok "${pf%%:*}: real ${pf#*:} passes png-size" || no "${pf%%:*} real ${pf#*:} $(st png-size)" "$(jq -c .results "$TMP/q.json")"
+done
+qarun qa-edit-wide-001 image-edit icon-wide.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "image-edit: 384x256 fails the short side floor (any aspect)" || no "edit wide rc=$rc $(st png-size)"
 mkrun qa-exact-001 icon --style pixel-art --authoring "$AUTH"; cp "$FX/icon-ok.png" "$RUNS/qa-exact-001/outputs/"
 AG qa --run "$RUNS/qa-exact-001" --json > "$TMP/q.json"; rc=$?
 [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -q "expected exact 1024x1024" \
-  && ok "game override qa.size.mode exact: 256x256 fails exact 1024x1024" || no "exact rc=$rc $(st png-size)"
+  && ok "game override qa.size.mode exact: 512x512 fails exact 1024x1024" || no "exact rc=$rc $(st png-size)"
 qarun qa-deep-001 image-edit deep16.png
 if has_pil; then
   [ $rc -eq 0 ] && [ "$(st png-valid)" = PASS ] && ok "16-bit PNG decodes with Pillow" || no "16-bit with Pillow rc=$rc $(st png-valid)"
@@ -593,8 +638,8 @@ for name, (data, want) in cases.items():
         b = png.decode(path)
         assert b.decoder == "pillow" and a.rgba == b.rgba and a.has_alpha == b.has_alpha, (name, list(b.rgba[3::4]))
 # a gray icon whose background is transparent only through its tRNS key: corners and alpha must see it
-rows = [bytes(0 if (x - 128) ** 2 + (y - 128) ** 2 > 90 ** 2 else 40 + (x + y) % 200 for x in range(256)) for y in range(256)]
-open(os.path.join(out, "trns-icon.png"), "wb").write(png.encode_raw(256, 256, 8, 0, rows, extra=[(b"tRNS", struct.pack(">H", 0))]))
+rows = [bytes(0 if (x - 256) ** 2 + (y - 256) ** 2 > 180 ** 2 else 40 + (x + y) % 200 for x in range(512)) for y in range(512)]
+open(os.path.join(out, "trns-icon.png"), "wb").write(png.encode_raw(512, 512, 8, 0, rows, extra=[(b"tRNS", struct.pack(">H", 0))]))
 print("ok pillow" if pil else "ok stdlib-only")
 EOF
 grep -q "^ok" "$TMP/o" && ok "stdlib decoder applies gray, RGB and palette tRNS ($(cat "$TMP/o"): same pixels as Pillow when present)" \
@@ -677,7 +722,7 @@ EOF
 [ $rc -eq 0 ] && grep -qx ok "$TMP/o" && ok "review-cmd with a relative --run from another cwd prints absolute -C, -i and -o paths (binding paths stay run-relative)" \
   || no "review-cmd absolute paths rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
 want=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$d/workflow.json")
-jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 256x256 (requested $want)" \
+jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 512x512 (requested $want)" \
   && [ ! -e "$d/review" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose" \
   || no "pixel size line" "$(jq -r .stdin "$TMP/rc.json" | grep -n 'pixel size'; ls "$d")"
 AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin | grep -qF "outputs/big.png: 1536x1024 (requested" \
@@ -725,6 +770,78 @@ AG review-cmd --phase image --run "$RUNS/qa-tile-two-001" --json > "$TMP/rt.json
   && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-a.png" ] && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-b.png" ] \
   && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rt.json")" = 4 ] \
   && ok "several outputs: one tile per output (review/tile-2x2-<stem>.png)" || no "two tiles rc=$rc" "$(jq -c .tiles "$TMP/rt.json")"
+
+echo "-- review prompts: params as rendered, QA owns the deterministic checks, --run takes a run id (e2e2)"
+sr="$RUNS/qa-svc-concept-1024-001"  # resolved with size 1536x1024, rendered with --param size=1024x1024
+AG review-cmd --phase image --run "$sr" --json 2>"$TMP/err" | jq -r .stdin > "$TMP/ri.txt"
+AG review-cmd --phase prompt --run "$sr" --json 2>>"$TMP/err" | jq -r .stdin > "$TMP/rp.txt"
+{ [ "$(jq -r .params.size "$sr/spec.json")" = 1536x1024 ] \
+  && grep -q "^Requested params (workflow.json): .*size=1024x1024" "$TMP/ri.txt" && grep -q "^Requested params (workflow.json): .*size=1024x1024" "$TMP/rp.txt" \
+  && grep -qF "1672x941 (requested 1024x1024)" "$TMP/ri.txt" && ! grep -q "1536x1024" "$TMP/ri.txt" "$TMP/rp.txt"; } \
+  && ok "render --param size=1024x1024: both review prompts request only 1024x1024 (params read back from workflow.json, not spec.json)" \
+  || no "rendered params in review prompts" "$(cat "$TMP/err"; grep -n "equested" "$TMP/ri.txt" "$TMP/rp.txt")"
+AG manifest --run "$sr" >/dev/null 2>"$TMP/err"
+mp=$(sed -n '/^---json$/,/^---$/p' "$sr/run.md" | sed '1d;$d' | jq -r '.spec.params.size')
+[ "$mp" = 1024x1024 ] && [ "$(jq -r .params.size "$sr/spec.json")" = 1536x1024 ]   && [ "$mp" = "$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$sr/workflow.json")" ]   && ok "manifest after render --param size=1024x1024: run.md spec.params.size is the rendered 1024x1024, not spec.json's 1536x1024"   || no "run.md spec.params from workflow.json: $mp" "$(cat "$TMP/err")"
+mkrun review-unrendered-001 concept-2d --style stylized-painterly
+AG review-cmd --phase prompt --run "$RUNS/review-unrendered-001" --json | jq -r .stdin \
+  | grep -q "^Requested params (spec.json): .*size=1536x1024" && ok "review prompt before render: spec.json params, named as such" || no "unrendered params"
+python3 -B - "$ROOT" "$TMP/rparams" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import assetgen
+run = sys.argv[2]; os.makedirs(run, exist_ok=True)
+spec = {"params": {"size": "1024x1024", "tag": "a", "count": 1, "extra": "kept"},
+        "template": {"data": {"params": {"size": {"type": "string"}, "tag": {"type": "string"}, "count": {"type": "int"},
+                                         "extra": {"type": "string"}, "prompt": {"type": "string"}},
+                              "workflow": {"1": {"class_type": "X", "inputs": {"size": "{{size}}", "count": "{{ count }}",
+                                                                              "text": "{{prompt}}", "name": "run/{{tag}}-v{{count}}"}}}}}}
+assert assetgen.rendered_params(run, spec) == (spec["params"], "spec.json")
+json.dump({"1": {"class_type": "X", "inputs": {"size": "640x480", "count": 3, "text": "the prompt", "name": "run/hero-v3"}},
+           "9": {"class_type": "LoadImage", "inputs": {"image": "anchor-a.png"}}}, open(os.path.join(run, "workflow.json"), "w"))
+got = assetgen.rendered_params(run, spec)
+assert got == ({"size": "640x480", "tag": "hero", "count": 3, "extra": "kept"}, "workflow.json"), got
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "rendered_params: whole placeholders, placeholders inside strings and typed values come from workflow.json; prompt left out" \
+  || no "rendered_params" "$(cat "$TMP/o")"
+qarun review-qafail-001 concept-2d svc-tiny.png
+AG review-cmd --phase image --run "$RUNS/review-qafail-001" --json | jq -r .stdin > "$TMP/ri.txt"
+mkrun review-noqa-001 icon --style stylized-painterly && AG render --run "$RUNS/review-noqa-001" >/dev/null \
+  && cp "$FX/icon-ok.png" "$RUNS/review-noqa-001/outputs/"
+AG review-cmd --phase image --run "$RUNS/review-noqa-001" --json | jq -r .stdin > "$TMP/rn.txt"
+{ grep -q "^Deterministic QA: FAIL (FAIL outputs/svc-tiny.png png-size.*); context only, qa.json is graded separately$" "$TMP/ri.txt" \
+  && grep -qF "Deterministic checks (size, alpha, corners, tileable, blank) belong to QA only: do not re-grade them." "$TMP/ri.txt" \
+  && grep -qF "never fail a rubric item, or report a finding, for a size or another deterministic check" "$TMP/ri.txt" \
+  && grep -q "^Deterministic QA: NOT_RUN; it is graded separately (qa.json)$" "$TMP/rn.txt" \
+  && grep -qF "belong to QA only: do not re-grade them." "$TMP/rn.txt"; } \
+  && ok "image review prompt: QA's verdict (FAIL or NOT_RUN) is context only; the reviewer must not re-grade size, alpha, corners, tileable, blank" \
+  || no "QA owns deterministic checks" "$(grep -n "QA\|Deterministic" "$TMP/ri.txt" "$TMP/rn.txt")"
+# --run RUN-ID: under <authoring>/assetgen/runs/, with --authoring from anywhere or from inside the authoring repo
+d="$RUNS/qa-icon-ok-001"
+(cd "$TMP" && AG review-cmd --phase prompt --run qa-icon-ok-001 --authoring "$AUTH" --json) > "$TMP/rid.json" 2>"$TMP/err"; rc1=$?
+(cd "$AUTH/assetgen" && AG review-cmd --phase prompt --run qa-icon-ok-001 --json) > "$TMP/rid2.json" 2>>"$TMP/err"; rc2=$?
+AG review-cmd --phase prompt --run "$d" --json > "$TMP/rid3.json"
+[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -r .verdict "$TMP/rid.json")" = "$d/review-prompt.json" ] \
+  && cmp -s "$TMP/rid.json" "$TMP/rid3.json" && cmp -s "$TMP/rid2.json" "$TMP/rid3.json" \
+  && ok "--run qa-icon-ok-001 (a run id): resolved with --authoring from another directory and from inside the authoring repo, same command as the path" \
+  || no "--run id rc=$rc1/$rc2" "$(cat "$TMP/err"; jq -r .verdict "$TMP/rid.json")"
+(cd "$AUTH" && AG qa --run qa-icon-ok-001 --json) > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .run "$TMP/q.json")" = qa-icon-ok-001 ] && [ -f "$d/qa.json" ] && ok "qa --run RUN-ID inside the authoring repo grades that run" \
+  || no "qa --run id rc=$rc" "$(cat "$TMP/err")"
+(cd "$AUTH" && AG manifest --run nope-icon-001) >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "no run directory at nope-icon-001 or $AUTH/assetgen/runs/nope-icon-001" "$TMP/err" \
+  && ok "--run with an unknown run id: exit 2 naming the tried paths" || no "unknown run id rc=$rc" "$(cat "$TMP/err")"
+NG="$TMP/not-a-repo"; mkdir -p "$NG"
+if ! git -C "$NG" rev-parse --show-toplevel >/dev/null 2>&1; then
+  (cd "$NG" && AG qa --run qa-icon-ok-001) >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "no --authoring and the current directory is not in a git repository" "$TMP/err" \
+    && ok "--run RUN-ID outside any git repository without --authoring: exit 2, says why" || no "run id outside repo rc=$rc" "$(cat "$TMP/err")"
+fi
+AG embed --run "$TMP/missing/dir-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -qF "no run directory at $TMP/missing/dir-001 (" "$TMP/err" && ok "--run with a missing path (not a run id): exit 2 naming the path" \
+  || no "missing run path rc=$rc" "$(cat "$TMP/err")"
+AG qa --help | grep -q "run id <slug>-NNN" && AG resolve --help | grep -q -- "--verbose" && ok "CLI help documents --run RUN-ID and resolve --verbose" || no "CLI help"
 
 echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
 ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly && AG render --run "$ed" >/dev/null
@@ -992,6 +1109,12 @@ variant qp-rejbind-001; jq '.style_lock.rejections += [{"id": "r-late", "type": 
 variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
 variant qp-rqual-001; rebase qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
+# a review is bound to the params it was shown (the rendered ones): the same --param again keeps it bound
+variant qp-rsame-001; rebase qp-rsame-001 --param size=1536x1024; AG render --run "$RUNS/qp-rsame-001" --param size=1536x1024 >/dev/null
+AG manifest --run "$RUNS/qp-rsame-001" >/dev/null
+# run.md spec.params tampered after manifest: never replaced by spec.json, compared with the rendered params
+variant qp-tsize-001; fmset "$RUNS/qp-tsize-001" 'obj["spec"]["params"]["size"] = "1x1"'
+variant qp-tmodel-001; fmset "$RUNS/qp-tmodel-001" 'obj["spec"]["params"]["model"] = "invented-model"; obj["spec"]["params"]["background"] = "invented-background"'
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # image-edit: the reference image is bound by name and content (references/<name> in the run directory)
 edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --authoring "$AUTH"
@@ -1100,8 +1223,27 @@ case_ qp-wfprompt-001 gen-run-image-review FAIL 'bound to other requirements' "w
 case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
 case_ qp-rejbind-001 gen-run-prompt-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the prompt review: FAIL (rejections are bound)"
 case_ qp-rejbind-001 gen-run-image-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the image review: FAIL"
-[ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
-  || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
+rs="$RUNS/qp-rsize-001"; rs_params=$(sed -n '/^---json$/,/^---$/p' "$rs/run.md" | sed '1d;$d' | jq -r .spec.params.size)
+case_ qp-rsize-001 gen-run-prompt-review FAIL 'bound to other requirements' "render --param size after the prompt review: FAIL (the review is bound to the params it was shown)"
+case_ qp-rqual-001 gen-run-prompt-review FAIL 'bound to other requirements' "render --param quality=low after the prompt review: FAIL"
+[ "$rs_params" = 1536x1024 ] && [ "$(jq -r .params.size "$rs/spec.json")" != 1536x1024 ] && [ "$(st AGEN-qp-rsize-001 gen-run-provenance)" = PASS ] \
+  && ok "run.md spec.params records the rendered size 1536x1024 (spec.json keeps its own), provenance PASS" \
+  || no "rsize params: $rs_params, provenance $(st AGEN-qp-rsize-001 gen-run-provenance)" "$(why AGEN-qp-rsize-001 gen-run-provenance)"
+ptitle() { jq -r '[.[] | select(.class_type == "PrimitiveStringMultiline") | ._meta.title] | join(",")' "$1/workflow.json"; }
+rcb() { AG review-cmd --phase prompt --run "$1" --no-write --json | jq -r .binding.requirements_sha256; }
+[ "$(ptitle "$rs")" = "Prompt (Claude, Codex review STALE)" ] && [ "$(rcb "$rs")" != "$(jq -r .requirements_sha256 "$rs/review-prompt.json")" ] \
+  && ok "render --param size after the prompt review: render title STALE and review-cmd hands out another binding, as the plugin grades" \
+  || no "rsize consistency: title $(ptitle "$rs"), review-cmd $(rcb "$rs"), verdict $(jq -r .requirements_sha256 "$rs/review-prompt.json")"
+rq="$RUNS/qp-rsame-001"
+[ "$(st AGEN-qp-rsame-001 gen-run-prompt-review)/$(st AGEN-qp-rsame-001 gen-run-image-review)/$(st AGEN-qp-rsame-001 gen-run-provenance)" = PASS/PASS/PASS ] \
+  && [ "$(ptitle "$rq")" = "Prompt (Claude, Codex review PASS)" ] && [ "$(rcb "$rq")" = "$(jq -r .requirements_sha256 "$rq/review-prompt.json")" ] \
+  && ok "render repeating the reviewed --param size: reviews stay bound (plugin PASS, render title PASS, review-cmd binding equal)" \
+  || no "rsame: $(st AGEN-qp-rsame-001 gen-run-prompt-review)/$(st AGEN-qp-rsame-001 gen-run-image-review)/$(st AGEN-qp-rsame-001 gen-run-provenance), title $(ptitle "$rq")" "$(why AGEN-qp-rsame-001 gen-run-prompt-review)"
+case_ qp-tsize-001 gen-run-provenance FAIL 'spec.params differ from the rendered params (workflow.json over spec.json) in size' "run.md spec.params size tampered to 1x1: FAIL (never substituted from spec.json)"
+case_ qp-tmodel-001 gen-run-provenance FAIL 'in background, model' "run.md spec.params with an invented model and background: FAIL"
+[ "$(st AGEN-qp-tsize-001 gen-run-prompt-review)/$(st AGEN-qp-tsize-001 gen-run-image-review)" = PASS/PASS ] \
+  && ok "tampered run.md params: the reviews stay bound to the rendered params they were shown; only provenance FAILs" \
+  || no "tsize reviews: $(st AGEN-qp-tsize-001 gen-run-prompt-review)/$(st AGEN-qp-tsize-001 gen-run-image-review)"
 got=$(for c in $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-edit-001 "$c")"; done)
 [ "$got" = "$(for c in $plugin_checks; do printf '%s=PASS ' "$c"; done)" ] && ok "image-edit run with its reference kept in references/: every plugin check PASS"   || no "image-edit good run: $got" "$(jq -c '.results[] | select(.artifact == "AGEN-qp-edit-001" and .state != "PASS")' "$TMP/aq.json")"
 case_ qp-eswap-001 gen-run-image-review FAIL 'bound to other requirements' "image-edit re-rendered with another reference after the image review: FAIL"
@@ -1415,7 +1557,7 @@ grep -qx ok "$TMP/o" || no "style lock CLI fixture" "$(cat "$TMP/o")"
 git init -q -b main "$SC" && git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "style lock fixture"
 slrun() { # slrun NAME PURPOSE [resolve args...]: resolve into a run of the style lock repo, with a prompt
   local d="$SR/$1" p="$2"; shift 2; mkdir -p "$d/outputs"
-  AG resolve --purpose "$p" --authoring "$SC" "$@" --out "$d/spec.json" > "$TMP/slr.out" 2>"$TMP/err" || return 1
+  AG resolve --purpose "$p" --authoring "$SC" "$@" --out "$d/spec.json" --verbose > "$TMP/slr.out" 2>"$TMP/err" || return 1
   printf 'Style lock prompt for %s.\n' "$p" > "$d/prompt.md"
 }
 lk() { jq -r "$1" "$SR/$2/spec.json"; }
@@ -1436,6 +1578,26 @@ grep -q "^style lock: style rpg-base v2 (sha256 [0-9a-f]\{12\}), family props \[
   && grep -q "^reference b-strong  \[family match; dimensions: palette, shape, line; strength strong\]$" "$TMP/slr.out" \
   && grep -q "^rejection r-props direction too_detailed: No fine filigree on props.$" "$TMP/slr.out" \
   && ok "resolve text: style lock, references with reasons, rejections" || no "resolve text" "$(cat "$TMP/slr.out")"
+# e2e2: resolve prints a short summary by default; --verbose adds every source, --json is the whole spec
+AG resolve --purpose icon --authoring "$SC" > "$TMP/short.out" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --authoring "$SC" --verbose > "$TMP/long.out" 2>>"$TMP/err"
+cmp -s <(AG resolve --purpose icon --authoring "$SC" --json) <(AG resolve --purpose icon --authoring "$SC" --json --verbose); same=$?
+{ [ $rc -eq 0 ] && [ "$(wc -l < "$TMP/short.out")" -le 12 ] \
+  && grep -q "^params: .*size=" "$TMP/short.out" && grep -q "^hints: " "$TMP/short.out" \
+  && grep -q "^style lock: style rpg-base v2 (sha256 [0-9a-f]\{12\}), family props \[purpose\], project assetgen/project.json$" "$TMP/short.out" \
+  && grep -q "^references: b-strong, a-canon, c-supp (max 3)$" "$TMP/short.out" \
+  && grep -q "^rejections: r-props (direction too_detailed)$" "$TMP/short.out" \
+  && grep -q "^warning: filename_prefix assetgen/run is not bound to a run" "$TMP/short.out" \
+  && ! grep -q "  \[core:\|  \[game:" "$TMP/short.out" && grep -q -- "--verbose or --json" "$TMP/short.out" \
+  && grep -q "^param size = .*  \[core:templates/assetgen/purposes/icon.json\]$" "$TMP/long.out" \
+  && grep -q "^purpose.title  \[core:" "$TMP/long.out" && [ "$(wc -l < "$TMP/long.out")" -gt 30 ] && [ $same -eq 0 ]; } \
+  && ok "resolve: short summary by default (params, hints, style lock, references, rejections, warnings, no field sources); --verbose lists the sources; --json unchanged by --verbose" \
+  || no "resolve summary rc=$rc same=$same" "$(cat "$TMP/err" "$TMP/short.out")"
+AG resolve --purpose icon --authoring "$SC" --style anime-cel --style-override "one-off key art" > "$TMP/short.out" 2>"$TMP/err"
+grep -q "^warning: style override: one-off key art$" "$TMP/short.out" && ! grep -q "no assetgen/project.json" "$TMP/short.out" \
+  && AG resolve --purpose icon --style pixel-art --authoring "$AUTH" | grep -q "^warning: no assetgen/project.json" \
+  && ! AG resolve --purpose icon --style pixel-art | grep -q "project.json" \
+  && ok "resolve summary warnings: style override, a game layer without project.json (none for the core only)" || no "resolve warnings" "$(cat "$TMP/err" "$TMP/short.out")"
 slrun sl-icon-002 icon && [ "$(jq -S .style_lock "$SR/sl-icon-001/spec.json")" = "$(jq -S .style_lock "$SR/sl-icon-002/spec.json")" ] \
   && ok "resolve: same inputs -> same style lock and selection" || no "resolve determinism"
 slrun sl-chars-001 icon --family characters
@@ -1593,7 +1755,7 @@ AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --s
 AG manifest --run "$dp" >/dev/null
 AG promote-anchor --run "$dp" --output 1 --family props --dimensions palette --strength strong --id y-1 >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "does not match qa.json" "$TMP/err" && ok "promote-anchor: output not the one qa.json graded refused" || no "qa mismatch rc=$rc" "$(cat "$TMP/err")"
-AG promote-anchor --run "$TMP/sl-wf-run-001" --output 1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
+mkdir -p "$TMP/sl-wf-run-001"; AG promote-anchor --run "$TMP/sl-wf-run-001" --output 1 --family props --dimensions palette --strength strong >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <authoring>/assetgen/runs/<slug>-NNN" "$TMP/err" && ok "promote-anchor: a run outside <authoring>/assetgen/runs refused" || no "run layout rc=$rc" "$(cat "$TMP/err")"
 grep -rq '"status": "active"' "$pa.json" && no "promote-anchor wrote an active anchor" || ok "promote-anchor never writes status active"
 
@@ -1653,7 +1815,8 @@ print("ok")
 EOF
 grep -qx ok "$TMP/o" || no "style QA fixtures" "$(cat "$TMP/o")"
 sq="$SR/sl-qa-001"; slrun sl-qa-001 icon && AG render --run "$sq" >/dev/null 2>"$TMP/err" || no "style QA run" "$(cat "$TMP/err")"
-cp "$sq/spec.json" "$TMP/sq-spec.json"
+# the style fixtures are 256x256: the run keeps the default size floor so only the style rows vary
+jq '.purpose.data.qa.size |= del(.min_side, .min_pixels)' "$sq/spec.json" > "$TMP/sq-spec.json"
 sqa() { # sqa PNG JQ-EDIT: the style QA run with outputs/out.png = PNG and spec.json = the resolved spec edited by JQ-EDIT
   rm -f "$sq/outputs/"*.png; cp "$FX/$1" "$sq/outputs/out.png"
   jq "$2" "$TMP/sq-spec.json" > "$sq/spec.json"

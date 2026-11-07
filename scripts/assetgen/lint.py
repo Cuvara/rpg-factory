@@ -20,7 +20,7 @@ import runfiles
 import stylelock
 
 KNOWN = os.path.join(layers.HERE, "data", "known-nodes.json")
-PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+PLACEHOLDER = runfiles.PLACEHOLDER
 PARAM_TYPES = {"string", "int", "number", "bool", "enum"}
 # a URL scheme, an IPv4 address, a local host name, a credential-shaped key or value
 FORBIDDEN = [

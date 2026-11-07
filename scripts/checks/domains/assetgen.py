@@ -14,7 +14,9 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        scripts/assetgen/runfiles.py reads from it (else FAIL: re-run manifest), and its binding must
                        name the current bytes: prompt_sha256 = spec.prompt_sha256, requirements_sha256 =
                        runfiles.requirements_sha256 of the run.md spec (purpose, style and template content hashes,
-                       params; for the image review also the generation inputs of workflow.json) and, for the
+                       the rendered params - runfiles.rendered_params of workflow.json over spec.json, what the review
+                       prompt showed - or run.md's spec.params without spec.json; for the image review also
+                       the generation inputs of workflow.json) and, for the
                        image review, outputs = the recorded outputs (review-cmd hands the reviewer these values to copy back). A missing, invalid,
                        unbound or stale review file is missing work.
   gen-run-claude-review
@@ -34,7 +36,8 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        style-* FAIL row must agree with a FAIL qa state.
   gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
-                       the rendered workflow.json is present
+                       the rendered workflow.json is present; run.md spec.params equal the rendered params
+                       (runfiles.rendered_params of workflow.json over spec.json), else FAIL (re-run manifest)
   gen-run-style        the style lock (spec.style_lock, resolve with project.json, anchors and rejections): the style ref
                        is well formed, names the run's style and resolves (a newer version or another hash is a WARN:
                        anchors of the recorded version stay valid), run.md equals spec.json, an override carries a
@@ -160,8 +163,12 @@ def check(artifact, ctx):
     except (OSError, ValueError):
         workflow = None
     size = runfiles.requested_size(workflow, spec_json if isinstance(spec_json, dict) else spec)
-    requirements = {"prompt": runfiles.requirements_sha256(spec, None), "image": runfiles.requirements_sha256(
-        spec, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec,
+    # a review is bound to the params it was shown: the rendered params (workflow.json read back over spec.json), what
+    # review-cmd hands out and manifest records as run.md spec.params; never substituted from spec.json
+    rendered = runfiles.rendered_params(workflow, spec_json)[0] if isinstance(spec_json, dict) else None
+    bound = dict(spec, params=rendered) if rendered is not None else spec
+    requirements = {"prompt": runfiles.requirements_sha256(bound, None), "image": runfiles.requirements_sha256(
+        bound, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec,
                                     lambda name: resolve("references/" + name)))}
     lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else None
 
@@ -360,6 +367,12 @@ def check(artifact, ctx):
         if ref is None or not ref.is_file():
             todo.append("reference image %s is not kept as references/%s in the run directory (copy the original "
                         "there before upload_file; the image review binds its sha256)" % (name, os.path.basename(name)))
+    recorded_params = spec.get("params") if isinstance(spec.get("params"), dict) else None
+    if rendered is not None and recorded_params != rendered:
+        diff = sorted(k for k in set(rendered) | set(recorded_params or {})
+                      if (recorded_params or {}).get(k, "<absent>") != rendered.get(k, "<absent>"))
+        fails.append("run.md spec.params differ from the rendered params (workflow.json over spec.json) in %s; re-run "
+                     "assetgen.py manifest" % (", ".join(diff) or "type"))
     grade("gen-run-provenance", fails, todo)
 
     fails, todo, warns = [], [], []

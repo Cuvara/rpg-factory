@@ -58,9 +58,10 @@
  },
  "qa": {
   "size": {
-   "mode": "aspect",
-   "aspect_tolerance": 0.25,
-   "min_area": 0.9
+   "mode": "orientation",
+   "orientation": "landscape",
+   "min_side": 512,
+   "min_pixels": 1000000
   },
   "alpha": "any",
   "not_blank": {

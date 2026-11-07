@@ -4,10 +4,15 @@ Per output PNG (results keyed by output path, rpg-factory.validation/1 states); 
 runfiles.required_checks(qa), which the gen-run quality plugin also requires as PASS rows:
   png-valid           decodes (Pillow when present, else the stdlib decoder; NOT_AVAILABLE when neither can)
   png-size            qa.size.mode: exact (= expect), min (width and height >= expect), aspect (ratio within
-                      aspect_tolerance, default 0.02, the short side >= min_side, default 256, and, with min_area,
-                      width x height >= min_area x the expected pixel count), any.
-                      expect defaults to the requested size (workflow.json, else spec params); "auto" = any.
-                      The 9router gateway may return another size than requested, so exact is opt-in.
+                      aspect_tolerance, default 0.02, and, with min_area, width x height >= min_area x the expected
+                      pixel count), orientation (landscape, portrait or square: qa.size.orientation, or "auto" to
+                      take it from expect; square when the long side is at most square_tolerance, default 0.05,
+                      longer than the short side), area (no aspect at all), any.
+                      aspect, orientation and area also need the short side >= min_side (default 256) and, with
+                      min_pixels, width x height >= min_pixels (absolute). expect defaults to the requested size
+                      (workflow.json, else spec params); "auto" = any (orientation auto with expect auto too).
+                      The 9router image service ignores the requested size (e2e: 1672x941 returned for 1536x1024
+                      and 1024x1024 requests), so the core purposes grade orientation or area plus these floors.
   png-alpha           qa.alpha: required (alpha channel and some transparent pixels), forbidden (fully opaque), any
   png-corners         qa.transparent_corners: the four corner pixels have alpha <= 8
   png-tileable        qa.tileable.max_seam_error: wrap-around edge difference minus the interior
@@ -55,11 +60,35 @@ def parse_size(text):
     return (w, h) if w > 0 and h > 0 else None
 
 
+def orientation_of(w, h, tol):
+    if max(w, h) <= min(w, h) * (1 + tol):
+        return "square"
+    return "landscape" if w > h else "portrait"
+
+
+def floor_detail(img, cfg):
+    """The absolute floors of aspect, orientation and area: short side >= min_side (default 256), with min_pixels
+    width x height >= min_pixels. Returns (ok, detail parts)."""
+    side, area = min(img.width, img.height), img.width * img.height
+    min_side, min_pixels = cfg.get("min_side", 256), cfg.get("min_pixels")
+    ok = side >= min_side and (min_pixels is None or area >= min_pixels)
+    detail = ["short side %d (min %d)" % (side, min_side)]
+    if min_pixels is not None:
+        detail.append("area %d px (min %d)" % (area, min_pixels))
+    return ok, detail
+
+
 def check_size(img, cfg, requested):
     mode = cfg.get("mode", "any")
+    got = "%dx%d" % (img.width, img.height)
+    if mode == "area":
+        ok, detail = floor_detail(img, cfg)
+        return ("PASS" if ok else "FAIL"), ["%s, expected area (any aspect): %s" % (got, ", ".join(detail))]
     raw = cfg.get("expect", requested)
     expect = parse_size(raw)
-    got = "%dx%d" % (img.width, img.height)
+    want_orient = cfg.get("orientation", "auto")
+    if mode == "orientation" and want_orient != "auto":
+        raw, expect = "%s orientation" % want_orient, (0, 0)  # the expected size plays no part
     if mode != "any" and expect is None and raw != "auto":
         return "FAIL", ["%s, expected size %r is not WIDTHxHEIGHT with positive dimensions" % (got, raw)]
     if mode == "any" or expect is None:
@@ -69,13 +98,24 @@ def check_size(img, cfg, requested):
         ok = (img.width, img.height) == expect
     elif mode == "min":
         ok = img.width >= ew and img.height >= eh
+    elif mode == "orientation":
+        tol = cfg.get("square_tolerance", 0.05)
+        want = want_orient if want_orient != "auto" else orientation_of(ew, eh, tol)
+        have = orientation_of(img.width, img.height, tol)
+        ok, detail = floor_detail(img, cfg)
+        ok = ok and have == want
+        source = "" if want_orient != "auto" else " (from %dx%d)" % (ew, eh)
+        return ("PASS" if ok else "FAIL"), ["%s is %s, expected orientation %s%s (square within %d%%): %s"
+                                            % (got, have, want, source, round(tol * 100), ", ".join(detail))]
     else:
-        tol, min_side, min_area = cfg.get("aspect_tolerance", 0.02), cfg.get("min_side", 256), cfg.get("min_area")
+        tol, min_area = cfg.get("aspect_tolerance", 0.02), cfg.get("min_area")
         ratio, want = img.width / img.height, ew / eh
-        ok = abs(ratio - want) <= tol * want and min(img.width, img.height) >= min_side             and (min_area is None or img.width * img.height >= min_area * ew * eh)
+        ok, floors = floor_detail(img, cfg)
+        ok = ok and abs(ratio - want) <= tol * want and (min_area is None or img.width * img.height >= min_area * ew * eh)
         detail = ["aspect %.3f (expected %.3f +/- %d%%)" % (ratio, want, round(tol * 100))]
         if min_area is not None:
             detail.append("area %d px (min %d%% of %d)" % (img.width * img.height, round(min_area * 100), ew * eh))
+        detail += floors
         return ("PASS" if ok else "FAIL"), ["%s, expected %s %dx%d: %s" % (got, mode, ew, eh, ", ".join(detail))]
     return ("PASS" if ok else "FAIL"), ["%s, expected %s %dx%d" % (got, mode, ew, eh)]
 

@@ -28,7 +28,8 @@
                                           and ComfyUI templates (core + game layer), a resolved spec, data lint,
                                           the Codex review command (printed, never run), style drift of gen-runs
                                           and anchors; --authoring defaults to the workspace authoring repo when
-                                          it has assetgen/
+                                          it has assetgen/ (also where a review-cmd --run <run-id> resolves);
+                                          resolve prints a summary, --verbose adds the field sources
   help [--json]                           every command with its arguments, an example, the Claude form
                                           (/rpg-factory:<verb>) and the Codex form (python3 -B ...)
 
@@ -278,7 +279,7 @@ def cmd_assetgen(raw):
     if any(len(a.split("=", 1)[0]) >= 3 and "--out".startswith(a.split("=", 1)[0]) for a in args):
         raise ValueError("assetgen --out (or an abbreviation of it) writes a file: run scripts/assetgen/assetgen.py directly "
                          "(the asset-gen skill)")
-    if args[0] in ("list", "show", "resolve", "lint", "drift") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
+    if args[0] in ("list", "show", "resolve", "lint", "drift", "review-cmd") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
         reg = registry()
         game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
         if os.path.isdir(os.path.join(game, "assetgen")):

@@ -5,23 +5,32 @@ Usage:
   assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
   assetgen.py show ID [--kind K] [--authoring DIR] [--json]
   assetgen.py resolve --purpose P [--style S] [--template T] [--family F] [--style-override REASON] [--authoring DIR]
-                      [--out FILE] [--json]
-  assetgen.py render (--run DIR | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]...
+                      [--out FILE] [--verbose] [--json]
+  assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
-  assetgen.py review-cmd --phase prompt|image --run DIR [--codex BIN] [--no-write] [--json]
-  assetgen.py embed --run DIR [--json]
-  assetgen.py qa --run DIR [--json]
-  assetgen.py manifest --run DIR [--title T] [--prompt-author A] [--generated-by G] [--json]
-  assetgen.py publish --run DIR --comfy-url URL [--json]
-  assetgen.py promote-anchor --run DIR --output N|PATH --family F --dimensions a,b --strength S [--id ID] [--json]
-  assetgen.py reject --type asset|direction --reason R [--text T] [--family F] [--run DIR --output N|PATH]
+  assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
+  assetgen.py embed --run RUN [--authoring DIR] [--json]
+  assetgen.py qa --run RUN [--authoring DIR] [--json]
+  assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
+  assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
+  assetgen.py promote-anchor --run RUN --output N|PATH --family F --dimensions a,b --strength S [--id ID]
+                             [--authoring DIR] [--json]
+  assetgen.py reject --type asset|direction --reason R [--text T] [--family F] [--run RUN --output N|PATH]
                      [--style S --authoring DIR] [--any-version] [--id ID] [--json]
   assetgen.py drift --authoring DIR [--json]
 
+RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
+<authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
+directory (resolve_run); when neither exists the error names the tried paths (exit 2).
+resolve prints a short summary (purpose, style and template, params, hints, style lock, references, rejections,
+warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
+
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
-game wins) core ids. resolve prints the merged spec with the source file of every field and each param.
-Param precedence, low to high: template default < style params < purpose params < render --param.
+game wins) core ids. resolve --verbose prints the merged spec with the source file of every field and each param.
+Param precedence, low to high: template default < style params < purpose params < render --param. The review prompts
+list the params render used (rendered_params: read back from workflow.json, so a render --param shows; spec.json
+params before the first render), and each review is bound to exactly those params.
 Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
 style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
 
@@ -61,7 +70,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
-                      style and template content hashes and the resolved params
+                      style and template content hashes and the rendered params the review prompt shows
+                      (rendered_params: workflow.json after render, spec.json before), so a render --param that
+                      changes a param after the review makes it STALE (the same params again keep it bound)
   review/tile-2x2.png review-cmd image, purposes with a tileable QA check: the output repeated 2x2 (seam preview,
                       passed with -i after the outputs; tile-2x2-<stem>.png per output when there are several).
                       Derived from the output pixels, never an output and never in the binding
@@ -72,7 +83,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       tiles; a missing or changed copy is refused), adds the rubric items "The image matches the attached
                       anchors ..." (when anchors are selected) and "Not repeated: <reason> - <text>" per relevant
                       rejection, and the binding adds "style" (the style ref) and "anchors" [{"anchor_id", "sha256"}].
-                      The prompt review lists the direction rejections under "Must avoid"
+                      The prompt review lists the direction rejections under "Must avoid". The image review states
+                      qa.json's verdict as context only: size, alpha, corners, tileable and blank belong to QA, and
+                      the reviewer is told not to re-grade them
   review-image-claude.json  Claude's own visual review, written by the agent: the same schema and binding (the
                       "binding" of review-cmd --phase image --json, judged against its "rubric") with "by": "claude". manifest records it as
                       spec.claude_image_review; the plugin WARNs when it is missing, unbound or stale. It never replaces
@@ -108,6 +121,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -205,22 +219,7 @@ def style_lock_lines(lock):
 
 # -- render ----------------------------------------------------------------------------------------------------
 
-def typed(name, decl, value):
-    """value coerced to the param type; raises ValueError naming the param."""
-    t = decl.get("type")
-    if t == "int" and not isinstance(value, int):
-        value = int(value)
-    elif t == "number" and not isinstance(value, (int, float)):
-        value = float(value)
-    elif t == "bool" and not isinstance(value, bool):
-        if str(value).lower() not in ("true", "false"):
-            raise ValueError("param %s: expected true or false, got %r" % (name, value))
-        value = str(value).lower() == "true"
-    elif t in ("string", "enum"):
-        value = str(value)
-    if t == "enum" and value not in decl.get("options", []):
-        raise ValueError("param %s: %r is not one of %s" % (name, value, decl.get("options")))
-    return value
+typed = runfiles.typed_param  # value coerced to the param type; raises ValueError naming the param
 
 
 def fill(node, values):
@@ -244,16 +243,17 @@ def bind_run(spec, run_id):
     return spec
 
 
-def prompt_review_state(run_dir, spec, prompt):
+def prompt_review_state(run_dir, spec, prompt, params=None):
     """(state, by) of review-prompt.json for this prompt and spec: PASS/FAIL when bound to both (prompt_sha256 and
     requirements_sha256, as review-cmd --phase prompt hands them out), STALE when either differs or is missing; a PASS
     by a reviewer that is not Codex (a SAME_MODEL fallback) is WARN, as the quality plugin grades it. by is "codex"
-    while no verdict exists (the title names the reviewer the run expects)."""
+    while no verdict exists (the title names the reviewer the run expects). params: the rendered params the binding is
+    checked against (render passes those of the workflow it is about to write); rendered_params of the run when None."""
     v = runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt")
     if v["state"] not in ("PASS", "FAIL"):
         return v["state"], "codex"
     if (v["prompt_sha256"] != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            or v["requirements_sha256"] != runfiles.requirements_sha256(spec, None)):
+            or v["requirements_sha256"] != review_requirements_sha256(run_dir, spec, "prompt", params)):
         return "STALE", v["by"]
     if v["state"] == "PASS" and not is_codex(v["by"]):
         return "WARN", v["by"]
@@ -394,6 +394,22 @@ def requested_size(run_dir, spec):
     return runfiles.requested_size(read_json(wf, "workflow") if os.path.isfile(wf) else None, spec)
 
 
+def rendered_params(run_dir, spec):
+    """(params, source) of the params render used (runfiles.rendered_params of the run's workflow.json): spec.json
+    params with each template param read back from workflow.json, so a render --param shows; source names
+    workflow.json, or spec.json before the first render. These are the params a review is shown and bound to."""
+    wf_path = os.path.join(run_dir, "workflow.json")
+    return runfiles.rendered_params(read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None, spec)
+
+
+def review_requirements_sha256(run_dir, spec, phase, params=None):
+    """requirements_sha256 a review of phase is bound to: over the rendered params (what the review prompt shows;
+    params, else rendered_params of the run), so a render --param that changes a param after a review makes it stale;
+    the image phase also hashes the generation inputs."""
+    bound = dict(spec, params=rendered_params(run_dir, spec)[0] if params is None else params)
+    return runfiles.requirements_sha256(bound, generation_inputs(run_dir, spec) if phase == "image" else None)
+
+
 def workflow_model(run_dir, spec):
     wf = os.path.join(run_dir, "workflow.json")
     if os.path.isfile(wf):
@@ -435,8 +451,13 @@ def review_rubric(spec, phase):
     return rubric
 
 
-def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=(), anchors=()):
+DETERMINISTIC = "size, alpha, corners, tileable, blank"
+
+
+def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=(), anchors=(), params=None):
+    """params: (values, source) of rendered_params; spec.json params when None."""
     p, s = spec["purpose"], spec["style"]
+    values, source = params if params is not None else (spec.get("params", {}), "spec.json")
     rubric = review_rubric(spec, phase)
     forbidden = s["data"].get("forbidden") if isinstance(s["data"].get("forbidden"), list) else []
     lines = [
@@ -452,7 +473,7 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
         "Style shape language: %s" % (stylelock.hint_text(s["data"].get("shape_language")) or "none"),
         "Hints (the purpose wins for technical constraints): %s" % ("; ".join(
             "%s: %s" % (k, h["text"]) for k, h in sorted(effective_hints(spec).items())) or "none"),
-        "Requested params: %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(spec.get("params", {}).items())),
+        "Requested params (%s): %s" % (source, ", ".join("%s=%s" % (k, v) for k, v in sorted(values.items()))),
     ]
     guide = p["data"].get("prompt", {})
     if phase == "prompt":
@@ -471,8 +492,13 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
                   "against it" % (a, pick.get("anchor_id"), pick.get("strength"), ", ".join(pick.get("dimensions") or []) or "-",
                                   ((spec.get("style_lock") or {}).get("style") or {}).get("style_id")) for a, pick in anchors]
         if qa_report:
-            lines += ["Deterministic QA: %s (%s)" % (qa_report.get("state"), "; ".join(
+            lines += ["Deterministic QA: %s (%s); context only, qa.json is graded separately" % (qa_report.get("state"), "; ".join(
                 "%s %s %s" % (r["state"], r["output"], r["check"]) for r in qa_report.get("results", []) if r["state"] != "PASS") or "all checks PASS")]
+        else:
+            lines += ["Deterministic QA: NOT_RUN; it is graded separately (qa.json)"]
+        lines += ["Deterministic checks (%s) belong to QA only: do not re-grade them. The pixel sizes and the QA verdict "
+                  "above are context; never fail a rubric item, or report a finding, for a size or another deterministic "
+                  "check unless that rubric item asks for it. Grade each rubric item only on what it asks." % DETERMINISTIC]
     bound = ", ".join("%s: %s" % (json.dumps(k), json.dumps(v, sort_keys=True)) for k, v in sorted(binding.items()))
     lines += ["", "Answer with exactly one JSON object and nothing else:",
               '{"state": "PASS" or "FAIL", "findings": [{"rubric": <item number>, "severity": "blocker|major|minor", '
@@ -562,7 +588,7 @@ def review_cmd(run_dir, phase, codex, write=True):
     qa_report = read_json(qa_path, "qa") if phase == "image" and os.path.isfile(qa_path) else None
     rel = [os.path.relpath(i, run_dir).replace(os.sep, "/") for i in images]
     binding = {"prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-               "requirements_sha256": runfiles.requirements_sha256(spec, generation_inputs(run_dir, spec) if phase == "image" else None)}
+               "requirements_sha256": review_requirements_sha256(run_dir, spec, phase)}
     if phase == "image":
         binding["outputs"] = [{"path": r, "sha256": qa.sha256(i)} for r, i in zip(rel, images)]
     sizes, tiles = [], []
@@ -578,7 +604,8 @@ def review_cmd(run_dir, phase, codex, write=True):
     if phase == "image" and isinstance(lock, dict):
         binding["style"] = lock.get("style")
         binding["anchors"] = [{"anchor_id": pick.get("anchor_id"), "sha256": pick.get("sha256")} for _, pick in anchors]
-    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding, sizes, tiles, anchors)
+    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding, sizes, tiles, anchors,
+                               rendered_params(run_dir, spec))
     verdict = os.path.join(run_dir, REVIEW_FILES[phase]).replace(os.sep, "/")
     argv = [codex, "exec", "--sandbox", "read-only", "-C", run_dir.replace(os.sep, "/")]
     for i in images + [os.path.join(run_dir, *t.split("/")) for t, _ in tiles + anchors]:
@@ -716,7 +743,7 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
         "spec": {
             "run_id": name, "purpose": ref(spec["purpose"]), "style": ref(spec["style"]), "template": ref(spec["template"]),
             "handoff_domain": spec["purpose"]["data"].get("handoff_domain"),
-            "params": spec.get("params", {}),
+            "params": rendered_params(run_dir, spec)[0],
             "prompt": prompt, "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "prompt_author": prompt_author,
             "prompt_review": runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt"),
@@ -924,6 +951,69 @@ def drift_text(report):
 
 # -- CLI -------------------------------------------------------------------------------------------------------
 
+def git_toplevel():
+    """The top level of the git repository of the current directory, or None."""
+    try:
+        res = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = res.stdout.strip() if res.returncode == 0 else ""
+    return top or None
+
+
+def resolve_run(value, authoring):
+    """--run: an existing directory as is, else a run id under <authoring>/assetgen/runs/ (--authoring, else the
+    current git repository's top level). Exits 2 naming the tried paths when neither exists."""
+    if os.path.isdir(value):
+        return value
+    tried = [value]
+    if RUN_ID.match(value):
+        root = authoring or git_toplevel()
+        if root:
+            candidate = os.path.join(root, "assetgen", "runs", value)
+            if os.path.isdir(candidate):
+                return candidate
+            tried.append(candidate)
+        else:
+            tried.append("<authoring>/assetgen/runs/%s (no --authoring and the current directory is not in a git "
+                         "repository)" % value)
+    fail("--run %s: no run directory at %s (pass a run directory, or a run id <slug>-NNN with --authoring DIR or from "
+         "inside the authoring repository)" % (value, " or ".join(t.replace(os.sep, "/") for t in tried)), 2)
+
+
+def resolve_text(spec, verbose):
+    """resolve's text output: a short summary; verbose adds the source of every param, hint and field."""
+    head = ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(
+        x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
+    if verbose:
+        return "\n".join(head
+                         + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
+                         + ["hint %s = %s  [%s%s]" % (k, h["text"], h["source"], "; style hint overridden by the purpose" if "overrides" in h else "")
+                            for k, h in sorted(spec["hints"].items())]
+                         + style_lock_lines(spec["style_lock"])
+                         + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())])
+    lock = spec["style_lock"]
+    lines = head + ["params: " + (", ".join("%s=%s" % (k, v) for k, v in sorted(spec["params"].items())) or "none"),
+                    "hints: " + (", ".join("%s (%s%s)" % (k, h.get("from") or "-", ", overrides the style" if "overrides" in h else "")
+                                           for k, h in sorted(spec["hints"].items())) or "none"),
+                    style_lock_lines(lock)[0]]
+    lines.append("references: " + (", ".join(r["anchor_id"] for r in lock["references"]) or "none")
+                 + " (max %d)" % lock["max_references"])
+    lines.append("rejections: " + (", ".join("%s (%s %s)" % (r["id"], r["type"], r["reason"]) for r in lock["rejections"]) or "none"))
+    warnings = []
+    if lock["override"]:
+        warnings.append("style override: " + lock["override"])
+    if spec.get("authoring") and not lock["project"]:
+        warnings.append("no assetgen/project.json: the style is not locked by a project")
+    if "filename_prefix" in spec["params"] and not str(spec["param_sources"].get("filename_prefix", "")).startswith("run id "):
+        warnings.append("filename_prefix %s is not bound to a run: resolve --out <authoring>/assetgen/runs/<run-id>/spec.json"
+                        % spec["params"]["filename_prefix"])
+    lines += ["warning: " + w for w in warnings]
+    lines.append("(sources of every param, hint and field: --verbose or --json)")
+    return "\n".join(lines)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="assetgen.py", description="asset-gen engine (see module docstring)", allow_abbrev=False)
     subs = ap.add_subparsers(dest="cmd", required=True)
@@ -934,30 +1024,42 @@ def main(argv=None):
     c = sp("show"); c.add_argument("id"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
     c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
     c.add_argument("--family"); c.add_argument("--style-override", metavar="REASON")
-    c.add_argument("--authoring"); c.add_argument("--out"); c.add_argument("--json", action="store_true")
-    c = sp("render"); c.add_argument("--run"); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
+    c.add_argument("--authoring"); c.add_argument("--out")
+    c.add_argument("--verbose", action="store_true", help="also print the source of every param, hint and field")
+    c.add_argument("--json", action="store_true")
+    run_help = ("run directory, or run id <slug>-NNN resolved under <authoring>/assetgen/runs/ (--authoring, else the "
+                "current git repository)")
+    auth_help = "authoring repo a --run id resolves in (default: the current git repository)"
+
+    def run_arg(c, required=True):
+        c.add_argument("--run", required=required, metavar="RUN", help=run_help)
+        c.add_argument("--authoring", help=auth_help)
+    c = sp("render"); run_arg(c, False); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
     c.add_argument("--param", action="append", default=[])
     c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
-    c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); c.add_argument("--run", required=True)
+    c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); run_arg(c)
     c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
-    c = sp("embed"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
-    c = sp("publish"); c.add_argument("--run", required=True); c.add_argument("--comfy-url", required=True)
+    c = sp("embed"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
-    c = sp("qa"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
-    c = sp("promote-anchor"); c.add_argument("--run", required=True); c.add_argument("--output", required=True)
+    c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("promote-anchor"); run_arg(c); c.add_argument("--output", required=True)
     c.add_argument("--family", required=True); c.add_argument("--dimensions", required=True)
     c.add_argument("--strength", required=True, choices=list(stylelock.STRENGTHS)); c.add_argument("--id"); c.add_argument("--json", action="store_true")
     c = sp("reject"); c.add_argument("--type", required=True, choices=list(stylelock.REJECTION_TYPES), dest="kind")
     c.add_argument("--reason", required=True, choices=list(stylelock.REASONS)); c.add_argument("--text"); c.add_argument("--family")
-    c.add_argument("--run"); c.add_argument("--output"); c.add_argument("--style"); c.add_argument("--authoring")
+    c.add_argument("--run", metavar="RUN", help=run_help); c.add_argument("--output"); c.add_argument("--style")
+    c.add_argument("--authoring", help="authoring repo (direction rejections; a --run id resolves in it)")
     c.add_argument("--any-version", action="store_true"); c.add_argument("--id"); c.add_argument("--json", action="store_true")
     c = sp("drift"); c.add_argument("--authoring", required=True); c.add_argument("--json", action="store_true")
-    c = sp("manifest"); c.add_argument("--run", required=True); c.add_argument("--title")
+    c = sp("manifest"); run_arg(c); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     authoring = getattr(a, "authoring", None)
     if authoring and not os.path.isdir(authoring):
         fail("--authoring %s is not a directory" % authoring, 2)
+    if getattr(a, "run", None):
+        a.run = resolve_run(a.run, authoring)
     try:
         if a.cmd == "list":
             items = layers.entries(a.kind, authoring)
@@ -977,13 +1079,7 @@ def main(argv=None):
                 spec = bind_run(spec, os.path.basename(run_dir))
             if a.out:
                 write_json(a.out, spec)
-            emit(spec, a.json, "\n".join(
-                ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
-                + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
-                + ["hint %s = %s  [%s%s]" % (k, h["text"], h["source"], "; style hint overridden by the purpose" if "overrides" in h else "")
-                   for k, h in sorted(spec["hints"].items())]
-                + style_lock_lines(spec["style_lock"])
-                + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())]))
+            emit(spec, a.json, resolve_text(spec, a.verbose))
             return 0
         if a.cmd == "render":
             if a.run:
@@ -995,8 +1091,10 @@ def main(argv=None):
                 fail("render needs --run DIR or --spec, --prompt-file and --out", 2)
             run_id = os.path.basename(os.path.normpath(a.run)) if a.run else None
             prompt, spec = read_prompt(prompt_path), load_spec(spec_path)
-            state, reviewer = prompt_review_state(a.run, spec, prompt) if a.run else ("NOT_RUN", "codex")
-            workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
+            workflow, errors = render(spec, prompt, a.param, run_id)
+            if not errors and a.run:  # the title states the review against the params this workflow renders
+                state, reviewer = prompt_review_state(a.run, spec, prompt, runfiles.rendered_params(workflow, spec)[0])
+                workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
             if not errors and a.run:
                 errors = copy_anchors(a.run, spec)
             ui = None

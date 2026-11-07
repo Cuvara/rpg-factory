@@ -50,8 +50,9 @@
  ],
  "qa": {
   "size": {
-   "mode": "min",
-   "expect": "1024x1024"
+   "mode": "area",
+   "min_side": 768,
+   "min_pixels": 1000000
   },
   "alpha": "any",
   "not_blank": {
