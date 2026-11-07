@@ -28,7 +28,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   workflow.json       render: ComfyUI API-format graph {"<id>": {"class_type", "inputs"}}, links [node_id, index];
                       runnable as is by comfy-mcp run_workflow. The prompt is the value of a PrimitiveStringMultiline
                       node titled "Prompt (Claude, Codex review <state>)" (state of review-prompt.json for this
-                      prompt: PASS, FAIL, STALE, INVALID or NOT_RUN) linked into NineRouterImage.user_prompt.
+                      prompt and spec: PASS, FAIL, STALE when its prompt_sha256 or requirements_sha256 differs,
+                      INVALID or NOT_RUN; a verdict by another reviewer reads "review <by> <state>", its PASS as
+                      WARN, e.g. "review SAME_MODEL:claude WARN") linked into NineRouterImage.user_prompt.
                       render --run refuses a spec.json whose filename_prefix is not assetgen/<run-id> and a
                       --param filename_prefix
   workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
@@ -179,18 +181,38 @@ def bind_run(spec, run_id):
     return spec
 
 
-def prompt_review_state(run_dir, prompt):
-    """State of review-prompt.json for this prompt: PASS/FAIL when bound to it, STALE when bound to another prompt."""
+def prompt_review_state(run_dir, spec, prompt):
+    """(state, by) of review-prompt.json for this prompt and spec: PASS/FAIL when bound to both (prompt_sha256 and
+    requirements_sha256, as review-cmd --phase prompt hands them out), STALE when either differs or is missing; a PASS
+    by a reviewer that is not Codex (a SAME_MODEL fallback) is WARN, as the quality plugin grades it. by is "codex"
+    while no verdict exists (the title names the reviewer the run expects)."""
     v = runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt")
-    if v["state"] in ("PASS", "FAIL") and v["prompt_sha256"] != hashlib.sha256(prompt.encode("utf-8")).hexdigest():
-        return "STALE"
-    return v["state"]
+    if v["state"] not in ("PASS", "FAIL"):
+        return v["state"], "codex"
+    if (v["prompt_sha256"] != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            or v["requirements_sha256"] != runfiles.requirements_sha256(spec, None)):
+        return "STALE", v["by"]
+    if v["state"] == "PASS" and not is_codex(v["by"]):
+        return "WARN", v["by"]
+    return v["state"], v["by"]
 
 
-def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN"):
+def is_codex(by):
+    return re.split(r"[-_/.:@ ]", str(by or "").strip().lower(), maxsplit=1)[0] == "codex"
+
+
+def review_title(title, state, by):
+    """A node title with <state> filled; a verdict by another reviewer than Codex (or by none) never reads "Codex review"."""
+    if not is_codex(by):
+        title = title.replace("Codex review <state>", "review %s <state>" % (by or "without reviewer"))
+    return title.replace("<state>", state)
+
+
+def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewer="codex"):
     """(workflow, errors). Strict: undeclared params, missing required params and leftover placeholders are errors.
     run_id (render --run): spec.json must carry filename_prefix assetgen/<run_id> (bind_run) and --param may not
-    change it. review_state replaces <state> in node titles (the prompt node's title)."""
+    change it. review_state replaces <state> in node titles (the prompt node's title); reviewer (the verdict's by)
+    replaces "Codex review" there when it is not Codex (review_title)."""
     tmpl = spec["template"]["data"]
     declared = tmpl.get("params", {})
     values, errors = dict(spec.get("params", {})), []
@@ -223,7 +245,7 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN"):
     for node in workflow.values():
         meta = node.get("_meta") if isinstance(node, dict) else None
         if isinstance(meta, dict) and isinstance(meta.get("title"), str):
-            meta["title"] = meta["title"].replace("<state>", review_state)
+            meta["title"] = review_title(meta["title"], review_state, reviewer)
     e, _ = lint.check_graph(workflow, None)
     return workflow, e
 
@@ -594,9 +616,9 @@ def main(argv=None):
             else:
                 fail("render needs --run DIR or --spec, --prompt-file and --out", 2)
             run_id = os.path.basename(os.path.normpath(a.run)) if a.run else None
-            prompt = read_prompt(prompt_path)
-            state = prompt_review_state(a.run, prompt) if a.run else "NOT_RUN"
-            workflow, errors = render(load_spec(spec_path), prompt, a.param, run_id, state)
+            prompt, spec = read_prompt(prompt_path), load_spec(spec_path)
+            state, reviewer = prompt_review_state(a.run, spec, prompt) if a.run else ("NOT_RUN", "codex")
+            workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
             ui = None
             if not errors:
                 try:

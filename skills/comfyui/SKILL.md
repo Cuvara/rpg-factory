@@ -51,7 +51,9 @@ lead's workflow asks for in a run directory or the game layer.
   review binds) and `<run>/workflow.ui.json` (ComfyUI frontend / LiteGraph format: node positions and sizes, titles,
   links, `widgets_values` in input order, the run id in `extra`), which converts back to the same API graph. The
   prompt is a `PrimitiveStringMultiline` node ("Text (Multiline)", input `value`) titled
-  `Prompt (Claude, Codex review <state>)`, linked into `NineRouterImage.user_prompt`.
+  `Prompt (Claude, Codex review <state>)`, linked into `NineRouterImage.user_prompt` (`render --run` fills the state
+  of `review-prompt.json`: `STALE` when its prompt or requirements hash no longer matches, and a non-Codex reviewer
+  replaces `Codex review`, e.g. `review SAME_MODEL:claude WARN`).
 - **Image node:** the core templates use the 9router custom node `NineRouterImage` (`user_prompt`, `model`, `size`,
   `quality`, `background`, optional `reference_images`) into `SaveImage`; `NineRouterChat` is the text node. Their
   inputs are snapshotted in `scripts/assetgen/data/known-nodes.json` for offline lint.

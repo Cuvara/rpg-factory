@@ -58,7 +58,8 @@ and run directories `assetgen/runs/<run-id>/`. Core purposes, styles and templat
    one comfy-mcp runs; strict: an undeclared or missing param is an error) and `<run>/workflow.ui.json` (the same
    graph laid out for the ComfyUI frontend, run id in `extra`). The prompt enters the graph through a
    `PrimitiveStringMultiline` node titled `Prompt (Claude, Codex review <state>)`, so a person opening the workflow
-   sees it. For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
+   sees it: `PASS`/`FAIL` only while `review-prompt.json` binds this prompt and spec (`STALE` once either changed);
+   a verdict by another reviewer names it, its `PASS` as `WARN` (`review SAME_MODEL:claude WARN`). For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
    upload it first (step 6) and pass `--param reference_image=<name it returned>`.
 6. **Generate** (spends image credits: only when the task asks for generation). comfy-mcp: `server_info` (ComfyUI
    up, the image node present; when it shows the `comfyui_9router` node pack outdated, name its version in the

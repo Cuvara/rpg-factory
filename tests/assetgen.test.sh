@@ -212,6 +212,25 @@ AG render --run "$td" >/dev/null && t1=$(jq -r '.["3"]._meta.title' "$td/workflo
 echo "Another prompt." > "$td/prompt.md"; AG render --run "$td" >/dev/null && t2=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
 [ "$t1|$t2" = "Prompt (Claude, Codex review PASS)|Prompt (Claude, Codex review STALE)" ] \
   && ok "prompt node title: Codex review PASS, STALE once the prompt changed" || no "prompt node title: $t1|$t2"
+# requirements changed, prompt kept: the verdict no longer binds the spec (STALE, never PASS)
+bound "$td" prompt PASS codex > "$td/review-prompt.json"
+jq '.params.quality = "low"' "$td/spec.json" > "$TMP/spec.json" && cp "$TMP/spec.json" "$td/spec.json"
+AG render --run "$td" >/dev/null && t3=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+[ "$t3" = "Prompt (Claude, Codex review STALE)" ] \
+  && ok "prompt node title: STALE when the requirements changed and the prompt did not" || no "prompt node title after requirements change: $t3"
+# a verdict without a requirements binding is not bound to this spec either
+bound "$td" prompt PASS codex | jq -c 'del(.requirements_sha256)' > "$td/review-prompt.json"
+AG render --run "$td" >/dev/null && t4=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+[ "$t4" = "Prompt (Claude, Codex review STALE)" ] && ok "prompt node title: STALE without requirements_sha256" || no "unbound requirements title: $t4"
+# a fallback or other reviewer never reads "Codex review PASS": SAME_MODEL PASS is WARN, other FAIL keeps its reviewer
+for c in "SAME_MODEL:claude PASS|Prompt (Claude, review SAME_MODEL:claude WARN)" "claude-sonnet FAIL|Prompt (Claude, review claude-sonnet FAIL)" \
+         "gpt-5 PASS|Prompt (Claude, review gpt-5 WARN)" "codex-mini PASS|Prompt (Claude, Codex review PASS)" " PASS|Prompt (Claude, review without reviewer WARN)"; do
+  by=${c%% *}; rest=${c#* }; st=${rest%%|*}; want=${c#*|}
+  if [ -z "$by" ]; then bound "$td" prompt PASS x | jq -c 'del(.by)' > "$td/review-prompt.json"; else bound "$td" prompt "$st" "$by" > "$td/review-prompt.json"; fi
+  AG render --run "$td" >/dev/null && t=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+  ul=$(jq -r '[.nodes[] | select(.type == "PrimitiveStringMultiline") | .title][0]' "$td/workflow.ui.json")
+  [ "$t|$ul" = "$want|$want" ] && ok "prompt node title for by=${by:-none} $st: $want" || no "prompt node title by=${by:-none}: $t|$ul (want $want)"
+done
 # the image review binding covers the prompt node: another prompt value is another requirements hash
 jq '.["3"].inputs.value = "changed"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/changed-wf.json"
 python3 -B - "$ROOT" "$RUNS/golden-icon-001/spec.json" "$RUNS/golden-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
