@@ -10,6 +10,8 @@ docs/schemas/pipeline-plan.schema.json.
   tier --plan <plan.json> --repo KEY --paths FILE... [--json]
         the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
         from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts.
+  agents <plan.json> [--down AGENT [--reason TEXT] | --up AGENT] [--json]
+        per-run MODEL_UNAVAILABLE marks in <state dir>/pipeline/<plan id>/agents.json, then the availability table.
   validate <plan.json> [--json]
         disjoint path ownership, dependency cycles, waves, the no-worktree rule (Unity projects: tasks one
         after another in the main checkout, never two in one wave), cross-model review pairing, and shared
@@ -1127,7 +1129,7 @@ def cmd_dispatch(a, reg):
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan)
         # an ad hoc --paths session of its own model (no subtask id) is a slice: the task's record keeps its implementer
-        if sub or not (a.paths and a.agent):
+        if a.runner != "print" and (sub or not (a.paths and a.agent)):
             pr.record(plan, task["id"], sid, "implementer",
                       {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
                        "timestamp": now_utc()})
@@ -1173,10 +1175,11 @@ def cmd_dispatch(a, reg):
     full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     sha = full if rc == 0 and full else a.sha
     # what verdict reads: a fallback is stamped only for this reviewer on this candidate, never from availability later
-    pr.record(plan, task["id"], sid, "reviewer",
-              {"agent": started, "sha": sha, "implementer": sub_impl,
-               "fallback": pr.paired(pipe, sub or task, sub_impl) if fallback and started == agent else None,
-               "timestamp": now_utc()}, sha)
+    if a.runner != "print":
+        pr.record(plan, task["id"], sid, "reviewer",
+                  {"agent": started, "sha": sha, "implementer": sub_impl,
+                   "fallback": pr.paired(pipe, sub or task, sub_impl) if fallback and started == agent else None,
+                   "timestamp": now_utc()}, sha)
     child_note(place)
     return 0
 
@@ -1280,9 +1283,21 @@ def subtask_failures(plan, reg, task_id, target):
                 or not n.startswith(f"{pre}{safe_name(rec['subtask'])}__")):
             continue
         modern = f"{pres[0]}{safe_name(rec['subtask'])}__{rec['phase']}"
-        if pre == pres[1] and any(x == modern + ".json" or x.startswith(modern + "__") for x in names):
-            continue
         fp = fp or scope_fingerprint(plan, reg, task_id)
+        if pre == pres[1]:
+            archive = re.compile(re.escape(modern) + r"__[0-9a-f]{12}__[^/]+\.json$")
+            superseded = False
+            for name in names:
+                if name != modern + ".json" and not archive.fullmatch(name):
+                    continue
+                newer = fstate.read_json(os.path.join(vdir, name))
+                if (isinstance(newer, dict) and newer.get("fingerprint") == fp
+                        and newer.get("task") == task_id and newer.get("subtask") == rec["subtask"]
+                        and newer.get("phase") == rec["phase"]):
+                    superseded = True
+                    break
+            if superseded:
+                continue
         if rec.get("fingerprint") != fp:
             continue
         current = n == f"{pre}{safe_name(rec['subtask'])}__{rec['phase']}.json"
@@ -1993,7 +2008,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
             row["phase"] = "candidate"
         elif info["worktrees"] or ((start is not None or not base) and row["worktree"]
                                    and git(row["worktree"], "status", "--porcelain", "--", *specs(paths))[0]):
-            # a no-worktree task before its serial predecessor's verdict has not started: uncommitted work in the
+            # a no-worktree task before its serial predecessor's QA PASS has not started: uncommitted work in the
             # paths they share is the predecessor's
             row["phase"] = "implementing"
     elif (rv or rv_stale) and topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *specs(paths))[0] not in (None, "", "0"):
@@ -2282,7 +2297,7 @@ def main():
     change = ag.add_mutually_exclusive_group()
     change.add_argument("--down")
     change.add_argument("--up")
-    ag.add_argument("--reason", default="MODEL_UNAVAILABLE")
+    ag.add_argument("--reason", default="")
     ag.add_argument("--json", action="store_true")
     st = sub.add_parser("status")
     st.add_argument("plan")
