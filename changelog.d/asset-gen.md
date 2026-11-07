@@ -134,7 +134,10 @@
   output fails each.
 - **Review prompt params.** The requested params in the review prompts and `run.md` `spec.params` come from the
   rendered workflow, so a `render --param` value is the one the reviewer and the record see, never the `spec.json`
-  value it replaced.
+  value it replaced. Each review is bound to exactly those params: a `render --param` that changes a param after a
+  review makes it stale (render title, `review-cmd` and the quality check agree; the same params again keep it
+  bound), and the quality check FAILs a `run.md` `spec.params` that differs from the rendered params instead of
+  substituting `spec.json`.
 - **Size double-counted in the image review.** The image review prompt states QA's verdict as context and tells the
   reviewer not to grade size or the other deterministic checks again; they belong to QA only.
 - **`filename_prefix`.** `spec.json`, the review prompts and `run.md` record the same `assetgen/<run-id>` prefix that

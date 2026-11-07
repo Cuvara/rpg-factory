@@ -1109,6 +1109,12 @@ variant qp-rejbind-001; jq '.style_lock.rejections += [{"id": "r-late", "type": 
 variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
 variant qp-rqual-001; rebase qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
+# a review is bound to the params it was shown (the rendered ones): the same --param again keeps it bound
+variant qp-rsame-001; rebase qp-rsame-001 --param size=1536x1024; AG render --run "$RUNS/qp-rsame-001" --param size=1536x1024 >/dev/null
+AG manifest --run "$RUNS/qp-rsame-001" >/dev/null
+# run.md spec.params tampered after manifest: never replaced by spec.json, compared with the rendered params
+variant qp-tsize-001; fmset "$RUNS/qp-tsize-001" 'obj["spec"]["params"]["size"] = "1x1"'
+variant qp-tmodel-001; fmset "$RUNS/qp-tmodel-001" 'obj["spec"]["params"]["model"] = "invented-model"; obj["spec"]["params"]["background"] = "invented-background"'
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # image-edit: the reference image is bound by name and content (references/<name> in the run directory)
 edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterly --authoring "$AUTH"
@@ -1218,8 +1224,26 @@ case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "rend
 case_ qp-rejbind-001 gen-run-prompt-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the prompt review: FAIL (rejections are bound)"
 case_ qp-rejbind-001 gen-run-image-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the image review: FAIL"
 rs="$RUNS/qp-rsize-001"; rs_params=$(sed -n '/^---json$/,/^---$/p' "$rs/run.md" | sed '1d;$d' | jq -r .spec.params.size)
-[ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && [ "$rs_params" = 1536x1024 ] && [ "$(jq -r .params.size "$rs/spec.json")" != 1536x1024 ]   && ok "render --param size leaves the prompt review bound (the binding hashes spec.json params; run.md spec.params records the rendered 1536x1024)" \
-  || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
+case_ qp-rsize-001 gen-run-prompt-review FAIL 'bound to other requirements' "render --param size after the prompt review: FAIL (the review is bound to the params it was shown)"
+case_ qp-rqual-001 gen-run-prompt-review FAIL 'bound to other requirements' "render --param quality=low after the prompt review: FAIL"
+[ "$rs_params" = 1536x1024 ] && [ "$(jq -r .params.size "$rs/spec.json")" != 1536x1024 ] && [ "$(st AGEN-qp-rsize-001 gen-run-provenance)" = PASS ] \
+  && ok "run.md spec.params records the rendered size 1536x1024 (spec.json keeps its own), provenance PASS" \
+  || no "rsize params: $rs_params, provenance $(st AGEN-qp-rsize-001 gen-run-provenance)" "$(why AGEN-qp-rsize-001 gen-run-provenance)"
+ptitle() { jq -r '[.[] | select(.class_type == "PrimitiveStringMultiline") | ._meta.title] | join(",")' "$1/workflow.json"; }
+rcb() { AG review-cmd --phase prompt --run "$1" --no-write --json | jq -r .binding.requirements_sha256; }
+[ "$(ptitle "$rs")" = "Prompt (Claude, Codex review STALE)" ] && [ "$(rcb "$rs")" != "$(jq -r .requirements_sha256 "$rs/review-prompt.json")" ] \
+  && ok "render --param size after the prompt review: render title STALE and review-cmd hands out another binding, as the plugin grades" \
+  || no "rsize consistency: title $(ptitle "$rs"), review-cmd $(rcb "$rs"), verdict $(jq -r .requirements_sha256 "$rs/review-prompt.json")"
+rq="$RUNS/qp-rsame-001"
+[ "$(st AGEN-qp-rsame-001 gen-run-prompt-review)/$(st AGEN-qp-rsame-001 gen-run-image-review)/$(st AGEN-qp-rsame-001 gen-run-provenance)" = PASS/PASS/PASS ] \
+  && [ "$(ptitle "$rq")" = "Prompt (Claude, Codex review PASS)" ] && [ "$(rcb "$rq")" = "$(jq -r .requirements_sha256 "$rq/review-prompt.json")" ] \
+  && ok "render repeating the reviewed --param size: reviews stay bound (plugin PASS, render title PASS, review-cmd binding equal)" \
+  || no "rsame: $(st AGEN-qp-rsame-001 gen-run-prompt-review)/$(st AGEN-qp-rsame-001 gen-run-image-review)/$(st AGEN-qp-rsame-001 gen-run-provenance), title $(ptitle "$rq")" "$(why AGEN-qp-rsame-001 gen-run-prompt-review)"
+case_ qp-tsize-001 gen-run-provenance FAIL 'spec.params differ from the rendered params (workflow.json over spec.json) in size' "run.md spec.params size tampered to 1x1: FAIL (never substituted from spec.json)"
+case_ qp-tmodel-001 gen-run-provenance FAIL 'in background, model' "run.md spec.params with an invented model and background: FAIL"
+[ "$(st AGEN-qp-tsize-001 gen-run-prompt-review)/$(st AGEN-qp-tsize-001 gen-run-image-review)" = PASS/PASS ] \
+  && ok "tampered run.md params: the reviews stay bound to the rendered params they were shown; only provenance FAILs" \
+  || no "tsize reviews: $(st AGEN-qp-tsize-001 gen-run-prompt-review)/$(st AGEN-qp-tsize-001 gen-run-image-review)"
 got=$(for c in $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-edit-001 "$c")"; done)
 [ "$got" = "$(for c in $plugin_checks; do printf '%s=PASS ' "$c"; done)" ] && ok "image-edit run with its reference kept in references/: every plugin check PASS"   || no "image-edit good run: $got" "$(jq -c '.results[] | select(.artifact == "AGEN-qp-edit-001" and .state != "PASS")' "$TMP/aq.json")"
 case_ qp-eswap-001 gen-run-image-review FAIL 'bound to other requirements' "image-edit re-rendered with another reference after the image review: FAIL"

@@ -30,7 +30,7 @@ layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (sa
 game wins) core ids. resolve --verbose prints the merged spec with the source file of every field and each param.
 Param precedence, low to high: template default < style params < purpose params < render --param. The review prompts
 list the params render used (rendered_params: read back from workflow.json, so a render --param shows; spec.json
-params before the first render).
+params before the first render), and each review is bound to exactly those params.
 Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
 style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
 
@@ -70,7 +70,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
-                      style and template content hashes and the resolved params
+                      style and template content hashes and the rendered params the review prompt shows
+                      (rendered_params: workflow.json after render, spec.json before), so a render --param that
+                      changes a param after the review makes it STALE (the same params again keep it bound)
   review/tile-2x2.png review-cmd image, purposes with a tileable QA check: the output repeated 2x2 (seam preview,
                       passed with -i after the outputs; tile-2x2-<stem>.png per output when there are several).
                       Derived from the output pixels, never an output and never in the binding
@@ -217,22 +219,7 @@ def style_lock_lines(lock):
 
 # -- render ----------------------------------------------------------------------------------------------------
 
-def typed(name, decl, value):
-    """value coerced to the param type; raises ValueError naming the param."""
-    t = decl.get("type")
-    if t == "int" and not isinstance(value, int):
-        value = int(value)
-    elif t == "number" and not isinstance(value, (int, float)):
-        value = float(value)
-    elif t == "bool" and not isinstance(value, bool):
-        if str(value).lower() not in ("true", "false"):
-            raise ValueError("param %s: expected true or false, got %r" % (name, value))
-        value = str(value).lower() == "true"
-    elif t in ("string", "enum"):
-        value = str(value)
-    if t == "enum" and value not in decl.get("options", []):
-        raise ValueError("param %s: %r is not one of %s" % (name, value, decl.get("options")))
-    return value
+typed = runfiles.typed_param  # value coerced to the param type; raises ValueError naming the param
 
 
 def fill(node, values):
@@ -256,16 +243,17 @@ def bind_run(spec, run_id):
     return spec
 
 
-def prompt_review_state(run_dir, spec, prompt):
+def prompt_review_state(run_dir, spec, prompt, params=None):
     """(state, by) of review-prompt.json for this prompt and spec: PASS/FAIL when bound to both (prompt_sha256 and
     requirements_sha256, as review-cmd --phase prompt hands them out), STALE when either differs or is missing; a PASS
     by a reviewer that is not Codex (a SAME_MODEL fallback) is WARN, as the quality plugin grades it. by is "codex"
-    while no verdict exists (the title names the reviewer the run expects)."""
+    while no verdict exists (the title names the reviewer the run expects). params: the rendered params the binding is
+    checked against (render passes those of the workflow it is about to write); rendered_params of the run when None."""
     v = runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt")
     if v["state"] not in ("PASS", "FAIL"):
         return v["state"], "codex"
     if (v["prompt_sha256"] != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            or v["requirements_sha256"] != runfiles.requirements_sha256(spec, None)):
+            or v["requirements_sha256"] != review_requirements_sha256(run_dir, spec, "prompt", params)):
         return "STALE", v["by"]
     if v["state"] == "PASS" and not is_codex(v["by"]):
         return "WARN", v["by"]
@@ -407,49 +395,19 @@ def requested_size(run_dir, spec):
 
 
 def rendered_params(run_dir, spec):
-    """(params, source) of the params render used: spec.json params with each template param the template workflow
-    places read back from workflow.json (a whole "{{name}}" value as is, a placeholder inside a string by matching the
-    template string), so a render --param shows. source names workflow.json, or spec.json before the first render.
-    The prompt is not a param here."""
-    params = dict(spec.get("params") or {}) if isinstance(spec.get("params"), dict) else {}
+    """(params, source) of the params render used (runfiles.rendered_params of the run's workflow.json): spec.json
+    params with each template param read back from workflow.json, so a render --param shows; source names
+    workflow.json, or spec.json before the first render. These are the params a review is shown and bound to."""
     wf_path = os.path.join(run_dir, "workflow.json")
-    workflow = read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None
-    tmpl = spec.get("template") if isinstance(spec.get("template"), dict) else {}
-    data = tmpl.get("data") if isinstance(tmpl.get("data"), dict) else {}
-    if not isinstance(workflow, dict) or not isinstance(data.get("workflow"), dict):
-        return params, "spec.json"
-    declared = data.get("params") if isinstance(data.get("params"), dict) else {}
-    found = {}
+    return runfiles.rendered_params(read_json(wf_path, "workflow") if os.path.isfile(wf_path) else None, spec)
 
-    def walk(t, r):
-        if isinstance(t, dict) and isinstance(r, dict):
-            for k, v in t.items():
-                if k in r:
-                    walk(v, r[k])
-        elif isinstance(t, list) and isinstance(r, list) and len(t) == len(r):
-            for a, b in zip(t, r):
-                walk(a, b)
-        elif isinstance(t, str):
-            whole = lint.PLACEHOLDER.fullmatch(t.strip())
-            if whole:
-                found.setdefault(whole.group(1), r)
-                return
-            names = lint.PLACEHOLDER.findall(t)
-            if names and isinstance(r, str):
-                pattern = "".join("(.*?)" if i % 2 else re.escape(part)
-                                  for i, part in enumerate(lint.PLACEHOLDER.split(t)))
-                m = re.fullmatch(pattern, r, re.S)
-                for name, value in zip(names, m.groups() if m else ()):
-                    found.setdefault(name, value)
-    walk(data["workflow"], workflow)
-    for name, value in found.items():
-        if name == "prompt" or name not in declared:
-            continue
-        try:
-            params[name] = typed(name, declared[name], value)
-        except (ValueError, TypeError):
-            params[name] = value
-    return params, "workflow.json"
+
+def review_requirements_sha256(run_dir, spec, phase, params=None):
+    """requirements_sha256 a review of phase is bound to: over the rendered params (what the review prompt shows;
+    params, else rendered_params of the run), so a render --param that changes a param after a review makes it stale;
+    the image phase also hashes the generation inputs."""
+    bound = dict(spec, params=rendered_params(run_dir, spec)[0] if params is None else params)
+    return runfiles.requirements_sha256(bound, generation_inputs(run_dir, spec) if phase == "image" else None)
 
 
 def workflow_model(run_dir, spec):
@@ -630,7 +588,7 @@ def review_cmd(run_dir, phase, codex, write=True):
     qa_report = read_json(qa_path, "qa") if phase == "image" and os.path.isfile(qa_path) else None
     rel = [os.path.relpath(i, run_dir).replace(os.sep, "/") for i in images]
     binding = {"prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-               "requirements_sha256": runfiles.requirements_sha256(spec, generation_inputs(run_dir, spec) if phase == "image" else None)}
+               "requirements_sha256": review_requirements_sha256(run_dir, spec, phase)}
     if phase == "image":
         binding["outputs"] = [{"path": r, "sha256": qa.sha256(i)} for r, i in zip(rel, images)]
     sizes, tiles = [], []
@@ -1133,8 +1091,10 @@ def main(argv=None):
                 fail("render needs --run DIR or --spec, --prompt-file and --out", 2)
             run_id = os.path.basename(os.path.normpath(a.run)) if a.run else None
             prompt, spec = read_prompt(prompt_path), load_spec(spec_path)
-            state, reviewer = prompt_review_state(a.run, spec, prompt) if a.run else ("NOT_RUN", "codex")
-            workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
+            workflow, errors = render(spec, prompt, a.param, run_id)
+            if not errors and a.run:  # the title states the review against the params this workflow renders
+                state, reviewer = prompt_review_state(a.run, spec, prompt, runfiles.rendered_params(workflow, spec)[0])
+                workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
             if not errors and a.run:
                 errors = copy_anchors(a.run, spec)
             ui = None

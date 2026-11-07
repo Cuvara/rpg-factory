@@ -54,14 +54,14 @@ Drives the handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`; the receivi
    On `FAIL` fix `prompt.md` and review again, at most 2 fix rounds; still `FAIL` -> report `BLOCKED`, ask the user.
    When `codex` is not OK or the command fails, review it yourself against the same text (`review-cmd --json`, field
    `stdin`) and write the verdict with its `binding` fields and `"by": "SAME_MODEL:claude"` - it grades `WARN`,
-   never `PASS`; say so. A verdict binds the prompt and images it saw (`prompt_sha256`, `outputs`): change either
-   and the review is stale until it runs again.
+   never `PASS`; say so. A verdict binds the prompt, rendered params and images it saw: change any (a `render
+   --param` with another value too) and the review is stale until it runs again.
 5. **Render.** `assetgen.py render --run <run> [--param name=value]` writes `<run>/workflow.json` (API format, the
    one comfy-mcp runs; strict: an undeclared or missing param is an error) and `<run>/workflow.ui.json` (the same
    graph laid out for the ComfyUI frontend, run id in `extra`). The prompt enters the graph through a
    `PrimitiveStringMultiline` node titled `Prompt (Claude, Codex review <state>)`: `PASS`/`FAIL` only while
-   `review-prompt.json` binds this prompt and spec (`STALE` once either changed); another reviewer is named, its
-   `PASS` as `WARN`. For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
+   `review-prompt.json` binds this prompt, spec and the rendered params (`STALE` once any changed); another
+   reviewer is named, its `PASS` as `WARN`. For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
    upload it (step 6), pass `--param reference_image=<name it returned>`. `render --run` copies each selected anchor
    to `<run>/references/anchor-<id>.png` and wires it (`rpg-factory:comfyui`).
 6. **Generate** (spends image credits: only when the task asks for generation). comfy-mcp: `server_info` (ComfyUI

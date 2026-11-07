@@ -12,10 +12,11 @@ read_verdict(path, phase) -> {by, state, findings, prompt_sha256, requirements_s
   them keeps them ({"style": dict or None, "anchors": [...]}), a verdict without them has neither key (older runs keep
   their shape).
 requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sorted keys, compact separators) of
-  {purpose, style, template: their content sha256, params: the resolved params, generation: generation}. generation
-  is None for the prompt review and generation_inputs(workflow, spec) for the image review. Works on spec.json
-  (resolved refs carry sha256) and on run.md's spec block (manifest copies the refs and params); malformed input
-  still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
+  {purpose, style, template: their content sha256, params: spec params, generation: generation}. generation
+  is None for the prompt review and generation_inputs(workflow, spec) for the image review. A review binding passes
+  the spec with the rendered params (rendered_params: what the review prompt shows), so a render --param that changes
+  a param after a review makes it stale. Works on spec.json (resolved refs carry sha256) and on run.md's spec block
+  (manifest copies the refs and the rendered params); malformed input still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
   params or the rendered generation inputs changed is stale. Only when the spec carries style_lock (resolve with the
   style lock) does the object also hold {"style_lock": style_lock_binding(spec)}: the style ref, the family, the anchor
   hashes and the relevant rejections (id and content hash), so a review made before the family or the rejection set
@@ -26,6 +27,10 @@ generation_inputs(workflow, spec, locate=None) -> the effective inputs the image
   path of the run's copy references/<name> (None or a missing file -> null); style-lock anchors are LoadImage inputs
   anchor-<id>.png, so their copies are bound by content. With spec.style_lock it also holds {"anchors": [{anchor_id,
   sha256}]} of the selected references (absent otherwise). Without a workflow: the spec params.
+rendered_params(workflow, spec) -> (params, source): spec.json params with each template param read back from the
+  rendered workflow.json (source "workflow.json"; "spec.json" without a workflow). manifest records them as run.md
+  spec.params, the review prompts show them, and the review bindings and the plugin hash them.
+typed_param(name, decl, value) -> value coerced to its template param type (ValueError naming the param).
 style_lock_binding(spec) -> {"style", "family", "references": [anchor sha256...], "rejections": [{id, sha256}]} of
   spec.style_lock (sha256 of a rejection: canonical JSON of its spec.style_lock entry), or None for a spec without it.
 style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] without it).
@@ -51,6 +56,7 @@ SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
 SIZE_MODES = {"exact", "min", "aspect", "orientation", "area", "any"}
 ORIENTATIONS = {"landscape", "portrait", "square", "auto"}
 ALPHA_MODES = {"required", "forbidden", "any"}
+PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 def required_checks(purpose_qa):
@@ -205,6 +211,68 @@ def style_lock_binding(spec):
     rejections = [{"id": r.get("id"), "sha256": _canonical_sha256(r)} for r in rej if isinstance(r, dict)]         if isinstance(rej, list) else []
     return {"style": lock.get("style"), "family": lock.get("family"),
             "references": [r.get("sha256") for r in style_lock_references(spec)], "rejections": rejections}
+
+
+def typed_param(name, decl, value):
+    """value coerced to the param type of its template declaration; raises ValueError naming the param."""
+    t = decl.get("type")
+    if t == "int" and not isinstance(value, int):
+        value = int(value)
+    elif t == "number" and not isinstance(value, (int, float)):
+        value = float(value)
+    elif t == "bool" and not isinstance(value, bool):
+        if str(value).lower() not in ("true", "false"):
+            raise ValueError("param %s: expected true or false, got %r" % (name, value))
+        value = str(value).lower() == "true"
+    elif t in ("string", "enum"):
+        value = str(value)
+    if t == "enum" and value not in decl.get("options", []):
+        raise ValueError("param %s: %r is not one of %s" % (name, value, decl.get("options")))
+    return value
+
+
+def rendered_params(workflow, spec):
+    """(params, source): the resolved spec params with each template param the template workflow places read back from
+    workflow (a whole "{{name}}" value as is, a placeholder inside a string by matching the template string), so a
+    render --param shows. source is "workflow.json", or "spec.json" without a workflow. The prompt is not a param here."""
+    spec = spec if isinstance(spec, dict) else {}
+    params = dict(spec["params"]) if isinstance(spec.get("params"), dict) else {}
+    tmpl = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = tmpl.get("data") if isinstance(tmpl.get("data"), dict) else {}
+    if not isinstance(workflow, dict) or not isinstance(data.get("workflow"), dict):
+        return params, "spec.json"
+    declared = data.get("params") if isinstance(data.get("params"), dict) else {}
+    found = {}
+
+    def walk(t, r):
+        if isinstance(t, dict) and isinstance(r, dict):
+            for k, v in t.items():
+                if k in r:
+                    walk(v, r[k])
+        elif isinstance(t, list) and isinstance(r, list) and len(t) == len(r):
+            for a, b in zip(t, r):
+                walk(a, b)
+        elif isinstance(t, str):
+            whole = PLACEHOLDER.fullmatch(t.strip())
+            if whole:
+                found.setdefault(whole.group(1), r)
+                return
+            names = PLACEHOLDER.findall(t)
+            if names and isinstance(r, str):
+                pattern = "".join("(.*?)" if i % 2 else re.escape(part)
+                                  for i, part in enumerate(PLACEHOLDER.split(t)))
+                m = re.fullmatch(pattern, r, re.S)
+                for name, value in zip(names, m.groups() if m else ()):
+                    found.setdefault(name, value)
+    walk(data["workflow"], workflow)
+    for name, value in found.items():
+        if name == "prompt" or not isinstance(declared.get(name), dict):
+            continue
+        try:
+            params[name] = typed_param(name, declared[name], value)
+        except (ValueError, TypeError):
+            params[name] = value
+    return params, "workflow.json"
 
 
 def requirements_sha256(spec, generation=None):
