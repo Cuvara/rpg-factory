@@ -14,7 +14,8 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        scripts/assetgen/runfiles.py reads from it (else FAIL: re-run manifest), and its binding must
                        name the current bytes: prompt_sha256 = spec.prompt_sha256, requirements_sha256 =
                        runfiles.requirements_sha256 of the run.md spec (purpose, style and template content hashes,
-                       params; for the image review also the generation inputs of workflow.json) and, for the
+                       the resolved params of spec.json, run.md's spec.params without it; for the image review also
+                       the generation inputs of workflow.json) and, for the
                        image review, outputs = the recorded outputs (review-cmd hands the reviewer these values to copy back). A missing, invalid,
                        unbound or stale review file is missing work.
   gen-run-claude-review
@@ -160,8 +161,12 @@ def check(artifact, ctx):
     except (OSError, ValueError):
         workflow = None
     size = runfiles.requested_size(workflow, spec_json if isinstance(spec_json, dict) else spec)
-    requirements = {"prompt": runfiles.requirements_sha256(spec, None), "image": runfiles.requirements_sha256(
-        spec, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec,
+    # the binding hashes the resolved params of spec.json (what review-cmd hands out); run.md spec.params records the
+    # rendered ones, so a render --param is bound through the workflow.json generation inputs, not twice
+    resolved = spec_json.get("params") if isinstance(spec_json, dict) else None
+    bound = dict(spec, params=resolved) if isinstance(resolved, dict) else spec
+    requirements = {"prompt": runfiles.requirements_sha256(bound, None), "image": runfiles.requirements_sha256(
+        bound, runfiles.generation_inputs(workflow, spec_json if isinstance(spec_json, dict) else spec,
                                     lambda name: resolve("references/" + name)))}
     lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else None
 

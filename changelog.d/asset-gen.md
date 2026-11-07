@@ -129,9 +129,12 @@
   2026-11-08: 1672x941 returned for 1536x1024 and 1024x1024 requests), so `concept-2d` could never pass and
   `promote-anchor` refused good outputs. No core purpose's size QA grades the exact size any more: it grades
   orientation or aspect with a tolerance, a minimum area and a minimum short side that real outputs meet, per purpose
-  in data, with regression tests on the real returned sizes.
-- **Review prompt params.** The requested params in the review prompts come from the rendered workflow, so a
-  `render --param` value is the one the reviewer sees, never the `spec.json` value it replaced.
+  in data, with regression tests on the real returned sizes. Every core purpose has a short side and an area floor
+  (`icon`, `sprite-2d`, `texture-tileable`, `ui-element` and `image-edit` 512 px and 512x512 pixels), so a 256x256
+  output fails each.
+- **Review prompt params.** The requested params in the review prompts and `run.md` `spec.params` come from the
+  rendered workflow, so a `render --param` value is the one the reviewer and the record see, never the `spec.json`
+  value it replaced.
 - **Size double-counted in the image review.** The image review prompt states QA's verdict as context and tells the
   reviewer not to grade size or the other deterministic checks again; they belong to QA only.
 - **`filename_prefix`.** `spec.json`, the review prompts and `run.md` record the same `assetgen/<run-id>` prefix that

@@ -45,7 +45,9 @@
  ],
  "qa": {
   "size": {
-   "mode": "any"
+   "mode": "area",
+   "min_side": 512,
+   "min_pixels": 262144
   },
   "alpha": "any",
   "not_blank": {

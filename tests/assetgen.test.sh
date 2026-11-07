@@ -450,28 +450,30 @@ def disc(w, h, bg):
         inside = (x - w / 2) ** 2 + (y - h / 2) ** 2 < (min(w, h) * 0.3) ** 2
         return (200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if inside else bg
     return f
-save("icon-ok.png", 256, 256, disc(256, 256, (0, 0, 0, 0)))
-save("icon-opaque.png", 256, 256, disc(256, 256, (30, 30, 30, 255)), alpha=False)
+save("icon-ok.png", 512, 512, disc(512, 512, (0, 0, 0, 0)))  # 512x512: the icon, sprite and texture floors
+save("icon-small.png", 256, 256, disc(256, 256, (0, 0, 0, 0)))  # under every core purpose floor
+save("icon-opaque.png", 512, 512, disc(512, 512, (30, 30, 30, 255)), alpha=False)
 save("icon-wide.png", 384, 256, disc(384, 256, (0, 0, 0, 0)))
 save("empty.png", 256, 256, lambda x, y: (0, 0, 0, 0))
 save("flat.png", 256, 256, lambda x, y: (90, 90, 90, 255), alpha=False)
 def wave(x, y):
     v = int(128 + 60 * math.sin(2 * math.pi * x / 256) * math.cos(2 * math.pi * y / 256))
     return (v, v // 2 + 40, 255 - v, 255)
-save("tile-ok.png", 256, 256, wave, alpha=False)
-save("tile-bad.png", 256, 256, lambda x, y: (x, x, 128, 255), alpha=False)
+save("tile-ok.png", 512, 512, wave, alpha=False)
+save("tile-small.png", 256, 256, wave, alpha=False)
+save("tile-bad.png", 512, 512, lambda x, y: (x // 2, x // 2, 128, 255), alpha=False)
 row = bytes(c for x in range(1536) for c in (x % 256, (x // 6) % 256, 100))
 open(os.path.join(out, "big.png"), "wb").write(png.encode_raw(1536, 1024, 8, 2, [row] * 1024))
 for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940),
                    ("svc-wide.png", 1672, 941), ("svc-tiny.png", 512, 288)):  # real 9router sizes (e2e2) + too small
     r = bytes(c for x in range(w) for c in (x % 256, (x // 6) % 256, 100))
     open(os.path.join(out, name), "wb").write(png.encode_raw(w, h, 8, 2, [r] * h))
-row16 = bytes(b for x in range(256) for b in (x, 0, 255 - x, 0, 60, 0))
+row16 = bytes(b for x in range(512) for b in (x % 256, 0, 255 - x % 256, 0, 60, 0))
 def disc_rows(w, h):
     return [bytes(c for x in range(w) for c in ((200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.3) ** 2 else (0, 0, 0, 0)))
             for y in range(h)]
 open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
-open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(256, 256, 16, 2, [row16] * 256))
+open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row16] * 512))
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
 open(os.path.join(out, "corrupt.png"), "wb").write(bytes(data))
 open(os.path.join(out, "not-a-png.png"), "wb").write(b"GIF89a not a png")
@@ -549,12 +551,21 @@ qarun qa-svc-icon-001 icon svc-square.png
 qarun qa-svc-icon-wide-001 icon svc-wide.png
 [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1672x941 is landscape, expected orientation square" \
   && ok "icon: 1672x941 fails orientation square" || no "icon svc wide rc=$rc $(st png-size)"
-qarun qa-edit-any-001 image-edit icon-wide.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "image-edit: size mode any" || no "edit any rc=$rc $(st png-size)"
+# e2e2 review: every core purpose has a short side and an area floor; 256x256 fails each, the real sizes pass
+for pf in icon:icon-small.png sprite-2d:icon-small.png texture-tileable:tile-small.png ui-element:icon-small.png image-edit:icon-small.png; do
+  qarun "qa-floor-${pf%%:*}-001" "${pf%%:*}" "${pf#*:}"
+  [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "short side 256 (min 512), area 65536 px (min 262144)"     && ok "${pf%%:*}: 256x256 fails png-size (short side and area floors)" || no "${pf%%:*} floor rc=$rc $(st png-size)" "$(jq -c .results "$TMP/q.json")"
+done
+for pf in sprite-2d:svc-square.png texture-tileable:svc-square.png ui-element:svc-square.png ui-element:svc-wide.png image-edit:svc-wide.png image-edit:svc-square.png; do
+  qarun "qa-real-${pf%%:*}-$(echo "${pf#*:}" | tr -dc a-z)-001" "${pf%%:*}" "${pf#*:}"
+  [ "$(st png-size)" = PASS ] && ok "${pf%%:*}: real ${pf#*:} passes png-size" || no "${pf%%:*} real ${pf#*:} $(st png-size)" "$(jq -c .results "$TMP/q.json")"
+done
+qarun qa-edit-wide-001 image-edit icon-wide.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "image-edit: 384x256 fails the short side floor (any aspect)" || no "edit wide rc=$rc $(st png-size)"
 mkrun qa-exact-001 icon --style pixel-art --authoring "$AUTH"; cp "$FX/icon-ok.png" "$RUNS/qa-exact-001/outputs/"
 AG qa --run "$RUNS/qa-exact-001" --json > "$TMP/q.json"; rc=$?
 [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -q "expected exact 1024x1024" \
-  && ok "game override qa.size.mode exact: 256x256 fails exact 1024x1024" || no "exact rc=$rc $(st png-size)"
+  && ok "game override qa.size.mode exact: 512x512 fails exact 1024x1024" || no "exact rc=$rc $(st png-size)"
 qarun qa-deep-001 image-edit deep16.png
 if has_pil; then
   [ $rc -eq 0 ] && [ "$(st png-valid)" = PASS ] && ok "16-bit PNG decodes with Pillow" || no "16-bit with Pillow rc=$rc $(st png-valid)"
@@ -627,8 +638,8 @@ for name, (data, want) in cases.items():
         b = png.decode(path)
         assert b.decoder == "pillow" and a.rgba == b.rgba and a.has_alpha == b.has_alpha, (name, list(b.rgba[3::4]))
 # a gray icon whose background is transparent only through its tRNS key: corners and alpha must see it
-rows = [bytes(0 if (x - 128) ** 2 + (y - 128) ** 2 > 90 ** 2 else 40 + (x + y) % 200 for x in range(256)) for y in range(256)]
-open(os.path.join(out, "trns-icon.png"), "wb").write(png.encode_raw(256, 256, 8, 0, rows, extra=[(b"tRNS", struct.pack(">H", 0))]))
+rows = [bytes(0 if (x - 256) ** 2 + (y - 256) ** 2 > 180 ** 2 else 40 + (x + y) % 200 for x in range(512)) for y in range(512)]
+open(os.path.join(out, "trns-icon.png"), "wb").write(png.encode_raw(512, 512, 8, 0, rows, extra=[(b"tRNS", struct.pack(">H", 0))]))
 print("ok pillow" if pil else "ok stdlib-only")
 EOF
 grep -q "^ok" "$TMP/o" && ok "stdlib decoder applies gray, RGB and palette tRNS ($(cat "$TMP/o"): same pixels as Pillow when present)" \
@@ -711,7 +722,7 @@ EOF
 [ $rc -eq 0 ] && grep -qx ok "$TMP/o" && ok "review-cmd with a relative --run from another cwd prints absolute -C, -i and -o paths (binding paths stay run-relative)" \
   || no "review-cmd absolute paths rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
 want=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$d/workflow.json")
-jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 256x256 (requested $want)" \
+jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 512x512 (requested $want)" \
   && [ ! -e "$d/review" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose" \
   || no "pixel size line" "$(jq -r .stdin "$TMP/rc.json" | grep -n 'pixel size'; ls "$d")"
 AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin | grep -qF "outputs/big.png: 1536x1024 (requested" \
@@ -769,6 +780,9 @@ AG review-cmd --phase prompt --run "$sr" --json 2>>"$TMP/err" | jq -r .stdin > "
   && grep -qF "1672x941 (requested 1024x1024)" "$TMP/ri.txt" && ! grep -q "1536x1024" "$TMP/ri.txt" "$TMP/rp.txt"; } \
   && ok "render --param size=1024x1024: both review prompts request only 1024x1024 (params read back from workflow.json, not spec.json)" \
   || no "rendered params in review prompts" "$(cat "$TMP/err"; grep -n "equested" "$TMP/ri.txt" "$TMP/rp.txt")"
+AG manifest --run "$sr" >/dev/null 2>"$TMP/err"
+mp=$(sed -n '/^---json$/,/^---$/p' "$sr/run.md" | sed '1d;$d' | jq -r '.spec.params.size')
+[ "$mp" = 1024x1024 ] && [ "$(jq -r .params.size "$sr/spec.json")" = 1536x1024 ]   && [ "$mp" = "$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$sr/workflow.json")" ]   && ok "manifest after render --param size=1024x1024: run.md spec.params.size is the rendered 1024x1024, not spec.json's 1536x1024"   || no "run.md spec.params from workflow.json: $mp" "$(cat "$TMP/err")"
 mkrun review-unrendered-001 concept-2d --style stylized-painterly
 AG review-cmd --phase prompt --run "$RUNS/review-unrendered-001" --json | jq -r .stdin \
   | grep -q "^Requested params (spec.json): .*size=1536x1024" && ok "review prompt before render: spec.json params, named as such" || no "unrendered params"
@@ -1203,7 +1217,8 @@ case_ qp-wfprompt-001 gen-run-image-review FAIL 'bound to other requirements' "w
 case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
 case_ qp-rejbind-001 gen-run-prompt-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the prompt review: FAIL (rejections are bound)"
 case_ qp-rejbind-001 gen-run-image-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the image review: FAIL"
-[ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
+rs="$RUNS/qp-rsize-001"; rs_params=$(sed -n '/^---json$/,/^---$/p' "$rs/run.md" | sed '1d;$d' | jq -r .spec.params.size)
+[ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && [ "$rs_params" = 1536x1024 ] && [ "$(jq -r .params.size "$rs/spec.json")" != 1536x1024 ]   && ok "render --param size leaves the prompt review bound (the binding hashes spec.json params; run.md spec.params records the rendered 1536x1024)" \
   || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
 got=$(for c in $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-edit-001 "$c")"; done)
 [ "$got" = "$(for c in $plugin_checks; do printf '%s=PASS ' "$c"; done)" ] && ok "image-edit run with its reference kept in references/: every plugin check PASS"   || no "image-edit good run: $got" "$(jq -c '.results[] | select(.artifact == "AGEN-qp-edit-001" and .state != "PASS")' "$TMP/aq.json")"
@@ -1776,7 +1791,8 @@ print("ok")
 EOF
 grep -qx ok "$TMP/o" || no "style QA fixtures" "$(cat "$TMP/o")"
 sq="$SR/sl-qa-001"; slrun sl-qa-001 icon && AG render --run "$sq" >/dev/null 2>"$TMP/err" || no "style QA run" "$(cat "$TMP/err")"
-cp "$sq/spec.json" "$TMP/sq-spec.json"
+# the style fixtures are 256x256: the run keeps the default size floor so only the style rows vary
+jq '.purpose.data.qa.size |= del(.min_side, .min_pixels)' "$sq/spec.json" > "$TMP/sq-spec.json"
 sqa() { # sqa PNG JQ-EDIT: the style QA run with outputs/out.png = PNG and spec.json = the resolved spec edited by JQ-EDIT
   rm -f "$sq/outputs/"*.png; cp "$FX/$1" "$sq/outputs/out.png"
   jq "$2" "$TMP/sq-spec.json" > "$sq/spec.json"

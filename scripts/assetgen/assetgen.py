@@ -785,7 +785,7 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
         "spec": {
             "run_id": name, "purpose": ref(spec["purpose"]), "style": ref(spec["style"]), "template": ref(spec["template"]),
             "handoff_domain": spec["purpose"]["data"].get("handoff_domain"),
-            "params": spec.get("params", {}),
+            "params": rendered_params(run_dir, spec)[0],
             "prompt": prompt, "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "prompt_author": prompt_author,
             "prompt_review": runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt"),

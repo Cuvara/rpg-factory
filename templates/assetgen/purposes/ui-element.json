@@ -51,8 +51,9 @@
  ],
  "qa": {
   "size": {
-   "mode": "min",
-   "expect": "256x256"
+   "mode": "area",
+   "min_side": 512,
+   "min_pixels": 262144
   },
   "alpha": "required",
   "not_blank": {

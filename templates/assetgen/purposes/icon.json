@@ -52,7 +52,9 @@
   "size": {
    "mode": "orientation",
    "expect": "1024x1024",
-   "square_tolerance": 0.05
+   "square_tolerance": 0.05,
+   "min_side": 512,
+   "min_pixels": 262144
   },
   "alpha": "required",
   "transparent_corners": true,
