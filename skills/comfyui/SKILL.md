@@ -108,9 +108,9 @@ lead's workflow asks for in a run directory or the game layer.
   pixel count); in the live style-lock e2e of 2026-11-08 it returned 1672x941 for both a 1536x1024 and a 1024x1024
   request, 1322x1190 for a square sprite and 1024x1536 for a 1536x1024 request. So no core purpose's size QA grades
   the exact size: it grades orientation, aspect or area, a minimum area and a minimum short side that real outputs
-  meet (square purposes tolerate such near-square outputs, a landscape or portrait purpose may set `qa.size.allow_swap`
-  to accept the swapped orientation), per purpose in data; `exact` is opt-in (`scripts/assetgen/qa.py`
-  docstring, `size` param description in `templates/assetgen/workflows/image-generate.json`). A size FAIL from the
+  meet (square purposes `icon`, `sprite-2d`, `texture-tileable`: `square_tolerance` 0.15, so 1322x1190 is square;
+  `qa.size.allow_swap`, default false, accepts the swapped orientation, false in `ref-3d-turnaround`), per purpose in
+  data; `exact` is opt-in (`scripts/assetgen/qa.py` docstring, `size` param in `templates/assetgen/workflows/image-generate.json`). A size FAIL from the
   service is not fixed by a new prompt: `asset-gen` stops regenerating. `review-cmd --phase image` states each
   output's true size and QA's verdict; the reviewer does not grade size again.
 - **A model id the gateway does not serve passes `validate_workflow`** (the `model` input is a free STRING) and fails
@@ -131,8 +131,9 @@ lead's workflow asks for in a run directory or the game layer.
   `qa`: QA and the reviews bind the hash of the embedded file (`scripts/assetgen/assetgen.py` `embed`).
 - **Transparent outputs carry an edge fringe:** the service leaves orange or red speckled colour in the RGB of pixels
   with alpha 1-31 (and body alpha 251-254), invisible on a checkerboard and visible on a dark background.
-  `defringe` (after `fetch_outputs`, before `embed`; originals kept) bleeds opaque neighbour colour into those
-  pixels, QA's `png-edge-fringe` row grades it (`scripts/assetgen/qa.py`), and the reviews see it on dark and light.
+  `defringe` (after `fetch_outputs`, before `embed` and `qa`; originals in `outputs-raw/`, the step in `defringe.json`)
+  bleeds opaque neighbour colour into those pixels, QA's `png-edge-fringe` row (purposes with `qa.alpha` required)
+  grades it (`scripts/assetgen/qa.py`), and the image reviews see `review/composite-dark.png` and `-light.png`.
 - **SaveImage writes into ComfyUI's output folder** under `filename_prefix`: `resolve --out <run>/spec.json` records
   `assetgen/<run-id>` and `render --run` requires that value and refuses `--param filename_prefix`
   (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`

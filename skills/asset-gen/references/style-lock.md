@@ -21,7 +21,8 @@ Use when the game has no `<A>/assetgen/project.json` yet, or the user asks for a
    an output that does not match `run.md` or `qa.json`: run `qa` and `manifest` again first.
 4. **A person approves.** The source gen-runs need the human gate `assetgen-approval` (signed approval): on the
    person's explicit word, quoted in the report, `assetgen.py approve-record --run <run> --by <their name>` writes the
-   record; the person commits and signs it (unsigned: "approval present but not committed/signed", `HUMAN_REQUIRED`).
+   record; the person commits `run.md` and it in one SSH-signed commit as that name (until then: "approval present
+   but not committed/signed", `HUMAN_REQUIRED`).
    A person edits each anchor to `status: active` with `approved_by` (their name) and `approved_on`. Agents never set
    either: an anchor approved by `claude`, `codex`, `gpt*` or `SAME_MODEL:*` fails the quality check `gen-run-style`.
 5. **Write the game style and project.** Only after the approval, and only when the user asks: a game style
@@ -43,7 +44,7 @@ approved runs under the game style id, or making the game style id the explorati
   `--style` outside `allowed_styles` and the `families` values, or a `deprecated` style, is refused. Use
   `--style-override REASON` only when the user asks for it; the reason is shown to the approver in `run.md`.
 - Read the `style lock`, `reference` and `rejection` lines `resolve` prints. A selected anchor of another family
-  than the run's is a warning: name it in the report. `anchor_family_fallback: false` in the purpose or `project.json`
+  than the run's is a `warning: reference ...` line: name it in the report. `anchor_family_fallback: false` in the purpose or `project.json`
   forbids such anchors. The prompt follows the structured style
   fields (`text` of each), the `forbidden` list and the direction rejections.
 - The references are `references/anchor-<id>.png` in the run after `render --run`; upload each with comfy-mcp

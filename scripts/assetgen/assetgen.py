@@ -10,6 +10,7 @@ Usage:
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
   assetgen.py embed --run RUN [--authoring DIR] [--json]
+  assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
@@ -18,12 +19,14 @@ Usage:
   assetgen.py reject --type asset|direction --reason R [--text T] [--family F] [--run RUN --output N|PATH]
                      [--style S --authoring DIR] [--any-version] [--id ID] [--json]
   assetgen.py drift --authoring DIR [--json]
+  assetgen.py approve-record --run RUN --by NAME [--note TEXT] [--authoring DIR] [--json]
 
 RUN is a run directory or a run id (<slug>-NNN): a value that is not an existing directory resolves to
 <authoring>/assetgen/runs/<id>, with --authoring when given, else the top level of the git repository of the current
 directory (resolve_run); when neither exists the error names the tried paths (exit 2).
 resolve prints a short summary (purpose, style and template, params, hints, style lock, references, rejections,
-warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
+warnings: a selected anchor of another family than the run's, or the anchors anchor_family_fallback: false left out,
+also recorded as spec.warnings); --verbose adds the source of every param, hint and field, --json prints the whole spec.
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
@@ -43,7 +46,8 @@ active anchors of that style version, deterministic order, capped) with reason[]
 ones}. render wires each selected anchor as a LoadImage (anchor-<id>.png) and a chain of ImageBatch nodes into
 NineRouterImage.reference_images (an image-edit reference stays first). promote-anchor writes a proposed anchor from a
 manifested run output (a person approves it); reject records a rejected asset or direction; drift lists gen-runs,
-anchors and rejections recorded on an older style version or another style hash.
+anchors and rejections recorded on an older style version or another style hash, and with project.json those under a
+style id that is neither the project style nor a family style (style-id-mismatch, naming the project style).
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
@@ -60,9 +64,22 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       --param filename_prefix
   workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
                       (uiworkflow.py); written next to workflow.json (render --out X.json: X.ui.json)
-  outputs/*.png       comfy-mcp fetch_outputs out_dir; embed then adds a `workflow` tEXt chunk (workflow.ui.json,
-                      compact JSON) before IEND of each PNG that has none (prompt chunk kept, idempotent), so the
-                      file QA and the reviews hash is the embedded one and dragging it into ComfyUI restores the graph
+  outputs/*.png       comfy-mcp fetch_outputs out_dir; for a purpose with alpha defringe rewrites them (below); embed
+                      then adds a `workflow` tEXt chunk (workflow.ui.json, compact JSON) before IEND of each PNG (prompt
+                      chunk kept; a PNG whose chunk is the current workflow.ui.json is kept byte for byte, a stale
+                      chunk from an older render is replaced), so the file QA and the reviews hash is the embedded one
+                      and dragging it into ComfyUI restores the graph
+  outputs-raw/<name>  defringe: the original of each output it rewrote (kept; never an output, never in a binding)
+  defringe.json       defringe: {"schema": "rpg-factory.assetgen-defringe/1", "params": {"alpha_floor", "rings",
+                      "opaque"}, "outputs": [{"output", "raw", "before_sha256", "after_sha256", "after_pixels_sha256",
+                      "stats"}]}
+                      (imaging.defringe: opaque neighbour colour bled into the pixels with 0 < alpha < 224, alpha kept
+                      except --alpha-floor N sets alpha below N to 0; text chunks carried over). Run it after
+                      fetch_outputs and before embed, qa and the reviews; run again, it starts from outputs-raw/, so
+                      the result depends only on the originals and the params. It refuses an approved run.md, and
+                      outputs that qa.json or an image review already bind unless --force (they are stale then and
+                      must be re-run). manifest adds a "- Defringe:" line to the run.md body (STALE when an output's
+                      pixels are no longer the ones defringe wrote; embed keeps them)
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   references/anchor-<id>.png  render --run: a copy of each style-lock anchor spec.style_lock.references selected
                       (refused when the anchor's image no longer has the sha256 resolve selected); the agent uploads
@@ -76,6 +93,11 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   review/tile-2x2.png review-cmd image, purposes with a tileable QA check: the output repeated 2x2 (seam preview,
                       passed with -i after the outputs; tile-2x2-<stem>.png per output when there are several).
                       Derived from the output pixels, never an output and never in the binding
+  review/composite-dark.png, review/composite-light.png  review-cmd image: each output with transparent pixels
+                      composited on #202020 and on #e0e0e0 (imaging.composite; composite-<stem>-dark.png etc. when
+                      there are several outputs), attached with -i after the outputs and tiles, listed as "composites"
+                      in --json, and the rubric gains the item "The edges of every output with alpha are clean on both
+                      the dark and the light composite ...". Derived, never an output and never in the binding
   review-image.json   the same for the images (review-cmd image); its requirements_sha256 also covers the generation
                       inputs of workflow.json (runfiles.generation_inputs), and the binding adds "outputs": [{"path", "sha256"}] (runfiles.py; the
                       quality plugin FAILs a stale or unbound verdict once the run is proposed). With spec.style_lock
@@ -95,18 +117,28 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       also gets the style consistency rows style-palette, style-tone, style-edges, style-canvas
                       (qa.py, consistency.py): never required checks, WARN and NOT_AVAILABLE keep the qa state, a style
                       FAIL row (severity fail in the style data) fails it
-  run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
+  run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest()). A re-run keeps
+                      an approved status while nothing the approval binds changed (approval.keep_status: the same
+                      run.md bytes, so the record's rev still matches), else resets to proposed and names the change
+  approvals/AGEN-<run-id>/assetgen-approval-<rev>.json  (authoring repo) approve-record --by NAME: a person's approval
+                      (approval.approve_record: refuses an agent or model name and names the run records as agents or
+                      reviewers; sets run.md status approved; rev = the git blob id of that run.md). An agent runs it
+                      only on the person's explicit word; the person commits run.md and the record in one SSH-signed
+                      commit whose signer principal is NAME (until then: present but not committed/signed)
 
 Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
-Read-only except: resolve/render --out, render --run (workflow.json, workflow.ui.json, references/anchor-*.png), embed
-(outputs/*.png), qa (qa.json), manifest (run.md) and review-cmd --phase image of a tileable purpose (review/tile-2x2.png)
-in the given run dir, and promote-anchor (assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and
-reject (assetgen/styles/<style>/rejections/<id>.json) in the authoring repo; drift is read-only. review-cmd only prints a `codex exec --sandbox read-only` command with absolute paths (it works from any cwd);
---no-write (factory-cmd always passes it) never builds the tile: it uses review/tile-2x2.png only when it holds
-the current pixels, else exits 2. The only network call is publish: it POSTs workflow.ui.json to ComfyUI's userdata
+Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
+these). The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json, references/anchor-*.png),
+defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json), manifest (run.md) and
+review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
+the given run dir, approve-record (run.md and <authoring>/approvals/AGEN-<run-id>/), promote-anchor
+(assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and reject
+(assetgen/styles/<style>/rejections/<id>.json) in the authoring repo. review-cmd only prints a `codex exec --sandbox
+read-only` command with absolute paths (it works from any cwd); --no-write (factory-cmd always passes it) never builds
+a tile or composite: it uses each only when it holds the current pixels, else exits 2. The only network call is publish: it POSTs workflow.ui.json to ComfyUI's userdata
 API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
 sidebar under assetgen; it writes nothing locally (unreachable ComfyUI: NOT_AVAILABLE, exit 3). This script never
 runs agents or ComfyUI. Model ids, sizes and other values live in template params data, not here.
@@ -128,6 +160,8 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import approval  # noqa: E402
+import imaging  # noqa: E402
 import layers  # noqa: E402
 import lint  # noqa: E402
 import png  # noqa: E402
@@ -189,18 +223,22 @@ def read_prompt(path):
 def resolve_spec(purpose, style, template, authoring, family=None, override=None):
     """layers.resolve with the style lock: stylelock.choose picks the family and style (project.json, refusals and
     the override), then spec.style_lock records the project, family, style ref, override, the selected anchors and
-    the relevant rejections."""
+    the relevant rejections. stylelock.family_fallback (purpose, else project.json anchor_family_fallback) decides
+    whether anchors of another family may fill the selection; spec.warnings names each such pick (and the anchors a
+    false fallback left out)."""
     choice = stylelock.choose(layers.load("purpose", purpose, authoring), authoring, family, style, override)
     spec = layers.resolve(purpose, choice["style_id"], template, authoring)
     ref = stylelock.style_ref(spec["style"])
     cap = stylelock.max_references(spec["purpose"]["data"], spec["template"]["data"])
-    picks = stylelock.select_references(stylelock.valid_anchors(authoring, ref["style_id"]), ref, choice["family"],
-                                        spec["purpose"]["data"].get("dimensions"), cap) if authoring else []
+    picks, warnings = stylelock.select_with_warnings(
+        stylelock.valid_anchors(authoring, ref["style_id"]), ref, choice["family"], spec["purpose"]["data"].get("dimensions"),
+        cap, stylelock.family_fallback(spec["purpose"]["data"], authoring)) if authoring else ([], [])
     rejections = stylelock.relevant_rejections(stylelock.load_rejections(authoring, ref["style_id"]), ref,
                                                choice["family"]) if authoring else []
     spec["style_lock"] = {"project": choice["project"], "family": choice["family"], "family_source": choice["family_source"],
                           "style": ref, "override": choice["override"], "max_references": cap, "references": picks,
                           "rejections": rejections}
+    spec["warnings"] = warnings  # cross-family anchor picks (resolve prints them; not part of the style lock record)
     return spec
 
 
@@ -439,26 +477,31 @@ def style_lock_rejections(spec):
     return [r for r in rej if isinstance(r, dict)] if isinstance(rej, list) else []
 
 
-def review_rubric(spec, phase):
+def review_rubric(spec, phase, composites=False):
     """The rubric of a review: the purpose's prompt_rubric or image_rubric; with spec.style_lock the image phase adds
-    the anchor item (when anchors are selected) and one item per relevant rejection. Claude's own visual review
-    (review-image-claude.json) uses the same items (review-cmd --json prints them as rubric)."""
+    the anchor item (when anchors are selected) and one item per relevant rejection; composites (an output with alpha,
+    review/composite-*.png attached) adds the edge item. Claude's own visual review (review-image-claude.json) uses the
+    same items (review-cmd --json prints them as rubric)."""
     rubric = list(spec["purpose"]["data"].get("prompt_rubric" if phase == "prompt" else "image_rubric", []))
     if phase == "image":
         if runfiles.style_lock_references(spec):
             rubric.append(ANCHOR_RUBRIC)
         rubric += [rejection_item(r) for r in style_lock_rejections(spec)]
+        if composites:
+            rubric.append(EDGE_RUBRIC)
     return rubric
 
 
 DETERMINISTIC = "size, alpha, corners, tileable, blank"
 
 
-def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=(), anchors=(), params=None):
-    """params: (values, source) of rendered_params; spec.json params when None."""
+def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=(), anchors=(), params=None,
+                       composites=()):
+    """params: (values, source) of rendered_params; spec.json params when None. composites: [(path, source output,
+    background)] of review_composites."""
     p, s = spec["purpose"], spec["style"]
     values, source = params if params is not None else (spec.get("params", {}), "spec.json")
-    rubric = review_rubric(spec, phase)
+    rubric = review_rubric(spec, phase, bool(composites))
     forbidden = s["data"].get("forbidden") if isinstance(s["data"].get("forbidden"), list) else []
     lines = [
         "You are the independent %s reviewer of an asset-gen run (purpose %s, style %s, template %s)."
@@ -485,9 +528,13 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
     lines += ["", "Rubric:"] + ["%d. %s" % (i + 1, r) for i, r in enumerate(rubric)]
     lines += ["", "Prompt under review:" if phase == "prompt" else "Prompt that produced the images:", prompt]
     if phase == "image":
-        lines += ["", "Attached images (one per -i): " + ", ".join(list(images) + [t for t, _ in tiles] + [a for a, _ in anchors])]
+        lines += ["", "Attached images (one per -i): " + ", ".join(list(images) + [t for t, _ in tiles] + [c for c, _, _ in composites]
+                                                                  + [a for a, _ in anchors])]
         lines += ["True pixel size (PNG header) of %s: %s" % (i, z) for i, z in zip(images, sizes)]
         lines += ["%s is not an output: review-cmd tiled %s 2x2 so you can judge its seams" % (t, src) for t, src in tiles]
+        lines += ["%s is not an output: review-cmd composited %s on a %s background (#%02x%02x%02x) so you can judge its "
+                  "edges; judge them on both the dark and the light composite" % ((c, src, bg) + imaging.SOLID[bg])
+                  for c, src, bg in composites]
         lines += ["%s is not an output: style anchor %s (%s; %s) of style %s, approved by a person; judge the outputs "
                   "against it" % (a, pick.get("anchor_id"), pick.get("strength"), ", ".join(pick.get("dimensions") or []) or "-",
                                   ((spec.get("style_lock") or {}).get("style") or {}).get("style_id")) for a, pick in anchors]
@@ -531,6 +578,32 @@ def tile_names(images):
     return ["review/tile-2x2-%s.png" % os.path.splitext(os.path.basename(i))[0] for i in images]
 
 
+def composite_name(images, image, background):
+    """review/composite-<background>.png for a single output, review/composite-<stem>-<background>.png for several."""
+    if len(images) == 1:
+        return "review/composite-%s.png" % background
+    return "review/composite-%s-%s.png" % (os.path.splitext(os.path.basename(image))[0], background)
+
+
+def derived_preview(run_dir, name, data, write):
+    """Writes a review preview (review/*.png, derived from output pixels, never an output). write=False builds nothing:
+    the file must already hold exactly these bytes, else exit 2."""
+    target = os.path.join(run_dir, *name.split("/"))
+    if write:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(data)
+        return
+    try:
+        with open(target, "rb") as f:
+            current = f.read() == data
+    except OSError:
+        current = False
+    if not current:
+        fail("%s is missing or stale and --no-write builds nothing: run scripts/assetgen/assetgen.py review-cmd "
+             "--phase image --run %s directly (the asset-gen skill)" % (name, run_dir.replace(os.sep, "/")), 2)
+
+
 def review_tiles(run_dir, images, rel, write):
     """[(tile path relative to the run, source output)] of the 2x2 seam previews. write=False builds nothing: it uses a
     tile only when its bytes are what review-cmd would build now, else exits 2."""
@@ -541,21 +614,33 @@ def review_tiles(run_dir, images, rel, write):
         except (png.Invalid, png.Unsupported) as exc:
             print("assetgen: no tiled preview of %s: %s" % (src, exc), file=sys.stderr)
             continue
-        target = os.path.join(run_dir, *name.split("/"))
-        if write:
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as f:
-                f.write(data)
-        else:
-            try:
-                with open(target, "rb") as f:
-                    current = f.read() == data
-            except OSError:
-                current = False
-            if not current:
-                fail("%s is missing or stale and --no-write builds nothing: run scripts/assetgen/assetgen.py review-cmd "
-                     "--phase image --run %s directly (the asset-gen skill)" % (name, run_dir.replace(os.sep, "/")), 2)
+        derived_preview(run_dir, name, data, write)
         out.append((name, src))
+    return out
+
+
+COMPOSITE_BACKGROUNDS = ("dark", "light")
+EDGE_RUBRIC = ("The edges of every output with alpha are clean on both the dark and the light composite: no coloured "
+               "fringe, halo, speckle or matte line around the subject.")
+
+
+def review_composites(run_dir, images, rel, write):
+    """[(composite path relative to the run, source output, background)] of every output with transparent pixels,
+    composited on the dark and on the light background (imaging.composite) so a reviewer sees its edges. write=False
+    as review_tiles."""
+    out = []
+    for path, src in zip(images, rel):
+        try:
+            img = png.decode(path)
+        except (png.Invalid, png.Unsupported) as exc:
+            print("assetgen: no composite preview of %s: %s" % (src, exc), file=sys.stderr)
+            continue
+        if not img.has_alpha or min(img.rgba[3::4]) == 255:
+            continue
+        for bg in COMPOSITE_BACKGROUNDS:
+            name = composite_name(images, path, bg)
+            derived_preview(run_dir, name, imaging.composite(img, bg), write)
+            out.append((name, src, bg))
     return out
 
 
@@ -591,7 +676,7 @@ def review_cmd(run_dir, phase, codex, write=True):
                "requirements_sha256": review_requirements_sha256(run_dir, spec, phase)}
     if phase == "image":
         binding["outputs"] = [{"path": r, "sha256": qa.sha256(i)} for r, i in zip(rel, images)]
-    sizes, tiles = [], []
+    sizes, tiles, composites = [], [], []
     if phase == "image":
         requested = requested_size(run_dir, spec)
         sizes = [pixel_size(i, requested) for i in images]
@@ -599,22 +684,25 @@ def review_cmd(run_dir, phase, codex, write=True):
         data = purpose.get("data") if isinstance(purpose.get("data"), dict) else {}
         if "png-tileable" in runfiles.required_checks(data.get("qa")):
             tiles = review_tiles(run_dir, images, rel, write)
+        composites = review_composites(run_dir, images, rel, write)
     anchors = review_anchors(run_dir, spec) if phase == "image" else []
     lock = spec.get("style_lock")
     if phase == "image" and isinstance(lock, dict):
         binding["style"] = lock.get("style")
         binding["anchors"] = [{"anchor_id": pick.get("anchor_id"), "sha256": pick.get("sha256")} for _, pick in anchors]
     stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding, sizes, tiles, anchors,
-                               rendered_params(run_dir, spec))
+                               rendered_params(run_dir, spec), composites)
     verdict = os.path.join(run_dir, REVIEW_FILES[phase]).replace(os.sep, "/")
     argv = [codex, "exec", "--sandbox", "read-only", "-C", run_dir.replace(os.sep, "/")]
-    for i in images + [os.path.join(run_dir, *t.split("/")) for t, _ in tiles + anchors]:
+    for i in images + [os.path.join(run_dir, *t.split("/")) for t in [t for t, _ in tiles] + [c for c, _, _ in composites]
+                       + [a for a, _ in anchors]]:
         argv += ["-i", i.replace(os.sep, "/")]
     argv += ["-o", verdict, "-"]
     shell = "%s <<'%s'\n%s\n%s" % (shlex.join(argv), HEREDOC, stdin, HEREDOC)
     return {"schema": "rpg-factory.assetgen-review-cmd/1", "phase": phase, "argv": argv, "stdin": stdin,
             "verdict": verdict, "binding": binding, "shell": shell, "tiles": [t for t, _ in tiles],
-            "anchors": [a for a, _ in anchors], "rubric": review_rubric(spec, phase)}
+            "composites": [c for c, _, _ in composites], "anchors": [a for a, _ in anchors],
+            "rubric": review_rubric(spec, phase, bool(composites))}
 
 
 # -- embed -----------------------------------------------------------------------------------------------------
@@ -627,10 +715,41 @@ def read_ui(run_dir):
     return path, ui
 
 
+def text_chunks(data, keyword=None):
+    """The (type, body) text chunks (tEXt, zTXt, iTXt) of PNG bytes in file order; only those named keyword when given."""
+    key = keyword.encode("latin-1") if keyword is not None else None
+    return [(t, b) for t, b in png.chunks(data) if t in png.TEXT_CHUNKS and (key is None or b.split(b"\0", 1)[0] == key)]
+
+
+def rebuild(data, keep, extra=()):
+    """PNG bytes with only the chunks keep(type, body) accepts and the extra (type, body) chunks right before IEND;
+    every kept chunk and anything after IEND stay byte for byte."""
+    out, pos = [data[:8]], 8
+    for ctype, body in png.chunks(data):
+        size = 12 + len(body)
+        if ctype == b"IEND":
+            out += [png.chunk(t, b) for t, b in extra]
+        if ctype == b"IEND" or keep(ctype, body):
+            out.append(data[pos:pos + size])
+        pos += size
+    out.append(data[pos:])
+    return b"".join(out)
+
+
+def write_atomic(path, data, suffix):
+    tmp = path + suffix
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
 def embed(run_dir):
-    """Rows {output, state: embedded|kept|FAIL, reason}: the UI workflow as a `workflow` tEXt chunk of each output."""
+    """Rows {output, state: embedded|replaced|kept|FAIL, reason}: the UI workflow as a `workflow` tEXt chunk of each
+    output. A PNG whose workflow chunk is exactly the current workflow.ui.json is kept byte for byte; one whose chunk
+    differs (an older render) gets it replaced (every other chunk kept)."""
     _, ui = read_ui(run_dir)
     text = json.dumps(ui, separators=(",", ":"), ensure_ascii=True)
+    want = [(b"tEXt", b"workflow\0" + text.encode("latin-1"))]
     images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
     if not images:
         fail("no outputs/*.png in %s to embed the workflow in" % run_dir.replace(os.sep, "/"))
@@ -640,19 +759,141 @@ def embed(run_dir):
         with open(path, "rb") as f:
             data = f.read()
         try:
-            if "workflow" in png.text_keywords(data):
-                rows.append({"output": name, "state": "kept", "reason": "already carries a workflow chunk"})
+            have = text_chunks(data, "workflow")
+            if have == want:
+                rows.append({"output": name, "state": "kept", "reason": "already carries the current workflow chunk"})
                 continue
-            new = png.add_text(data, "workflow", text)
+            new = rebuild(data, lambda t, b: not (t in png.TEXT_CHUNKS and b.split(b"\0", 1)[0] == b"workflow"))
+            new = png.add_text(new, "workflow", text)
         except png.Invalid as exc:
             rows.append({"output": name, "state": "FAIL", "reason": str(exc)})
             continue
-        tmp = path + ".embed.tmp"
-        with open(tmp, "wb") as f:
-            f.write(new)
-        os.replace(tmp, path)
-        rows.append({"output": name, "state": "embedded", "reason": "workflow chunk of %d bytes added" % len(text)})
+        write_atomic(path, new, ".embed.tmp")
+        if have:
+            rows.append({"output": name, "state": "replaced", "reason": "stale workflow chunk replaced by the current "
+                         "workflow.ui.json (%d bytes)" % len(text)})
+        else:
+            rows.append({"output": name, "state": "embedded", "reason": "workflow chunk of %d bytes added" % len(text)})
     return rows
+
+
+# -- defringe --------------------------------------------------------------------------------------------------
+
+DEFRINGE_FILE = "defringe.json"
+RAW_DIR = "outputs-raw"
+DEFRINGE_RINGS = 8
+
+
+def bound_records(run_dir, outputs):
+    """The run records that bind any of these output hashes ({path: sha256}): qa.json and the image reviews."""
+    names = []
+    for name in ("qa.json", REVIEW_FILES["image"], CLAUDE_REVIEW):
+        path = os.path.join(run_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        recorded = data.get("outputs") if isinstance(data, dict) else None
+        if any(isinstance(o, dict) and outputs.get(o.get("path")) == o.get("sha256") for o in recorded or []):
+            names.append(name)
+    return names
+
+
+def pixels_sha256(path):
+    """sha256 of the decoded RGBA pixels (and size) of a PNG, None when unreadable: unchanged by embed, which only
+    adds a text chunk."""
+    try:
+        img = png.decode(path)
+    except (png.Invalid, png.Unsupported, OSError):
+        return None
+    return hashlib.sha256(b"%dx%d:" % (img.width, img.height) + img.rgba).hexdigest()
+
+
+def defringe(run_dir, alpha_floor=None, force=False):
+    """(rows, bound): rows {output, state: defringed|skipped|FAIL, reason, ...} of imaging.defringe on every output
+    with transparent pixels, in place; bound names the records (qa.json, image reviews) --force made stale. The
+    original goes to outputs-raw/<name> first; defringe.json records the params and each output's before/after sha256
+    (file bytes), its after_pixels_sha256 (decoded pixels: embed after defringe keeps them) and stats. Running it again
+    on outputs it wrote (same pixels) starts from the kept originals, so the result depends only on the originals and
+    the params. Text chunks (prompt, workflow) are carried over. Refuses an approved run, and outputs
+    that qa.json or an image review already bind unless force (those records must be re-run afterwards)."""
+    images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
+    if not images:
+        fail("no outputs/*.png in %s to defringe" % run_dir.replace(os.sep, "/"))
+    front = existing_front(os.path.join(run_dir, "run.md"))
+    if isinstance(front, dict) and front.get("status") == "approved":
+        fail("run.md is approved: defringe would change the approved outputs; start a new attempt <slug>-NNN+1 instead")
+    current = {"outputs/" + os.path.basename(p): qa.sha256(p) for p in images}
+    bound = bound_records(run_dir, current)
+    if bound and not force:
+        fail("%s already bind(s) the current outputs: defringe changes them, so they would be stale. Run defringe after "
+             "fetch_outputs and before qa and the image reviews, or pass --force and then re-run qa, review-cmd --phase "
+             "image (Codex) and Claude's image review" % ", ".join(bound))
+    record_path = os.path.join(run_dir, DEFRINGE_FILE)
+    old = {}
+    if os.path.isfile(record_path):
+        rec = read_json(record_path, "defringe record")
+        old = {o.get("output"): o for o in rec.get("outputs") or [] if isinstance(o, dict)} if isinstance(rec, dict) else {}
+    rows = []
+    for path in images:
+        name = "outputs/" + os.path.basename(path)
+        raw = os.path.join(run_dir, RAW_DIR, os.path.basename(path))
+        prev = old.get(name) or {}
+        again = (os.path.isfile(raw) and qa.sha256(raw) == prev.get("before_sha256")
+                 and prev.get("after_pixels_sha256") == pixels_sha256(path))
+        src = raw if again else path
+        with open(src, "rb") as f:
+            data = f.read()
+        try:
+            img = png.decode(src)
+            chunks = text_chunks(data)
+        except (png.Invalid, png.Unsupported) as exc:
+            rows.append({"output": name, "state": "FAIL", "reason": str(exc)})
+            continue
+        if not img.has_alpha or min(img.rgba[3::4]) == 255:
+            rows.append({"output": name, "state": "skipped", "reason": "no transparent pixels: nothing to defringe"})
+            continue
+        new, stats = imaging.defringe(img, alpha_floor, DEFRINGE_RINGS)
+        new = rebuild(new, lambda t, b: True, chunks)
+        if not again:
+            os.makedirs(os.path.dirname(raw), exist_ok=True)
+            shutil.copyfile(path, raw)
+        write_atomic(path, new, ".defringe.tmp")
+        rows.append({"output": name, "state": "defringed", "raw": RAW_DIR + "/" + os.path.basename(path),
+                     "before_sha256": hashlib.sha256(data).hexdigest(), "after_sha256": hashlib.sha256(new).hexdigest(),
+                     "after_pixels_sha256": pixels_sha256(path),
+                     "stats": stats, "reason": "%d of %d soft pixels recoloured (%d unreached), %d floored to alpha 0%s" % (
+                         stats["recoloured"], stats["soft"], stats["unreached"], stats["floored"],
+                         ", from the kept original" if again else "")})
+    done = [r for r in rows if r["state"] == "defringed"]
+    if done:
+        write_json(record_path, {"schema": "rpg-factory.assetgen-defringe/1", "run": os.path.basename(os.path.normpath(run_dir)),
+                                 "params": {"alpha_floor": alpha_floor, "rings": DEFRINGE_RINGS, "opaque": imaging.OPAQUE},
+                                 "outputs": [{k: r[k] for k in ("output", "raw", "before_sha256", "after_sha256",
+                                                                "after_pixels_sha256", "stats")}
+                                             for r in done]})
+    return rows, bound
+
+
+def defringe_line(run_dir, outputs):
+    """The run.md body line of defringe.json (None without it): what it did, and STALE when an output's pixels are no
+    longer the ones defringe wrote (after_pixels_sha256; embed keeps them)."""
+    path = os.path.join(run_dir, DEFRINGE_FILE)
+    if not os.path.isfile(path):
+        return None
+    rec = read_json(path, "defringe record")
+    done = [o for o in rec.get("outputs") or [] if isinstance(o, dict)] if isinstance(rec, dict) else []
+    recorded = {o["path"] for o in outputs}
+    stale = [str(o.get("output")) for o in done if o.get("output") not in recorded or pixels_sha256(
+        os.path.join(run_dir, *str(o.get("output")).split("/"))) != o.get("after_pixels_sha256")]
+    params = rec.get("params") if isinstance(rec, dict) and isinstance(rec.get("params"), dict) else {}
+    floor = params.get("alpha_floor")
+    return "- Defringe: %d output(s), alpha floor %s, originals in %s/ (%s)%s" % (
+        len(done), floor if floor is not None else "none", RAW_DIR, DEFRINGE_FILE,
+        "; STALE, the outputs changed since: " + ", ".join(stale) if stale else "")
 
 
 # -- publish ---------------------------------------------------------------------------------------------------
@@ -711,7 +952,11 @@ def failed_attempts(run_dir):
 
 
 def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude"):
-    """The gen-run front matter (and whether a previous status was reset)."""
+    """(front matter, reset, changes): the gen-run front matter; reset when an earlier status other than proposed
+    went back to proposed, changes the bound fields that made an approved run proposed (approval.bound_changes).
+    The status follows approval.keep_status: an approved run stays approved while nothing its approval binds changed
+    and the new run.md is byte for byte the approved one (so the approval record's rev still matches); any other
+    change (another --title or --prompt-author too) makes it proposed and names the changed fields."""
     name = os.path.basename(os.path.normpath(run_dir))
     if not RUN_ID.match(name):
         fail("run dir name %r must be <slug>-NNN (lowercase, digits, dashes), e.g. iron-sword-icon-001" % name)
@@ -727,10 +972,8 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
     def ref(r):
         return {"id": r["id"], "layer": r["layer"], "files": r["files"], "sha256": r["sha256"]}
     old = existing_front(os.path.join(run_dir, "run.md")) or {}
-    same_outputs = old.get("spec", {}).get("outputs") == outputs
-    status = old.get("status") if old.get("status") and same_outputs else "proposed"
     front = {
-        "id": "AGEN-" + name, "kind": "gen-run", "domain": "assetgen", "schema_version": 2, "status": status,
+        "id": "AGEN-" + name, "kind": "gen-run", "domain": "assetgen", "schema_version": 2, "status": "proposed",
         "title": title or old.get("title") or "%s / %s generation run %s" % (spec["purpose"]["id"], spec["style"]["id"], name),
         "upstream": old.get("upstream", []), "sources": [o["path"] for o in outputs],
         "authors": old.get("authors") or [{"kind": "agent", "id": prompt_author}],
@@ -757,10 +1000,29 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
     }
     if isinstance(spec.get("style_lock"), dict):  # a spec from before the style lock keeps its run.md shape
         front["spec"]["style_lock"] = spec["style_lock"]
-    return front, bool(old.get("status")) and not same_outputs and old.get("status") != "proposed"
+    front["status"] = approval.keep_status(old, front)
+    changes = []
+    if front["status"] == "approved":
+        # the approval record binds the run.md blob: any other byte (another --title or --prompt-author, a body line)
+        # would leave an approved run.md that no approval binds, so it goes back to proposed and names the fields
+        with open(os.path.join(run_dir, "run.md"), encoding="utf-8", newline="") as f:
+            if f.read() != manifest_text(front, run_dir):
+                front["status"] = "proposed"
+                changes = unbound_changes(old, front) or ["run.md body"]
+    reset = bool(old.get("status")) and old.get("status") != "proposed" and front["status"] == "proposed"
+    if reset and old.get("status") == "approved" and not changes:
+        changes = approval.bound_changes(old, front)
+    return front, reset, changes
 
 
-def manifest_text(front):
+def unbound_changes(old, new):
+    """The front-matter fields (spec.<key> inside spec) that differ between two run.md fronts, status left out."""
+    out = [k for k in sorted(set(old) | set(new)) if k not in ("status", "spec") and old.get(k) != new.get(k)]
+    o, n = old.get("spec") or {}, new.get("spec") or {}
+    return out + ["spec." + k for k in sorted(set(o) | set(n)) if o.get(k) != n.get(k)]
+
+
+def manifest_text(front, run_dir=None):
     s = front["spec"]
     body = ["# " + front["title"], "",
             "- Purpose: `%s` (%s), style `%s`, template `%s`" % (s["purpose"]["id"], s["purpose"]["layer"], s["style"]["id"], s["template"]["id"]),
@@ -771,6 +1033,9 @@ def manifest_text(front):
             "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
                                                      ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
             "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none")]
+    fringe = defringe_line(run_dir, s["outputs"]) if run_dir else None
+    if fringe:
+        body.append(fringe)
     lock = s.get("style_lock")
     if isinstance(lock, dict):
         st = lock.get("style") or {}
@@ -939,14 +1204,20 @@ def reject(kind, reason, text=None, family=None, run_dir=None, output=None, styl
 
 
 def drift_text(report):
+    """One line per drift item; a style-id-mismatch line names the project style (and the version state of its own
+    style, when it is also behind)."""
     rows = []
     for i in report["items"]:
         st, cur = i["style"], i["current"]
         now = "v%s %s" % (cur["version"], (cur["sha256"] or "")[:12]) if cur else "missing"
-        rows.append("%s %s %s (%s): recorded %s v%s %s, current %s" % (
+        line = "%s %s %s (%s): recorded %s v%s %s, current %s" % (
             i["state"], i["kind"], i["id"], i["path"], st["style_id"], st.get("version") if st.get("version") is not None else "-",
-            (st.get("sha256") or "-")[:12], now))
-    return "\n".join(rows + ["assetgen drift: %d item(s) behind the current style" % len(report["items"])])
+            (st.get("sha256") or "-")[:12], now)
+        if i["state"] == "style-id-mismatch":
+            line += ", project style %s%s" % (i.get("project_style"), ", also %s" % i["version_state"] if i.get("version_state") else "")
+        rows.append(line)
+    return "\n".join(rows + ["assetgen drift: %d item(s) behind the current style or outside the project's styles"
+                             % len(report["items"])])
 
 
 # -- CLI -------------------------------------------------------------------------------------------------------
@@ -992,6 +1263,7 @@ def resolve_text(spec, verbose):
                          + ["hint %s = %s  [%s%s]" % (k, h["text"], h["source"], "; style hint overridden by the purpose" if "overrides" in h else "")
                             for k, h in sorted(spec["hints"].items())]
                          + style_lock_lines(spec["style_lock"])
+                         + ["warning: " + w for w in spec.get("warnings") or []]
                          + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())])
     lock = spec["style_lock"]
     lines = head + ["params: " + (", ".join("%s=%s" % (k, v) for k, v in sorted(spec["params"].items())) or "none"),
@@ -1001,7 +1273,7 @@ def resolve_text(spec, verbose):
     lines.append("references: " + (", ".join(r["anchor_id"] for r in lock["references"]) or "none")
                  + " (max %d)" % lock["max_references"])
     lines.append("rejections: " + (", ".join("%s (%s %s)" % (r["id"], r["type"], r["reason"]) for r in lock["rejections"]) or "none"))
-    warnings = []
+    warnings = list(spec.get("warnings") or [])
     if lock["override"]:
         warnings.append("style override: " + lock["override"])
     if spec.get("authoring") and not lock["project"]:
@@ -1040,6 +1312,13 @@ def main(argv=None):
     c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); run_arg(c)
     c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
     c = sp("embed"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("defringe"); run_arg(c); c.add_argument("--alpha-floor", type=int, metavar="N",
+                                                   help="also set every alpha below N (0..%d) to 0" % imaging.OPAQUE)
+    c.add_argument("--force", action="store_true", help="defringe outputs that qa.json or an image review already bind "
+                   "(they are stale afterwards: re-run them)")
+    c.add_argument("--json", action="store_true")
+    c = sp("approve-record"); run_arg(c); c.add_argument("--by", metavar="NAME", help="the person who approves the run")
+    c.add_argument("--note"); c.add_argument("--json", action="store_true")
     c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
@@ -1124,11 +1403,39 @@ def main(argv=None):
             return 0
         if a.cmd == "embed":
             rows = embed(a.run)
-            counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("embedded", "kept", "FAIL")}
+            counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("embedded", "replaced", "kept", "FAIL")}
             emit({"schema": "rpg-factory.assetgen-embed/1", "run": os.path.basename(os.path.normpath(a.run)), "results": rows,
                   "summary": counts}, a.json, "\n".join("%s %s: %s" % (r["state"], r["output"], r["reason"]) for r in rows)
-                 + "\nassetgen embed: %(embedded)d embedded, %(kept)d kept, %(FAIL)d FAIL" % counts)
+                 + "\nassetgen embed: %(embedded)d embedded, %(replaced)d replaced, %(kept)d kept, %(FAIL)d FAIL" % counts)
             return 1 if counts["FAIL"] else 0
+        if a.cmd == "defringe":
+            if a.alpha_floor is not None and not 0 <= a.alpha_floor <= imaging.OPAQUE:
+                fail("--alpha-floor must be from 0 to %d" % imaging.OPAQUE, 2)
+            rows, stale = defringe(a.run, a.alpha_floor, a.force)
+            counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("defringed", "skipped", "FAIL")}
+            tail = ("\nstale now (re-run them): " + ", ".join(stale)) if stale else ""
+            emit({"schema": "rpg-factory.assetgen-defringe-run/1", "run": os.path.basename(os.path.normpath(a.run)),
+                  "results": rows, "summary": counts, "stale": stale}, a.json,
+                 "\n".join("%s %s: %s" % (r["state"], r["output"], r["reason"]) for r in rows)
+                 + "\nassetgen defringe: %(defringed)d defringed, %(skipped)d skipped, %(FAIL)d FAIL" % counts
+                 + (" (originals in %s/, record %s); next: embed, qa" % (RAW_DIR, DEFRINGE_FILE) if counts["defringed"] else "")
+                 + tail)
+            return 1 if counts["FAIL"] else 0
+        if a.cmd == "approve-record":
+            if not a.by or not a.by.strip():
+                fail("approve-record needs --by NAME: the person who approves the run (an agent runs it only on that "
+                     "person's explicit word)", 2)
+            res = approval.approve_record(a.run, a.by, a.note)
+            rel = os.path.relpath(res["approval"], os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(a.run)))))
+            res = dict(res, run_md=res["run_md"].replace(os.sep, "/"), approval=res["approval"].replace(os.sep, "/"))
+            emit(res, a.json, "\n".join([
+                "wrote %s: status approved" % res["run_md"],
+                "wrote %s: %s by %s, rev %s" % (rel.replace(os.sep, "/"), approval.GATE, res["record"]["by"], res["rev"]),
+                "next: %s commits run.md and this record together in one SSH-signed commit (git commit -S) whose signer "
+                "principal is %s; until then the checks report the approval as present but not committed/signed"
+                % (res["record"]["by"], res["record"]["by"]),
+                "do not edit run.md or the record before that commit: the record binds the blob %s of run.md" % res["rev"]]))
+            return 0
         if a.cmd == "publish":
             res = publish(a.run, a.comfy_url)
             emit(res, a.json, "assetgen publish: %s %s (%s)" % (res["state"], res["workflow"], res["reason"]))
@@ -1161,10 +1468,11 @@ def main(argv=None):
             emit(report, a.json, drift_text(report))
             return 0
         if a.cmd == "manifest":
-            front, reset = manifest(a.run, a.title, a.prompt_author, a.generated_by)
+            front, reset, changes = manifest(a.run, a.title, a.prompt_author, a.generated_by)
             with open(os.path.join(a.run, "run.md"), "w", encoding="utf-8", newline="\n") as f:
-                f.write(manifest_text(front))
-            note = " (outputs changed: status reset to proposed)" if reset else ""
+                f.write(manifest_text(front, a.run))
+            note = (" (approval no longer binds, changed: %s; status reset to proposed)" % ", ".join(changes) if changes
+                    else " (outputs changed: status reset to proposed)" if reset else "")
             emit(front, a.json, "wrote %s/run.md: %s %s%s" % (a.run.replace(os.sep, "/"), front["id"], front["status"], note))
             return 0
     except layers.SpecError as exc:

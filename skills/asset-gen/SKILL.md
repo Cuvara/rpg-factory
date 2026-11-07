@@ -64,8 +64,8 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    report and tell the user - never update or reinstall it) -> `validate_workflow` on `<run>/workflow.json` ->
    `upload_file` of every `<run>/references/*` file under its name -> `run_workflow` (wait) -> `job` until done ->
    `fetch_outputs` with `out_dir` `<run>/outputs` -> for a purpose with alpha `assetgen.py defringe --run <run>
-   [--alpha-floor N]` (bleeds opaque neighbour colour into low-alpha edge pixels, keeps the originals, recorded in
-   the run) -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow into each PNG, replacing
+   [--alpha-floor N]` (bleeds opaque neighbour colour into low-alpha edge pixels, originals in `outputs-raw/`,
+   `defringe.json`; refused once `qa.json` or a review binds the outputs) -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow into each PNG, replacing
    a stale one, so QA and the reviews hash the final file and the PNG restores the graph in ComfyUI).
    `run_workflow` opens no canvas tab; `assetgen.py publish --run <run> --comfy-url <URL of the running ComfyUI>`
    (optional) uploads `workflow.ui.json` to Workflows > assetgen (exit 0 PASS, 1 FAIL, 2 usage, 3 `NOT_AVAILABLE`:
@@ -90,9 +90,9 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 8. **Record.** `assetgen.py manifest --run <run> [--title T]` writes `run.md` (`gen-run`, status `proposed`). Never
    edit `run.md` by hand: fix the run and run `manifest` again. Run the fast checks (validation delta). A person
    approves (gate below): only on their explicit word, quoted in the report, `assetgen.py approve-record --run <run>
-   --by <their name> [--note T]` writes the approval record and status `approved`; the person commits and signs it
-   (until then the checks say "approval present but not committed/signed", `HUMAN_REQUIRED`), and `manifest` keeps
-   `approved` while nothing bound changed. Then hand off to the lead of `spec.handoff_domain` through its contract:
+   --by <their name> [--note T]` writes the approval record and status `approved`; the person commits both in one
+   SSH-signed commit as that name (until then "approval present but not committed/signed", `HUMAN_REQUIRED`), and
+   `manifest` keeps `approved` only while `run.md` stays byte for byte the same. Then hand off to the lead of `spec.handoff_domain` through its contract:
    `rpg-factory:art-2d` (art2d), `rpg-factory:art-3d` (art3d), `rpg-factory:ui-ux` (ui), `rpg-factory:vfx` (vfx),
    with the gen-run ID, output paths and SHA-256. Before approval the images are concept drafts only.
 9. **Promote** a tuned purpose, style or template into the game layer (`extends` with only the changed fields) only
@@ -109,7 +109,8 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 
 ## Generated & protected paths
 
-- `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `references/anchor-*.png`, `qa.json`, `run.md`: `assetgen.py`.
+- `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `references/anchor-*.png`, `outputs-raw/`, `defringe.json`,
+  `qa.json`, `review/*.png` (tile and composite previews), `run.md`: `assetgen.py`.
 - `<run>/review-prompt.json`, `review-image.json`: the reviewer's (`-o` of the printed command); `review-image-claude.json`: yours.
 - `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `defringe` and `embed`; the SHA-256 after them is the record.
 - `approvals/AGEN-<run_id>/`: `approve-record` on a person's explicit word; the person commits and signs it.

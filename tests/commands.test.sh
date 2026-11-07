@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -188,6 +188,11 @@ python3 -B "$CMD" assetgen publish --run "$TMP/x-001" --comfy-url y >/dev/null 2
 [ $rc -eq 2 ] && grep -q "publish uploads to ComfyUI: the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err"   && ok "assetgen publish is not exposed through factory-cmd (exit 2, points at assetgen.py)" || no "assetgen publish rc=$rc: $(head -2 "$TMP/err")"
 python3 -B "$CMD" assetgen embed --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && grep -q "embed writes into a run directory" "$TMP/err" && ok "assetgen embed is not exposed through factory-cmd (exit 2)" || no "assetgen embed rc=$rc: $(head -2 "$TMP/err")"
+# defringe rewrites outputs and approve-record writes a person's approval record: never factory-cmd verbs
+python3 -B "$CMD" assetgen defringe --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "defringe writes into a run directory" "$TMP/err" && ok "assetgen defringe is not exposed through factory-cmd (exit 2)" || no "assetgen defringe rc=$rc: $(head -2 "$TMP/err")"
+python3 -B "$CMD" assetgen "approve-record --run $TMP/x-001 --by Dana" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "approve-record writes a person's approval record: the asset-gen skill runs it only on that person's explicit word" "$TMP/err"   && ok "assetgen approve-record is not exposed through factory-cmd (exit 2, only on the person's explicit word)" || no "assetgen approve-record rc=$rc: $(head -2 "$TMP/err")"
 # style lock: drift is read-only and forwarded (--authoring defaults to the workspace authoring repo);
 # review-cmd --run RUN-ID resolves under the workspace authoring repo (--authoring defaulted), from any directory
 rd="$WS/game-authoring/assetgen/runs/cmd-icon-001"; mkdir -p "$rd"

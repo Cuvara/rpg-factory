@@ -100,6 +100,8 @@ def qa_errors(qa):
             errs.append("qa.size.orientation must be one of %s" % sorted(ORIENTATIONS))
         if "square_tolerance" in size and not (_number(size["square_tolerance"]) and 0 <= size["square_tolerance"] < 1):
             errs.append("qa.size.square_tolerance must be a number between 0 and 1")
+        if "allow_swap" in size and not isinstance(size["allow_swap"], bool):
+            errs.append("qa.size.allow_swap must be true or false")
     if qa.get("alpha", "any") not in ALPHA_MODES:
         errs.append("qa.alpha must be one of %s" % sorted(ALPHA_MODES))
     if not isinstance(qa.get("transparent_corners", False), bool):

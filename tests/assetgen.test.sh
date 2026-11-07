@@ -20,7 +20,12 @@
 # by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), review prompts listing
 # the params render used (workflow.json) and leaving deterministic checks to QA, --run RUN-ID resolution, the short
 # resolve summary and --verbose, the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
-# and no endpoints or credentials in templates/assetgen or scripts/assetgen.
+# the e2e3 fixes (png-edge-fringe on a speckled low-alpha fringe, defringe and its record and refusals, dark/light
+# composites in the image review, approve-record refusals and record, manifest keeping or resetting an approval, the
+# proposed -> approved lifecycle, an uncommitted approval HUMAN_REQUIRED in gen-run-style, cross-family anchor
+# warnings and anchor_family_fallback false, drift style-id-mismatch, 1322x1190 square tolerance and allow_swap, the
+# embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
+# style_selftest.py), and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -430,7 +435,10 @@ expect_lint link--1 FAIL "node 1 has no output -1" "link output index -1: FAIL (
 expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAIL, no traceback"
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
-AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "19 PASS, 1 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o"   && ok "core + game layer lint clean (19 files; WARN: no assetgen/project.json)" || no "full lint" "$(tail -5 "$TMP/o")"
+AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "17 PASS, 3 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
+  && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness)" "$TMP/o" \
+  && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no structured style fields" "$TMP/o" \
+  && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
 
 echo "-- fixture PNGs"
 FX="$TMP/png"; mkdir -p "$FX"
@@ -474,6 +482,19 @@ def disc_rows(w, h):
             for y in range(h)]
 open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(512, 512, 16, 2, [row16] * 512))
+# e2e3: real near-square 9router size, a portrait answer to a landscape request, and a prop whose low-alpha edge pixels
+# carry a yellow/red speckle in their RGB (barrel-prop-001): body alpha 254, edge alpha 8-31
+open(os.path.join(out, "svc-nearsq.png"), "wb").write(png.encode_raw(1322, 1190, 8, 6, disc_rows(1322, 1190)))
+r = bytes(c for x in range(1024) for c in (x % 256, (x // 6) % 256, 100))
+open(os.path.join(out, "svc-portrait.png"), "wb").write(png.encode_raw(1024, 1536, 8, 2, [r] * 1536))
+def fringe(x, y):
+    d = math.hypot(x - 256, y - 256)
+    if d <= 150:
+        return (110 + (x * 80) // 512, 70 + (y * 60) // 512, 40, 254)
+    if d <= 156:
+        return ((255, 220, 0) if (x + y) % 2 else (255, 40, 0)) + (8 + (x * 7 + y * 3) % 24,)
+    return (0, 0, 0, 0)
+save("fringe.png", 512, 512, fringe)
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
 open(os.path.join(out, "corrupt.png"), "wb").write(bytes(data))
 open(os.path.join(out, "not-a-png.png"), "wb").write(b"GIF89a not a png")
@@ -560,6 +581,26 @@ for pf in sprite-2d:svc-square.png texture-tileable:svc-square.png ui-element:sv
   qarun "qa-real-${pf%%:*}-$(echo "${pf#*:}" | tr -dc a-z)-001" "${pf%%:*}" "${pf#*:}"
   [ "$(st png-size)" = PASS ] && ok "${pf%%:*}: real ${pf#*:} passes png-size" || no "${pf%%:*} real ${pf#*:} $(st png-size)" "$(jq -c .results "$TMP/q.json")"
 done
+# e2e3 item 7: the service's near-square 1322x1190 (10% longer side) passes the square purposes (square_tolerance 0.15)
+for p in sprite-2d icon; do
+  qarun "qa-nearsq-$p-001" "$p" svc-nearsq.png
+  [ "$(st png-size)" = PASS ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1322x1190 is square, expected orientation square (from 1024x1024) (square within 15%)" \
+    && ok "$p: real 1322x1190 passes png-size (square within 15%)" || no "$p near-square $(st png-size)" "$(jq -c '.results[] | select(.check == "png-size")' "$TMP/q.json")"
+done
+# portrait 1024x1536 for a 1536x1024 request: ref-3d-turnaround (allow_swap false) fails it, a purpose with allow_swap true passes
+qarun qa-swap-turn-001 ref-3d-turnaround svc-portrait.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1024x1536 is portrait, expected orientation landscape, swap not accepted (qa.size.allow_swap)" \
+  && ok "ref-3d-turnaround: a portrait 1024x1536 answer fails (allow_swap false names the swap)" || no "turnaround swap rc=$rc" "$(jq -c '.results[] | select(.check == "png-size")' "$TMP/q.json")"
+SWA="$TMP/swap-authoring"; mkdir -p "$SWA/assetgen/purposes"
+echo '{"extends": "ref-3d-turnaround", "qa": {"size": {"allow_swap": true}}}' > "$SWA/assetgen/purposes/turn-swap.json"
+mkrun qa-swap-ok-001 turn-swap --style stylized-painterly --authoring "$SWA" && AG render --run "$RUNS/qa-swap-ok-001" >/dev/null 2>&1 \
+  && cp "$FX/svc-portrait.png" "$RUNS/qa-swap-ok-001/outputs/"
+AG qa --run "$RUNS/qa-swap-ok-001" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ "$(st png-size)" = PASS ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "swap accepted (qa.size.allow_swap)" \
+  && ok "a purpose with qa.size.allow_swap true accepts the portrait 1024x1536 answer" || no "allow_swap true rc=$rc" "$(cat "$TMP/err"; jq -c '.results[] | select(.check == "png-size")' "$TMP/q.json")"
+echo '{"extends": "ref-3d-turnaround", "qa": {"size": {"allow_swap": "yes"}}}' > "$SWA/assetgen/purposes/turn-bad.json"
+out=$(AG lint "$SWA/assetgen/purposes/turn-bad.json" --authoring "$SWA" 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "qa.size.allow_swap must be true or false" <<<"$out" && ok "lint: qa.size.allow_swap must be a boolean" || no "allow_swap lint rc=$rc" "$out"
 qarun qa-edit-wide-001 image-edit icon-wide.png
 [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "image-edit: 384x256 fails the short side floor (any aspect)" || no "edit wide rc=$rc $(st png-size)"
 mkrun qa-exact-001 icon --style pixel-art --authoring "$AUTH"; cp "$FX/icon-ok.png" "$RUNS/qa-exact-001/outputs/"
@@ -723,7 +764,7 @@ EOF
   || no "review-cmd absolute paths rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
 want=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$d/workflow.json")
 jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 512x512 (requested $want)" \
-  && [ ! -e "$d/review" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose" \
+  && [ -z "$(ls "$d/review" | grep -v '^composite-\(dark\|light\)\.png$')" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose (only the alpha composites)" \
   || no "pixel size line" "$(jq -r .stdin "$TMP/rc.json" | grep -n 'pixel size'; ls "$d")"
 AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin | grep -qF "outputs/big.png: 1536x1024 (requested" \
   && ok "pixel size of a 1536x1024 output (concept-2d)" || no "concept pixel size"
@@ -884,8 +925,32 @@ EOF
   || no "embed rc=$rc" "$(cat "$TMP/err" "$TMP/o" "$TMP/e.json")"
 sums=$(sha256sum "$ed"/outputs/*.png)
 AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
-[ $rc -eq 0 ] && [ "$(sha256sum "$ed"/outputs/*.png)" = "$sums" ] && grep -q "0 embedded, 2 kept, 0 FAIL" "$TMP/o" \
+[ $rc -eq 0 ] && [ "$(sha256sum "$ed"/outputs/*.png)" = "$sums" ] && grep -q "0 embedded, 0 replaced, 2 kept, 0 FAIL" "$TMP/o" \
   && ok "embed is idempotent (a PNG that carries a workflow chunk is kept byte for byte)" || no "embed idempotent rc=$rc" "$(cat "$TMP/o")"
+# e2e3 item 8: a workflow chunk from an older workflow.ui.json is replaced (one chunk, prompt kept), then kept again
+jq -c '.extra.assetgen.note = "re-rendered"' "$ed/workflow.ui.json" > "$TMP/ui" && mv "$TMP/ui" "$ed/workflow.ui.json"
+AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
+python3 -B - "$ROOT" "$ed" > "$TMP/o2" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+run = sys.argv[2]
+ui = json.load(open(os.path.join(run, "workflow.ui.json"), encoding="utf-8"))
+for name, prompt in (("comfy.png", True), ("plain.png", False)):
+    data = open(os.path.join(run, "outputs", name), "rb").read()
+    texts = [b.split(b"\0", 1) for c, b in png.chunks(data) if c in png.TEXT_CHUNKS]
+    flows = [v for k, v in texts if k == b"workflow"]
+    assert len(flows) == 1 and json.loads(flows[0].decode("latin-1")) == ui, name
+    assert any(k == b"prompt" for k, _ in texts) == prompt, name
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -q "^replaced outputs/comfy.png: stale workflow chunk replaced" "$TMP/o" && grep -q "0 embedded, 2 replaced, 0 kept, 0 FAIL" "$TMP/o" && grep -qx ok "$TMP/o2" \
+  && ok "embed replaces a stale workflow chunk (one chunk, the current workflow.ui.json, prompt chunk kept)" || no "embed stale rc=$rc" "$(cat "$TMP/o" "$TMP/o2")"
+s1=$(sha256sum "$ed"/outputs/*.png); AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(sha256sum "$ed"/outputs/*.png)" = "$s1" ] && grep -q "0 embedded, 0 replaced, 2 kept, 0 FAIL" "$TMP/o" \
+  && ok "embed after a replace is idempotent again (current chunk kept byte for byte)" || no "embed stale idempotent rc=$rc" "$(cat "$TMP/o")"
+AG render --run "$ed" >/dev/null && AG embed --run "$ed" >/dev/null
+[ "$(sha256sum "$ed"/outputs/*.png)" = "$sums" ] && ok "render again and embed: the outputs are byte for byte what the first embed wrote" || no "embed restore"
 AG qa --run "$ed" --json > "$TMP/q.json"; AG review-cmd --phase image --run "$ed" --json > "$TMP/rc.json"
 emb=$(sha256sum "$ed/outputs/comfy.png" | cut -d' ' -f1)
 [ "$(jq -r '.outputs[] | select(.path == "outputs/comfy.png") | .sha256' "$TMP/q.json")" = "$emb" ] \
@@ -902,6 +967,156 @@ AG embed --run "$RUNS/embed-noui-001" > /dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "workflow.ui.json" "$TMP/err" && cmp -s "$FX/icon-ok.png" "$RUNS/embed-noui-001/outputs/icon-ok.png" \
   && ok "embed without workflow.ui.json: error, outputs untouched" || no "embed no ui rc=$rc" "$(cat "$TMP/err")"
 rm -rf "$RUNS/embed-noui-001"
+
+echo "-- e2e3: edge fringe QA, defringe, composites in the image review"
+# item 1: a prop whose low-alpha edge pixels carry a coloured speckle (barrel-prop-001) fails png-edge-fringe;
+# defringe (refused while qa.json binds the outputs, --force names what is stale) repairs it and QA passes
+fr="$RUNS/fringe-icon-001"; mkrun fringe-icon-001 icon --style stylized-painterly && AG render --run "$fr" >/dev/null
+python3 -B - "$ROOT" "$FX/fringe.png" "$fr/outputs/prop.png" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+open(sys.argv[3], "wb").write(png.add_text(open(sys.argv[2], "rb").read(), "prompt", '{"1": {"class_type": "NineRouterImage"}}'))
+EOF
+orig=$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)
+AG qa --run "$fr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(st png-edge-fringe)" = FAIL ] && [ "$(jq -r '[.results[] | select(.state == "FAIL") | .check] | join(",")' "$TMP/q.json")" = png-edge-fringe ] \
+  && jq -r '.results[] | select(.check == "png-edge-fringe") | .reasons | join(" ")' "$TMP/q.json" | grep -q "run assetgen.py defringe on the run" \
+  && ok "qa: a coloured low-alpha fringe is a png-edge-fringe FAIL (the only FAIL row), pointing at defringe" || no "fringe qa rc=$rc" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/q.json")"
+AG defringe --run "$fr" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -qF "qa.json already bind(s) the current outputs" "$TMP/o" && grep -qF "or pass --force and then re-run qa" "$TMP/o" \
+  && [ "$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)" = "$orig" ] && [ ! -e "$fr/outputs-raw" ] \
+  && ok "defringe refuses outputs qa.json already binds (says to re-run them), nothing written" || no "defringe bound rc=$rc" "$(cat "$TMP/o")"
+AG defringe --run "$fr" --alpha-floor 300 > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 2 ] && grep -q "alpha-floor must be from 0 to 224" "$TMP/o" && ok "defringe --alpha-floor out of range: exit 2" || no "alpha floor range rc=$rc" "$(cat "$TMP/o")"
+AG defringe --run "$fr" --force --json > "$TMP/d.json" 2>"$TMP/err"; rc=$?
+after=$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)
+[ $rc -eq 0 ] && [ "$(jq -r '.results[0].state + " " + (.stale | join(","))' "$TMP/d.json")" = "defringed qa.json" ] \
+  && [ "$(sha256sum "$fr/outputs-raw/prop.png" | cut -d' ' -f1)" = "$orig" ] && [ "$after" != "$orig" ] \
+  && [ "$(jq -r '.schema + " " + (.params.alpha_floor | tostring) + " " + (.params.rings | tostring) + " " + .outputs[0].output + " " + .outputs[0].raw' "$fr/defringe.json")" = "rpg-factory.assetgen-defringe/1 null 8 outputs/prop.png outputs-raw/prop.png" ] \
+  && [ "$(jq -r '.outputs[0].before_sha256 + " " + .outputs[0].after_sha256' "$fr/defringe.json")" = "$orig $after" ] \
+  && [ "$(jq -r '.outputs[0].stats | (.recoloured == .soft and .soft > 0 and .unreached == 0) | tostring' "$fr/defringe.json")" = true ] \
+  && [ -z "$(ls "$fr/outputs" | grep -v '^prop\.png$')" ] \
+  && ok "defringe --force: original kept in outputs-raw/, defringe.json records params, before/after sha256 and stats, qa.json named stale" \
+  || no "defringe force rc=$rc" "$(cat "$TMP/err" "$TMP/d.json"; cat "$fr/defringe.json")"
+python3 -B - "$ROOT" "$fr" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+run = sys.argv[2]
+a, b = png.decode(os.path.join(run, "outputs-raw", "prop.png")), png.decode(os.path.join(run, "outputs", "prop.png"))
+assert (a.width, a.height) == (b.width, b.height) and a.rgba[3::4] == b.rgba[3::4], "alpha changed"
+assert any(a.rgba[i:i + 3] != b.rgba[i:i + 3] for i in range(0, len(a.rgba), 4) if 0 < a.rgba[i + 3] < 32), "no soft pixel recoloured"
+assert all(a.rgba[i:i + 4] == b.rgba[i:i + 4] for i in range(0, len(a.rgba), 4) if a.rgba[i + 3] in (0, 254)), "body or background changed"
+assert "prompt" in png.text_keywords(open(os.path.join(run, "outputs", "prop.png"), "rb").read()), "prompt chunk lost"
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "defringe: alpha unchanged, soft pixels recoloured, body and background bytes kept, prompt chunk carried over" || no "defringe pixels" "$(cat "$TMP/o")"
+AG qa --run "$fr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(st png-edge-fringe)" = PASS ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] \
+  && ok "qa after defringe: png-edge-fringe PASS, QA PASS" || no "qa after defringe rc=$rc" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/q.json")"
+rm -f "$fr/qa.json"; AG defringe --run "$fr" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q "from the kept original" "$TMP/o" && [ "$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)" = "$after" ] \
+  && [ "$(sha256sum "$fr/outputs-raw/prop.png" | cut -d' ' -f1)" = "$orig" ] \
+  && ok "defringe again starts from the kept original: same output bytes, original untouched" || no "defringe again rc=$rc" "$(cat "$TMP/o")"
+AG defringe --run "$fr" --alpha-floor 16 --json > "$TMP/d.json" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.outputs[0].stats.floored > 0 and .params.alpha_floor == 16' "$fr/defringe.json")" = true ] \
+  && [ "$(jq -r .outputs[0].before_sha256 "$fr/defringe.json")" = "$orig" ] && [ "$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)" != "$after" ] \
+  && ok "defringe --alpha-floor 16: from the original again, alpha below 16 floored and recorded" || no "defringe floor rc=$rc" "$(cat "$TMP/d.json")"
+AG defringe --run "$fr" > /dev/null 2>&1; AG embed --run "$fr" > /dev/null; AG qa --run "$fr" > /dev/null; AG manifest --run "$fr" > /dev/null
+grep -qx -- "- Defringe: 1 output(s), alpha floor none, originals in outputs-raw/ (defringe.json)" "$fr/run.md" \
+  && ok "defringe, then embed, qa, manifest: run.md records the defringe step (embed keeps its pixels: not stale)" || no "run.md defringe line" "$(grep -n Defringe "$fr/run.md")"
+cp "$fr/outputs-raw/prop.png" "$fr/outputs/prop.png"; AG manifest --run "$fr" > /dev/null
+grep -q -- "^- Defringe: .*; STALE, the outputs changed since: outputs/prop.png$" "$fr/run.md" \
+  && ok "run.md: a defringe record whose pixels are no longer the outputs is STALE" || no "run.md defringe stale" "$(grep -n Defringe "$fr/run.md")"
+AG defringe --run "$fr" > /dev/null 2>&1; AG embed --run "$fr" > /dev/null; AG qa --run "$fr" > /dev/null; AG manifest --run "$fr" > /dev/null
+# item 2: the image review attaches the output composited on dark and on light and asks to judge edges on both
+AG review-cmd --phase image --run "$fr" --codex codex --json > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$fr" "$TMP/rc.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import imaging, png
+run, cmd = sys.argv[2], json.load(open(sys.argv[3], encoding="utf-8"))
+assert cmd["composites"] == ["review/composite-dark.png", "review/composite-light.png"], cmd["composites"]
+ims = [cmd["argv"][i + 1] for i, a in enumerate(cmd["argv"]) if a == "-i"]
+assert [i.split("/fringe-icon-001/")[1] for i in ims] == ["outputs/prop.png", "review/composite-dark.png", "review/composite-light.png"], ims
+src = png.decode(os.path.join(run, "outputs", "prop.png"))
+for bg in ("dark", "light"):
+    assert open(os.path.join(run, "review", "composite-%s.png" % bg), "rb").read() == imaging.composite(src, bg), bg
+assert [o["path"] for o in cmd["binding"]["outputs"]] == ["outputs/prop.png"], cmd["binding"]
+assert cmd["rubric"][-1].startswith("The edges of every output with alpha are clean on both the dark and the light composite"), cmd["rubric"]
+assert "review/composite-dark.png is not an output: review-cmd composited outputs/prop.png on a dark background (#202020)" in cmd["stdin"]
+assert "review/composite-light.png is not an output: review-cmd composited outputs/prop.png on a light background (#e0e0e0)" in cmd["stdin"]
+assert "Attached images (one per -i): outputs/prop.png, review/composite-dark.png, review/composite-light.png" in cmd["stdin"]
+assert "%d. The edges of every output with alpha" % len(cmd["rubric"]) in cmd["stdin"]
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" \
+  && ok "review-cmd image: composites on dark and light (imaging.composite) attached after the output, listed, edge rubric item, never in the binding" \
+  || no "composites rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
+rm -f "$fr/review/composite-light.png"
+AG review-cmd --phase image --run "$fr" --no-write > /dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "review/composite-light.png is missing or stale and --no-write builds nothing" "$TMP/err" && [ ! -e "$fr/review/composite-light.png" ] \
+  && ok "review-cmd --no-write: a missing composite exits 2 and builds nothing" || no "composite no-write rc=$rc" "$(cat "$TMP/err")"
+AG review-cmd --phase image --run "$fr" > /dev/null && AG review-cmd --phase image --run "$fr" --no-write --json > "$TMP/rc2.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/rc2.json")" = "$(jq -c .argv "$TMP/rc.json")" ] \
+  && ok "review-cmd --no-write uses current composites (same command)" || no "composite no-write current rc=$rc" "$(cat "$TMP/err")"
+# several outputs: composites per output with alpha (review/composite-<stem>-<bg>.png); an opaque output gets none and defringe skips it
+f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly && AG render --run "$f2" >/dev/null
+cp "$FX/fringe.png" "$f2/outputs/a.png"; cp "$FX/icon-opaque.png" "$f2/outputs/b.png"; ob=$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)
+AG defringe --run "$f2" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q "^skipped outputs/b.png: no transparent pixels" "$TMP/o" && grep -q "1 defringed, 1 skipped, 0 FAIL" "$TMP/o" \
+  && [ "$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)" = "$ob" ] && [ ! -e "$f2/outputs-raw/b.png" ] \
+  && ok "defringe skips an output without transparent pixels (untouched, no raw copy)" || no "defringe skip rc=$rc" "$(cat "$TMP/o")"
+AG review-cmd --phase image --run "$f2" --json > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c .composites "$TMP/rc.json")" = '["review/composite-a-dark.png","review/composite-a-light.png"]' ] \
+  && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rc.json")" = 4 ] \
+  && ok "several outputs: review/composite-<stem>-dark/light.png for the output with alpha only" || no "composites two rc=$rc" "$(cat "$TMP/err"; jq -c .composites "$TMP/rc.json")"
+# item 3: approve-record for a person (refusals write nothing), manifest keeps an approved status while nothing bound
+# changed; the lifecycle allows a committed proposed run.md -> approved
+APA="$TMP/approve-auth"; mkdir -p "$APA/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$APA/assetgen/"
+cp -R "$fr" "$APA/assetgen/runs/"; ar="$APA/assetgen/runs/fringe-icon-001"
+AG manifest --run "$ar" --prompt-author robin > /dev/null
+git init -q -b main "$APA" && git -C "$APA" add -A && git -C "$APA" "${G[@]}" commit -qm "proposed run"
+md0=$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md)
+AG approve-record --run "$ar" > /dev/null 2>"$TMP/err"; rc1=$?
+grep -q "approve-record needs --by NAME" "$TMP/err"; e1=$?
+AG approve-record --run "$ar" --by "  " > /dev/null 2>"$TMP/err"; rc2=$?
+AG approve-record --run "$ar" --by claude-opus > /dev/null 2>"$TMP/err"; rc3=$?
+grep -q "'claude-opus' is an agent or model name; only a person approves a gen-run" "$TMP/err"; e3=$?
+AG approve-record --run "$ar" --by Codex > /dev/null 2>"$TMP/err"; rc4=$?
+AG approve-record --run "$ar" --by Robin > /dev/null 2>"$TMP/err"; rc5=$?
+grep -q "'Robin' is recorded in this run as an agent or reviewer" "$TMP/err"; e5=$?
+[ "$rc1/$e1/$rc2/$rc3/$e3/$rc4/$rc5/$e5" = "2/0/2/1/0/1/1/0" ] && [ -z "$(git -C "$APA" status --porcelain)" ] \
+  && ok "approve-record refuses without --by (exit 2), an agent or model name and a name the run records as an agent (exit 1); nothing written" \
+  || no "approve-record refusals $rc1/$e1/$rc2/$rc3/$e3/$rc4/$rc5/$e5" "$(cat "$TMP/err"; git -C "$APA" status --porcelain)"
+AG approve-record --run "$ar" --by Dana --note "edges clean on dark and light" > "$TMP/o" 2>"$TMP/err"; rc=$?
+rev=$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md); recf="$APA/approvals/AGEN-fringe-icon-001/assetgen-approval-$rev.json"
+[ $rc -eq 0 ] && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = approved ] && grep -qx -- "- Status: approved (approval is human-only)" "$ar/run.md" \
+  && [ "$(jq -r '[.artifact, .gate, .scope, .rev, .by, .note] | join("|")' "$recf")" = "AGEN-fringe-icon-001|assetgen-approval|assetgen|$rev|Dana|edges clean on dark and light" ] \
+  && grep -qF "Dana commits run.md and this record together in one SSH-signed commit (git commit -S) whose signer principal is Dana" "$TMP/o" \
+  && ok "approve-record --by Dana: run.md approved, record {artifact, gate, scope, rev = git blob of run.md, by, note}, says to commit both SSH-signed as Dana" \
+  || no "approve-record rc=$rc" "$(cat "$TMP/err" "$TMP/o"; ls -R "$APA/approvals" 2>&1)"
+AG manifest --run "$ar" --prompt-author robin > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q "AGEN-fringe-icon-001 approved$" "$TMP/o" && [ "$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md)" = "$rev" ] \
+  && ok "manifest after approve-record keeps approved and writes the same run.md bytes (the record's rev still binds)" || no "manifest after approval rc=$rc" "$(cat "$TMP/o")"
+python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$APA" --registry "$ROOT/registry.json" --domain assetgen --json > "$TMP/aq.json" 2>"$TMP/err"
+lc=$(jq -r '[.results[] | select(.artifact == "AGEN-fringe-icon-001" and .check == "lifecycle") | .state] | join(",")' "$TMP/aq.json")
+ta=$(jq -r '[.results[] | select(.artifact == "AGEN-fringe-icon-001" and .check == "trace-approval") | .state] | join(",")' "$TMP/aq.json")
+[ "$lc" = PASS ] && [ "$ta" = HUMAN_REQUIRED ] \
+  && ok "artifact-quality: committed proposed run.md approved with approve-record passes the lifecycle (proposed -> approved); the unsigned approval is HUMAN_REQUIRED" \
+  || no "lifecycle after approve-record: lifecycle=$lc trace-approval=$ta" "$(cat "$TMP/err"; jq -c '.results[] | select(.artifact == "AGEN-fringe-icon-001" and (.check == "lifecycle" or .check == "trace-approval"))' "$TMP/aq.json")"
+AG defringe --run "$ar" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "run.md is approved: defringe would change the approved outputs" "$TMP/o" && ok "defringe refuses an approved run" || no "defringe approved rc=$rc" "$(cat "$TMP/o")"
+AG manifest --run "$ar" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qF "AGEN-fringe-icon-001 proposed (approval no longer binds, changed: spec.prompt_author; status reset to proposed)" "$TMP/o" \
+  && ok "manifest with another --prompt-author on an approved run: the bytes would differ from the approved run.md, so proposed, naming the field" \
+  || no "manifest unbound change rc=$rc" "$(cat "$TMP/o")"
+AG approve-record --run "$ar" --by Dana > /dev/null 2>"$TMP/err" || no "approve-record again" "$(cat "$TMP/err")"
+cp "$FX/icon-ok.png" "$ar/outputs/prop.png"; AG manifest --run "$ar" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -q "AGEN-fringe-icon-001 proposed (approval no longer binds, changed: outputs" "$TMP/o" \
+  && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = proposed ] \
+  && ok "manifest after the approved outputs changed: proposed, names what the approval no longer binds" || no "manifest reset rc=$rc" "$(cat "$TMP/o")"
 
 echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
 cat > "$TMP/fake-comfy.py" <<'EOF'
@@ -1578,6 +1793,23 @@ grep -q "^style lock: style rpg-base v2 (sha256 [0-9a-f]\{12\}), family props \[
   && grep -q "^reference b-strong  \[family match; dimensions: palette, shape, line; strength strong\]$" "$TMP/slr.out" \
   && grep -q "^rejection r-props direction too_detailed: No fine filigree on props.$" "$TMP/slr.out" \
   && ok "resolve text: style lock, references with reasons, rejections" || no "resolve text" "$(cat "$TMP/slr.out")"
+# e2e3 item 5: anchors of another family are a fallback resolve warns about; anchor_family_fallback: false forbids them
+[ "$(lk '.warnings | length' sl-icon-001)" = 0 ] && ! grep -q "^warning: reference" "$TMP/slr.out" \
+  && ok "resolve: every selected anchor of the run's family, no cross-family warning" || no "same-family warnings" "$(lk .warnings sl-icon-001)"
+AG resolve --purpose icon --family vfx --authoring "$SC" --json > "$TMP/xf.json" 2>"$TMP/err"; rc1=$?
+AG resolve --purpose icon --family vfx --authoring "$SC" > "$TMP/xf.txt" 2>>"$TMP/err"; rc2=$?
+[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -r '.style_lock.references | length' "$TMP/xf.json")" = 3 ] && [ "$(jq -r '.warnings | length' "$TMP/xf.json")" = 3 ] \
+  && grep -q "^warning: reference b-strong is a props anchor, the run's family is vfx (cross-family fallback; set anchor_family_fallback: false in the purpose or project.json to forbid it)$" "$TMP/xf.txt" \
+  && ok "resolve --family vfx: the props anchors fill in as a cross-family fallback, one warning per pick (text and spec.warnings)" \
+  || no "cross-family warning rc=$rc1/$rc2" "$(cat "$TMP/err" "$TMP/xf.txt"; jq -c .warnings "$TMP/xf.json")"
+echo '{"extends": "icon", "title": "Icon, own family only", "anchor_family_fallback": false}' > "$SG/purposes/icon-own.json"
+AG resolve --purpose icon-own --family vfx --authoring "$SC" --json > "$TMP/xf.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.style_lock.references | length' "$TMP/xf.json")" = 0 ] \
+  && jq -r '.warnings[]' "$TMP/xf.json" | grep -q "^anchor_family_fallback is false: [1-9][0-9]* anchor(s) of other families than vfx were not selected$" \
+  && [ "$(AG resolve --purpose icon-own --authoring "$SC" --json | jq -r '[.style_lock.references[].anchor_id] | join(",")')" = "b-strong,a-canon,c-supp" ] \
+  && ok "anchor_family_fallback: false in the purpose: no cross-family anchor (warning says how many were left out); its own family still selected" \
+  || no "fallback false rc=$rc" "$(cat "$TMP/err"; jq -c '[.style_lock.references, .warnings]' "$TMP/xf.json")"
+rm -f "$SG/purposes/icon-own.json"
 # e2e2: resolve prints a short summary by default; --verbose adds every source, --json is the whole spec
 AG resolve --purpose icon --authoring "$SC" > "$TMP/short.out" 2>"$TMP/err"; rc=$?
 AG resolve --purpose icon --authoring "$SC" --verbose > "$TMP/long.out" 2>>"$TMP/err"
@@ -1840,7 +2072,7 @@ sqa sl-blue.png '.style.data.palette = "Warm earthy palette."'
 [ $rc -eq 0 ] && [ "$(sst style-palette)" = NOT_AVAILABLE ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] \
   && ok "qa style-palette NOT_AVAILABLE (prose palette): the qa state stays PASS, exit 0 (not 3)" || no "palette NA rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
 req=$(jq -r '[.results[] | select(.check | startswith("png-")) | .check] | unique | join(",")' "$TMP/sq.json")
-[ "$req" = "png-alpha,png-corners,png-not-blank,png-size,png-valid" ] && [ "$(jq -r '[.results[].check] | map(select(startswith("style-"))) | join(",")' "$TMP/sq.json")" = "style-palette,style-tone,style-edges,style-canvas" ] \
+[ "$req" = "png-alpha,png-corners,png-edge-fringe,png-not-blank,png-size,png-valid" ] && [ "$(jq -r '[.results[].check] | map(select(startswith("style-"))) | join(",")' "$TMP/sq.json")" = "style-palette,style-tone,style-edges,style-canvas" ] \
   && python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import runfiles, json; q = json.load(open(sys.argv[2]))["purpose"]["data"]["qa"]; sys.exit(0 if not any(c.startswith("style-") for c in runfiles.required_checks(q)) else 1)' "$ROOT/scripts/assetgen" "$sq/spec.json" \
   && ok "style rows come after the required checks and are never required checks (runfiles.required_checks)" || no "style rows order/required: $req"
 # tone against the selected anchors (references/anchor-*.png copies of icon-ok.png)
@@ -1878,20 +2110,20 @@ sqa sl-blue.png "del(.style_lock) | $PAL"
 cp "$TMP/sq-spec.json" "$sq/spec.json"; rm -f "$sq/outputs/"*.png; cp "$FX/sl-warm.png" "$sq/outputs/out.png"; AG qa --run "$sq" >/dev/null
 AG review-cmd --phase image --run "$sq" --codex codex --json > "$TMP/rv.json" 2>"$TMP/err"; rc=$?
 sqabs=$(cd "$sq" && { pwd -W 2>/dev/null || pwd; })
-want="$sqabs/outputs/out.png $sqabs/references/anchor-b-strong.png $sqabs/references/anchor-a-canon.png $sqabs/references/anchor-c-supp.png"
+want="$sqabs/outputs/out.png $sqabs/review/composite-dark.png $sqabs/review/composite-light.png $sqabs/references/anchor-b-strong.png $sqabs/references/anchor-a-canon.png $sqabs/references/anchor-c-supp.png"
 [ $rc -eq 0 ] && [ "$(jq -r '[.argv | to_entries[] | select(.value == "-i") | .key + 1] as $i | [.argv[$i[]]] | join(" ")' "$TMP/rv.json")" = "$want" ] \
   && [ "$(jq -r '.anchors | join(",")' "$TMP/rv.json")" = "references/anchor-b-strong.png,references/anchor-a-canon.png,references/anchor-c-supp.png" ] \
-  && ok "review-cmd image: -i outputs first, then the selected anchors in selection order" || no "review argv rc=$rc" "$(cat "$TMP/err"; jq -c .argv "$TMP/rv.json")"
+  && ok "review-cmd image: -i outputs first, then the alpha composites, then the selected anchors in selection order" || no "review argv rc=$rc" "$(cat "$TMP/err"; jq -c .argv "$TMP/rv.json")"
 jq -r .stdin "$TMP/rv.json" > "$TMP/rv.txt"
 grep -qF "The image matches the attached anchors in palette, lighting, line, detail density and rendering." "$TMP/rv.txt" \
   && grep -qF "Not repeated: too_detailed - No fine filigree on props." "$TMP/rv.txt" \
-  && grep -q "^Attached images (one per -i): outputs/out.png, references/anchor-b-strong.png, references/anchor-a-canon.png, references/anchor-c-supp.png$" "$TMP/rv.txt" \
+  && grep -q "^Attached images (one per -i): outputs/out.png, review/composite-dark.png, review/composite-light.png, references/anchor-b-strong.png, references/anchor-a-canon.png, references/anchor-c-supp.png$" "$TMP/rv.txt" \
   && grep -q "^references/anchor-b-strong.png is not an output: style anchor b-strong (strong; palette, shape, line) of style rpg-base" "$TMP/rv.txt" \
   && ok "review-cmd image: anchor rubric item, one item per relevant rejection, anchors named as not outputs" || no "review rubric" "$(cat "$TMP/rv.txt")"
 n_rub=$(jq '.purpose.data.image_rubric | length' "$sq/spec.json")
-[ "$(jq -r --argjson n "$n_rub" '.rubric[$n:] | join("|")' "$TMP/rv.json")" = "The image matches the attached anchors in palette, lighting, line, detail density and rendering.|Not repeated: palette_off - the rejected asset sl-icon-001 outputs/out.png|Not repeated: too_detailed - No fine filigree on props.|Not repeated: too_detailed - No gold trim.|Not repeated: too_detailed - No noise." ] \
+[ "$(jq -r --argjson n "$n_rub" '.rubric[$n:] | join("|")' "$TMP/rv.json")" = "The image matches the attached anchors in palette, lighting, line, detail density and rendering.|Not repeated: palette_off - the rejected asset sl-icon-001 outputs/out.png|Not repeated: too_detailed - No fine filigree on props.|Not repeated: too_detailed - No gold trim.|Not repeated: too_detailed - No noise.|The edges of every output with alpha are clean on both the dark and the light composite: no coloured fringe, halo, speckle or matte line around the subject." ] \
   && grep -q "^$((n_rub + 2))\. Not repeated: palette_off" "$TMP/rv.txt" \
-  && ok "review-cmd --json prints the same rubric items (purpose rubric, then anchor and rejection items) for Claude's own review" || no "rubric json" "$(jq -c .rubric "$TMP/rv.json")"
+  && ok "review-cmd --json prints the same rubric items (purpose rubric, then anchor, rejection and edge items) for Claude's own review" || no "rubric json" "$(jq -c .rubric "$TMP/rv.json")"
 [ "$(jq -c '.binding.style == ($s[0].style_lock.style)' --slurpfile s "$sq/spec.json" "$TMP/rv.json")" = true ] \
   && [ "$(jq -c '[.binding.anchors[] | .anchor_id] | join(",")' -r "$TMP/rv.json")" = "b-strong,a-canon,c-supp" ] \
   && [ "$(jq -c --slurpfile s "$sq/spec.json" '[.binding.anchors[].sha256] == [$s[0].style_lock.references[].sha256]' "$TMP/rv.json")" = true ] \
@@ -1930,7 +2162,7 @@ done
 # old runs: a spec without style_lock reviews exactly as before
 sl_="$SR/sl-legacy-001"; cp -R "$sq" "$sl_"; jq 'del(.style_lock)' "$sq/spec.json" > "$sl_/spec.json"; rm -rf "$sl_/references"
 AG review-cmd --phase image --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(jq -r '(.binding | keys | join(",")) + " " + (.anchors | length | tostring) + " " + ([.argv[] | select(. == "-i")] | length | tostring)' "$TMP/rl.json")" = "outputs,prompt_sha256,requirements_sha256 0 1" ] \
+[ $rc -eq 0 ] && [ "$(jq -r '(.binding | keys | join(",")) + " " + (.anchors | length | tostring) + " " + ([.argv[] | select(. == "-i")] | length | tostring) + " " + (.composites | length | tostring)' "$TMP/rl.json")" = "outputs,prompt_sha256,requirements_sha256 0 3 2" ] \
   && ! jq -r .stdin "$TMP/rl.json" | grep -q "attached anchors\|Not repeated" \
   && ok "review-cmd image on an old spec without style_lock: old binding keys, no anchors, no style rubric items" || no "legacy review rc=$rc" "$(cat "$TMP/err"; jq -c '[.binding, .argv]' "$TMP/rl.json")"
 jq 'del(.style.data.forbidden, .style.data.outline, .style.data.shape_language)' "$sl_/spec.json" > "$TMP/s" && mv "$TMP/s" "$sl_/spec.json"
@@ -1940,7 +2172,12 @@ grep -qx "Style forbidden (never in the prompt or the image): none" "$TMP/rr.txt
 # drift (read-only): older version and hash changed
 git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "runs and records"
 AG drift --authoring "$SC" --json > "$TMP/dr.json" 2>"$TMP/err"; rc=$?
-[ $rc -eq 0 ] && [ "$(jq '.items | length' "$TMP/dr.json")" = 0 ] && ok "drift: nothing behind the current style" || no "drift clean rc=$rc" "$(cat "$TMP/err" "$TMP/dr.json")"
+[ $rc -eq 0 ] && [ "$(jq -r '[.items[] | .kind + " " + .id + " " + .state + " " + .project_style + " " + .version_state] | join(",")' "$TMP/dr.json")" = "gen-run AGEN-sl-override-001 style-id-mismatch rpg-base " ] \
+  && ok "drift: nothing behind the current style; the --style-override run under anime-cel is a style-id-mismatch (project style rpg-base)" || no "drift clean rc=$rc" "$(cat "$TMP/err" "$TMP/dr.json")"
+AG drift --authoring "$SC" > "$TMP/dr.txt" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && grep -q "^style-id-mismatch gen-run AGEN-sl-override-001 (assetgen/runs/sl-override-001/run.md): recorded anime-cel v[^ ]* [0-9a-f-]*, current v[^ ]* [0-9a-f]*, project style rpg-base$" "$TMP/dr.txt" \
+  && grep -qx "assetgen drift: 1 item(s) behind the current style or outside the project's styles" "$TMP/dr.txt" \
+  && ok "drift text: the style-id-mismatch line names the project style; the footer fits every item" || no "drift text mismatch rc=$rc" "$(cat "$TMP/err" "$TMP/dr.txt")"
 jq '.version = 3' "$SG/styles/rpg-base.json" > "$TMP/s" && mv "$TMP/s" "$SG/styles/rpg-base.json"
 git -C "$SC" "${G[@]}" commit -qam "style v3"
 AG drift --authoring "$SC" --json > "$TMP/dr.json" 2>"$TMP/err"; rc=$?
@@ -1955,7 +2192,7 @@ jq '.version = 2' "$SG/styles/rpg-base.json" > "$TMP/s" && mv "$TMP/s" "$SG/styl
 jq '.prefix = "RPG base art, revised,"' "$SG/styles/rpg-base.json" > "$TMP/s" && mv "$TMP/s" "$SG/styles/rpg-base.json"
 AG drift --authoring "$SC" > "$TMP/dr.txt" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && grep -q "^hash-changed anchor a-canon (assetgen/styles/rpg-base/anchors/a-canon.json): recorded rpg-base v2 [0-9a-f]\{12\}, current v2 [0-9a-f]\{12\}$" "$TMP/dr.txt" \
-  && grep -q "^hash-changed gen-run AGEN-sl-icon-001 " "$TMP/dr.txt" && ! grep -q "^older-version" "$TMP/dr.txt" && grep -q "^assetgen drift: [1-9][0-9]* item(s) behind the current style$" "$TMP/dr.txt" \
+  && grep -q "^hash-changed gen-run AGEN-sl-icon-001 " "$TMP/dr.txt" && ! grep -q "^older-version" "$TMP/dr.txt" && grep -q "^assetgen drift: [1-9][0-9]* item(s) behind the current style or outside the project's styles$" "$TMP/dr.txt" \
   && ok "drift text: same version, changed style data -> hash-changed" || no "drift hash-changed rc=$rc" "$(cat "$TMP/err" "$TMP/dr.txt")"
 git -C "$SC" checkout -q -- .
 
@@ -2062,6 +2299,19 @@ case("src-agent-001", "FAIL", ["without a person's approval", "codex"], "gen-run
      status="approved", lock=False, outputs=[("outputs/s.png", sha)])
 case("src-agent-001", "FAIL", ["which this run does not record"], "gen-run-style: an anchor naming output bytes the run does not record FAIL",
      status="approved", lock=False, outputs=[("outputs/s.png", "0" * 64)])
+# e2e3 item 4: a source run approved with assetgen.py approve-record but not yet committed and signed is HUMAN_REQUIRED
+# ("present but not committed/signed"), not a missing approval
+import subprocess
+os.makedirs(os.path.join(G, "runs", "seed3-001"), exist_ok=True)
+with open(os.path.join(G, "runs", "seed3-001", "run.md"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("---json\n%s\n---\n# seed3\n\n- Status: proposed (approval is human-only)\n" % json.dumps(
+        {"id": "AGEN-seed3-001", "kind": "gen-run", "domain": "assetgen", "status": "proposed", "spec": {}}, indent=2))
+p = subprocess.run([sys.executable, "-B", os.path.join(root, "scripts", "assetgen", "assetgen.py"), "approve-record", "--run",
+                    os.path.join(G, "runs", "seed3-001"), "--by", "Dana"], capture_output=True, text=True)
+print(("ok " if p.returncode == 0 else "no ") + "approve-record on the source run (not committed)" + ("" if p.returncode == 0 else " | " + p.stderr))
+shas["a-pending"] = anchor("a-pending", ref2, run="seed3-001", n=13)
+case("u-pending-001", "HUMAN_REQUIRED", ["approval of source gen-run AGEN-seed3-001 is present but not committed/signed"],
+     "gen-run-style: an approval written by approve-record but not committed/signed is HUMAN_REQUIRED, not missing", refs=["a-pending"])
 print("ok gen-run-style cases ran to the end")
 EOF
 while IFS= read -r line; do
@@ -2081,6 +2331,13 @@ echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_self
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
 n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
 [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "consistency self-test: $n_ok cases passed" || no "consistency self-test rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
+
+for st_ in imaging_selftest style_selftest; do
+  echo "-- $st_ (tests/fixtures/assetgen/$st_.py)"
+  python3 -B "$ROOT/tests/fixtures/assetgen/$st_.py" > "$TMP/cs" 2>&1; rc=$?
+  n_ok=$(grep -c '^ok ' "$TMP/cs"); n_no=$(grep -c '^not ok ' "$TMP/cs")
+  [ $rc -eq 0 ] && [ "$n_ok" -gt 0 ] && [ "$n_no" -eq 0 ] && ok "$st_: $n_ok cases passed" || no "$st_ rc=$rc ($n_ok ok, $n_no not ok)" "$(grep -v '^ok ' "$TMP/cs")"
+done
 
 echo "-- no endpoints or credentials in core data or engine"
 hits=$(grep -rnIE '://|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost:[0-9]|Bearer [A-Za-z0-9]|sk-[A-Za-z0-9]{12}|"(api[_-]?key|authorization|base_url)" *:' \

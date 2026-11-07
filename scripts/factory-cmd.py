@@ -261,16 +261,19 @@ ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd", "drift")
 
 
 def cmd_assetgen(raw):
-    """Read-only assetgen.py verbs; render, embed, qa and manifest write into a run directory, promote-anchor and reject
-    write style-lock records into the authoring repo and publish uploads to ComfyUI: they stay with the asset-gen
-    skill."""
+    """Read-only assetgen.py verbs; render, defringe, embed, qa and manifest write into a run directory, promote-anchor
+    and reject write style-lock records into the authoring repo, approve-record writes a person's approval record and
+    publish uploads to ComfyUI: they stay with the asset-gen skill."""
     args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
     if not args or args[0] not in ASSETGEN_VERBS:
         hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
-                if args and args[0] in ("render", "embed", "qa", "manifest") else
+                if args and args[0] in ("render", "defringe", "embed", "qa", "manifest") else
                 " (%s writes a style-lock record into the authoring repo: the asset-gen skill runs "
                 "scripts/assetgen/assetgen.py directly)" % args[0]
                 if args and args[0] in ("promote-anchor", "reject") else
+                " (approve-record writes a person's approval record: the asset-gen skill runs it only on that person's "
+                "explicit word, with scripts/assetgen/assetgen.py directly)"
+                if args and args[0] == "approve-record" else
                 " (publish uploads to ComfyUI: the asset-gen skill runs scripts/assetgen/assetgen.py directly)"
                 if args and args[0] == "publish" else "")
         raise ValueError("assetgen needs " + "|".join(ASSETGEN_VERBS) + hint)
