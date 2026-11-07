@@ -39,11 +39,18 @@ lead's workflow asks for in a run directory or the game layer.
   game: `assetgen/{purposes,styles,templates}/`. The id is the file name.
 - **Precedence:** a game file with a core id and no `extends` replaces it; `"extends": "<id>"` deep-merges onto it
   (objects key by key, the game wins; lists and scalars replace). Params, low to high: template default < style <
-  purpose < `render --param`. `resolve` prints the source file of every field and param.
+  purpose < `render --param`. `resolve` prints the source file of every field and param. For technical constraints
+  (lighting, background, framing, palette limits) the purpose wins over the style: `resolve` marks each style hint
+  the purpose overrides, so the prompt writer sees only the purpose's value.
 - **Template format** (`templates/assetgen/workflows/image-generate.json`): `params` (`type` string, int, number,
   bool or enum with `options`; `default`; `required`), `output_node` (a SaveImage node id), `workflow` (ComfyUI API
   format `{"<id>": {"class_type", "inputs"}}`, links `["<node id>", <output index>]`). `{{name}}` as the whole string
   takes the typed value; inside a longer string it is text. `render` fails on an undeclared or missing param.
+- **Two renders of one graph:** `render` writes `<run>/workflow.json` (API format, what `run_workflow` runs and the
+  review binds) and `<run>/workflow.ui.json` (ComfyUI frontend / LiteGraph format: node positions and sizes, titles,
+  links, `widgets_values` in input order, the run id in `extra`), which converts back to the same API graph. The
+  prompt is a `PrimitiveStringMultiline` node ("Text (Multiline)", input `value`) titled
+  `Prompt (Claude, Codex review <state>)`, linked into `NineRouterImage.user_prompt`.
 - **Image node:** the core templates use the 9router custom node `NineRouterImage` (`user_prompt`, `model`, `size`,
   `quality`, `background`, optional `reference_images`) into `SaveImage`; `NineRouterChat` is the text node. Their
   inputs are snapshotted in `scripts/assetgen/data/known-nodes.json` for offline lint.
@@ -57,7 +64,14 @@ lead's workflow asks for in a run directory or the game layer.
 - **Run sequence:** `server_info` (version, nodes present) -> `validate_workflow` (`<run>/workflow.json` against the
   live node list) -> `upload_file` (image-edit reference; returns the input-folder name) -> `run_workflow`
   (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`).
-  `nodes`, `list_workflow_slots` and `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
+  -> `assetgen.py embed --run <run>` (mandatory, before `qa`). `nodes`, `list_workflow_slots` and
+  `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
+- **Node pack version:** read the `comfyui_9router` pack in `server_info`; when it is outdated, report it with its
+  version and let the user update it - never `update_comfyui`, `install_node` or any other update yourself.
+- **See the run in ComfyUI:** `assetgen.py publish --run <run> --comfy-url <URL>` (optional, only when ComfyUI is
+  reachable) uploads `workflow.ui.json` through ComfyUI's userdata API, so it shows under Workflows > assetgen;
+  connection refused is `NOT_AVAILABLE` and writes nothing. Dragging an embedded output PNG into ComfyUI restores the
+  laid-out graph too.
 - **Setup** (once, the user's machine): install the `comfy-mcp` package into a Python env, register it for Claude as
   `comfy-mcp` with `COMFY_LOCAL_URL` set to the running ComfyUI, start ComfyUI (Desktop or headless). A newly added
   MCP server loads only in a new session.
@@ -84,6 +98,11 @@ lead's workflow asks for in a run directory or the game layer.
 - **LoadImage reads ComfyUI's input folder, not the run directory:** upload the reference with `upload_file` and pass
   the returned name as `reference_image` (`templates/assetgen/workflows/image-edit.json`); keep the original as
   `<run>/references/<that name>` too, or the gen-run quality plugin fails provenance and cannot bind it.
+- **`run_workflow` opens no canvas tab:** it posts the API graph to ComfyUI's `/prompt` queue, so a person who opens
+  ComfyUI sees no workflow until `publish` uploads `workflow.ui.json` (`scripts/assetgen/assetgen.py` `publish`).
+- **Fetched PNGs carry no workflow:** comfy-mcp sends no `extra_pnginfo`, so a PNG holds only the `prompt` text chunk;
+  `embed` adds the `workflow` chunk (idempotent, keeps `prompt`). Run it before `qa`: QA and the reviews bind the
+  hash of the embedded file (`scripts/assetgen/assetgen.py` `embed`).
 - **SaveImage writes into ComfyUI's output folder** under `filename_prefix` (`render --run` sets
   `assetgen/<run-id>`, `scripts/assetgen/assetgen.py` `render`); only `fetch_outputs` puts the PNGs into the run.
 - **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`):
@@ -92,7 +111,8 @@ lead's workflow asks for in a run directory or the game layer.
 
 ## Testing
 
-- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose, lint, review-cmd, PNG QA,
+- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI
+  graph converted back equals the API graph), lint, review-cmd, embed, publish against a fake HTTP server, PNG QA,
   manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
 - `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs
   ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
@@ -100,4 +120,4 @@ lead's workflow asks for in a run directory or the game layer.
 ## Tools
 
 - `comfy-mcp`: the run sequence above (Idioms). Not OK: `assetgen.py render` only; generation `NOT_RUN` and a
-  person runs `workflow.json` in ComfyUI.
+  person loads `workflow.ui.json` in ComfyUI.
