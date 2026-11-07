@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # asset-gen engine (scripts/assetgen/): list/show/resolve with core + game layers (override, extends, per-field
-# source, param precedence), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
-# lint errors and warnings, review-cmd output (prints, never runs Codex), PNG QA on fixture PNGs generated here
-# (alpha, corners, seam, blank, size modes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
-# (gen-run front matter, review bindings), the gen-run quality plugin (pass and fail cases: review files and their
+# source, param precedence, purpose constraints over style hints), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
+# the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
+# workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
+# lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
+# the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
+# (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
+# (alpha, corners, seam, blank, size modes incl. aspect + min area, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
+# (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md,
@@ -102,6 +106,36 @@ echo '{"extends": "icon", "params": {"tint": "red"}}' > "$BAD/assetgen/purposes/
 AG resolve --purpose icon --style pixel-art --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "param 'tint' that template 'image-generate' does not declare" "$TMP/err" && ok "purpose param not declared by the template: error" || no "undeclared purpose param rc=$rc" "$(cat "$TMP/err")"
 
+echo "-- resolve: purpose constraints beat style hints (data/precedence.json)"
+AG resolve --purpose ref-3d-turnaround --style stylized-painterly --json > "$TMP/r.json"
+[ "$(r .hints.lighting.from)" = purpose ] && [ "$(r .hints.lighting.text)" = "$(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" ] \
+  && [ "$(r .hints.lighting.overrides.text)" = "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" ] \
+  && [ "$(r .hints.lighting.overrides.source)" = "core:templates/assetgen/styles/stylized-painterly.json" ] \
+  && ok "turnaround + painterly: purpose lighting wins, the style's key + rim light is marked overridden" || no "hints: $(r .hints)"
+[ "$(r .hints.palette.from)/$(r '.hints.palette | has("overrides")')" = "style/false" ] && [ "$(r .hints.background.from)" = purpose ] \
+  && ok "palette stays a style hint; background comes from the purpose constraint" || no "palette/background hints: $(r .hints)"
+[ "$(r .style.data.lighting)" = "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" ] \
+  && ok "the style data itself is unchanged (the content hash binding keeps what was resolved)" || no "style data changed"
+AG resolve --purpose texture-tileable --style low-poly --json | jq -e '.hints.lighting.from == "purpose" and (.hints.lighting.overrides.text | test("directional"))' >/dev/null \
+  && ok "texture + low-poly: even lighting beats the single directional light" || no "texture/low-poly hints"
+AG resolve --purpose icon --style stylized-painterly --json | jq -e '.hints.lighting.from == "style" and (.hints.lighting | has("overrides") | not)' >/dev/null \
+  && ok "a purpose without a lighting constraint keeps the style's lighting hint" || no "icon/painterly hints"
+out=$(AG resolve --purpose ref-3d-turnaround --style low-poly)
+grep -q "^hint lighting = Flat, even lighting.*style hint overridden by the purpose\]$" <<<"$out" && ! grep -q "Single soft directional light" <<<"$out" \
+  && ok "resolve text: one lighting hint (the purpose's), marked as overriding the style; the style text is not shown" || no "resolve text hints" "$(grep hint <<<"$out")"
+HA="$TMP/hint-authoring"; mkdir -p "$HA/assetgen/purposes"
+echo '{"extends": "ref-3d-turnaround", "constraints": {"lighting": "Overcast even daylight."}}' > "$HA/assetgen/purposes/ref-3d-turnaround.json"
+AG resolve --purpose ref-3d-turnaround --style stylized-painterly --authoring "$HA" --json > "$TMP/r.json"
+[ "$(r .hints.lighting.text)|$(r .hints.lighting.source)|$(r .hints.background.source)" = "Overcast even daylight.|game:assetgen/purposes/ref-3d-turnaround.json|core:templates/assetgen/purposes/ref-3d-turnaround.json" ] \
+  && ok "a game purpose extension overrides one constraint; each hint names its source file" || no "game constraint: $(r .hints)"
+echo '{"extends": "icon", "constraints": {"palette": "Only greens."}}' > "$HA/assetgen/purposes/icon.json"
+echo '{"extends": "sprite-2d", "constraints": {"lighting": ["flat"]}}' > "$HA/assetgen/purposes/sprite-2d.json"
+got=$(AG lint "$HA/assetgen/purposes/icon.json" --authoring "$HA" 2>&1)
+grep -q "^FAIL game:assetgen/purposes/icon.json: constraints.palette: not a technical constraint a purpose may set" <<<"$got" \
+  && ok "lint: a purpose may not constrain a style-only hint (palette)" || no "palette constraint lint" "$got"
+got=$(AG lint "$HA/assetgen/purposes/sprite-2d.json" --authoring "$HA" 2>&1)
+grep -q "constraints.lighting must be a non-empty string" <<<"$got" && ok "lint: a constraint must be a non-empty string" || no "constraint type lint" "$got"
+
 echo "-- render: every purpose against its golden workflow"
 RUNS="$GL/runs"
 mkrun() { # mkrun NAME PURPOSE [resolve args...]
@@ -121,8 +155,12 @@ for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround
   else no "render $p rc=$rc" "$out
 $(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$p.json" 2>/dev/null))"; fi
 done
+AG review-cmd --phase prompt --run "$RUNS/golden-ref-3d-turnaround-001" --json | jq -r .stdin > "$TMP/rp.txt"
+grep -qF "lighting: $(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" "$TMP/rp.txt" \
+  && ! grep -qF "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" "$TMP/rp.txt" \
+  && ok "prompt review: the reviewer judges against the purpose lighting, not the overridden style lighting" || no "review hints" "$(grep -n Hints "$TMP/rp.txt")"
 w="$RUNS/golden-icon-001/workflow.json"
-[ "$(jq -r '.["1"].inputs.user_prompt' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
+[ "$(jq -r '.["3"].inputs.value' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
   && [ "$(jq -r '.["1"].inputs.background' "$w")" = transparent ] && ok "icon workflow: prompt verbatim (trimmed), link kept, transparent background" || no "icon workflow content"
 [ "$(jq -c '.["2"].inputs.reference_images' "$RUNS/golden-image-edit-001/workflow.json")/$(jq -r '.["1"].inputs.image' "$RUNS/golden-image-edit-001/workflow.json")" = '["1",0]/ref.png' ] \
   && ok "image-edit: LoadImage -> reference_images" || no "image-edit links"
@@ -140,6 +178,148 @@ out=$(AG render --run "$d" --param reference_image=r.png --param size=999x999 --
 [ $rc -eq 1 ] && grep -q "is empty" <<<"$out" && ok "empty prompt file: error" || no "empty prompt rc=$rc" "$out"
 AG render --spec "$RUNS/golden-icon-001/spec.json" --prompt-file "$RUNS/golden-icon-001/prompt.md" --out "$TMP/wf.json" >/dev/null && [ -f "$TMP/wf.json" ] \
   && ok "render --spec/--prompt-file/--out" || no "render explicit paths"
+printf 'Test prompt for image-edit: one subject, centered.
+' > "$d/prompt.md"; AG render --run "$d" --param reference_image=ref.png >/dev/null
+# item 1: the prompt is a visible PrimitiveStringMultiline node linked into NineRouterImage.user_prompt
+for pw in "golden-icon-001 1 3" "golden-image-edit-001 2 4"; do
+  set -- $pw; f="$RUNS/$1/workflow.json"
+  [ "$(jq -c --arg n "$2" '.[$n].inputs.user_prompt' "$f")" = "[\"$3\",0]" ] \
+    && [ "$(jq -r --arg n "$3" '.[$n].class_type + "|" + .[$n]._meta.title' "$f")" = "PrimitiveStringMultiline|Prompt (Claude, Codex review NOT_RUN)" ] \
+    && [ "$(jq -r --arg n "$3" '.[$n].inputs.value' "$f")" = "$(sed 's/[[:space:]]*$//' "$RUNS/$1/prompt.md")" ] \
+    && ok "$1: prompt node $3 (Text (Multiline), review state in the title) feeds node $2 user_prompt" || no "$1 prompt node" "$(jq -c . "$f")"
+done
+for t in image-generate image-edit; do
+  jq -e '[.workflow[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt | type] == ["array"]' "$ROOT/templates/assetgen/workflows/$t.json" >/dev/null \
+    && ok "core template $t: no inline prompt, user_prompt is a link" || no "template $t user_prompt"
+done
+python3 -B - "$ROOT" "$w" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+wf = json.load(open(sys.argv[2], encoding="utf-8"))
+assert runfiles.workflow_prompts(wf) == [wf["3"]["inputs"]["value"]], runfiles.workflow_prompts(wf)
+inline = {"1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": "inline text"}}}
+assert runfiles.workflow_prompts(inline) == ["inline text"]
+chat = {"1": {"class_type": "NineRouterImage", "inputs": {"user_prompt": ["2", 0]}}, "2": {"class_type": "NineRouterChat", "inputs": {"user_prompt": "idea"}}}
+assert runfiles.workflow_prompts(chat) == [["2", 0], "idea"], runfiles.workflow_prompts(chat)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "runfiles.workflow_prompts follows the link to the prompt node (inline and other links unchanged)" || no "workflow_prompts" "$(cat "$TMP/o")"
+# the prompt node's title carries the prompt review state of this prompt (PASS, STALE when the prompt changed)
+mkrun title-icon-001 icon --style stylized-painterly; td="$RUNS/title-icon-001"
+bound "$td" prompt PASS codex > "$td/review-prompt.json"
+AG render --run "$td" >/dev/null && t1=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+echo "Another prompt." > "$td/prompt.md"; AG render --run "$td" >/dev/null && t2=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+[ "$t1|$t2" = "Prompt (Claude, Codex review PASS)|Prompt (Claude, Codex review STALE)" ] \
+  && ok "prompt node title: Codex review PASS, STALE once the prompt changed" || no "prompt node title: $t1|$t2"
+# requirements changed, prompt kept: the verdict no longer binds the spec (STALE, never PASS)
+bound "$td" prompt PASS codex > "$td/review-prompt.json"
+jq '.params.quality = "low"' "$td/spec.json" > "$TMP/spec.json" && cp "$TMP/spec.json" "$td/spec.json"
+AG render --run "$td" >/dev/null && t3=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+[ "$t3" = "Prompt (Claude, Codex review STALE)" ] \
+  && ok "prompt node title: STALE when the requirements changed and the prompt did not" || no "prompt node title after requirements change: $t3"
+# a verdict without a requirements binding is not bound to this spec either
+bound "$td" prompt PASS codex | jq -c 'del(.requirements_sha256)' > "$td/review-prompt.json"
+AG render --run "$td" >/dev/null && t4=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+[ "$t4" = "Prompt (Claude, Codex review STALE)" ] && ok "prompt node title: STALE without requirements_sha256" || no "unbound requirements title: $t4"
+# a fallback or other reviewer never reads "Codex review PASS": SAME_MODEL PASS is WARN, other FAIL keeps its reviewer
+for c in "SAME_MODEL:claude PASS|Prompt (Claude, review SAME_MODEL:claude WARN)" "claude-sonnet FAIL|Prompt (Claude, review claude-sonnet FAIL)" \
+         "gpt-5 PASS|Prompt (Claude, review gpt-5 WARN)" "codex-mini PASS|Prompt (Claude, Codex review PASS)" " PASS|Prompt (Claude, review without reviewer WARN)"; do
+  by=${c%% *}; rest=${c#* }; st=${rest%%|*}; want=${c#*|}
+  if [ -z "$by" ]; then bound "$td" prompt PASS x | jq -c 'del(.by)' > "$td/review-prompt.json"; else bound "$td" prompt "$st" "$by" > "$td/review-prompt.json"; fi
+  AG render --run "$td" >/dev/null && t=$(jq -r '.["3"]._meta.title' "$td/workflow.json")
+  ul=$(jq -r '[.nodes[] | select(.type == "PrimitiveStringMultiline") | .title][0]' "$td/workflow.ui.json")
+  [ "$t|$ul" = "$want|$want" ] && ok "prompt node title for by=${by:-none} $st: $want" || no "prompt node title by=${by:-none}: $t|$ul (want $want)"
+done
+# the image review binding covers the prompt node: another prompt value is another requirements hash
+jq '.["3"].inputs.value = "changed"' "$RUNS/golden-icon-001/workflow.json" > "$TMP/changed-wf.json"
+python3 -B - "$ROOT" "$RUNS/golden-icon-001/spec.json" "$RUNS/golden-icon-001/workflow.json" "$TMP/changed-wf.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import runfiles
+spec = json.load(open(sys.argv[2], encoding="utf-8"))
+a, b = (runfiles.requirements_sha256(spec, runfiles.generation_inputs(json.load(open(f, encoding="utf-8")), spec)) for f in sys.argv[3:5])
+assert a != b
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "image review requirements hash covers the prompt node value (whole rendered graph)" || no "binding covers prompt node" "$(cat "$TMP/o")"
+
+echo "-- workflow.ui.json: the same graph for the ComfyUI frontend"
+# stdlib UI -> API converter (as comfy-9router run_sample.py, object_info from data/known-nodes.json): widgets_values in
+# input order, then each linked socket; the result must equal workflow.json
+cat > "$TMP/ui2api.py" <<'EOF'
+import json, sys
+known = json.load(open(sys.argv[1], encoding="utf-8"))["nodes"]
+ui = json.load(open(sys.argv[2], encoding="utf-8"))
+api = json.load(open(sys.argv[3], encoding="utf-8"))
+WIDGETS = ("STRING", "INT", "FLOAT", "BOOLEAN", "COMBO")
+by_id = {n["id"]: n for n in ui["nodes"]}
+links = {l[0]: l for l in ui["links"]}
+assert len(links) == len(ui["links"]) and ui["last_link_id"] == max(links, default=0) and ui["last_node_id"] == max(by_id)
+assert sorted(n["order"] for n in ui["nodes"]) == list(range(len(ui["nodes"])))
+graph = {}
+for node in ui["nodes"]:
+    spec = known[node["type"]]
+    assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
+    values, inputs = iter(node["widgets_values"]), {}
+    for name, decl in spec["inputs"].items():
+        if decl["type"] in WIDGETS:
+            try:
+                inputs[name] = next(values)
+            except StopIteration:
+                if decl.get("required"):
+                    raise ValueError("missing widget %s.%s" % (node["type"], name))
+    for i, socket in enumerate(node.get("inputs", [])):
+        if socket.get("link") is None:
+            continue
+        link = links[socket["link"]]
+        assert link[3] == node["id"] and link[4] == i, link
+        src = by_id[link[1]]
+        assert src["outputs"][link[2]]["type"] == link[5] and link[0] in src["outputs"][link[2]]["links"], link
+        inputs[socket["name"]] = [str(link[1]), link[2]]
+    graph[str(node["id"])] = {"class_type": node["type"], "inputs": inputs, "_meta": {"title": node["title"]}}
+for nid in api:
+    api[nid].setdefault("_meta", {"title": api[nid]["class_type"]})
+assert graph == api, json.dumps({"ui->api": graph, "workflow.json": api}, indent=1, sort_keys=True)
+print("ok")
+EOF
+KN="$ROOT/scripts/assetgen/data/known-nodes.json"
+for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround image-edit; do
+  d="$RUNS/golden-$p-001"; [ "$p" = icon ] && AG render --run "$d" >/dev/null
+  [ "$p" = image-edit ] && AG render --run "$d" --param reference_image=ref.png >/dev/null
+  out=$(python3 -B "$TMP/ui2api.py" "$KN" "$d/workflow.ui.json" "$d/workflow.json" 2>&1)
+  [ "$out" = ok ] && [ "$(jq -r '.extra.assetgen.run_id + "|" + (.version | tostring)' "$d/workflow.ui.json")" = "golden-$p-001|0.4" ] \
+    && ok "workflow.ui.json $p: converts back to workflow.json; run id in extra" || no "ui workflow $p" "$out"
+done
+u="$RUNS/golden-image-edit-001/workflow.ui.json"
+[ "$(jq -c '[.nodes[] | select(.type == "LoadImage") | .widgets_values][0]' "$u")" = '["ref.png","image"]' ] \
+  && [ "$(jq -c '[.nodes[] | select(.type == "NineRouterImage") | .inputs[] | {name, link: (.link != null), widget: (.widget.name // null)}]' "$u")" = \
+       '[{"name":"user_prompt","link":true,"widget":"user_prompt"},{"name":"reference_images","link":true,"widget":null}]' ] \
+  && [ "$(jq -r '[.nodes[] | select(.type == "PrimitiveStringMultiline") | .title][0]' "$u")" = "Prompt (Claude, Codex review NOT_RUN)" ] \
+  && ok "workflow.ui.json image-edit: LoadImage upload widget, linked prompt widget socket, prompt node title" || no "ui image-edit" "$(jq -c .nodes "$u")"
+[ "$(jq -c '[.nodes[] | {id, x: .pos[0]}] | sort_by(.id)' "$RUNS/golden-icon-001/workflow.ui.json")" = '[{"id":1,"x":500},{"id":2,"x":940},{"id":3,"x":60}]' ] \
+  && ok "workflow.ui.json layout: one column per link depth (prompt -> image -> save)" || no "ui layout" "$(jq -c '[.nodes[] | {id, pos}]' "$RUNS/golden-icon-001/workflow.ui.json")"
+[ -f "$TMP/wf.ui.json" ] && [ "$(jq -r '.extra.assetgen.run_id' "$TMP/wf.ui.json")" = null ] \
+  && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
+  && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
+
+echo "-- filename_prefix: one value in spec.json, workflow.json, review prompts and run.md"
+mkrun prefix-icon-001 icon --style stylized-painterly; pd="$RUNS/prefix-icon-001"; want=assetgen/prefix-icon-001
+AG render --run "$pd" >/dev/null 2>"$TMP/err" && AG manifest --run "$pd" >/dev/null 2>>"$TMP/err"
+got="$(jq -r .params.filename_prefix "$pd/spec.json")|$(jq -r '[.[] | select(.class_type == "SaveImage")][0].inputs.filename_prefix' "$pd/workflow.json")"
+got="$got|$(sed -n '/^---json$/,/^---$/p' "$pd/run.md" | sed '1d;$d' | jq -r .spec.params.filename_prefix)"
+AG review-cmd --phase prompt --run "$pd" --json | jq -r .stdin > "$TMP/rp.txt"
+[ "$got" = "$want|$want|$want" ] && grep -q "filename_prefix=$want" "$TMP/rp.txt" && ! grep -q 'assetgen/run\b' "$pd/workflow.json" "$pd/workflow.ui.json" "$pd/run.md" "$TMP/rp.txt" \
+  && [ "$(jq -r .param_sources.filename_prefix "$pd/spec.json")" = "run id prefix-icon-001" ] \
+  && ok "filename_prefix $want in spec.json, workflow.json, run.md and the review prompt (never assetgen/run)" || no "filename_prefix: $got" "$(cat "$TMP/err"; grep -n filename_prefix "$TMP/rp.txt")"
+mkdir -p "$RUNS/prefix-copy-001"; cp "$TMP/spec-out.json" "$RUNS/prefix-copy-001/spec.json"; cp "$pd/prompt.md" "$RUNS/prefix-copy-001/"
+[ "$(jq -r .params.filename_prefix "$TMP/spec-out.json")" = assetgen/run ] && ok "resolve --out outside a run dir keeps the template default prefix" || no "default prefix"
+out=$(AG render --run "$RUNS/prefix-copy-001" 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "spec.json records filename_prefix 'assetgen/run', run prefix-copy-001 needs 'assetgen/prefix-copy-001'" <<<"$out" \
+  && [ ! -f "$RUNS/prefix-copy-001/workflow.json" ] && ok "render --run refuses a spec.json resolved for another prefix, nothing written" || no "foreign spec rc=$rc" "$out"
+out=$(AG render --run "$pd" --param filename_prefix=elsewhere 2>&1); rc=$?
+[ $rc -eq 1 ] && grep -q "a run's prefix is $want" <<<"$out" && ok "render --run refuses --param filename_prefix" || no "prefix override rc=$rc" "$out"
+rm -rf "$RUNS/prefix-copy-001"
 
 echo "-- lint: errors and warnings"
 LA="$TMP/lint-authoring"; mkdir -p "$LA/assetgen/templates" "$LA/assetgen/purposes"
@@ -167,9 +347,17 @@ expect_lint bad-combo FAIL "'999x999' is not one of" "combo value outside the no
 expect_lint undeclared FAIL "placeholder {{mood}} is not a declared param" "undeclared placeholder"
 expect_lint unsupported-model WARN "cx/gpt-image-2.5 is unsupported by the 9router gateway" "known unsupported model id (warning)"
 expect_lint endpoint FAIL "contains a URL" "URL in a template"
+tmpl named-ids '' "{\"gen\": {\"class_type\": \"NineRouterImage\", \"inputs\": {\"user_prompt\": \"{{prompt}}\", \"model\": \"m\", \"size\": \"auto\", \"quality\": \"auto\", \"background\": \"auto\"}}, \"2\": {\"class_type\": \"SaveImage\", \"inputs\": {\"filename_prefix\": \"x\", \"images\": [\"gen\", 0]}}}"
+expect_lint named-ids FAIL "node id 'gen': must be digits" "non-numeric node id (workflow.ui.json needs numeric ids)"
 AG lint "$LA/assetgen/templates/unsupported-model.json" --authoring "$LA" >/dev/null 2>&1 && ok "warnings alone exit 0" || no "warn exit code"
 AG lint "$LA/assetgen/templates/unknown-node.json" --authoring "$LA" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a FAIL exits 1" || no "fail exit code"
 echo '{"extends": "icon", "handoff_domain": "audio", "qa": {"size": {"mode": "huge"}, "alpha": "maybe"}, "prompt_rubric": []}' > "$LA/assetgen/purposes/icon.json"
+AG lint --authoring "$LA" --json > "$TMP/o" 2>&1
+lst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/o"; }
+[ "$(lst core:templates/assetgen/purposes/icon.json)/$(lst game:assetgen/purposes/icon.json)" = "PASS/FAIL" ] \
+  && [ "$(lst core:templates/assetgen/workflows/image-generate.json)" = PASS ] \
+  && ok "lint blames the game file holding the bad values, not the unchanged core file it extends" \
+  || no "lint blame: core $(lst core:templates/assetgen/purposes/icon.json), game $(lst game:assetgen/purposes/icon.json)" "$(jq -c '.results[] | select(.path | test("icon|image-generate"))' "$TMP/o")"
 got=$(AG lint "$LA/assetgen/purposes/icon.json" --authoring "$LA" 2>&1)
 { grep -q "handoff_domain 'audio' is not a registry domain" <<<"$got" && grep -q "qa.size.mode must be one of" <<<"$got" \
   && grep -q "qa.alpha must be one of" <<<"$got" && grep -q "prompt_rubric must be a non-empty list" <<<"$got"; } \
@@ -188,6 +376,7 @@ mal mal-blank '{"extends": "texture-tileable", "qa": {"tileable": true, "not_bla
 mal mal-zero '{"extends": "icon", "qa": {"size": {"mode": "aspect", "expect": "1024x0"}}}'
 mal mal-zerow '{"extends": "icon", "qa": {"size": {"mode": "min", "expect": "0x1024"}}}'
 mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "default_style": 7}'
+mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
   local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
@@ -206,6 +395,7 @@ grep -q "qa.tileable.max_seam_error must be" <<<"$got" && grep -q "qa.size.expec
 expect_mal mal-zero "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero height in qa.size.expect -> FAIL row"
 expect_mal mal-zerow "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero width in qa.size.expect -> FAIL row"
 expect_mal mal-prompt "prompt.must_include must be a list of strings" "malformed purpose: prompt guidance and default_style types -> FAIL row"
+expect_mal mal-area "qa.size.min_area must be a number above 0 and at most 1" "malformed purpose: qa.size.min_area above 1 -> FAIL row"
 python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -257,6 +447,9 @@ save("tile-ok.png", 256, 256, wave, alpha=False)
 save("tile-bad.png", 256, 256, lambda x, y: (x, x, 128, 255), alpha=False)
 row = bytes(c for x in range(1536) for c in (x % 256, (x // 6) % 256, 100))
 open(os.path.join(out, "big.png"), "wb").write(png.encode_raw(1536, 1024, 8, 2, [row] * 1024))
+for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940)):
+    r = bytes(c for x in range(w) for c in (x % 256, (x // 6) % 256, 100))
+    open(os.path.join(out, name), "wb").write(png.encode_raw(w, h, 8, 2, [r] * h))
 row16 = bytes(b for x in range(256) for b in (x, 0, 255 - x, 0, 60, 0))
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(256, 256, 16, 2, [row16] * 256))
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
@@ -305,6 +498,16 @@ qarun qa-concept-big-001 concept-2d big.png
 [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "concept-2d: 1536x1024 passes size mode min 1024x1024 (gateway size drift)" || no "concept big rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-icon-big-001 icon big.png
 [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "icon: 1536x1024 returned for a square request fails aspect" || no "icon big rc=$rc $(st png-size)"
+qarun qa-turn-ok-001 ref-3d-turnaround big.png
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1536x1024 for a 1536x1024 request passes aspect + min area" || no "turnaround ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-turn-near-001 ref-3d-turnaround sheet-near.png
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1700x940 (aspect within the tolerance, more pixels) passes" || no "turnaround near rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-turn-strip-001 ref-3d-turnaround strip.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "2172x724, expected aspect 1536x1024: aspect 3.000 (expected 1.500" \
+  && ok "ref-3d-turnaround: the e2e 2172x724 strip (same pixel count, 3:1) fails the aspect check" || no "turnaround strip rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-turn-small-001 ref-3d-turnaround sheet-small.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "area 393216 px (min 90% of 1572864)" \
+  && ok "ref-3d-turnaround: 768x512 (right aspect, a quarter of the pixels) fails the min area" || no "turnaround small rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-edit-any-001 image-edit icon-wide.png
 [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "image-edit: size mode any" || no "edit any rc=$rc $(st png-size)"
 mkrun qa-exact-001 icon --style pixel-art --authoring "$AUTH"; cp "$FX/icon-ok.png" "$RUNS/qa-exact-001/outputs/"
@@ -426,7 +629,8 @@ spec = json.load(open(os.path.join(run, "spec.json"), encoding="utf-8"))
 gen = runfiles.generation_inputs(json.load(open(os.path.join(run, "workflow.json"), encoding="utf-8")), spec,
                                  lambda n: os.path.join(run, "references", n))
 img = [n["inputs"] for n in gen["graph"].values() if n["class_type"] == "NineRouterImage"][0]
-assert img["user_prompt"] == open(os.path.join(run, "prompt.md"), encoding="utf-8").read().strip() and "size" in img and "quality" in img and gen["references"] == {}, gen
+assert runfiles.workflow_prompts(gen["graph"]) == [open(os.path.join(run, "prompt.md"), encoding="utf-8").read().strip()], gen
+assert img["user_prompt"] == ["3", 0] and "size" in img and "quality" in img and gen["references"] == {}, gen
 want = runfiles.requirements_sha256(spec, gen)
 assert image["binding"]["requirements_sha256"] == want, (image["binding"], want)
 assert runfiles.SHA256.match(want) and want != runfiles.requirements_sha256(spec, None)
@@ -446,6 +650,180 @@ print(runfiles.requirements_sha256(spec, None))" "$ROOT" "$d" > "$TMP/req"
   && jq -r .stdin "$TMP/rc.json" | grep -qF "\"requirements_sha256\": \"$(jq -r .binding.requirements_sha256 "$TMP/rc.json")\""; } \
   && ok "review-cmd binds requirements_sha256 (prompt: purpose/style/template/params; image: + generation inputs); malformed specs still hash" \
   || no "requirements binding" "$(cat "$TMP/o"; jq -c .binding "$TMP/rcp.json")"
+
+echo "-- review-cmd: absolute paths, true pixel sizes, 2x2 tile preview"
+d="$RUNS/qa-icon-ok-001"
+(cd "$TMP" && AG review-cmd --phase image --run "game-authoring/assetgen/runs/qa-icon-ok-001" --json) > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$TMP/rc.json" "$d" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+cmd, run = json.load(open(sys.argv[1], encoding="utf-8")), sys.argv[2]
+argv = cmd["argv"]
+paths = [argv[i + 1] for i, a in enumerate(argv) if a in ("-C", "-i", "-o")]
+assert all(os.path.isabs(p) and "\\" not in p for p in paths), paths
+assert os.path.samefile(argv[argv.index("-C") + 1], run), argv
+os.chdir(os.path.splitdrive(run)[0] + os.sep)  # another cwd: every path still resolves
+assert all(os.path.isfile(argv[i + 1]) for i, a in enumerate(argv) if a == "-i"), argv
+assert os.path.samefile(os.path.dirname(cmd["verdict"]), run) and cmd["verdict"].endswith("/review-image.json")
+assert cmd["binding"]["outputs"][0]["path"] == "outputs/icon-ok.png" and cmd["tiles"] == [], cmd
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" && ok "review-cmd with a relative --run from another cwd prints absolute -C, -i and -o paths (binding paths stay run-relative)" \
+  || no "review-cmd absolute paths rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
+want=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$d/workflow.json")
+jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 256x256 (requested $want)" \
+  && [ ! -e "$d/review" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose" \
+  || no "pixel size line" "$(jq -r .stdin "$TMP/rc.json" | grep -n 'pixel size'; ls "$d")"
+AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin | grep -qF "outputs/big.png: 1536x1024 (requested" \
+  && ok "pixel size of a 1536x1024 output (concept-2d)" || no "concept pixel size"
+td="$RUNS/qa-tile-ok-001"
+AG review-cmd --phase image --run "$td" --json > "$TMP/rt.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$td" "$TMP/rt.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+run, cmd = sys.argv[2], json.load(open(sys.argv[3], encoding="utf-8"))
+src, tile = png.decode(os.path.join(run, "outputs", "tile-ok.png")), png.decode(os.path.join(run, "review", "tile-2x2.png"))
+assert (tile.width, tile.height) == (2 * src.width, 2 * src.height), (tile.width, tile.height)
+for x, y in ((0, 0), (17, 200), (255, 255)):
+    for dx, dy in ((0, 0), (src.width, 0), (0, src.height), (src.width, src.height)):
+        assert tile.pixel(x + dx, y + dy) == src.pixel(x, y), (x, y, dx, dy)
+ims = [cmd["argv"][i + 1] for i, a in enumerate(cmd["argv"]) if a == "-i"]
+assert len(ims) == 2 and ims[0].endswith("/outputs/tile-ok.png") and ims[1].endswith("/review/tile-2x2.png"), ims
+assert os.path.samefile(ims[1], os.path.join(run, "review", "tile-2x2.png"))
+assert cmd["tiles"] == ["review/tile-2x2.png"] and [o["path"] for o in cmd["binding"]["outputs"]] == ["outputs/tile-ok.png"], cmd
+assert "review/tile-2x2.png is not an output: review-cmd tiled outputs/tile-ok.png 2x2" in cmd["stdin"], cmd["stdin"]
+assert "Attached images (one per -i): outputs/tile-ok.png, review/tile-2x2.png" in cmd["stdin"]
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" && ok "tileable purpose: review/tile-2x2.png (stdlib encode, output repeated 2x2) passed with -i after the output, never in the binding" \
+  || no "tile preview rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
+sum0=$(sha256sum "$td/review/tile-2x2.png" | cut -d' ' -f1)
+AG review-cmd --phase image --run "$td" --no-write --json > "$TMP/rt2.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/rt2.json")" = "$(jq -c .argv "$TMP/rt.json")" ] && [ "$(sha256sum "$td/review/tile-2x2.png" | cut -d' ' -f1)" = "$sum0" ] \
+  && ok "--no-write uses a current tile (same command)" || no "--no-write current tile rc=$rc"
+python3 -B "$ROOT/scripts/factory-cmd.py" assetgen review-cmd --phase image --run "$td" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "factory-cmd assetgen review-cmd image with a current tile: exit 0" || no "factory-cmd current tile rc=$rc" "$(cat "$TMP/err")"
+cp "$FX/tile-bad.png" "$td/review/tile-2x2.png"
+AG review-cmd --phase image --run "$td" --no-write >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "review/tile-2x2.png is missing or stale" "$TMP/err" && cmp -s "$FX/tile-bad.png" "$td/review/tile-2x2.png" \
+  && ok "--no-write with a stale tile: exit 2, nothing rewritten" || no "--no-write stale rc=$rc" "$(cat "$TMP/err")"
+rm -rf "$td/review"
+python3 -B "$ROOT/scripts/factory-cmd.py" assetgen review-cmd --phase image --run "$td" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$td/review" ] && grep -q "missing or stale" "$TMP/err" \
+  && ok "factory-cmd assetgen review-cmd image passes --no-write: no tile built (exit 2, nothing written)" || no "factory-cmd tile rc=$rc" "$(cat "$TMP/err"; ls "$td")"
+mkrun qa-tile-two-001 texture-tileable --style stylized-painterly && AG render --run "$RUNS/qa-tile-two-001" >/dev/null
+cp "$FX/tile-ok.png" "$RUNS/qa-tile-two-001/outputs/a.png"; cp "$FX/flat.png" "$RUNS/qa-tile-two-001/outputs/b.png"
+AG review-cmd --phase image --run "$RUNS/qa-tile-two-001" --json > "$TMP/rt.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c .tiles "$TMP/rt.json")" = '["review/tile-2x2-a.png","review/tile-2x2-b.png"]' ] \
+  && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-a.png" ] && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-b.png" ] \
+  && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rt.json")" = 4 ] \
+  && ok "several outputs: one tile per output (review/tile-2x2-<stem>.png)" || no "two tiles rc=$rc" "$(jq -c .tiles "$TMP/rt.json")"
+
+echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
+ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly && AG render --run "$ed" >/dev/null
+python3 -B - "$ROOT" "$FX/icon-ok.png" "$ed/outputs/comfy.png" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+data = open(sys.argv[2], "rb").read()  # a ComfyUI-like output: a prompt tEXt chunk (comfy-mcp sends no extra_pnginfo)
+open(sys.argv[3], "wb").write(png.add_text(data, "prompt", '{"1": {"class_type": "NineRouterImage"}}'))
+EOF
+cp "$FX/icon-ok.png" "$ed/outputs/plain.png"; before=$(sha256sum "$ed/outputs/plain.png" | cut -d' ' -f1)
+AG embed --run "$ed" --json > "$TMP/e.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$ed" "$FX/icon-ok.png" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+run = sys.argv[2]
+ui = json.load(open(os.path.join(run, "workflow.ui.json"), encoding="utf-8"))
+orig = png.decode(sys.argv[3])
+for name, prompt in (("comfy.png", True), ("plain.png", False)):
+    data = open(os.path.join(run, "outputs", name), "rb").read()
+    chunks = list(png.chunks(data))  # signature, lengths and every CRC checked
+    kinds = [c for c, _ in chunks]
+    assert kinds[-1] == b"IEND" and kinds[-2] == b"tEXt" and kinds.count(b"IEND") == 1, kinds
+    texts = dict(b.split(b"\0", 1) for c, b in chunks if c == b"tEXt")
+    assert json.loads(texts[b"workflow"].decode("latin-1")) == ui, name
+    assert (b"prompt" in texts) == prompt and (not prompt or texts[b"prompt"].startswith(b'{"1"')), (name, list(texts))
+    img = png.decode(os.path.join(run, "outputs", name))
+    assert (img.width, img.height, img.rgba) == (orig.width, orig.height, orig.rgba), name
+    try:
+        from PIL import Image
+    except ImportError:
+        continue
+    assert json.loads(Image.open(os.path.join(run, "outputs", name)).text["workflow"]) == ui, name  # .text reads past IDAT
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" && [ "$(jq -r '([.results[].state] | join(",")) + " " + (.summary.embedded | tostring)' "$TMP/e.json")" = "embedded,embedded 2" ] \
+  && [ "$(sha256sum "$ed/outputs/plain.png" | cut -d' ' -f1)" != "$before" ] && [ -z "$(ls "$ed/outputs" | grep -v '\.png$')" ] \
+  && ok "embed: workflow tEXt chunk = workflow.ui.json right before IEND, CRCs valid, prompt chunk kept, pixels unchanged, no temp file left" \
+  || no "embed rc=$rc" "$(cat "$TMP/err" "$TMP/o" "$TMP/e.json")"
+sums=$(sha256sum "$ed"/outputs/*.png)
+AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(sha256sum "$ed"/outputs/*.png)" = "$sums" ] && grep -q "0 embedded, 2 kept, 0 FAIL" "$TMP/o" \
+  && ok "embed is idempotent (a PNG that carries a workflow chunk is kept byte for byte)" || no "embed idempotent rc=$rc" "$(cat "$TMP/o")"
+AG qa --run "$ed" --json > "$TMP/q.json"; AG review-cmd --phase image --run "$ed" --json > "$TMP/rc.json"
+emb=$(sha256sum "$ed/outputs/comfy.png" | cut -d' ' -f1)
+[ "$(jq -r '.outputs[] | select(.path == "outputs/comfy.png") | .sha256' "$TMP/q.json")" = "$emb" ] \
+  && [ "$(jq -r '.binding.outputs[] | select(.path == "outputs/comfy.png") | .sha256' "$TMP/rc.json")" = "$emb" ] \
+  && [ "$(jq -r .state "$TMP/q.json")" = PASS ] \
+  && ok "QA (PASS) and the image review binding hash the embedded file" || no "embedded hashes" "$(jq -c .outputs "$TMP/q.json")"
+cp "$FX/corrupt.png" "$ed/outputs/zz-corrupt.png"
+AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "^FAIL outputs/zz-corrupt.png: bad CRC" "$TMP/o" && cmp -s "$FX/corrupt.png" "$ed/outputs/zz-corrupt.png" \
+  && ok "embed: a broken PNG is a FAIL row (exit 1) and stays untouched" || no "embed corrupt rc=$rc" "$(cat "$TMP/o")"
+rm -f "$ed/outputs/zz-corrupt.png"
+mkdir -p "$RUNS/embed-noui-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/embed-noui-001/outputs/"
+AG embed --run "$RUNS/embed-noui-001" > /dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "workflow.ui.json" "$TMP/err" && cmp -s "$FX/icon-ok.png" "$RUNS/embed-noui-001/outputs/icon-ok.png" \
+  && ok "embed without workflow.ui.json: error, outputs untouched" || no "embed no ui rc=$rc" "$(cat "$TMP/err")"
+rm -rf "$RUNS/embed-noui-001"
+
+echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
+cat > "$TMP/fake-comfy.py" <<'EOF'
+import json, os, socket, subprocess, sys, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ag, run, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+seen = []
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        seen.append({"path": self.path, "type": self.headers["Content-Type"], "body": body})
+        code = 409 if mode == "conflict" else 200
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(b'"workflows/assetgen/x.json"')
+    def log_message(self, *a):
+        pass
+if mode == "refused":
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+else:
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+p = subprocess.run([sys.executable, "-B", ag, "publish", "--run", run, "--comfy-url", "http://127.0.0.1:%d/" % port, "--json"],
+                   capture_output=True, text=True)
+out = json.loads(p.stdout) if p.stdout.strip() else {}
+req = [{"path": r["path"], "type": r["type"], "same_body": r["body"] == open(os.path.join(run, "workflow.ui.json"), "rb").read()} for r in seen]
+print(json.dumps({"rc": p.returncode, "out": out, "requests": req, "stderr": p.stderr}))
+EOF
+pr="$RUNS/embed-icon-001"; snap() { find "$pr" -type f -exec sha256sum {} + | sort; }; s0=$(snap)
+python3 -B "$TMP/fake-comfy.py" "$ROOT/scripts/assetgen/assetgen.py" "$pr" ok > "$TMP/p.json" 2>&1
+jq -e '.rc == 0 and .out.state == "PASS" and .out.http_status == 200 and .out.workflow == "workflows/assetgen/embed-icon-001.json"
+       and (.requests | length) == 1 and .requests[0].path == "/api/userdata/workflows%2Fassetgen%2Fembed-icon-001.json?overwrite=true"
+       and .requests[0].type == "application/json" and .requests[0].same_body' "$TMP/p.json" >/dev/null \
+  && [ "$(snap)" = "$s0" ] \
+  && ok "publish: one POST /api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true with workflow.ui.json as the body, exit 0, run dir unchanged" \
+  || no "publish ok" "$(cat "$TMP/p.json")"
+python3 -B "$TMP/fake-comfy.py" "$ROOT/scripts/assetgen/assetgen.py" "$pr" conflict > "$TMP/p.json" 2>&1
+jq -e '.rc == 1 and .out.state == "FAIL" and .out.http_status == 409' "$TMP/p.json" >/dev/null && [ "$(snap)" = "$s0" ] \
+  && ok "publish: an HTTP error from ComfyUI is FAIL (exit 1), nothing written" || no "publish conflict" "$(cat "$TMP/p.json")"
+python3 -B "$TMP/fake-comfy.py" "$ROOT/scripts/assetgen/assetgen.py" "$pr" refused > "$TMP/p.json" 2>&1
+jq -e '.rc == 3 and .out.state == "NOT_AVAILABLE" and .requests == []' "$TMP/p.json" >/dev/null && [ "$(snap)" = "$s0" ] \
+  && ok "publish: connection refused is NOT_AVAILABLE (exit 3), nothing written" || no "publish refused" "$(cat "$TMP/p.json")"
+for u in "ftp-host:8188" "file:///etc" "http://127.0.0.1:1/?x=1"; do
+  AG publish --run "$pr" --comfy-url "$u" >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "comfy-url must be" "$TMP/err" && ok "publish --comfy-url $u refused (exit 2)" || no "publish url $u rc=$rc" "$(cat "$TMP/err")"
+done
+[ "$(snap)" = "$s0" ] && ok "refused publish calls write nothing" || no "publish wrote into the run dir"
 
 echo "-- manifest (run.md, gen-run)"
 d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art; AG render --run "$d" >/dev/null
@@ -482,6 +860,21 @@ AG manifest --run "$d" >/dev/null && [ "$(fm .status)" = reviewed ] && ok "re-ma
 cp "$FX/tile-ok.png" "$d/outputs/iron-sword.png"
 out=$(AG manifest --run "$d"); [ "$(fm .status)" = proposed ] && grep -q "status reset to proposed" <<<"$out" && ok "changed outputs reset the status to proposed" || no "reset: $(fm .status) $out"
 rm -f "$d/review-image.json"; AG manifest --run "$d" >/dev/null; [ "$(fm .spec.image_review.state)" = NOT_RUN ] && ok "missing review file: NOT_RUN" || no "NOT_RUN: $(fm .spec.image_review)"
+bound "$d" image PASS claude > "$d/review-image-claude.json"; AG manifest --run "$d" >/dev/null
+[ "$(fm '.spec.claude_image_review.by + " " + .spec.claude_image_review.state + " " + .spec.image_review.state')" = "claude PASS NOT_RUN" ] \
+  && grep -q '^- Claude visual review: PASS by claude$' "$d/run.md" && grep -q '^- Image review: NOT_RUN by -$' "$d/run.md" \
+  && ok "manifest records review-image-claude.json as claude_image_review and summarises it in run.md, apart from the image review" \
+  || no "claude review: $(fm '.spec.claude_image_review')" "$(grep -n 'review' "$d/run.md" | head)"
+for n in axe-icon-001 axe-icon-002 axe-icon-004 big-axe-icon-001; do mkdir -p "$RUNS/$n"; done
+: > "$RUNS/axe-icon-002/run.md"; : > "$RUNS/axe-icon-not-a-run"
+mkrun axe-icon-003 icon --style pixel-art && AG manifest --run "$RUNS/axe-icon-003" >/dev/null
+d3="$RUNS/axe-icon-003"
+[ "$(python3 -c "import json,re,sys; print(json.dumps(json.loads(re.match(r'\A---json\s*\n(.*?)\n---', open(sys.argv[1], encoding='utf-8').read(), re.S).group(1))['spec']['trace']))" "$d3/run.md")" = '{"failed_attempts": ["axe-icon-001"]}' ] \
+  && grep -q '^- Failed attempts: axe-icon-001$' "$d3/run.md" \
+  && ok "manifest: trace.failed_attempts lists earlier attempts of the series without run.md (not later ones, finished ones or other slugs)" \
+  || no "failed attempts" "$(grep -n 'trace\|Failed' -A3 "$d3/run.md" | head)"
+[ "$(fm '.spec.trace.failed_attempts | length')" = 0 ] && grep -q '^- Failed attempts: none$' "$d/run.md" && ok "manifest: no failed attempts -> empty trace" || no "empty trace: $(fm .spec.trace)"
+rm -rf "$RUNS"/axe-icon-00[1-4] "$RUNS/big-axe-icon-001" "$RUNS/axe-icon-not-a-run"
 mkdir -p "$RUNS/Bad_Name"; cp "$d/spec.json" "$d/prompt.md" "$RUNS/Bad_Name/"
 AG manifest --run "$RUNS/Bad_Name" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <slug>-NNN" "$TMP/err" && ok "run dir name must be <slug>-NNN" || no "bad run name rc=$rc"
@@ -491,6 +884,7 @@ good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly
 AG render --run "$good" >/dev/null && cp "$FX/icon-ok.png" "$good/outputs/qp-icon.png" && AG qa --run "$good" >/dev/null \
   || no "good run: render/qa did not PASS" "$(jq -c .results "$good/qa.json" 2>/dev/null)"
 bound "$good" prompt PASS codex > "$good/review-prompt.json"; bound "$good" image PASS codex > "$good/review-image.json"
+bound "$good" image PASS claude > "$good/review-image-claude.json"
 AG manifest --run "$good" >/dev/null
 fmset() { # fmset RUN-DIR PYTHON-STATEMENT: edit run.md front matter (obj) in place
   python3 -B -c '
@@ -506,6 +900,13 @@ variant() { # variant NAME [prompt-review-by]: a copy of the good run, re-manife
   local d="$RUNS/$1"; rm -rf "$d"; cp -R "$good" "$d"; rm -f "$d/run.md"
   [ -n "${2:-}" ] && bound "$d" prompt PASS "$2" > "$d/review-prompt.json"
   AG manifest --run "$d" >/dev/null
+}
+rebase() { # rebase NAME [render args...]: a copied run's spec.json takes its own filename_prefix, re-rendered and re-reviewed
+  local d="$RUNS/$1"; shift
+  python3 -B -c 'import json, os, sys; p = os.path.join(sys.argv[1], "spec.json"); s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + os.path.basename(sys.argv[1]); json.dump(s, open(p, "w"))' "$d"
+  AG render --run "$d" "$@" >/dev/null && AG qa --run "$d" >/dev/null
+  bound "$d" prompt PASS codex > "$d/review-prompt.json"; bound "$d" image PASS codex > "$d/review-image.json"
+  bound "$d" image PASS claude > "$d/review-image-claude.json"
 }
 qaset() { # qaset NAME PYTHON-STATEMENT: edit the run's qa.json (obj) in place
   python3 -B -c 'import json, sys; p = sys.argv[1]; obj = json.load(open(p, encoding="utf-8")); exec(sys.argv[2], {"obj": obj}); json.dump(obj, open(p, "w", encoding="utf-8"))' "$RUNS/$1/qa.json" "$2"
@@ -540,6 +941,14 @@ variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = jso
 variant qp-qapurp-001; qaset qp-qapurp-001 'obj["purpose_sha256"] = "0" * 64'; AG manifest --run "$RUNS/qp-qapurp-001" >/dev/null
 variant qp-qasize-001; python3 -B -c 'import json, sys; p = sys.argv[1]; w = json.load(open(p)); [n["inputs"].__setitem__("size", "1024x1536") for n in w.values() if n.get("class_type") == "NineRouterImage"]; json.dump(w, open(p, "w"))' "$RUNS/qp-qasize-001/workflow.json"
 AG manifest --run "$RUNS/qp-qasize-001" >/dev/null
+# Claude's own visual review (review-image-claude.json): recorded, WARN when missing, never replaces the Codex review
+variant qp-noclaude-001; rm -f "$RUNS/qp-noclaude-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-noclaude-001" >/dev/null
+variant qp-claudeonly-001; rm -f "$RUNS/qp-claudeonly-001/review-image.json"; AG manifest --run "$RUNS/qp-claudeonly-001" >/dev/null
+variant qp-claudefail-001; bound "$RUNS/qp-claudefail-001" image FAIL claude '[{"rubric": 4, "severity": "major", "text": "broken hilt"}]' > "$RUNS/qp-claudefail-001/review-image-claude.json"
+AG manifest --run "$RUNS/qp-claudefail-001" >/dev/null
+variant qp-claudediff-001; bound "$RUNS/qp-claudediff-001" image FAIL claude > "$RUNS/qp-claudediff-001/review-image-claude.json"
+variant qp-claudestale-001; printf '{"state": "PASS", "findings": [], "by": "claude"}\n' > "$RUNS/qp-claudestale-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-claudestale-001" >/dev/null
+variant qp-claudeby-001; bound "$RUNS/qp-claudeby-001" image PASS codex > "$RUNS/qp-claudeby-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-claudeby-001" >/dev/null
 variant qp-tool-001; fmset "$RUNS/qp-tool-001" 'obj["provenance"]["tool"] = "other"'
 variant qp-ref-001; fmset "$RUNS/qp-ref-001" 'obj["spec"]["style"]["id"] = "no-such-style"'
 variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha256"] = "0" * 64'
@@ -553,10 +962,10 @@ echo '{"extends": "sprite-2d", "prompt_rubric": ["Names one subject only."], "im
   > "$RUBA/assetgen/purposes/sprite-2d.json"
 variant qp-rubric-001; AG resolve --purpose sprite-2d --style stylized-painterly --authoring "$RUBA" --out "$RUNS/qp-rubric-001/spec.json" >/dev/null
 AG qa --run "$RUNS/qp-rubric-001" >/dev/null; AG manifest --run "$RUNS/qp-rubric-001" >/dev/null
-variant qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
+variant qp-rsize-001; rebase qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
 AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-001" >/dev/null
 variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
-variant qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
+variant qp-rqual-001; rebase qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
 AG manifest --run "$RUNS/qa-malformed-001" >/dev/null
 # image-edit: the reference image is bound by name and content (references/<name> in the run directory)
@@ -564,9 +973,10 @@ edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterl
 mkdir -p "$edit/references"; cp "$FX/icon-ok.png" "$edit/references/ref-a.png"
 AG render --run "$edit" --param reference_image=ref-a.png >/dev/null && cp "$FX/icon-ok.png" "$edit/outputs/edit.png" && AG qa --run "$edit" >/dev/null   || no "image-edit run: render/qa did not PASS" "$(jq -c .results "$edit/qa.json" 2>/dev/null)"
 bound "$edit" prompt PASS codex > "$edit/review-prompt.json"; bound "$edit" image PASS codex > "$edit/review-image.json"
+bound "$edit" image PASS claude > "$edit/review-image-claude.json"
 AG manifest --run "$edit" >/dev/null
 evariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$edit" "$d"; rm -f "$d/run.md"; }
-evariant qp-eswap-001; cp "$FX/icon-opaque.png" "$RUNS/qp-eswap-001/references/ref-b.png"
+evariant qp-eswap-001; rebase qp-eswap-001 --param reference_image=ref-a.png; cp "$FX/icon-opaque.png" "$RUNS/qp-eswap-001/references/ref-b.png"
 AG render --run "$RUNS/qp-eswap-001" --param reference_image=ref-b.png >/dev/null; AG qa --run "$RUNS/qp-eswap-001" >/dev/null; AG manifest --run "$RUNS/qp-eswap-001" >/dev/null
 evariant qp-ebytes-001; cp "$FX/icon-opaque.png" "$RUNS/qp-ebytes-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-ebytes-001" >/dev/null
 evariant qp-enoref-001; rm -f "$RUNS/qp-enoref-001/references/ref-a.png"; AG manifest --run "$RUNS/qp-enoref-001" >/dev/null
@@ -577,7 +987,7 @@ cp -R "$good" "$RUNS/qp-fallback-001" "$QAUTH/assetgen/runs/"; git init -q -b ma
 python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$QAUTH" --registry "$ROOT/registry.json" --domain assetgen --json > "$TMP/aq.json" 2>"$TMP/err"; rc=$?
 st() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .state] | join(",")' "$TMP/aq.json"; }
 why() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .reasons[]] | join("; ")' "$TMP/aq.json"; }
-plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs"
+plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-claude-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs"
 got=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-icon-001 "$c")"; done)
 want=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=PASS ' "$c"; done)
 [ $rc -eq 0 ] && [ "$got" = "$want" ] && ok "artifact-quality --domain assetgen: complete run (codex reviews, QA PASS, hashes, provenance, game-layer refs) all PASS" \
@@ -631,6 +1041,14 @@ case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAIL
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"
 case_ qp-qasize-001 gen-run-qa FAIL 'graded for requested size' "requested size changed after QA: FAIL"
+case_ qp-noclaude-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "no Claude visual review file: WARN"
+[ "$(st AGEN-qp-noclaude-001 gen-run-image-review)" = PASS ] && ok "a missing Claude review leaves the Codex image review PASS" || no "noclaude image review: $(st AGEN-qp-noclaude-001 gen-run-image-review)"
+case_ qp-claudeonly-001 gen-run-image-review FAIL 'review-image.json is missing' "a Claude PASS never replaces the missing Codex image review: FAIL"
+[ "$(st AGEN-qp-claudeonly-001 gen-run-claude-review)" = PASS ] && ok "claude-only run: the Claude review itself grades PASS" || no "claudeonly claude review: $(st AGEN-qp-claudeonly-001 gen-run-claude-review)"
+case_ qp-claudefail-001 gen-run-claude-review FAIL "Claude's visual review is FAIL (1 finding(s))" "Claude's own review FAIL on a proposed run: FAIL"
+case_ qp-claudediff-001 gen-run-claude-review FAIL 'differs from review-image-claude.json (file: FAIL' "review-image-claude.json contradicting run.md: FAIL"
+case_ qp-claudestale-001 gen-run-claude-review WARN 'not bound to the current prompt' "unbound Claude review: WARN"
+case_ qp-claudeby-001 gen-run-claude-review WARN 'is by codex, not claude' "review-image-claude.json by another model: WARN"
 case_ qp-tool-001 gen-run-provenance FAIL 'provenance.tool must be comfyui' "provenance tool other than comfyui: FAIL"
 case_ qp-ref-001 gen-run-refs FAIL "style 'no-such-style' does not resolve" "unresolvable style ref: FAIL"
 case_ qp-drift-001 gen-run-refs WARN 'changed since the run' "template content changed since the run: WARN (the record keeps what was used)"

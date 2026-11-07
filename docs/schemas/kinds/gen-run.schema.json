@@ -280,6 +280,27 @@
     },
     "image_review": {
       "$ref": "#/$defs/review"
+    },
+    "claude_image_review": {
+      "description": "Claude's own visual review (review-image-claude.json, by claude). Recorded for the human approver; never replaces image_review.",
+      "$ref": "#/$defs/review"
+    },
+    "trace": {
+      "type": "object",
+      "required": [
+        "failed_attempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "failed_attempts": {
+          "description": "Run ids of earlier attempts of the same series (<slug>-NNN, lower NNN) whose directory has no run.md.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*-[0-9]{3}$"
+          }
+        }
+      }
     }
   }
 }

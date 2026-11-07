@@ -3,6 +3,8 @@
 Checks: schema id and required fields per kind, typed template params, {{placeholder}} use, node types, input
 names, required inputs, link targets and types, combo values against data/known-nodes.json (a snapshot; the live
 check is comfy-mcp validate_workflow), extends targets, and that no file carries a URL, host address or credential.
+Purpose constraints are checked against data/precedence.json. A core file is linted as core data only (no game
+layer merged in), so a bad game value is reported on the game file that holds it.
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
 """
 import json
@@ -56,6 +58,8 @@ def check_graph(graph, params=None):
     if not isinstance(graph, dict) or not graph:
         return ["workflow must be a non-empty object of nodes"], []
     for nid, node in graph.items():
+        if not nid.isdigit():
+            errs.append("node id %r: must be digits (workflow.ui.json, the ComfyUI frontend workflow, needs numeric ids)" % nid)
         if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) or not isinstance(node.get("inputs"), dict):
             errs.append("node %s: needs class_type and an inputs object" % nid)
             continue
@@ -183,6 +187,17 @@ def purpose_errors(data, ident, authoring):
             layers.load("style", data["default_style"], authoring)
         except layers.SpecError as exc:
             errs.append("default_style: %s" % exc)
+    cons = data.get("constraints", {})
+    if not isinstance(cons, dict):
+        errs.append("constraints must be an object")
+    else:
+        rules = layers.precedence()
+        for field, text in cons.items():
+            if rules.get(field) != "purpose":
+                errs.append("constraints.%s: not a technical constraint a purpose may set (%s; data/precedence.json)"
+                            % (field, ", ".join(sorted(k for k, v in rules.items() if v == "purpose"))))
+            elif not isinstance(text, str) or not text:
+                errs.append("constraints.%s must be a non-empty string" % field)
     return errs + runfiles.qa_errors(data.get("qa"))
 
 
@@ -196,15 +211,16 @@ def style_errors(data):
 
 
 def classify(path, authoring):
-    """(kind, id) when path is a layer file, else (None, None)."""
+    """(kind, id, layer) when path is a layer file (layer core or game), else (None, None, None)."""
     full = os.path.abspath(path)
     for kind, spec in layers.KINDS.items():
-        dirs = [os.path.join(layers.CORE_DIR, spec["core"])]
+        dirs = [("core", os.path.join(layers.CORE_DIR, spec["core"]))]
         if authoring:
-            dirs.append(os.path.join(layers.game_dir(authoring), spec["game"]))
-        if any(os.path.normcase(os.path.dirname(full)) == os.path.normcase(os.path.abspath(d)) for d in dirs):
-            return kind, os.path.basename(full)[:-5]
-    return None, None
+            dirs.append(("game", os.path.join(layers.game_dir(authoring), spec["game"])))
+        for layer, d in dirs:
+            if os.path.normcase(os.path.dirname(full)) == os.path.normcase(os.path.abspath(d)):
+                return kind, os.path.basename(full)[:-5], layer
+    return None, None, None
 
 
 def display(path, authoring):
@@ -218,10 +234,14 @@ def display(path, authoring):
 def lint_data(path, raw, authoring):
     """(errors, warnings) of one parsed file; nested types are validated before use."""
     errs, warns = [], []
-    kind, ident = classify(path, authoring)
+    kind, ident, layer = classify(path, authoring)
     if kind:
+        # a core file is linted as core data only: a bad game value that extends or overrides it is blamed on the
+        # game file that holds it, never on the unchanged core file
+        if layer == "core":
+            authoring = None
         try:
-            entry = layers.load(kind, ident, authoring)
+            entry = layers.load(kind, ident, authoring, _layer=layer if layer == "core" else None)
         except layers.SpecError as exc:
             return [str(exc)], []
         data = entry["data"]

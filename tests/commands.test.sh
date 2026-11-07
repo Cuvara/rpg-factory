@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen resolve --purpose icon --out x.json"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen publish --run x --comfy-url y" "assetgen resolve --purpose icon --out x.json"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -183,5 +183,13 @@ done
 python3 -B "$ROOT/scripts/assetgen/assetgen.py" resolve --purpose icon "--ou=$TMP/abbr.json" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && [ ! -e "$TMP/abbr.json" ] && grep -q "unrecognized arguments: --ou=" "$TMP/err" \
   && ok "assetgen.py itself does not expand --ou to --out (allow_abbrev=False)" || no "assetgen.py --ou rc=$rc" "$(cat "$TMP/err")"
+# publish (network upload to ComfyUI) and embed (rewrites outputs) are assetgen.py verbs, never factory-cmd verbs
+python3 -B "$CMD" assetgen publish --run "$TMP/x-001" --comfy-url y >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "publish uploads to ComfyUI: the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err"   && ok "assetgen publish is not exposed through factory-cmd (exit 2, points at assetgen.py)" || no "assetgen publish rc=$rc: $(head -2 "$TMP/err")"
+python3 -B "$CMD" assetgen embed --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "embed writes into a run directory" "$TMP/err" && ok "assetgen embed is not exposed through factory-cmd (exit 2)" || no "assetgen embed rc=$rc: $(head -2 "$TMP/err")"
+python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen") | (.args | test("publish|embed") | not) and .read_only' >/dev/null \
+  && ! grep -qE "publish|embed" "$ROOT/commands/assetgen.md" \
+  && ok "help and /rpg-factory:assetgen list assetgen as read-only, without publish or embed" || no "help or commands/assetgen.md names publish or embed"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

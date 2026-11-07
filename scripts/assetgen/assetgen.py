@@ -7,39 +7,70 @@ Usage:
   assetgen.py resolve --purpose P [--style S] [--template T] [--authoring DIR] [--out FILE] [--json]
   assetgen.py render (--run DIR | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]...
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
-  assetgen.py review-cmd --phase prompt|image --run DIR [--codex BIN] [--json]
+  assetgen.py review-cmd --phase prompt|image --run DIR [--codex BIN] [--no-write] [--json]
+  assetgen.py embed --run DIR [--json]
   assetgen.py qa --run DIR [--json]
   assetgen.py manifest --run DIR [--title T] [--prompt-author A] [--generated-by G] [--json]
+  assetgen.py publish --run DIR --comfy-url URL [--json]
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
 game wins) core ids. resolve prints the merged spec with the source file of every field and each param.
 Param precedence, low to high: template default < style params < purpose params < render --param.
+Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
+style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
   prompt.md           the final prompt text only (written by the prompt author; sent verbatim, reviewed verbatim)
+  spec.json           resolve --out <run>/spec.json also sets the filename_prefix param to assetgen/<run-id>
+                      (runfiles.run_filename_prefix): the one value render, the review prompts and run.md record
   workflow.json       render: ComfyUI API-format graph {"<id>": {"class_type", "inputs"}}, links [node_id, index];
-                      runnable as is by comfy-mcp run_workflow; render --run sets filename_prefix=assetgen/<run-id>
-                      unless --param filename_prefix=... is given
-  outputs/*.png       comfy-mcp fetch_outputs out_dir
+                      runnable as is by comfy-mcp run_workflow. The prompt is the value of a PrimitiveStringMultiline
+                      node titled "Prompt (Claude, Codex review <state>)" (state of review-prompt.json for this
+                      prompt and spec: PASS, FAIL, STALE when its prompt_sha256 or requirements_sha256 differs,
+                      INVALID or NOT_RUN; a verdict by another reviewer reads "review <by> <state>", its PASS as
+                      WARN, e.g. "review SAME_MODEL:claude WARN") linked into NineRouterImage.user_prompt.
+                      render --run refuses a spec.json whose filename_prefix is not assetgen/<run-id> and a
+                      --param filename_prefix
+  workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
+                      (uiworkflow.py); written next to workflow.json (render --out X.json: X.ui.json)
+  outputs/*.png       comfy-mcp fetch_outputs out_dir; embed then adds a `workflow` tEXt chunk (workflow.ui.json,
+                      compact JSON) before IEND of each PNG that has none (prompt chunk kept, idempotent), so the
+                      file QA and the reviews hash is the embedded one and dragging it into ComfyUI restores the graph
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
                       style and template content hashes and the resolved params
+  review/tile-2x2.png review-cmd image, purposes with a tileable QA check: the output repeated 2x2 (seam preview,
+                      passed with -i after the outputs; tile-2x2-<stem>.png per output when there are several).
+                      Derived from the output pixels, never an output and never in the binding
   review-image.json   the same for the images (review-cmd image); its requirements_sha256 also covers the generation
                       inputs of workflow.json (runfiles.generation_inputs), and the binding adds "outputs": [{"path", "sha256"}] (runfiles.py; the
                       quality plugin FAILs a stale or unbound verdict once the run is proposed)
+  review-image-claude.json  Claude's own visual review, written by the agent: the same schema and binding (the
+                      "binding" of review-cmd --phase image --json) with "by": "claude". manifest records it as
+                      spec.claude_image_review; the plugin WARNs when it is missing, unbound or stale. It never replaces
+                      the independent review-image.json
   qa.json             qa: rpg-factory.validation/1 results per output, bound to the purpose content hash and the
                       requested size it graded with (purpose_sha256, requested_size)
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
 
-Read-only except: resolve/render --out, render --run (workflow.json), qa (qa.json) and manifest (run.md) in the
-given run dir. review-cmd only prints a `codex exec --sandbox read-only` command; this script never runs agents,
-ComfyUI or the network. Model ids, sizes and other values live in template params data, not here.
-Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa). Options are never abbreviated (--ou is
-not --out): allow_abbrev=False on every parser.
+Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
+attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
+its series (same slug) that have no run.md in spec.trace.failed_attempts.
+
+Read-only except: resolve/render --out, render --run (workflow.json, workflow.ui.json), embed (outputs/*.png), qa
+(qa.json), manifest (run.md) and review-cmd --phase image of a tileable purpose (review/tile-2x2.png) in the given run
+dir. review-cmd only prints a `codex exec --sandbox read-only` command with absolute paths (it works from any cwd);
+--no-write (factory-cmd always passes it) never builds the tile: it uses review/tile-2x2.png only when it holds
+the current pixels, else exits 2. The only network call is publish: it POSTs workflow.ui.json to ComfyUI's userdata
+API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
+sidebar under assetgen; it writes nothing locally (unreachable ComfyUI: NOT_AVAILABLE, exit 3). This script never
+runs agents or ComfyUI. Model ids, sizes and other values live in template params data, not here.
+Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa, publish). Options are never abbreviated (--ou
+is not --out): allow_abbrev=False on every parser.
 """
 import argparse
 import glob
@@ -49,15 +80,21 @@ import os
 import re
 import shlex
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import layers  # noqa: E402
 import lint  # noqa: E402
+import png  # noqa: E402
 import qa  # noqa: E402
 import runfiles  # noqa: E402
+import uiworkflow  # noqa: E402
 
 RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{3}$")
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
+CLAUDE_REVIEW = "review-image-claude.json"  # Claude's own visual review: recorded, never replaces review-image.json
 HEREDOC = "ASSETGEN_REVIEW"
 
 
@@ -136,21 +173,61 @@ def fill(node, values):
     return node
 
 
-def render(spec, prompt, overrides, run_id=None):
+def bind_run(spec, run_id):
+    """spec with the run's filename_prefix (resolve --out <run>/spec.json), when the template declares the param."""
+    if "filename_prefix" in spec["template"]["data"].get("params", {}):
+        spec["params"]["filename_prefix"] = runfiles.run_filename_prefix(run_id)
+        spec["param_sources"]["filename_prefix"] = "run id " + run_id
+    return spec
+
+
+def prompt_review_state(run_dir, spec, prompt):
+    """(state, by) of review-prompt.json for this prompt and spec: PASS/FAIL when bound to both (prompt_sha256 and
+    requirements_sha256, as review-cmd --phase prompt hands them out), STALE when either differs or is missing; a PASS
+    by a reviewer that is not Codex (a SAME_MODEL fallback) is WARN, as the quality plugin grades it. by is "codex"
+    while no verdict exists (the title names the reviewer the run expects)."""
+    v = runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["prompt"]), "prompt")
+    if v["state"] not in ("PASS", "FAIL"):
+        return v["state"], "codex"
+    if (v["prompt_sha256"] != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            or v["requirements_sha256"] != runfiles.requirements_sha256(spec, None)):
+        return "STALE", v["by"]
+    if v["state"] == "PASS" and not is_codex(v["by"]):
+        return "WARN", v["by"]
+    return v["state"], v["by"]
+
+
+def is_codex(by):
+    return re.split(r"[-_/.:@ ]", str(by or "").strip().lower(), maxsplit=1)[0] == "codex"
+
+
+def review_title(title, state, by):
+    """A node title with <state> filled; a verdict by another reviewer than Codex (or by none) never reads "Codex review"."""
+    if not is_codex(by):
+        title = title.replace("Codex review <state>", "review %s <state>" % (by or "without reviewer"))
+    return title.replace("<state>", state)
+
+
+def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewer="codex"):
     """(workflow, errors). Strict: undeclared params, missing required params and leftover placeholders are errors.
-    run_id (render --run) sets filename_prefix to assetgen/<run_id> when the template declares it."""
+    run_id (render --run): spec.json must carry filename_prefix assetgen/<run_id> (bind_run) and --param may not
+    change it. review_state replaces <state> in node titles (the prompt node's title); reviewer (the verdict's by)
+    replaces "Codex review" there when it is not Codex (review_title)."""
     tmpl = spec["template"]["data"]
     declared = tmpl.get("params", {})
     values, errors = dict(spec.get("params", {})), []
     values["prompt"] = prompt
-    if run_id and "filename_prefix" in declared:
-        values["filename_prefix"] = "assetgen/" + run_id
+    if run_id and "filename_prefix" in declared and values.get("filename_prefix") != runfiles.run_filename_prefix(run_id):
+        errors.append("spec.json records filename_prefix %r, run %s needs %r: resolve again with --out <run>/spec.json"
+                      % (values.get("filename_prefix"), run_id, runfiles.run_filename_prefix(run_id)))
     for item in overrides:
         name, sep, value = item.partition("=")
         if not sep:
             errors.append("--param %r: expected NAME=VALUE" % item)
         elif name == "prompt":
             errors.append("--param prompt: the prompt comes from the prompt file only")
+        elif name == "filename_prefix" and run_id:
+            errors.append("--param filename_prefix: a run's prefix is %s, recorded in spec.json" % runfiles.run_filename_prefix(run_id))
         else:
             values[name] = value
     for name in sorted(values):
@@ -165,8 +242,16 @@ def render(spec, prompt, overrides, run_id=None):
     if errors:
         return None, errors
     workflow = fill(tmpl.get("workflow", {}), values)
+    for node in workflow.values():
+        meta = node.get("_meta") if isinstance(node, dict) else None
+        if isinstance(meta, dict) and isinstance(meta.get("title"), str):
+            meta["title"] = review_title(meta["title"], review_state, reviewer)
     e, _ = lint.check_graph(workflow, None)
     return workflow, e
+
+
+def ui_path(out):
+    return (out[:-5] if out.endswith(".json") else out) + ".ui.json"
 
 
 def generation_inputs(run_dir, spec):
@@ -191,7 +276,7 @@ def workflow_model(run_dir, spec):
 
 # -- review-cmd ------------------------------------------------------------------------------------------------
 
-def review_prompt_text(phase, spec, prompt, images, qa_report, binding):
+def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=()):
     p, s = spec["purpose"], spec["style"]
     rubric = p["data"].get("prompt_rubric" if phase == "prompt" else "image_rubric", [])
     lines = [
@@ -201,6 +286,8 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding):
         "", "Purpose: %s - %s" % (p["data"].get("title", ""), p["data"].get("description", "")),
         "Style: %s. Prefix: %s Suffix: %s" % (s["data"].get("title", ""), s["data"].get("prefix", ""), s["data"].get("suffix", "")),
         "Style avoid: %s" % ", ".join(s["data"].get("avoid", [])),
+        "Hints (the purpose wins for technical constraints): %s" % ("; ".join(
+            "%s: %s" % (k, h["text"]) for k, h in sorted(effective_hints(spec).items())) or "none"),
         "Requested params: %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(spec.get("params", {}).items())),
     ]
     guide = p["data"].get("prompt", {})
@@ -211,7 +298,9 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding):
     lines += ["", "Rubric:"] + ["%d. %s" % (i + 1, r) for i, r in enumerate(rubric)]
     lines += ["", "Prompt under review:" if phase == "prompt" else "Prompt that produced the images:", prompt]
     if phase == "image":
-        lines += ["", "Attached images (one per -i): " + ", ".join(images)]
+        lines += ["", "Attached images (one per -i): " + ", ".join(list(images) + [t for t, _ in tiles])]
+        lines += ["True pixel size (PNG header) of %s: %s" % (i, z) for i, z in zip(images, sizes)]
+        lines += ["%s is not an output: review-cmd tiled %s 2x2 so you can judge its seams" % (t, src) for t, src in tiles]
         if qa_report:
             lines += ["Deterministic QA: %s (%s)" % (qa_report.get("state"), "; ".join(
                 "%s %s %s" % (r["state"], r["output"], r["check"]) for r in qa_report.get("results", []) if r["state"] != "PASS") or "all checks PASS")]
@@ -225,7 +314,58 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding):
     return "\n".join(l if l.strip() != HEREDOC else l + "." for l in text.splitlines())
 
 
-def review_cmd(run_dir, phase, codex):
+def effective_hints(spec):
+    """spec.hints (resolve); a spec written before hints existed is resolved from its recorded purpose and style."""
+    if isinstance(spec.get("hints"), dict):
+        return spec["hints"]
+    return layers.resolve_hints({"data": spec["purpose"]["data"], "sources": {}}, {"data": spec["style"]["data"], "sources": {}})
+
+
+def pixel_size(path, requested):
+    try:
+        with open(path, "rb") as f:
+            w, h = png.header(f.read())[:2]
+    except (OSError, png.Invalid) as exc:
+        return "unreadable (%s)" % exc
+    return "%dx%d (requested %s)" % (w, h, requested)
+
+
+def tile_names(images):
+    if len(images) == 1:
+        return ["review/tile-2x2.png"]
+    return ["review/tile-2x2-%s.png" % os.path.splitext(os.path.basename(i))[0] for i in images]
+
+
+def review_tiles(run_dir, images, rel, write):
+    """[(tile path relative to the run, source output)] of the 2x2 seam previews. write=False builds nothing: it uses a
+    tile only when its bytes are what review-cmd would build now, else exits 2."""
+    out = []
+    for path, src, name in zip(images, rel, tile_names(images)):
+        try:
+            data = png.tile_2x2(png.decode(path))
+        except (png.Invalid, png.Unsupported) as exc:
+            print("assetgen: no tiled preview of %s: %s" % (src, exc), file=sys.stderr)
+            continue
+        target = os.path.join(run_dir, *name.split("/"))
+        if write:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as f:
+                f.write(data)
+        else:
+            try:
+                with open(target, "rb") as f:
+                    current = f.read() == data
+            except OSError:
+                current = False
+            if not current:
+                fail("%s is missing or stale and --no-write builds nothing: run scripts/assetgen/assetgen.py review-cmd "
+                     "--phase image --run %s directly (the asset-gen skill)" % (name, run_dir.replace(os.sep, "/")), 2)
+        out.append((name, src))
+    return out
+
+
+def review_cmd(run_dir, phase, codex, write=True):
+    run_dir = os.path.abspath(run_dir)  # the printed command works from any cwd
     spec = load_spec(os.path.join(run_dir, "spec.json"))
     prompt = read_prompt(os.path.join(run_dir, "prompt.md"))
     images = []
@@ -240,15 +380,90 @@ def review_cmd(run_dir, phase, codex):
                "requirements_sha256": runfiles.requirements_sha256(spec, generation_inputs(run_dir, spec) if phase == "image" else None)}
     if phase == "image":
         binding["outputs"] = [{"path": r, "sha256": qa.sha256(i)} for r, i in zip(rel, images)]
-    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding)
+    sizes, tiles = [], []
+    if phase == "image":
+        requested = requested_size(run_dir, spec)
+        sizes = [pixel_size(i, requested) for i in images]
+        purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
+        data = purpose.get("data") if isinstance(purpose.get("data"), dict) else {}
+        if "png-tileable" in runfiles.required_checks(data.get("qa")):
+            tiles = review_tiles(run_dir, images, rel, write)
+    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding, sizes, tiles)
     verdict = os.path.join(run_dir, REVIEW_FILES[phase]).replace(os.sep, "/")
     argv = [codex, "exec", "--sandbox", "read-only", "-C", run_dir.replace(os.sep, "/")]
-    for i in images:
+    for i in images + [os.path.join(run_dir, *t.split("/")) for t, _ in tiles]:
         argv += ["-i", i.replace(os.sep, "/")]
     argv += ["-o", verdict, "-"]
     shell = "%s <<'%s'\n%s\n%s" % (shlex.join(argv), HEREDOC, stdin, HEREDOC)
     return {"schema": "rpg-factory.assetgen-review-cmd/1", "phase": phase, "argv": argv, "stdin": stdin,
-            "verdict": verdict, "binding": binding, "shell": shell}
+            "verdict": verdict, "binding": binding, "shell": shell, "tiles": [t for t, _ in tiles]}
+
+
+# -- embed -----------------------------------------------------------------------------------------------------
+
+def read_ui(run_dir):
+    path = os.path.join(run_dir, "workflow.ui.json")
+    ui = read_json(path, "UI workflow (run render --run first)")
+    if not isinstance(ui, dict) or not isinstance(ui.get("nodes"), list):
+        fail("%s is not a ComfyUI frontend workflow (run render --run again)" % path.replace(os.sep, "/"))
+    return path, ui
+
+
+def embed(run_dir):
+    """Rows {output, state: embedded|kept|FAIL, reason}: the UI workflow as a `workflow` tEXt chunk of each output."""
+    _, ui = read_ui(run_dir)
+    text = json.dumps(ui, separators=(",", ":"), ensure_ascii=True)
+    images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
+    if not images:
+        fail("no outputs/*.png in %s to embed the workflow in" % run_dir.replace(os.sep, "/"))
+    rows = []
+    for path in images:
+        name = "outputs/" + os.path.basename(path)
+        with open(path, "rb") as f:
+            data = f.read()
+        try:
+            if "workflow" in png.text_keywords(data):
+                rows.append({"output": name, "state": "kept", "reason": "already carries a workflow chunk"})
+                continue
+            new = png.add_text(data, "workflow", text)
+        except png.Invalid as exc:
+            rows.append({"output": name, "state": "FAIL", "reason": str(exc)})
+            continue
+        tmp = path + ".embed.tmp"
+        with open(tmp, "wb") as f:
+            f.write(new)
+        os.replace(tmp, path)
+        rows.append({"output": name, "state": "embedded", "reason": "workflow chunk of %d bytes added" % len(text)})
+    return rows
+
+
+# -- publish ---------------------------------------------------------------------------------------------------
+
+def publish(run_dir, comfy_url, timeout=15):
+    """POST workflow.ui.json to ComfyUI's userdata API as workflows/assetgen/<run-id>.json (overwrite); writes nothing."""
+    run_id = os.path.basename(os.path.normpath(run_dir))
+    if not RUN_ID.match(run_id):
+        fail("run dir name %r must be <slug>-NNN (lowercase, digits, dashes)" % run_id, 2)
+    parts = urllib.parse.urlsplit(comfy_url)
+    if parts.scheme not in ("http", "https") or not parts.netloc or parts.query or parts.fragment:
+        fail("--comfy-url must be the ComfyUI base address (http or https, host and port, no query)", 2)
+    path, _ = read_ui(run_dir)
+    with open(path, "rb") as f:
+        body = f.read()
+    target = "workflows/assetgen/%s.json" % run_id
+    url = comfy_url.rstrip("/") + "/api/userdata/" + urllib.parse.quote(target, safe="") + "?overwrite=true"
+    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    result = {"schema": "rpg-factory.assetgen-publish/1", "run": run_id, "workflow": target, "comfy_url": comfy_url}
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout) as resp:
+            result.update(state="PASS", http_status=resp.status,
+                          reason="ComfyUI Workflows sidebar > assetgen > %s.json" % run_id)
+    except urllib.error.HTTPError as exc:
+        result.update(state="FAIL", http_status=exc.code, reason="ComfyUI refused the upload: HTTP %d %s" % (exc.code, exc.reason))
+    except (urllib.error.URLError, OSError) as exc:
+        result.update(state="NOT_AVAILABLE", http_status=None,
+                      reason="ComfyUI is not reachable: %s" % getattr(exc, "reason", exc))
+    return result
 
 
 # -- manifest --------------------------------------------------------------------------------------------------
@@ -262,6 +477,19 @@ def existing_front(path):
         return json.loads(m.group(1)) if m else None
     except ValueError:
         return None
+
+
+def failed_attempts(run_dir):
+    """Run ids of the earlier attempts of this run's series (<slug>-NNN, lower NNN) whose directory has no run.md."""
+    name = os.path.basename(os.path.normpath(run_dir))
+    slug, num = name.rsplit("-", 1)
+    parent = os.path.dirname(os.path.abspath(os.path.normpath(run_dir)))
+    out = []
+    for other in sorted(os.listdir(parent)):
+        o_slug, _, o_num = other.rpartition("-")
+        if RUN_ID.match(other) and o_slug == slug and int(o_num) < int(num)                 and os.path.isdir(os.path.join(parent, other)) and not os.path.isfile(os.path.join(parent, other, "run.md")):
+            out.append(other)
+    return out
 
 
 def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude"):
@@ -305,6 +533,8 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
                            "workflow": "workflow.json" if os.path.isfile(os.path.join(run_dir, "workflow.json")) else None},
             "outputs": outputs, "qa": qa_block,
             "image_review": runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["image"]), "image"),
+            "claude_image_review": runfiles.read_verdict(os.path.join(run_dir, CLAUDE_REVIEW), "image"),
+            "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
     return front, bool(old.get("status")) and not same_outputs and old.get("status") != "proposed"
@@ -318,6 +548,9 @@ def manifest_text(front):
             "- Generation: %s, model `%s`" % (s["generation"]["tool"], s["generation"]["model"] or "-"),
             "- QA: %s" % s["qa"]["state"],
             "- Image review: %s by %s" % (s["image_review"]["state"], s["image_review"]["by"] or "-"),
+            "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
+                                                     ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
+            "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none"),
             "- Status: %s (approval is human-only)" % front["status"], "", "## Prompt", "", s["prompt"], "", "## Outputs", ""]
     body += ["![%s](%s)" % (o["path"], o["path"]) for o in s["outputs"]] or ["(none)"]
     return "---json\n%s\n---\n%s\n" % (json.dumps(front, indent=2, ensure_ascii=True), "\n".join(body))
@@ -339,7 +572,10 @@ def main(argv=None):
     c.add_argument("--param", action="append", default=[])
     c = sp("lint"); c.add_argument("paths", nargs="*"); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
     c = sp("review-cmd"); c.add_argument("--phase", choices=["prompt", "image"], required=True); c.add_argument("--run", required=True)
-    c.add_argument("--codex", default="codex"); c.add_argument("--json", action="store_true")
+    c.add_argument("--codex", default="codex"); c.add_argument("--no-write", action="store_true"); c.add_argument("--json", action="store_true")
+    c = sp("embed"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
+    c = sp("publish"); c.add_argument("--run", required=True); c.add_argument("--comfy-url", required=True)
+    c.add_argument("--json", action="store_true")
     c = sp("qa"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
     c = sp("manifest"); c.add_argument("--run", required=True); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
@@ -359,11 +595,16 @@ def main(argv=None):
             return 0
         if a.cmd == "resolve":
             spec = layers.resolve(a.purpose, a.style, a.template, authoring)
+            run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
+            if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
+                spec = bind_run(spec, os.path.basename(run_dir))
             if a.out:
                 write_json(a.out, spec)
             emit(spec, a.json, "\n".join(
                 ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
                 + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
+                + ["hint %s = %s  [%s%s]" % (k, h["text"], h["source"], "; style hint overridden by the purpose" if "overrides" in h else "")
+                   for k, h in sorted(spec["hints"].items())]
                 + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())]))
             return 0
         if a.cmd == "render":
@@ -375,12 +616,22 @@ def main(argv=None):
             else:
                 fail("render needs --run DIR or --spec, --prompt-file and --out", 2)
             run_id = os.path.basename(os.path.normpath(a.run)) if a.run else None
-            workflow, errors = render(load_spec(spec_path), read_prompt(prompt_path), a.param, run_id)
+            prompt, spec = read_prompt(prompt_path), load_spec(spec_path)
+            state, reviewer = prompt_review_state(a.run, spec, prompt) if a.run else ("NOT_RUN", "codex")
+            workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
+            ui = None
+            if not errors:
+                try:
+                    ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
+                                          {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}})
+                except ValueError as exc:
+                    errors.append("workflow.ui.json: %s" % exc)
             if errors:
                 print("\n".join("FAIL " + e for e in errors))
                 return 1
             write_json(out, workflow)
-            print("rendered %s (%d nodes)" % (out, len(workflow)))
+            write_json(ui_path(out), ui)
+            print("rendered %s (%d nodes) and %s" % (out, len(workflow), ui_path(out)))
             return 0
         if a.cmd == "lint":
             results = [lint.lint_file(p, authoring) for p in (a.paths or lint.default_paths(authoring))]
@@ -390,9 +641,20 @@ def main(argv=None):
                  + "\nassetgen lint: %(PASS)d PASS, %(WARN)d WARN, %(FAIL)d FAIL" % counts)
             return 1 if counts["FAIL"] else 0
         if a.cmd == "review-cmd":
-            cmd = review_cmd(a.run, a.phase, a.codex)
+            cmd = review_cmd(a.run, a.phase, a.codex, not a.no_write)
             emit(cmd, a.json, cmd["shell"])
             return 0
+        if a.cmd == "embed":
+            rows = embed(a.run)
+            counts = {s: sum(1 for r in rows if r["state"] == s) for s in ("embedded", "kept", "FAIL")}
+            emit({"schema": "rpg-factory.assetgen-embed/1", "run": os.path.basename(os.path.normpath(a.run)), "results": rows,
+                  "summary": counts}, a.json, "\n".join("%s %s: %s" % (r["state"], r["output"], r["reason"]) for r in rows)
+                 + "\nassetgen embed: %(embedded)d embedded, %(kept)d kept, %(FAIL)d FAIL" % counts)
+            return 1 if counts["FAIL"] else 0
+        if a.cmd == "publish":
+            res = publish(a.run, a.comfy_url)
+            emit(res, a.json, "assetgen publish: %s %s (%s)" % (res["state"], res["workflow"], res["reason"]))
+            return {"PASS": 0, "FAIL": 1}.get(res["state"], 3)
         if a.cmd == "qa":
             spec = load_spec(os.path.join(a.run, "spec.json"))
             size = requested_size(a.run, spec)

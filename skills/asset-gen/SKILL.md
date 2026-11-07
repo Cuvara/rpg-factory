@@ -37,29 +37,55 @@ and run directories `assetgen/runs/<run-id>/`. Core purposes, styles and templat
    when the asset fits no purpose). Run id `<slug>-NNN`, next free number under `<A>/assetgen/runs/`.
 2. **Resolve.** `assetgen.py resolve --purpose P --style S [--template T] --authoring <A> --out <run>/spec.json`.
    Read the param sources it prints: game-layer values win over core, and a param nobody set comes from the template.
+   It also records `filename_prefix` `assetgen/<run-id>` in `spec.json`, the one prefix `render --run` requires and
+   the review prompts and `run.md` repeat; a run directory copied under a new id needs `resolve --out` again.
+   For technical constraints (lighting, background, framing: `scripts/assetgen/data/precedence.json`) the purpose's
+   `constraints` win over the style; the palette stays the style's. `resolve` prints one `hint` line per field and
+   marks a style hint the purpose overrides (`spec.hints`), so the prompt uses only the purpose's value, never both.
 3. **Prompt.** Write `<run>/prompt.md` (the prompt text only) from the purpose's `prompt.guidance`, `must_include`
-   and `avoid` (`assetgen.py show <purpose> --authoring <A>`), the style prefix, suffix, palette and lighting, and the
-   user's subject. No text, logos or brands unless the purpose asks for them.
+   and `avoid` (`assetgen.py show --kind purpose <id> --authoring <A>`: an id like `image-edit` is both a purpose and
+   a template, so always pass `--kind`), the style prefix and suffix, the `hint` lines of `resolve` (never a style
+   hint it marked overridden), and the user's subject. No text, logos or brands unless the purpose asks for them.
 4. **Prompt review (Codex).** `assetgen.py review-cmd --phase prompt --run <run>` prints a read-only `codex exec`
-   command; run it as printed. It writes `<run>/review-prompt.json`. On `FAIL` fix `prompt.md` from the findings and
+   command with absolute paths (it works from any directory); run it as printed. It writes
+   `<run>/review-prompt.json`. On `FAIL` fix `prompt.md` from the findings and
    review again, at most 2 fix rounds; still `FAIL` -> stop, report `BLOCKED` with the findings, ask the user.
    When `codex` is not OK or the command fails, review it yourself against the same text (`review-cmd --json`, field
    `stdin`) and write the verdict with its `binding` fields and `"by": "SAME_MODEL:claude"` - it grades `WARN`,
    never `PASS`; say so. A verdict binds the prompt and images it saw (`prompt_sha256`, `outputs`): change either
    and the review is stale until it runs again.
-5. **Render.** `assetgen.py render --run <run> [--param name=value]` writes `<run>/workflow.json` (strict: an
-   undeclared or missing param is an error). For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
+5. **Render.** `assetgen.py render --run <run> [--param name=value]` writes `<run>/workflow.json` (API format, the
+   one comfy-mcp runs; strict: an undeclared or missing param is an error) and `<run>/workflow.ui.json` (the same
+   graph laid out for the ComfyUI frontend, run id in `extra`). The prompt enters the graph through a
+   `PrimitiveStringMultiline` node titled `Prompt (Claude, Codex review <state>)`, so a person opening the workflow
+   sees it: `PASS`/`FAIL` only while `review-prompt.json` binds this prompt and spec (`STALE` once either changed);
+   a verdict by another reviewer names it, its `PASS` as `WARN` (`review SAME_MODEL:claude WARN`). For `image-edit`, copy the original into `<run>/references/` (the image review binds its sha256),
    upload it first (step 6) and pass `--param reference_image=<name it returned>`.
 6. **Generate** (spends image credits: only when the task asks for generation). comfy-mcp: `server_info` (ComfyUI
-   up, the image node present) -> `validate_workflow` on `<run>/workflow.json` -> `upload_file` for an edit's
-   reference -> `run_workflow` (wait) -> `job` until done -> `fetch_outputs` with `out_dir` `<run>/outputs`. Tool
-   not OK: render only, generation `NOT_RUN`; a person may run `workflow.json` in ComfyUI and drop the PNGs into
-   `outputs/`. Never claim a generation that did not run.
+   up, the image node present; when it shows the `comfyui_9router` node pack outdated, name its version in the
+   report and tell the user - never update or reinstall it) -> `validate_workflow` on `<run>/workflow.json` ->
+   `upload_file` for an edit's reference -> `run_workflow` (wait) -> `job` until done -> `fetch_outputs` with
+   `out_dir` `<run>/outputs` -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow
+   into each PNG, so QA and the reviews hash the final file and dragging the PNG into ComfyUI restores the graph).
+   `run_workflow` posts to ComfyUI's `/prompt` queue and never opens a canvas tab; to show the run in ComfyUI,
+   `assetgen.py publish --run <run> --comfy-url <URL of the running ComfyUI>` (optional, only when ComfyUI is
+   reachable) uploads `workflow.ui.json` to Workflows > assetgen (exit 0 PASS, 1 FAIL: ComfyUI refused it, 2 usage,
+   3 `NOT_AVAILABLE`: not reachable, nothing written); `NOT_AVAILABLE` there blocks nothing. Tool
+   not OK: render only, generation `NOT_RUN`; a person may run `workflow.ui.json` in ComfyUI and drop the PNGs into
+   `outputs/`, then `embed`. Never claim a generation that did not run.
 7. **Check the images.** `assetgen.py qa --run <run>` (exit 0 PASS, 1 FAIL, 3 NOT_AVAILABLE) writes `qa.json`.
-   Then look at every PNG yourself (Read) against the purpose's `image_rubric` and note each finding. Then the image
-   review: `review-cmd --phase image --run <run>`, run as printed -> `review-image.json` (same SAME_MODEL fallback as
-   step 4). Any FAIL: fix the prompt or params and regenerate in a new run directory (next NNN) with a new prompt
-   review, at most 2 regenerations; then stop and report the failed attempts. A failed attempt gets no `run.md`.
+   Then look at every PNG yourself (Read) against the purpose's `image_rubric` and write your verdict as
+   `<run>/review-image-claude.json` (the review schema, `"by": "claude"`, binding fields from `review-cmd --phase
+   image --json`); `manifest` summarises it, the quality plugin WARNs when it is missing, and it never replaces the
+   Codex review. Then the image review: `review-cmd --phase image --run <run>`, run as printed -> `review-image.json`
+   (same SAME_MODEL fallback as step 4). Its prompt states the true pixel size of every output (PNG header) and, for
+   a purpose with a tileable check, it writes `<run>/review/tile-2x2.png` (the output repeated 2x2) and passes it with
+   `-i` so the reviewer sees the seams. `/rpg-factory:assetgen review-cmd` appends `--no-write`: it builds no tile
+   and exits 2 when the tile is missing or stale, so run `assetgen.py review-cmd` directly for a tileable purpose.
+   Any FAIL: fix the prompt or params and regenerate in a new run directory with a new prompt review, at most 2
+   regenerations; then stop and report the failed attempts. A failed attempt's run directory stays on disk without
+   `run.md`; the next attempt takes the next free NNN, and `manifest` of the successful run lists the earlier
+   attempts of the series without `run.md` in `spec.trace.failed_attempts`.
 8. **Record.** `assetgen.py manifest --run <run> [--title T]` writes `run.md` (`gen-run`, status `proposed`). Never
    edit `run.md` by hand: fix the run and run `manifest` again. Run the fast checks (validation delta). A person
    approves (gate below); after that, hand off to the lead of `spec.handoff_domain` through its contract:
@@ -78,16 +104,20 @@ and run directories `assetgen/runs/<run-id>/`. Core purposes, styles and templat
 
 ## Generated & protected paths
 
-- `<run>/spec.json`, `workflow.json`, `qa.json`, `run.md`: written by `assetgen.py` (resolve, render, qa, manifest).
-- `<run>/review-prompt.json`, `review-image.json`: the reviewer's verdict (the `-o` file of the printed command).
-- `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`; never edited, their SHA-256 is the record.
+- `<run>/spec.json`, `workflow.json`, `workflow.ui.json`, `qa.json`, `run.md`: written by `assetgen.py` (resolve,
+  render, qa, manifest).
+- `<run>/review-prompt.json`, `review-image.json`: the reviewer's verdict (the `-o` file of the printed command);
+  `review-image-claude.json`: your own visual verdict.
+- `<run>/outputs/*.png`: comfy-mcp `fetch_outputs`, then only `embed` adds the `workflow` chunk; never edited
+  otherwise, their SHA-256 after `embed` is the record.
 - `approvals/AGEN-<run_id>/`: human only.
 
 ## Validation delta
 
 - Fast: `artifact-lint`, `artifact-trace`, `assetgen-quality`
   (`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/checks/artifact-quality.py <A> --registry ${CLAUDE_PLUGIN_ROOT}/registry.json --domain assetgen --json`).
-  Read `gen-run-prompt-review`, `-image-review`, `-qa`, `-outputs`, `-provenance`, `-refs`; resolve every `FAIL`.
+  Read `gen-run-prompt-review`, `-image-review`, `-claude-review`, `-qa`, `-outputs`, `-provenance`, `-refs`;
+  resolve every `FAIL` (`-claude-review` only WARNs when your visual review is missing or stale).
 - `assetgen.py lint --authoring <A>` for game-layer data; comfy-mcp `validate_workflow` is the live node check.
 - `qa.json` state per output; the image QA's size check follows the purpose's size mode (`rpg-factory:comfyui`).
 - Generation without comfy-mcp: `NOT_RUN`; a `SAME_MODEL` review: `WARN`, named in the report.
@@ -101,19 +131,21 @@ and run directories `assetgen/runs/<run-id>/`. Core purposes, styles and templat
 
 - [ ] Purpose, style and template fit the asset; the game layer was used when it has the id.
 - [ ] `prompt.md` follows the purpose guidance and style; reviewed by Codex (or a marked SAME_MODEL fallback).
-- [ ] `workflow.json` validated live; outputs fetched into the run, hashes recorded by `manifest`.
-- [ ] QA PASS for every output; the visual review and the Codex image review agree, or their findings are listed.
+- [ ] `workflow.json` validated live; outputs fetched into the run and embedded before QA, hashes recorded by `manifest`.
+- [ ] QA PASS for every output; `review-image-claude.json` and the Codex image review agree, or their findings are listed.
+- [ ] No overridden style hint in `prompt.md`; failed attempts left without `run.md` and listed in `spec.trace`.
 - [ ] `run.md` is `proposed`, the checks pass, and no handoff happened before a human approval.
 
 ## Report additions
 
 Run id and gen-run ID, purpose / style / template with their layer, the prompt, the prompt and image review states
 and reviewers (SAME_MODEL named), tool states (comfy-mcp, codex), the outputs (path, size, SHA-256), the QA table,
-your visual findings, regeneration count, the record status, the approval waiting on a person and the handoff target.
+your visual findings, regeneration count and failed attempt ids, the publish state (published, `NOT_AVAILABLE` or
+not run), an outdated `comfyui_9router` pack, the record status, the approval waiting on a person and the handoff target.
 
 ## Tools
 
 - `comfy-mcp`: step 6 (server_info, validate_workflow, upload_file, run_workflow, job, fetch_outputs). Not OK:
-  render only, generation `NOT_RUN`, a person runs `workflow.json`.
+  render only, generation `NOT_RUN`, a person runs `workflow.ui.json`.
 - `codex`: the prompt review (step 4) and the image review (step 7) through `codex exec`. Not OK: the marked
   `SAME_MODEL:claude` review.
