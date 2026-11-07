@@ -8,6 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; }
 P="$ROOT/scripts/factory-pipeline.py"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
+# hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
+# (the Orca-first cases below set them on purpose)
+for v in $(compgen -e | grep '^ORCA_'); do unset "$v"; done
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; T="$TMP/tool"
 pass=0; fail=0
 # expect <name> <rc> <grep-regex|-> <args...>: exit code and (optionally) a line of the combined output
@@ -641,6 +644,9 @@ import json, os, sys
 with open(os.environ["FAKE_ORCA_LOG"], "a", encoding="utf-8") as fh:
     fh.write(" ".join(sys.argv[1:]) + "\n")
 mode = os.environ.get("FAKE_ORCA_MODE", "list")
+if sys.argv[1:3] == ["status", "--json"]:
+    reachable = os.environ.get("FAKE_ORCA_REACHABLE", "true") == "true"
+    print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
 if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
     print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] != ["orchestration", "worker-list"] or mode == "error":
@@ -791,6 +797,32 @@ opath "status text names the integration child with its rm command" 0 "^  \[inte
 opath "cleanup names the integration QA child" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*feat-core-demo--qa" cleanup "$G"
 opath "cleanup names the lineage helper of the integration checkout" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*int-helper" cleanup "$G"
 unset FAKE_ORCA_WT
+
+echo "-- Orca first: --runner agent inside a reachable Orca session needs --orca-unavailable"
+# the fake orca's `status --json` answers reachable unless FAKE_ORCA_REACHABLE=false
+inorca() { PATH="$fpath" ORCA_WORKTREE_ID=x "$@"; }
+inorca expect "inside Orca: dispatch --runner agent exits 2 naming --runner orca" 2 "ORCA_WORKTREE_ID is set.*use --runner orca" dispatch "$OK" --task integration:client --phase qa --sha abc1234 --runner agent
+inorca expect "inside Orca: the refusal names --orca-unavailable REASON" 2 "needs --orca-unavailable REASON" dispatch "$OK" --task c1 --phase lead --runner agent
+inorca refute "inside Orca: the refusal prints no agent call" '"subagent_type"' dispatch "$OK" --task c1 --phase lead --runner agent
+inorca expect "inside Orca: planner --runner agent exits 2 too" 2 "use --runner orca" planner --request "add a thing" --runner agent
+PATH="$fpath" ORCA_AGENT_HOOK_ENDPOINT=e expect "inside Orca (ORCA_AGENT_HOOK_ENDPOINT only): refused" 2 "ORCA_AGENT_HOOK_ENDPOINT is set" planner --request "add a thing" --runner agent
+inorca expect "inside Orca with --orca-unavailable: the planner prompt opens with the reason" 0 '"prompt": "Orca unavailable: quota hit\. This session runs through' planner --request "add a thing" --runner agent --orca-unavailable "quota hit"
+inorca expect "inside Orca with --orca-unavailable: the agent call's prompt names the reason (whitespace collapsed)" 0 '\\nOrca unavailable: quota hit\. This session runs through the Claude Code Agent-tool fallback' dispatch "$OK" --task integration:client --phase qa --sha abc1234 --runner agent --orca-unavailable 'quota   hit'
+inorca expect "inside Orca with --orca-unavailable: stderr note" 0 "Orca unavailable \(quota hit\)" planner --request "add a thing" --runner agent --orca-unavailable "quota hit"
+inorca expect "inside Orca with --orca-unavailable: the lead prompt passes the flag on" 0 "pass --orca-unavailable with it to every factory-pipeline.py planner or dispatch" dispatch "$OK" --task c1 --phase lead --runner agent --orca-unavailable "quota hit"
+expect "outside Orca with --orca-unavailable: the reason is named too" 0 "Orca unavailable: quota hit\." planner --request "add a thing" --runner agent --orca-unavailable "quota hit"
+inorca expect "inside Orca: the default runner is orca" 0 "^orca orchestration worker-start " planner --request "add a thing"
+inorca refute "inside Orca: the default runner is not print" "^# agent:" planner --request "add a thing"
+expect "outside Orca: the default runner is print" 0 "^# agent: " planner --request "add a thing"
+PATH="$fpath" expect "orca reachable but no ORCA_* variable: the default runner is print" 0 "^# agent: " planner --request "add a thing"
+PATH="$fpath" expect "orca reachable but no ORCA_* variable: --runner agent as before" 0 '"subagent_type": "general-purpose"' planner --request "add a thing" --runner agent
+FAKE_ORCA_REACHABLE=false inorca expect "Orca env set, runtime unreachable: --runner agent as before" 0 '"subagent_type": "general-purpose"' planner --request "add a thing" --runner agent
+FAKE_ORCA_REACHABLE=false inorca expect "Orca env set, runtime unreachable: the default runner is print" 0 "^# agent: " planner --request "add a thing"
+noorca=$(IFS=:; for d in $PATH; do [ -e "$d/orca" ] || [ -e "$d/orca.cmd" ] || [ -e "$d/orca.exe" ] || printf '%s:' "$d"; done)
+PATH="${noorca%:}" ORCA_WORKTREE_ID=x expect "Orca env set, orca not on PATH: --runner agent as before" 0 '"subagent_type": "general-purpose"' dispatch "$OK" --task integration:client --phase qa --sha abc1234 --runner agent
+inorca expect "--orca-unavailable with --runner orca is a usage error" 2 "--orca-unavailable REASON goes with --runner agent only" planner --request "add a thing" --runner orca --orca-unavailable x
+expect "--orca-unavailable without --runner is a usage error" 2 "goes with --runner agent only" planner --request "add a thing" --orca-unavailable x
+expect "--orca-unavailable with a blank reason is a usage error" 2 "--orca-unavailable needs a REASON" planner --request "add a thing" --runner agent --orca-unavailable "  "
 git -C "$S" worktree remove "$TMP/feat-core-demo--qa"; git -C "$S" worktree remove "$TMP/int-helper"
 git -C "$S" branch -q -D feat/core/demo--qa int-helper
 if python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.integration_children == []' >/dev/null
