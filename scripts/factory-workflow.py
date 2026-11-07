@@ -374,7 +374,8 @@ def main():
         if a.runner in ("orca","agent"):
             # Orca --task takes a task id; a spec text goes to --spec, and every start needs --agent.
             pipe=reg["pipeline"]
-            agent,_=pr.route(pipe,node,pr.available(pipe,None))
+            # Workflow artifact kinds are not pipeline task kinds; use default routing and availability fallback.
+            agent,_=pr.route(pipe,{},pr.available(pipe,None))
             chosen=dict(x.split("=",1) for x in a.repos if "=" in x)  # the checkouts this run inspected
             place=orca_cmd.placement(reg,node.get("repo"),chosen.get(node.get("repo")))
             if a.runner=="orca":

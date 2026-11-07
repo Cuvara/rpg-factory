@@ -144,7 +144,8 @@ python3 -B - "$ROOT" "$TMP" <<'PY'
 import json,os,pathlib,shlex,subprocess,sys
 root=pathlib.Path(sys.argv[1]); tmp=pathlib.Path(sys.argv[2])
 reg=json.loads((tmp/'registry.json').read_text()); pipe=reg['pipeline']
-pipe['default_implementer']='claude'; pipe['agent_routing']={'default':'codex'}
+# An artifact kind entry must not override the pipeline default for workflow nodes.
+pipe['default_implementer']='claude'; pipe['agent_routing']={'default':'codex','feature-spec':'claude'}
 pipe['available_agents']=['claude','codex']
 for agent in ('claude','codex'):
     pipe['agents'][agent]['orca_agent']=agent+'-routed'

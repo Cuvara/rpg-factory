@@ -138,7 +138,7 @@ def warnings(pipe, items):
         routing = pipe.get('agent_routing', {})
         expected = routing.get(kind) or routing.get('default') or pipe['default_implementer']
         if expected and item.get('implementer') and item['implementer'] != expected and not (item.get('reason') or '').strip():
-            out.append(str(item.get('id', '?')) + ': implementer overrides ' + ('kind' if kind else 'default') + ' routing without reason')
+            out.append(str(item.get('id', '?')) + ': implementer overrides ' + ('kind' if routing.get(kind) else 'default') + ' routing without reason')
     planned = {a: {'available': True} for a in pipe['agents']}
     if len(items) >= 3 and len({route(pipe, i, planned)[0] for i in items}) == 1:
         out.append('one-model plan: 3 or more tasks/subtasks use one model')

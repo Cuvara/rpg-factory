@@ -54,6 +54,9 @@ docs/schemas/pipeline-plan.schema.json.
         implement records the model it started per task/subtask (<task>[@<subtask>]__implementer.model.json); review
         and QA pair against it (else the planned routing), never current availability. review records its reviewer
         and any SAME_MODEL fallback per candidate SHA: the only source `verdict` stamps a fallback from.
+        --runner print is a preview that writes no implementer or reviewer record. A print dispatch (the default
+        outside Orca) leaves verdict nothing to pair against or stamp a SAME_MODEL fallback from: dispatch
+        with --runner orca or --runner agent for a recorded session.
   ... [--subplan FILE --subtask ID] [--placement shared|child]
         --subplan/--subtask (a valid subplan of the task) default --paths to the subtask's paths, --agent to its
         implementer (implement) or reviewer (review), and --placement to its placement. --placement child runs the

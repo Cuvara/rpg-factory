@@ -1428,6 +1428,8 @@ if case == 'followup-validation':
     custom = dict(pipe, agent_routing={})
     other = next(agent for agent in pipe['agents'] if agent != pipe['default_implementer'])
     assert r.warnings(custom, [{'implementer': other}])
+    assert r.warnings(custom, [{'kind': 'code', 'implementer': other}]) == [
+        '?: implementer overrides default routing without reason']
     assert not r.warnings(custom, [{'implementer': other, 'reason': 'expertise'}])
     plan['tasks'][0]['kind'] = 'outside-schema'
     assert m.validate(plan, reg)['errors']
