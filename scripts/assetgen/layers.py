@@ -13,7 +13,8 @@ first, then core. Every leaf of the merged data records the file it came from (s
 Style hints versus purpose constraints (data/precedence.json): a field marked "purpose" there (lighting, background,
 framing) is a technical constraint; a purpose's constraints.<field> replaces the style's <field>, and resolve records
 spec.hints.<field> = {text, from: purpose, source, overrides: {text, source}} so the prompt writer uses one value and
-sees the style hint marked overridden. A "style" field (palette) is taste only the style sets.
+sees the style hint marked overridden. A "style" field (palette) is taste only the style sets. A style field may be
+prose (a string) or a structured object (stylelock.py); its hint is the object's `text`.
 """
 import hashlib
 import json
@@ -205,8 +206,11 @@ def resolve_hints(p, s):
     constraints = constraints if isinstance(constraints, dict) else {}
     hints = {}
     for field, winner in sorted(precedence().items()):
-        style_text, purpose_text = s["data"].get(field), constraints.get(field)
-        style_src, purpose_src = s["sources"].get(field, "style"), p["sources"].get("constraints." + field, "purpose")
+        style_value, purpose_text = s["data"].get(field), constraints.get(field)
+        # a structured style field (palette, lighting, ...) is an object whose hint is its text
+        style_text = style_value.get("text") if isinstance(style_value, dict) else style_value
+        style_src = s["sources"].get(field + ".text" if isinstance(style_value, dict) else field, "style")
+        purpose_src = p["sources"].get("constraints." + field, "purpose")
         if winner == "purpose" and isinstance(purpose_text, str) and purpose_text:
             hints[field] = {"text": purpose_text, "from": "purpose", "source": purpose_src}
             if isinstance(style_text, str) and style_text:

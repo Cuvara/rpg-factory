@@ -10,7 +10,8 @@
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
-# manifest-produced run.md,
+# manifest-produced run.md, the style lock data side (stylelock.py: project.json precedence, refusal and override,
+# deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -415,7 +416,7 @@ expect_lint link--1 FAIL "node 1 has no output -1" "link output index -1: FAIL (
 expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAIL, no traceback"
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
-AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "19 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "core + game layer lint clean (19 files)" || no "full lint" "$(tail -5 "$TMP/o")"
+AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "19 PASS, 1 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o"   && ok "core + game layer lint clean (19 files; WARN: no assetgen/project.json)" || no "full lint" "$(tail -5 "$TMP/o")"
 
 echo "-- fixture PNGs"
 FX="$TMP/png"; mkdir -p "$FX"
@@ -1084,6 +1085,242 @@ grep -q '^FAIL AGEN-qp-escape-001 .*does not match pattern' "$TMP/lint" && ok "k
 T2="$TMP/tmpl"; mkdir -p "$T2" && cp "$ROOT/templates/assetgen/gen-run.md" "$T2/" && git init -q "$T2"
 python3 -B "$ROOT/scripts/checks/artifact-lint.py" "$T2" --registry "$ROOT/registry.json" | grep -q '^PASS AGEN-example-icon-001$' \
   && ok "kind template templates/assetgen/gen-run.md is a schema-valid draft" || no "gen-run template lint"
+
+echo "-- style lock: project config, anchors, rejections, selection, drift (stylelock.py, lint)"
+SL="$TMP/stylelock-authoring"
+python3 -B - "$ROOT" "$SL" > "$TMP/sl" 2>&1 <<'EOF'
+import hashlib, json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import layers, lint, stylelock
+A = sys.argv[2]
+G = os.path.join(A, "assetgen")
+def w(rel, obj):
+    p = os.path.join(G, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(obj if isinstance(obj, str) else json.dumps(obj))
+    return p
+def check(cond, label, detail=""):
+    print(("ok " if cond else "no ") + label + ("" if cond else " :: " + str(detail)[:600]))
+def refused(fn, text):
+    try:
+        fn()
+    except stylelock.StyleLockError as exc:
+        return text in str(exc), str(exc)
+    return False, "not refused"
+def lint_of(*rel):
+    return lint.lint_file(os.path.join(G, *rel), A)
+def failed(res, *texts):
+    return res["state"] == "FAIL" and all(any(t in x for x in res["reasons"]) for t in texts)
+
+# a game style family: rpg-base v2 (active, structured fields), rpg-chars extends it, rpg-old deprecated
+w("styles/rpg-base.json", {"schema": "rpg-factory.assetgen-style/1", "title": "RPG base", "version": 2, "status": "active",
+  "palette": {"text": "Warm earthy palette.", "colors": [{"hex": "#aa5533", "role": "primary"}], "max_distance": 40},
+  "lighting": "Soft top light.", "outline": {"text": "Dark 2px outline.", "edge_darkness": {"max_luminance": 70, "min_ratio": 0.5}},
+  "forbidden": ["photo texture"], "canvas": {"props": {"aspect": "1:1", "min_side": 512}}, "tone": {"tolerance": 0.05}})
+w("styles/rpg-chars.json", {"extends": "rpg-base", "title": "RPG characters"})
+w("styles/rpg-old.json", {"schema": "rpg-factory.assetgen-style/1", "title": "RPG old", "version": 1, "status": "deprecated"})
+proj = {"schema": "rpg-factory.assetgen-project/1", "style": {"id": "rpg-base", "version": 2}, "allowed_styles": ["pixel-art", "rpg-old"],
+        "families": {"characters": "rpg-chars"}, "art_direction": [{"artifact": "ART2D-DIR-001", "rev": 3}]}
+w("project.json", proj)
+icon, sprite, edit = (layers.load("purpose", p, A) for p in ("icon", "sprite-2d", "image-edit"))
+
+# project precedence, refusal, override
+c = stylelock.choose(icon, A)
+check((c["family"], c["family_source"], c["style_id"], c["override"]) == ("props", "purpose", "rpg-base", None)
+      and c["project"]["path"] == "assetgen/project.json" and len(c["project"]["sha256"]) == 64,
+      "project: purpose default_family props, project default style rpg-base", c)
+c = stylelock.choose(sprite, A)
+check((c["family"], c["style_id"]) == ("characters", "rpg-chars"), "project: families[characters] picks the sub-style", c)
+c = stylelock.choose(icon, A, family="characters")
+check((c["family"], c["family_source"], c["style_id"]) == ("characters", "flag", "rpg-chars"), "project: --family beats the purpose default_family", c)
+c = stylelock.choose(edit, A)
+check((c["family"], c["family_source"], c["style_id"]) == (None, None, "rpg-base"), "project: purpose without default_family -> no family, project style", c)
+c = stylelock.choose(icon, A, style="pixel-art")
+check(c["style_id"] == "pixel-art" and c["override"] is None, "project: --style in allowed_styles is accepted", c)
+check(stylelock.choose(icon, A, style="rpg-chars")["style_id"] == "rpg-chars", "project: --style naming a family sub-style is accepted")
+r = refused(lambda: stylelock.choose(icon, A, style="anime-cel"), "is not allowed by assetgen/project.json")
+check(r[0], "project: --style outside allowed_styles is refused", r[1])
+c = stylelock.choose(icon, A, style="anime-cel", override="one-off key art")
+check(c["style_id"] == "anime-cel" and c["override"] == "one-off key art", "project: --style-override REASON accepts and records the reason", c)
+r = refused(lambda: stylelock.choose(icon, A, style="rpg-old"), "is deprecated")
+check(r[0], "deprecated style is refused even when allowed", r[1])
+check(stylelock.choose(icon, A, style="rpg-old", override="legacy fix")["override"] == "legacy fix", "deprecated style with an override reason is accepted")
+w("project.json", dict(proj, style={"id": "rpg-base", "version": 1}))
+r = refused(lambda: stylelock.choose(icon, A), "pins style rpg-base version 1")
+check(r[0], "project style version must equal the style file's version (resolve refuses)", r[1])
+check(failed(lint_of("project.json"), "project version 1 is not the style's version 2"), "lint: project version mismatch FAIL", lint_of("project.json"))
+w("project.json", dict(proj, families={"characters": "pixel-art"}, allowed_styles="all"))
+check(failed(lint_of("project.json"), "must extend the project style", "allowed_styles must be a list"),
+      "lint: family style not extending the base, malformed allowed_styles FAIL", lint_of("project.json"))
+w("project.json", {"schema": "x"})
+r = refused(lambda: stylelock.choose(icon, A), "assetgen/project.json")
+check(r[0], "malformed project.json is refused by resolve", r[1])
+w("project.json", proj)
+check(lint_of("project.json")["state"] == "PASS", "lint: valid project.json PASS", lint_of("project.json"))
+
+# without project.json: today's behaviour
+B = os.path.join(os.path.dirname(A), "stylelock-none")
+os.makedirs(os.path.join(B, "assetgen"), exist_ok=True)
+c = stylelock.choose(layers.load("purpose", "icon", B), B, style="pixel-art")
+check(c["project"] is None and c["style_id"] == "pixel-art" and c["family"] == "props", "no project.json: --style as today, project null", c)
+r = refused(lambda: stylelock.choose(layers.load("purpose", "icon", B), B), "pass --style")
+check(r[0], "no project.json and no default_style: refused as today", r[1])
+res = lint.lint_file(stylelock.project_path(B), B)
+check(res["state"] == "WARN" and "no assetgen/project.json" in res["reasons"][0], "lint: WARN without assetgen/project.json", res)
+check(os.path.abspath(stylelock.project_path(B)) in map(os.path.abspath, lint.default_paths(B)), "lint default paths include assetgen/project.json")
+
+# style refs, hints from structured fields, style and purpose lint
+base = layers.load("style", "rpg-base", A)
+ref = stylelock.style_ref(base)
+check(ref == {"style_id": "rpg-base", "version": 2, "sha256": layers.content_hash(base["data"])}, "style ref {style_id, version, sha256}", ref)
+spec = layers.resolve("icon", "rpg-base", authoring=A)
+check(spec["hints"]["palette"] == {"text": "Warm earthy palette.", "from": "style", "source": "game:assetgen/styles/rpg-base.json"},
+      "hints: an object palette gives its text and source", spec["hints"].get("palette"))
+check(stylelock.style_ref(layers.load("style", "rpg-chars", A))["version"] == 2, "an extending style inherits the version")
+for name, data, text in (
+        ("bad-version", {"version": 0}, "version must be an integer >= 1"),
+        ("bad-status", {"status": "live"}, "status must be one of"),
+        ("bad-palette", {"palette": {"text": "x", "colors": [{"hex": "red"}], "max_distance": 500}}, "palette.colors must be"),
+        ("bad-share", {"palette": {"text": "x", "min_share": 2}}, "palette.min_share must be"),
+        ("bad-text", {"lighting": {"severity": "warn"}}, "lighting.text must be a non-empty string"),
+        ("bad-edges", {"outline": {"text": "x", "edge_darkness": {"max_luminance": 300}}}, "max_luminance must be a number from 0 to 255"),
+        ("bad-canvas", {"canvas": {"props": {"aspect": "1x1"}}}, "canvas.props.aspect must be W:H"),
+        ("bad-pixels", {"canvas": {"props": {"aspect": "1:1", "width": 512}}}, "an exact pixel canvas is never set"),
+        ("bad-forbidden", {"forbidden": "text"}, "forbidden must be a list"),
+        ("bad-tone", {"tone": {"tolerance": 3}}, "tone.tolerance must be a number from 0 to 1")):
+    p = w("styles/%s.json" % name, dict({"schema": "rpg-factory.assetgen-style/1", "title": name}, **data))
+    res = lint.lint_file(p, A)
+    check(failed(res, text), "lint style: " + text, res)
+    os.remove(p)
+check(lint_of("styles", "rpg-base.json")["state"] == "PASS", "lint: structured style fields PASS", lint_of("styles", "rpg-base.json"))
+p = w("purposes/bad-dims.json", {"extends": "icon", "dimensions": ["palette", "smell"], "max_references": -1, "default_family": "Props!", "qa": {"outlines": "yes"}})
+res = lint.lint_file(p, A)
+check(failed(res, "dimensions must be", "max_references must be", "default_family must be", "qa.outlines must be"),
+      "lint purpose: dimensions, max_references, default_family, qa.outlines", res)
+os.remove(p)
+
+# anchors: validity in the engine view
+PNG = b"\x89PNG\r\n\x1a\nanchor-bytes"
+PNG_SHA = hashlib.sha256(PNG).hexdigest()
+def anchor(aid, family, dims, strength, status="active", version=2, run="good-001", by="Dana", sha=None):
+    d = os.path.join(G, "styles", "rpg-base", "anchors")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, aid + ".png"), "wb") as f:
+        f.write(PNG)
+    w("styles/rpg-base/anchors/%s.json" % aid, {
+        "schema": "rpg-factory.assetgen-anchor/1", "id": aid, "status": status,
+        "style": {"style_id": "rpg-base", "version": version, "sha256": sha or ref["sha256"]}, "family": family,
+        "dimensions": dims, "strength": strength, "image": aid + ".png", "image_sha256": PNG_SHA,
+        "source_run": {"run_id": run, "output": "outputs/a.png", "sha256": "0" * 64},
+        "approved_by": by if status == "active" else None, "approved_on": "2026-11-01" if status == "active" else None})
+def run(rid, status, style_ref):
+    front = {"id": "AGEN-" + rid, "status": status, "spec": {"style": {"id": style_ref["style_id"], "sha256": style_ref["sha256"]},
+                                                              "style_lock": {"style": style_ref}}}
+    w("runs/%s/run.md" % rid, "---json\n%s\n---\n# run\n" % json.dumps(front))
+def anchors():
+    return {r["id"]: r for r in stylelock.load_anchors(A, "rpg-base")}
+run("good-001", "approved", ref)
+run("draft-001", "proposed", ref)
+anchor("a-canon", "props", ["palette", "line"], "canonical")
+anchor("a-strong", "props", ["palette", "shape", "line"], "strong")
+anchor("b-strong", "props", ["palette", "shape", "line"], "strong")
+anchor("c-chars", "characters", ["palette", "shape", "line"], "canonical")
+anchor("d-props-tex", "props", ["texture"], "supporting")
+anchor("p-proposed", "props", ["palette", "shape", "line"], "canonical", status="proposed")
+anchor("u-unapproved", "props", ["palette", "shape", "line"], "canonical", run="draft-001")
+anchor("v-old", "props", ["palette", "shape", "line"], "canonical", version=1, sha="1" * 64)
+v = {k: stylelock.anchor_validity(r, A) for k, r in anchors().items()}
+check(not v["p-proposed"][0] and "status proposed" in v["p-proposed"][1], "anchor: proposed is not valid", v["p-proposed"])
+check(not v["u-unapproved"][0] and "draft-001 is proposed, not approved" in v["u-unapproved"][1], "anchor: active with an unapproved source run is not valid", v["u-unapproved"])
+check(v["a-canon"][0], "anchor: active with an approved source run is valid", v["a-canon"])
+check(v["v-old"][0], "anchor: an older style version stays valid", v["v-old"])
+valid = stylelock.valid_anchors(A, "rpg-base")
+check(sorted(a["id"] for a in valid) == ["a-canon", "a-strong", "b-strong", "c-chars", "d-props-tex", "v-old"], "valid_anchors keeps only valid active anchors", [a["id"] for a in valid])
+check(failed(lint_of("styles", "rpg-base", "anchors", "u-unapproved.json"), "not approved"), "lint: active anchor with an unapproved source run FAIL",
+      lint_of("styles", "rpg-base", "anchors", "u-unapproved.json"))
+check(lint_of("styles", "rpg-base", "anchors", "p-proposed.json")["state"] == "PASS", "lint: proposed anchor PASS", lint_of("styles", "rpg-base", "anchors", "p-proposed.json"))
+check(lint_of("styles", "rpg-base", "anchors", "a-canon.json")["state"] == "PASS", "lint: approved active anchor PASS", lint_of("styles", "rpg-base", "anchors", "a-canon.json"))
+anchor("x-agent", "props", ["palette"], "strong", by="claude")
+check(failed(lint_of("styles", "rpg-base", "anchors", "x-agent.json"), "is an agent or model"), "lint: anchor approved_by an agent FAIL")
+check(not stylelock.anchor_validity(anchors()["x-agent"], A)[0], "anchor approved by an agent is never valid")
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "x-agent.json"))
+with open(os.path.join(G, "styles", "rpg-base", "anchors", "b-strong.png"), "wb") as f:
+    f.write(b"changed")
+check(failed(lint_of("styles", "rpg-base", "anchors", "b-strong.json"), "does not match image_sha256"), "lint: anchor image changed after promotion FAIL")
+with open(os.path.join(G, "styles", "rpg-base", "anchors", "b-strong.png"), "wb") as f:
+    f.write(PNG)
+w("styles/rpg-base/anchors/m-bad.json", {"schema": "rpg-factory.assetgen-anchor/1", "id": "other", "status": "active", "style": {"style_id": "rpg-chars"},
+                                         "family": "props", "dimensions": ["smell"], "strength": "huge"})
+res = lint_of("styles", "rpg-base", "anchors", "m-bad.json")
+check(failed(res, "is not the file name", "is not the style directory", "dimensions must be", "strength must be", "needs approved_by"),
+      "lint: malformed anchor names every bad field", res)
+check(not stylelock.anchor_validity(anchors()["m-bad"], A)[0], "malformed anchor is never valid")
+check(os.path.abspath(os.path.join(G, "styles", "rpg-base", "anchors", "m-bad.json")) in map(os.path.abspath, lint.default_paths(A)), "lint default paths include anchors")
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "m-bad.json"))
+
+# deterministic selection: family, dimension overlap, strength, id; cap; style version
+dims = icon["data"]["dimensions"]
+picks = stylelock.select_references(valid, ref, "props", dims, 3)
+check([p["anchor_id"] for p in picks] == ["a-strong", "b-strong", "a-canon"], "selection order: family, then dimension overlap, then strength, then id", [p["anchor_id"] for p in picks])
+check(picks[0] == {"anchor_id": "a-strong", "family": "props", "strength": "strong", "dimensions": ["palette", "shape", "line"],
+                   "image": "references/anchor-a-strong.png", "sha256": PNG_SHA,
+                   "reason": ["family match", "dimensions: palette, shape, line", "strength strong"]}, "pick record with reasons", picks[0])
+allp = stylelock.select_references(valid, ref, "props", dims, 10)
+check([p["anchor_id"] for p in allp] == ["a-strong", "b-strong", "a-canon", "d-props-tex", "c-chars"] and allp[-1]["reason"][0] == "same style"
+      and allp[3]["reason"] == ["family match", "strength supporting"], "selection: other family last as same style, older version excluded",
+      [(p["anchor_id"], p["reason"]) for p in allp])
+check(len(stylelock.select_references(valid, ref, "props", dims, 2)) == 2 and stylelock.select_references(valid, ref, "props", dims, 0) == [], "selection cap")
+check(stylelock.select_references(list(reversed(valid)), ref, "props", dims, 3) == picks, "same inputs in another order -> same selection")
+old_ref = {"style_id": "rpg-base", "version": 1, "sha256": "1" * 64}
+check([p["anchor_id"] for p in stylelock.select_references(valid, old_ref, "props", dims, 3)] == ["v-old"], "an older style version selects only its own anchors")
+check(stylelock.max_references({"max_references": 3}, {"max_references": 2}) == 2 and stylelock.max_references({}, {}) == 3
+      and stylelock.max_references({"max_references": 1}, None) == 1, "max_references: the smaller of purpose and template, default 3")
+core_p = {p: layers.load("purpose", p)["data"] for p in ("icon", "sprite-2d", "concept-2d", "ui-element", "texture-tileable", "ref-3d-turnaround", "image-edit")}
+check(all(isinstance(d.get("dimensions"), list) and d.get("max_references") == 3 for d in core_p.values())
+      and core_p["icon"]["default_family"] == "props" and core_p["sprite-2d"]["default_family"] == "characters"
+      and "default_family" not in core_p["image-edit"], "core purposes declare dimensions, max_references and default_family (none for image-edit)")
+check(all(layers.load("style", s)["data"].get("version") == 1 and layers.load("style", s)["data"].get("status") == "active"
+          for s in ("anime-cel", "flat-ui", "low-poly", "pixel-art", "realistic-pbr", "stylized-painterly")), "core styles are version 1, active")
+
+# rejections: relevance by style, family and version
+def rej(rid, **kw):
+    return w("styles/rpg-base/rejections/%s.json" % rid, dict({"schema": "rpg-factory.assetgen-rejection/1", "id": rid, "type": "direction",
+             "style": dict(ref), "family": None, "reason": "too_detailed", "text": "No fine filigree."}, **kw))
+ASSET_RUN = {"run_id": "good-001", "output": "outputs/a.png", "sha256": "0" * 64}
+rej("r-all")
+rej("r-props", family="props", reason="palette_off", text="Neon green.")
+rej("r-chars", family="characters")
+rej("r-anyver", style={"style_id": "rpg-base", "version": None, "sha256": "2" * 64})
+rej("r-oldver", style={"style_id": "rpg-base", "version": 1, "sha256": "1" * 64})
+rej("r-asset", type="asset", reason="anatomy", text=None, run=ASSET_RUN)
+rel = stylelock.relevant_rejections(stylelock.load_rejections(A, "rpg-base"), ref, "props")
+check([r["id"] for r in rel] == ["r-all", "r-anyver", "r-asset", "r-props"], "rejections: same style, family null or equal, version null or equal", [r["id"] for r in rel])
+check(rel[3] == {"id": "r-props", "type": "direction", "reason": "palette_off", "text": "Neon green."} and rel[2]["run"] == ASSET_RUN and "text" not in rel[2],
+      "rejection item carries its text or run", rel)
+other = {"style_id": "rpg-chars", "version": 2, "sha256": ref["sha256"]}
+check(stylelock.relevant_rejections(stylelock.load_rejections(A, "rpg-base"), other, "props") == [], "rejections of another style id are not relevant")
+for rid, kw, text in (("bad-1", {"text": ""}, "text is required"), ("bad-2", {"reason": "ugly"}, "reason must be one of"),
+                      ("bad-3", {"type": "asset", "run": {"run_id": "x"}}, "run must be"),
+                      ("bad-4", {"reason": "other", "type": "asset", "text": None, "run": ASSET_RUN}, "text is required")):
+    check(failed(lint.lint_file(rej(rid, **kw), A), text), "lint rejection: " + text, lint_of("styles", "rpg-base", "rejections", rid + ".json"))
+    os.remove(os.path.join(G, "styles", "rpg-base", "rejections", rid + ".json"))
+check(lint_of("styles", "rpg-base", "rejections", "r-asset.json")["state"] == "PASS", "lint: valid asset rejection PASS", lint_of("styles", "rpg-base", "rejections", "r-asset.json"))
+
+# drift: older version, hash changed, style missing (read-only)
+run("old-001", "approved", {"style_id": "rpg-base", "version": 1, "sha256": "1" * 64})
+run("hash-001", "approved", {"style_id": "rpg-base", "version": 2, "sha256": "3" * 64})
+run("gone-001", "approved", {"style_id": "rpg-gone", "version": 1, "sha256": "4" * 64})
+d = stylelock.drift(A)
+got = sorted((i["kind"], i["id"], i["state"]) for i in d["items"])
+want = sorted([("gen-run", "AGEN-old-001", "older-version"), ("gen-run", "AGEN-hash-001", "hash-changed"), ("gen-run", "AGEN-gone-001", "style-missing"),
+               ("anchor", "v-old", "older-version"), ("rejection", "r-oldver", "older-version"), ("rejection", "r-anyver", "hash-changed")])
+check(d["schema"] == "rpg-factory.assetgen-drift/1" and got == want, "drift lists older-version, hash-changed and style-missing only", got)
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "style lock: unexpected output" "$line" ;; esac
+done < "$TMP/sl"
+grep -qE '^(ok|no) drift' "$TMP/sl" && ok "style lock cases ran to the end" || no "style lock cases stopped early" "$(tail -5 "$TMP/sl")"
 
 echo "-- no endpoints or credentials in core data or engine"
 hits=$(grep -rnIE '://|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost:[0-9]|Bearer [A-Za-z0-9]|sk-[A-Za-z0-9]{12}|"(api[_-]?key|authorization|base_url)" *:' \

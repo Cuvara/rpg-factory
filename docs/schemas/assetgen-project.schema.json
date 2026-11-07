@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asset-gen project style config (<authoring>/assetgen/project.json; scripts/assetgen/stylelock.py)",
+  "type": "object",
+  "required": [
+    "schema",
+    "style"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rpg-factory.assetgen-project/1"
+    },
+    "style": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "description": "The game's default style; version must equal the style file's version.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "allowed_styles": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Styles resolve --style accepts besides the default and the family styles; any other needs --style-override REASON."
+    },
+    "families": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Asset family (characters, environment, props, ui, vfx, ...) -> a game style that extends the default style."
+    },
+    "art_direction": {
+      "type": "array",
+      "description": "Upstream approved art-direction-2d / art-direction-3d artifacts.",
+      "items": {
+        "type": "object",
+        "required": [
+          "artifact",
+          "rev"
+        ],
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rev": {}
+        }
+      }
+    }
+  }
+}

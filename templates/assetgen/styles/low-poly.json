@@ -1,6 +1,8 @@
 {
  "schema": "rpg-factory.assetgen-style/1",
  "title": "Low poly",
+ "version": 1,
+ "status": "active",
  "prefix": "Low-poly 3D game asset render,",
  "suffix": "flat-shaded faceted polygons, simple materials.",
  "avoid": [

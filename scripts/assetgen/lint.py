@@ -5,6 +5,10 @@ names, required inputs, link targets and types, combo values against data/known-
 check is comfy-mcp validate_workflow), extends targets, and that no file carries a URL, host address or credential.
 Purpose constraints are checked against data/precedence.json. A core file is linted as core data only (no game
 layer merged in), so a bad game value is reported on the game file that holds it.
+Style lock (stylelock.py): style version, status and structured fields, purpose default_family/dimensions/
+max_references, <authoring>/assetgen/project.json (styles it names, version match), anchors (structure, image file
+and hash, an active anchor needs a person's approval and an approved source gen-run) and rejections. With an
+authoring repo and no project.json, lint adds a WARN row for assetgen/project.json (style lock off).
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
 """
 import json
@@ -13,6 +17,7 @@ import re
 
 import layers
 import runfiles
+import stylelock
 
 KNOWN = os.path.join(layers.HERE, "data", "known-nodes.json")
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -137,6 +142,7 @@ def template_errors(data, ident):
     warns += w
     used = set(PLACEHOLDER.findall(json.dumps(graph)))
     warns += ["param %s is declared but never used in the workflow" % n for n in params if n not in used]
+    errs += [e for e in stylelock.purpose_errors(data) if e.startswith("max_references")]
     out = data.get("output_node")
     if not isinstance(graph, dict) or not isinstance(out, str) or out not in graph:
         errs.append("output_node %r is not a node of the workflow" % out)
@@ -198,7 +204,7 @@ def purpose_errors(data, ident, authoring):
                             % (field, ", ".join(sorted(k for k, v in rules.items() if v == "purpose"))))
             elif not isinstance(text, str) or not text:
                 errs.append("constraints.%s must be a non-empty string" % field)
-    return errs + runfiles.qa_errors(data.get("qa"))
+    return errs + stylelock.purpose_errors(data) + runfiles.qa_errors(data.get("qa"))
 
 
 def style_errors(data):
@@ -207,6 +213,22 @@ def style_errors(data):
         errs.append("avoid must be a list")
     if not isinstance(data.get("params", {}), dict):
         errs.append("params must be an object")
+    return errs + stylelock.style_errors(data)
+
+
+def anchor_lint(raw, style_id, ident, path, authoring):
+    errs = stylelock.anchor_errors(raw, style_id, ident)
+    if errs:
+        return errs
+    img = os.path.join(os.path.dirname(path), raw["image"])
+    if not os.path.isfile(img):
+        errs.append("image %s is missing next to the anchor" % raw["image"])
+    elif stylelock._file_sha256(img) != raw["image_sha256"]:
+        errs.append("image %s does not match image_sha256" % raw["image"])
+    if raw["status"] == "active":
+        ok, why = stylelock.anchor_validity({"errors": [], "data": raw}, authoring)
+        if not ok:
+            errs.append("active anchor: " + why)
     return errs
 
 
@@ -234,6 +256,13 @@ def display(path, authoring):
 def lint_data(path, raw, authoring):
     """(errors, warnings) of one parsed file; nested types are validated before use."""
     errs, warns = [], []
+    lock, style_id, lock_id = stylelock.classify(path, authoring)
+    if lock == "project":
+        return stylelock.project_errors(raw, authoring), []
+    if lock == "anchor":
+        return anchor_lint(raw, style_id, lock_id, path, authoring), []
+    if lock == "rejection":
+        return stylelock.rejection_errors(raw, style_id, lock_id), []
     kind, ident, layer = classify(path, authoring)
     if kind:
         # a core file is linted as core data only: a bad game value that extends or overrides it is blamed on the
@@ -270,6 +299,9 @@ def lint_data(path, raw, authoring):
 def lint_file(path, authoring=None):
     errs, warns = [], []
     shown = display(path, authoring)
+    if stylelock.classify(path, authoring)[0] == "project" and not os.path.isfile(path):
+        return {"path": shown, "check": "assetgen-lint", "state": "WARN",
+                "reasons": ["no assetgen/project.json: style lock off (styles come from the purpose's default_style or --style)"]}
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read()
@@ -291,4 +323,7 @@ def default_paths(authoring=None):
     for kind in layers.KINDS:
         files = layers.layer_files(kind, authoring)
         out += list(files["core"].values()) + list(files["game"].values())
+    if authoring:
+        out.append(stylelock.project_path(authoring))
+        out += [p for _, _, p in stylelock.anchor_files(authoring)]
     return out

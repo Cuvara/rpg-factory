@@ -4,6 +4,13 @@
  "description": "Orthographic front/side/back reference sheet for 3D modelling.",
  "handoff_domain": "art3d",
  "default_template": "image-generate",
+ "default_family": "characters",
+ "dimensions": [
+  "shape",
+  "palette",
+  "line"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1536x1024",
   "background": "opaque",
