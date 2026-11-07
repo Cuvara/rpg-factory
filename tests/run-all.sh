@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # run-all.sh — every local validation for the plugin. Read-only against the workspace.
 # Prints one line per check and a final count; exits non-zero if anything failed.
+# Dead parallel workers fail with buffered output; added branch/worktree config sections warn, other mutations fail.
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
 #   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
@@ -46,7 +47,7 @@ _note() { echo "$1"; }
 # queued and started in the background (at most N at a time: live-lane suites first, one at a time, one slot for the
 # earliest queued suite, then the SLOW ones, then the rest in order; output buffered in $QD). Every line - suite results and inline checks alike - waits
 # in the queue until the lines before it are out, so the output order, the count and the exit code are those of -j 1.
-QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QL=(); QA=(); PEND=()
+QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QL=(); QA=(); QP=(); PEND=()
 # the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
 SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
@@ -60,23 +61,35 @@ ok()   { queue ok "$@"; }
 bad()  { queue bad "$@"; }
 skp()  { queue skp "$@"; }
 note() { queue note "$1"; }
+worker_result() { # synthesize a failure only for a started worker that exited without publishing its result
+  local i=$1 pid=${QP[$1]:-}
+  if [ ! -f "$QD/$i.res" ] && [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    # The worker publishes by rename: it may have finished between the first test and kill -0.
+    [ -f "$QD/$i.res" ] && return 0
+    printf '\nsuite worker died without a result (pid %s)\n' "$pid" >> "$QD/$i.out"
+    printf '137 0\n' > "$QD/$i.res"
+  fi
+}
 flush() { # print the queue up to the first suite still running
   local i st secs
   while [ "$qnext" -lt "$qn" ]; do
     i=$qnext
     if [ "${QK[i]}" = job ]; then
+      worker_result "$i"
       [ -f "$QD/$i.res" ] || return 0
       read -r st secs < "$QD/$i.res"
-      if [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
+      if [ "$st" = 137 ] && grep -q 'suite worker died without a result' "$QD/$i.out"; then _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"
+      elif [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
       elif [ "$st" = 0 ]; then _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
       rm -f "$QD/$i.res" "$QD/$i.out"
     else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
-    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QL[i]' 'QA[i]'; qnext=$((i + 1))
+    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
   done
 }
 running() { # sets nrun (started, not ended), nlive (of them in the live lane), nord (started as the in-order one)
   local i; nrun=0; nlive=0; nord=0
   for ((i = qnext; i < qn; i++)); do
+    [ "${QK[i]}" = job ] && worker_result "$i"
     [ -n "${QL[i]:-}" ] && [ ! -f "$QD/$i.res" ] && { nrun=$((nrun + 1)); [ -n "${QA[i]:-}" ] && nlive=$((nlive + 1))
       [ "${QL[i]}" = o ] && nord=$((nord + 1)); }
   done
@@ -85,6 +98,7 @@ start() { # queue index [o: the in-order pick]
   QL[$1]=${2:-1}
   ( t0=$(date +%s); eval "${QC[$1]}" > "$QD/$1.out" 2>&1 < /dev/null; rc=$?; t1=$(date +%s)
     echo "$rc $((t1 - t0))" > "$QD/$1.tmp" && mv "$QD/$1.tmp" "$QD/$1.res" ) &
+  QP[$1]=$!
 }
 pump() { # start queued suites while fewer than $jobs run: a live-lane one when none runs, the earliest queued one when
   # none of those runs (keeps the output moving), else SLOW first, else in order
@@ -137,7 +151,45 @@ _run() {
   n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$s; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
   pump; flush
 }
-# sourced (tests/run-all-parallel.test.sh): the scheduler above only, no checks
+# Classify conservatively: existing bytes must stay intact, and insertions must be whole new sections.
+gitcfg_classify() { # before after -> PASS|WARN|FAIL (unreadable files fail)
+  python3 -B - "$1" "$2" <<'PY'
+import difflib
+import re
+import sys
+try:
+    before, after = [open(p, 'rb').readlines() for p in sys.argv[1:]]
+except OSError:
+    print('FAIL')
+    sys.exit(0)
+if before == after:
+    print('PASS')
+    sys.exit(0)
+header = re.compile(rb'^\s*\[([^\r\n]+)\]\s*(?:\r?\n)?$')
+allowed = re.compile(rb'^(?:branch\s+"[^"\r\n]+"|worktree(?:\s+"[^"\r\n]+")?)$')
+existing = {m[1] for line in before if (m := header.fullmatch(line))}
+for tag, a, b, c, d in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+    if tag == 'equal':
+        continue
+    if tag != 'insert' or (a < len(before) and not header.fullmatch(before[a])):
+        print('FAIL')
+        break
+    lines = after[c:d]
+    if not lines or not header.fullmatch(lines[0]) or (a and not before[a-1].endswith(b'\n')):
+        print('FAIL')
+        break
+    for line in lines:
+        if line.lstrip().startswith(b'['):
+            m = header.fullmatch(line)
+            if not m or not allowed.fullmatch(m[1]) or m[1] in existing:
+                print('FAIL')
+                sys.exit(0)
+            existing.add(m[1])
+else:
+    print('WARN')
+PY
+}
+# sourced (tests/run-all-parallel.test.sh): scheduler and config classifier only, no checks
 [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
 
 # ---- syntax
@@ -488,7 +540,11 @@ find scripts tests testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/
 
 # ---- the shared git config (common dir) must be byte-identical to what it was when the run started
 if [ -n "${GITCFG_FILE:-}" ]; then
-  if out=$(gitcfg_verify); then ok "shared git config unchanged during the run"; else bad "shared git config changed during the run" "$out"; fi
+  if out=$(gitcfg_verify); then ok "shared git config unchanged during the run"
+  elif [ -n "${GITCFG_COPY:-}" ] && [ "$(gitcfg_classify "$GITCFG_COPY" "$GITCFG_FILE")" = WARN ]; then
+    note "WARN  shared git config: only other sessions' branch/worktree sections were added during the run"
+    note "$(diff -u "$GITCFG_COPY" "$GITCFG_FILE" | sed 's/^/      /')"
+  else bad "shared git config changed during the run" "$out"; fi
 else skp "shared git config unchanged during the run" "not inside a git repository"; fi
 
 total=$((pass + fail + skip))

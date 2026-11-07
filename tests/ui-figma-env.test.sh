@@ -35,7 +35,10 @@ port_file() { # port_file PROJECT PORT HEARTBEAT
   printf '{"port": %s, "evalToken": "%s", "lastHeartbeat": "%s", "endpoints": [{"type": "http", "port": "%s"}]}\n' \
     "$2" "$TOKEN" "$3" "$2" > "$1/Library/Pipeline/.unity-pipeline-port"
 }
-now_utc() { python3 -B -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "1Z")'; }
+# figma_env has no clock override: only ages > 60 s are stale (future stamps are accepted).
+# Allow an hour of scheduling delay across fixture setup and repeated checks on loaded machines;
+# keep OLD's explicit 2020 timestamp below so the stale-heartbeat case still exercises expiry.
+fresh_heartbeat() { python3 -B -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "1Z")'; }
 CONN='"com.unity.ui.figma": "0.3.0-exp.1"'
 CONN_LOCK='"com.unity.ui.figma": {"version": "0.3.0-exp.1", "source": "registry"}, "com.unity.pipeline": {"version": "0.9.1-exp.1", "source": "registry"}'
 HASH=0123456789abcdef0123456789abcdef01234567
@@ -46,7 +49,7 @@ project "$GIT" 6000.3.9f1 "{\"com.cuvara.uitoolkit\": \"https://github.com/Cuvar
   "{\"com.cuvara.uitoolkit\": {\"version\": \"https://github.com/Cuvara/UIToolkit.git#v0.8.0\", \"source\": \"git\", \"hash\": \"$HASH\"}, $CONN_LOCK}"
 pkg "$GIT/Library/PackageCache/com.cuvara.uitoolkit@0123456789ab" 0.8.0 with-tools
 pkg "$GIT/Library/PackageCache/com.cuvara.uitoolkit@ffffffffffff" 0.7.2
-port_file "$GIT" 54321 "$(now_utc)"
+port_file "$GIT" 54321 "$(fresh_heartbeat)"
 mkdir -p "$GIT/ProjectSettings/Packages/com.unity.pipeline"
 echo '{"m_AllowBrowserClients": true}' > "$GIT/ProjectSettings/Packages/com.unity.pipeline/EditorPipelineConfig.json"
 
@@ -194,7 +197,7 @@ EOF
 )
 [ "$net" = 0 ] && ok "no socket opened without --probe-pipeline" || no "sockets opened without the flag: $net"
 closed=$(python3 -B -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-port_file "$GIT" "$closed" "$(now_utc)"
+port_file "$GIT" "$closed" "$(fresh_heartbeat)"
 out=$(run --project "$GIT" --json --probe-pipeline); rc=$?
 [ "$(state "$out" pipeline-probe)" = HUMAN_REQUIRED ] && [ "$(field "$out" 'next(i for i in r["items"] if i["id"]=="pipeline-probe")["value"]')" = unreachable ] \
   && ok "probe on a closed port: unreachable" || no "probe closed: $(state "$out" pipeline-probe) ($out)"

@@ -3,6 +3,7 @@
 # output is line for line the -j 1 output (times aside), the counts are equal, two slow suites overlap (event order,
 # no wall clock), at most 3 suites run at once, a SLOW suite starts first, live-lane suites (runl, block) never
 # overlap each other, a block's lines are counted, a run1 suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
+# Killed workers cannot hang the queue; shared config classification permits only whole added branch/worktree sections.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -99,6 +100,49 @@ for j in 0 x ""; do
 done
 grep -q '^\[ "\${BASH_SOURCE\[0\]}" != "\$0" \] && return 0' "$ROOT/tests/run-all.sh" \
   && good "sourcing run-all.sh stops after the scheduler" || no "run-all.sh has no source guard after the scheduler"
+
+cat > "$TMP/dead.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 3
+die() { echo 'buffered before death'; kill -9 "$BASHPID"; }
+run 'dead suite' die
+run 'later suite' bash -c 'exit 0'
+drain
+echo "counts $pass $fail $skip"
+[ "$pass" -eq 1 ] && [ "$fail" -eq 1 ] && [ "$skip" -eq 0 ]
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" timeout 90 bash "$TMP/dead.sh" 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && grep -q '^FAIL  dead suite' <<<"$out" \
+    && grep -q 'suite worker died without a result (pid [0-9]' <<<"$out" \
+    && grep -q 'buffered before death' <<<"$out" && grep -q '^PASS  later suite' <<<"$out" \
+    && grep -q '^counts 1 1 0$' <<<"$out"; then
+  good 'dead worker fails with buffered output, later suites finish and counts are correct'
+else no "dead worker recovery (rc=$rc; timeout=124)" "$out"; fi
+
+# Source in a separate process: the scheduler initializes its own counters and EXIT trap.
+cat > "$TMP/config.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+gitcfg_classify "$1" "$2"
+PLAN
+printf '[core]\n\tworktree = /original\n[branch "existing"]\n\tremote = origin\n' > "$TMP/before"
+config_case() {
+  local name=$1 want=$2 got
+  got=$(ROOT_UNDER_TEST="$ROOT" bash "$TMP/config.sh" "$TMP/before" "$TMP/after")
+  [ "$got" = "$want" ] && good "config: $name -> $want" || no "config: $name expected $want, got $got"
+}
+cp "$TMP/before" "$TMP/after"; config_case unchanged PASS
+printf '[branch "other"]\n\tremote = origin\n' >> "$TMP/after"; config_case 'added branch section' WARN
+cp "$TMP/before" "$TMP/after"; printf '[worktree]\n\tconfig = true\n' >> "$TMP/after"; config_case 'added worktree section' WARN
+printf '[branch "other"]\n\tremote = origin\n' >> "$TMP/after"; config_case 'added both sections' WARN
+sed 's@/original@/changed@' "$TMP/before" > "$TMP/after"; config_case 'changed core.worktree' FAIL
+cp "$TMP/before" "$TMP/after"; printf '\tmerge = refs/heads/existing\n' >> "$TMP/after"; config_case 'key added inside existing branch' FAIL
+head -2 "$TMP/before" > "$TMP/after"; config_case 'removed section' FAIL
+cp "$TMP/before" "$TMP/after"; printf '[remote "other"]\n\turl = example\n' >> "$TMP/after"; config_case 'added unrelated section' FAIL
+cp "$TMP/before" "$TMP/after"; printf '[branch "existing"]\n\tmerge = other\n' >> "$TMP/after"; config_case 'duplicate existing branch' FAIL
+# A whole new section between old sections is allowed, but a key inserted before it is not.
+{ head -2 "$TMP/before"; printf '[branch "middle"]\n\tremote = origin\n'; tail -2 "$TMP/before"; } > "$TMP/after"
+config_case 'whole section inserted in middle' WARN
+{ head -2 "$TMP/before"; printf '\tbare = false\n[branch "middle"]\n\tremote = origin\n'; tail -2 "$TMP/before"; } > "$TMP/after"
+config_case 'core key inserted before new section' FAIL
 
 echo "run-all-parallel tests: $((pass + fail)) run, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
