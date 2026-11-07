@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Asset generation run record (gen-run) v1",
+  "description": "Written by scripts/assetgen/assetgen.py manifest into <authoring>/assetgen/runs/<run_id>/run.md; paths are relative to the run directory. Quality rules: scripts/checks/domains/assetgen.py.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "purpose",
+    "style",
+    "template",
+    "handoff_domain",
+    "params",
+    "prompt",
+    "prompt_sha256",
+    "prompt_author",
+    "prompt_review",
+    "generation",
+    "outputs",
+    "qa",
+    "image_review"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullable_string": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "enum": [
+            null
+          ]
+        }
+      ]
+    },
+    "ref": {
+      "type": "object",
+      "required": [
+        "id",
+        "layer",
+        "files",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layer": {
+          "type": "string",
+          "enum": [
+            "core",
+            "game",
+            "game-override",
+            "game-extends"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": [
+        "by",
+        "state",
+        "findings",
+        "prompt_sha256",
+        "requirements_sha256",
+        "outputs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/nullable_string"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_RUN",
+            "INVALID"
+          ]
+        },
+        "findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "prompt_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "requirements_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/output"
+          }
+        }
+      },
+      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs (runfiles.generation_inputs: the whole workflow.json graph and the sha256 of each references/<name>) for the image review; outputs only for the image review)."
+    },
+    "output": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^outputs/[^/]+[.][Pp][Nn][Gg]$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*-[0-9]{3}$"
+    },
+    "purpose": {
+      "$ref": "#/$defs/ref"
+    },
+    "style": {
+      "$ref": "#/$defs/ref"
+    },
+    "template": {
+      "$ref": "#/$defs/ref"
+    },
+    "handoff_domain": {
+      "type": "string",
+      "enum": [
+        "art2d",
+        "art3d",
+        "ui",
+        "vfx"
+      ]
+    },
+    "params": {
+      "type": "object"
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "prompt_author": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_review": {
+      "$ref": "#/$defs/review"
+    },
+    "generation": {
+      "type": "object",
+      "required": [
+        "generated_by",
+        "tool",
+        "model",
+        "workflow"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "generated_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool": {
+          "type": "string",
+          "const": "comfyui"
+        },
+        "model": {
+          "$ref": "#/$defs/nullable_string"
+        },
+        "workflow": {
+          "$ref": "#/$defs/nullable_string"
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/output"
+      }
+    },
+    "qa": {
+      "type": "object",
+      "required": [
+        "state",
+        "results"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "PASS",
+            "FAIL",
+            "NOT_AVAILABLE",
+            "NOT_RUN"
+          ]
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "output",
+              "check",
+              "state"
+            ],
+            "properties": {
+              "output": {
+                "type": "string"
+              },
+              "check": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "WARN",
+                  "NOT_AVAILABLE"
+                ]
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "image_review": {
+      "$ref": "#/$defs/review"
+    }
+  }
+}

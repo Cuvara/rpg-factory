@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rpg-factory delivery pipeline status (scripts/factory-pipeline.py status --json)",
+  "description": "How far each task of a plan got, derived from git and the recorded verdicts; how a new lead session resumes a run.",
+  "type": "object",
+  "required": [
+    "schema",
+    "plan",
+    "topic",
+    "valid",
+    "errors",
+    "waves",
+    "tasks",
+    "integration_children",
+    "ready_wave",
+    "ready",
+    "next"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rpg-factory.pipeline-status/1"
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "const": null
+        }
+      ]
+    },
+    "topic": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "const": null
+        }
+      ]
+    },
+    "valid": {
+      "type": "boolean",
+      "description": "false when `validate` reports an error; tasks is then empty."
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "waves": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "repo",
+          "wave",
+          "phase",
+          "branch",
+          "worktree",
+          "sha",
+          "review",
+          "qa",
+          "children",
+          "next",
+          "notes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "wave": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "phase": {
+            "enum": [
+              "pending",
+              "implementing",
+              "candidate",
+              "reviewed",
+              "integrated",
+              "qa"
+            ],
+            "description": "pending: nothing started; implementing: task branch (and worktree) without commits; candidate: commits not reviewed at their HEAD; reviewed: a review verdict on the HEAD (PASS or FAIL); integrated: reviewed PASS and contained in the integration branch; qa: QA PASS on a commit containing it."
+          },
+          "branch": {
+            "type": "string"
+          },
+          "worktree": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "sha": {
+            "description": "The task's candidate commit (task branch HEAD, or the integration HEAD in a no-worktree repo).",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "review": {
+            "$ref": "#/$defs/verdict"
+          },
+          "qa": {
+            "$ref": "#/$defs/verdict"
+          },
+          "children": {
+            "description": "Leftover Orca child worktrees of the task worktree (branch or directory `<task branch>--*`); each also gets a note: merge it into the task branch, then `orca worktree rm --worktree path:<child>`.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "path",
+                "branch",
+                "merged"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "const": null
+                    }
+                  ]
+                },
+                "merged": {
+                  "type": "boolean",
+                  "description": "The child branch is contained in the task branch."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "description": "The command the lead runs next for this task; null while it waits.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "integration_children": {
+      "description": "Leftover Orca child worktrees of each repo's integration checkout (integration QA or a helper session: branch or directory `<topic>--*`, or any name whose Orca lineage parent is the integration checkout), listed once per repo. Merge a child's commits into the integration branch, then remove it at once with `orca worktree rm --worktree path:<child>`; `cleanup` names each as \"child of integration:<repo>\".",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "repo",
+          "path",
+          "branch",
+          "merged",
+          "note"
+        ],
+        "properties": {
+          "repo": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "const": null
+              }
+            ]
+          },
+          "merged": {
+            "type": "boolean",
+            "description": "The child branch is contained in the integration branch."
+          },
+          "note": {
+            "type": "string",
+            "description": "Cleanup guidance: merge it (unless merged), then the `orca worktree rm` command."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "ready_wave": {
+      "description": "First wave (1-based) with a task not yet integrated.",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": null
+        }
+      ]
+    },
+    "ready": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Pending tasks whose dependencies are met: dispatch them now."
+    },
+    "next": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Plan-level commands (validate when invalid, gate when every task has QA)."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "verdict": {
+      "anyOf": [
+        {
+          "required": [
+            "state",
+            "sha",
+            "by",
+            "task"
+          ],
+          "properties": {
+            "state": {
+              "type": "string"
+            },
+            "sha": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "task": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object"
+        },
+        {
+          "const": null
+        }
+      ]
+    }
+  }
+}

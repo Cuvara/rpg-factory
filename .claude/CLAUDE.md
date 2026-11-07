@@ -36,9 +36,15 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
   A citation whose anchor moved to a unique line is MOVED (warning; FAIL under `--strict` / `run-all --release`):
   `--fix` rewrites its line spec in place.
-- Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree per task
-  (Orca-managed or `isolation: worktree`), never a second clone; the main session integrates. That file is the
-  only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
+- Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree and one task-lead
+  session per task (Orca-managed or `isolation: worktree`), never a second clone; the main session (run lead)
+  integrates. That file is the only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
+- **Developing this plugin:** every plugin task (new or split skill, core change) runs through `factory-pipeline.py`
+  with a `plan.json` whose `repos` entry names this checkout (`"plugin": {"path": "<this checkout>"}`), small tasks
+  with disjoint owned paths, and cross-model review. The run lead starts each task's lead with
+  `dispatch --phase lead`; the task lead runs its subtasks, review and QA in that task's worktree. How:
+  `parallel-work.md` sections 1 and 10 and section 8 "Session lifecycle"; the session-level steps (tier, plan,
+  `dispatch --phase lead`, `status` to resume, review pairing, gate, cleanup) are factory-core `SKILL.md` steps 6, 7, 11, 12.
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
   Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line, and gather the
   fragments into the `CHANGELOG.md` section with `python3 -B scripts/changelog.py release X.Y.Z [--summary TEXT]` (run-all and
@@ -62,6 +68,33 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Point-in-time values go in registry `facts[]` with a probe, never in skill prose.
 - Registry facts must be verified against the product repos (file paths, CI workflow
   contents, run logs), not copied from docs that may be stale.
+
+## Operating lessons
+
+Learned the hard way while building 1.3-1.5. Each rule names its reason; delivery-flow lessons (Orca, Codex,
+sessions, load limits) live only in `skills/factory-core/references/parallel-work.md`, dogfood practice in
+`docs/dogfood.md`.
+
+- **No worktree or branch creation while `tests/run-all.sh` runs.** Every checkout shares one `.git/config`, and
+  run-all's shared-config check fails when it changes mid-run (a new worktree or tracking branch writes to it).
+- **Create branches with `git switch --no-track -c <branch>`.** A tracking branch writes `branch.<name>.*` into
+  the shared `.git/config`, which races with other sessions' runs.
+- **Git Bash, never WSL, on Windows** (every agent runtime). A WSL git run once wrote `core.worktree=/mnt/c/...`
+  into the shared config and broke every checkout of the repo.
+- **Fix citation drift right before a release gate:** `python3 -B scripts/checks/skill-citations.py --fix`.
+  Citations are checked against client and Netcode `develop`, which merge refactors every 30-60 minutes; in 1.3.0
+  they drifted between the fix and the gate four times. Check their open PRs before starting the gate.
+- **At most 2 concurrent full `tests/run-all.sh` runs on this machine;** other sessions use `--affected`. Four
+  parallel full runs made every suite 2-4x slower and timed some out (`parallel-work.md` section 4 treats the
+  full run as an exclusive resource).
+- **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
+  script is committed as 100644 and fails on Linux CI.
+- **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted
+  shell argument (for example an `orca orchestration send --body`) are command substitution: they run in the
+  sender's shell and the message loses the example.
+- **Learning loop.** A new operating lesson goes into this section, or into the policy file it belongs to
+  (`parallel-work.md`, `docs/dogfood.md`, `git-safety.md`), with its reason and a test when it can have one.
+  Private agent memory only points here: Codex, other machines and new sessions never see it.
 
 ## Commands
 
@@ -99,7 +132,7 @@ python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   #
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 env -u TMPDIR tests/pipeline.test.sh       # delivery pipeline on a throwaway workspace (server + Unity client)
-python3 -B scripts/factory-pipeline.py tier|validate|planner|dispatch|verdict|gate ...  # delivery pipeline (parallel-work.md section 10)
+python3 -B scripts/factory-pipeline.py tier|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (parallel-work.md section 10)
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--domain <id>] [--explain] [--json]
@@ -150,20 +183,22 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
     is logged to the session's `ADVISORIES` file (tests, dogfood). Both guards import `factory_session` for the mode.
   - No PostToolUse hooks.
 - **Slash commands** (`commands/*.md`: status, route, check, doctor, workflow, pipeline, ui, ui-figma, ui-components, ui-screen,
-  ui-review) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
-  `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`.
+  ui-review, assetgen) call `scripts/factory-cmd.py` and are covered by `tests/commands.test.sh`; the `ui*` verbs run
+  `scripts/ui/ui_plan.py` (read-only UI plan; data in `scripts/ui/data/`), covered by `tests/ui-commands.test.sh`;
+  `assetgen` forwards the read-only verbs of `scripts/assetgen/assetgen.py` (asset-gen engine, `tests/assetgen.test.sh`).
 - **Skills:** `factory-core` (references: git-safety, report, repos, validation, skill-contract, parallel-work, engineering, workflows) routes to
-  13 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
-  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d and vfx. 10 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
-  unity-client-tech, unity-dots, netcode-client, and the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
-  ui-toolkit-screen, ui-validation) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
-  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders), and the
+  14 specialised skills: wire-contract, pin-bump, measure, server-realtime, server-services, server-ops,
+  unity-package, client-integration, game-design, ui-ux, art-2d, art-3d, vfx and asset-gen. 11 tech skills (`kind: tech`: dotnet-gameserver, go-backend,
+  unity-client-tech, unity-dots, netcode-client, the UI skills ui-orchestrator, ui-component-selection, ui-figma-import,
+  ui-toolkit-screen, ui-validation, and comfyui) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
+  a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders; comfyui: `assetgen/`), and the
   snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
   (`docs/architecture/ui-skills.md`).
 - **Delivery pipeline:** `factory-pipeline.py` (settings: registry `pipeline`; plan schema
-  `docs/schemas/pipeline-plan.schema.json`; verdicts under the persistent state dir `pipeline/<plan id>/`) prints Orca
+  `docs/schemas/pipeline-plan.schema.json`, a task lead's subplan `docs/schemas/pipeline-subplan.schema.json`; verdicts under the persistent state dir `pipeline/<plan id>/`) prints Orca
   or Agent dispatch commands and grades READY_FOR_PR; it never runs agents, pushes or creates worktrees. A repo with
-  `worktrees: false` (Unity project) never gets a worktree: tasks run in sequence in the main checkout.
+  `worktrees: false` (Unity project) never gets a worktree: tasks run in sequence in the main checkout. Two levels
+  (run lead, one task lead per task worktree) as in `parallel-work.md`.
 - **Dev tools:** registry `dev_tools[]` → `lib/devtools.py` probes (PATH, TCP services, MCP server and
   plugin names only - never config values) → snapshot "Tools for this change" and doctor "Dev tools".
   Every non-core skill's `## Tools` names exactly its `used_by` tools (skills-lint).

@@ -38,7 +38,7 @@ jq --arg ws "$WS" '
         {id: "t-isolated-clean2", cwd: ".", run: "echo clean again", evidence: "e"},
         {id: "t-dirty-edit", cwd: ".", run: "echo edited >> backend/gateway/x.go", evidence: "e"},
         {id: "t-large-untracked", cwd: ".", run: "echo clean", evidence: "e"},
-        {id: "t-timeout-tree", cwd: ".", run: "(sleep 60) & echo $! > child.pid; cat /proc/$!/winpid > child.winpid 2>/dev/null || true; wait", evidence: "e"},
+        {id: "t-timeout-tree", cwd: ".", run: "(sleep 60) & echo $! > child.pid; cat /proc/$!/winpid > child.winpid 2>/dev/null || true; date +%s%3N > child.spawned; wait", evidence: "e"},
         {id: "t-env", cwd: ".", run: "env | grep '^RPG_FACTORY_'; pwd", evidence: "e"}
       ],
       external: [{id: "t-ci", run: "CI job", evidence: "e"}]})
@@ -119,7 +119,7 @@ out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gatewa
 head=$(git -C "$S" rev-parse HEAD)
 jq -e --arg ws "$WS" --arg repo "$S" --arg head "$head" '.results[] | select(.check == "t-env") | .state == "PASS" and (.output_tail | contains("work space") and contains("rpg-mmo-server") and contains("server") and contains($head))' <<<"$out" >/dev/null && okk "bash receives workspace, repo, repo key and head; cwd is correct" || { nok "environment contract"; jq -c '.results[] | select(.check == "t-env") | {state,reason,output_tail}' <<<"$out"; }
 out=$(RPG_FACTORY_WORKSPACE="$TMP/missing workspace" python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-env --approve t-env --json)
-[ "$(jq -r '.results[] | select(.check == "t-env") | .state' <<<"$out")" = BLOCKED ] && okk "missing workspace blocks the check" || nok "missing workspace did not block"
+jq -e '.results[] | select(.check == "t-env") | .state == "BLOCKED" and (.reason | contains("missing: workspace") and contains("bash="))' <<<"$out" >/dev/null && okk "missing workspace blocks the check and names what is missing" || nok "missing workspace did not block: $(jq -c '.results[] | select(.check == "t-env") | {state,reason}' <<<"$out")"
 if [ -n "$RPGF_WINDOWS" ]; then
   python3 -B - "$P/scripts/run-checks.py" "$WS" "$(command -v bash)" <<'PY'
 import importlib.util, sys, shutil
@@ -144,14 +144,138 @@ assert "/p" not in env["WSLENV"]
 PY
   [ $? -eq 0 ] && okk "Git Bash and WSL path/environment probes pass" || nok "bash path/environment probe failed"
 fi
-start=$(python3 -c 'import time; print(time.monotonic())')
+# The Windows bash flavor probe is a process start like any other: one that fails to run under load must not turn
+# the flavor into "unknown" (every check of the run would be BLOCKED); only repeated failures do, and they say why.
+probe_out=$(python3 -B - "$P/scripts/run-checks.py" <<'PY' 2>&1
+import importlib.util, subprocess, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+bash = mod.os.path.abspath("C:/Git/bin/bash.exe")
+def probe(*answers):
+    seq = list(answers)
+    def run(*a, **k):
+        x = seq.pop(0)
+        if isinstance(x, BaseException): raise x
+        return subprocess.CompletedProcess([], x[0], x[1], "")
+    mod._BASH_SELECTION = None
+    with patch.object(mod.os, "name", "nt"), patch.object(mod, "bash_candidates", return_value=[bash]), \
+         patch.object(mod.os.path, "isfile", return_value=True), patch.object(mod.subprocess, "run", side_effect=run):
+        return mod.select_bash(), mod.bash_diagnostics(), len(seq)
+sel, diag, left = probe(subprocess.TimeoutExpired("bash", 10), (3221225794, ""), (0, "MINGW64_NT-10.0\n3.4.10"), (0, "unused"))
+assert sel == (bash, "gitbash") and left == 1, (sel, diag, left)
+sel, diag, left = probe(OSError("start failed"), (1, "fork: Resource temporarily unavailable"), (3221225794, ""), (0, "unused"))
+assert sel == (bash, "unknown") and left == 1 and "start failed" in diag and "fork: Resource" in diag and "exit 3221225794" in diag, (sel, diag)
+sel, diag, left = probe((0, "SomeOS\n1.0"), (0, "MINGW64"))
+assert sel == (bash, "unknown") and left == 1, (sel, diag)  # a probe that ran is not retried: its answer stands
+print("ok")
+PY
+)
+[ "$probe_out" = ok ] && okk "bash flavor probe retries a failed start, keeps an answer that ran, and explains an unknown flavor" || nok "bash flavor probe: $probe_out"
+# The timeout bound is graded on the runner's own record (spawn -> timeout -> tree verified gone),
+# never on this script's wall clock: python start-up and git under machine load are not the property.
+TIMEOUT_OK='.timeout | if type == "object" and .verified == true and ([.limit_s, .timed_out_after_s, .killed_after_s, .cleanup_grace_s] | all(type == "number"))
+  then .timed_out_after_s >= .limit_s and .killed_after_s >= .timed_out_after_s and (.killed_after_s - .timed_out_after_s) <= .cleanup_grace_s else false end'
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
-elapsed=$(python3 -c 'import time,sys; print(time.monotonic()-float(sys.argv[1]))' "$start")
-[ "$(awk -v e="$elapsed" 'BEGIN {print (e <= 8) ? "yes" : "no"}')" = yes ] && okk "timeout runner returned within timeout plus cleanup grace (${elapsed}s)" || nok "timeout runner exceeded bound (${elapsed}s)"
-[ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics"
-if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"; else nok "timeout check did not create pid file"; fi
-if [ -s "$S/child.winpid" ]; then wpid=$(cat "$S/child.winpid"); tasklist //FI "PID eq $wpid" 2>/dev/null | grep -q "$wpid" && nok "timeout Windows grandchild survived (pid $wpid)" || okk "timeout Windows grandchild was killed"; fi
-rm -f "$S/child.pid" "$S/child.winpid"
+trec=$(jq -c '.results[] | select(.check == "t-timeout-tree") | .timeout' <<<"$out")
+# every t-timeout-tree failure prints what the runner returned: the graded result, else the raw output head
+tdiag=$(jq -c '.results[] | select(.check == "t-timeout-tree") | {state, reason, exit, duration_s, timeout, output_tail}' <<<"$out" 2>/dev/null)
+[ -n "$tdiag" ] || tdiag="no t-timeout-tree result; raw output: $(head -c 600 <<<"$out")"
+jq -e '.results[] | select(.check == "t-timeout-tree") | '"$TIMEOUT_OK" <<<"$out" >/dev/null && okk "timeout tree killed after the limit and within the runner's cleanup grace ($trec)" || nok "timeout record outside limit/grace: $tdiag"
+# Negative: a hung child the runner never manages to kill must not pass that bound (fake clock, no real wait).
+neg=$(python3 -B - "$P/scripts/run-checks.py" <<'PY'
+import importlib.util, json, subprocess, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+class Clock:
+    now = 100.0
+    def monotonic(self): return self.now
+    def sleep(self, s): self.now += s
+class Hung:
+    pid = 4242; calls = 0
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            Clock.now += timeout
+            raise subprocess.TimeoutExpired("bash", timeout)
+        return "", None
+    def wait(self, timeout=None): return 0
+timing = {}
+with patch.object(mod.procrun, "time", Clock()), patch.object(mod.os, "name", "posix"), \
+     patch.object(mod.subprocess, "Popen", return_value=Hung()), \
+     patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
+     patch.object(mod.signal, "SIGKILL", 9, create=True), \
+     patch.object(mod.os, "killpg", side_effect=lambda pgid, sig: None, create=True):
+    code, out, timed_out, cleanup = mod.procrun.run_check("sleep 60", ".", {}, 1, ("bash", "gitbash"), timing)
+assert code == 124 and timed_out and cleanup.startswith("failed"), (code, timed_out, cleanup)
+print(json.dumps({"timeout": mod.procrun.timeout_record(timing)}))
+PY
+)
+if [ -n "$neg" ] && ! jq -e "$TIMEOUT_OK" <<<"$neg" >/dev/null; then okk "never-killed hung child fails the timeout bound ($neg)"; else nok "never-killed hung child passed the timeout bound: ${neg:-no record}"; fi
+bad_records='{}
+{"timeout":null}
+{"timeout":{"limit_s":1,"timed_out_after_s":1.01,"killed_after_s":9.9,"cleanup_grace_s":3.5,"verified":true}}
+{"timeout":{"limit_s":1,"timed_out_after_s":0.4,"killed_after_s":0.5,"cleanup_grace_s":3.5,"verified":true}}
+{"timeout":{"limit_s":1,"timed_out_after_s":1.01,"killed_after_s":null,"cleanup_grace_s":3.5,"verified":false}}'
+accepted=$(jq -c "select($TIMEOUT_OK)" <<<"$bad_records")
+[ -z "$accepted" ] && okk "timeout bound rejects missing, late, early and unverified kill records" || nok "timeout bound accepted: $accepted"
+[ "$(jq -r '.results[] | select(.check == "t-timeout-tree") | .state' <<<"$out")" = FAIL ] && jq -e '.results[] | select(.check == "t-timeout-tree") | .reason | test("(?i)timeout.*cleanup")' <<<"$out" >/dev/null && okk "timeout is a FAIL with cleanup diagnostics" || nok "timeout state/diagnostics: $tdiag"
+# Under load bash can take longer than the 1 s limit to reach `echo $!`: the check is then killed before it writes
+# child.pid and there is no grandchild pid to probe. That is a legitimate timeout as long as the runner's own record
+# says the whole tree was verified gone; without a verified record a missing child.pid is a failure.
+if [ -f "$S/child.pid" ]; then pid=$(cat "$S/child.pid"); kill -0 "$pid" 2>/dev/null && nok "timeout grandchild survived (pid $pid)" || okk "timeout grandchild was killed"
+elif jq -e '.results[] | select(.check == "t-timeout-tree") | '"$TIMEOUT_OK" <<<"$out" >/dev/null; then okk "timeout check was killed before it wrote child.pid; the verified record covers its tree ($trec)"
+else nok "timeout check did not create pid file: $tdiag"; fi
+# Windows reuses PIDs fast under load, so a PID that is alive again is only our grandchild when its process
+# started no later than the check's own timestamp taken after the spawn (child.spawned). A process at that PID that
+# started later is a reuse: the grandchild had already died. No wall-clock bound; order only. Evidence on FAIL.
+# One Win32_Process query decides, so a PID that exits between two observations cannot read as a survivor:
+# gone (no process), unknown (query failed or no CreationDate) or the creation time in Unix ms. CreationDate is
+# readable for every process; Get-Process StartTime is access denied for an elevated or other-user process.
+winpid_state() { # <winpid>; prints gone | unknown | <creation epoch ms>
+  local st
+  st=$(powershell.exe -NoProfile -NonInteractive -Command "try { \$p = Get-CimInstance Win32_Process -Filter 'ProcessId=$1' -ErrorAction Stop; if (-not \$p) { 'gone' } elseif (\$p.CreationDate) { ([DateTimeOffset]\$p.CreationDate).ToUnixTimeMilliseconds() } else { 'unknown' } } catch { 'unknown' }" 2>/dev/null | tr -d '\r\n ')
+  case "$st" in gone|unknown) echo "$st" ;; *[!0-9]*|'') echo unknown ;; *) echo "$st" ;; esac
+}
+winpid_survivor() { # <winpid> <spawned epoch ms>; 0 = the original process is still alive; prints the evidence
+  local st; st=$(winpid_state "$1")
+  echo "pid $1 state=$st; spawned_ms=$2"
+  case "$st" in
+    gone) return 1 ;;                  # no process at that PID: killed
+    unknown) return 0 ;;               # cannot prove it is gone or reused, so it counts as a survivor
+    *) [ "$st" -le "$2" ] ;;           # started no later than the spawn timestamp: the original; later: a reuse
+  esac
+}
+if [ -s "$S/child.winpid" ]; then
+  wpid=$(tr -d '\r\n ' < "$S/child.winpid"); spawned=$(tr -d '\r\n ' < "$S/child.spawned" 2>/dev/null)
+  [ -n "$spawned" ] || spawned=$(date +%s%3N)   # check killed before its timestamp: anything started from now on is a reuse
+  if ev=$(winpid_survivor "$wpid" "$spawned"); then nok "timeout Windows grandchild survived (pid $wpid): $ev"; else okk "timeout Windows grandchild was killed ($ev)"; fi
+fi
+if [ -e "/proc/$$/winpid" ]; then # Windows: the probe self-test runs even when the check was killed before child.winpid
+  # the probe itself: a live process started before the timestamp is a survivor; one started after it is a PID reuse
+  before=$(date +%s%3N); sleep 30 & bpid=$!; sleep 0.3; bw=$(tr -d '\r\n ' < "/proc/$bpid/winpid" 2>/dev/null); after=$(date +%s%3N)
+  if [ -n "$bw" ]; then
+    ev=$(winpid_survivor "$bw" "$after") && okk "pid probe flags a live grandchild ($ev)" || nok "pid probe missed a live grandchild: $ev"
+    ev=$(winpid_survivor "$bw" "$((before - 1000))") && nok "pid probe took a reused pid for the grandchild: $ev" || okk "pid probe tells a reused pid from the grandchild ($ev)"
+  else nok "pid probe self-test: no Windows pid for pid $bpid"; fi
+  kill "$bpid" 2>/dev/null; wait "$bpid" 2>/dev/null
+  # disappearance between observations: the process existed when its timestamp was taken and is gone at the query
+  if [ -n "$bw" ]; then
+    ev=$(winpid_survivor "$bw" "$after") && nok "pid probe took an exited process for a survivor: $ev" || okk "pid probe reads an exited process as killed ($ev)"
+  fi
+fi
+# the decision on each probe state, with the CIM query stubbed (a PID that exits right before the query is 'gone')
+probe_states=$(
+  winpid_state() { echo "$STUB_STATE"; }
+  for c in "gone 1000 1" "unknown 1000 0" "900 1000 0" "1000 1000 0" "1100 1000 1"; do
+    set -- $c; STUB_STATE=$1
+    ev=$(winpid_survivor 4242 "$2"); rc=$?
+    [ "$rc" = "$3" ] && echo "ok $1" || echo "bad $1: rc=$rc want $3 ($ev)"
+  done
+)
+grep -q '^bad' <<<"$probe_states" && nok "pid probe state decision: $(grep '^bad' <<<"$probe_states" | tr '\n' ';')" || okk "pid probe state decision: gone=killed, unknown=survivor, earlier/equal=survivor, later=reuse"
+rm -f "$S/child.pid" "$S/child.winpid" "$S/child.spawned"
 python3 -B "$ROOT/tests/fixtures/run-checks-cleanup-failure.py" "$P/scripts/run-checks.py" && okk "simulated timeout cleanup failure is reported" || nok "simulated cleanup failure was hidden"
 out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-ext --approve t-ext --json)
 expect t-ext PASS

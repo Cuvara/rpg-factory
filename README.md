@@ -70,6 +70,7 @@ Optional tools are detected without launching applications or making provider re
 | ffmpeg | Optional media conversion when a workflow requests it | No conversion is attempted; provide a supported source/export |
 | game-art-mcp | Optional concept exploration provider | `NOT_AVAILABLE`; author concepts manually |
 | ai-pixel-art-image-generation | Optional concept exploration provider | `NOT_AVAILABLE`; author concepts manually |
+| comfy-mcp + ComfyUI | Asset generation runs (`asset-gen`) | the workflow is rendered only; generation `NOT_RUN` |
 
 ## Skill map
 
@@ -80,6 +81,7 @@ Optional tools are detected without launching applications or making provider re
 | 2D art direction, concepts, asset specifications or runtime exports | `art-2d` |
 | 3D art specifications or delivery records | `art-3d` |
 | VFX direction, specifications, budgets or delivery records | `vfx` |
+| AI image generation (concept, sprite, icon, UI part, texture, 3D reference) through ComfyUI | `asset-gen` |
 
 
 | Command | What you get | Changes anything? |
@@ -96,6 +98,7 @@ Optional tools are detected without launching applications or making provider re
 | `/rpg-factory:ui-components <request>` | component selection from the real com.cuvara.uitoolkit catalog and Unity built-ins: reuse > configure > compose > missing | no |
 | `/rpg-factory:ui-screen <request>` | the UI plan for implementing or wiring a screen (including imported UXML) | no |
 | `/rpg-factory:ui-review <request>` | the UI plan for a review, loading only the validation skills | no |
+| `/rpg-factory:assetgen list\|show\|resolve\|lint\|review-cmd [args]` | asset-gen data (purposes, styles, ComfyUI templates; core and game layer), a resolved spec, data lint, the Codex review command (printed, never run) | no |
 
 Every verb also runs from a shell (Codex, scripts, other agents) as `python3 -B <plugin root>/scripts/factory-cmd.py
 <verb> <args>`; `factory-cmd.py help [--json]` (schema `rpg-factory.commands/1`) lists each verb with its arguments, an
@@ -144,6 +147,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
      art-2d                                 2D art direction, concepts, production specifications and runtime exports
      art-3d                                 3D art briefs and delivery manifests
      vfx                                    VFX specifications and delivery manifests
+     asset-gen                              AI image generation runs (ComfyUI), reviewed, human-approved
      wire-contract  server → Netcode → client     server-realtime   (C# game server, SGL)
      pin-bump       released tag → client pins    server-services   (Go gateway, Nakama, Redis, migrations)
      measure        benchmarks / baselines        server-ops        (Docker, k8s/Agones, monitoring, CD)
@@ -156,6 +160,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
                                                   UI (paths-scoped, entry ui-orchestrator): ui-orchestrator
                                                   ui-component-selection · ui-figma-import
                                                   ui-toolkit-screen · ui-validation
+                                                  asset generation (paths assetgen/): comfyui
               └────────────────┬─────────────────┘
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
@@ -176,6 +181,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
 | 2D art direction, concepts, asset specifications or runtime exports | `art-2d` | optional `authoring` | `artifact-lint`, `artifact-trace`, `art2d-quality` |
 | 3D art brief or asset manifest | `art-3d` | optional `authoring` | shared artifact checks, `asset-manifest` |
 | VFX specification or asset manifest | `vfx` | optional `authoring` | shared artifact checks, `asset-manifest` |
+| Generate an image asset with AI (purpose x style x ComfyUI template), review it and record a gen-run | `asset-gen` | optional `authoring` | `artifact-lint`, `artifact-trace`, `assetgen-quality`; Codex prompt and image review; `assetgen-approval` |
 | Add a message or field to the wire protocol, change the protocol version, JoinToken claims, or the Redis `servers:id` hash | `wire-contract` | server → netcode → client | `generate.sh` (protoc 29.3), `wire-parity.sh`, TestDotnetInterop, Netcode headless tests, pin-bump |
 | Move the client to Netcode/UnityDots/UIToolkit vX.Y.Z or to sgl-vX.Y.Z; bump the unity-build-workflows toolkit | `pin-bump` | client (upstream read-only) | `pin-plan.py`, `pin-status.py`, DOTS Sample byte diff, CI 02-package-pins |
 | Benchmark, encoding sweep, re-baseline, multi-client check | `measure` | server + client tools | expected value, control, run id, attribution; `bench.sh` legs |
@@ -202,10 +208,11 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `ui-figma-import` | client-integration | Figma frame to UI Toolkit through the official connector and com.cuvara.uitoolkit 0.8: preflight, env check, headless import, validator, diagnostics, profile, bridge, preset |
 | `ui-toolkit-screen` | client-integration | screens and popups on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, registration, navigator, codegen, settings, dialogs, theme service |
 | `ui-validation` | client-integration | UI review and evidence: references, bindings, lifecycle, theme, responsive, runtime, tests; the ui-review checklist |
+| `comfyui` | asset-gen, art-2d, art-3d, ui-ux, vfx | comfy-template format and game-layer precedence, comfy-mcp setup and tool sequence, the 9router image node's pitfalls, ComfyUI ports, adding a purpose, style or template |
 
 **Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry
 `dev_tools` it uses (Unity MCP, Go LSP, C# LSP, pg-aiguide, context-mode, codex, dotnet, go, protoc,
-docker) and the step each one is for. The snapshot prints "Tools for this change" with each tool's state;
+docker, comfy-mcp) and the step each one is for. The snapshot prints "Tools for this change" with each tool's state;
 when a tool is not OK the skill uses the registered fallback. There is no C# language server configured
 yet (known issue `no-csharp-lsp`); the Go one is the workspace `lsp` MCP server.
 

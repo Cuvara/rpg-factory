@@ -93,6 +93,14 @@
     "unity-mcp": {
       "probe": "tcp://127.0.0.1:23621",
       "purpose": "Unity Editor MCP (ai-game-developer). Reachable only while the Editor has the client project open. Used to run the Unity Test Runner from an agent."
+    },
+    "comfyui": {
+      "probe": "tcp://127.0.0.1:8188",
+      "purpose": "ComfyUI started headless (main.py, default port). asset-gen runs workflows on it through comfy-mcp; reachable only while ComfyUI runs."
+    },
+    "comfyui-desktop": {
+      "probe": "tcp://127.0.0.1:8189",
+      "purpose": "ComfyUI Desktop session (its own port). Either this or the headless comfyui service is enough for comfy-mcp."
     }
   },
   "dev_tools": [
@@ -196,15 +204,16 @@
         "plugin:codex",
         "bin:codex"
       ],
-      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks.",
+      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks. For asset-gen: the independent prompt and image review (codex exec, read-only sandbox) of a generation run.",
       "used_by": [
         "server-realtime",
         "server-services",
         "unity-package",
-        "client-integration"
+        "client-integration",
+        "asset-gen"
       ],
       "required": false,
-      "fallback": "none needed"
+      "fallback": "none needed; asset-gen: a Claude review recorded as SAME_MODEL:claude (grades WARN, never PASS)"
     },
     {
       "id": "dotnet",
@@ -310,6 +319,21 @@
       ],
       "required": false,
       "fallback": "the hand-walked multi-client steps in measure references/legs.md; a claim the run did not produce stays NOT_RUN"
+    },
+    {
+      "id": "comfy-mcp",
+      "kind": "mcp",
+      "probes": [
+        "mcp:comfy-mcp|mcp:comfy",
+        "service:comfyui|service:comfyui-desktop"
+      ],
+      "provides": "ComfyUI from the agent through the official Comfy-Org comfy-mcp server (tool ids mcp__comfy-mcp__<tool>): server_info, validate_workflow against the live node list, run_workflow, job, fetch_outputs into a run directory, upload_file for reference images, nodes, workflow slots and launch_comfyui.",
+      "used_by": [
+        "asset-gen",
+        "comfyui"
+      ],
+      "required": false,
+      "fallback": "render the workflow with assetgen.py render and leave the generation step NOT_RUN (a person runs workflow.json in ComfyUI and drops the PNGs into outputs/); never claim a generation that did not run"
     }
   ],
   "pipeline": {
@@ -321,16 +345,16 @@
         "max_files": 6,
         "contracts": false,
         "generated": false,
-        "flow": "lead implements in-session; cross-model review; QA by the lead; gate; PR"
+        "flow": "run lead writes a one-task plan.json; validate; dispatch --phase lead starts the task lead (task worktree; no-worktree repo: main checkout); task lead runs sub-sessions, cross-model review and QA; run lead integrates (never implements); gate; PR"
       },
       "M": {
         "max_repos": 1,
         "contracts": false,
         "generated": false,
-        "flow": "lead writes plan.json; validate; implementation workers; per-task cross-model review; integrate; QA worker; gate; PR"
+        "flow": "run lead writes plan.json; validate; dispatch --phase lead per task (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA; gate; PR"
       },
       "L": {
-        "flow": "planner worker writes plan.json; validate; waves of workers; per-task cross-model review; integrate; QA worker; gate; one PR per repo"
+        "flow": "planner worker writes plan.json; validate; dispatch --phase lead per task in waves (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA per repo; gate; one PR per repo"
       }
     },
     "agents": {
@@ -350,6 +374,7 @@
       "codex": "claude"
     },
     "default_implementer": "claude",
+    "lead_agent": "claude",
     "verdict_states": [
       "PASS",
       "FAIL",
@@ -802,6 +827,10 @@
     {
       "id": "art3d-visual-review",
       "rule": "3D visual acceptance, rights and final production review are human decisions."
+    },
+    {
+      "id": "assetgen-approval",
+      "rule": "A person approves a generation run (gen-run) before its images become a production source in another domain; agents never approve, including their own generations."
     }
   ],
   "contracts": [],

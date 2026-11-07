@@ -93,6 +93,14 @@
     "unity-mcp": {
       "probe": "tcp://127.0.0.1:23621",
       "purpose": "Unity Editor MCP (ai-game-developer). Reachable only while the Editor has the client project open. Used to run the Unity Test Runner from an agent."
+    },
+    "comfyui": {
+      "probe": "tcp://127.0.0.1:8188",
+      "purpose": "ComfyUI started headless (main.py, default port). asset-gen runs workflows on it through comfy-mcp; reachable only while ComfyUI runs."
+    },
+    "comfyui-desktop": {
+      "probe": "tcp://127.0.0.1:8189",
+      "purpose": "ComfyUI Desktop session (its own port). Either this or the headless comfyui service is enough for comfy-mcp."
     }
   },
   "dev_tools": [
@@ -196,15 +204,16 @@
         "plugin:codex",
         "bin:codex"
       ],
-      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks.",
+      "provides": "Independent second diagnosis or implementation pass (codex:rescue) for a stuck bug; its output is reviewed like any other diff and is outside the Factory hooks. For asset-gen: the independent prompt and image review (codex exec, read-only sandbox) of a generation run.",
       "used_by": [
         "server-realtime",
         "server-services",
         "unity-package",
-        "client-integration"
+        "client-integration",
+        "asset-gen"
       ],
       "required": false,
-      "fallback": "none needed"
+      "fallback": "none needed; asset-gen: a Claude review recorded as SAME_MODEL:claude (grades WARN, never PASS)"
     },
     {
       "id": "dotnet",
@@ -310,6 +319,21 @@
       ],
       "required": false,
       "fallback": "the hand-walked multi-client steps in measure references/legs.md; a claim the run did not produce stays NOT_RUN"
+    },
+    {
+      "id": "comfy-mcp",
+      "kind": "mcp",
+      "probes": [
+        "mcp:comfy-mcp|mcp:comfy",
+        "service:comfyui|service:comfyui-desktop"
+      ],
+      "provides": "ComfyUI from the agent through the official Comfy-Org comfy-mcp server (tool ids mcp__comfy-mcp__<tool>): server_info, validate_workflow against the live node list, run_workflow, job, fetch_outputs into a run directory, upload_file for reference images, nodes, workflow slots and launch_comfyui.",
+      "used_by": [
+        "asset-gen",
+        "comfyui"
+      ],
+      "required": false,
+      "fallback": "render the workflow with assetgen.py render and leave the generation step NOT_RUN (a person runs workflow.json in ComfyUI and drops the PNGs into outputs/); never claim a generation that did not run"
     }
   ],
   "pipeline": {
@@ -321,16 +345,16 @@
         "max_files": 6,
         "contracts": false,
         "generated": false,
-        "flow": "lead implements in-session; cross-model review; QA by the lead; gate; PR"
+        "flow": "run lead writes a one-task plan.json; validate; dispatch --phase lead starts the task lead (task worktree; no-worktree repo: main checkout); task lead runs sub-sessions, cross-model review and QA; run lead integrates (never implements); gate; PR"
       },
       "M": {
         "max_repos": 1,
         "contracts": false,
         "generated": false,
-        "flow": "lead writes plan.json; validate; implementation workers; per-task cross-model review; integrate; QA worker; gate; PR"
+        "flow": "run lead writes plan.json; validate; dispatch --phase lead per task (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA; gate; PR"
       },
       "L": {
-        "flow": "planner worker writes plan.json; validate; waves of workers; per-task cross-model review; integrate; QA worker; gate; one PR per repo"
+        "flow": "planner worker writes plan.json; validate; dispatch --phase lead per task in waves (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA per repo; gate; one PR per repo"
       }
     },
     "agents": {
@@ -350,6 +374,7 @@
       "codex": "claude"
     },
     "default_implementer": "claude",
+    "lead_agent": "claude",
     "verdict_states": [
       "PASS",
       "FAIL",
@@ -3451,7 +3476,9 @@
       ],
       "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
-      "rules": [],
+      "rules": [
+        "Generated images become production sources only through a human-approved gen-run handed off by assetgen-to-art2d: the asset spec or runtime export cites the gen-run id in its sources; agents never approve. Generated imagery without an approved gen-run (including optional concept providers) stays a concept-2d draft."
+      ],
       "generated": [],
       "tools": [],
       "checks": {
@@ -3492,7 +3519,9 @@
       ],
       "responsibility": "2D art production authoring and delivery records.",
       "depends_on": [],
-      "rules": [],
+      "rules": [
+        "Generated images become production sources only through a human-approved gen-run handed off by assetgen-to-art2d: the asset spec or runtime export cites the gen-run id in its sources; agents never approve. Generated imagery without an approved gen-run (including optional concept providers) stays a concept-2d draft."
+      ],
       "generated": [],
       "tools": [],
       "checks": {
@@ -3852,6 +3881,50 @@
       "gates": [],
       "obligations": [],
       "domain": "art3d",
+      "docs": []
+    },
+    {
+      "id": "authoring.assetgen",
+      "repo": "authoring",
+      "paths": [
+        "assetgen/"
+      ],
+      "responsibility": "AI image generation: the game layer of asset-gen purposes, styles and ComfyUI workflow templates, and generation run records (gen-run) with prompt, reviews, QA and output hashes.",
+      "depends_on": [],
+      "rules": [
+        "Approval of a gen-run is human-only (gate assetgen-approval); agents never write approvals.",
+        "The prompt and image reviews come from a model other than the prompt author; a same-model review is an explicit SAME_MODEL fallback, never a silent pass.",
+        "No credentials, endpoints or provider URLs in templates or run records; the ComfyUI node reads its own credentials."
+      ],
+      "generated": [],
+      "tools": [],
+      "checks": {
+        "fast": [
+          {
+            "id": "artifact-lint",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-lint.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact schema and lifecycle validation."
+          },
+          {
+            "id": "artifact-trace",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-trace.py . --registry {plugin_root}/registry.json",
+            "evidence": "Artifact trace and approvals validation."
+          },
+          {
+            "id": "assetgen-quality",
+            "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain assetgen",
+            "evidence": "Generation runs: reviewer model differs from the prompt author, QA PASS recorded, output hashes match the files, provenance complete, purpose/style/template refs resolve."
+          }
+        ],
+        "extended": [],
+        "external": []
+      },
+      "skills": [
+        "asset-gen"
+      ],
+      "gates": [],
+      "obligations": [],
+      "domain": "assetgen",
       "docs": []
     },
     {
@@ -4966,6 +5039,34 @@
       "order": 88,
       "summary": "Production 3D art authoring, quality and delivery workflow"
     },
+    "asset-gen": {
+      "kind": "repo",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 100,
+      "summary": "AI image asset generation runs: purpose x style x ComfyUI workflow template, reviewed prompt, comfy-mcp generation, deterministic QA, image review, gen-run record and human-approved handoff."
+    },
+    "comfyui": {
+      "kind": "tech",
+      "repos": [
+        "authoring"
+      ],
+      "domain": "assetgen",
+      "order": 101,
+      "paths": [
+        "assetgen/"
+      ],
+      "used_by": [
+        "asset-gen",
+        "art-2d",
+        "art-3d",
+        "ui-ux",
+        "vfx"
+      ],
+      "summary": "How asset-gen's ComfyUI side works: the comfy-template format and game-layer overrides, the comfy-mcp tool sequence, the 9router image node's behaviour and pitfalls, ComfyUI ports, and how to add a purpose, style or template."
+    },
     "game-design": {
       "kind": "repo",
       "repos": [
@@ -5187,6 +5288,10 @@
     {
       "id": "art3d-visual-review",
       "rule": "3D visual acceptance, rights and final production review are human decisions."
+    },
+    {
+      "id": "assetgen-approval",
+      "rule": "A person approves a generation run (gen-run) before its images become a production source in another domain; agents never approve, including their own generations."
     }
   ],
   "contracts": [
@@ -5663,6 +5768,86 @@
       "evidence": "artifact-trace"
     },
     {
+      "id": "assetgen-to-art2d",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to 2D Art (runtime exports cite them) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art2d/exports/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "assetgen-to-art3d",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to 3D Art (model references, textures) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "art3d/models/"
+        },
+        {
+          "repo": "authoring",
+          "path": "art3d/materials/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "assetgen-to-ui",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to UI/UX (UI element parts) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "ui/specs/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
+      "id": "assetgen-to-vfx",
+      "kind": "handoff",
+      "domain": "assetgen",
+      "summary": "Human-approved generation runs (gen-run) hand their output images and provenance to VFX (effect textures) as production sources.",
+      "source": {
+        "repo": "authoring",
+        "path": "assetgen/runs/"
+      },
+      "copies": [
+        {
+          "repo": "authoring",
+          "path": "vfx/assets/"
+        }
+      ],
+      "driver": "asset-gen",
+      "gate": "assetgen-approval",
+      "evidence": "artifact-trace"
+    },
+    {
       "id": "feature-spec-to-impl",
       "kind": "handoff",
       "domain": "design",
@@ -6100,6 +6285,7 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "assetgen-to-art2d",
         "ui-spec-to-art2d-brief",
         "art2d-asset-to-impl"
       ],
@@ -6135,6 +6321,7 @@
         "art3d-visual-review"
       ],
       "handoffs": [
+        "assetgen-to-art3d",
         "art3d-asset-to-vfx",
         "art3d-asset-to-impl",
         "asset-3d-to-vfx",
@@ -6143,6 +6330,35 @@
       "may_own_feature_state": false,
       "approvers": [],
       "quality_plugin": "scripts/checks/domains/art3d.py",
+      "reviewers": []
+    },
+    "assetgen": {
+      "summary": "AI image generation runs (ComfyUI through comfy-mcp): reviewed prompts, deterministic image QA, provenance and human-approved handoff of the images to 2D Art, 3D Art, UI/UX and VFX.",
+      "status": "active",
+      "lead": "asset-gen",
+      "repos": [
+        "authoring"
+      ],
+      "artifact_kinds": [
+        "gen-run"
+      ],
+      "quality_gates": [
+        "artifact-lint",
+        "artifact-trace",
+        "assetgen-quality"
+      ],
+      "human_gates": [
+        "assetgen-approval"
+      ],
+      "handoffs": [
+        "assetgen-to-art2d",
+        "assetgen-to-art3d",
+        "assetgen-to-ui",
+        "assetgen-to-vfx"
+      ],
+      "may_own_feature_state": false,
+      "approvers": [],
+      "quality_plugin": "scripts/checks/domains/assetgen.py",
       "reviewers": []
     },
     "design": {
@@ -6210,6 +6426,7 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "assetgen-to-ui",
         "feature-spec-to-ui-spec",
         "ui-spec-to-art2d-brief",
         "ui-spec-to-client",
@@ -6239,6 +6456,7 @@
       ],
       "human_gates": [],
       "handoffs": [
+        "assetgen-to-vfx",
         "gameplay-event-to-vfx",
         "art3d-asset-to-vfx",
         "ui-vfx-sync",
@@ -7648,6 +7866,121 @@
       "requirements": {
         "approved": {
           "approval_when_binding": true
+        },
+        "in-implementation": {
+          "needs_trace": [
+            "impl"
+          ]
+        },
+        "verified": {
+          "coverage_by_acceptance": true,
+          "verify_type_coverage": {
+            "test": {
+              "needs_trace": [
+                "impl",
+                "test"
+              ]
+            },
+            "review": {
+              "needs_review": true
+            },
+            "measure": {
+              "needs_evidence": true
+            }
+          }
+        },
+        "released": {
+          "needs_trace": [
+            "release"
+          ],
+          "requires_approved_verified": true
+        },
+        "proposed": {
+          "schema_complete": true,
+          "acceptance": true
+        },
+        "reviewed": {
+          "independent_review": true
+        },
+        "rejected": {
+          "rejection_record": true
+        },
+        "blocked": {
+          "blocked_by": true
+        }
+      }
+    },
+    "gen-run": {
+      "states": [
+        "draft",
+        "review",
+        "approved",
+        "in-implementation",
+        "verified",
+        "released",
+        "deprecated",
+        "proposed",
+        "reviewed",
+        "blocked",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": {
+        "draft": [
+          "proposed",
+          "review"
+        ],
+        "proposed": [
+          "reviewed",
+          "rejected",
+          "blocked"
+        ],
+        "review": [
+          "reviewed",
+          "approved",
+          "rejected",
+          "blocked"
+        ],
+        "reviewed": [
+          "approved",
+          "rejected",
+          "blocked",
+          "draft"
+        ],
+        "approved": [
+          "in-implementation",
+          "draft",
+          "blocked"
+        ],
+        "in-implementation": [
+          "verified",
+          "draft",
+          "blocked",
+          "rejected"
+        ],
+        "verified": [
+          "released",
+          "draft",
+          "blocked"
+        ],
+        "released": [
+          "deprecated",
+          "superseded"
+        ],
+        "rejected": [
+          "draft"
+        ],
+        "blocked": [
+          "draft"
+        ],
+        "deprecated": [],
+        "superseded": []
+      },
+      "requirements": {
+        "approved": {
+          "needs_approval": [
+            "assetgen-approval"
+          ]
         },
         "in-implementation": {
           "needs_trace": [
@@ -9803,6 +10136,7 @@
     "rig-spec": "docs/schemas/kinds/rig-spec.schema.json",
     "animation-spec": "docs/schemas/kinds/animation-spec.schema.json",
     "asset-3d": "docs/schemas/kinds/asset-3d.schema.json",
+    "gen-run": "docs/schemas/kinds/gen-run.schema.json",
     "gdd": "docs/schemas/kinds/gdd.schema.json",
     "feature-spec": "docs/schemas/kinds/feature-spec.schema.json",
     "design-decision": "docs/schemas/kinds/design-decision.schema.json",

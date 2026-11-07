@@ -203,37 +203,53 @@ is_abs "$r" && [ "$(fwd "$r")" != "$TMP/blocked/rpg-factory" ] && ok "scratch():
 r=$(env -u RPG_FACTORY_STATE_DIR -u XDG_STATE_HOME HOME=rel USERPROFILE=rel HOMEDRIVE= HOMEPATH= python3 -B -c "import sys; sys.path.insert(0,'$ROOT/scripts/lib'); import fstate; print(fstate.persistent())" 2>&1)
 is_abs "$r" && ok "persistent(): relative HOME -> absolute ($r)" || no "persistent fallback: $r"
 # atomic state files: a Windows sharing lock longer than the old fixed retry count (~0.36 s read, ~0.3 s replace)
-# is waited out (time budget), never read as a missing record; elsewhere a PermissionError keeps the short count
+# is waited out (time budget), never read as a missing record; elsewhere a PermissionError keeps the short count.
+# fstate's clock is a fake (monotonic + sleep advance it): retries and the budget stop are exact, no real waits
 mkdir -p "$TMP/lockt"
-python3 -B - "$ROOT/scripts/lib" "$TMP/lockt" <<'PY' && ok "fstate: a 0.6 s Windows lock -> read_json gets the record, write_text succeeds; non-Windows unchanged" || no "fstate lock retry budget"
-import builtins, os, sys, time; sys.path.insert(0, sys.argv[1]); import fstate
+python3 -B - "$ROOT/scripts/lib" "$TMP/lockt" <<'PY' && ok "fstate (fake clock): a 0.6 s Windows lock -> read_json gets the record, write_text succeeds; non-Windows keeps 8/5 tries; an endless lock stops at the first retry past LOCK_BUDGET_S" || no "fstate lock retry budget"
+import builtins, os, sys, types; sys.path.insert(0, sys.argv[1]); import fstate
 path = os.path.join(sys.argv[2], "rec.json"); fstate.write_json(path, {"state": "PASS"})
-real_open, real_replace, bad = builtins.open, os.replace, []
-def locked(fn, until, match):
+real_open, real_replace, real_time, bad = builtins.open, os.replace, fstate.time, []
+now, sleeps, calls, until = [0.0], [], [0], [0.0]
+def fake_sleep(s):
+    sleeps.append(s); now[0] += s
+fstate.time = types.SimpleNamespace(monotonic=lambda: now[0], sleep=fake_sleep)
+def locked(fn, match):
     def f(*a, **k):
-        if match(a) and time.monotonic() < until[0]:
-            raise PermissionError(13, "sharing violation (simulated)")
+        if match(a):
+            calls[0] += 1
+            if now[0] < until[0]:
+                raise PermissionError(13, "sharing violation (simulated)")
         return fn(*a, **k)
     return f
-until = [0.0]
-fstate.open = locked(real_open, until, lambda a: a[0] == path)
-os.replace = locked(real_replace, until, lambda a: a[1] == path)
+def lock(seconds):
+    del sleeps[:]; calls[0] = 0; until[0] = now[0] + seconds
+fstate.open = locked(real_open, lambda a: a[0] == path)
+os.replace = locked(real_replace, lambda a: a[1] == path)
 try:
     for win in (True, False):
         fstate._WINDOWS = win
-        until[0] = time.monotonic() + 0.6; r = fstate.read_json(path, default="MISSING")
-        if (r != {"state": "PASS"}) if win else (r != "MISSING"): bad.append(("read", win, r))
-        until[0] = time.monotonic() + 0.6
+        lock(0.6); r = fstate.read_json(path, default="MISSING")
+        if win and (r != {"state": "PASS"} or sum(sleeps) < 0.6 or calls[0] != len(sleeps) + 1):
+            bad.append(("read win", r, calls[0], list(sleeps)))
+        if not win and (r != "MISSING" or calls[0] != 8 or len(sleeps) != 7):  # tries=8 in read_json
+            bad.append(("read posix", r, calls[0], list(sleeps)))
+        lock(0.6)
         try:
             fstate.write_json(path, {"state": "FAIL"}); w = "ok"
         except PermissionError:
             w = "raised"
-        if w != ("ok" if win else "raised"): bad.append(("write", win, w))
-    fstate._WINDOWS = True  # a lock that never ends is still bounded: default after the budget
-    until[0] = time.monotonic() + 60; t0 = time.monotonic(); r = fstate.read_json(path, default="MISSING")
-    if r != "MISSING" or not 1.5 < time.monotonic() - t0 < 5: bad.append(("endless", r, time.monotonic() - t0))
+        if win and (w != "ok" or sum(sleeps) < 0.6 or calls[0] != len(sleeps) + 1):
+            bad.append(("write win", w, calls[0], list(sleeps)))
+        if not win and (w != "raised" or calls[0] != 5 or len(sleeps) != 4):  # tries=5 in write_text
+            bad.append(("write posix", w, calls[0], list(sleeps)))
+    fstate._WINDOWS = True  # a lock that never ends is still bounded: default at the first retry past the budget
+    lock(1e9); t0 = now[0]; r = fstate.read_json(path, default="MISSING"); spent = now[0] - t0
+    if (r != "MISSING" or not sleeps or spent < fstate.LOCK_BUDGET_S or spent - sleeps[-1] >= fstate.LOCK_BUDGET_S
+            or max(sleeps) > 0.05 or calls[0] != len(sleeps) + 1):
+        bad.append(("endless", r, spent, calls[0], len(sleeps)))
 finally:
-    del fstate.open; os.replace = real_replace
+    del fstate.open; os.replace = real_replace; fstate.time = real_time
 left = [f for f in os.listdir(sys.argv[2]) if f.endswith(".tmp")]
 print(bad, left) if bad or left else None
 sys.exit(1 if bad or left else 0)

@@ -16,7 +16,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `factory-context.sh` - live snapshot and routing (lead, legs, checks, gates); read-only. `tests/routing.test.sh`, `tests/domains.test.sh`
 - `factory-status.py` - pending cross-repo work derived from git (rollout, READY_TO_TAG, pin drift, STALE). `tests/factory-status.test.sh`
 - `run-checks.py` - runs and grades registry checks, writes evidence; `--status` regrades. `tests/run-checks.test.sh`
-- `factory-cmd.py` - entry point behind the slash commands (`status`, `route`, `check`, `doctor`, `ui*`). `tests/commands.test.sh`, `tests/ui-commands.test.sh`
+- `factory-cmd.py` - entry point behind the slash commands (`status`, `route`, `check`, `doctor`, `ui*`, `assetgen`). `tests/commands.test.sh`, `tests/ui-commands.test.sh`
+- `assetgen/assetgen.py` - asset-gen engine: list, show, resolve, render, lint, review-cmd (prints the Codex command), qa, manifest; writes only into the given run directory. `tests/assetgen.test.sh`
 - `factory-workflow.py` - plan, status, dispatch and report registry-routed artifact workflows. `tests/workflow.test.sh`
 
 ## Checks (`checks/`, read-only evidence scripts)
@@ -25,7 +26,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `artifact-trace.py` - artifact revisions, trace coverage, signed approvals. `tests/artifacts.test.sh`, `tests/artifact-quality.test.sh`
 - `artifact-review.py` - git identity and SSH signature helpers for the artifact checks. `tests/artifact-quality.test.sh`
 - `artifact-quality.py` - aggregates artifact checks and the domain plugins. `tests/artifact-quality.test.sh`
-- `domains/*.py` - per-domain quality plugins (`_api.py` contract; design, ui, art2d, art3d, vfx, noop). `tests/artifact-quality.test.sh`, `tests/<domain>-workflow.test.sh`
+- `domains/*.py` - per-domain quality plugins (`_api.py` contract; design, ui, art2d, art3d, vfx, assetgen, noop). `tests/artifact-quality.test.sh`, `tests/<domain>-workflow.test.sh`
+- `domains/assetgen.py` - gen-run quality plugin: reviewer model differs from the prompt author (`SAME_MODEL:<model>` fallback grades WARN), review files bound to the current prompt and outputs, `qa.json` PASS with every required check, output hashes, provenance, refs. `tests/assetgen.test.sh`
 - `asset-manifest.py` - asset manifest records against registered repos. `tests/asset-manifest.test.sh`
 - `registry-ownership.py` - cross-domain ownership and handoff invariants. `tests/handoff-e2e.test.sh`
 - `english-only.py` - English-only content policy (`--enforce`). `tests/english-only.test.sh`, `tests/skills-lint.sh`
@@ -49,10 +51,21 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 
 ## Libraries
 
-- `lib/` - `context.py` + `resolve.jq` (routing engine), `evidence.py`, `fstate.py` (state paths), `devtools.py`,
-  `tools.py`, `registry_src.py`, `shells.py`, `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh`
-  (sourced by tests). `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`
+- `lib/` - `context.py` + `resolve.jq` (routing engine), `snapshot_render.py` (snapshot text, domain views, Next line),
+  `workspace.py` (workspace and checkout path helpers shared by the hooks and routing), `gitguard.py` (git guard
+  facade; loads the `guard/` package by path as `rpgf_guard`: `common`, `shell`, `git`, `process`, `gates`, `mode`,
+  `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
+  pollution fingerprints), `runchecks_grade.py` (check parser choice and result grading for `run-checks.py`),
+  `artifacts.py` (artifact discovery and quality), `orca_cmd.py` (Orca and Agent dispatch
+  argv), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
+  `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
+  `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
+  `tests/hook-perf.test.sh`
 - `ui/` - UI plan engine (`ui_plan.py`, data in `ui/data/`), `ui_catalog.py`, `ui_select.py`, `figma_env.py`.
   `tests/ui-commands.test.sh`, `tests/ui-catalog.test.sh`, `tests/ui-skill-routing.test.sh`, `tests/ui-figma-env.test.sh`
+- `assetgen/` - asset-gen engine modules: `layers.py` (core and game layers, override and extends), `lint.py` (offline data
+  and workflow lint against `data/known-nodes.json`), `qa.py` and `png.py` (deterministic image QA, stdlib PNG decoder), `runfiles.py` (review verdict
+  binding and required QA checks, shared with `checks/domains/assetgen.py`).
+  `tests/assetgen.test.sh`
 - `adapters/` - optional domain tool adapters (`art2d/provider.py`, `art3d/blender-stats.py` run inside Blender,
   `vfx/unity.py`). `tests/art2d-workflow.test.sh`, `tests/art3d-workflow.test.sh`, `tests/vfx-workflow.test.sh`

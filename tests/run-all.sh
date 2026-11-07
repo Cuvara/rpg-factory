@@ -50,7 +50,7 @@ QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=()
 # the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
 SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
-      tests/devtools.test.sh tests/domains.test.sh testlab/tests/test_lab.py"
+      tests/devtools.test.sh tests/domains.test.sh tests/assetgen.test.sh testlab/tests/test_lab.py"
 [ "$jobs" -gt 1 ] && QD=$(mktemp_win) && trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$QD"' EXIT
 queue() { # kind message [detail]
   if [ -z "$QD" ]; then "_$1" "$2" "${3:-}"; return; fi
@@ -146,7 +146,7 @@ while IFS= read -r f; do json_count=$((json_count + 1)); run "json: $f" jq empty
   < <(find . -name '*.json' -not -path './.git/*' | sort)
 [ "$json_count" -ge 4 ] && ok "json files found: $json_count" || bad "json files found: $json_count (expected >= 4)"
 for f in scripts/*.sh scripts/checks/*.sh tests/*.sh; do run "bash -n: $f" bash -n "$f"; done
-for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py testlab/*.py testlab/lab/*.py testlab/tests/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
+for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py scripts/lib/guard/*.py testlab/*.py testlab/lab/*.py testlab/tests/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
 run "jq compile: scripts/lib/resolve.jq" \
   jq -e --arg repo server --argjson files '[]' --argjson subst '{}' --argjson tools '{}' -f scripts/lib/resolve.jq registry.json
 find scripts tests -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
@@ -180,7 +180,8 @@ cmver=""; [ -f .agents/plugins/marketplace.json ] && cmver=$(jq -r '[.version?, 
 # release policy wording: tags and releases are the lead's by default and the agent's only with explicit release
 # authorization in the current task - no authoritative text may state the absolute "agents never tag" rule again
 policy_files=(.claude/CLAUDE.md README.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
-              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/gitguard.py scripts/lib/context.py
+              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/gitguard.py scripts/lib/guard/*.py
+              scripts/lib/context.py scripts/lib/procrun.py scripts/lib/snapshot_render.py
               .claude-plugin/plugin.json .claude-plugin/marketplace.json)
 absolute=$(grep -nE -i "agents never tag|never create the tag|tags are never (done|created) by agents|never tag, never publish|; never tag\b" "${policy_files[@]}" 2>/dev/null)
 missing=$(for f in .claude/CLAUDE.md README.md registry.json skills/factory-core/references/git-safety.md skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md; do
@@ -188,7 +189,7 @@ missing=$(for f in .claude/CLAUDE.md README.md registry.json skills/factory-core
 [ -z "$absolute$missing" ] && ok "release policy: default READY_TO_TAG, tag/release only with explicit authorization (${#policy_files[@]} files)" \
   || bad "release policy wording" "absolute 'never tag' text: ${absolute:-none}; no authorization rule in: ${missing:-none}"
 # since 1.0.3 the hooks are advisory only: agent-facing text must not claim they deny, block or enforce
-advisory_files=(.claude/CLAUDE.md README.md scripts/lib/context.py scripts/factory-context.sh commands/*.md skills/*/SKILL.md skills/*/references/*.md)
+advisory_files=(.claude/CLAUDE.md README.md scripts/lib/context.py scripts/lib/snapshot_render.py scripts/factory-context.sh commands/*.md skills/*/SKILL.md skills/*/references/*.md)
 blocking=$(grep -nE -i "denied by the guard|hooks enforce|\(deny\)|enforced by (both|the) (guards?|hooks)" "${advisory_files[@]}" 2>/dev/null)
 [ -z "$blocking" ] && ok "advisory wording: no 'denied by the guard' / 'hooks enforce' / '(deny)' in agent-facing text (${#advisory_files[@]} files)" \
   || bad "advisory wording (hooks never block since 1.0.3)" "$blocking"
@@ -240,6 +241,7 @@ else skp "registry paths exist in workspace" "--no-workspace"; fi
 run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -u TMPDIR tests/compat.test.sh
 run "git-guard unit tests" tests/git-guard.test.sh
 run "skills lint (contract)" tests/skills-lint.sh
+run "line budget (gitguard.py, context.py, run-checks.py under 500 lines; self-test at 499/500)" tests/line-budget.test.sh
 run "English-only fixture cases" env -u TMPDIR tests/english-only.test.sh
 run "English-only enforcement (report available)" python3 -B scripts/checks/english-only.py --enforce
 run "session state + tripwire removed (state paths, stale latch files inert)" env -u TMPDIR tests/session-state.test.sh
@@ -284,6 +286,7 @@ run "UI/UX production workflow" tests/ui-workflow.test.sh
 run "2D Art production workflow" tests/art2d-workflow.test.sh
 run "3D Art production workflow" tests/art3d-workflow.test.sh
 run "VFX production workflow" tests/vfx-workflow.test.sh
+run "asset-gen engine, core templates, image QA, gen-run quality plugin (temp authoring repo, no network)" env -u TMPDIR tests/assetgen.test.sh
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh

@@ -1,0 +1,56 @@
+{
+ "schema": "rpg-factory.assetgen-purpose/1",
+ "title": "2D game sprite",
+ "description": "Single in-game sprite on a transparent background, ready for slicing and import.",
+ "handoff_domain": "art2d",
+ "default_template": "image-generate",
+ "params": {
+  "size": "1024x1024",
+  "background": "transparent",
+  "quality": "high"
+ },
+ "prompt": {
+  "guidance": [
+   "One subject, centered, fully inside the frame with margin.",
+   "State the view (side, top-down, isometric) the game uses.",
+   "Ask for a transparent background and no ground shadow unless the game uses one."
+  ],
+  "must_include": [
+   "subject",
+   "view",
+   "transparent background"
+  ],
+  "avoid": [
+   "scene background",
+   "cropped edges",
+   "text"
+  ]
+ },
+ "prompt_rubric": [
+  "The prompt names one clear subject and its role in the game.",
+  "The prompt states the style, framing and background the purpose requires.",
+  "The prompt contains no text, logos, watermarks or real-world brands to render unless the purpose asks for them.",
+  "The prompt avoids contradictions (for example transparent background and a full scene).",
+  "The prompt fixes the view angle and asks for the whole subject inside the frame."
+ ],
+ "image_rubric": [
+  "The image shows the subject the prompt asked for, without extra subjects.",
+  "The style matches the style preset; no mixed rendering styles.",
+  "No unwanted text, watermark, signature or frame.",
+  "No anatomical, perspective or structural errors that block the target use.",
+  "The subject is complete and not cropped by the frame.",
+  "Edges are clean against transparency (no halo or matte fringe)."
+ ],
+ "qa": {
+  "size": {
+   "mode": "aspect",
+   "expect": "1024x1024"
+  },
+  "alpha": "required",
+  "transparent_corners": true,
+  "not_blank": {
+   "min_stddev": 4.0,
+   "min_coverage": 0.02
+  }
+ }
+}

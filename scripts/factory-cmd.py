@@ -13,9 +13,9 @@
   domain [<id>] [--json]                  registry domains: lead, repos, artifact kinds, gates, handoffs,
                                           authoring artifact counts, stale/FAIL/HUMAN_REQUIRED, next steps
   workflow plan|status|dispatch|report     dependency-aware artifact workflow entry point
-  pipeline tier|validate|planner|dispatch|verdict|gate|cleanup [args]
-                                          factory-pipeline.py: task tier, plan validation, worker dispatch
-                                          commands, review/QA verdicts and the READY_FOR_PR gate
+  pipeline tier|validate|subplan|planner|dispatch|verdict|gate|cleanup|status [args]
+                                          factory-pipeline.py: task tier, plan and subplan validation, dispatch
+                                          commands, review/QA verdicts, the READY_FOR_PR gate and run status
   ui [--json] [--project DIR] [--uitoolkit-ref REF] <request...>
                                           scripts/ui/ui_plan.py: UI plan - intent, ONLY the UI skills
                                           needed, lead route, missing context, components (exit 3 =
@@ -23,6 +23,11 @@
   ui-figma | ui-components | ui-screen | ui-review  [same options] <request...>
                                           the same plan with the intent family forced (Figma import,
                                           component selection, screen implementation, review)
+  assetgen list|show|resolve|lint|review-cmd [args]
+                                          scripts/assetgen/assetgen.py, read-only verbs: asset-gen purposes, styles
+                                          and ComfyUI templates (core + game layer), a resolved spec, data lint,
+                                          the Codex review command (printed, never run); --authoring defaults to
+                                          the workspace authoring repo when it has assetgen/
   help [--json]                           every command with its arguments, an example, the Claude form
                                           (/rpg-factory:<verb>) and the Codex form (python3 -B ...)
 
@@ -212,7 +217,7 @@ def cmd_workflow(args):
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "factory-workflow.py"), *args])
 
 
-PIPELINE_VERBS = ("tier", "validate", "planner", "dispatch", "verdict", "gate", "cleanup")
+PIPELINE_VERBS = ("tier", "validate", "subplan", "planner", "dispatch", "verdict", "gate", "cleanup", "status")
 
 
 def cmd_pipeline(raw):
@@ -248,6 +253,29 @@ def cmd_ui(verb, raw):
     if not text:
         raise ValueError(f"{verb} needs a request, e.g. {verb} Create an inventory screen")
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "ui", "ui_plan.py"), "--verb", verb, *opts, text])
+
+
+ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd")
+
+
+def cmd_assetgen(raw):
+    """Read-only assetgen.py verbs; render, qa and manifest write into a run directory and stay with the asset-gen skill."""
+    args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
+    if not args or args[0] not in ASSETGEN_VERBS:
+        hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
+                if args and args[0] in ("render", "qa", "manifest") else "")
+        raise ValueError("assetgen needs " + "|".join(ASSETGEN_VERBS) + hint)
+    # --out writes a file. Refuse it and every prefix of it (--o, --ou, with or without =VALUE) for every verb, so an
+    # abbreviation cannot slip past; assetgen.py also parses with allow_abbrev=False.
+    if any(len(a.split("=", 1)[0]) >= 3 and "--out".startswith(a.split("=", 1)[0]) for a in args):
+        raise ValueError("assetgen --out (or an abbreviation of it) writes a file: run scripts/assetgen/assetgen.py directly "
+                         "(the asset-gen skill)")
+    if args[0] in ("list", "show", "resolve", "lint") and not any(a == "--authoring" or a.startswith("--authoring=") for a in args):
+        reg = registry()
+        game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
+        if os.path.isdir(os.path.join(game, "assetgen")):
+            args += ["--authoring", game]
+    return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "assetgen", "assetgen.py"), *args])
 
 
 def cmd_domain(args):
@@ -377,9 +405,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "registry domains: lead, repos, kinds, gates, handoffs, artifact counts, stale/FAIL/HUMAN_REQUIRED, next steps"},
     {"verb": "workflow", "args": "plan|status|dispatch|report <spec> [--json]", "read_only": True,
      "example": "workflow plan spec.json --json", "summary": "dependency-aware artifact workflow (dispatch only prints a contract)"},
-    {"verb": "pipeline", "args": "tier|validate|planner|dispatch|verdict|gate|cleanup [args]", "read_only": False,
+    {"verb": "pipeline", "args": "tier|validate|subplan|planner|dispatch|verdict|gate|cleanup|status [args]", "read_only": False,
      "example": "pipeline tier -- --repo server --paths backend/shared/proto/wire.proto",
-     "summary": "delivery pipeline: task tier, plan validation, worker dispatch, review/QA verdicts, READY_FOR_PR gate, cleanup"},
+     "summary": "delivery pipeline: task tier, plan and subplan validation, worker dispatch, review/QA verdicts, READY_FOR_PR gate, cleanup, run status"},
     {"verb": "ui", "args": "[--json] [--project <dir>] [--uitoolkit-ref <ref>] <request>", "read_only": True,
      "example": "ui Create an inventory screen", "summary": "UI plan: intent, ONLY the UI skills needed, lead route, missing context"},
     {"verb": "ui-figma", "args": "[ui options] <request>", "read_only": True, "example": "ui-figma Import the shop frame",
@@ -390,6 +418,9 @@ VERBS = [  # help: one entry per verb; read_only is False only where the verb ru
      "summary": "UI plan forced to screen implementation"},
     {"verb": "ui-review", "args": "[ui options] <request>", "read_only": True, "example": "ui-review Review the HUD",
      "summary": "UI plan forced to review"},
+    {"verb": "assetgen", "args": "list|show|resolve|lint|review-cmd [args]", "read_only": True,
+     "example": "assetgen list --kind purpose",
+     "summary": "asset-gen data (purposes, styles, ComfyUI templates; core + game layer), resolved spec, lint, Codex review command (printed)"},
     {"verb": "help", "args": "[--json]", "read_only": True, "example": "help --json",
      "summary": "this list; no slash command - agents and Codex discover the commands here"},
 ]
@@ -423,6 +454,11 @@ def main(argv):
     if argv[0] == "pipeline":
         try:
             return cmd_pipeline(argv[1:])
+        except ValueError as e:
+            return usage(str(e))
+    if argv[0] == "assetgen":
+        try:
+            return cmd_assetgen(argv[1:])
         except ValueError as e:
             return usage(str(e))
     if argv[0] in UI_VERBS:

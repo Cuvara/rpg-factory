@@ -70,15 +70,19 @@ grep -qE "$SECRET1|$SECRET2" <<<"$out" && no "probe output leaks a planted secre
 # -- scenarios over the REAL registry in a controlled environment (fake PATH, config, Editor port)
 SC="$TMP/scen"; mkdir -p "$SC/bin" "$SC/cfg" "$SC/ws"
 for b in gopls csharp-ls dotnet dotnet-counters go protoc protoc-gen-go docker codex; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
-echo '{"mcpServers": {"ai-game-developer": {}, "lsp": {}, "pg-aiguide": {}, "figma": {}}}' > "$SC/ws/.mcp.json"
+echo '{"mcpServers": {"ai-game-developer": {}, "lsp": {}, "pg-aiguide": {}, "figma": {}, "comfy-mcp": {}}}' > "$SC/ws/.mcp.json"
 echo '{"enabledPlugins": {"context-mode@context-mode": true, "codex@openai-codex": true}}' > "$SC/cfg/settings.json"
 scen=$(cd "$ROOT/scripts/lib" && CLAUDE_CONFIG_DIR="$SC/cfg" python3 -B - "$SC" "$ROOT/registry.json" <<'EOF'
 import json, os, socket, sys
 import devtools
 sc, reg = sys.argv[1], json.load(open(sys.argv[2]))
 os.environ["PATH"] = f"{sc}/bin"
-editor = socket.socket(); editor.bind(("127.0.0.1", 0)); editor.listen(1)
+editor = socket.socket(); editor.bind(("127.0.0.1", 0)); editor.listen(64)  # never accepts: room for every probe
 reg["services"]["unity-mcp"]["probe"] = f"tcp://127.0.0.1:{editor.getsockname()[1]}"
+closed = socket.socket(); closed.bind(("127.0.0.1", 0)); port = closed.getsockname()[1]; closed.close()
+comfy = socket.socket(); comfy.bind(("127.0.0.1", 0)); comfy.listen(64)  # ComfyUI Desktop up, headless port closed
+reg["services"]["comfyui"]["probe"] = f"tcp://127.0.0.1:{port}"
+reg["services"]["comfyui-desktop"]["probe"] = f"tcp://127.0.0.1:{comfy.getsockname()[1]}"
 def states(tag):
     for t in reg["dev_tools"]:
         r = devtools.Prober(f"{sc}/ws", reg).tool(t)
@@ -88,6 +92,8 @@ editor.close()                                   # Editor closed
 states("editor-closed")
 os.remove(f"{sc}/bin/csharp-ls")                 # no C# language server
 states("no-csharp")
+comfy.close()                                    # ComfyUI stopped (comfy-mcp still configured)
+states("comfy-stopped")
 EOF
 )
 n=$(jq '.dev_tools | length' "$ROOT/registry.json")
@@ -96,6 +102,13 @@ grep -q '^editor-closed unity-mcp DOWN fallback=True' <<<"$scen" && [ "$(grep -c
   && ok "scenario Unity Editor closed: unity-mcp DOWN (not MISSING, not OK), fallback set, rest OK" || no "scenario editor-closed: $(grep '^editor-closed' <<<"$scen" | grep -v ' OK ')"
 grep -q '^no-csharp lsp-csharp MISSING fallback=True' <<<"$scen" && grep -q '^no-csharp unity-mcp DOWN' <<<"$scen" \
   && ok "scenario no C# LSP: lsp-csharp MISSING with fallback, other states unchanged" || no "scenario no-csharp: $(grep '^no-csharp' <<<"$scen" | grep -v ' OK ')"
+grep -q '^all comfy-mcp OK' <<<"$scen" && grep -q '^comfy-stopped comfy-mcp DOWN fallback=True' <<<"$scen" \
+  && ok "comfy-mcp: either ComfyUI port (service alternatives) is enough; ComfyUI stopped = DOWN with fallback" \
+  || no "comfy-mcp scenarios: $(grep ' comfy-mcp ' <<<"$scen")"
+jq -e '.dev_tools[] | select(.id == "comfy-mcp") | .kind == "mcp" and .required == false
+  and .probes == ["mcp:comfy-mcp|mcp:comfy", "service:comfyui|service:comfyui-desktop"]' "$ROOT/registry.json" >/dev/null \
+  && jq -e '[.services.comfyui.probe, .services["comfyui-desktop"].probe] | all(test("^tcp://127[.]0[.]0[.]1:[0-9]+$"))' "$ROOT/registry.json" >/dev/null \
+  && ok "registry: comfy-mcp is an optional mcp tool probed by server name and either ComfyUI service" || no "registry comfy-mcp dev tool"
 jq -e '[.dev_tools[] | select(.id == "unity-mcp" or .id == "lsp-csharp") | .required] == [false, false]' "$ROOT/registry.json" >/dev/null \
   && ok "unity-mcp and lsp-csharp are optional: their absence never fails doctor or a check" || no "unity-mcp/lsp-csharp marked required"
 # doctor's exit code also reflects install state, so compare: an optional tool's absence must not change it

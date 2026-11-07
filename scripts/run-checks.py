@@ -42,10 +42,8 @@ Exit: 0 all executed checks PASS; 1 any FAIL/BLOCKED/NOT_AVAILABLE among require
 import json
 import os
 import posixpath
-import re
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -61,6 +59,9 @@ import fstate  # noqa: E402
 import context as ctxlib  # noqa: E402
 from context import native_abs  # noqa: E402
 from shells import bash_candidates, find_bash  # noqa: E402
+import procrun  # noqa: E402
+from procrun import git, worktree_state, wsl_environment, _verify_windows_pids, _windows_pid_state, _run_windows_check  # noqa: E402
+from runchecks_grade import parser_for, grade  # noqa: E402
 
 
 def parse_args(argv):
@@ -109,44 +110,9 @@ def usage_error(msg):
     sys.exit(2)
 
 
-def git(d, *args):
-    try:
-        r = subprocess.run(["git", "-C", d, *args], capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
-        return r.stdout if r.returncode == 0 else ""
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def worktree_state(d):
-    """Fingerprint changed/untracked paths, including edits to already-dirty files."""
-    entries = git(d, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all").split("\0")
-    paths = set()
-    i = 0
-    while i < len(entries):
-        entry = entries[i]
-        i += 1
-        if len(entry) >= 4:
-            status, path = entry[:2], entry[3:]
-            paths.add(path)
-            if "R" in status or "C" in status:
-                if i < len(entries) and entries[i]:
-                    paths.add(entries[i])  # the source path follows the destination in porcelain -z output
-                i += 1
-    state = {}
-    for path in paths:
-        full = os.path.join(d, path)
-        try:
-            st = os.stat(full, follow_symlinks=False)
-            target = ""
-            if stat.S_ISLNK(st.st_mode):
-                target = ":target=" + os.readlink(full)
-            state[path] = f"size={st.st_size}:mtime_ns={st.st_mtime_ns}:mode={st.st_mode}{target}"
-        except OSError as e:
-            state[path] = f"unreadable:{e}"
-    return state
-
-
 _BASH_SELECTION = None
+_BASH_PROBE = []  # what each flavor probe attempt answered (Windows only)
+BASH_PROBE_ATTEMPTS = 3
 
 
 def select_bash():
@@ -162,336 +128,42 @@ def select_bash():
     if not bash:
         _BASH_SELECTION = (None, "missing")
         return _BASH_SELECTION
-    try:
-        p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+    flavor = "unknown"
+    _BASH_PROBE.clear()
+    # A probe that could not run (start-up failure under load, timeout) says nothing about the flavor, and an
+    # unknown flavor BLOCKs every check of this run: retry it a bounded number of times before giving up.
+    for _ in range(BASH_PROBE_ATTEMPTS):
+        try:
+            p = subprocess.run([bash, "-c", "uname -s; uname -r"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+        except (OSError, subprocess.SubprocessError) as e:
+            _BASH_PROBE.append(f"{type(e).__name__}: {e}")
+            continue
         probe = (p.stdout + p.stderr).lower()
         flavor = "wsl" if p.returncode == 0 and "linux" in probe and "microsoft" in probe else \
                  "gitbash" if p.returncode == 0 and ("mingw" in probe or "msys" in probe) else "unknown"
-    except (OSError, subprocess.SubprocessError):
-        flavor = "unknown"
+        _BASH_PROBE.append(f"exit {p.returncode}: {' '.join((p.stdout + p.stderr).split())[:160]}")
+        if p.returncode == 0:
+            break  # the probe ran: its answer stands, even for a bash this runner does not support
     _BASH_SELECTION = (bash, flavor)
     return _BASH_SELECTION
 
 
+def bash_diagnostics():
+    """The selected bash and what its flavor probe answered, for a BLOCKED reason."""
+    bash, flavor = select_bash()
+    return f"bash={bash or 'not found'}, flavor={flavor}" + (f", probe: {' | '.join(_BASH_PROBE)}" if _BASH_PROBE else "")
+
+
 def bash_env_path(path, bash, flavor=None):
-    """Convert native workspace paths to the selected bash's path syntax; fail closed."""
-    if os.name != "nt":
-        return os.path.realpath(path)
-    if flavor is None:
-        _, flavor = select_bash()
-    if flavor == "wsl":
-        conv = subprocess.run([bash, "-c", "wslpath -u \"$1\"", "runner", path], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
-        return conv.stdout.strip() if conv.returncode == 0 and conv.stdout.strip().startswith("/") else None
-    if flavor != "gitbash":
-        return None
-    # Git Bash accepts the ENV CONTRACT's Windows drive form directly. This
-    # avoids depending on cygpath being visible to Windows Python's PATH.
-    absolute = os.path.abspath(path)
-    drive, tail = os.path.splitdrive(absolute)
-    if not drive or not tail.startswith(("\\", "/")):
-        return None
-    return drive.replace("\\", "/") + tail.replace("\\", "/")
-
-
-def wsl_environment(env):
-    """Bridge already-translated contract values into WSL without path conversion."""
-    names = ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX")
-    entries = [x for x in env.get("WSLENV", "").split(":") if x]
-    env["WSLENV"] = ":".join(dict.fromkeys(entries + list(names)))
-    return env
-
-
-def _verify_windows_pids(pids, is_alive, grace=3):
-    deadline = time.monotonic() + grace
-    remaining = set(pids)
-    while time.monotonic() < deadline:
-        # The Windows probe is tri-state: only a positively verified gone PID
-        # is clean. Preserve bool support for callers/tests using the old shape.
-        remaining = set()
-        for pid in pids:
-            state = is_alive(pid)
-            still_present = state != "gone" if isinstance(state, str) else bool(state)
-            if still_present:
-                remaining.add(pid)
-        if not remaining:
-            return True, set()
-        time.sleep(.05)
-    return False, remaining
-
-
-def _windows_pid_state(kernel, pid, ctypes, wintypes):
-    handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
-    if not handle:
-        return "gone" if ctypes.get_last_error() == 87 else "unknown"
-    try:
-        code = wintypes.DWORD()
-        if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return "unknown"
-        return "alive" if code.value == 259 else "gone"
-    finally:
-        kernel.CloseHandle(handle)
+    return procrun.bash_env_path(path, bash, select_bash()[1] if os.name == "nt" and flavor is None else flavor)
 
 
 def _windows_fallback_cleanup(exit_code, pids, is_alive, fallback=""):
-    verified, remaining = _verify_windows_pids(pids, is_alive)
-    status = "success" if exit_code == 0 and verified else f"failed (taskkill exit {exit_code}; remaining pids={sorted(remaining)})"
-    return f"{status}; {fallback}" if fallback else status
+    return procrun._windows_fallback_cleanup(exit_code, pids, is_alive, fallback, _verify_windows_pids)
 
 
-def _run_windows_check(bash, command, kwargs, timeout):
-    """Own a suspended check in a kill-on-close job before it can spawn children."""
-    import ctypes
-    from ctypes import wintypes
-
-    class IO_COUNTERS(ctypes.Structure):
-        _fields_ = [(n, ctypes.c_ulonglong) for n in ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount", "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-    class BASIC_LIMIT(ctypes.Structure):
-        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong), ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t), ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD), ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
-    class EXT_LIMIT(ctypes.Structure):
-        _fields_ = [("BasicLimitInformation", BASIC_LIMIT), ("IoInfo", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
-    class BASIC_ACCOUNT(ctypes.Structure):
-        _fields_ = [("TotalUserTime", ctypes.c_longlong), ("TotalKernelTime", ctypes.c_longlong), ("ThisPeriodTotalUserTime", ctypes.c_longlong), ("ThisPeriodTotalKernelTime", ctypes.c_longlong), ("TotalPageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD), ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateJobObjectW.restype = wintypes.HANDLE
-    kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-    kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    kernel.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel.OpenProcess.restype = wintypes.HANDLE
-    kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-
-    def alive(pid):
-        return _windows_pid_state(kernel, pid, ctypes, wintypes)
-
-    def descendants(root):
-        # Toolhelp snapshot, then walk parent links without relying on wmic.
-        class ENTRY(ctypes.Structure):
-            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
-                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
-                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]; k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-        k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]; k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ENTRY)]
-        snap = k32.CreateToolhelp32Snapshot(2, 0)
-        if snap == wintypes.HANDLE(-1).value: return {int(root)}
-        try:
-            e = ENTRY(); e.dwSize = ctypes.sizeof(e); rows = []
-            ok = k32.Process32FirstW(snap, ctypes.byref(e))
-            while ok:
-                rows.append((int(e.th32ProcessID), int(e.th32ParentProcessID)))
-                e.dwSize = ctypes.sizeof(e); ok = k32.Process32NextW(snap, ctypes.byref(e))
-            found = {int(root)}
-            changed = True
-            while changed:
-                before = len(found); found.update(pid for pid, parent in rows if parent in found); changed = len(found) != before
-            return found
-        finally: kernel.CloseHandle(snap)
-    job = kernel.CreateJobObjectW(None, None)
-    p = None
-    fallback = None
-    if job:
-        info = EXT_LIMIT()
-        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        try:
-            if not kernel.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
-                raise OSError(ctypes.get_last_error(), "SetInformationJobObject")
-            p = subprocess.Popen([bash, "-c", command], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004, **kwargs)  # CREATE_SUSPENDED
-            if not kernel.AssignProcessToJobObject(job, wintypes.HANDLE(int(p._handle))):
-                raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject")
-            status = ctypes.WinDLL("ntdll").NtResumeProcess(wintypes.HANDLE(int(p._handle)))
-            if status != 0:
-                raise OSError(f"NtResumeProcess status {status}")
-        except Exception as e:
-            fallback = f"job creation/assignment failed ({e}); taskkill fallback"
-            if p and p.poll() is None:
-                if job:
-                    kernel.TerminateJobObject(job, 1)
-                else:
-                    p.kill()
-                try: p.wait(timeout=2)
-                except subprocess.SubprocessError: pass
-            if p:
-                # The assigned process may still be suspended: terminate it, then reap/close it.
-                if p.poll() is None:
-                    try: p.kill(); p.wait(timeout=2)
-                    except (OSError, subprocess.SubprocessError): pass
-                try: p._handle.Close()
-                except Exception: pass
-            kernel.CloseHandle(job)
-            job = None
-            p = None
-    else:
-        fallback = f"job creation failed ({ctypes.get_last_error()}); taskkill fallback"
-    if p is None:
-        p = subprocess.Popen([bash, "-c", command], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **kwargs)
-    try:
-        out, _ = p.communicate(timeout=timeout)
-        if job:
-            kernel.CloseHandle(job)
-        try: p._handle.Close()
-        except Exception: pass
-        return p.returncode, out or "", False, "not needed"
-    except subprocess.TimeoutExpired:
-        cleanup = "failed"
-        if job:
-            kernel.TerminateJobObject(job, 1)
-            account = BASIC_ACCOUNT()
-            deadline = time.monotonic() + 3
-            verified = False
-            while time.monotonic() < deadline:
-                if kernel.QueryInformationJobObject(job, 1, ctypes.byref(account), ctypes.sizeof(account), None) and account.ActiveProcesses == 0:
-                    verified = True
-                    break
-                time.sleep(.05)
-            cleanup = "success (job ActiveProcesses=0)" if verified else f"failed (job ActiveProcesses={account.ActiveProcesses})"
-        else:
-            try:
-                tree = descendants(p.pid)
-                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
-                cleanup = _windows_fallback_cleanup(killer.returncode, tree, alive, fallback)
-            except (OSError, subprocess.SubprocessError) as e:
-                cleanup = f"failed ({e}); {fallback}"
-        try:
-            out, _ = p.communicate(timeout=3)
-        except subprocess.TimeoutExpired:
-            out = ""
-            cleanup += "; process pipes did not close within 3 s"
-        if job:
-            kernel.CloseHandle(job)
-        try: p._handle.Close()
-        except Exception: pass
-        return 124, f"TIMEOUT after {timeout} s; pids={[p.pid]}; cleanup={cleanup}\n{out or ''}", True, cleanup
-
-
-def run_check(command, cwd, env, timeout):
-    """Run bash in an isolated process group and clean up its entire child tree on timeout."""
-    bash, flavor = select_bash()
-    if not bash:
-        return 127, "could not start: bash not found", False, "not started"
-    if flavor == "wsl":
-        required = ("RPG_FACTORY_WORKSPACE", "RPG_FACTORY_REPO_DIR", "RPG_FACTORY_REPO_KEY", "RPG_FACTORY_HEAD", "PYTHONDONTWRITEBYTECODE")
-        checks = " ".join(f'test -n "${{{name}}}" || {{ echo "BLOCKED: WSL environment missing {name}"; exit 97; }};' for name in required)
-        command = checks + " " + command
-    kwargs = dict(cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                  encoding="utf-8", errors="replace", env=env)
-    if os.name == "nt":
-        return _run_windows_check(bash, command, kwargs, timeout)
-    else:
-        p = subprocess.Popen([bash, "-c", command], start_new_session=True, **kwargs)
-    try:
-        out, _ = p.communicate(timeout=timeout)
-        return p.returncode, out or "", False, "not needed"
-    except subprocess.TimeoutExpired:
-        pids = [p.pid]
-        cleanup = "success"
-        try:
-            if os.name == "nt":
-                killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
-                cleanup = "success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode}: {killer.stderr.strip() or killer.stdout.strip()})"
-            else:
-                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3)
-                if listing.returncode == 0:
-                    pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
-                os.killpg(p.pid, signal.SIGKILL)
-                try:
-                    p.wait(timeout=1)  # reap the direct child before probing group membership
-                except subprocess.TimeoutExpired:
-                    pass
-                deadline = time.monotonic() + 3
-                while time.monotonic() < deadline:
-                    try:
-                        os.killpg(p.pid, 0)
-                    except ProcessLookupError:
-                        cleanup = "success"
-                        break
-                    except PermissionError:
-                        cleanup = f"failed (pgid {p.pid} still has members)"
-                        break
-                    time.sleep(.05)
-                else:
-                    cleanup = f"failed (pgid {p.pid} still has members)"
-        except (OSError, subprocess.SubprocessError) as e:
-            cleanup = f"failed ({e})"
-        try:
-            out, _ = p.communicate(timeout=3)
-        except subprocess.TimeoutExpired:
-            out = ""
-            cleanup += "; pipes/process did not close within 3 s"
-        return 124, f"TIMEOUT after {timeout} s; pids={pids}; cleanup={cleanup}\n{out or ''}", True, cleanup
-
-
-def parser_for(check):
-    p = check.get("parser")
-    if p:
-        return p
-    run = check["run"]
-    if re.search(r"\bgo test\b", run):
-        return "go-test"
-    if re.search(r"\bdotnet(\.exe)? test\b|\{dotnet\} test", run) and "Regenerate" not in run:
-        return "dotnet-test"
-    if "netcode-headless.sh" in run:
-        return r"regex:executed=[1-9]\d* passed=\d+ failed=0"
-    return "exit"
-
-
-def grade(parser, code, out):
-    """(state, counts, reason)"""
-    counts = {}
-    if parser == "artifact":
-        lines = [line for line in out.splitlines() if re.match(r"^(PASS|FAIL|HUMAN_REQUIRED|NOT_AVAILABLE) ", line)]
-        counts = {"passed": sum(line.startswith("PASS ") for line in lines),
-                  "failed": sum(line.startswith("FAIL ") for line in lines),
-                  "human_required": sum(line.startswith("HUMAN_REQUIRED ") for line in lines),
-                  "not_available": sum(line.startswith("NOT_AVAILABLE ") for line in lines),
-                  "discovered": len(lines)}
-        if code != 0 or counts["failed"]:
-            return "FAIL", counts, f"exit {code}, {counts['failed']} artifact failures"
-        if not lines:
-            return "FAIL", counts, "no artifact result lines"
-        if counts["human_required"] or counts["not_available"]:
-            reasons = []
-            if counts["human_required"]: reasons.append(f"{counts['human_required']} artifact(s) need human approval")
-            reasons.extend(line[len("NOT_AVAILABLE "):] for line in lines if line.startswith("NOT_AVAILABLE "))
-            return "HUMAN_REQUIRED", counts, "; ".join(reasons)
-        if counts["passed"] == 0:
-            return "FAIL", counts, "no artifact PASS result lines"
-        return "PASS", counts, None
-    if parser == "go-test":
-        counts = {"passed": len(re.findall(r"^\s*--- PASS", out, re.M)), "failed": len(re.findall(r"^\s*--- FAIL", out, re.M)),
-                  "skipped": len(re.findall(r"^\s*--- SKIP", out, re.M)),
-                  "packages_ok": len(re.findall(r"^ok\s", out, re.M)), "packages_failed": len(re.findall(r"^FAIL\s", out, re.M)),
-                  "no_test_files": len(re.findall(r"\[no test files\]", out))}
-        counts["discovered"] = counts["passed"] + counts["failed"] + counts["skipped"]
-        if code != 0 or counts["failed"]:
-            return "FAIL", counts, f"exit {code}, {counts['failed']} failed"
-        if counts["passed"] == 0:
-            return "FAIL", counts, "exit 0 but no test PASSED - nothing was verified"
-        return "PASS", counts, None
-    if parser == "dotnet-test":
-        tot = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
-        for m in re.finditer(r"(?:Passed|Failed)!\s+-\s+Failed:\s+(\d+),\s+Passed:\s+(\d+),\s+Skipped:\s+(\d+),\s+Total:\s+(\d+)", out):
-            f, p, s, t = map(int, m.groups())
-            tot["failed"] += f; tot["passed"] += p; tot["skipped"] += s; tot["total"] += t
-        counts = {**tot, "discovered": tot["total"]}
-        if code != 0 or tot["failed"]:
-            return "FAIL", counts, f"exit {code}, {tot['failed']} failed"
-        if tot["passed"] == 0:
-            return "FAIL", counts, "no test passed (0 executed or all skipped) - dotnet test exits 0 on that"
-        return "PASS", counts, None
-    if parser.startswith("regex:"):
-        pat = parser[6:]
-        if code != 0:
-            return "FAIL", counts, f"exit {code}"
-        m = re.search(pat, out, re.M)
-        if not m:
-            return "FAIL", counts, f"exit 0 but expected evidence /{pat}/ not found"
-        line = out[out.rfind("\n", 0, m.start()) + 1: out.find("\n", m.end()) if out.find("\n", m.end()) >= 0 else len(out)]
-        counts = {k: int(v) for k, v in re.findall(r"(\w+)=(\d+)", line)}
-        counts["evidence"] = line.strip()[:120]
-        return "PASS", counts, None
-    return ("PASS", counts, None) if code == 0 else ("FAIL", counts, f"exit {code}")
+def run_check(command, cwd, env, timeout, timing=None):
+    return procrun.run_check(command, cwd, env, timeout, select_bash(), timing)
 
 
 def status(a, ws, repo, rdir, meta, commit):
@@ -683,7 +355,10 @@ def main():
             repo_path = bash_env_path(os.path.realpath(rdir), bash, bash_flavor) if bash else None
             head = git(rdir, "rev-parse", "HEAD").strip()
             if not os.path.isdir(ws) or (requested_ws and not os.path.isdir(requested_ws)) or not ws_path or not repo_path or not head:
-                res.update(state="BLOCKED", reason="workspace or checkout path cannot be resolved for the selected bash environment")
+                missing = [n for n, ok in (("workspace", os.path.isdir(ws) and (not requested_ws or os.path.isdir(requested_ws))),
+                                           ("workspace path", ws_path), ("checkout path", repo_path), ("HEAD", head)) if not ok]
+                res.update(state="BLOCKED", reason="workspace or checkout path cannot be resolved for the selected bash environment"
+                           f" (missing: {', '.join(missing)}; {bash_diagnostics()})")
                 state_of[key] = res["state"]
                 results.append(res)
                 continue
@@ -695,7 +370,8 @@ def main():
                 }
                 if bash_flavor == "wsl":
                     check_env = wsl_environment(check_env)
-                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"])
+                timing = {}
+                code, out, timed_out, cleanup = run_check(c["run"], cwd, check_env, a["timeout"], timing)
             except OSError as e:
                 code, out, timed_out, cleanup = 127, f"could not start: {e}", False, "not started"
             res["duration_s"] = round(time.perf_counter() - t0, 1)
@@ -711,7 +387,8 @@ def main():
             if timed_out:
                 state = "FAIL"
                 diag = out.splitlines()[0] if out.startswith("TIMEOUT") else f"TIMEOUT after {a['timeout']} s"
-                reason = f"{diag}; cleanup={cleanup}"
+                reason = diag if "cleanup=" in diag else f"{diag}; cleanup={cleanup}"  # the TIMEOUT line already names the cleanup
+                res["timeout"] = procrun.timeout_record(timing)
             res.update(state=state, counts=counts, reason=reason, output_tail="\n".join(out.strip().splitlines()[-15:]),
                        identity=ident, timestamp=stamp, scopes=scopes,
                        definition={k: {**m, **c}.get(k) for k in ("run", "cwd", "parser", "evidence")})

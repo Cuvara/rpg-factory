@@ -7,26 +7,91 @@
 #                 version-keyed cache copy), and that the snapshot header says
 #                 "runtime <version> (installed ...)" with install state CURRENT.
 #   (default)     load the working tree with --plugin-dir (development).
+#   --two-level   run lead scenario: a multi-file plugin task (evals/pipeline-two-level/prompt.md) in a
+#                 throwaway clone of this checkout; PASS only if the session ran a successful
+#                 `factory-pipeline.py dispatch ... --phase lead` (print runner), loaded factory-core and
+#                 edited none of the task files itself. Also run by --all.
+#   --grade-two-level <transcript.jsonl> [<clone dir>]
+#                 grade a recorded two-level transcript offline (no model call, no clone; the disk check only
+#                 with a clone dir). tests/pipeline.test.sh runs it on synthetic transcripts.
 #
 # Opt-in: it spends model tokens and takes minutes. Not part of run-all.sh.
+# Reading failures (1-3 nondeterministic per --all run; classify grader / plugin / model, retry, report): docs/dogfood.md
 # Tools are restricted to Skill/Read/Grep/Glob; the skills' own allowed-tools grant the
 # factory-context / status / check scripts. Transcripts land in ${DOGFOOD_OUT:-/tmp/rpgf-dogfood}/.
 #
-# Usage: tests/dogfood.sh [--write|--all] [--installed] [--model sonnet] [scenario...]
+# Usage: tests/dogfood.sh [--write|--two-level|--all] [--installed] [--model sonnet] [scenario...]
+#        tests/dogfood.sh --grade-two-level <transcript.jsonl> [<clone dir>]
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
-OUT="${DOGFOOD_OUT:-/tmp/rpgf-dogfood}"; mkdir -p "$OUT"
-model=sonnet; installed=false; write_mode=false; all_mode=false
+OUT="${DOGFOOD_OUT:-/tmp/rpgf-dogfood}"
+
+# Grade a two-level run lead transcript (stream-json). With a clone dir, also check the clone and every worktree it
+# grew on disk. Prints one result line; returns 0 on PASS, 1 on FAIL. No model call (offline: --grade-two-level).
+grade_two_level() {
+  local f="$1" clone="${2:-}" why="" calls c id cmd res dispatched="" used edits wt frag outcome
+  local task_files=(scripts/factory-cmd.py skills/factory-core/SKILL.md tests/commands.test.sh)
+  [ -s "$f" ] || { echo "two-level | FAIL: no transcript $f"; return 1; }
+  calls=$(grep '^{' "$f" | jq -c 'select(.type=="assistant") | .message.content[]? | objects | select(.type=="tool_use")')
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    id=$(jq -r .id <<<"$c"); cmd=$(jq -r '.input.command // ""' <<<"$c")
+    grep -qE 'factory-pipeline\.py["'"'"']?[[:space:]].*dispatch[[:space:]].*--phase[ =]lead\b' <<<"$cmd" || continue
+    grep -qE '^[[:space:]]*(echo|printf)[[:space:]]' <<<"$cmd" && continue
+    grep -qE -- '--runner[ =](orca|agent)\b' <<<"$cmd" && continue
+    # a pipe (`... 2>&1 | head`) hides the exit status: the result must carry the printed task-lead spec and no error
+    res=$(grep '^{' "$f" | jq -r --arg id "$id" 'select(.type=="user") | .message.content[]? | objects
+      | select(.type=="tool_result" and .tool_use_id == $id and (.is_error | not))
+      | (.content | if type == "array" then map(.text? // "") | join("\n") else tostring end)')
+    grep -q '^# agent: ' <<<"$res" && grep -q '^Task lead for task ' <<<"$res" || continue
+    grep -q 'Traceback (most recent call last)' <<<"$res" && continue
+    # factory-pipeline: lines other than the known warnings (tool not on PATH, one task at a time, SAME_MODEL) are errors
+    [ -z "$(grep '^factory-pipeline: ' <<<"$res" | grep -vE 'is not on PATH here|takes one task at a time|SAME_MODEL')" ] || continue
+    dispatched=$id
+  done < <(jq -c 'select(.name=="Bash" or .name=="PowerShell")' <<<"$calls")
+  [ -n "$dispatched" ] || why+="no successful factory-pipeline.py dispatch --phase lead (print runner); "
+  used=$(grep '^{' "$f" | jq -r 'select(.type=="user") | .message.content[]? | objects | select(.type=="tool_result" and (.is_error | not))
+    | (.content | if type == "array" then map(.text? // "") | join(" ") else tostring end) | capture("Launching skill: (?<s>[^ \\n\"]+)")? | .s' | sed 's/^rpg-factory://' | tr '\n' ' ')
+  grep -qw factory-core <<<"$used" || why+="factory-core not invoked; "
+  edits=$(jq -r 'select(.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit") | .input.file_path // .input.notebook_path // ""' <<<"$calls" \
+    | tr '\\' '/' | grep -E '(scripts/factory-cmd\.py|skills/factory-core/SKILL\.md|tests/commands\.test\.sh|changelog\.d/)' | tr '\n' ' ')
+  [ -z "$edits" ] || why+="run lead edited task files with file tools: $edits; "
+  grep -qE '"name":"Agent"|"name":"Task"' <<<"$calls" && why+="launched an agent; "
+  jq -r 'select(.name=="Bash" or .name=="PowerShell") | .input.command' <<<"$calls" | grep -qE '(^|[;&|(]|&&)[[:space:]]*orca[[:space:]]' && why+="ran orca; "
+  # disk state: the clone and every worktree it grew keep the task files and changelog.d untouched
+  if [ -n "$clone" ]; then
+    while IFS= read -r wt; do
+      [ -n "$wt" ] || continue
+      git -C "$wt" diff --quiet HEAD -- "${task_files[@]}" 2>/dev/null || why+="task files changed in $wt; "
+      frag=$(git -C "$wt" status --porcelain --untracked-files=all -- changelog.d 2>/dev/null | tr '\n' ' ')
+      [ -z "$frag" ] || why+="changelog.d changed in $wt: $frag; "
+    done < <(git -C "$clone" worktree list --porcelain | sed -n 's/^worktree //p')
+  fi
+  outcome=$(grep '^{' "$f" | jq -r 'select(.type=="result") | .subtype // ""' | tail -1)
+  [ "$outcome" = success ] || why+="session did not finish (result: ${outcome:-none}); "
+  if [ -z "$why" ]; then r=PASS; else r="FAIL: $why"; fi
+  echo "two-level | invoked: ${used:-none} | dispatch tool_use: ${dispatched:-none} | $r"
+  [ -z "$why" ]
+}
+
+if [ "${1:-}" = --grade-two-level ]; then
+  [ $# -ge 2 ] && [ $# -le 3 ] || { echo "usage: tests/dogfood.sh --grade-two-level <transcript.jsonl> [<clone dir>]" >&2; exit 2; }
+  grade_two_level "$2" "${3:-}"; exit $?
+fi
+
+mkdir -p "$OUT"
+model=sonnet; installed=false; write_mode=false; all_mode=false; two_level=false
 while [ $# -gt 0 ]; do case "$1" in
   --installed) installed=true; shift;;
   --write) write_mode=true; shift;;
+  --two-level) two_level=true; shift;;
   --all) all_mode=true; shift;;
   --model) model="$2"; shift 2;;
   *) break;;
 esac; done
-if $all_mode; then write_mode=true; fi
+if $all_mode; then write_mode=true; two_level=true; fi
 scenarios=("$@")
 VERSION=$(jq -r .version "$ROOT/.claude-plugin/plugin.json")
 LOADS=$(python3 -B "$ROOT/scripts/install-status.py" --json 2>/dev/null | jq -r '.installed.loads_from // empty')
@@ -95,6 +160,9 @@ PROMPT[ui-figma]="Plan only, do not edit anything: how would you import this Fig
 EXPECT[ui-figma]="factory-core client-integration ui-orchestrator ui-figma-import ui-component-selection ui-toolkit-screen ui-validation"; HANDOFF[ui-figma]=""; SHOWS[ui-figma]="FIG023|HUMAN_REQUIRED|NOT_RUN"
 PROMPT[ui-not-ui]="Change the Go gateway in rpg-mmo-server so its TLS listener accepts TLS 1.3 only."
 EXPECT[ui-not-ui]="factory-core server-services"; HANDOFF[ui-not-ui]=""; NOTEXPECT[ui-not-ui]="ui-orchestrator ui-component-selection ui-figma-import ui-toolkit-screen ui-validation"
+# asset generation: routes to asset-gen, loads comfyui for the ComfyUI side; plan only (no generation, no credits)
+PROMPT[asset-gen]="Plan only, do not generate or edit anything: how would you generate a transparent iron sword item icon in a pixel-art style for the game with ComfyUI, get it reviewed and hand it to 2D art?"
+EXPECT[asset-gen]="factory-core asset-gen comfyui"; HANDOFF[asset-gen]="art-2d"; SHOWS[asset-gen]="review-cmd|SAME_MODEL|assetgen-approval"
 
 # WRITE scenarios use an isolated game-authoring repository per session. The helper creates
 # registry-routed folders, commits the empty layout, and grades disk state plus transcript.
@@ -115,6 +183,32 @@ W_PROMPT[xdomain-art3d-vfx]="Using the supplied 3D asset record and gameplay sys
 W_EXPECT[xdomain-art3d-vfx]="vfx"; W_KINDS[xdomain-art3d-vfx]="vfx-spec"; W_DOMAIN[xdomain-art3d-vfx]=vfx; W_PLAN[xdomain-art3d-vfx]=art3d-vfx; W_SEEDS[xdomain-art3d-vfx]=asset-3d-vfx
 W_PROMPT[xdomain-stale]="The supplied gameplay system has changed. Use the game-design workflow to update its upstream artifact, then inspect workflow status for the existing downstream VFX spec. Report that the downstream artifact is stale and needs revalidation, with both IDs and revisions. Do not create approvals."
 W_EXPECT[xdomain-stale]="game-design"; W_KINDS[xdomain-stale]="gameplay-system vfx-spec"; W_DOMAIN[xdomain-stale]=vfx; W_PLAN[xdomain-stale]=stale; W_SEEDS[xdomain-stale]=stale-pair
+
+# TWO-LEVEL scenario: the session is the run lead of a plugin task in a throwaway clone of this checkout.
+# It must plan and dispatch one task lead (print runner only: nothing is launched) and never edit the task files.
+if $two_level; then
+  out_abs="$(cd "$OUT" && pwd)"; ws="$out_abs/ws-two-level"; clone="$ws/rpg-factory"
+  case "$ws" in "$out_abs"/ws-*) ;; *) echo "unsafe two-level workspace: $ws" >&2; exit 2;; esac
+  rm -rf -- "$ws"; mkdir -p "$ws/state"
+  git clone -q --no-hardlinks "$ROOT" "$clone"
+  git -C "$clone" remote set-url --push origin "no-push://dogfood-two-level"   # never push into this checkout
+  git -C "$clone" config user.name "Factory Dogfood"; git -C "$clone" config user.email "dogfood@example.invalid"
+  clone_native="$(cygpath -m "$clone" 2>/dev/null || printf '%s' "$clone")"
+  state_native="$(cygpath -m "$ws/state" 2>/dev/null || printf '%s' "$ws/state")"
+  tl_prompt="$(awk 'c >= 2 { print } /^---$/ { c++ }' "$ROOT/evals/pipeline-two-level/prompt.md") This checkout is $clone_native. Keep every file you create inside it. Use --runner print for every factory-pipeline.py planner or dispatch command: print the commands only; never run orca, never launch agents or sub-sessions, never commit, merge or push."
+  pd=(); $installed || pd=(--plugin-dir "$ROOT")
+  tl_start=$(date +%s)
+  (cd "$clone" && RPG_FACTORY_STATE_DIR="$state_native" timeout 900 claude "${pd[@]}" -p "$tl_prompt" --model "$model" --output-format stream-json --verbose --allowedTools "Skill,Read,Grep,Glob,Write,Edit,Bash" </dev/null > "$OUT/two-level.jsonl" 2>/dev/null) || true
+  f="$OUT/two-level.jsonl"
+  tl_run=1; tl_fail=0; grade_two_level "$f" "$clone" || tl_fail=1
+  # cleanup: the clone's extra worktrees, then the throwaway workspace (the transcript stays in $OUT)
+  git -C "$clone" worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | while IFS= read -r wt; do
+    git -C "$clone" worktree remove --force "$wt" 2>/dev/null || echo "two-level: could not remove worktree $wt" >&2
+  done
+  rm -rf -- "$ws"
+  echo "dogfood two-level: $tl_run run, $((tl_run - tl_fail)) passed, $tl_fail failed (model $model; $(( $(date +%s) - tl_start ))s; transcript $f)"
+  if ! $all_mode && ! $write_mode; then exit "$tl_fail"; fi
+fi
 
 if $write_mode; then
   write_scenarios=(design-write ui-write art2d-write art3d-write vfx-write xdomain-design-ui-eng xdomain-art3d-vfx xdomain-stale)
@@ -143,7 +237,7 @@ if $write_mode; then
   scenarios=()
 fi
 
-[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui)
+[ ${#scenarios[@]} -eq 0 ] && scenarios=(design-feature-spec ui-foundation art2d-foundation art3d-foundation vfx-foundation realtime-knob nakama-rpc wire-field netcode-change package-propagation client-integration k8s benchmark analyze-only plan-only validate-only cmd-status cmd-route tech-dotnet tech-go tech-unity tech-dots tech-netcode tech-first ui-settings ui-figma ui-not-ui asset-gen)
 run() {
   local n="$1" pd=()
   $installed || pd=(--plugin-dir "$ROOT")
@@ -240,5 +334,5 @@ print(next((d for d in cands if os.path.isdir(d)), cands[0]))" "$ROOT/scripts/li
   printf '%-20s | %-26s | %-28s | %-40s | %s\n' "$n" "${lv:-?} ${src:-?}" "${EXPECT[$n]}${HANDOFF[$n]:+ > ${HANDOFF[$n]:-}}" "${used:-none}" "$r"
 done
 echo "dogfood: $((pass + fail)) run, $pass passed, $fail failed (model $model; $($installed && echo "installed $VERSION" || echo plugin-dir); ${elapsed}s wall, parallel; transcripts in $OUT)"
-# --all: the read-only result and the write result must both pass
-[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && [ "${write_fail:-0}" -eq 0 ]
+# --all: the read-only, write and two-level results must all pass
+[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ] && [ "${tl_fail:-0}" -eq 0 ] && [ "${write_fail:-0}" -eq 0 ]

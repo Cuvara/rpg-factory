@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rpg-factory task-lead subplan (scripts/factory-pipeline.py subplan validate)",
+  "type": "object",
+  "required": [
+    "schema",
+    "plan",
+    "task",
+    "subtasks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rpg-factory.pipeline-subplan/1"
+    },
+    "plan": {
+      "type": "string",
+      "description": "The pipeline plan file (docs/schemas/pipeline-plan.schema.json): absolute, or relative to the subplan file. `--plan` overrides it."
+    },
+    "task": {
+      "type": "string",
+      "description": "The plan task this subplan splits; every subtask belongs to it."
+    },
+    "subtasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "objective",
+          "paths",
+          "implementer"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "task": {
+            "type": "string",
+            "description": "Optional; when present it must equal the subplan's `task`."
+          },
+          "objective": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Repo-relative, never absolute and without `..` segments (both are errors); each equal to or under one of the task's owned paths, outside its exclusions, and disjoint from every subtask it is not ordered with by deps."
+          },
+          "deps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subtask ids of this subplan; no cycle."
+          },
+          "implementer": {
+            "type": "string",
+            "description": "registry pipeline.agents key (claude or codex): the model of the fresh sub-session."
+          },
+          "reviewer": {
+            "type": "string",
+            "description": "default: pipeline.review_pairing[implementer]; never the implementer's model"
+          },
+          "placement": {
+            "enum": [
+              "shared",
+              "child"
+            ],
+            "description": "Where the subtask's sessions run: shared (default) is the task worktree (small, disjoint files, narrow tests; the sub-session does not commit), child an Orca child of it (`dispatch --subplan ... --subtask <id>` prints `worker-start --worktree new-child`; the sub-session commits on its child branch, the task lead merges it and removes the child at once). Never child in a no-worktree repo (Unity project)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the placement; required (non-empty) when placement is child: parallel full suites, generated/build output, risky work, a frozen QA checkout."
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "acceptance": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "if": {
+          "properties": {
+            "placement": {
+              "const": "child"
+            }
+          },
+          "required": [
+            "placement"
+          ]
+        },
+        "then": {
+          "required": [
+            "reason"
+          ]
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

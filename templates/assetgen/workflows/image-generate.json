@@ -1,0 +1,83 @@
+{
+ "schema": "rpg-factory.comfy-template/1",
+ "title": "Image generation (NineRouterImage + SaveImage)",
+ "description": "Text-to-image through the 9router image node; credentials are read by the node at run time, never stored here.",
+ "params": {
+  "prompt": {
+   "type": "string",
+   "required": true,
+   "description": "Final reviewed prompt (filled from --prompt-file)."
+  },
+  "model": {
+   "type": "string",
+   "default": "cx/gpt-5.6-sol-image",
+   "description": "Image model id served through the NineRouterImage node."
+  },
+  "size": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "1024x1024",
+    "1536x1024",
+    "1024x1536"
+   ],
+   "default": "1024x1024",
+   "description": "Requested size; the gateway may return another size (QA checks per purpose)."
+  },
+  "quality": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "low",
+    "medium",
+    "high"
+   ],
+   "default": "auto",
+   "description": "Image quality."
+  },
+  "background": {
+   "type": "enum",
+   "options": [
+    "auto",
+    "opaque",
+    "transparent"
+   ],
+   "default": "auto",
+   "description": "Background mode."
+  },
+  "filename_prefix": {
+   "type": "string",
+   "default": "assetgen/run",
+   "description": "SaveImage filename prefix in the ComfyUI output folder."
+  }
+ },
+ "output_node": "2",
+ "workflow": {
+  "1": {
+   "class_type": "NineRouterImage",
+   "inputs": {
+    "user_prompt": "{{prompt}}",
+    "model": "{{model}}",
+    "size": "{{size}}",
+    "quality": "{{quality}}",
+    "background": "{{background}}"
+   },
+   "_meta": {
+    "title": "Generate image"
+   }
+  },
+  "2": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "filename_prefix": "{{filename_prefix}}",
+    "images": [
+     "1",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Save image"
+   }
+  }
+ }
+}

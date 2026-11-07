@@ -29,7 +29,7 @@ Task: $ARGUMENTS
 3. `design-tokens`: define named color, typography, spacing, radius, elevation, and motion tokens. Reference token names elsewhere; never inline token values there. Use an explicit unresolved value or a labelled proposal for gameplay-relevant numbers.
 4. `component-spec`: describe component variants, props, states, accessibility, and token references.
 5. `screen-spec`: describe purpose, layout regions, components, navigation, platforms or breakpoints, bindings by known design/engineering IDs, five required states, and per-element interaction and accessibility contracts. Mark a state not applicable only with a reason.
-6. `ui-handoff`: map screen IDs to testable acceptance criteria and exact registered client engine paths. Send illustrations/icons to art2d and effect dependencies to VFX through registered contracts.
+6. `ui-handoff`: map screen IDs to testable acceptance criteria and exact registered client engine paths. Send illustrations/icons to art2d and effect dependencies to VFX through registered contracts. AI-generated UI element parts arrive only as an approved `gen-run` (`assetgen-to-ui`, made by `rpg-factory:asset-gen`); cite its ID in `sources`, and invoke `rpg-factory:comfyui` to inspect its template and params.
 7. Engine-side work that implements a `ui-handoff` or screen spec (Unity UI Toolkit screens, Figma import, component choice, UI review) is planned by `rpg-factory:ui-orchestrator`; invoke it only for that part.
 
 ## Rules and handoffs

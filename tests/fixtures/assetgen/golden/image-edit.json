@@ -1,0 +1,41 @@
+{
+ "1": {
+  "_meta": {
+   "title": "Reference image"
+  },
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "ref.png"
+  }
+ },
+ "2": {
+  "_meta": {
+   "title": "Edit image"
+  },
+  "class_type": "NineRouterImage",
+  "inputs": {
+   "background": "auto",
+   "model": "cx/gpt-5.6-sol-image",
+   "quality": "high",
+   "reference_images": [
+    "1",
+    0
+   ],
+   "size": "auto",
+   "user_prompt": "Test prompt for image-edit: one subject, centered."
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Save image"
+  },
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "assetgen/golden-image-edit-001",
+   "images": [
+    "2",
+    0
+   ]
+  }
+ }
+}

@@ -1,0 +1,16 @@
+{
+ "schema": "rpg-factory.assetgen-style/1",
+ "title": "Anime cel-shaded",
+ "prefix": "Anime style cel-shaded game art,",
+ "suffix": "clean line art, two-tone cel shading, vivid colors.",
+ "avoid": [
+  "painterly texture",
+  "photorealism",
+  "muddy shading"
+ ],
+ "palette": "Vivid clean colors with distinct shadow tones.",
+ "lighting": "Hard-edged cel shadows from one key light.",
+ "params": {
+  "quality": "high"
+ }
+}
