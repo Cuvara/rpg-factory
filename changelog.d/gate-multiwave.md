@@ -5,10 +5,11 @@
   by the topic's merge commits. Unreviewed changes and evil merges still block. `status` judges review currency with
   the same rule, so `status` and the gate agree on shared dependent paths.
 - **Pipeline.** `verdict` records the true implementer of a task (the task record, else the unanimous subtask records,
-  else the review dispatch or the planned routing) and the subtask implementers; `--implementer` declares it, and the
-  gate pairs the review against the recorded implementer.
+  else the review dispatch or the planned routing) and the subtask implementers; `--implementer` declares it (refused
+  when it conflicts with an implementer the dispatch recorded), and the gate pairs the review against the recorded
+  implementer.
 - **Pipeline.** `status` shows a task's own current QA and reports integration QA staleness as such; a QA recorded a
   moment ago is never STALE.
 - **Pipeline.** `verdict --report` requires an existing file; `--note TEXT` takes free text.
-- **Registry.** `check-registry.sh` ties the kind enum copies (the subplan schema and the registry schema
+- **Pipeline.** `check-registry.sh` ties the kind enum copies (the subplan schema and the registry schema
   `agent_routing`) to `docs/schemas/pipeline-plan.schema.json` and fails when one differs.
