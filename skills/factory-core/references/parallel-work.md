@@ -353,6 +353,10 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
   with only Codex, Codex does all of it and also leads. A fallback review carries
   `SAME_MODEL (fallback: <model> unavailable)` and the gate accepts it (step 4). `dispatch` and `status` print
   each role's model and why (`model: <role> -> <agent> (<why>)`); no command fails because a model is missing.
+- **Recorded implementer.** `dispatch --phase implement` records the model it started, per task and per
+  subtask. Review, QA, `verdict` and the gate pair against that recorded implementer (the planned routing when
+  none is recorded), never against current availability: a model that comes back after a fallback does not change
+  who reviews.
 
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L and the flow.
    S: the run lead writes a `plan.json` with one task and dispatches its task lead (step 3; the task worktree, or
@@ -394,9 +398,10 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
    merges that branch and removes the child (section 4); `--paths` inside the
    task's exclusions is refused. When the paired model is unavailable ("Which model" above), a fresh session of
-   the same model reviews, its prompt and report carry `SAME_MODEL (fallback: <model> unavailable)`, and `verdict`
-   records the fallback automatically when the pair is down (`--fallback <model>` is refused while that model is
-   available); the gate accepts a recorded fallback and needs `--allow-same-model` only for an unrecorded
+   the same model reviews, its prompt and report carry `SAME_MODEL (fallback: <model> unavailable)`, and
+   `dispatch --phase review` records that fallback for the candidate SHA. `verdict` stamps the fallback only when
+   that SHA's review dispatch was a recorded fallback and `--by` is its reviewer, not from availability at verdict
+   time (`--fallback <model>` is refused while that model is available); the gate accepts a recorded fallback and needs `--allow-same-model` only for an unrecorded
    SAME_MODEL review. `--runner agent` (Claude only) marks a session planned for Codex SAME_MODEL in its prompt.
    The task lead also runs the per-task QA
    (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).
