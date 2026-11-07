@@ -23,12 +23,13 @@ docs/schemas/pipeline-plan.schema.json.
         no-worktree repo are errors; so are absolute or `..` paths and malformed subtasks (not an object, a
         non-string id, paths or deps that are not lists of strings). Prints the waves: one subtask per wave in a
         no-worktree repo (Unity project). Exit 0 OK, 1 errors, 2 usage.
-  planner --request TEXT [--runner orca|agent|print] [--agent ID]
+  planner --request TEXT [--runner orca|agent|print] [--orca-unavailable REASON] [--agent ID]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
         and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
         planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
-  dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print] [--agent ID]
+  dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print]
+          [--orca-unavailable REASON] [--agent ID]
         the run lead starts ONE task-lead session per task, always a registry pipeline.lead_agent (Claude) session
         whatever the task's implementer (--agent another model: warning, ignored). In a worktree repo it gets the task worktree: created here
         from the base on the task branch <topic>-<id> (a task with deps: from <topic> when that integration branch
@@ -69,7 +70,11 @@ docs/schemas/pipeline-plan.schema.json.
         worktree list`); none is an error (exit 1, no worktree created). A no-worktree repo: the main checkout.
         --placement child: an Orca child of that checkout (`worker-start --worktree new-child --base-branch <SHA>`).
         --runner agent is the Claude Code Agent-tool fallback (Claude only): a session planned for codex starts a
-        fresh Claude session whose prompt and report say SAME_MODEL.
+        fresh Claude session whose prompt and report say SAME_MODEL. Orca first (references/parallel-work.md
+        section 5): inside an Orca session (ORCA_WORKTREE_ID or ORCA_AGENT_HOOK_ENDPOINT set) whose runtime is
+        reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
+        agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
+        names it. --orca-unavailable goes with --runner agent only.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
           [--subtask ID]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
@@ -694,6 +699,28 @@ def orca_prompt(a, prompt, plan=None, note=None):
     return f"Read your task spec at {path} and follow it." + (f" {' '.join(note.split())}" if note else "")
 
 
+def resolve_runner(a):
+    """Orca first (references/parallel-work.md section 5): settle a.runner before any output. Orca is here when the
+    session runs inside Orca and its runtime is reachable; the default runner is then orca (elsewhere print), and
+    --runner agent there needs --orca-unavailable REASON."""
+    reason = " ".join((a.orca_unavailable or "").split())
+    if a.orca_unavailable is not None and a.runner != "agent":
+        die("--orca-unavailable REASON goes with --runner agent only")
+    if a.orca_unavailable is not None and not reason:
+        die("--orca-unavailable needs a REASON")
+    a.orca_unavailable = reason or None
+    if a.runner not in (None, "agent"):
+        return
+    env = orca_cmd.in_orca_session()
+    here = bool(env) and orca_cmd.orca_reachable()
+    if a.runner is None:
+        a.runner = "orca" if here else "print"
+    elif here and not a.orca_unavailable:
+        die(f"this session runs inside Orca ({env} is set) and the Orca runtime is reachable: use --runner orca "
+            "(references/parallel-work.md section 5, Orca first). --runner agent here needs --orca-unavailable REASON, "
+            "naming why Orca cannot run this session")
+
+
 def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
     pipe = settings(reg)
     if a.runner == "orca":
@@ -709,6 +736,13 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
             print(f"factory-pipeline: --runner agent starts a fresh Claude session for this {agent} session: SAME_MODEL",
                   file=sys.stderr)
             agent = AGENT_FALLBACK
+        if a.orca_unavailable:
+            prompt = (f"Orca unavailable: {a.orca_unavailable}. This session runs through the Claude Code Agent-tool "
+                      "fallback (references/parallel-work.md section 5): name this reason in your report, and pass "
+                      "--orca-unavailable with it to every factory-pipeline.py planner or dispatch you run with "
+                      "--runner agent.\n" + prompt)
+            print(f"factory-pipeline: --runner agent with Orca unavailable ({a.orca_unavailable}): the prompt names the "
+                  "reason", file=sys.stderr)
         print(json.dumps(orca_cmd.agent_task(reg, agent, prompt, place, title), indent=2))
     else:
         print(f"# agent: {agent}   worktree: {place['worktree']}" + (f"   base: {place.get('base')}" if place.get("base") else "")
@@ -720,6 +754,7 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
 
 
 def cmd_planner(a, reg):
+    resolve_runner(a)
     pipe = settings(reg)
     agent = a.agent or pipe["default_implementer"]
     prompt = ("You are the planner of a Factory delivery pipeline. Read-only: change no file except the plan file.\n"
@@ -805,7 +840,8 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
     rules = [
         f"<pipeline> = `{me}`; <plan> = `{pf}`; <dispatch> = `<pipeline> dispatch <plan> --task {task['id']}`.",
         f"1. Orca: create your OWN Run (`orca orchestration run-create --objective \"task {task['id']}\"`); every session "
-        "below is its worker (Orca allows no nested workers). Without Orca: --runner agent.",
+        "below is its worker (Orca allows no nested workers). Outside an Orca session: --runner agent; inside Orca with "
+        "the runtime unreachable: --runner agent --orca-unavailable REASON.",
         "2. Split into short subtasks with disjoint paths inside owned_paths (many short parallel sessions beat one long "
         f"one); write subplan.json (docs/schemas/pipeline-subplan.schema.json; `plan` is {os.path.abspath(plan['_path'])}, "
         f"`task` is {task['id']}) and run `<pipeline> subplan validate <subplan.json>` until it prints OK.",
@@ -877,6 +913,7 @@ def load_subtask(a, plan, reg, task):
 
 
 def cmd_dispatch(a, reg):
+    resolve_runner(a)
     pipe = settings(reg)
     plan = read_plan(a.plan)
     plan["_path"] = a.plan
@@ -2034,7 +2071,8 @@ def main():
             d.add_argument("--subtask")
         else:
             d.add_argument("--request", required=True)
-        d.add_argument("--runner", choices=("orca", "agent", "print"), default="print")
+        d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
+        d.add_argument("--orca-unavailable", metavar="REASON")
         d.add_argument("--agent")
     v = sub.add_parser("verdict")
     v.add_argument("plan")

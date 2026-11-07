@@ -8,12 +8,40 @@ Orca child of the caller's worktree (`--worktree new-child`, child_placement) wh
 Flags match `orca orchestration worker-start --help` (Orca 1.4): (--task <id> | --spec <text>) and
 (--agent <id> | --terminal <handle>); creation flags (--repo, --base-branch, --name) only with new worktrees.
 Printed commands use POSIX quoting (Claude Code's Bash tool, Git Bash); PowerShell needs its own quoting.
+in_orca_session() and orca_reachable() tell whether the caller runs inside a reachable Orca (Orca first,
+references/parallel-work.md section 5); orca_reachable() is the only call here that runs `orca` (read-only status).
 """
+import json
 import os
 import shlex
+import shutil
 import subprocess
 
 import fstate
+
+
+# set by Orca in every terminal it starts (the first one found names the session in messages)
+ORCA_SESSION_ENV = ("ORCA_WORKTREE_ID", "ORCA_AGENT_HOOK_ENDPOINT")
+
+
+def in_orca_session(env=None):
+    """The first ORCA_SESSION_ENV name set non-empty in env (default os.environ), or None."""
+    env = os.environ if env is None else env
+    return next((name for name in ORCA_SESSION_ENV if env.get(name)), None)
+
+
+def orca_reachable():
+    """True only when `orca status --json` reports result.runtime.reachable true; any error is False (never raises)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return False
+    try:
+        r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=30, encoding="utf-8",
+                           errors="replace", stdin=subprocess.DEVNULL)
+        data = json.loads(r.stdout or "")
+        return data.get("result", {}).get("runtime", {}).get("reachable") is True
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+        return False
 
 
 def quote(argv):
