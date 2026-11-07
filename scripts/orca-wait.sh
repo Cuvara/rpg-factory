@@ -60,7 +60,8 @@ guard_owned=0
 # Keep output bounded without truncating JSON: reject oversized deliveries so
 # the caller can inspect the original inbox safely. Payloads are never eval'd.
 response="$state.$$.response"
-trap 'rm -f "$response"; cleanup' EXIT
+stderr="$response.stderr"
+trap 'rm -f "$response" "$stderr"; cleanup' EXIT
 ack=
 while :; do
   args=(orchestration check --run "$run" --json)
@@ -69,11 +70,12 @@ while :; do
   else
     args+=(--wait --types "$types" --timeout-ms "$timeout")
   fi
-  orca "${args[@]}" > "$response" 2>&1 &
+  orca "${args[@]}" > "$response" 2> "$stderr" &
   child=$!
   wait "$child"; status=$?; child=
   if [ "$status" -ne 0 ]; then
     echo "ERROR: orca check exited $status" >&2
+    tail -n 15 "$stderr" >&2
     tail -n 15 "$response" >&2
     exit 4
   fi

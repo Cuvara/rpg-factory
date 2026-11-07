@@ -17,6 +17,10 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/orca" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_DIR/argv"
+if [[ " $* " == *' --wait '* ]]; then
+  echo '{"_keepalive":true,"elapsedMs":15000}' >&2
+  echo '{"_keepalive":true,"elapsedMs":30000}' >&2
+fi
 if [ "${FAKE_MODE:-sequence}" = failure ]; then
   echo 'fake orca stdout diagnostic'
   echo 'fake orca stderr diagnostic' >&2
@@ -54,7 +58,9 @@ o = json.load(open(sys.argv[1]))
 assert o['result']['deliveryId'] == 'done-99'
 PY
 [ "$?" -eq 0 ] && ok "only real JSON printed" || no "real JSON output incorrect"
+[ ! -s "$TMP/err" ] && ok "wait keepalives on stderr do not leak into delivery or diagnostics" || no "wait keepalives leaked"
 [ ! -e "$TMP/state/orca-wait/sequence.lock" ] && ok "lock removed on exit" || no "lock leaked"
+[ -z "$(find "$TMP/state/orca-wait" -name '*.response*' -print)" ] && ok "response and stderr files removed on exit" || no "response files leaked"
 
 export FAKE_MODE=hold
 bash "$ROOT/scripts/orca-wait.sh" --run held > "$TMP/held.out" 2> "$TMP/held.err" &
