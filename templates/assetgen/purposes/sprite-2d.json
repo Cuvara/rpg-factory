@@ -51,8 +51,9 @@
  ],
  "qa": {
   "size": {
-   "mode": "aspect",
-   "expect": "1024x1024"
+   "mode": "orientation",
+   "expect": "1024x1024",
+   "square_tolerance": 0.05
   },
   "alpha": "required",
   "transparent_corners": true,

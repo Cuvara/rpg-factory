@@ -48,7 +48,8 @@ import re
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
-SIZE_MODES = {"exact", "min", "aspect", "any"}
+SIZE_MODES = {"exact", "min", "aspect", "orientation", "area", "any"}
+ORIENTATIONS = {"landscape", "portrait", "square", "auto"}
 ALPHA_MODES = {"required", "forbidden", "any"}
 
 
@@ -87,6 +88,12 @@ def qa_errors(qa):
             errs.append("qa.size.min_side must be a number >= 0")
         if "min_area" in size and not (_number(size["min_area"]) and 0 < size["min_area"] <= 1):
             errs.append("qa.size.min_area must be a number above 0 and at most 1 (share of the expected pixel count)")
+        if "min_pixels" in size and not (_number(size["min_pixels"]) and size["min_pixels"] >= 1):
+            errs.append("qa.size.min_pixels must be a number >= 1 (absolute pixel count)")
+        if size.get("orientation", "auto") not in ORIENTATIONS:
+            errs.append("qa.size.orientation must be one of %s" % sorted(ORIENTATIONS))
+        if "square_tolerance" in size and not (_number(size["square_tolerance"]) and 0 <= size["square_tolerance"] < 1):
+            errs.append("qa.size.square_tolerance must be a number between 0 and 1")
     if qa.get("alpha", "any") not in ALPHA_MODES:
         errs.append("qa.alpha must be one of %s" % sorted(ALPHA_MODES))
     if not isinstance(qa.get("transparent_corners", False), bool):

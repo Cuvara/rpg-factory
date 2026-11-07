@@ -6,7 +6,7 @@
 # lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
 # the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
-# (alpha, corners, seam, blank, size modes incl. aspect + min area, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
+# (alpha, corners, seam, blank, size modes incl. aspect + min area, orientation, area + min pixels, real 9router sizes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
@@ -384,6 +384,9 @@ mal mal-zero '{"extends": "icon", "qa": {"size": {"mode": "aspect", "expect": "1
 mal mal-zerow '{"extends": "icon", "qa": {"size": {"mode": "min", "expect": "0x1024"}}}'
 mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "default_style": 7}'
 mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}}'
+mal mal-orient '{"extends": "icon", "qa": {"size": {"mode": "orientation", "orientation": "wide"}}}'
+mal mal-pixels '{"extends": "concept-2d", "qa": {"size": {"mode": "area", "min_pixels": 0}}}'
+mal mal-sqtol '{"extends": "icon", "qa": {"size": {"square_tolerance": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
   local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
@@ -403,6 +406,9 @@ expect_mal mal-zero "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: ze
 expect_mal mal-zerow "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero width in qa.size.expect -> FAIL row"
 expect_mal mal-prompt "prompt.must_include must be a list of strings" "malformed purpose: prompt guidance and default_style types -> FAIL row"
 expect_mal mal-area "qa.size.min_area must be a number above 0 and at most 1" "malformed purpose: qa.size.min_area above 1 -> FAIL row"
+expect_mal mal-orient "qa.size.orientation must be one of" "malformed purpose: unknown qa.size.orientation -> FAIL row"
+expect_mal mal-pixels "qa.size.min_pixels must be a number >= 1" "malformed purpose: qa.size.min_pixels 0 -> FAIL row"
+expect_mal mal-sqtol "qa.size.square_tolerance must be a number between 0 and 1" "malformed purpose: qa.size.square_tolerance 1.5 -> FAIL row"
 python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -454,10 +460,15 @@ save("tile-ok.png", 256, 256, wave, alpha=False)
 save("tile-bad.png", 256, 256, lambda x, y: (x, x, 128, 255), alpha=False)
 row = bytes(c for x in range(1536) for c in (x % 256, (x // 6) % 256, 100))
 open(os.path.join(out, "big.png"), "wb").write(png.encode_raw(1536, 1024, 8, 2, [row] * 1024))
-for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940)):
+for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940),
+                   ("svc-wide.png", 1672, 941), ("svc-tiny.png", 512, 288)):  # real 9router sizes (e2e2) + too small
     r = bytes(c for x in range(w) for c in (x % 256, (x // 6) % 256, 100))
     open(os.path.join(out, name), "wb").write(png.encode_raw(w, h, 8, 2, [r] * h))
 row16 = bytes(b for x in range(256) for b in (x, 0, 255 - x, 0, 60, 0))
+def disc_rows(w, h):
+    return [bytes(c for x in range(w) for c in ((200, 40 + (x * 200) // w, 40 + (y * 150) // h, 255) if (x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.3) ** 2 else (0, 0, 0, 0)))
+            for y in range(h)]
+open(os.path.join(out, "svc-square.png"), "wb").write(png.encode_raw(1254, 1254, 8, 6, disc_rows(1254, 1254)))  # real 9router icon size
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(256, 256, 16, 2, [row16] * 256))
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
 open(os.path.join(out, "corrupt.png"), "wb").write(bytes(data))
@@ -502,19 +513,40 @@ qarun qa-tile-flat-001 texture-tileable flat.png
 qarun qa-tile-alpha-001 texture-tileable icon-ok.png
 [ $rc -eq 1 ] && [ "$(st png-alpha)" = FAIL ] && ok "texture: transparency fails alpha forbidden" || no "alpha forbidden rc=$rc $(st png-alpha)"
 qarun qa-concept-big-001 concept-2d big.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "concept-2d: 1536x1024 passes size mode min 1024x1024 (gateway size drift)" || no "concept big rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "concept-2d: 1536x1024 passes size mode area (gateway size drift)" || no "concept big rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-icon-big-001 icon big.png
-[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "icon: 1536x1024 returned for a square request fails aspect" || no "icon big rc=$rc $(st png-size)"
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "icon: 1536x1024 returned for a square request fails orientation square" || no "icon big rc=$rc $(st png-size)"
 qarun qa-turn-ok-001 ref-3d-turnaround big.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1536x1024 for a 1536x1024 request passes aspect + min area" || no "turnaround ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1536x1024 (real e2e size) passes orientation landscape + min pixels" || no "turnaround ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-turn-near-001 ref-3d-turnaround sheet-near.png
-[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1700x940 (aspect within the tolerance, more pixels) passes" || no "turnaround near rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1700x940 passes" || no "turnaround near rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-turn-strip-001 ref-3d-turnaround strip.png
-[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "2172x724, expected aspect 1536x1024: aspect 3.000 (expected 1.500" \
-  && ok "ref-3d-turnaround: the e2e 2172x724 strip (same pixel count, 3:1) fails the aspect check" || no "turnaround strip rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" \
+  | grep -qF "2172x724 is landscape, expected orientation landscape (square within 5%): short side 724 (min 512), area 1572528 px (min 1000000)" \
+  && ok "ref-3d-turnaround: the real e2e 2172x724 strip passes orientation landscape, detail names the floors" || no "turnaround strip rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-turn-small-001 ref-3d-turnaround sheet-small.png
-[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "area 393216 px (min 90% of 1572864)" \
-  && ok "ref-3d-turnaround: 768x512 (right aspect, a quarter of the pixels) fails the min area" || no "turnaround small rc=$rc" "$(jq -c .results "$TMP/q.json")"
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "area 393216 px (min 1000000)" \
+  && ok "ref-3d-turnaround: 768x512 (right orientation, a quarter of the pixels) fails min_pixels" || no "turnaround small rc=$rc" "$(jq -c .results "$TMP/q.json")"
+# e2e2: the 9router image service ignores the requested size; every real size passes its core purpose
+for req in 1536x1024 1024x1024; do
+  sr="$RUNS/qa-svc-concept-${req%%x*}-001"; mkrun "$(basename "$sr")" concept-2d --style stylized-painterly \
+    && AG render --run "$sr" --param size=$req >/dev/null 2>&1 && cp "$FX/svc-wide.png" "$sr/outputs/"
+  AG qa --run "$sr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && [ "$(jq -r .requested_size "$sr/qa.json")" = "$req" ] \
+    && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1672x941, expected area (any aspect): short side 941 (min 768), area 1573352 px (min 1000000)" \
+    && ok "concept-2d: real 1672x941 for a $req request passes png-size (area mode)" || no "concept svc $req rc=$rc" "$(cat "$TMP/err"; jq -c .results "$TMP/q.json")"
+done
+qarun qa-svc-tiny-001 concept-2d svc-tiny.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "short side 288 (min 768), area 147456 px (min 1000000)" \
+  && ok "concept-2d: 512x288 fails png-size (short side and min pixels)" || no "concept tiny rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-svc-turn-tiny-001 ref-3d-turnaround svc-tiny.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "ref-3d-turnaround: 512x288 fails png-size" || no "turnaround tiny rc=$rc $(st png-size)"
+qarun qa-svc-icon-001 icon svc-square.png
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1254x1254 is square, expected orientation square (from 1024x1024)" \
+  && ok "icon: real 1254x1254 passes png-size (orientation square)" || no "icon svc rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-svc-icon-wide-001 icon svc-wide.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "1672x941 is landscape, expected orientation square" \
+  && ok "icon: 1672x941 fails orientation square" || no "icon svc wide rc=$rc $(st png-size)"
 qarun qa-edit-any-001 image-edit icon-wide.png
 [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "image-edit: size mode any" || no "edit any rc=$rc $(st png-size)"
 mkrun qa-exact-001 icon --style pixel-art --authoring "$AUTH"; cp "$FX/icon-ok.png" "$RUNS/qa-exact-001/outputs/"

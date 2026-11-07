@@ -79,6 +79,7 @@ A purpose may declare these fields:
 - `dimensions`: a subset of `palette`, `lighting`, `shape`, `texture`, `composition` and `line`.
 - `max_references`: a template may set it too, and the smaller value wins (default `stylelock.DEFAULT_MAX_REFERENCES`).
 - `qa.outlines`: turns on the edge check.
+- `qa.size`: the `png-size` rule. `mode` is `exact` or `min` (against `expect`, default the requested size), `aspect` (ratio within `aspect_tolerance`, optional `min_area` share of the expected pixels), `orientation` (`orientation` `landscape`, `portrait` or `square`, or `auto` from `expect`; square when the long side is at most `square_tolerance` longer, default 0.05), `area` (no aspect at all) or `any`. `aspect`, `orientation` and `area` also need a short side of at least `min_side` (default 256) and, with `min_pixels`, at least that many pixels. The image service ignores the requested size (the e2e returned 1672x941 for both 1536x1024 and 1024x1024 requests), so the core purposes grade orientation or area plus these floors, never an exact size. The per-purpose values are data (`templates/assetgen/purposes/*.json`); `runfiles.qa_errors` validates them and `lint` reports the same rules.
 
 A style's optional `STYLE.md` is explanation only. Art decisions stay ADR-style artifacts of the existing kinds. Machine-checkable constraints live only in the structured style data.
 
