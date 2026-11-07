@@ -43,9 +43,10 @@
   --comfy-url URL` (optional, not exposed through `factory-cmd.py`) uploads `workflow.ui.json` through ComfyUI's
   userdata API to Workflows > assetgen, and reports `NOT_AVAILABLE` without writing anything when ComfyUI is not
   reachable.
-- **Claude's visual review is recorded.** The agent writes `<run>/review-image-claude.json` (review schema,
-  `"by": "claude"`), `manifest` summarises it in `run.md`, and the quality plugin WARNs when it is missing; it never
-  replaces the Codex image review.
+- **Claude's visual review is recorded.** The agent writes `<run>/review-image-claude.json` (review schema and the
+  image review binding, `"by": "claude"`), `manifest` records it as `spec.claude_image_review` and summarises it in
+  `run.md`, and the quality check `gen-run-claude-review` WARNs when it is missing, unbound or stale and FAILs when it
+  contradicts `run.md` or is a FAIL verdict on a proposed run; it never replaces the Codex image review.
 - **Image review inputs.** `review-cmd --phase image` states the true pixel size of every output, and for purposes
   with a tileable check it passes a 2x2 tiled preview (`<run>/review/tile-2x2.png`) to the reviewer.
 - **Skills.** `asset-gen` and `comfyui` document `embed` and `publish`, that comfy-mcp `run_workflow` posts to
@@ -61,13 +62,17 @@
 - **Docs.** The skill counts are now 14 specialised skills and 11 tech skills (`.claude/CLAUDE.md`, plugin and
   marketplace manifests, README, factory-core Skills, skill-contract diagram).
 - **Tests.** `tests/new-skill.test.sh` reads the lead count from the registry instead of a fixed number.
-- **Purpose over style.** For technical constraints (lighting, background, framing) the purpose wins over the
-  style; `resolve` marks the style hints the purpose overrides, so the prompt writer never sees both.
-- **`ref-3d-turnaround`.** QA checks aspect and minimum area with a tolerance instead of a minimum width and height,
-  and the prompt guidance asks for a compact landscape sheet whose views fill most of its height.
+- **Purpose over style.** A purpose's `constraints` (lighting, background, framing; precedence in
+  `scripts/assetgen/data/precedence.json`, the palette stays a style hint) win over the style's hint of the same name.
+  `resolve` writes `spec.hints` and marks each overridden style hint, and the review prompts use those hints, so the
+  prompt writer never sees both. `ref-3d-turnaround` and `texture-tileable` carry lighting constraints; lint fails a
+  constraint on a style-only hint.
+- **`ref-3d-turnaround`.** QA checks the aspect of the requested size with a 25% tolerance and a minimum area (90% of
+  the requested pixel count, new `qa.size.min_area`) instead of a minimum width and height, and the prompt guidance
+  asks for a compact landscape sheet whose views fill most of its height.
 - **Failed attempts.** A failed attempt's run directory stays on disk without `run.md`, the next attempt takes the
-  next number, and `manifest` of the successful run lists the failed attempt ids in `trace` (documented in
-  `asset-gen`).
+  next number, and `manifest` lists the earlier attempts of the series without `run.md` in
+  `spec.trace.failed_attempts` (the envelope `trace` stays the engineering trace; documented in `asset-gen`).
 
 ### Fixed
 

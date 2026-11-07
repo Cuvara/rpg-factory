@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # asset-gen engine (scripts/assetgen/): list/show/resolve with core + game layers (override, extends, per-field
-# source, param precedence), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
+# source, param precedence, purpose constraints over style hints), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
-# lint errors and warnings, review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
+# lint errors and warnings (blamed on the game file holding a bad value), review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
 # the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
 # (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
-# (alpha, corners, seam, blank, size modes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
-# (gen-run front matter, review bindings), the gen-run quality plugin (pass and fail cases: review files and their
+# (alpha, corners, seam, blank, size modes incl. aspect + min area, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
+# (gen-run front matter, review bindings, Claude's visual review, failed attempts in trace), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
 # malformed purpose data and link indices (FAIL rows, no traceback), artifact-lint on
 # manifest-produced run.md,
@@ -106,6 +106,36 @@ echo '{"extends": "icon", "params": {"tint": "red"}}' > "$BAD/assetgen/purposes/
 AG resolve --purpose icon --style pixel-art --authoring "$BAD" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "param 'tint' that template 'image-generate' does not declare" "$TMP/err" && ok "purpose param not declared by the template: error" || no "undeclared purpose param rc=$rc" "$(cat "$TMP/err")"
 
+echo "-- resolve: purpose constraints beat style hints (data/precedence.json)"
+AG resolve --purpose ref-3d-turnaround --style stylized-painterly --json > "$TMP/r.json"
+[ "$(r .hints.lighting.from)" = purpose ] && [ "$(r .hints.lighting.text)" = "$(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" ] \
+  && [ "$(r .hints.lighting.overrides.text)" = "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" ] \
+  && [ "$(r .hints.lighting.overrides.source)" = "core:templates/assetgen/styles/stylized-painterly.json" ] \
+  && ok "turnaround + painterly: purpose lighting wins, the style's key + rim light is marked overridden" || no "hints: $(r .hints)"
+[ "$(r .hints.palette.from)/$(r '.hints.palette | has("overrides")')" = "style/false" ] && [ "$(r .hints.background.from)" = purpose ] \
+  && ok "palette stays a style hint; background comes from the purpose constraint" || no "palette/background hints: $(r .hints)"
+[ "$(r .style.data.lighting)" = "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" ] \
+  && ok "the style data itself is unchanged (the content hash binding keeps what was resolved)" || no "style data changed"
+AG resolve --purpose texture-tileable --style low-poly --json | jq -e '.hints.lighting.from == "purpose" and (.hints.lighting.overrides.text | test("directional"))' >/dev/null \
+  && ok "texture + low-poly: even lighting beats the single directional light" || no "texture/low-poly hints"
+AG resolve --purpose icon --style stylized-painterly --json | jq -e '.hints.lighting.from == "style" and (.hints.lighting | has("overrides") | not)' >/dev/null \
+  && ok "a purpose without a lighting constraint keeps the style's lighting hint" || no "icon/painterly hints"
+out=$(AG resolve --purpose ref-3d-turnaround --style low-poly)
+grep -q "^hint lighting = Flat, even lighting.*style hint overridden by the purpose\]$" <<<"$out" && ! grep -q "Single soft directional light" <<<"$out" \
+  && ok "resolve text: one lighting hint (the purpose's), marked as overriding the style; the style text is not shown" || no "resolve text hints" "$(grep hint <<<"$out")"
+HA="$TMP/hint-authoring"; mkdir -p "$HA/assetgen/purposes"
+echo '{"extends": "ref-3d-turnaround", "constraints": {"lighting": "Overcast even daylight."}}' > "$HA/assetgen/purposes/ref-3d-turnaround.json"
+AG resolve --purpose ref-3d-turnaround --style stylized-painterly --authoring "$HA" --json > "$TMP/r.json"
+[ "$(r .hints.lighting.text)|$(r .hints.lighting.source)|$(r .hints.background.source)" = "Overcast even daylight.|game:assetgen/purposes/ref-3d-turnaround.json|core:templates/assetgen/purposes/ref-3d-turnaround.json" ] \
+  && ok "a game purpose extension overrides one constraint; each hint names its source file" || no "game constraint: $(r .hints)"
+echo '{"extends": "icon", "constraints": {"palette": "Only greens."}}' > "$HA/assetgen/purposes/icon.json"
+echo '{"extends": "sprite-2d", "constraints": {"lighting": ["flat"]}}' > "$HA/assetgen/purposes/sprite-2d.json"
+got=$(AG lint "$HA/assetgen/purposes/icon.json" --authoring "$HA" 2>&1)
+grep -q "^FAIL game:assetgen/purposes/icon.json: constraints.palette: not a technical constraint a purpose may set" <<<"$got" \
+  && ok "lint: a purpose may not constrain a style-only hint (palette)" || no "palette constraint lint" "$got"
+got=$(AG lint "$HA/assetgen/purposes/sprite-2d.json" --authoring "$HA" 2>&1)
+grep -q "constraints.lighting must be a non-empty string" <<<"$got" && ok "lint: a constraint must be a non-empty string" || no "constraint type lint" "$got"
+
 echo "-- render: every purpose against its golden workflow"
 RUNS="$GL/runs"
 mkrun() { # mkrun NAME PURPOSE [resolve args...]
@@ -125,6 +155,10 @@ for p in concept-2d sprite-2d icon ui-element texture-tileable ref-3d-turnaround
   else no "render $p rc=$rc" "$out
 $(diff <(jq -S . "$wf" 2>/dev/null) <(jq -S . "$GOLD/$p.json" 2>/dev/null))"; fi
 done
+AG review-cmd --phase prompt --run "$RUNS/golden-ref-3d-turnaround-001" --json | jq -r .stdin > "$TMP/rp.txt"
+grep -qF "lighting: $(jq -r .constraints.lighting "$ROOT/templates/assetgen/purposes/ref-3d-turnaround.json")" "$TMP/rp.txt" \
+  && ! grep -qF "$(jq -r .lighting "$ROOT/templates/assetgen/styles/stylized-painterly.json")" "$TMP/rp.txt" \
+  && ok "prompt review: the reviewer judges against the purpose lighting, not the overridden style lighting" || no "review hints" "$(grep -n Hints "$TMP/rp.txt")"
 w="$RUNS/golden-icon-001/workflow.json"
 [ "$(jq -r '.["3"].inputs.value' "$w")" = "Test prompt for icon: one subject, centered." ] && [ "$(jq -c '.["2"].inputs.images' "$w")" = '["1",0]' ] \
   && [ "$(jq -r '.["1"].inputs.background' "$w")" = transparent ] && ok "icon workflow: prompt verbatim (trimmed), link kept, transparent background" || no "icon workflow content"
@@ -299,6 +333,12 @@ expect_lint named-ids FAIL "node id 'gen': must be digits" "non-numeric node id 
 AG lint "$LA/assetgen/templates/unsupported-model.json" --authoring "$LA" >/dev/null 2>&1 && ok "warnings alone exit 0" || no "warn exit code"
 AG lint "$LA/assetgen/templates/unknown-node.json" --authoring "$LA" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a FAIL exits 1" || no "fail exit code"
 echo '{"extends": "icon", "handoff_domain": "audio", "qa": {"size": {"mode": "huge"}, "alpha": "maybe"}, "prompt_rubric": []}' > "$LA/assetgen/purposes/icon.json"
+AG lint --authoring "$LA" --json > "$TMP/o" 2>&1
+lst() { jq -r --arg p "$1" '[.results[] | select(.path == $p) | .state] | join(",")' "$TMP/o"; }
+[ "$(lst core:templates/assetgen/purposes/icon.json)/$(lst game:assetgen/purposes/icon.json)" = "PASS/FAIL" ] \
+  && [ "$(lst core:templates/assetgen/workflows/image-generate.json)" = PASS ] \
+  && ok "lint blames the game file holding the bad values, not the unchanged core file it extends" \
+  || no "lint blame: core $(lst core:templates/assetgen/purposes/icon.json), game $(lst game:assetgen/purposes/icon.json)" "$(jq -c '.results[] | select(.path | test("icon|image-generate"))' "$TMP/o")"
 got=$(AG lint "$LA/assetgen/purposes/icon.json" --authoring "$LA" 2>&1)
 { grep -q "handoff_domain 'audio' is not a registry domain" <<<"$got" && grep -q "qa.size.mode must be one of" <<<"$got" \
   && grep -q "qa.alpha must be one of" <<<"$got" && grep -q "prompt_rubric must be a non-empty list" <<<"$got"; } \
@@ -317,6 +357,7 @@ mal mal-blank '{"extends": "texture-tileable", "qa": {"tileable": true, "not_bla
 mal mal-zero '{"extends": "icon", "qa": {"size": {"mode": "aspect", "expect": "1024x0"}}}'
 mal mal-zerow '{"extends": "icon", "qa": {"size": {"mode": "min", "expect": "0x1024"}}}'
 mal mal-prompt '{"extends": "icon", "prompt": {"must_include": "a sword"}, "default_style": 7}'
+mal mal-area '{"extends": "ref-3d-turnaround", "qa": {"size": {"min_area": 1.5}}}'
 expect_mal() { # expect_mal ID TEXT LABEL
   local out rc; out=$(AG lint "$LA/assetgen/purposes/$1.json" --authoring "$LA" --json 2>"$TMP/err"); rc=$?
   local got; got=$(jq -r '.results[0] | .state + " " + (.reasons | join("; "))' <<<"$out" 2>/dev/null)
@@ -335,6 +376,7 @@ grep -q "qa.tileable.max_seam_error must be" <<<"$got" && grep -q "qa.size.expec
 expect_mal mal-zero "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero height in qa.size.expect -> FAIL row"
 expect_mal mal-zerow "qa.size.expect must be WIDTHxHEIGHT" "malformed purpose: zero width in qa.size.expect -> FAIL row"
 expect_mal mal-prompt "prompt.must_include must be a list of strings" "malformed purpose: prompt guidance and default_style types -> FAIL row"
+expect_mal mal-area "qa.size.min_area must be a number above 0 and at most 1" "malformed purpose: qa.size.min_area above 1 -> FAIL row"
 python3 -B - "$ROOT" > "$TMP/o" 2>&1 <<'EOF'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
@@ -386,6 +428,9 @@ save("tile-ok.png", 256, 256, wave, alpha=False)
 save("tile-bad.png", 256, 256, lambda x, y: (x, x, 128, 255), alpha=False)
 row = bytes(c for x in range(1536) for c in (x % 256, (x // 6) % 256, 100))
 open(os.path.join(out, "big.png"), "wb").write(png.encode_raw(1536, 1024, 8, 2, [row] * 1024))
+for name, w, h in (("strip.png", 2172, 724), ("sheet-small.png", 768, 512), ("sheet-near.png", 1700, 940)):
+    r = bytes(c for x in range(w) for c in (x % 256, (x // 6) % 256, 100))
+    open(os.path.join(out, name), "wb").write(png.encode_raw(w, h, 8, 2, [r] * h))
 row16 = bytes(b for x in range(256) for b in (x, 0, 255 - x, 0, 60, 0))
 open(os.path.join(out, "deep16.png"), "wb").write(png.encode_raw(256, 256, 16, 2, [row16] * 256))
 data = bytearray(open(os.path.join(out, "icon-ok.png"), "rb").read()); data[60] ^= 0xFF
@@ -434,6 +479,16 @@ qarun qa-concept-big-001 concept-2d big.png
 [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "concept-2d: 1536x1024 passes size mode min 1024x1024 (gateway size drift)" || no "concept big rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-icon-big-001 icon big.png
 [ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && ok "icon: 1536x1024 returned for a square request fails aspect" || no "icon big rc=$rc $(st png-size)"
+qarun qa-turn-ok-001 ref-3d-turnaround big.png
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1536x1024 for a 1536x1024 request passes aspect + min area" || no "turnaround ok rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-turn-near-001 ref-3d-turnaround sheet-near.png
+[ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "ref-3d-turnaround: 1700x940 (aspect within the tolerance, more pixels) passes" || no "turnaround near rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-turn-strip-001 ref-3d-turnaround strip.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "2172x724, expected aspect 1536x1024: aspect 3.000 (expected 1.500" \
+  && ok "ref-3d-turnaround: the e2e 2172x724 strip (same pixel count, 3:1) fails the aspect check" || no "turnaround strip rc=$rc" "$(jq -c .results "$TMP/q.json")"
+qarun qa-turn-small-001 ref-3d-turnaround sheet-small.png
+[ $rc -eq 1 ] && [ "$(st png-size)" = FAIL ] && jq -r '.results[] | select(.check == "png-size") | .reasons[0]' "$TMP/q.json" | grep -qF "area 393216 px (min 90% of 1572864)" \
+  && ok "ref-3d-turnaround: 768x512 (right aspect, a quarter of the pixels) fails the min area" || no "turnaround small rc=$rc" "$(jq -c .results "$TMP/q.json")"
 qarun qa-edit-any-001 image-edit icon-wide.png
 [ $rc -eq 0 ] && [ "$(st png-size)" = PASS ] && ok "image-edit: size mode any" || no "edit any rc=$rc $(st png-size)"
 mkrun qa-exact-001 icon --style pixel-art --authoring "$AUTH"; cp "$FX/icon-ok.png" "$RUNS/qa-exact-001/outputs/"
@@ -786,6 +841,21 @@ AG manifest --run "$d" >/dev/null && [ "$(fm .status)" = reviewed ] && ok "re-ma
 cp "$FX/tile-ok.png" "$d/outputs/iron-sword.png"
 out=$(AG manifest --run "$d"); [ "$(fm .status)" = proposed ] && grep -q "status reset to proposed" <<<"$out" && ok "changed outputs reset the status to proposed" || no "reset: $(fm .status) $out"
 rm -f "$d/review-image.json"; AG manifest --run "$d" >/dev/null; [ "$(fm .spec.image_review.state)" = NOT_RUN ] && ok "missing review file: NOT_RUN" || no "NOT_RUN: $(fm .spec.image_review)"
+bound "$d" image PASS claude > "$d/review-image-claude.json"; AG manifest --run "$d" >/dev/null
+[ "$(fm '.spec.claude_image_review.by + " " + .spec.claude_image_review.state + " " + .spec.image_review.state')" = "claude PASS NOT_RUN" ] \
+  && grep -q '^- Claude visual review: PASS by claude$' "$d/run.md" && grep -q '^- Image review: NOT_RUN by -$' "$d/run.md" \
+  && ok "manifest records review-image-claude.json as claude_image_review and summarises it in run.md, apart from the image review" \
+  || no "claude review: $(fm '.spec.claude_image_review')" "$(grep -n 'review' "$d/run.md" | head)"
+for n in axe-icon-001 axe-icon-002 axe-icon-004 big-axe-icon-001; do mkdir -p "$RUNS/$n"; done
+: > "$RUNS/axe-icon-002/run.md"; : > "$RUNS/axe-icon-not-a-run"
+mkrun axe-icon-003 icon --style pixel-art && AG manifest --run "$RUNS/axe-icon-003" >/dev/null
+d3="$RUNS/axe-icon-003"
+[ "$(python3 -c "import json,re,sys; print(json.dumps(json.loads(re.match(r'\A---json\s*\n(.*?)\n---', open(sys.argv[1], encoding='utf-8').read(), re.S).group(1))['spec']['trace']))" "$d3/run.md")" = '{"failed_attempts": ["axe-icon-001"]}' ] \
+  && grep -q '^- Failed attempts: axe-icon-001$' "$d3/run.md" \
+  && ok "manifest: trace.failed_attempts lists earlier attempts of the series without run.md (not later ones, finished ones or other slugs)" \
+  || no "failed attempts" "$(grep -n 'trace\|Failed' -A3 "$d3/run.md" | head)"
+[ "$(fm '.spec.trace.failed_attempts | length')" = 0 ] && grep -q '^- Failed attempts: none$' "$d/run.md" && ok "manifest: no failed attempts -> empty trace" || no "empty trace: $(fm .spec.trace)"
+rm -rf "$RUNS"/axe-icon-00[1-4] "$RUNS/big-axe-icon-001" "$RUNS/axe-icon-not-a-run"
 mkdir -p "$RUNS/Bad_Name"; cp "$d/spec.json" "$d/prompt.md" "$RUNS/Bad_Name/"
 AG manifest --run "$RUNS/Bad_Name" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 1 ] && grep -q "must be <slug>-NNN" "$TMP/err" && ok "run dir name must be <slug>-NNN" || no "bad run name rc=$rc"
@@ -795,6 +865,7 @@ good="$RUNS/qp-icon-001"; mkrun qp-icon-001 sprite-2d --style stylized-painterly
 AG render --run "$good" >/dev/null && cp "$FX/icon-ok.png" "$good/outputs/qp-icon.png" && AG qa --run "$good" >/dev/null \
   || no "good run: render/qa did not PASS" "$(jq -c .results "$good/qa.json" 2>/dev/null)"
 bound "$good" prompt PASS codex > "$good/review-prompt.json"; bound "$good" image PASS codex > "$good/review-image.json"
+bound "$good" image PASS claude > "$good/review-image-claude.json"
 AG manifest --run "$good" >/dev/null
 fmset() { # fmset RUN-DIR PYTHON-STATEMENT: edit run.md front matter (obj) in place
   python3 -B -c '
@@ -816,6 +887,7 @@ rebase() { # rebase NAME [render args...]: a copied run's spec.json takes its ow
   python3 -B -c 'import json, os, sys; p = os.path.join(sys.argv[1], "spec.json"); s = json.load(open(p)); s["params"]["filename_prefix"] = "assetgen/" + os.path.basename(sys.argv[1]); json.dump(s, open(p, "w"))' "$d"
   AG render --run "$d" "$@" >/dev/null && AG qa --run "$d" >/dev/null
   bound "$d" prompt PASS codex > "$d/review-prompt.json"; bound "$d" image PASS codex > "$d/review-image.json"
+  bound "$d" image PASS claude > "$d/review-image-claude.json"
 }
 qaset() { # qaset NAME PYTHON-STATEMENT: edit the run's qa.json (obj) in place
   python3 -B -c 'import json, sys; p = sys.argv[1]; obj = json.load(open(p, encoding="utf-8")); exec(sys.argv[2], {"obj": obj}); json.dump(obj, open(p, "w", encoding="utf-8"))' "$RUNS/$1/qa.json" "$2"
@@ -850,6 +922,14 @@ variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = jso
 variant qp-qapurp-001; qaset qp-qapurp-001 'obj["purpose_sha256"] = "0" * 64'; AG manifest --run "$RUNS/qp-qapurp-001" >/dev/null
 variant qp-qasize-001; python3 -B -c 'import json, sys; p = sys.argv[1]; w = json.load(open(p)); [n["inputs"].__setitem__("size", "1024x1536") for n in w.values() if n.get("class_type") == "NineRouterImage"]; json.dump(w, open(p, "w"))' "$RUNS/qp-qasize-001/workflow.json"
 AG manifest --run "$RUNS/qp-qasize-001" >/dev/null
+# Claude's own visual review (review-image-claude.json): recorded, WARN when missing, never replaces the Codex review
+variant qp-noclaude-001; rm -f "$RUNS/qp-noclaude-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-noclaude-001" >/dev/null
+variant qp-claudeonly-001; rm -f "$RUNS/qp-claudeonly-001/review-image.json"; AG manifest --run "$RUNS/qp-claudeonly-001" >/dev/null
+variant qp-claudefail-001; bound "$RUNS/qp-claudefail-001" image FAIL claude '[{"rubric": 4, "severity": "major", "text": "broken hilt"}]' > "$RUNS/qp-claudefail-001/review-image-claude.json"
+AG manifest --run "$RUNS/qp-claudefail-001" >/dev/null
+variant qp-claudediff-001; bound "$RUNS/qp-claudediff-001" image FAIL claude > "$RUNS/qp-claudediff-001/review-image-claude.json"
+variant qp-claudestale-001; printf '{"state": "PASS", "findings": [], "by": "claude"}\n' > "$RUNS/qp-claudestale-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-claudestale-001" >/dev/null
+variant qp-claudeby-001; bound "$RUNS/qp-claudeby-001" image PASS codex > "$RUNS/qp-claudeby-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-claudeby-001" >/dev/null
 variant qp-tool-001; fmset "$RUNS/qp-tool-001" 'obj["provenance"]["tool"] = "other"'
 variant qp-ref-001; fmset "$RUNS/qp-ref-001" 'obj["spec"]["style"]["id"] = "no-such-style"'
 variant qp-drift-001; fmset "$RUNS/qp-drift-001" 'obj["spec"]["template"]["sha256"] = "0" * 64'
@@ -874,6 +954,7 @@ edit="$RUNS/qp-edit-001"; mkrun qp-edit-001 image-edit --style stylized-painterl
 mkdir -p "$edit/references"; cp "$FX/icon-ok.png" "$edit/references/ref-a.png"
 AG render --run "$edit" --param reference_image=ref-a.png >/dev/null && cp "$FX/icon-ok.png" "$edit/outputs/edit.png" && AG qa --run "$edit" >/dev/null   || no "image-edit run: render/qa did not PASS" "$(jq -c .results "$edit/qa.json" 2>/dev/null)"
 bound "$edit" prompt PASS codex > "$edit/review-prompt.json"; bound "$edit" image PASS codex > "$edit/review-image.json"
+bound "$edit" image PASS claude > "$edit/review-image-claude.json"
 AG manifest --run "$edit" >/dev/null
 evariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$edit" "$d"; rm -f "$d/run.md"; }
 evariant qp-eswap-001; rebase qp-eswap-001 --param reference_image=ref-a.png; cp "$FX/icon-opaque.png" "$RUNS/qp-eswap-001/references/ref-b.png"
@@ -887,7 +968,7 @@ cp -R "$good" "$RUNS/qp-fallback-001" "$QAUTH/assetgen/runs/"; git init -q -b ma
 python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$QAUTH" --registry "$ROOT/registry.json" --domain assetgen --json > "$TMP/aq.json" 2>"$TMP/err"; rc=$?
 st() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .state] | join(",")' "$TMP/aq.json"; }
 why() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .reasons[]] | join("; ")' "$TMP/aq.json"; }
-plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs"
+plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-claude-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs"
 got=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-icon-001 "$c")"; done)
 want=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=PASS ' "$c"; done)
 [ $rc -eq 0 ] && [ "$got" = "$want" ] && ok "artifact-quality --domain assetgen: complete run (codex reviews, QA PASS, hashes, provenance, game-layer refs) all PASS" \
@@ -941,6 +1022,14 @@ case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAIL
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"
 case_ qp-qasize-001 gen-run-qa FAIL 'graded for requested size' "requested size changed after QA: FAIL"
+case_ qp-noclaude-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "no Claude visual review file: WARN"
+[ "$(st AGEN-qp-noclaude-001 gen-run-image-review)" = PASS ] && ok "a missing Claude review leaves the Codex image review PASS" || no "noclaude image review: $(st AGEN-qp-noclaude-001 gen-run-image-review)"
+case_ qp-claudeonly-001 gen-run-image-review FAIL 'review-image.json is missing' "a Claude PASS never replaces the missing Codex image review: FAIL"
+[ "$(st AGEN-qp-claudeonly-001 gen-run-claude-review)" = PASS ] && ok "claude-only run: the Claude review itself grades PASS" || no "claudeonly claude review: $(st AGEN-qp-claudeonly-001 gen-run-claude-review)"
+case_ qp-claudefail-001 gen-run-claude-review FAIL "Claude's visual review is FAIL (1 finding(s))" "Claude's own review FAIL on a proposed run: FAIL"
+case_ qp-claudediff-001 gen-run-claude-review FAIL 'differs from review-image-claude.json (file: FAIL' "review-image-claude.json contradicting run.md: FAIL"
+case_ qp-claudestale-001 gen-run-claude-review WARN 'not bound to the current prompt' "unbound Claude review: WARN"
+case_ qp-claudeby-001 gen-run-claude-review WARN 'is by codex, not claude' "review-image-claude.json by another model: WARN"
 case_ qp-tool-001 gen-run-provenance FAIL 'provenance.tool must be comfyui' "provenance tool other than comfyui: FAIL"
 case_ qp-ref-001 gen-run-refs FAIL "style 'no-such-style' does not resolve" "unresolvable style ref: FAIL"
 case_ qp-drift-001 gen-run-refs WARN 'changed since the run' "template content changed since the run: WARN (the record keeps what was used)"

@@ -4,7 +4,8 @@ Per output PNG (results keyed by output path, rpg-factory.validation/1 states); 
 runfiles.required_checks(qa), which the gen-run quality plugin also requires as PASS rows:
   png-valid           decodes (Pillow when present, else the stdlib decoder; NOT_AVAILABLE when neither can)
   png-size            qa.size.mode: exact (= expect), min (width and height >= expect), aspect (ratio within
-                      aspect_tolerance, default 0.02, and the short side >= min_side, default 256), any.
+                      aspect_tolerance, default 0.02, the short side >= min_side, default 256, and, with min_area,
+                      width x height >= min_area x the expected pixel count), any.
                       expect defaults to the requested size (workflow.json, else spec params); "auto" = any.
                       The 9router gateway may return another size than requested, so exact is opt-in.
   png-alpha           qa.alpha: required (alpha channel and some transparent pixels), forbidden (fully opaque), any
@@ -61,8 +62,13 @@ def check_size(img, cfg, requested):
     elif mode == "min":
         ok = img.width >= ew and img.height >= eh
     else:
-        tol, min_side = cfg.get("aspect_tolerance", 0.02), cfg.get("min_side", 256)
-        ok = abs(img.width / img.height - ew / eh) <= tol * (ew / eh) and min(img.width, img.height) >= min_side
+        tol, min_side, min_area = cfg.get("aspect_tolerance", 0.02), cfg.get("min_side", 256), cfg.get("min_area")
+        ratio, want = img.width / img.height, ew / eh
+        ok = abs(ratio - want) <= tol * want and min(img.width, img.height) >= min_side             and (min_area is None or img.width * img.height >= min_area * ew * eh)
+        detail = ["aspect %.3f (expected %.3f +/- %d%%)" % (ratio, want, round(tol * 100))]
+        if min_area is not None:
+            detail.append("area %d px (min %d%% of %d)" % (img.width * img.height, round(min_area * 100), ew * eh))
+        return ("PASS" if ok else "FAIL"), ["%s, expected %s %dx%d: %s" % (got, mode, ew, eh, ", ".join(detail))]
     return ("PASS" if ok else "FAIL"), ["%s, expected %s %dx%d" % (got, mode, ew, eh)]
 
 

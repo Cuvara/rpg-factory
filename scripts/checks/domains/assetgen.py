@@ -17,6 +17,12 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        params; for the image review also the generation inputs of workflow.json) and, for the
                        image review, outputs = the recorded outputs (review-cmd hands the reviewer these values to copy back). A missing, invalid,
                        unbound or stale review file is missing work.
+  gen-run-claude-review
+                       Claude's own visual review, review-image-claude.json (same schema and binding as the image
+                       review, by claude), recorded as spec.claude_image_review. It never replaces the independent
+                       image review and never grades PASS for it. run.md must equal the file (else FAIL: re-run
+                       manifest); a missing, invalid, unbound or stale file, or a reviewer other than claude, is a
+                       WARN; a FAIL verdict is missing work (the agent regenerates or the run stays draft).
   gen-run-qa           qa.json is the evidence: it hashed the recorded output bytes, run.md's qa equals its state and
                        results (else FAIL: re-run manifest), its state is PASS, and every recorded output has a PASS
                        row for each check the purpose requires (runfiles.required_checks of the run's spec.json
@@ -48,6 +54,7 @@ ROOT = Path(__file__).resolve().parents[3]
 LENIENT = {"draft", "rejected", "blocked", "superseded", "deprecated"}
 FALLBACK = "SAME_MODEL:"
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
+CLAUDE_REVIEW = "review-image-claude.json"
 _engine = {}
 
 
@@ -173,6 +180,33 @@ def check(artifact, ctx):
         elif state == "PASS":
             fails.append("%s review PASS without a reviewer (by)" % phase)
         grade("gen-run-%s-review" % phase, fails, todo, warns)
+
+    fails, todo, warns = [], [], []
+    rv = spec.get("claude_image_review") if isinstance(spec.get("claude_image_review"), dict) else None
+    rf = resolve(CLAUDE_REVIEW)
+    if rf is None or not rf.is_file():
+        warns.append("%s is missing: record Claude's own visual review (review schema, by claude, the binding of "
+                     "review-cmd --phase image --json), then assetgen.py manifest" % CLAUDE_REVIEW)
+        if rv is not None and rv.get("state") not in (None, "NOT_RUN"):
+            fails.append("run.md claude_image_review is %s but %s is missing; re-run assetgen.py manifest"
+                         % (rv.get("state"), CLAUDE_REVIEW))
+    else:
+        disk = runfiles.read_verdict(str(rf), "image")
+        if disk != rv:
+            fails.append("run.md claude_image_review differs from %s (file: %s by %s); re-run assetgen.py manifest"
+                         % (CLAUDE_REVIEW, disk["state"], disk["by"] or "-"))
+        if disk["state"] == "INVALID":
+            warns.append("%s holds no JSON verdict with state PASS or FAIL" % CLAUDE_REVIEW)
+        elif disk["prompt_sha256"] != spec.get("prompt_sha256") or disk["requirements_sha256"] != requirements["image"]                 or {o["path"]: o["sha256"] for o in disk["outputs"]} != recorded:
+            warns.append("%s is not bound to the current prompt, requirements and outputs: review the images again "
+                         "with the binding of review-cmd --phase image --json" % CLAUDE_REVIEW)
+        elif disk["state"] == "FAIL":
+            todo.append("Claude's visual review is FAIL (%d finding(s)): regenerate, or keep the run draft"
+                        % disk["findings"])
+        if disk["state"] != "INVALID" and family(disk["by"] or "") != "claude":
+            warns.append("%s is by %s, not claude; the independent review belongs in %s"
+                         % (CLAUDE_REVIEW, disk["by"] or "-", REVIEW_FILES["image"]))
+    grade("gen-run-claude-review", fails, todo, warns)
 
     fails, todo = [], []
     if not outputs:

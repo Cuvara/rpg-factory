@@ -17,6 +17,8 @@ Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow template
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
 game wins) core ids. resolve prints the merged spec with the source file of every field and each param.
 Param precedence, low to high: template default < style params < purpose params < render --param.
+Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
+style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
@@ -45,9 +47,17 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
   review-image.json   the same for the images (review-cmd image); its requirements_sha256 also covers the generation
                       inputs of workflow.json (runfiles.generation_inputs), and the binding adds "outputs": [{"path", "sha256"}] (runfiles.py; the
                       quality plugin FAILs a stale or unbound verdict once the run is proposed)
+  review-image-claude.json  Claude's own visual review, written by the agent: the same schema and binding (the
+                      "binding" of review-cmd --phase image --json) with "by": "claude". manifest records it as
+                      spec.claude_image_review; the plugin WARNs when it is missing, unbound or stale. It never replaces
+                      the independent review-image.json
   qa.json             qa: rpg-factory.validation/1 results per output, bound to the purpose content hash and the
                       requested size it graded with (purpose_sha256, requested_size)
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
+
+Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
+attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
+its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
 Read-only except: resolve/render --out, render --run (workflow.json, workflow.ui.json), embed (outputs/*.png), qa
 (qa.json), manifest (run.md) and review-cmd --phase image of a tileable purpose (review/tile-2x2.png) in the given run
@@ -82,6 +92,7 @@ import uiworkflow  # noqa: E402
 
 RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{3}$")
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
+CLAUDE_REVIEW = "review-image-claude.json"  # Claude's own visual review: recorded, never replaces review-image.json
 HEREDOC = "ASSETGEN_REVIEW"
 
 
@@ -253,6 +264,8 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
         "", "Purpose: %s - %s" % (p["data"].get("title", ""), p["data"].get("description", "")),
         "Style: %s. Prefix: %s Suffix: %s" % (s["data"].get("title", ""), s["data"].get("prefix", ""), s["data"].get("suffix", "")),
         "Style avoid: %s" % ", ".join(s["data"].get("avoid", [])),
+        "Hints (the purpose wins for technical constraints): %s" % ("; ".join(
+            "%s: %s" % (k, h["text"]) for k, h in sorted(effective_hints(spec).items())) or "none"),
         "Requested params: %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(spec.get("params", {}).items())),
     ]
     guide = p["data"].get("prompt", {})
@@ -277,6 +290,13 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
               "Copy these binding fields unchanged into your answer; they name what you reviewed: " + bound]
     text = "\n".join(lines)
     return "\n".join(l if l.strip() != HEREDOC else l + "." for l in text.splitlines())
+
+
+def effective_hints(spec):
+    """spec.hints (resolve); a spec written before hints existed is resolved from its recorded purpose and style."""
+    if isinstance(spec.get("hints"), dict):
+        return spec["hints"]
+    return layers.resolve_hints({"data": spec["purpose"]["data"], "sources": {}}, {"data": spec["style"]["data"], "sources": {}})
 
 
 def pixel_size(path, requested):
@@ -437,6 +457,19 @@ def existing_front(path):
         return None
 
 
+def failed_attempts(run_dir):
+    """Run ids of the earlier attempts of this run's series (<slug>-NNN, lower NNN) whose directory has no run.md."""
+    name = os.path.basename(os.path.normpath(run_dir))
+    slug, num = name.rsplit("-", 1)
+    parent = os.path.dirname(os.path.abspath(os.path.normpath(run_dir)))
+    out = []
+    for other in sorted(os.listdir(parent)):
+        o_slug, _, o_num = other.rpartition("-")
+        if RUN_ID.match(other) and o_slug == slug and int(o_num) < int(num)                 and os.path.isdir(os.path.join(parent, other)) and not os.path.isfile(os.path.join(parent, other, "run.md")):
+            out.append(other)
+    return out
+
+
 def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude"):
     """The gen-run front matter (and whether a previous status was reset)."""
     name = os.path.basename(os.path.normpath(run_dir))
@@ -478,6 +511,8 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
                            "workflow": "workflow.json" if os.path.isfile(os.path.join(run_dir, "workflow.json")) else None},
             "outputs": outputs, "qa": qa_block,
             "image_review": runfiles.read_verdict(os.path.join(run_dir, REVIEW_FILES["image"]), "image"),
+            "claude_image_review": runfiles.read_verdict(os.path.join(run_dir, CLAUDE_REVIEW), "image"),
+            "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
     return front, bool(old.get("status")) and not same_outputs and old.get("status") != "proposed"
@@ -491,6 +526,9 @@ def manifest_text(front):
             "- Generation: %s, model `%s`" % (s["generation"]["tool"], s["generation"]["model"] or "-"),
             "- QA: %s" % s["qa"]["state"],
             "- Image review: %s by %s" % (s["image_review"]["state"], s["image_review"]["by"] or "-"),
+            "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
+                                                     ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
+            "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none"),
             "- Status: %s (approval is human-only)" % front["status"], "", "## Prompt", "", s["prompt"], "", "## Outputs", ""]
     body += ["![%s](%s)" % (o["path"], o["path"]) for o in s["outputs"]] or ["(none)"]
     return "---json\n%s\n---\n%s\n" % (json.dumps(front, indent=2, ensure_ascii=True), "\n".join(body))
@@ -543,6 +581,8 @@ def main(argv=None):
             emit(spec, a.json, "\n".join(
                 ["purpose %s (%s), style %s (%s), template %s (%s)" % tuple(x for k in ("purpose", "style", "template") for x in (spec[k]["id"], spec[k]["layer"]))]
                 + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
+                + ["hint %s = %s  [%s%s]" % (k, h["text"], h["source"], "; style hint overridden by the purpose" if "overrides" in h else "")
+                   for k, h in sorted(spec["hints"].items())]
                 + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())]))
             return 0
         if a.cmd == "render":

@@ -39,9 +39,10 @@ lead's workflow asks for in a run directory or the game layer.
   game: `assetgen/{purposes,styles,templates}/`. The id is the file name.
 - **Precedence:** a game file with a core id and no `extends` replaces it; `"extends": "<id>"` deep-merges onto it
   (objects key by key, the game wins; lists and scalars replace). Params, low to high: template default < style <
-  purpose < `render --param`. `resolve` prints the source file of every field and param. For technical constraints
-  (lighting, background, framing, palette limits) the purpose wins over the style: `resolve` marks each style hint
-  the purpose overrides, so the prompt writer sees only the purpose's value.
+  purpose < `render --param`. `resolve` prints the source file of every field and param. Hints: a purpose's
+  `constraints` (lighting, background, framing; `scripts/assetgen/data/precedence.json`) win over the style's hint of
+  the same name, the palette is the style's only; `resolve` writes `spec.hints` and marks each overridden style hint,
+  so the prompt writer and the reviewer see only the purpose's value.
 - **Template format** (`templates/assetgen/workflows/image-generate.json`): `params` (`type` string, int, number,
   bool or enum with `options`; `default`; `required`), `output_node` (a SaveImage node id), `workflow` (ComfyUI API
   format `{"<id>": {"class_type", "inputs"}}`, links `["<node id>", <output index>]`). `{{name}}` as the whole string
@@ -69,15 +70,19 @@ lead's workflow asks for in a run directory or the game layer.
 - **Node pack version:** read the `comfyui_9router` pack in `server_info`; when it is outdated, report it with its
   version and let the user update it - never `update_comfyui`, `install_node` or any other update yourself.
 - **See the run in ComfyUI:** `assetgen.py publish --run <run> --comfy-url <URL>` (optional, only when ComfyUI is
-  reachable) uploads `workflow.ui.json` through ComfyUI's userdata API, so it shows under Workflows > assetgen;
-  connection refused is `NOT_AVAILABLE` and writes nothing. Dragging an embedded output PNG into ComfyUI restores the
+  reachable) uploads `workflow.ui.json` through ComfyUI's userdata API, so it shows under Workflows > assetgen.
+  Exit 0 PASS, 1 FAIL (an HTTP error), 2 usage (bad run id or URL), 3 `NOT_AVAILABLE` (connection refused); it
+  writes nothing locally. Dragging an embedded output PNG into ComfyUI restores the
   laid-out graph too.
 - **Setup** (once, the user's machine): install the `comfy-mcp` package into a Python env, register it for Claude as
   `comfy-mcp` with `COMFY_LOCAL_URL` set to the running ComfyUI, start ComfyUI (Desktop or headless). A newly added
   MCP server loads only in a new session.
 - **Add a purpose:** copy the closest `templates/assetgen/purposes/*.json` (game layer for one game, core for all),
-  keep the schema id, write guidance, both rubrics, `qa` (size `mode` exact|min|aspect|any, `alpha`
-  required|forbidden|any, `transparent_corners`, `tileable`, `not_blank`) and `handoff_domain`. Add a style the
+  keep the schema id, write guidance, both rubrics, `constraints` (only the technical hints of
+  `data/precedence.json`; lint fails any other), `qa` (size `mode` exact|min|aspect|any, for aspect
+  `aspect_tolerance`, `min_side` and `min_area`, the share of the expected pixel count; `alpha`
+  required|forbidden|any, `transparent_corners`, `tileable`, `not_blank`) and `handoff_domain`. `lint` reports a bad
+  game value on the game file that holds it, never on the core file it extends. Add a style the
   same way. **Add a template:** API-format graph with placeholders, every placeholder a declared param, `output_node`
   set; then `assetgen.py lint [--authoring <A>]` and a live `validate_workflow`.
 - **Game override:** prefer `extends` with only the changed fields, so core fixes still reach the game.
@@ -85,8 +90,10 @@ lead's workflow asks for in a run directory or the game layer.
 ## Pitfalls
 
 - **The returned size can differ from the requested one:** the gateway has answered a square request with a
-  landscape image. The purpose QA's size mode handles it; `exact` is opt-in (`scripts/assetgen/qa.py` docstring,
-  `size` param description in `templates/assetgen/workflows/image-generate.json`).
+  landscape image, and a 1536x1024 turnaround request with a 2172x724 strip (same pixel count). The purpose QA's
+  size mode handles it: `ref-3d-turnaround` checks aspect with a tolerance plus a minimum area, so the strip fails;
+  `exact` is opt-in (`scripts/assetgen/qa.py` docstring, `size` param description in
+  `templates/assetgen/workflows/image-generate.json`). `review-cmd --phase image` states each output's true size.
 - **A model id the gateway does not serve passes `validate_workflow`** (the `model` input is a free STRING) and fails
   only at run time. Known bad ids are `warn_values` in `scripts/assetgen/data/known-nodes.json`; the working default
   is the template's `model` param - never hard-code an id in a prompt or skill.
@@ -103,8 +110,10 @@ lead's workflow asks for in a run directory or the game layer.
 - **Fetched PNGs carry no workflow:** comfy-mcp sends no `extra_pnginfo`, so a PNG holds only the `prompt` text chunk;
   `embed` adds the `workflow` chunk (idempotent, keeps `prompt`). Run it before `qa`: QA and the reviews bind the
   hash of the embedded file (`scripts/assetgen/assetgen.py` `embed`).
-- **SaveImage writes into ComfyUI's output folder** under `filename_prefix` (`render --run` sets
-  `assetgen/<run-id>`, `scripts/assetgen/assetgen.py` `render`); only `fetch_outputs` puts the PNGs into the run.
+- **SaveImage writes into ComfyUI's output folder** under `filename_prefix`: `resolve --out <run>/spec.json` records
+  `assetgen/<run-id>` and `render --run` requires that value and refuses `--param filename_prefix`
+  (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`
+  again. Only `fetch_outputs` puts the PNGs into the run.
 - **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`):
   `COMFY_LOCAL_URL` pointing at the one that is not running makes every tool fail while the snapshot shows the other
   service up.
@@ -112,8 +121,8 @@ lead's workflow asks for in a run directory or the game layer.
 ## Testing
 
 - `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI
-  graph converted back equals the API graph), lint, review-cmd, embed, publish against a fake HTTP server, PNG QA,
-  manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
+  graph converted back equals the API graph), hints and lint blame, review-cmd, embed, publish against a fake HTTP
+  server, PNG QA, manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
 - `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs
   ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
 

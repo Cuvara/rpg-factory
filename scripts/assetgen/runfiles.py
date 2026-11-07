@@ -74,6 +74,8 @@ def qa_errors(qa):
             errs.append("qa.size.aspect_tolerance must be a number between 0 and 1")
         if "min_side" in size and not (_number(size["min_side"]) and size["min_side"] >= 0):
             errs.append("qa.size.min_side must be a number >= 0")
+        if "min_area" in size and not (_number(size["min_area"]) and 0 < size["min_area"] <= 1):
+            errs.append("qa.size.min_area must be a number above 0 and at most 1 (share of the expected pixel count)")
     if qa.get("alpha", "any") not in ALPHA_MODES:
         errs.append("qa.alpha must be one of %s" % sorted(ALPHA_MODES))
     if not isinstance(qa.get("transparent_corners", False), bool):

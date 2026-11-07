@@ -43,6 +43,9 @@
   "No visible seam or repeating focal feature when tiled 2x2.",
   "Lighting is flat; no baked directional light."
  ],
+ "constraints": {
+  "lighting": "Even, flat lighting with no baked light direction and no cast shadows."
+ },
  "qa": {
   "size": {
    "mode": "aspect",
