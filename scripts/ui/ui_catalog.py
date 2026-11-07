@@ -17,7 +17,8 @@ highest v* tag ("latest-tag"). A client pin older than the ref used is reported 
 Every entry: {id, kind, name, namespace, source: "<path>:<line>@<ref>" | docs URL, purpose, config,
 requires, related_skills}. Kinds: package-type, package-uxml-element, package-service, theme-token,
 uss-class, editor-tool, sample, unity-builtin.
-No repository or an unknown ref: status NOT_AVAILABLE with the reason (built-ins only, nothing invented).
+No repository, an unknown ref or a failing or truncated git read: status NOT_AVAILABLE with the reason
+(built-ins only, nothing invented).
 Exit 0 = PASS, 1 = NOT_AVAILABLE, 2 = usage. Writes nothing.
 """
 import html
@@ -145,17 +146,25 @@ def resolve_ref(repo, ref=None, project=None):
 
 
 def read_blobs(repo, ref, paths):
-    """{path: text} for every path at ref, through one git cat-file --batch."""
+    """{path: text} for every path at ref, through one git cat-file --batch. Raises Unavailable when git fails or
+    its output is truncated: never a partial catalog read from a broken stream."""
     if not paths:
         return {}
     req = "".join(f"{ref}:{p}\n" for p in paths).encode("utf-8")
-    out = subprocess.run(["git", "-C", repo, "cat-file", "--batch"], input=req, capture_output=True).stdout
-    res, i = {}, 0
+    proc = subprocess.run(["git", "-C", repo, "cat-file", "--batch"], input=req, capture_output=True)
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise Unavailable(f"git cat-file --batch failed in {repo} (exit {proc.returncode})" + (f": {err[-1]}" if err else ""))
+    out, res, i = proc.stdout, {}, 0
     for p in paths:
-        nl = out.index(b"\n", i)
+        nl = out.find(b"\n", i)
+        if nl < 0:
+            raise Unavailable(f"git cat-file --batch output truncated before {p} in {repo}")
         head = out[i:nl].split()
-        if len(head) == 3 and head[1] == b"blob":
+        if len(head) == 3 and head[1] == b"blob" and head[2].isdigit():
             size = int(head[2])
+            if nl + 1 + size + 1 > len(out):
+                raise Unavailable(f"git cat-file --batch output truncated in {p} in {repo}")
             res[p] = out[nl + 1:nl + 1 + size].decode("utf-8", errors="replace")
             i = nl + 1 + size + 1
         else:
@@ -290,22 +299,26 @@ def build(uitoolkit=None, ref=None, project=None):
     """The catalog dict. Never raises for a missing repo or ref: status NOT_AVAILABLE."""
     repo, project, reason = locate(uitoolkit, project)
     cat = {"schema": SCHEMA, "status": "PASS", "reason": "", "uitoolkit": None, "counts": {}, "entries": []}
+    files, wanted, blobs = [], [], {}
     if repo:
         try:
             cat["uitoolkit"] = {"repo": repo, **resolve_ref(repo, ref, project)}
+            r = cat["uitoolkit"]["ref"]
+            rc, listing = git(repo, "ls-tree", "-r", "--name-only", r)
+            if rc != 0:
+                raise Unavailable(f"git ls-tree {r} failed in {repo} (exit {rc})")
+            files = listing.splitlines()
+            wanted = [f for f in files if (f.endswith((".cs", ".asmdef")) and f.startswith(("Runtime/", "Editor/")))
+                      or f.startswith("Runtime/Theme/Resources/") and f.endswith(".uss")
+                      or f.startswith("Tools~/") and (f.endswith("Program.cs") or f.endswith(".py") and not os.path.basename(f).startswith("test_") and "/template/" not in f and os.path.basename(f) != "cli_smoke.py")
+                      or f.startswith("Samples~/") and f.endswith("/README.md") and f.count("/") == 2]
+            blobs = read_blobs(repo, r, wanted)
         except Unavailable as e:
-            reason = str(e)
+            cat["uitoolkit"], reason = None, str(e)
     if not cat["uitoolkit"]:
         cat.update(status="NOT_AVAILABLE", reason=reason, entries=builtins())
         cat["counts"] = {"unity-builtin": len(cat["entries"])}
         return cat
-    r = cat["uitoolkit"]["ref"]
-    files = git(repo, "ls-tree", "-r", "--name-only", r)[1].splitlines()
-    wanted = [f for f in files if (f.endswith((".cs", ".asmdef")) and f.startswith(("Runtime/", "Editor/")))
-              or f.startswith("Runtime/Theme/Resources/") and f.endswith(".uss")
-              or f.startswith("Tools~/") and (f.endswith("Program.cs") or f.endswith(".py") and not os.path.basename(f).startswith("test_") and "/template/" not in f and os.path.basename(f) != "cli_smoke.py")
-              or f.startswith("Samples~/") and f.endswith("/README.md") and f.count("/") == 2]
-    blobs = read_blobs(repo, r, wanted)
     asmdefs = {}
     for f in wanted:
         if f.endswith(".asmdef"):
