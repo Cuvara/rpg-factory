@@ -3,7 +3,9 @@
 # source, param precedence), strict render per purpose against golden workflows (tests/fixtures/assetgen/golden/),
 # the prompt node (PrimitiveStringMultiline, review state in its title), workflow.ui.json (converted back to
 # workflow.json by a stdlib UI->API converter), one filename_prefix (assetgen/<run-id>) in every run record,
-# lint errors and warnings, review-cmd output (prints, never runs Codex), PNG QA on fixture PNGs generated here
+# lint errors and warnings, review-cmd output (prints, never runs Codex; absolute paths from any cwd, true pixel sizes,
+# the 2x2 tile preview of tileable purposes and --no-write), embed (workflow tEXt chunk in the outputs), publish
+# (against an in-process fake ComfyUI: POST, HTTP error, connection refused), PNG QA on fixture PNGs generated here
 # (alpha, corners, seam, blank, size modes, stdlib decoder incl. gray/RGB/palette tRNS, NOT_AVAILABLE), manifest run.md
 # (gen-run front matter, review bindings), the gen-run quality plugin (pass and fail cases: review files and their
 # prompt/output/requirements binding, qa.json as the QA evidence; through artifact-quality and called directly),
@@ -574,6 +576,180 @@ print(runfiles.requirements_sha256(spec, None))" "$ROOT" "$d" > "$TMP/req"
   && jq -r .stdin "$TMP/rc.json" | grep -qF "\"requirements_sha256\": \"$(jq -r .binding.requirements_sha256 "$TMP/rc.json")\""; } \
   && ok "review-cmd binds requirements_sha256 (prompt: purpose/style/template/params; image: + generation inputs); malformed specs still hash" \
   || no "requirements binding" "$(cat "$TMP/o"; jq -c .binding "$TMP/rcp.json")"
+
+echo "-- review-cmd: absolute paths, true pixel sizes, 2x2 tile preview"
+d="$RUNS/qa-icon-ok-001"
+(cd "$TMP" && AG review-cmd --phase image --run "game-authoring/assetgen/runs/qa-icon-ok-001" --json) > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$TMP/rc.json" "$d" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+cmd, run = json.load(open(sys.argv[1], encoding="utf-8")), sys.argv[2]
+argv = cmd["argv"]
+paths = [argv[i + 1] for i, a in enumerate(argv) if a in ("-C", "-i", "-o")]
+assert all(os.path.isabs(p) and "\\" not in p for p in paths), paths
+assert os.path.samefile(argv[argv.index("-C") + 1], run), argv
+os.chdir(os.path.splitdrive(run)[0] + os.sep)  # another cwd: every path still resolves
+assert all(os.path.isfile(argv[i + 1]) for i, a in enumerate(argv) if a == "-i"), argv
+assert os.path.samefile(os.path.dirname(cmd["verdict"]), run) and cmd["verdict"].endswith("/review-image.json")
+assert cmd["binding"]["outputs"][0]["path"] == "outputs/icon-ok.png" and cmd["tiles"] == [], cmd
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" && ok "review-cmd with a relative --run from another cwd prints absolute -C, -i and -o paths (binding paths stay run-relative)" \
+  || no "review-cmd absolute paths rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
+want=$(jq -r '[.[] | select(.class_type == "NineRouterImage")][0].inputs.size' "$d/workflow.json")
+jq -r .stdin "$TMP/rc.json" | grep -qxF "True pixel size (PNG header) of outputs/icon-ok.png: 256x256 (requested $want)" \
+  && [ ! -e "$d/review" ] && ok "image review prompt states each output's true pixel size from the PNG header; no tile for a non-tileable purpose" \
+  || no "pixel size line" "$(jq -r .stdin "$TMP/rc.json" | grep -n 'pixel size'; ls "$d")"
+AG review-cmd --phase image --run "$RUNS/qa-concept-big-001" --json | jq -r .stdin | grep -qF "outputs/big.png: 1536x1024 (requested" \
+  && ok "pixel size of a 1536x1024 output (concept-2d)" || no "concept pixel size"
+td="$RUNS/qa-tile-ok-001"
+AG review-cmd --phase image --run "$td" --json > "$TMP/rt.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$td" "$TMP/rt.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+run, cmd = sys.argv[2], json.load(open(sys.argv[3], encoding="utf-8"))
+src, tile = png.decode(os.path.join(run, "outputs", "tile-ok.png")), png.decode(os.path.join(run, "review", "tile-2x2.png"))
+assert (tile.width, tile.height) == (2 * src.width, 2 * src.height), (tile.width, tile.height)
+for x, y in ((0, 0), (17, 200), (255, 255)):
+    for dx, dy in ((0, 0), (src.width, 0), (0, src.height), (src.width, src.height)):
+        assert tile.pixel(x + dx, y + dy) == src.pixel(x, y), (x, y, dx, dy)
+ims = [cmd["argv"][i + 1] for i, a in enumerate(cmd["argv"]) if a == "-i"]
+assert len(ims) == 2 and ims[0].endswith("/outputs/tile-ok.png") and ims[1].endswith("/review/tile-2x2.png"), ims
+assert os.path.samefile(ims[1], os.path.join(run, "review", "tile-2x2.png"))
+assert cmd["tiles"] == ["review/tile-2x2.png"] and [o["path"] for o in cmd["binding"]["outputs"]] == ["outputs/tile-ok.png"], cmd
+assert "review/tile-2x2.png is not an output: review-cmd tiled outputs/tile-ok.png 2x2" in cmd["stdin"], cmd["stdin"]
+assert "Attached images (one per -i): outputs/tile-ok.png, review/tile-2x2.png" in cmd["stdin"]
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" && ok "tileable purpose: review/tile-2x2.png (stdlib encode, output repeated 2x2) passed with -i after the output, never in the binding" \
+  || no "tile preview rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
+sum0=$(sha256sum "$td/review/tile-2x2.png" | cut -d' ' -f1)
+AG review-cmd --phase image --run "$td" --no-write --json > "$TMP/rt2.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/rt2.json")" = "$(jq -c .argv "$TMP/rt.json")" ] && [ "$(sha256sum "$td/review/tile-2x2.png" | cut -d' ' -f1)" = "$sum0" ] \
+  && ok "--no-write uses a current tile (same command)" || no "--no-write current tile rc=$rc"
+python3 -B "$ROOT/scripts/factory-cmd.py" assetgen review-cmd --phase image --run "$td" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && ok "factory-cmd assetgen review-cmd image with a current tile: exit 0" || no "factory-cmd current tile rc=$rc" "$(cat "$TMP/err")"
+cp "$FX/tile-bad.png" "$td/review/tile-2x2.png"
+AG review-cmd --phase image --run "$td" --no-write >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "review/tile-2x2.png is missing or stale" "$TMP/err" && cmp -s "$FX/tile-bad.png" "$td/review/tile-2x2.png" \
+  && ok "--no-write with a stale tile: exit 2, nothing rewritten" || no "--no-write stale rc=$rc" "$(cat "$TMP/err")"
+rm -rf "$td/review"
+python3 -B "$ROOT/scripts/factory-cmd.py" assetgen review-cmd --phase image --run "$td" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && [ ! -e "$td/review" ] && grep -q "missing or stale" "$TMP/err" \
+  && ok "factory-cmd assetgen review-cmd image passes --no-write: no tile built (exit 2, nothing written)" || no "factory-cmd tile rc=$rc" "$(cat "$TMP/err"; ls "$td")"
+mkrun qa-tile-two-001 texture-tileable --style stylized-painterly && AG render --run "$RUNS/qa-tile-two-001" >/dev/null
+cp "$FX/tile-ok.png" "$RUNS/qa-tile-two-001/outputs/a.png"; cp "$FX/flat.png" "$RUNS/qa-tile-two-001/outputs/b.png"
+AG review-cmd --phase image --run "$RUNS/qa-tile-two-001" --json > "$TMP/rt.json"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c .tiles "$TMP/rt.json")" = '["review/tile-2x2-a.png","review/tile-2x2-b.png"]' ] \
+  && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-a.png" ] && [ -f "$RUNS/qa-tile-two-001/review/tile-2x2-b.png" ] \
+  && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rt.json")" = 4 ] \
+  && ok "several outputs: one tile per output (review/tile-2x2-<stem>.png)" || no "two tiles rc=$rc" "$(jq -c .tiles "$TMP/rt.json")"
+
+echo "-- embed: the UI workflow as a workflow tEXt chunk of each output"
+ed="$RUNS/embed-icon-001"; mkrun embed-icon-001 icon --style stylized-painterly && AG render --run "$ed" >/dev/null
+python3 -B - "$ROOT" "$FX/icon-ok.png" "$ed/outputs/comfy.png" <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+data = open(sys.argv[2], "rb").read()  # a ComfyUI-like output: a prompt tEXt chunk (comfy-mcp sends no extra_pnginfo)
+open(sys.argv[3], "wb").write(png.add_text(data, "prompt", '{"1": {"class_type": "NineRouterImage"}}'))
+EOF
+cp "$FX/icon-ok.png" "$ed/outputs/plain.png"; before=$(sha256sum "$ed/outputs/plain.png" | cut -d' ' -f1)
+AG embed --run "$ed" --json > "$TMP/e.json" 2>"$TMP/err"; rc=$?
+python3 -B - "$ROOT" "$ed" "$FX/icon-ok.png" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+run = sys.argv[2]
+ui = json.load(open(os.path.join(run, "workflow.ui.json"), encoding="utf-8"))
+orig = png.decode(sys.argv[3])
+for name, prompt in (("comfy.png", True), ("plain.png", False)):
+    data = open(os.path.join(run, "outputs", name), "rb").read()
+    chunks = list(png.chunks(data))  # signature, lengths and every CRC checked
+    kinds = [c for c, _ in chunks]
+    assert kinds[-1] == b"IEND" and kinds[-2] == b"tEXt" and kinds.count(b"IEND") == 1, kinds
+    texts = dict(b.split(b"\0", 1) for c, b in chunks if c == b"tEXt")
+    assert json.loads(texts[b"workflow"].decode("latin-1")) == ui, name
+    assert (b"prompt" in texts) == prompt and (not prompt or texts[b"prompt"].startswith(b'{"1"')), (name, list(texts))
+    img = png.decode(os.path.join(run, "outputs", name))
+    assert (img.width, img.height, img.rgba) == (orig.width, orig.height, orig.rgba), name
+    try:
+        from PIL import Image
+    except ImportError:
+        continue
+    assert json.loads(Image.open(os.path.join(run, "outputs", name)).text["workflow"]) == ui, name  # .text reads past IDAT
+print("ok")
+EOF
+[ $rc -eq 0 ] && grep -qx ok "$TMP/o" && [ "$(jq -r '([.results[].state] | join(",")) + " " + (.summary.embedded | tostring)' "$TMP/e.json")" = "embedded,embedded 2" ] \
+  && [ "$(sha256sum "$ed/outputs/plain.png" | cut -d' ' -f1)" != "$before" ] && [ -z "$(ls "$ed/outputs" | grep -v '\.png$')" ] \
+  && ok "embed: workflow tEXt chunk = workflow.ui.json right before IEND, CRCs valid, prompt chunk kept, pixels unchanged, no temp file left" \
+  || no "embed rc=$rc" "$(cat "$TMP/err" "$TMP/o" "$TMP/e.json")"
+sums=$(sha256sum "$ed"/outputs/*.png)
+AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && [ "$(sha256sum "$ed"/outputs/*.png)" = "$sums" ] && grep -q "0 embedded, 2 kept, 0 FAIL" "$TMP/o" \
+  && ok "embed is idempotent (a PNG that carries a workflow chunk is kept byte for byte)" || no "embed idempotent rc=$rc" "$(cat "$TMP/o")"
+AG qa --run "$ed" --json > "$TMP/q.json"; AG review-cmd --phase image --run "$ed" --json > "$TMP/rc.json"
+emb=$(sha256sum "$ed/outputs/comfy.png" | cut -d' ' -f1)
+[ "$(jq -r '.outputs[] | select(.path == "outputs/comfy.png") | .sha256' "$TMP/q.json")" = "$emb" ] \
+  && [ "$(jq -r '.binding.outputs[] | select(.path == "outputs/comfy.png") | .sha256' "$TMP/rc.json")" = "$emb" ] \
+  && [ "$(jq -r .state "$TMP/q.json")" = PASS ] \
+  && ok "QA (PASS) and the image review binding hash the embedded file" || no "embedded hashes" "$(jq -c .outputs "$TMP/q.json")"
+cp "$FX/corrupt.png" "$ed/outputs/zz-corrupt.png"
+AG embed --run "$ed" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "^FAIL outputs/zz-corrupt.png: bad CRC" "$TMP/o" && cmp -s "$FX/corrupt.png" "$ed/outputs/zz-corrupt.png" \
+  && ok "embed: a broken PNG is a FAIL row (exit 1) and stays untouched" || no "embed corrupt rc=$rc" "$(cat "$TMP/o")"
+rm -f "$ed/outputs/zz-corrupt.png"
+mkdir -p "$RUNS/embed-noui-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/embed-noui-001/outputs/"
+AG embed --run "$RUNS/embed-noui-001" > /dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "workflow.ui.json" "$TMP/err" && cmp -s "$FX/icon-ok.png" "$RUNS/embed-noui-001/outputs/icon-ok.png" \
+  && ok "embed without workflow.ui.json: error, outputs untouched" || no "embed no ui rc=$rc" "$(cat "$TMP/err")"
+rm -rf "$RUNS/embed-noui-001"
+
+echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
+cat > "$TMP/fake-comfy.py" <<'EOF'
+import json, os, socket, subprocess, sys, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ag, run, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+seen = []
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        seen.append({"path": self.path, "type": self.headers["Content-Type"], "body": body})
+        code = 409 if mode == "conflict" else 200
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(b'"workflows/assetgen/x.json"')
+    def log_message(self, *a):
+        pass
+if mode == "refused":
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+else:
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+p = subprocess.run([sys.executable, "-B", ag, "publish", "--run", run, "--comfy-url", "http://127.0.0.1:%d/" % port, "--json"],
+                   capture_output=True, text=True)
+out = json.loads(p.stdout) if p.stdout.strip() else {}
+req = [{"path": r["path"], "type": r["type"], "same_body": r["body"] == open(os.path.join(run, "workflow.ui.json"), "rb").read()} for r in seen]
+print(json.dumps({"rc": p.returncode, "out": out, "requests": req, "stderr": p.stderr}))
+EOF
+pr="$RUNS/embed-icon-001"; snap() { find "$pr" -type f -exec sha256sum {} + | sort; }; s0=$(snap)
+python3 -B "$TMP/fake-comfy.py" "$ROOT/scripts/assetgen/assetgen.py" "$pr" ok > "$TMP/p.json" 2>&1
+jq -e '.rc == 0 and .out.state == "PASS" and .out.http_status == 200 and .out.workflow == "workflows/assetgen/embed-icon-001.json"
+       and (.requests | length) == 1 and .requests[0].path == "/api/userdata/workflows%2Fassetgen%2Fembed-icon-001.json?overwrite=true"
+       and .requests[0].type == "application/json" and .requests[0].same_body' "$TMP/p.json" >/dev/null \
+  && [ "$(snap)" = "$s0" ] \
+  && ok "publish: one POST /api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true with workflow.ui.json as the body, exit 0, run dir unchanged" \
+  || no "publish ok" "$(cat "$TMP/p.json")"
+python3 -B "$TMP/fake-comfy.py" "$ROOT/scripts/assetgen/assetgen.py" "$pr" conflict > "$TMP/p.json" 2>&1
+jq -e '.rc == 1 and .out.state == "FAIL" and .out.http_status == 409' "$TMP/p.json" >/dev/null && [ "$(snap)" = "$s0" ] \
+  && ok "publish: an HTTP error from ComfyUI is FAIL (exit 1), nothing written" || no "publish conflict" "$(cat "$TMP/p.json")"
+python3 -B "$TMP/fake-comfy.py" "$ROOT/scripts/assetgen/assetgen.py" "$pr" refused > "$TMP/p.json" 2>&1
+jq -e '.rc == 3 and .out.state == "NOT_AVAILABLE" and .requests == []' "$TMP/p.json" >/dev/null && [ "$(snap)" = "$s0" ] \
+  && ok "publish: connection refused is NOT_AVAILABLE (exit 3), nothing written" || no "publish refused" "$(cat "$TMP/p.json")"
+for u in "ftp-host:8188" "file:///etc" "http://127.0.0.1:1/?x=1"; do
+  AG publish --run "$pr" --comfy-url "$u" >/dev/null 2>"$TMP/err"; rc=$?
+  [ $rc -eq 2 ] && grep -q "comfy-url must be" "$TMP/err" && ok "publish --comfy-url $u refused (exit 2)" || no "publish url $u rc=$rc" "$(cat "$TMP/err")"
+done
+[ "$(snap)" = "$s0" ] && ok "refused publish calls write nothing" || no "publish wrote into the run dir"
 
 echo "-- manifest (run.md, gen-run)"
 d="$RUNS/iron-sword-icon-001"; mkrun iron-sword-icon-001 icon --style pixel-art; AG render --run "$d" >/dev/null

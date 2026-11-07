@@ -12,6 +12,10 @@ encode(width, height, rgba, alpha=True) -> PNG bytes (8-bit RGBA, or RGB when al
 encode_raw(width, height, bit_depth, color_type, rows, interlace=0, extra=()) -> PNG bytes from raw scanline bytes
   (test fixtures: formats the stdlib decoder does not handle; extra [(type, body)] chunks such as PLTE and tRNS go
   before IDAT).
+text_keywords(data) -> the keywords of the tEXt, zTXt and iTXt chunks of PNG bytes (raises Invalid).
+add_text(data, keyword, text) -> the PNG bytes with a tEXt chunk keyword=text inserted right before IEND (CRC set;
+  every other chunk, and anything after IEND, kept byte for byte). text must be Latin-1 (JSON with ensure_ascii).
+tile_2x2(img) -> PNG bytes (8-bit RGBA) of the Image repeated 2x2: a seam preview for tileable textures.
 """
 import os
 import struct
@@ -205,3 +209,29 @@ def encode(width, height, rgba, alpha=True):
         line = rgba[y * width * 4:(y + 1) * width * 4]
         rows.append(line if alpha else bytes(b for i, b in enumerate(line) if i % 4 != 3))
     return encode_raw(width, height, 8, 6 if n == 4 else 2, rows)
+
+
+TEXT_CHUNKS = (b"tEXt", b"zTXt", b"iTXt")
+
+
+def text_keywords(data):
+    return {body.split(b"\0", 1)[0].decode("latin-1") for ctype, body in chunks(data) if ctype in TEXT_CHUNKS}
+
+
+def add_text(data, keyword, text):
+    key = keyword.encode("latin-1")
+    if not 1 <= len(key) <= 79 or b"\0" in key:
+        raise ValueError("tEXt keyword must be 1-79 Latin-1 bytes without NUL")
+    body = key + b"\0" + text.encode("latin-1")
+    pos = 8
+    for ctype, cbody in chunks(data):  # validates signature, lengths and CRCs up to IEND
+        if ctype == b"IEND":
+            return data[:pos] + chunk(b"tEXt", body) + data[pos:]
+        pos += 12 + len(cbody)
+    raise Invalid("missing IEND")
+
+
+def tile_2x2(img):
+    stride = img.width * 4
+    rows = [img.rgba[y * stride:(y + 1) * stride] * 2 for y in range(img.height)]
+    return encode_raw(img.width * 2, img.height * 2, 8, 6, rows + rows)

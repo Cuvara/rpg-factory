@@ -259,11 +259,14 @@ ASSETGEN_VERBS = ("list", "show", "resolve", "lint", "review-cmd")
 
 
 def cmd_assetgen(raw):
-    """Read-only assetgen.py verbs; render, qa and manifest write into a run directory and stay with the asset-gen skill."""
+    """Read-only assetgen.py verbs; render, embed, qa and manifest write into a run directory and publish uploads to
+    ComfyUI: they stay with the asset-gen skill."""
     args = shlex.split(raw[0]) if len(raw) == 1 else list(raw)
     if not args or args[0] not in ASSETGEN_VERBS:
         hint = (" (%s writes into a run directory: the asset-gen skill runs scripts/assetgen/assetgen.py directly)" % args[0]
-                if args and args[0] in ("render", "qa", "manifest") else "")
+                if args and args[0] in ("render", "embed", "qa", "manifest") else
+                " (publish uploads to ComfyUI: the asset-gen skill runs scripts/assetgen/assetgen.py directly)"
+                if args and args[0] == "publish" else "")
         raise ValueError("assetgen needs " + "|".join(ASSETGEN_VERBS) + hint)
     # --out writes a file. Refuse it and every prefix of it (--o, --ou, with or without =VALUE) for every verb, so an
     # abbreviation cannot slip past; assetgen.py also parses with allow_abbrev=False.
@@ -275,6 +278,8 @@ def cmd_assetgen(raw):
         game = os.path.join(workspace(reg), reg["repos"]["authoring"]["path"])
         if os.path.isdir(os.path.join(game, "assetgen")):
             args += ["--authoring", game]
+    if args[0] == "review-cmd":
+        args.append("--no-write")  # the image phase never builds review/tile-2x2.png from here
     return run([sys.executable, "-B", os.path.join(ROOT, "scripts", "assetgen", "assetgen.py"), *args])
 
 
