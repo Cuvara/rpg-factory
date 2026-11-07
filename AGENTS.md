@@ -17,10 +17,11 @@ Codex-specific notes and does not restate those rules.
 - **Plugin tasks:** Codex takes part in the plugin-development flow (`.claude/CLAUDE.md` "Developing this plugin")
   as a session a task lead starts in the task worktree: an implementation sub-session, a cross-model reviewer or a
   QA worker. Codex is the default implementer for the code, test, fix, refactor and generated kinds (registry
-  `pipeline.agent_routing`) and runs the long full-suite QA. The run lead is the main Claude Code session; the task
-  lead is Claude (registry `pipeline.lead_agent`), and Codex leads a task only when Claude is unavailable. The roles,
-  the "Which model" table and the fallback rules are in `skills/factory-core/references/parallel-work.md`. Follow the
-  spec you were given: edit only its paths, commit only where it says so, and report to the task lead.
+  `pipeline.agent_routing`) and runs the full-suite QA of work Claude implemented. The run lead is the main
+  Claude Code session; the task lead is Claude (registry `pipeline.lead_agent`), and
+  Codex leads a task only when Claude is unavailable. The roles, the "Which model" table and the fallback rules are in
+  `skills/factory-core/references/parallel-work.md`. Follow the spec you were given: edit only its paths, commit
+  only where it says so, and report to the task lead.
 - **Skills:** the factory-core skill names how to resolve the plugin root and load routed skills on Codex.
 
 More: `docs/codex.md` (manifests, hook adapter contract, Codex dogfood). Script index: `scripts/README.md`.

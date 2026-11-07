@@ -327,8 +327,9 @@ review pairing and exclusive resources live in registry `pipeline`; the plan for
 <!-- policy:no-worktree-repo -->
 A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.
 
-**Which model.** Each plan task and subtask may carry a `kind`; the implementer is the explicit `implementer`, else
-registry `pipeline.agent_routing[kind]`, else `default_implementer`, then mapped through availability:
+**Which model.** Each plan task may carry a `kind`, and each subtask names an `implementer` or a `kind` (`subplan
+validate` errors on neither); the implementer is the explicit `implementer`, else registry
+`pipeline.agent_routing[kind]`, else `default_implementer`, then mapped through availability:
 
 <!-- policy:which-model -->
 | Role or kind | Model | Registry |
@@ -338,11 +339,12 @@ registry `pipeline.agent_routing[kind]`, else `default_implementer`, then mapped
 | design (cross-file design, domain content) | claude | `agent_routing` |
 | code, test, fix, refactor, generated | codex | `agent_routing` |
 | review | the other model | `review_pairing` |
-| QA | the model that did not implement; long full-suite QA prefers codex | `qa_prefer` |
+| QA | the model that did not implement (`qa_prefer` codex when codex did not implement) | `qa_prefer` |
 
 - **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; full QA runs go
-  to Codex. An explicit `implementer` against the table needs a `reason`: `validate` and `subplan validate` warn
-  without one, and warn when 3 or more tasks or subtasks all use one model (warnings, never errors).
+  to Codex when Claude implemented (QA never runs on the implementer's model). An explicit `implementer` against
+  the table needs a `reason`: `validate` and `subplan validate` warn without one, and warn when 3 or more tasks or
+  subtasks all use one model (warnings, never errors).
 - **Availability never stops a task.** Available agents are detected: each `pipeline.agents.<a>.bin` on PATH,
   refined by the Orca account list when Orca runs; `RPG_FACTORY_AGENTS` (comma list) overrides the detection. A
   runtime MODEL_UNAVAILABLE (revoked token, 401) is recorded with
@@ -393,9 +395,10 @@ registry `pipeline.agent_routing[kind]`, else `default_implementer`, then mapped
    merges that branch and removes the child (section 4); `--paths` inside the
    task's exclusions is refused. When the paired model is unavailable ("Which model" above), a fresh session of
    the same model reviews, its prompt and report carry `SAME_MODEL (fallback: <model> unavailable)`, and `verdict`
-   records the fallback (`--fallback <model>`, automatic when the pair is unavailable now); the gate accepts a
-   recorded fallback and needs `--allow-same-model` only for an unrecorded SAME_MODEL review. `--runner agent`
-   (Claude only) marks a session planned for Codex SAME_MODEL in its prompt. The task lead also runs the per-task QA
+   records the fallback automatically when the pair is down (`--fallback <model>` is refused while that model is
+   available); the gate accepts a recorded fallback and needs `--allow-same-model` only for an unrecorded
+   SAME_MODEL review. `--runner agent` (Claude only) marks a session planned for Codex SAME_MODEL in its prompt.
+   The task lead also runs the per-task QA
    (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`. The run lead
    follows the tasks with `factory-pipeline.py status plan.json`. A recorded verdict holds for its task's

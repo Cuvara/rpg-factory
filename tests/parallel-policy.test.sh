@@ -218,17 +218,21 @@ s_mutate "step 4 says implement never commits" "retired shortcut phrasing 'alway
 # which_model <policy file> [<tree root>]: prints each problem; rc 1.
 WHICH_MODEL_ROWS=('| lead, plan, orchestration | claude |' '| docs, policy ' '| design '
   '| code, test, fix, refactor, generated | codex |' '| review | the other model |'
-  '| QA | the model that did not implement; long full-suite QA prefers codex |')
-WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'full QA runs go to Codex' 'RPG_FACTORY_AGENTS'
+  '| QA | the model that did not implement (`qa_prefer` codex when codex did not implement) |')
+WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'full QA runs go to Codex when Claude implemented'
+  'RPG_FACTORY_AGENTS'
   '--down <agent>' 'SAME_MODEL (fallback: <model> unavailable)' 'no command fails because a model is missing')
 which_model() {
-  local f="$1" root="${2:-}" p x table code sec copies errs=()
+  local f="$1" root="${2:-}" p x table code qa sec copies errs=()
   table=$(awk '$0 == "<!-- policy:which-model -->" { f = 1; next } f && /^\|/ { print; t = 1; next } f && t { exit }' "$f")
   if [ -z "$table" ]; then echo "which-model table missing"; return 1; fi
   for p in "${WHICH_MODEL_ROWS[@]}"; do grep -qF -- "$p" <<<"$table" || errs+=("which-model table row missing: '$p'"); done
   [ "$(wc -l <<<"$table")" -le 8 ] || errs+=("which-model table longer than 8 lines")
   code=$(grep -F '| code' <<<"$table")
   ! grep -qi 'claude' <<<"$code" || errs+=("which-model table names claude for code: '$code'")
+  qa=$(grep -F '| QA |' <<<"$table")
+  ! grep -qiE "implementer('s)? model|same model|implementing model" <<<"$qa" \
+    || errs+=("which-model QA row names the implementer's model: '$qa'")
   sec=$(awk '/^## 10\. / { f = 1 } f' "$f" | tr '\n' ' ' | tr -s ' ')
   for p in "${WHICH_MODEL_REQUIRED[@]}"; do grep -qF -- "$p" <<<"$sec" || errs+=("section 10 lacks the routing rule: '$p'"); done
   if [ -n "$root" ]; then
@@ -259,6 +263,10 @@ w_mutate "which-model names claude for code" "which-model table names claude for
   'sed -i "s/^| code, test, fix, refactor, generated | codex |/| code, test, fix, refactor, generated | claude |/" "$F"'
 w_mutate "which-model table grows past 8 lines" "which-model table longer than 8 lines" \
   'sed -i "/^| review | the other model |/i | asset | claude | x |\n| data | codex | x |" "$F"'
+w_mutate "which-model QA row names the implementer's model" "which-model QA row names the implementer's model" \
+  'sed -i "s/^| QA | the model that did not implement (\`qa_prefer\` codex when codex did not implement) |/| QA | the implementer'"'"'s model; long full-suite QA prefers codex |/" "$F"'
+w_mutate "QA token rule loses the implementer condition" "section 10 lacks the routing rule: 'full QA runs go to Codex when Claude implemented'" \
+  'perl -0pi -e "s/full QA runs go\s+to Codex when Claude implemented/full QA runs go to Codex/" "$F"'
 w_mutate "token rule dropped" "section 10 lacks the routing rule: 'delegates code to Codex and does not implement'" \
   'sed -i "s/delegates code to Codex and does not implement/may implement/" "$F"'
 w_mutate "fallback marker dropped" "section 10 lacks the routing rule: 'SAME_MODEL (fallback: <model> unavailable)'" \
