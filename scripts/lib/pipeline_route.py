@@ -8,8 +8,34 @@ import fstate
 KINDS = ('lead', 'plan', 'docs', 'policy', 'design', 'code', 'test', 'fix', 'refactor', 'generated')
 
 
+def _safe(x):
+    return ''.join(c if c.isalnum() or c in '-_.' else '_' for c in str(x))
+
+
 def marks_path(plan):
-    return os.path.join(fstate.persistent(), 'pipeline', ''.join(c if c.isalnum() or c in '-_.' else '_' for c in str(plan.get('id'))), 'agents.json')
+    return os.path.join(fstate.persistent(), 'pipeline', _safe(plan.get('id')), 'agents.json')
+
+
+def record_path(plan, task, subtask, role, sha=None):
+    """<state>/pipeline/<plan>/<task>[@<subtask>]__<role>[__<sha12>].model.json: the model a dispatch started."""
+    sub = '@' + _safe(subtask) if subtask else ''
+    tail = '__' + sha[:12] if sha else ''
+    return os.path.join(fstate.persistent(), 'pipeline', _safe(plan.get('id')),
+                        _safe(task) + sub + '__' + role + tail + '.model.json')
+
+
+def record(plan, task, subtask, role, data, sha=None):
+    fstate.write_json(record_path(plan, task, subtask, role, sha), data, indent=2)
+
+
+def recorded(plan, task, subtask, role, sha=None):
+    rec = fstate.read_json(record_path(plan, task, subtask, role, sha))
+    return rec if isinstance(rec, dict) and rec.get('agent') else None
+
+
+def planned(pipe, item):
+    """The implementer the plan names with every agent available (no availability, no record)."""
+    return route(pipe, item, {a: {'available': True} for a in pipe['agents']})
 
 
 def mark(plan, agent, reason=None):
@@ -26,9 +52,10 @@ _cache = {}
 
 
 def available(pipe, plan):
-    path = marks_path(plan)
-    stamp = os.stat(path).st_mtime_ns if os.path.exists(path) else None
-    key = (id(pipe), plan.get('id'), os.environ.get('RPG_FACTORY_AGENTS'), os.environ.get('PATH'), stamp)
+    """plan None (the planner): no per-run marks."""
+    path = marks_path(plan) if plan is not None else None
+    stamp = os.stat(path).st_mtime_ns if path and os.path.exists(path) else None
+    key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'), os.environ.get('PATH'), stamp)
     if key in _cache:
         return _cache[key]
     override = os.environ.get('RPG_FACTORY_AGENTS')
@@ -56,7 +83,7 @@ def available(pipe, plan):
                     out[agent] = {'available': False, 'why': 'Orca account unavailable'}
         except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
             pass
-    for agent, reason in fstate.read_json(marks_path(plan), {}).items():
+    for agent, reason in (fstate.read_json(path, {}) if path else {}).items():
         if agent in out:
             out[agent] = {'available': False, 'why': 'MODEL_UNAVAILABLE: ' + reason}
     _cache[key] = out
@@ -85,8 +112,10 @@ def paired(pipe, item, impl):
     return reviewer if reviewer and reviewer != impl else pipe["review_pairing"].get(impl)
 
 
-def roles(pipe, item, avail):
-    impl = route(pipe, item, avail)
+def roles(pipe, item, avail, impl=None):
+    """impl: the (agent, why) review and QA pair against - the recorded implementer, else the planned one; None
+    forecasts it from availability (status, implement and lead dispatch before anything was recorded)."""
+    impl = impl or route(pipe, item, avail)
     pair = paired(pipe, item, impl[0])
     review = choose(pair, 'review_pairing', avail)
     if review[0] == impl[0] and pair != impl[0] and not avail.get(pair, {}).get('available'):
@@ -98,7 +127,7 @@ def roles(pipe, item, avail):
             'review': review, 'qa': choose(qa, 'qa_prefer / review_pairing', avail)}
 
 
-def warnings(pipe, items, avail):
+def warnings(pipe, items):
     out = []
     for item in items:
         kind = item.get('kind')

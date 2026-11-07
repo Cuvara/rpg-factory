@@ -43,7 +43,7 @@ problems=$(jq -r '
       (($r.pipeline.agent_routing // {}) | to_entries[]
         | select((.key | IN("lead","plan","docs","policy","design","code","test","fix","refactor","generated","default") | not)
           or $r.pipeline.agents[.value] == null) | "pipeline.agent_routing: invalid kind or agent \(.key)"),
-      (select($r.pipeline.agents[$r.pipeline.qa_prefer] == null) | "pipeline.qa_prefer: unknown agent"),
+      (select($r.pipeline.qa_prefer != null and ($r.pipeline.agents // {})[$r.pipeline.qa_prefer] == null) | "pipeline.qa_prefer: unknown agent"),
       (($r.pipeline.available_agents // [])[] | select($r.pipeline.agents[.] == null) | "pipeline.available_agents: unknown agent \(.)"),
       ($ids | group_by(.) | map(select(length > 1))[] | "duplicate module id: \(.[0])"),
       (select(($r.domains.engineering // null) == null) | "missing domain: engineering"),
