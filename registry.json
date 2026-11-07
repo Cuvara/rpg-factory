@@ -395,6 +395,24 @@
     ],
     "no_worktree_markers": [
       "ProjectSettings/ProjectVersion.txt"
+    ],
+    "agent_routing": {
+      "lead": "claude",
+      "plan": "claude",
+      "docs": "claude",
+      "policy": "claude",
+      "design": "claude",
+      "code": "codex",
+      "test": "codex",
+      "fix": "codex",
+      "refactor": "codex",
+      "generated": "codex",
+      "default": "claude"
+    },
+    "qa_prefer": "codex",
+    "available_agents": [
+      "claude",
+      "codex"
     ]
   },
   "global_rules": [

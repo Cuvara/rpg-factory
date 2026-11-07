@@ -292,6 +292,37 @@
             "type": "string"
           },
           "description": "A repo whose root holds one of these files is treated as worktrees: false even when unregistered."
+        },
+        "agent_routing": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "lead",
+              "plan",
+              "docs",
+              "policy",
+              "design",
+              "code",
+              "test",
+              "fix",
+              "refactor",
+              "generated",
+              "default"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "qa_prefer": {
+          "type": "string"
+        },
+        "available_agents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
         }
       },
       "additionalProperties": false
@@ -603,7 +634,10 @@
             "type": "string"
           },
           "ordering": {
-            "enum": ["ordered", "none"],
+            "enum": [
+              "ordered",
+              "none"
+            ],
             "default": "ordered",
             "description": "none registers a routable synchronization contract for follow-ups and trace evidence without adding a workflow wave edge."
           },
