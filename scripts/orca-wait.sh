@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # One consuming waiter per Run. Real deliveries remain unacknowledged for the caller.
+# Exit codes: 0 real delivery; 2 usage / NOT_AVAILABLE / invalid receipt or state;
+# 3 lock held / acquisition busy; 4 orca failure; 130 INT; 143 TERM.
 set -uo pipefail
 run= timeout=60000 types=worker_done,escalation,question
 while [ "$#" -gt 0 ]; do
@@ -67,10 +69,14 @@ while :; do
   else
     args+=(--wait --types "$types" --timeout-ms "$timeout")
   fi
-  orca "${args[@]}" > "$response" &
+  orca "${args[@]}" > "$response" 2>&1 &
   child=$!
   wait "$child"; status=$?; child=
-  [ "$status" -eq 0 ] || { echo "ERROR: orca check exited $status" >&2; exit "$status"; }
+  if [ "$status" -ne 0 ]; then
+    echo "ERROR: orca check exited $status" >&2
+    tail -n 15 "$response" >&2
+    exit 4
+  fi
   parsed=$(python3 -B - "$response" <<'PY'
 import json, sys
 try:

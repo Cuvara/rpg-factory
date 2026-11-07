@@ -17,6 +17,11 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/orca" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_DIR/argv"
+if [ "${FAKE_MODE:-sequence}" = failure ]; then
+  echo 'fake orca stdout diagnostic'
+  echo 'fake orca stderr diagnostic' >&2
+  exit "${FAKE_EXIT:-2}"
+fi
 if [ "${FAKE_MODE:-sequence}" = hold ]; then
   touch "$FAKE_DIR/ready"
   while [ ! -f "$FAKE_DIR/release" ]; do sleep 0.05; done
@@ -72,6 +77,18 @@ rm -f "$TMP/step"
 bash "$ROOT/scripts/orca-wait.sh" --run stale > "$TMP/stale.out" 2> "$TMP/stale.err"
 status=$?
 [ "$status" -eq 0 ] && [ ! -e "$TMP/state/orca-wait/stale.lock" ] && ok "dead holder taken over and cleaned" || no "stale takeover failed"
+
+# CLI failures must not collide with the waiter's own usage and lock codes.
+for orca_code in 2 3 9; do
+  FAKE_MODE=failure FAKE_EXIT="$orca_code" bash "$ROOT/scripts/orca-wait.sh" --run failure > "$TMP/failure.out" 2> "$TMP/failure.err"
+  status=$?
+  if [ "$status" -eq 4 ] && grep -q "orca check exited $orca_code" "$TMP/failure.err" \
+    && grep -q 'fake orca stdout diagnostic' "$TMP/failure.err" \
+    && grep -q 'fake orca stderr diagnostic' "$TMP/failure.err" \
+    && [ ! -e "$TMP/state/orca-wait/failure.lock" ]; then
+    ok "orca failure $orca_code exits 4 with diagnostics and cleans lock"
+  else no "orca failure $orca_code not diagnosed or cleaned"; fi
+done
 
 # An empty PATH proves absence even on hosts with Orca installed.
 mkdir -p "$TMP/empty"

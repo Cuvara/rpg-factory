@@ -25,6 +25,12 @@ pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -15 | sed 's/^/      /'; }
 
+# Keep the waiter standalone while including it in run-all and CI through this suite.
+wait_out=$(bash "$ROOT/tests/orca-wait.test.sh" 2>&1); wait_rc=$?
+if [ "$wait_rc" -eq 0 ]; then
+  ok "$(tail -n 1 <<<"$wait_out")"
+else no "orca-wait suite (rc=$wait_rc)" "$(tail -n 15 <<<"$wait_out")"; fi
+
 # regression: a read-only file in the source tree still mutates in the copy (a temp source, never the real worktree)
 RO_SRC="$TMP/ro-src"; RO_DST="$TMP/ro-dst"; RO_F=skills/client-integration/SKILL.md
 mkdir -p "$RO_SRC/${RO_F%/*}" "$RO_DST"; cp "$P/$RO_F" "$RO_SRC/$RO_F"; chmod a-w "$RO_SRC/$RO_F"
@@ -404,7 +410,7 @@ import re
 import sys
 from pathlib import Path
 
-machine_path = re.compile(r'(?<![A-Za-z])[A-Za-z]:[/\\]|/mnt/[A-Za-z]/|/Users/|/home/|AppData', re.I)
+machine_path = re.compile(r'(?<![A-Za-z])[A-Za-z]:[/\\]|(?<![\w/:.-])/[A-Za-z]/|/mnt/[A-Za-z](?:/|$)|/Users/|/home/|AppData', re.I | re.M)
 bad = []
 for path in sorted(Path(sys.argv[1]).rglob('*')):
     if path.is_file() and machine_path.search(path.read_bytes().decode('utf-8', errors='replace')):
@@ -419,10 +425,10 @@ portable_out=$(portable_plans "$ROOT/docs/plans" 2>&1); portable_rc=$?
   || no "docs/plans portable paths (rc=$portable_rc)" "$portable_out"
 PLAN_COPY="$TMP/plans-portable"; mkdir -p "$PLAN_COPY"
 if [ -d "$ROOT/docs/plans" ]; then cp -r "$ROOT/docs/plans/." "$PLAN_COPY/"; fi
-printf '%s\n' 'see https://example.com/x' > "$PLAN_COPY/zz-url.md"
-portable_out=$(portable_plans "$PLAN_COPY" 2>&1) && ok "docs/plans check allows a URL" || no "docs/plans check rejects a URL" "$portable_out"
+printf '%s\n' 'see https://example.com/x and https://example.com/c/workspace/example' 'docs/plans/x and docs/plans/c/example' > "$PLAN_COPY/zz-url.md"
+portable_out=$(portable_plans "$PLAN_COPY" 2>&1) && ok "docs/plans check allows URLs and repo-relative paths" || no "docs/plans check rejects URLs or repo-relative paths" "$portable_out"
 rm -f "$PLAN_COPY/zz-url.md"
-for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
+for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/mnt/c' '/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
   printf '%s\n' "$machine_path" > "$PLAN_COPY/zz-machine-path.md"
   portable_out=$(portable_plans "$PLAN_COPY" 2>&1); portable_rc=$?
   if [ "$portable_rc" -ne 0 ] && grep -qF 'machine-specific absolute path:' <<<"$portable_out"; then
