@@ -91,6 +91,18 @@
   `references/style-lock.md` (bootstrap a new game style: exploration `concept-2d` runs, a person picks,
   `promote-anchor`, a person approves, then `project.json` and the game style at version 1; style change and drift);
   `comfyui` documents the anchor wiring and uploading every `references/*` file.
+- **Edge fringe QA and `defringe`.** `qa` adds the row `png-edge-fringe` for purposes with alpha (the colour of
+  low-alpha edge pixels against the adjacent opaque pixels and the output composited on black and white), and
+  `assetgen.py defringe --run DIR [--alpha-floor N]` bleeds opaque neighbour colour into low-alpha pixels (stdlib,
+  premultiply-safe), runs after generation and before QA, keeps the originals and is recorded in the run.
+- **Composite previews for alpha review.** `review-cmd --phase image` writes and attaches
+  `review/composite-dark.png` and `review/composite-light.png` for every output with alpha, and the rubric asks to
+  judge the edges on both; Claude's own image review uses the same composites.
+- **Approval verb.** `assetgen.py approve-record --run DIR --by NAME [--note TEXT]` writes the approval record and the
+  `run.md` status `approved` for a person; it refuses a missing `--by` and an agent or model name. The person commits
+  and signs the record. The `asset-gen` skill runs it only on the person's explicit word and quotes it.
+- **Cross-family anchors.** `resolve` warns when a selected anchor's family differs from the run's family, and
+  `anchor_family_fallback: false` in a purpose or `project.json` forbids such anchors.
 
 ### Changed
 
@@ -122,6 +134,14 @@
 - **Failed attempts.** A failed attempt's run directory stays on disk without `run.md`, the next attempt takes the
   next number, and `manifest` lists the earlier attempts of the series without `run.md` in
   `spec.trace.failed_attempts` (the envelope `trace` stays the engineering trace; documented in `asset-gen`).
+- **`manifest` keeps an approval.** An `approved` run stays `approved`, and its approval stays bound, when `manifest`
+  runs again and nothing the approval binds changed.
+- **Style bootstrap.** `asset-gen` `references/style-lock.md`: a new game style id has no anchors until runs under it
+  are approved and promoted, so promote again under the game style id or explore under it; step 5 checks the
+  structured `palette`, `tone` and `canvas` fields, and `lint` WARNs on an active game style without them (every
+  `style-*` QA row would be `NOT_AVAILABLE`).
+- **`drift` reports style-id mismatches.** Gen-runs and anchors recorded under another style id than `project.json`
+  are listed, not only older versions of the same style.
 
 ### Fixed
 
@@ -147,3 +167,11 @@
   purpose and the template.
 - **`lint`.** A bad game-layer value is blamed on the game file that holds it, not on the unchanged core file it
   extends.
+- **Uncommitted approval message.** An approval record that is present but not committed and signed reads
+  "approval present but not committed/signed" instead of "missing", graded `HUMAN_REQUIRED` in the trace and in
+  `gen-run-style`.
+- **Square size tolerance.** `sprite-2d` and `icon` square checks failed on real service outputs (1322x1190); square
+  purposes now tolerate such outputs, and a landscape or portrait purpose can set `qa.size.allow_swap` to accept the
+  swapped orientation (1024x1536 returned for 1536x1024), with these real sizes as regression tests.
+- **`embed` stale chunk.** `embed` replaces an existing `workflow` chunk that differs from the current
+  `workflow.ui.json` (idempotent when equal), so a re-render no longer leaves the old graph in the PNG.
