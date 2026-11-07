@@ -959,6 +959,11 @@ variant qp-qastylefail-001; qaset qp-qastylefail-001 '[r.__setitem__("state", "F
 AG manifest --run "$RUNS/qp-qastylefail-001" >/dev/null
 variant qp-qastyleagree-001; qaset qp-qastyleagree-001 'obj["state"] = "FAIL"; [r.__setitem__("state", "FAIL") for r in obj["results"] if r["check"] == "style-palette"]'
 AG manifest --run "$RUNS/qp-qastyleagree-001" >/dev/null
+# with spec.style_lock the image reviews bind the style ref and the anchors shown
+variant qp-stylebind-001; bound "$RUNS/qp-stylebind-001" image PASS codex | jq -c '.style.version = 99' > "$RUNS/qp-stylebind-001/review-image.json"
+AG manifest --run "$RUNS/qp-stylebind-001" >/dev/null
+variant qp-stylebindc-001; bound "$RUNS/qp-stylebindc-001" image PASS claude | jq -c 'del(.style, .anchors)' > "$RUNS/qp-stylebindc-001/review-image-claude.json"
+AG manifest --run "$RUNS/qp-stylebindc-001" >/dev/null
 # Claude's own visual review (review-image-claude.json): recorded, WARN when missing, never replaces the Codex review
 variant qp-noclaude-001; rm -f "$RUNS/qp-noclaude-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-noclaude-001" >/dev/null
 variant qp-claudeonly-001; rm -f "$RUNS/qp-claudeonly-001/review-image.json"; AG manifest --run "$RUNS/qp-claudeonly-001" >/dev/null
@@ -1005,7 +1010,7 @@ cp -R "$good" "$RUNS/qp-fallback-001" "$QAUTH/assetgen/runs/"; git init -q -b ma
 python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$QAUTH" --registry "$ROOT/registry.json" --domain assetgen --json > "$TMP/aq.json" 2>"$TMP/err"; rc=$?
 st() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .state] | join(",")' "$TMP/aq.json"; }
 why() { jq -r --arg a "$1" --arg c "$2" '[.results[] | select(.artifact == $a and .check == $c) | .reasons[]] | join("; ")' "$TMP/aq.json"; }
-plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-claude-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs"
+plugin_checks="gen-run-location gen-run-prompt-review gen-run-image-review gen-run-claude-review gen-run-outputs gen-run-qa gen-run-provenance gen-run-refs gen-run-style"
 got=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-icon-001 "$c")"; done)
 want=$(for c in schema lifecycle trace-approval $plugin_checks; do printf '%s=PASS ' "$c"; done)
 [ $rc -eq 0 ] && [ "$got" = "$want" ] && ok "artifact-quality --domain assetgen: complete run (codex reviews, QA PASS, hashes, provenance, game-layer refs) all PASS" \
@@ -1059,8 +1064,12 @@ case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAIL
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"
 case_ qp-qasize-001 gen-run-qa FAIL 'graded for requested size' "requested size changed after QA: FAIL"
-[ "$(st AGEN-qp-qastylewarn-001 gen-run-qa)" = PASS ] && ok "style-* WARN rows in a PASS qa.json neither grade nor contradict: gen-run-qa PASS" \
+case_ qp-qastylewarn-001 gen-run-qa WARN 'style consistency outputs/qp-icon.png: style-palette WARN' "style-* WARN rows in a PASS qa.json stay WARN (soft signal), never FAIL"
+[ "$(st AGEN-qp-qastylewarn-001 gen-run-qa)" = WARN ] && ! why AGEN-qp-qastylewarn-001 gen-run-qa | grep -q contradicts && ok "style-* WARN rows do not contradict a PASS qa.json" \
   || no "style WARN rows: $(st AGEN-qp-qastylewarn-001 gen-run-qa)" "$(why AGEN-qp-qastylewarn-001 gen-run-qa)"
+case_ qp-stylebind-001 gen-run-image-review FAIL 'is not bound to the style lock' "image review bound to another style ref than spec.style_lock: stale, FAIL"
+case_ qp-stylebindc-001 gen-run-claude-review WARN 'outputs and style lock' "Claude review without the style lock binding (style ref, anchors): WARN"
+[ "$(st AGEN-qp-stylebind-001 gen-run-prompt-review)" = PASS ] && ok "style lock binding: the prompt review is unaffected" || no "stylebind prompt review: $(st AGEN-qp-stylebind-001 gen-run-prompt-review)"
 case_ qp-qastylefail-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows' "a style-* FAIL row in a PASS qa.json contradicts it: FAIL"
 case_ qp-qastyleagree-001 gen-run-qa FAIL 'QA is FAIL' "a style-* FAIL row with a FAIL qa state: the run is not done (FAIL on a proposed run)"
 case_ qp-noclaude-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "no Claude visual review file: WARN"
@@ -1754,6 +1763,124 @@ AG drift --authoring "$SC" > "$TMP/dr.txt" 2>"$TMP/err"; rc=$?
   && grep -q "^hash-changed gen-run AGEN-sl-icon-001 " "$TMP/dr.txt" && ! grep -q "^older-version" "$TMP/dr.txt" && grep -q "^assetgen drift: [1-9][0-9]* item(s) behind the current style$" "$TMP/dr.txt" \
   && ok "drift text: same version, changed style data -> hash-changed" || no "drift hash-changed rc=$rc" "$(cat "$TMP/err" "$TMP/dr.txt")"
 git -C "$SC" checkout -q -- .
+
+echo "-- gen-run-style (quality plugin): style lock refs, anchor approval, image bytes, source runs, override"
+python3 -B - "$ROOT" "$TMP/style-plugin" "$FX/icon-ok.png" > "$TMP/gs" 2>&1 <<'EOF'
+import hashlib, importlib.util, json, os, sys
+root, A, png = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, os.path.join(root, "scripts", "checks"))
+from domains._api import Context
+spec_ = importlib.util.spec_from_file_location("assetgen_plugin_style", os.path.join(root, "scripts", "checks", "domains", "assetgen.py"))
+plugin = importlib.util.module_from_spec(spec_); spec_.loader.exec_module(plugin)
+layers, stylelock = plugin.engine("layers"), plugin.engine("stylelock")
+G = os.path.join(A, "assetgen")
+os.makedirs(os.path.join(G, "styles"), exist_ok=True)
+v1 = {"schema": "rpg-factory.assetgen-style/1", "title": "RPG base", "version": 1, "status": "active", "prefix": "RPG base art,"}
+v2 = dict(v1, version=2, prefix="RPG base art, warmer,")
+json.dump(v2, open(os.path.join(G, "styles", "rpg-base.json"), "w", encoding="utf-8"))
+ref2 = stylelock.style_ref(layers.load("style", "rpg-base", A))
+ref1 = {"style_id": "rpg-base", "version": 1, "sha256": layers.content_hash(v1)}
+img = open(png, "rb").read()
+SIGNED = {"seed-001", "src-ok-001", "src-agent-001"}  # runs whose signed approval verifies (ctx.approval stub)
+
+
+class Ctx(Context):
+    def approval(self, artifact_id):
+        ok = artifact_id[len("AGEN-"):] in SIGNED
+        return {"state": "verified" if ok else "missing", "reasons": [] if ok else ["no signed approval"]}
+
+
+for rid, status in (("seed-001", "approved"), ("seed2-001", "approved"), ("draft-001", "proposed")):
+    os.makedirs(os.path.join(G, "runs", rid), exist_ok=True)
+    with open(os.path.join(G, "runs", rid, "run.md"), "w", encoding="utf-8") as f:
+        f.write("---json\n%s\n---\n" % json.dumps({"id": "AGEN-" + rid, "status": status}))
+
+
+def anchor(aid, ref, run="seed-001", status="active", by="Dana", n=0, output="outputs/a.png"):
+    d = os.path.join(G, "styles", "rpg-base", "anchors"); os.makedirs(d, exist_ok=True)
+    data = img + bytes([n])  # distinct bytes per anchor (a trailing byte, never decoded)
+    open(os.path.join(d, aid + ".png"), "wb").write(data)
+    sha = hashlib.sha256(data).hexdigest()
+    json.dump({"schema": stylelock.ANCHOR_SCHEMA, "id": aid, "status": status, "style": ref, "family": "props",
+               "dimensions": ["palette"], "strength": "canonical", "image": aid + ".png", "image_sha256": sha,
+               "source_run": {"run_id": run, "output": output, "sha256": sha},
+               "approved_by": by if status == "active" else None, "approved_on": "2026-11-01" if status == "active" else None},
+              open(os.path.join(d, aid + ".json"), "w", encoding="utf-8"))
+    return sha
+
+
+shas = {"a-good": anchor("a-good", ref2, n=1), "a-agent": anchor("a-agent", ref2, by="claude-opus", n=2),
+        "a-old": anchor("a-old", ref1, n=3), "a-noimg": anchor("a-noimg", ref2, n=4),
+        "a-draftsrc": anchor("a-draftsrc", ref2, run="draft-001", n=5), "a-unsigned": anchor("a-unsigned", ref2, run="seed2-001", n=6),
+        "a-proposed": anchor("a-proposed", ref2, status="proposed", n=7), "a-retired": anchor("a-retired", ref2, status="retired", n=8),
+        "a-bytes": anchor("a-bytes", ref2, n=9)}
+os.remove(os.path.join(G, "styles", "rpg-base", "anchors", "a-noimg.png"))
+open(os.path.join(G, "styles", "rpg-base", "anchors", "a-bytes.png"), "ab").write(b"x")
+reg = json.load(open(os.path.join(root, "registry.json"), encoding="utf-8"))
+
+
+def style_rows(rid, status="proposed", refs=(), ref=ref2, override=None, lock=True, outputs=()):
+    spec = {"run_id": rid, "style": {"id": ref["style_id"], "layer": "game", "sha256": ref["sha256"]},
+            "outputs": [{"path": p, "sha256": s} for p, s in outputs]}
+    if lock:
+        spec["style_lock"] = {"project": None, "family": "props", "family_source": "purpose", "style": ref, "override": override,
+                              "max_references": 3, "rejections": [],
+                              "references": [{"anchor_id": a, "sha256": shas.get(a, "0" * 64)} for a in refs]}
+    obj = {"id": "AGEN-" + rid, "kind": "gen-run", "status": status, "spec": spec}
+    rows = plugin.check(obj, Ctx(A, reg, "assetgen/runs/%s/run.md" % rid, {}, None, {"authoring": A}))
+    return [r for r in rows if r.check == "gen-run-style"], [r.check for r in rows]
+
+
+def case(rid, want, needles, label, **kw):
+    rows, _ = style_rows(rid, **kw)
+    text = "; ".join(sum((r.reasons for r in rows), []))
+    good = len(rows) == 1 and rows[0].state == want and all(n in text for n in needles)
+    print(("ok " if good else "no ") + label + ("" if good else " | %s %s" % ([r.state for r in rows], text)))
+
+
+case("u-good-001", "PASS", [], "gen-run-style: a human-approved active anchor (approved source run, signed approval, bytes match) PASS", refs=["a-good"])
+case("u-agent-001", "FAIL", ["is an agent or model"], "gen-run-style: an active anchor approved_by an agent/model name FAIL", refs=["a-agent"])
+case("u-old-001", "WARN", ["changed since the run"], "gen-run-style: an anchor of an older style version stays valid (style drift WARN only)", refs=["a-old"], ref=ref1)
+case("u-gone-001", "FAIL", ["a-gone is not in assetgen/styles/rpg-base/anchors/"], "gen-run-style: a recorded anchor without its JSON FAIL", refs=["a-gone"])
+case("u-noimg-001", "FAIL", ["a-noimg image a-noimg.png is missing"], "gen-run-style: a recorded anchor without its image file FAIL", refs=["a-noimg"])
+case("u-bytes-001", "FAIL", ["sha256 on disk differs from image_sha256"], "gen-run-style: anchor image bytes changed FAIL", refs=["a-bytes"])
+case("u-draftsrc-001", "FAIL", ["source gen-run draft-001 is proposed, not approved"], "gen-run-style: an anchor whose source run is not approved FAIL", refs=["a-draftsrc"])
+case("u-unsigned-001", "FAIL", ["approval of source gen-run AGEN-seed2-001 is missing"],
+     "gen-run-style: source run approved in run.md without a verified signed approval FAIL", refs=["a-unsigned"])
+case("u-proposed-001", "FAIL", ["is proposed, not active"], "gen-run-style: a proposed anchor in the references FAIL", refs=["a-proposed"])
+case("u-retired-001", "WARN", ["retired since the run"], "gen-run-style: an anchor retired after the run WARN", refs=["a-retired"])
+case("u-override-001", "WARN", ["style override recorded: one-off key art"], "gen-run-style: an override with a reason WARN", override="one-off key art")
+case("u-blank-001", "FAIL", ["override must be null or a non-empty reason"], "gen-run-style: an override without a reason FAIL", override="  ")
+case("u-noref-001", "FAIL", ["does not resolve"], "gen-run-style: a style ref that does not resolve FAIL",
+     ref={"style_id": "no-such-style", "version": 1, "sha256": "1" * 64})
+rows, names = style_rows("legacy-001", lock=False)
+print(("ok " if not rows and "gen-run-refs" in names else "no ") + "gen-run-style: an old run without style_lock and no promoted anchor gets no row (unchanged)")
+# anchors promoted from the run itself
+sha = anchor("s-active", ref2, run="src-001", n=10, output="outputs/s.png")
+case("src-001", "FAIL", ["is active but its source gen-run AGEN-src-001 is proposed, not approved"],
+     "gen-run-style: an active anchor whose source run (this run) is not approved FAIL", lock=False, outputs=[("outputs/s.png", sha)])
+sha = anchor("s-ok", ref2, run="src-ok-001", n=11, output="outputs/s.png")
+case("src-ok-001", "PASS", [], "gen-run-style: an active anchor promoted from this approved run PASS", status="approved", lock=False,
+     outputs=[("outputs/s.png", sha)])
+sha = anchor("s-agent", ref2, run="src-agent-001", by="codex", n=12, output="outputs/s.png")
+case("src-agent-001", "FAIL", ["without a person's approval", "codex"], "gen-run-style: an active anchor of this run approved by an agent FAIL",
+     status="approved", lock=False, outputs=[("outputs/s.png", sha)])
+case("src-agent-001", "FAIL", ["which this run does not record"], "gen-run-style: an anchor naming output bytes the run does not record FAIL",
+     status="approved", lock=False, outputs=[("outputs/s.png", "0" * 64)])
+print("ok gen-run-style cases ran to the end")
+EOF
+while IFS= read -r line; do
+  case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; *) no "gen-run-style: unexpected output" "$line" ;; esac
+done < "$TMP/gs"
+grep -qx "ok gen-run-style cases ran to the end" "$TMP/gs" || no "gen-run-style cases stopped early" "$(tail -5 "$TMP/gs")"
+# registry fast check assetgen-lint: catches an active anchor whose source gen-run has no run.md (no gen-run to check)
+cmd=$(jq -r '.modules[] | select(.id == "authoring.assetgen") | .checks.fast[] | select(.id == "assetgen-lint") | .run' "$ROOT/registry.json")
+[ -n "$cmd" ] && jq -e '.domains.assetgen.quality_gates | index("assetgen-lint")' "$ROOT/registry.json" >/dev/null \
+  && ok "registry: authoring.assetgen fast check assetgen-lint is a quality gate of the assetgen domain" || no "registry assetgen-lint" "$cmd"
+SP="$TMP/style-plugin"; rm -rf "$SP/assetgen/runs/seed-001"
+(cd "$SP" && eval "${cmd//\{plugin_root\}/\"$ROOT\"}") > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "a-good.json: .*seed-001 is missing" "$TMP/o" \
+  && ok "assetgen-lint (registry command, in the authoring repo): an active anchor whose source run.md is gone FAILS" || no "assetgen-lint rc=$rc" "$(grep -v '^PASS' "$TMP/o")"
 
 echo "-- consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py)"
 python3 -B "$ROOT/tests/fixtures/assetgen/consistency_selftest.py" > "$TMP/cs" 2>&1; rc=$?
