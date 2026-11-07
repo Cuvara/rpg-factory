@@ -347,5 +347,88 @@ a_mutate "Claude task-lead rule dropped" "AGENTS.md lacks: 'Codex leads a task o
 a_mutate "Codex default implementer dropped" "AGENTS.md lacks: 'default implementer for the code, test, fix, refactor and generated kinds'" \
   'sed -i "s/Codex is the default implementer for the code, test, fix, refactor and generated kinds/Codex implements when asked/" "$F"'
 
+# Portable plan paths: no subprocesses or changes to the real workspace.
+paths_out=$(python3 -B - "$ROOT" "$TMP" <<'PY'
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))  # as factory-pipeline.py imports lib modules
+from plan_paths import resolve_repo_path
+
+tmp = Path(sys.argv[2]).resolve()
+plan = tmp / 'plans' / 'nested' / 'plan.json'
+workspace = tmp / 'workspace'
+workspace.mkdir()
+(workspace / 'marker').mkdir()
+variable = 'RPG_FACTORY_WORKSPACE'
+registry = {'workspace': {'root_env': variable, 'root_markers': ['marker'],
+                          'root_default': str(tmp / 'missing')}}
+
+def expect(label, value, wanted):
+    assert value == wanted, (label, value, wanted)
+    print(label)
+
+with patch.dict(os.environ, {variable: str(workspace)}):
+    expect('absolute normalized', resolve_repo_path(str(tmp / 'a' / '..' / 'repo'), plan, registry),
+           (str(tmp / 'repo'), None))
+    expect('plan-relative ../..', resolve_repo_path('../../repo', plan, registry),
+           (str(tmp / 'repo'), None))
+    for prefix in ('${' + variable + '}', '$' + variable):
+        expect('workspace prefix ' + prefix, resolve_repo_path(prefix + '/repo', plan, registry),
+               (str(workspace / 'repo'), None))
+        expect('workspace root ' + prefix, resolve_repo_path(prefix, plan, registry),
+               (str(workspace), None))
+    expect('variable boundary', resolve_repo_path('$' + variable + '_OTHER/repo', plan, registry),
+           (str(plan.parent / ('$' + variable + '_OTHER') / 'repo'), None))
+with patch.dict(os.environ, {variable: ''}):
+    result, reason = resolve_repo_path('${' + variable + '}/repo', plan, registry)
+    assert result is None and variable in reason, (result, reason)
+    print('missing workspace names variable')
+# The prefix comes from registry data rather than a second hard-coded variable name.
+registry['workspace']['root_env'] = 'FACTORY_TEST_WORKSPACE'
+with patch.dict(os.environ, {'FACTORY_TEST_WORKSPACE': str(workspace)}):
+    expect('registry variable', resolve_repo_path('$FACTORY_TEST_WORKSPACE/repo', plan, registry),
+           (str(workspace / 'repo'), None))
+PY
+); paths_rc=$?
+if [ "$paths_rc" -eq 0 ]; then
+  while IFS= read -r label; do ok "plan_paths: $label"; done <<<"$paths_out"
+else no "plan_paths unit cases (rc=$paths_rc)" "$paths_out"; fi
+
+# Check every file, including untracked plans; use the same checker on injected copies.
+portable_plans() {
+  python3 -B - "$1" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+machine_path = re.compile(r'(?<![A-Za-z])[A-Za-z]:[/\\]|/mnt/[A-Za-z]/|/Users/|/home/|AppData', re.I)
+bad = []
+for path in sorted(Path(sys.argv[1]).rglob('*')):
+    if path.is_file() and machine_path.search(path.read_bytes().decode('utf-8', errors='replace')):
+        bad.append(str(path))
+if bad:
+    print('machine-specific absolute path: ' + ', '.join(bad))
+    sys.exit(1)
+PY
+}
+portable_out=$(portable_plans "$ROOT/docs/plans" 2>&1); portable_rc=$?
+[ "$portable_rc" -eq 0 ] && ok "docs/plans contains no machine-specific absolute paths" \
+  || no "docs/plans portable paths (rc=$portable_rc)" "$portable_out"
+PLAN_COPY="$TMP/plans-portable"; mkdir -p "$PLAN_COPY"
+if [ -d "$ROOT/docs/plans" ]; then cp -r "$ROOT/docs/plans/." "$PLAN_COPY/"; fi
+printf '%s\n' 'see https://example.com/x' > "$PLAN_COPY/zz-url.md"
+portable_out=$(portable_plans "$PLAN_COPY" 2>&1) && ok "docs/plans check allows a URL" || no "docs/plans check rejects a URL" "$portable_out"
+rm -f "$PLAN_COPY/zz-url.md"
+for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/repo' '/Users/person/repo' '/home/person/repo' 'AppData/Local/state'; do
+  printf '%s\n' "$machine_path" > "$PLAN_COPY/zz-machine-path.md"
+  portable_out=$(portable_plans "$PLAN_COPY" 2>&1); portable_rc=$?
+  if [ "$portable_rc" -ne 0 ] && grep -qF 'machine-specific absolute path:' <<<"$portable_out"; then
+    ok "docs/plans mutation rejected: $machine_path"
+  else no "docs/plans mutation was not rejected: $machine_path (rc=$portable_rc)" "$portable_out"; fi
+done
+
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
