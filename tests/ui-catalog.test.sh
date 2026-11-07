@@ -125,6 +125,23 @@ for rc, cut, why in cases:
     assert c["uitoolkit"] is None and {e["kind"] for e in c["entries"]} == {"unity-builtin"}, why
 assert ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")["status"] == "PASS"
 PY
+# a failing git ls-tree (subprocess.run stubbed for ls-tree only): NOT_AVAILABLE, never a catalog from an empty listing
+python3 -B - "$ROOT/scripts/ui" "$U" <<'PY' && ok "ls-tree failure -> NOT_AVAILABLE with the reason, built-ins only" || no "ls-tree failure handling"
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import ui_catalog
+real = subprocess.run
+def run(cmd, *a, **kw):
+    if "ls-tree" not in cmd:
+        return real(cmd, *a, **kw)
+    return subprocess.CompletedProcess(cmd, 128, "", "fatal: stub failure\n")
+subprocess.run = run
+c = ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")
+subprocess.run = real
+assert c["status"] == "NOT_AVAILABLE" and "ls-tree" in c["reason"] and "exit 128" in c["reason"], (c["status"], c["reason"])
+assert c["uitoolkit"] is None and {e["kind"] for e in c["entries"]} == {"unity-builtin"}, c["entries"][:3]
+assert ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")["status"] == "PASS"
+PY
 python3 -B "$CAT" --ref >/dev/null 2>&1; [ $? -eq 2 ] && ok "catalog usage error -> exit 2" || no "catalog usage exit"
 out=$(python3 -B "$CAT" --ref v0.8.0); grep -q '^| `pkg:ConfirmDialog` | package-service | Runtime/Flow/ConfirmDialog.cs:' <<<"$out" && ok "Markdown table output" || no "markdown: $(head -c 300 <<<"$out")"
 
