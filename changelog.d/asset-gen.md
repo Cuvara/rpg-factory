@@ -94,6 +94,16 @@
 
 ### Changed
 
+- **`--run` takes a run id.** Every `--run` accepts the run id as well as the run directory; an id resolves under
+  `<authoring>/assetgen/runs/` (with `--authoring`, else the current repo).
+- **Short `resolve` output.** `resolve` prints a short summary (style lock, references, rejections, key params,
+  warnings); the source file of every field and param only with `--verbose` or `--json`.
+- **`asset-gen` skill: a service FAIL stops regenerating.** After a FAIL the service causes, not the prompt (for
+  example a returned size that ignores the request), the agent stops regenerating, runs `manifest` on the last attempt
+  with its QA FAIL visible and reports; the earlier attempts stay without `run.md`.
+- **`comfyui` skill.** It names the service ignoring `size` as a known issue, and says that `server_info`'s outdated
+  flag for a node pack compares the pack hash with ComfyUI's own commit, so it is unreliable for a pack inside the
+  ComfyUI checkout: the agent reports it as unverified and never prompts or performs an update on that signal alone.
 - **2D Art.** Generated images may become production sources, but only through a human-approved `gen-run` handed
   off by `assetgen-to-art2d`. Any other generated image stays a concept draft. Art 3D, UI/UX and VFX accept
   approved gen-runs through their handoff contracts and name `rpg-factory:comfyui` for inspecting a generation.
@@ -115,6 +125,15 @@
 
 ### Fixed
 
+- **Size QA vs the real image service.** The 9router image node can ignore `size` entirely (live style-lock e2e,
+  2026-11-08: 1672x941 returned for 1536x1024 and 1024x1024 requests), so `concept-2d` could never pass and
+  `promote-anchor` refused good outputs. No core purpose's size QA grades the exact size any more: it grades
+  orientation or aspect with a tolerance, a minimum area and a minimum short side that real outputs meet, per purpose
+  in data, with regression tests on the real returned sizes.
+- **Review prompt params.** The requested params in the review prompts come from the rendered workflow, so a
+  `render --param` value is the one the reviewer sees, never the `spec.json` value it replaced.
+- **Size double-counted in the image review.** The image review prompt states QA's verdict as context and tells the
+  reviewer not to grade size or the other deterministic checks again; they belong to QA only.
 - **`filename_prefix`.** `spec.json`, the review prompts and `run.md` record the same `assetgen/<run-id>` prefix that
   `render` writes into the workflow.
 - **`review-cmd`.** The printed command uses absolute paths, so it works from any working directory.
