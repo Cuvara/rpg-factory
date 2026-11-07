@@ -1275,7 +1275,7 @@ RPG_FACTORY_AGENTS=claude python3 -B "$P" verdict "$RP" --task k --phase review 
 if ! grep -q '"fallback": "' "$RVD/k__review__${RS2:0:12}__claude.json"; then pass=$((pass + 1)); echo "PASS  a fallback dispatch of another candidate stamps no fallback"
 else fail=$((fail + 1)); echo "FAIL  a fallback dispatch of another candidate stamps no fallback"; fi
 # a subtask fallback is never laundered by the task review: subtask s by claude (codex down), codex back, task review by
-# claude paired against the planned codex implementer
+# claude paired against the lead's explicitly declared codex implementation
 RSP=$(plan recsub '{"schema":"rpg-factory.pipeline-plan/1","id":"recsub","title":"Recorded subtasks","topic":"feat/core/rec","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[
  {"id":"k","repo":"rec","kind":"code","objective":"o","paths":["code/","docs/"],"acceptance":["a"]}]}')
 RSS="$TMP/sub-recsub.json"
@@ -1288,7 +1288,7 @@ rv() { python3 -B "$P" verdict "$RSP" "$@" >/dev/null || echo "verdict failed: $
 RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s
 RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s2
 rs dispatch "$RSP" --task k --phase review --sha "$RS2"
-rv --task k --phase review --sha "$RS2" --by claude --state PASS
+rv --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
 rv --task integration:rec --phase qa --sha "$RS2" --by codex --state PASS
 expect "a claude fallback subtask is not laundered by the claude task review once codex is back" 1 "BLOCKER k: subtask s recorded implementer claude, but the task review by claude pairs against codex: record .verdict --subtask s. PASS by codex" gate "$RSP" --no-run-checks
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s
@@ -1301,13 +1301,13 @@ expect "and the gate notes the subtask fallback" 0 "NOTE    k: subtask s2 SAME_M
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s --subplan "$RSS"
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s2 --subplan "$RSS"
 echo c > "$R/code/a.cs"; gi "$R" commit -qam "fix: later subtask edit"; RS3=$(git -C "$R" rev-parse HEAD)
-rv --task k --phase review --sha "$RS3" --by claude --state PASS
+rv --task k --phase review --sha "$RS3" --by claude --state PASS --implementer codex
 rv --task integration:rec --phase qa --sha "$RS3" --by codex --state PASS
 expect "a stale subtask PASS cannot cover the task reviewer's later edit: NOT_READY" 1 "BLOCKER k: subtask s .*changed paths code/a.cs; needs codex review" gate "$RSP" --no-run-checks
 rv --task k --phase review --sha "$RS3" --by codex --state PASS --subtask s --subplan "$RSS"
 expect "a fresh paired subtask review covers the later edit" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
 echo c > "$R/docs/a.md"; gi "$R" commit -qam "docs: outside code subtask"; RS4=$(git -C "$R" rev-parse HEAD)
-rv --task k --phase review --sha "$RS4" --by claude --state PASS
+rv --task k --phase review --sha "$RS4" --by claude --state PASS --implementer codex
 rv --task integration:rec --phase qa --sha "$RS4" --by codex --state PASS
 rv --task k --phase review --sha "$RS4" --by codex --state PASS --subtask s2 --subplan "$RSS"
 expect "an edit outside subtask paths keeps its ancestral review valid" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
@@ -1589,8 +1589,37 @@ if case == 'kinds-single-list':
     found = [v['propertyNames']['enum'] for v in find(schema, 'agent_routing', []) if isinstance(v, dict) and 'propertyNames' in v]
     assert found and all(e == kinds + ['default'] for e in found), found
     text = pathlib.Path(root + '/scripts/check-registry.sh').read_text(encoding='utf-8')
-    listed = re.search(r'agent_routing // \{\}\) \| to_entries\[\]\s*\|\s*select\(\(\.key \| IN\(([^)]*)\)', text)
-    assert listed and [x.strip().strip('"') for x in listed.group(1).split(',')] == kinds + ['default'], listed
+    assert '--argjson pipeline_kinds "$pipeline_kinds"' in text
+if case in ('enum-copy-original', 'enum-copy-subplan', 'enum-copy-registry'):
+    import shutil
+    copied = pathlib.Path(tmp) / case
+    for name in ('registry.json', 'docs/registry.schema.json', 'docs/schemas/pipeline-plan.schema.json',
+                 'docs/schemas/pipeline-subplan.schema.json', 'scripts/check-registry.sh', 'scripts/lib/compat.sh'):
+        dest = copied / name; dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pathlib.Path(root) / name, dest)
+    shutil.copytree(pathlib.Path(root) / 'docs/schemas/kinds', copied / 'docs/schemas/kinds')
+    shutil.copytree(pathlib.Path(root) / 'scripts/checks', copied / 'scripts/checks')
+    changed = None
+    if case == 'enum-copy-subplan':
+        changed = 'docs/schemas/pipeline-subplan.schema.json'
+        keys = ('properties', 'subtasks', 'items', 'properties', 'kind', 'enum')
+    elif case == 'enum-copy-registry':
+        changed = 'docs/registry.schema.json'
+        keys = ('properties', 'pipeline', 'properties', 'agent_routing', 'propertyNames', 'enum')
+    if changed:
+        doc = json.loads((copied / changed).read_text())
+        value = doc
+        for key in keys:
+            value = value[key]
+        value.append('drift')
+        (copied / changed).write_text(json.dumps(doc))
+    result = subprocess.run(['bash', str(copied / 'scripts/check-registry.sh'), '--structure-only'],
+                            capture_output=True, text=True, env=dict(os.environ, CLAUDE_PLUGIN_ROOT=str(copied)))
+    if changed:
+        assert result.returncode != 0, result.stdout
+        assert ('pipeline kind enum: ' + changed + ' differs from docs/schemas/pipeline-plan.schema.json') in result.stdout, (result.stdout, result.stderr)
+    else:
+        assert result.returncode == 0, (result.stdout, result.stderr)
 print('routing assertions passed')
 ROUTING
 expect_route() {
@@ -1631,6 +1660,170 @@ expect_route planned-warning
 expect_route subtask-kind
 expect_route no-probe
 expect_route kinds-single-list
+expect_route enum-copy-original
+expect_route enum-copy-subplan
+expect_route enum-copy-registry
+
+echo "-- multi-wave currency and verdict provenance"
+cat > "$TMP/multiwave.py" <<'MULTIWAVE'
+import copy, importlib.util, json, os, pathlib, shutil, subprocess, sys
+root, tmp, case = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('multiwave_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
+repo = work / 'repo'; repo.mkdir()
+os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
+def git(*args):
+    r = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, (args, r.stderr)
+    return r.stdout.strip()
+git('init', '-q', '-b', 'main')
+def commit(text, filename='shared.txt'):
+    (repo / filename).write_text(text)
+    git('add', filename); git('commit', '-qm', text)
+    return git('rev-parse', 'HEAD')
+if case.startswith('serial-'):
+    (repo / 'ProjectSettings').mkdir()
+    (repo / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
+    git('add', 'ProjectSettings')
+base = commit('base')
+git('switch', '--no-track', '-c', 'topic')
+plan = {'schema': m.SCHEMA, 'id': 'multiwave-' + case, 'title': 'test', 'topic': 'topic',
+        'repos': {'fixture': {'path': str(repo), 'base': 'main'}},
+        'tasks': [{'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'first',
+                   'paths': ['shared.txt'], 'acceptance': ['reviewed']},
+                  {'id': 'b', 'repo': 'fixture', 'kind': 'code', 'objective': 'second',
+                   'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['a']}]}
+pf = work / 'plan.json'; plan['_path'] = str(pf)
+def save():
+    pf.write_text(json.dumps(plan))
+save()
+def cli(*args, rc=0):
+    r = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
+                       capture_output=True, text=True)
+    assert r.returncode == rc, (args, r.stdout, r.stderr)
+    return r
+def verdict(task, phase, sha, by='claude', extra=()):
+    return cli('verdict', str(pf), '--task', task, '--phase', phase, '--sha', sha,
+               '--by', by, '--state', 'PASS', *extra)
+def record(task, phase):
+    return m.verdict_of(plan, reg, task, phase)[0]
+def stale_a(expected):
+    g = m.gate(plan, reg)
+    blockers = [b for b in g['blockers'] if b.startswith('a: review is STALE')]
+    row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+    stale = [n for n in row['notes'] if n.startswith('review at') and 'STALE' in n]
+    assert bool(blockers) == expected, g
+    assert bool(stale) == expected, row
+    if expected:
+        assert 'shared.txt' in blockers[0] and 'shared.txt' in stale[0]
+    return g, row
+if case.startswith('serial-'):
+    a = commit('a')
+    verdict('a', 'review', a); verdict('a', 'qa', a)
+    b = commit('b')
+    verdict('b', 'review', b)
+    if case != 'serial-missing-qa':
+        verdict('b', 'qa', b)
+    verdict('integration:fixture', 'qa', b)
+    g, row = stale_a(case == 'serial-missing-qa')
+    if case == 'serial-covered':
+        assert g['state'] == 'READY_FOR_PR', g
+        assert row['phase'] == 'qa', row
+    else:
+        assert any(x.startswith('a: QA is STALE') for x in g['blockers']), g
+    print(case + ' assertions passed')
+    sys.exit(0)
+git('switch', '--no-track', '-c', 'topic-a')
+a = commit('a')
+verdict('a', 'review', a)
+verdict('a', 'qa', a)
+if case == 'task-qa':
+    row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+    assert row['qa']['task'] == 'a' and row['qa']['sha'] == a, row
+    assert not any('STALE' in n for n in row['notes']), row
+elif case in ('report', 'implementer', 'override', 'legacy-implementer'):
+    if case == 'report':
+        r = cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', a, '--by', 'claude',
+                '--state', 'PASS', '--report', 'free text is not a file', rc=2)
+        assert '--report must name an existing file' in r.stderr and '--note' in r.stderr
+        verdict('a', 'qa', a, extra=('--note', 'free text'))
+        assert record('a', 'qa')['note'] == 'free text'
+        report = work / 'report.md'; report.write_text('evidence')
+        verdict('a', 'qa', a, extra=('--report', str(report)))
+        assert pathlib.Path(record('a', 'qa')['report']).is_file()
+    else:
+        m.pr.record(plan, 'a', 's1', 'implementer', {'agent': 'claude'})
+        m.pr.record(plan, 'a', 's2', 'implementer', {'agent': 'claude'})
+        extra = ('--implementer', 'codex') if case == 'override' else ()
+        verdict('a', 'review', a, by='codex', extra=extra)
+        rv = record('a', 'review')
+        assert rv['implementer'] == ('codex' if extra else 'claude'), rv
+        assert rv['implementer_source'] == ('explicit' if extra else 'subtask implementers'), rv
+        assert rv['implementers'] == {'s1': 'claude', 's2': 'claude'}, rv
+        if case == 'legacy-implementer':
+            del rv['implementer']
+            m.fstate.write_json(m.verdict_file(plan, 'a', 'review'), rv)
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+        g = m.gate(plan, reg)
+        pair_errors = [b for b in g['blockers'] if b.startswith('a: reviewed by')]
+        assert bool(pair_errors) == bool(extra), g
+        if extra:
+            assert 'cross-model review needs claude' in pair_errors[0]
+else:
+    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+    verdict('integration:fixture', 'qa', git('rev-parse', 'HEAD'))
+    if case == 'integration-qa':
+        row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+        assert not any('STALE' in n for n in row['notes']), row
+        plan['tasks'][1]['objective'] = 'updated later wave'; save()
+        row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+        assert row['qa']['task'] == 'a', row
+        s = m.status(plan, reg)
+        assert any('integration QA' in n and 'STALE' in n for r in s['tasks'] for n in r['notes']), s
+        assert not any(n.startswith('qa verdict is STALE') for r in s['tasks'] for n in r['notes']), s
+    else:
+        git('switch', '--no-track', '-c', 'topic-b')
+        b = commit('b')
+        verdict('b', 'review', b)
+        if case == 'post-review':
+            commit('unreviewed b')
+        if case == 'outside-owner':
+            plan['tasks'][1]['paths'] = ['other.txt']; save()
+            verdict('b', 'review', b)
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge b', 'topic-b')
+        if case == 'direct':
+            commit('unreviewed topic')
+        if case == 'invalid-review':
+            plan['tasks'][1]['objective'] = 'review fingerprint changed'; save()
+        if case == 'missing-review':
+            pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()
+        if case == 'evil-merge':
+            # A merge commit can introduce content absent from either parent.
+            git('switch', '--no-track', '-c', 'evil-side')
+            commit('side', 'other.txt')
+            git('switch', 'topic')
+            git('merge', '--no-ff', '--no-commit', 'evil-side')
+            (repo / 'shared.txt').write_text('evil resolution')
+            git('add', 'shared.txt'); git('commit', '-qm', 'evil merge')
+        head = git('rev-parse', 'HEAD')
+        verdict('integration:fixture', 'qa', head)
+        g, row = stale_a(case != 'covered')
+        if case == 'covered':
+            assert g['state'] == 'READY_FOR_PR', g
+            assert row['phase'] == 'qa', row
+            # Branch removal must not change currency.
+            git('branch', '-d', 'topic-a')
+            assert not stale_a(False)[0]['blockers']
+print(case + ' assertions passed')
+MULTIWAVE
+for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa; do
+  out=$(python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$case" 2>&1); rc=$?
+  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  multiwave $case"
+  else fail=$((fail + 1)); echo "FAIL  multiwave $case"; echo "$out"; fi
+done
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

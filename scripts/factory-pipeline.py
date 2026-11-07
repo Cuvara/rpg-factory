@@ -787,6 +787,10 @@ def implementer_of(pipe, plan, task, subtask=None, item=None):
     rec = pr.recorded(plan, task["id"], subtask, "implementer")
     if rec:
         return rec["agent"], "recorded implementer" + (f": {rec['why']}" if rec.get("why") else "")
+    if not subtask:
+        models = set(subtask_implementers(plan, task["id"]).values())
+        if len(models) == 1:
+            return models.pop(), "subtask implementers"
     agent, why = pr.planned(pipe, item or task)
     return agent, "planned implementer: " + why
 
@@ -1368,13 +1372,115 @@ def subtask_reviews(plan, reg, task_id, sid, target, stale=None):
     return out
 
 
+def review_implementer(pipe, plan, task, subtask=None, item=None, disp=None):
+    """Resolve actual execution provenance before falling back to planned routing."""
+    rec = pr.recorded(plan, task["id"], subtask, "implementer")
+    if rec:
+        return rec["agent"], "task dispatch" if not subtask else "subtask dispatch"
+    models = set(subtask_implementers(plan, task["id"]).values()) if not subtask else set()
+    if len(models) == 1:
+        return models.pop(), "subtask implementers"
+    if disp and disp.get("implementer") in pipe["agents"]:
+        return disp["implementer"], "review dispatch"
+    return pr.planned(pipe, item or task)[0], "planned routing"
+
+
+def uncovered_changes(plan, reg, task, sha, target, checking=()):
+    """Owned files changed since sha without current later-task review/QA coverage.
+
+    A first-parent topic merge attributes only its introduced side commits. Direct
+    topic edits and conflict resolutions changed against every parent have no owner.
+    Recursion checks the covering review itself, so a post-review edit cannot hide
+    behind an earlier task's review. Serial checkouts use their QA-delimited starts.
+    """
+    info = repo_info(plan, reg, task["repo"])
+    path = info["path"]
+    if not is_ancestor(path, sha, target):
+        return list(task["paths"])
+    if sha == target:
+        return []
+    by_id = {t["id"]: t for t in plan["tasks"]}
+    def files(a, b):
+        out, rc = git(path, "diff", "--name-only", a, b, "--", *specs(task["paths"]))
+        return set(out.splitlines()) if rc == 0 else set(task["paths"])
+    def owns(t, f):
+        return any(norm_path(p).rstrip("/") in ("", ".") or norm_path(f) == norm_path(p).rstrip("/")
+                   or norm_path(f).startswith(norm_path(p).rstrip("/") + "/") for p in t["paths"])
+    later = []
+    for t in plan["tasks"]:
+        if t["id"] in checking or not depends(by_id, t["id"], task["id"]) or not same_repo(plan, reg, t["repo"], task["repo"]):
+            continue
+        rv = verdict_of(plan, reg, t["id"], "review")[0]
+        if not rv or rv.get("state") != "PASS" or not is_ancestor(path, rv["sha"], target):
+            continue
+        if uncovered_changes(plan, reg, t, rv["sha"], target, checking + (task["id"],)):
+            continue
+        qa = None
+        if not info["worktrees"] and serial_count(plan, reg, task["repo"]) > 1:
+            qa = verdict_of(plan, reg, t["id"], "qa")[0]
+            if not qa or qa.get("state") != "PASS" or not is_ancestor(path, rv["sha"], qa["sha"]) or not is_ancestor(path, qa["sha"], target):
+                continue
+            if uncovered_changes(plan, reg, t, qa["sha"], target, checking + (task["id"],)):
+                continue
+        later.append((t, rv, own_start(plan, reg, info, t, rv["sha"])))
+    bad = set()
+    chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
+    if rc != 0:
+        return list(task["paths"])
+    for merge in (chain or "").splitlines():
+        if is_ancestor(path, merge, sha):
+            continue
+        parent_text, rc = git(path, "show", "-s", "--format=%P", merge)
+        parents = (parent_text or "").split()
+        if rc != 0 or not parents:
+            return list(task["paths"])
+        if len(parents) > 1:
+            evil = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", merge, "--", *specs(task["paths"]))
+            if evil[1] != 0:
+                return list(task["paths"])
+            bad.update((evil[0] or "").splitlines())
+            introduced, rc = git(path, "rev-list", *parents[1:], "--not", parents[0])
+            if rc != 0:
+                return list(task["paths"])
+            commits = (introduced or "").splitlines()
+        else:
+            commits = [merge]
+        for commit in commits:
+            if is_ancestor(path, commit, sha):
+                continue
+            parent_text, rc = git(path, "show", "-s", "--format=%P", commit)
+            if rc != 0:
+                return list(task["paths"])
+            ps = (parent_text or "").split()
+            touched = files(ps[0], commit) if ps else set(task["paths"])
+            for f in touched:
+                covered = False
+                for t, rv, start in later:
+                    if not start or not owns(t, f) or not is_ancestor(path, commit, rv["sha"]) or is_ancestor(path, commit, start):
+                        continue
+                    if len(parents) > 1:
+                        branch = task_branch(plan, info, t)
+                        tip = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0]
+                        if not any(p in (tip, rv["sha"]) or is_ancestor(path, p, rv["sha"]) for p in parents[1:]):
+                            continue
+                    elif info["worktrees"]:
+                        continue
+                    covered = True
+                    break
+                if not covered:
+                    bad.add(f)
+    return sorted(bad)
+
+
 def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
     """(blockers, notes) for subtasks whose recorded implementer the task review (by rv["by"], paired against impl)
     does not cover: a subtask by another model than impl, or by the task reviewer's own model, needs its own PASS review
     by its pair or a dispatch-recorded SAME_MODEL fallback review; a subtask fallback is never laundered by the task
     review."""
     blockers, notes = [], []
-    for sid, x in sorted(subtask_implementers(plan, t["id"]).items()):
+    implementers = dict(rv.get("implementers", {}))
+    implementers.update(subtask_implementers(plan, t["id"]))
+    for sid, x in sorted(implementers.items()):
         want = pr.paired(pipe, t, x)
         if x == impl and (rv.get("by") == want or (rv.get("by") == x and (rv.get("fallback") == want or allow_same_model))):
             continue
@@ -1398,6 +1504,10 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
 def cmd_verdict(a, reg):
     pipe = settings(reg)
     plan = read_plan(a.plan)
+    if a.report and not os.path.isfile(a.report):
+        die("--report must name an existing file; use --note TEXT for free text")
+    if a.implementer and (a.phase != "review" or a.implementer not in pipe["agents"]):
+        die("--implementer must name a pipeline agent and goes with --phase review")
     if a.state not in pipe["verdict_states"]:
         die(f"--state must be one of {', '.join(pipe['verdict_states'])}")
     if a.by not in pipe["agents"]:
@@ -1424,6 +1534,8 @@ def cmd_verdict(a, reg):
            "fingerprint": scope_fingerprint(plan, reg, a.task),
            "report": os.path.abspath(a.report) if a.report else None,
            "timestamp": now_utc()}
+    if a.note is not None:
+        rec["note"] = a.note
     if a.subtask:
         rec["subtask"] = a.subtask
     if a.fallback:
@@ -1442,10 +1554,12 @@ def cmd_verdict(a, reg):
         disp = pr.recorded(plan, a.task, a.subtask, "reviewer", full)
         # the implementer: the recorded one, else what this candidate's review dispatch paired against (routed over
         # the subtask), else the planned routing of the subtask (--subplan) or the task
-        impl = (disp["implementer"] if disp and disp.get("implementer") in pipe["agents"]
-                and not pr.recorded(plan, a.task, a.subtask, "implementer") and full.startswith(str(disp.get("sha")))
-                else implementer_of(pipe, plan, task, a.subtask, sub_item)[0])
+        impl, source = review_implementer(pipe, plan, task, a.subtask, sub_item, disp)
+        if a.implementer:
+            impl, source = a.implementer, "explicit"
         rec["implementer"] = impl
+        rec["implementer_source"] = source
+        rec["implementers"] = subtask_implementers(plan, a.task)
         if (not a.fallback and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
@@ -1456,11 +1570,11 @@ def cmd_verdict(a, reg):
         # the task review the gate reads: a review by another model (a paired review of a Codex subtask recorded
         # without --subtask) never replaces the paired reviewer's record for the same candidate
         old = fstate.read_json(path)
-        old_impl = (old.get("implementer") or pr.route(pipe, task, {x: {"available": True} for x in pipe["agents"]})[0]) if isinstance(old, dict) else impl
+        old_impl = (old.get("implementer") or review_implementer(pipe, plan, task)[0]) if isinstance(old, dict) else impl
         want = pr.paired(pipe, task, old_impl)
         new_pair = pr.paired(pipe, task, rec["implementer"])
         new_paired = a.by == new_pair or (a.by == rec["implementer"] and rec.get("fallback") == new_pair)
-        if (not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
+        if (not a.implementer and not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
                 and old.get("fingerprint") == rec["fingerprint"]):
             print(f"factory-pipeline: kept the {want} review of {a.task} at {a.sha[:10]} (the task's paired reviewer); "
                   f"this {a.by} review is kept per candidate only: {kept}. A subtask review takes --subtask <id>.",
@@ -1569,7 +1683,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         rv = read_verdict(plan, reg, t["id"], "review", blockers)
         if not rv:
             continue
-        impl = rv.get("implementer") or pr.route(pipe, t, {a: {"available": True} for a in pipe["agents"]})[0]
+        impl = rv.get("implementer") or review_implementer(pipe, plan, t, disp=pr.recorded(plan, t["id"], None, "reviewer", rv["sha"]))[0]
         want = pr.paired(pipe, t, impl)
         if rv.get("state") != "PASS":
             blockers.append(f"{t['id']}: review {rv.get('state')} at {rv.get('sha', '')[:10]}")
@@ -1592,19 +1706,19 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                 blockers.append(f"{t['id']}: QA {tq.get('state')} at {tq['sha'][:10]}")
             elif tq:
                 _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], tq["sha"])
-                moved, rc2 = git(info["path"], "diff", "--name-only", tq["sha"], heads[key], "--", *specs(t["paths"]))
+                moved = uncovered_changes(plan, reg, t, tq["sha"], heads[key])
                 if rc != 0:
                     blockers.append(f"{t['id']}: QA ran on {tq['sha'][:10]}, which does not contain the reviewed commit {rv['sha'][:10]}")
-                elif rc2 != 0 or moved:
+                elif moved:
                     blockers.append(f"{t['id']}: QA is STALE - owned paths changed after {tq['sha'][:10]}")
         _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], heads[key])
         if rc != 0:
             blockers.append(f"{t['id']}: reviewed commit {rv['sha'][:10]} is not integrated into {plan['topic']}")
             continue
-        changed, rc = git(info["path"], "diff", "--name-only", rv["sha"], heads[key], "--", *specs(t["paths"]))
-        if rc != 0 or changed:
+        changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key])
+        if changed:
             blockers.append(f"{t['id']}: review is STALE - owned paths changed after {rv['sha'][:10]}: "
-                            + ", ".join((changed or "?").splitlines()[:5]))
+                            + ", ".join(changed[:5]))
     if unverified and not blockers:
         notes.append("fast checks were not graded (--no-run-checks) for " + ", ".join(unverified) + ": no delivery")
     ready = not blockers and not unverified
@@ -1988,8 +2102,12 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
         row["notes"] += [child_note_text(c, branch) for c in row["children"]]
     rv, rv_stale = verdict_of(plan, reg, task["id"], "review")
     per_task_qa = not info["worktrees"] and n_in_repo > 1
-    qa_id = task["id"] if per_task_qa else f"integration:{task['repo']}"
-    qa, qa_stale = verdict_of(plan, reg, qa_id, "qa")
+    qa, qa_stale = verdict_of(plan, reg, task["id"], "qa")
+    integration_qa, integration_stale = verdict_of(plan, reg, f"integration:{task['repo']}", "qa")
+    if integration_stale:
+        row["notes"].append(f"integration QA for {task['repo']} is STALE: the plan changed since it was recorded")
+    if not qa and not qa_stale and not per_task_qa:
+        qa = integration_qa
     for kind, rec, stale in (("review", rv, rv_stale), ("qa", qa, qa_stale)):
         if rec:
             row[kind] = {"state": rec.get("state"), "sha": rec["sha"], "by": rec.get("by"), "task": rec.get("task")}
@@ -2025,16 +2143,25 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
                             "dispatching again")
     if row["phase"] != "candidate" or not rv:
         return row, info
-    if row["sha"] != rv["sha"] and (not is_ancestor(path, rv["sha"], row["sha"]) or changed_since(path, rv["sha"], row["sha"], paths)):
-        row["notes"].append(f"review at {rv['sha'][:10]} is STALE: owned paths changed since")
+    review_target = topic_head if is_ancestor(path, rv["sha"], topic_head) else row["sha"]
+    changed = uncovered_changes(plan, reg, task, rv["sha"], review_target)
+    if row["sha"] != review_target and not is_ancestor(path, row["sha"], rv["sha"]):
+        changed = sorted(set(changed) | set(uncovered_changes(plan, reg, task, rv["sha"], row["sha"])))
+    if changed:
+        row["notes"].append(f"review at {rv['sha'][:10]} is STALE: owned paths changed since: " + ", ".join(changed[:5]))
         return row, info
     row["phase"] = "reviewed"
     if rv.get("state") != "PASS" or not is_ancestor(path, rv["sha"], topic_head):
         return row, info
     row["phase"] = "integrated"
+    # Keep the lead's QA visible above, but current integration QA also proves
+    # completion in repos where the gate does not require per-task QA.
+    if (not per_task_qa and integration_qa and integration_qa.get("state") == "PASS"
+            and integration_qa["sha"] == topic_head):
+        qa = integration_qa
     if qa and qa.get("state") == "PASS" and is_ancestor(path, rv["sha"], qa["sha"]):
         row["phase"] = "qa"
-        if topic_head != qa["sha"] and changed_since(path, qa["sha"], topic_head, paths):
+        if topic_head != qa["sha"] and uncovered_changes(plan, reg, task, qa["sha"], topic_head):
             row["phase"] = "integrated"
             row["notes"].append(f"QA at {qa['sha'][:10]} is STALE: owned paths changed on {topic} since")
     return row, info
@@ -2292,6 +2419,8 @@ def main():
     v.add_argument("--by", required=True)
     v.add_argument("--state", required=True)
     v.add_argument("--report")
+    v.add_argument("--note")
+    v.add_argument("--implementer")
     v.add_argument("--subtask")
     v.add_argument("--subplan")
     v.add_argument("--fallback")
