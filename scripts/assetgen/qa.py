@@ -16,11 +16,19 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       pixels with alpha > 8 >= min_coverage
   purpose-qa          FAIL (one row for outputs/, nothing graded) when the purpose qa block is malformed
                       (runfiles.qa_errors; the same rules lint reports)
+Style consistency rows (only for a spec with style_lock; consistency.check_all over the style data spec.style.data,
+the purpose data, spec.style_lock.family and the run's copies of the selected anchors, references/anchor-<id>.png
+of spec.style_lock.references; a missing or undecodable copy is left out, so tone is NOT_AVAILABLE without one):
+  style-palette, style-tone, style-edges, style-canvas  PASS, WARN, FAIL or NOT_AVAILABLE (consistency.py). They are
+                      never required checks (runfiles.required_checks is unchanged): WARN and NOT_AVAILABLE do not
+                      change the qa state, a style FAIL row (the style field sets severity fail) makes it FAIL.
+A spec without style_lock (resolved before the style lock) gets no style rows: its qa.json is what it was.
 """
 import hashlib
 import math
 import os
 
+import consistency
 import png
 import runfiles
 
@@ -134,6 +142,23 @@ def check_not_blank(img, cfg):
     return ("PASS" if ok else "FAIL"), ["luminance stddev %.2f (min %.2f), coverage %.1f%% (min %.1f%%)" % (std, min_std, cover * 100, min_cov * 100)]
 
 
+def style_anchors(run_dir, spec):
+    """tone_stats of the decodable run copies of the selected anchors, in selection order."""
+    stats = []
+    for pick in runfiles.style_lock_references(spec):
+        image = pick.get("image")
+        path = os.path.join(run_dir, *image.split("/")) if isinstance(image, str) and image else None
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            tone = consistency.tone_stats(png.decode(path))
+        except (png.Invalid, png.Unsupported, OSError):
+            continue
+        if tone is not None:
+            stats.append(tone)
+    return stats
+
+
 def run_qa(run_dir, spec, requested_size):
     """(results, outputs) for every outputs/*.png of the run."""
     purpose = spec.get("purpose") if isinstance(spec, dict) else None
@@ -152,6 +177,10 @@ def run_qa(run_dir, spec, requested_size):
 
     def add(rel, check, verdict):
         results.append({"output": rel, "check": check, "state": verdict[0], "reasons": verdict[1]})
+    lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else None
+    style = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    style_data = style.get("data") if isinstance(style.get("data"), dict) else {}
+    anchors = style_anchors(run_dir, spec) if lock is not None else []
     for name in files:
         rel, path = "outputs/" + name, os.path.join(out_dir, name)
         item = {"path": rel, "sha256": sha256(path)}
@@ -173,9 +202,20 @@ def run_qa(run_dir, spec, requested_size):
                   "png-not-blank": lambda: check_not_blank(img, qa["not_blank"])}
         for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
             add(rel, name_, checks[name_]())
+        if lock is not None:
+            family = lock.get("family") if isinstance(lock.get("family"), str) else None
+            for row, state, details in consistency.check_all(img, style_data, data, family, anchors):
+                add(rel, row, (state, details))
     return results, outputs
 
 
+def is_style_row(row):
+    return str(row.get("check", "")).startswith("style-")
+
+
 def overall(results):
+    """FAIL when any row is FAIL; NOT_AVAILABLE when a non-style row is; style WARN and NOT_AVAILABLE never count."""
     states = {r["state"] for r in results}
-    return "FAIL" if "FAIL" in states else ("NOT_AVAILABLE" if "NOT_AVAILABLE" in states else "PASS")
+    if "FAIL" in states:
+        return "FAIL"
+    return "NOT_AVAILABLE" if any(r["state"] == "NOT_AVAILABLE" for r in results if not is_style_row(r)) else "PASS"

@@ -14,7 +14,10 @@
 # deprecated styles, anchor validity, deterministic reference selection, rejection relevance, drift; their lint rows),
 # the style lock through the CLI (resolve --family/--style-override into spec.style_lock, render wiring of 0/1/3 anchors
 # and image-edit as LoadImage + ImageBatch into reference_images, anchor copies, hashes bound only with style_lock,
-# manifest, promote-anchor, reject, drift), the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
+# manifest, promote-anchor, reject, drift), style lock QA rows through qa (palette PASS/WARN/FAIL/NOT_AVAILABLE, tone vs
+# the run's anchor copies, edges, canvas; older specs without rows) and the gen-run plugin's style-* row rule, the
+# anchor-aware review-cmd (anchors after outputs in -i, anchor and rejection rubric items, binding style + anchors kept
+# by read_verdict, direction rejections in the prompt review's Must avoid, older specs unchanged), the consistency signals self-test (tests/fixtures/assetgen/consistency_selftest.py),
 # and no endpoints or credentials in templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
@@ -945,6 +948,17 @@ variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = jso
 variant qp-qapurp-001; qaset qp-qapurp-001 'obj["purpose_sha256"] = "0" * 64'; AG manifest --run "$RUNS/qp-qapurp-001" >/dev/null
 variant qp-qasize-001; python3 -B -c 'import json, sys; p = sys.argv[1]; w = json.load(open(p)); [n["inputs"].__setitem__("size", "1024x1536") for n in w.values() if n.get("class_type") == "NineRouterImage"]; json.dump(w, open(p, "w"))' "$RUNS/qp-qasize-001/workflow.json"
 AG manifest --run "$RUNS/qp-qasize-001" >/dev/null
+# style-* rows (style lock consistency signals): WARN and NOT_AVAILABLE neither grade nor contradict; a FAIL must agree
+[ "$(jq -r '[.results[] | select(.check | startswith("style-")) | .check + "=" + .state] | join(",")' "$good/qa.json")" \
+  = "style-palette=NOT_AVAILABLE,style-tone=NOT_AVAILABLE,style-edges=NOT_AVAILABLE,style-canvas=NOT_AVAILABLE" ] \
+  && [ "$(jq -r .state "$good/qa.json")" = PASS ] && ok "qa: a style-locked run without style data gets four NOT_AVAILABLE style rows, state PASS" \
+  || no "good run style rows" "$(jq -c '[.state, .results]' "$good/qa.json")"
+variant qp-qastylewarn-001; qaset qp-qastylewarn-001 '[r.__setitem__("state", "WARN") for r in obj["results"] if r["check"] in ("style-palette", "style-tone")]'
+AG manifest --run "$RUNS/qp-qastylewarn-001" >/dev/null
+variant qp-qastylefail-001; qaset qp-qastylefail-001 '[r.__setitem__("state", "FAIL") for r in obj["results"] if r["check"] == "style-palette"]'
+AG manifest --run "$RUNS/qp-qastylefail-001" >/dev/null
+variant qp-qastyleagree-001; qaset qp-qastyleagree-001 'obj["state"] = "FAIL"; [r.__setitem__("state", "FAIL") for r in obj["results"] if r["check"] == "style-palette"]'
+AG manifest --run "$RUNS/qp-qastyleagree-001" >/dev/null
 # Claude's own visual review (review-image-claude.json): recorded, WARN when missing, never replaces the Codex review
 variant qp-noclaude-001; rm -f "$RUNS/qp-noclaude-001/review-image-claude.json"; AG manifest --run "$RUNS/qp-noclaude-001" >/dev/null
 variant qp-claudeonly-001; rm -f "$RUNS/qp-claudeonly-001/review-image.json"; AG manifest --run "$RUNS/qp-claudeonly-001" >/dev/null
@@ -1045,6 +1059,10 @@ case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAIL
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"
 case_ qp-qasize-001 gen-run-qa FAIL 'graded for requested size' "requested size changed after QA: FAIL"
+[ "$(st AGEN-qp-qastylewarn-001 gen-run-qa)" = PASS ] && ok "style-* WARN rows in a PASS qa.json neither grade nor contradict: gen-run-qa PASS" \
+  || no "style WARN rows: $(st AGEN-qp-qastylewarn-001 gen-run-qa)" "$(why AGEN-qp-qastylewarn-001 gen-run-qa)"
+case_ qp-qastylefail-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows' "a style-* FAIL row in a PASS qa.json contradicts it: FAIL"
+case_ qp-qastyleagree-001 gen-run-qa FAIL 'QA is FAIL' "a style-* FAIL row with a FAIL qa state: the run is not done (FAIL on a proposed run)"
 case_ qp-noclaude-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "no Claude visual review file: WARN"
 [ "$(st AGEN-qp-noclaude-001 gen-run-image-review)" = PASS ] && ok "a missing Claude review leaves the Codex image review PASS" || no "noclaude image review: $(st AGEN-qp-noclaude-001 gen-run-image-review)"
 case_ qp-claudeonly-001 gen-run-image-review FAIL 'review-image.json is missing' "a Claude PASS never replaces the missing Codex image review: FAIL"
@@ -1576,6 +1594,144 @@ AG lint --authoring "$SC" "$SG/styles/rpg-base/rejections/too-detailed-001.json"
   && grep -q "2 PASS, 0 WARN, 0 FAIL" "$TMP/o" && ok "reject: written rejections lint clean" || no "rejection lint" "$(cat "$TMP/o")"
 slrun sl-icon-004 icon && [ "$(lk '[.style_lock.rejections[].id] | join(",")' sl-icon-004)" = "palette-off-001,r-props,too-detailed-001,too-detailed-002" ] \
   && ok "resolve records the new relevant rejections (family props, any version)" || no "rejections after reject" "$(lk .style_lock.rejections sl-icon-004)"
+
+echo "-- style lock consistency QA and the anchor-aware review (qa style-* rows, review-cmd --phase image/prompt)"
+# fixture icons on a transparent background (icon qa: alpha, corners, not-blank): a two-tone disc, an outlined disc
+python3 -B - "$ROOT" "$FX" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+out = sys.argv[2]
+def disc(name, a, b, ring=None, w=256, h=256):
+    px = bytearray()
+    for y in range(h):
+        for x in range(w):
+            d = ((x - w / 2) ** 2 + (y - h / 2) ** 2) ** 0.5
+            r = min(w, h) * 0.3
+            if d < r - 6 or (ring is None and d < r):
+                px += bytes((a if x < w // 2 else b) + (255,))
+            elif ring is not None and d < r:
+                px += bytes(ring + (255,))
+            else:
+                px += bytes((0, 0, 0, 0))
+    open(os.path.join(out, name), "wb").write(png.encode(w, h, bytes(px)))
+disc("sl-warm.png", (170, 85, 51), (190, 105, 71))            # inside 48 of #aa5533
+disc("sl-blue.png", (40, 60, 200), (60, 80, 220))             # far from #aa5533
+disc("sl-dark.png", (20, 20, 30), (35, 35, 45))               # tone far below the icon-ok anchors
+disc("sl-outlined.png", (230, 200, 120), (240, 210, 130), ring=(10, 10, 10))
+disc("sl-wide.png", (170, 85, 51), (190, 105, 71), w=384, h=256)
+print("ok")
+EOF
+grep -qx ok "$TMP/o" || no "style QA fixtures" "$(cat "$TMP/o")"
+sq="$SR/sl-qa-001"; slrun sl-qa-001 icon && AG render --run "$sq" >/dev/null 2>"$TMP/err" || no "style QA run" "$(cat "$TMP/err")"
+cp "$sq/spec.json" "$TMP/sq-spec.json"
+sqa() { # sqa PNG JQ-EDIT: the style QA run with outputs/out.png = PNG and spec.json = the resolved spec edited by JQ-EDIT
+  rm -f "$sq/outputs/"*.png; cp "$FX/$1" "$sq/outputs/out.png"
+  jq "$2" "$TMP/sq-spec.json" > "$sq/spec.json"
+  AG qa --run "$sq" --json > "$TMP/sq.json" 2>"$TMP/err"; rc=$?
+}
+sst() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .state] | join(",")' "$TMP/sq.json"; }
+swhy() { jq -r --arg c "$1" '[.results[] | select(.check == $c) | .reasons[]] | join("; ")' "$TMP/sq.json"; }
+PAL='.style.data.palette = {"text": "Warm earthy palette.", "colors": [{"hex": "#aa5533", "role": "primary"}]}'
+sqa sl-warm.png "$PAL"
+[ $rc -eq 0 ] && [ "$(sst style-palette)" = PASS ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] && swhy style-palette | grep -q "100.0% of opaque pixels within 48 of 1 palette colours" \
+  && ok "qa style-palette PASS: every opaque pixel near the palette" || no "palette PASS rc=$rc $(sst style-palette)" "$(swhy style-palette; cat "$TMP/err")"
+sqa sl-blue.png "$PAL"
+[ $rc -eq 0 ] && [ "$(sst style-palette)" = WARN ] && [ "$(jq -r '.state + " " + (.summary.WARN | tostring)' "$TMP/sq.json")" = "PASS 1" ] \
+  && ok "qa style-palette WARN (default severity): the qa state stays PASS, exit 0, summary counts the WARN" || no "palette WARN rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
+AG qa --run "$sq" > "$TMP/o" 2>&1; grep -q "^WARN outputs/out.png style-palette: " "$TMP/o" && grep -q "^assetgen qa: PASS ([0-9]* PASS, 1 WARN, 0 FAIL, [0-9]* NOT_AVAILABLE)$" "$TMP/o" \
+  && ok "qa text: the WARN row and the WARN count" || no "qa text WARN" "$(cat "$TMP/o")"
+sqa sl-blue.png "$PAL | .style.data.palette.severity = \"fail\""
+[ $rc -eq 1 ] && [ "$(sst style-palette)" = FAIL ] && [ "$(jq -r .state "$TMP/sq.json")" = FAIL ] \
+  && ok "qa style-palette FAIL (palette severity fail): the qa state is FAIL, exit 1" || no "palette FAIL rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
+sqa sl-blue.png '.style.data.palette = "Warm earthy palette."'
+[ $rc -eq 0 ] && [ "$(sst style-palette)" = NOT_AVAILABLE ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] \
+  && ok "qa style-palette NOT_AVAILABLE (prose palette): the qa state stays PASS, exit 0 (not 3)" || no "palette NA rc=$rc $(sst style-palette)" "$(jq -c . "$TMP/sq.json")"
+req=$(jq -r '[.results[] | select(.check | startswith("png-")) | .check] | unique | join(",")' "$TMP/sq.json")
+[ "$req" = "png-alpha,png-corners,png-not-blank,png-size,png-valid" ] && [ "$(jq -r '[.results[].check] | map(select(startswith("style-"))) | join(",")' "$TMP/sq.json")" = "style-palette,style-tone,style-edges,style-canvas" ] \
+  && python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import runfiles, json; q = json.load(open(sys.argv[2]))["purpose"]["data"]["qa"]; sys.exit(0 if not any(c.startswith("style-") for c in runfiles.required_checks(q)) else 1)' "$ROOT/scripts/assetgen" "$sq/spec.json" \
+  && ok "style rows come after the required checks and are never required checks (runfiles.required_checks)" || no "style rows order/required: $req"
+# tone against the selected anchors (references/anchor-*.png copies of icon-ok.png)
+sqa icon-ok.png '.style.data.tone = {"tolerance": 0.05}'
+[ $rc -eq 0 ] && [ "$(sst style-tone)" = PASS ] && swhy style-tone | grep -q "inside .* of 3 anchor(s)" \
+  && ok "qa style-tone PASS: the output's luminance and saturation inside the 3 anchors' range" || no "tone PASS rc=$rc $(sst style-tone)" "$(swhy style-tone)"
+sqa sl-dark.png '.style.data.tone = {"tolerance": 0.05}'
+[ $rc -eq 0 ] && [ "$(sst style-tone)" = WARN ] && swhy style-tone | grep -q "mean luminance [0-9.]* outside" \
+  && ok "qa style-tone WARN: a far darker output than the anchors" || no "tone WARN rc=$rc $(sst style-tone)" "$(swhy style-tone)"
+sqa sl-dark.png '.style.data.tone = {"tolerance": 0.05, "severity": "fail"}'
+[ $rc -eq 1 ] && [ "$(sst style-tone)" = FAIL ] && ok "qa style-tone FAIL with severity fail" || no "tone FAIL rc=$rc $(sst style-tone)"
+mv "$sq/references" "$TMP/sq-refs"
+sqa sl-dark.png '.style.data.tone = {"tolerance": 0.05}'
+[ $rc -eq 0 ] && [ "$(sst style-tone)" = NOT_AVAILABLE ] && swhy style-tone | grep -q "no anchors" \
+  && ok "qa style-tone NOT_AVAILABLE without the run's anchor copies" || no "tone NA rc=$rc $(sst style-tone)" "$(swhy style-tone)"
+mv "$TMP/sq-refs" "$sq/references"
+# edges (purpose qa.outlines + outline.edge_darkness) and canvas (style.canvas[family])
+EDGE='.purpose.data.qa.outlines = true | .style.data.outline = {"text": "Dark outlines.", "edge_darkness": {"max_luminance": 80, "min_ratio": 0.5}}'
+sqa sl-outlined.png "$EDGE"
+[ $rc -eq 0 ] && [ "$(sst style-edges)" = PASS ] && ok "qa style-edges PASS: an outlined icon" || no "edges PASS rc=$rc $(sst style-edges)" "$(swhy style-edges)"
+sqa sl-outlined.png '.style.data.outline = {"text": "x", "edge_darkness": {}}'
+[ "$(sst style-edges)" = NOT_AVAILABLE ] && swhy style-edges | grep -q "qa.outlines" && ok "qa style-edges NOT_AVAILABLE for a purpose without qa.outlines" || no "edges NA $(sst style-edges)"
+sqa sl-warm.png '.style.data.canvas = {"props": {"aspect": "1:1", "min_side": 128}}'
+[ $rc -eq 0 ] && [ "$(sst style-canvas)" = PASS ] && swhy style-canvas | grep -q "^family props: 256x256" && ok "qa style-canvas PASS for the run's family (props)" || no "canvas PASS $(sst style-canvas)" "$(swhy style-canvas)"
+sqa sl-wide.png '.style.data.canvas = {"props": {"aspect": "1:1"}} | .purpose.data.qa.size = {"mode": "any"}'
+[ $rc -eq 0 ] && [ "$(sst style-canvas)" = WARN ] && ok "qa style-canvas WARN: 3:2 output for a 1:1 family canvas" || no "canvas WARN rc=$rc $(sst style-canvas)" "$(swhy style-canvas)"
+sqa sl-warm.png '.style.data.canvas = {"characters": {"aspect": "1:1"}}'
+[ "$(sst style-canvas)" = NOT_AVAILABLE ] && ok "qa style-canvas NOT_AVAILABLE without a canvas entry for the family" || no "canvas NA $(sst style-canvas)"
+# old runs: a spec without style_lock gets exactly the old rows
+sqa sl-blue.png "del(.style_lock) | $PAL"
+[ $rc -eq 0 ] && [ "$(jq -r '[.results[] | select(.check | startswith("style-"))] | length' "$TMP/sq.json")" = 0 ] && [ "$(jq -r .state "$TMP/sq.json")" = PASS ] \
+  && ok "qa: a spec without style_lock (older run) gets no style rows" || no "old run style rows" "$(jq -c .results "$TMP/sq.json")"
+
+# review-cmd --phase image: anchors attached after outputs, anchor rubric item, rejection items, binding style + anchors
+cp "$TMP/sq-spec.json" "$sq/spec.json"; rm -f "$sq/outputs/"*.png; cp "$FX/sl-warm.png" "$sq/outputs/out.png"; AG qa --run "$sq" >/dev/null
+AG review-cmd --phase image --run "$sq" --codex codex --json > "$TMP/rv.json" 2>"$TMP/err"; rc=$?
+sqabs=$(cd "$sq" && { pwd -W 2>/dev/null || pwd; })
+want="$sqabs/outputs/out.png $sqabs/references/anchor-b-strong.png $sqabs/references/anchor-a-canon.png $sqabs/references/anchor-c-supp.png"
+[ $rc -eq 0 ] && [ "$(jq -r '[.argv | to_entries[] | select(.value == "-i") | .key + 1] as $i | [.argv[$i[]]] | join(" ")' "$TMP/rv.json")" = "$want" ] \
+  && [ "$(jq -r '.anchors | join(",")' "$TMP/rv.json")" = "references/anchor-b-strong.png,references/anchor-a-canon.png,references/anchor-c-supp.png" ] \
+  && ok "review-cmd image: -i outputs first, then the selected anchors in selection order" || no "review argv rc=$rc" "$(cat "$TMP/err"; jq -c .argv "$TMP/rv.json")"
+jq -r .stdin "$TMP/rv.json" > "$TMP/rv.txt"
+grep -qF "The image matches the attached anchors in palette, lighting, line, detail density and rendering." "$TMP/rv.txt" \
+  && grep -qF "Not repeated: too_detailed - No fine filigree on props." "$TMP/rv.txt" \
+  && grep -q "^Attached images (one per -i): outputs/out.png, references/anchor-b-strong.png, references/anchor-a-canon.png, references/anchor-c-supp.png$" "$TMP/rv.txt" \
+  && grep -q "^references/anchor-b-strong.png is not an output: style anchor b-strong (strong; palette, shape, line) of style rpg-base" "$TMP/rv.txt" \
+  && ok "review-cmd image: anchor rubric item, one item per relevant rejection, anchors named as not outputs" || no "review rubric" "$(cat "$TMP/rv.txt")"
+n_rub=$(jq '.purpose.data.image_rubric | length' "$sq/spec.json")
+[ "$(jq -r --argjson n "$n_rub" '.rubric[$n:] | join("|")' "$TMP/rv.json")" = "The image matches the attached anchors in palette, lighting, line, detail density and rendering.|Not repeated: palette_off - the rejected asset sl-icon-001 outputs/out.png|Not repeated: too_detailed - No fine filigree on props.|Not repeated: too_detailed - No gold trim.|Not repeated: too_detailed - No noise." ] \
+  && grep -q "^$((n_rub + 2))\. Not repeated: palette_off" "$TMP/rv.txt" \
+  && ok "review-cmd --json prints the same rubric items (purpose rubric, then anchor and rejection items) for Claude's own review" || no "rubric json" "$(jq -c .rubric "$TMP/rv.json")"
+[ "$(jq -c '.binding.style == ($s[0].style_lock.style)' --slurpfile s "$sq/spec.json" "$TMP/rv.json")" = true ] \
+  && [ "$(jq -c '[.binding.anchors[] | .anchor_id] | join(",")' -r "$TMP/rv.json")" = "b-strong,a-canon,c-supp" ] \
+  && [ "$(jq -c --slurpfile s "$sq/spec.json" '[.binding.anchors[].sha256] == [$s[0].style_lock.references[].sha256]' "$TMP/rv.json")" = true ] \
+  && grep -qF '"style": {"sha256": ' "$TMP/rv.txt" \
+  && ok "review-cmd image binding: style ref and [{anchor_id, sha256}] of the attached anchors (also in the prompt)" || no "binding" "$(jq -c .binding "$TMP/rv.json")"
+bound "$sq" image PASS codex > "$sq/review-image.json"
+python3 -B - "$ROOT" "$sq/review-image.json" "$TMP/rv.json" > "$TMP/o" 2>&1 <<'EOF'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/scripts/assetgen")
+import runfiles
+v = runfiles.read_verdict(sys.argv[2], "image")
+b = json.load(open(sys.argv[3], encoding="utf-8"))["binding"]
+assert v["style"] == b["style"] and v["anchors"] == b["anchors"], v
+assert "style" not in runfiles.read_verdict(sys.argv[2], "prompt"), "prompt phase keeps no image binding"
+print("ok")
+EOF
+grep -qx ok "$TMP/o" && ok "read_verdict keeps the style and anchors of an image verdict" || no "read_verdict style lock" "$(cat "$TMP/o")"
+mv "$sq/references/anchor-a-canon.png" "$TMP/a-canon.png"
+AG review-cmd --phase image --run "$sq" --codex codex --json > /dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && grep -q "references/anchor-a-canon.png is missing: run .*render --run" "$TMP/err" && ok "review-cmd image: a selected anchor copy missing is refused (render --run copies it)" || no "missing anchor rc=$rc" "$(cat "$TMP/err")"
+mv "$TMP/a-canon.png" "$sq/references/anchor-a-canon.png"
+# prompt phase: direction rejections join Must avoid; no anchors and no style binding there
+AG review-cmd --phase prompt --run "$sq" --codex codex --json > "$TMP/rp.json" 2>"$TMP/err"
+jq -r .stdin "$TMP/rp.json" | grep -q "^Must avoid: .*, No fine filigree on props. (rejected direction r-props), No gold trim. (rejected direction too-detailed-001), No noise. (rejected direction too-detailed-002)$" \
+  && [ "$(jq -r '(.binding | has("style") or has("anchors")) or (.argv | index("-i") != null) or (.rubric | map(startswith("Not repeated")) | any)' "$TMP/rp.json")" = false ] \
+  && ok "review-cmd prompt: direction rejections in Must avoid; no -i, no anchor binding, no rejection rubric items" || no "prompt review" "$(cat "$TMP/err"; jq -r .stdin "$TMP/rp.json")"
+# old runs: a spec without style_lock reviews exactly as before
+sl_="$SR/sl-legacy-001"; cp -R "$sq" "$sl_"; jq 'del(.style_lock)' "$sq/spec.json" > "$sl_/spec.json"; rm -rf "$sl_/references"
+AG review-cmd --phase image --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '(.binding | keys | join(",")) + " " + (.anchors | length | tostring) + " " + ([.argv[] | select(. == "-i")] | length | tostring)' "$TMP/rl.json")" = "outputs,prompt_sha256,requirements_sha256 0 1" ] \
+  && ! jq -r .stdin "$TMP/rl.json" | grep -q "attached anchors\|Not repeated" \
+  && ok "review-cmd image on an old spec without style_lock: old binding keys, no anchors, no style rubric items" || no "legacy review rc=$rc" "$(cat "$TMP/err"; jq -c '[.binding, .argv]' "$TMP/rl.json")"
 
 # drift (read-only): older version and hash changed
 git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "runs and records"

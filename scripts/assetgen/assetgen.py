@@ -67,13 +67,21 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       Derived from the output pixels, never an output and never in the binding
   review-image.json   the same for the images (review-cmd image); its requirements_sha256 also covers the generation
                       inputs of workflow.json (runfiles.generation_inputs), and the binding adds "outputs": [{"path", "sha256"}] (runfiles.py; the
-                      quality plugin FAILs a stale or unbound verdict once the run is proposed)
+                      quality plugin FAILs a stale or unbound verdict once the run is proposed). With spec.style_lock
+                      review-cmd also attaches the selected anchors (-i references/anchor-<id>.png after the outputs and
+                      tiles; a missing or changed copy is refused), adds the rubric items "The image matches the attached
+                      anchors ..." (when anchors are selected) and "Not repeated: <reason> - <text>" per relevant
+                      rejection, and the binding adds "style" (the style ref) and "anchors" [{"anchor_id", "sha256"}].
+                      The prompt review lists the direction rejections under "Must avoid"
   review-image-claude.json  Claude's own visual review, written by the agent: the same schema and binding (the
-                      "binding" of review-cmd --phase image --json) with "by": "claude". manifest records it as
+                      "binding" of review-cmd --phase image --json, judged against its "rubric") with "by": "claude". manifest records it as
                       spec.claude_image_review; the plugin WARNs when it is missing, unbound or stale. It never replaces
                       the independent review-image.json
   qa.json             qa: rpg-factory.validation/1 results per output, bound to the purpose content hash and the
-                      requested size it graded with (purpose_sha256, requested_size)
+                      requested size it graded with (purpose_sha256, requested_size). With spec.style_lock each output
+                      also gets the style consistency rows style-palette, style-tone, style-edges, style-canvas
+                      (qa.py, consistency.py): never required checks, WARN and NOT_AVAILABLE keep the qa state, a style
+                      FAIL row (severity fail in the style data) fails it
   run.md              manifest: ---json front matter, kind gen-run, domain assetgen (see manifest())
 
 Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
@@ -397,9 +405,39 @@ def workflow_model(run_dir, spec):
 
 # -- review-cmd ------------------------------------------------------------------------------------------------
 
-def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=()):
+ANCHOR_RUBRIC = "The image matches the attached anchors in palette, lighting, line, detail density and rendering."
+
+
+def rejection_item(r):
+    """The image rubric item of one relevant rejection of spec.style_lock."""
+    text = r.get("text")
+    if not text:
+        run = r.get("run") if isinstance(r.get("run"), dict) else {}
+        text = "the rejected asset %s %s" % (run.get("run_id") or "-", run.get("output") or "-")
+    return "Not repeated: %s - %s" % (r.get("reason"), text)
+
+
+def style_lock_rejections(spec):
+    lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else {}
+    rej = lock.get("rejections")
+    return [r for r in rej if isinstance(r, dict)] if isinstance(rej, list) else []
+
+
+def review_rubric(spec, phase):
+    """The rubric of a review: the purpose's prompt_rubric or image_rubric; with spec.style_lock the image phase adds
+    the anchor item (when anchors are selected) and one item per relevant rejection. Claude's own visual review
+    (review-image-claude.json) uses the same items (review-cmd --json prints them as rubric)."""
+    rubric = list(spec["purpose"]["data"].get("prompt_rubric" if phase == "prompt" else "image_rubric", []))
+    if phase == "image":
+        if runfiles.style_lock_references(spec):
+            rubric.append(ANCHOR_RUBRIC)
+        rubric += [rejection_item(r) for r in style_lock_rejections(spec)]
+    return rubric
+
+
+def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=(), anchors=()):
     p, s = spec["purpose"], spec["style"]
-    rubric = p["data"].get("prompt_rubric" if phase == "prompt" else "image_rubric", [])
+    rubric = review_rubric(spec, phase)
     lines = [
         "You are the independent %s reviewer of an asset-gen run (purpose %s, style %s, template %s)."
         % (phase, p["id"], s["id"], spec["template"]["id"]),
@@ -415,13 +453,18 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
     if phase == "prompt":
         lines += ["Prompt guidance: " + " ".join(guide.get("guidance", [])),
                   "Must include: " + ", ".join(guide.get("must_include", [])),
-                  "Must avoid: " + ", ".join(guide.get("avoid", []))]
+                  "Must avoid: " + ", ".join(list(guide.get("avoid", [])) + [
+                      "%s (rejected direction %s)" % (r.get("text"), r.get("id")) for r in style_lock_rejections(spec)
+                      if r.get("type") == "direction" and r.get("text")])]
     lines += ["", "Rubric:"] + ["%d. %s" % (i + 1, r) for i, r in enumerate(rubric)]
     lines += ["", "Prompt under review:" if phase == "prompt" else "Prompt that produced the images:", prompt]
     if phase == "image":
-        lines += ["", "Attached images (one per -i): " + ", ".join(list(images) + [t for t, _ in tiles])]
+        lines += ["", "Attached images (one per -i): " + ", ".join(list(images) + [t for t, _ in tiles] + [a for a, _ in anchors])]
         lines += ["True pixel size (PNG header) of %s: %s" % (i, z) for i, z in zip(images, sizes)]
         lines += ["%s is not an output: review-cmd tiled %s 2x2 so you can judge its seams" % (t, src) for t, src in tiles]
+        lines += ["%s is not an output: style anchor %s (%s; %s) of style %s, approved by a person; judge the outputs "
+                  "against it" % (a, pick.get("anchor_id"), pick.get("strength"), ", ".join(pick.get("dimensions") or []) or "-",
+                                  ((spec.get("style_lock") or {}).get("style") or {}).get("style_id")) for a, pick in anchors]
         if qa_report:
             lines += ["Deterministic QA: %s (%s)" % (qa_report.get("state"), "; ".join(
                 "%s %s %s" % (r["state"], r["output"], r["check"]) for r in qa_report.get("results", []) if r["state"] != "PASS") or "all checks PASS")]
@@ -485,6 +528,22 @@ def review_tiles(run_dir, images, rel, write):
     return out
 
 
+def review_anchors(run_dir, spec):
+    """[(references/anchor-<id>.png, pick)] of the anchors spec.style_lock selected, in selection order. Exits 1 when
+    a run copy is missing or no longer has the sha256 resolve selected (render --run copies them)."""
+    out = []
+    for pick in runfiles.style_lock_references(spec):
+        rel = pick.get("image") if isinstance(pick.get("image"), str) else "references/anchor-%s.png" % pick.get("anchor_id")
+        path = os.path.join(run_dir, *rel.split("/"))
+        if not os.path.isfile(path):
+            fail("%s is missing: run scripts/assetgen/assetgen.py render --run %s (it copies the selected anchors)"
+                 % (rel, run_dir.replace(os.sep, "/")))
+        if qa.sha256(path) != pick.get("sha256"):
+            fail("%s is not the anchor resolve selected (sha256 differs): resolve and render again" % rel)
+        out.append((rel, pick))
+    return out
+
+
 def review_cmd(run_dir, phase, codex, write=True):
     run_dir = os.path.abspath(run_dir)  # the printed command works from any cwd
     spec = load_spec(os.path.join(run_dir, "spec.json"))
@@ -509,15 +568,21 @@ def review_cmd(run_dir, phase, codex, write=True):
         data = purpose.get("data") if isinstance(purpose.get("data"), dict) else {}
         if "png-tileable" in runfiles.required_checks(data.get("qa")):
             tiles = review_tiles(run_dir, images, rel, write)
-    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding, sizes, tiles)
+    anchors = review_anchors(run_dir, spec) if phase == "image" else []
+    lock = spec.get("style_lock")
+    if phase == "image" and isinstance(lock, dict):
+        binding["style"] = lock.get("style")
+        binding["anchors"] = [{"anchor_id": pick.get("anchor_id"), "sha256": pick.get("sha256")} for _, pick in anchors]
+    stdin = review_prompt_text(phase, spec, prompt, rel, qa_report, binding, sizes, tiles, anchors)
     verdict = os.path.join(run_dir, REVIEW_FILES[phase]).replace(os.sep, "/")
     argv = [codex, "exec", "--sandbox", "read-only", "-C", run_dir.replace(os.sep, "/")]
-    for i in images + [os.path.join(run_dir, *t.split("/")) for t, _ in tiles]:
+    for i in images + [os.path.join(run_dir, *t.split("/")) for t, _ in tiles + anchors]:
         argv += ["-i", i.replace(os.sep, "/")]
     argv += ["-o", verdict, "-"]
     shell = "%s <<'%s'\n%s\n%s" % (shlex.join(argv), HEREDOC, stdin, HEREDOC)
     return {"schema": "rpg-factory.assetgen-review-cmd/1", "phase": phase, "argv": argv, "stdin": stdin,
-            "verdict": verdict, "binding": binding, "shell": shell, "tiles": [t for t, _ in tiles]}
+            "verdict": verdict, "binding": binding, "shell": shell, "tiles": [t for t, _ in tiles],
+            "anchors": [a for a, _ in anchors], "rubric": review_rubric(spec, phase)}
 
 
 # -- embed -----------------------------------------------------------------------------------------------------
@@ -971,12 +1036,13 @@ def main(argv=None):
             results, outputs = qa.run_qa(a.run, spec, size)
             purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
             state = qa.overall(results)
-            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "FAIL", "NOT_AVAILABLE")}
+            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")}
             report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
                       "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size, "state": state, "results": results, "outputs": outputs, "summary": counts}
             write_json(os.path.join(a.run, "qa.json"), report)
             emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
-                 + "\nassetgen qa: %s (%d PASS, %d FAIL, %d NOT_AVAILABLE)" % (state, counts["PASS"], counts["FAIL"], counts["NOT_AVAILABLE"]))
+                 + "\nassetgen qa: %s (%d PASS, %s%d FAIL, %d NOT_AVAILABLE)" % (
+                     state, counts["PASS"], "%d WARN, " % counts["WARN"] if counts["WARN"] else "", counts["FAIL"], counts["NOT_AVAILABLE"]))
             return {"PASS": 0, "FAIL": 1}.get(state, 3)
         if a.cmd == "promote-anchor":
             rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)

@@ -29,7 +29,8 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        purpose, whose content hash must equal spec.purpose.sha256). NOT_AVAILABLE never grades PASS:
                        it is missing work (install Pillow, re-run qa). A report that claims PASS while a row is not
                        PASS or a required check is missing contradicts itself and always FAILS; rows for unrecorded
-                       outputs FAIL.
+                       outputs FAIL. Style consistency rows (style-*, never required checks) that are WARN or
+                       NOT_AVAILABLE neither grade nor contradict; a style-* FAIL row must agree with a FAIL qa state.
   gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present
@@ -246,7 +247,8 @@ def check(artifact, ctx):
     else:
         todo.append("qa.json is missing from the run directory (assetgen.py qa)")
     state = disk.get("state") if disk is not None else None
-    rows = [r for r in (disk or {}).get("results") or [] if isinstance(r, dict)]
+    all_rows = [r for r in (disk or {}).get("results") or [] if isinstance(r, dict)]
+    rows = [r for r in all_rows if not (str(r.get("check", "")).startswith("style-") and r.get("state") in ("WARN", "NOT_AVAILABLE"))]
     required, problems = None, []
     rec_purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
     if purpose is None:
@@ -283,7 +285,7 @@ def check(artifact, ctx):
                 problems.append("QA of %s: %s" % (path, ", ".join(bad)))
             if mine and missing:
                 problems.append("QA of %s lacks the required check(s) %s" % (path, ", ".join(missing)))
-        stale = sorted({str(r.get("output")) for r in rows} - set(recorded) - {"outputs/"})
+        stale = sorted({str(r.get("output")) for r in all_rows} - set(recorded) - {"outputs/"})
         if stale:
             fails.append("QA results name outputs that are not recorded: " + ", ".join(stale))
         if state == "PASS" and (problems or any(r.get("state") != "PASS" for r in rows)):

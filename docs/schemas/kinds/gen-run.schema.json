@@ -131,9 +131,42 @@
           "items": {
             "$ref": "#/$defs/output"
           }
+        },
+        "style": {
+          "description": "Image review with the style lock: the style ref review-cmd bound (null when the verdict's value is not an object). Absent in verdicts without it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/style_ref"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "anchors": {
+          "description": "Image review with the style lock: [{anchor_id, sha256}] of the anchors review-cmd attached. Absent in verdicts without it.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "anchor_id",
+              "sha256"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "anchor_id": {
+                "type": "string"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
         }
       },
-      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs (runfiles.generation_inputs: the whole workflow.json graph and the sha256 of each references/<name>) for the image review; outputs only for the image review)."
+      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs (runfiles.generation_inputs: the whole workflow.json graph and the sha256 of each references/<name>) for the image review; outputs only for the image review). With the style lock the image binding also carries style and anchors."
     },
     "output": {
       "type": "object",

@@ -7,7 +7,10 @@ read_verdict(path, phase) -> {by, state, findings, prompt_sha256, requirements_s
   PASS or FAIL is found. The binding fields are what review-cmd told the reviewer to copy back unchanged: the
   sha256 of the prompt it reviewed and the requirements_sha256 it judged against (both phases) and, for the image
   phase, [{path, sha256}] of the images it saw. A verdict without them, or with other values than the run's
-  current prompt, requirements and outputs, is unbound or stale.
+  current prompt, requirements and outputs, is unbound or stale. With the style lock the image binding also names
+  "style" (the style ref) and "anchors" ([{anchor_id, sha256}] of the anchors attached); an image verdict that carries
+  them keeps them ({"style": dict or None, "anchors": [...]}), a verdict without them has neither key (older runs keep
+  their shape).
 requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sorted keys, compact separators) of
   {purpose, style, template: their content sha256, params: the resolved params, generation: generation}. generation
   is None for the prompt review and generation_inputs(workflow, spec) for the image review. Works on spec.json
@@ -243,7 +246,18 @@ def read_verdict(path, phase):
         v = obj.get(key)
         return v if isinstance(v, str) and SHA256.match(v) else None
     findings = obj.get("findings")
-    return {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
-            "findings": len(findings) if isinstance(findings, list) else 0,
-            "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
-            "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}
+    out = {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
+           "findings": len(findings) if isinstance(findings, list) else 0,
+           "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
+           "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}
+    if phase == "image" and ("style" in obj or "anchors" in obj):
+        out["style"] = obj.get("style") if isinstance(obj.get("style"), dict) else None
+        out["anchors"] = _anchors(obj.get("anchors"))
+    return out
+
+
+def _anchors(value):
+    if not isinstance(value, list):
+        return []
+    return [{"anchor_id": a.get("anchor_id"), "sha256": a.get("sha256")} for a in value
+            if isinstance(a, dict) and isinstance(a.get("anchor_id"), str) and isinstance(a.get("sha256"), str)]
