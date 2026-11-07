@@ -158,6 +158,9 @@ grep -q "pipeline needs tier|validate|subplan|" "$TMP/err" && grep -qE "^  pipel
 out=$(python3 -B "$CMD" pipeline subplan validate "$TMP/pipeline-subplan.json" 2>&1); rc=$?
 [ "$rc" -eq 1 ] && ! grep -q "pipeline needs" <<<"$out" && grep -qE "^(ERROR |INVALID)" <<<"$out" \
   && ok "pipeline subplan is a pipeline verb (reaches subplan validate: exit 1 with its ERROR lines)" || no "pipeline subplan rc=$rc: $(head -c 300 <<<"$out")"
+needs=$(sed -n 's/^factory-cmd: pipeline needs //p' "$TMP/err")
+hint=$(sed -n 's/^argument-hint: "\([a-z|]*\) .*/\1/p' "$ROOT/commands/pipeline.md")
+[ -n "$needs" ] && [ "$hint" = "$needs" ] && ok "/pipeline argument-hint lists every pipeline verb ($hint)" || no "/pipeline argument-hint '$hint' != verbs '$needs'"
 # -- assetgen: read-only assetgen.py verbs; the game layer of the workspace authoring repo is picked up by default
 out=$(python3 -B "$CMD" assetgen list --kind purpose --json); rc=$?
 [ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-list/1" and any(.entries[]; .id == "icon" and .layer == "core")' <<<"$out" >/dev/null   && ok "assetgen list: core purposes through factory-cmd (exit 0)" || no "assetgen list rc=$rc: $(head -c 300 <<<"$out")"

@@ -922,7 +922,7 @@ def cmd_dispatch(a, reg):
             me = serial_key(plan, reg, key)
             group = [t["id"] for t in plan["tasks"] if serial_key(plan, reg, t["repo"]) == me]
             open_ = [tid for tid in group if len(group) > 1
-                     and (fstate.read_json(verdict_file(plan, tid, "qa")) or {}).get("state") != "PASS"]
+                     and (verdict_of(plan, reg, tid, "qa")[0] or {}).get("state") != "PASS"]
             if open_:
                 print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
                       "start the integration QA after it", file=sys.stderr)
@@ -946,7 +946,7 @@ def cmd_dispatch(a, reg):
             "base": start_base(plan, info, task)}
     if a.phase in ("lead", "implement") and not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
-        if prev and (fstate.read_json(verdict_file(plan, prev, "qa")) or {}).get("state") != "PASS":
+        if prev and (verdict_of(plan, reg, prev, "qa")[0] or {}).get("state") != "PASS":
             print(f"factory-pipeline: {task['repo']} takes one task at a time: task {prev} has no QA PASS yet; "
                   f"start {task['id']} after it", file=sys.stderr)
     if a.phase == "lead":
@@ -1117,15 +1117,20 @@ def safe_name(x):
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in str(x))
 
 
+SUB_SEP = "@"  # <task>@<subtask>: no task id contains it (ID_RULE), so no task's file name collides with a subtask's
+LEGACY_SUB = "__sub-"  # older records: <task>__sub-<subtask>, which task id "<task>__sub-<subtask>" also produced
+
+
 def verdict_file(plan, task, phase, subtask=None):
-    """The current verdict of a task phase; a subtask's own review or QA (--subtask) lives apart from the task's."""
-    sub = f"__sub-{safe_name(subtask)}" if subtask else ""
+    """The current verdict of a task phase: <task>__<phase>.json; a subtask's own review or QA (--subtask) lives apart
+    from the task's: <task>@<subtask>__<phase>.json."""
+    sub = f"{SUB_SEP}{safe_name(subtask)}" if subtask else ""
     return os.path.join(verdict_dir(plan), f"{safe_name(task)}{sub}__{phase}.json")
 
 
 def candidate_file(plan, task, phase, sha, by, subtask=None):
-    """Every verdict is also kept per candidate: <task>__<phase>__<sha12>__<by>.json (a subtask: <task>__sub-<id>__...)."""
-    sub = f"__sub-{safe_name(subtask)}" if subtask else ""
+    """Every verdict is also kept per candidate: <task>__<phase>__<sha12>__<by>.json (a subtask: <task>@<id>__...)."""
+    sub = f"{SUB_SEP}{safe_name(subtask)}" if subtask else ""
     return os.path.join(verdict_dir(plan), f"{safe_name(task)}{sub}__{phase}__{sha[:12]}__{safe_name(by)}.json")
 
 
@@ -1159,15 +1164,20 @@ def subtask_failures(plan, reg, task_id, target):
     a FAIL. Per subtask and phase, a candidate's own verdict is its current record (else its latest archive, a tie keeps
     the non-PASS) and only applicable candidates that no other applicable one contains decide: a PASS on a newer commit
     resolves an older FAIL, a late PASS on an older candidate never resolves a newer FAIL."""
-    vdir, pre = verdict_dir(plan), f"{safe_name(task_id)}__sub-"
+    vdir = verdict_dir(plan)
+    # legacy <task>__sub-<id> records count only when their own task and subtask fields name this task's subtask: task
+    # "<task>__sub-<id>" wrote the same names
+    pres = (f"{safe_name(task_id)}{SUB_SEP}", f"{safe_name(task_id)}{LEGACY_SUB}")
     names = sorted(os.listdir(vdir)) if os.path.isdir(vdir) else []
     fp, groups = None, {}
     for n in names:
-        if not (n.startswith(pre) and n.endswith(".json")):
+        pre = next((x for x in pres if n.startswith(x)), None)
+        if not pre or not n.endswith(".json"):
             continue
         rec = fstate.read_json(os.path.join(vdir, n))
         if (not isinstance(rec, dict) or rec.get("task") != task_id or not rec.get("subtask")
-                or rec.get("phase") not in ("review", "qa") or not rec.get("sha")):
+                or rec.get("phase") not in ("review", "qa") or not rec.get("sha")
+                or not n.startswith(f"{pre}{safe_name(rec['subtask'])}__")):
             continue
         fp = fp or scope_fingerprint(plan, reg, task_id)
         if rec.get("fingerprint") != fp:
@@ -1726,13 +1736,16 @@ def own_start(plan, reg, info, task, head):
     """Where the task's own commits start on `head`, or None when it has none yet. Dependent tasks may own the same
     paths, so the repo base is not enough: a branch cut from plan.topic starts at its fork point (none while it is still
     on the topic's first-parent chain: cut there, nothing of its own), and a no-worktree task, which shares the topic,
-    starts after its serial predecessor's last recorded verdict."""
+    starts after its serial predecessor's last recorded verdict (none yet: it has not started, the predecessor's commits
+    are not its own)."""
     base = info["base_sha"] or info["base"]
     if not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
-        recs = [verdict_of(plan, reg, prev, ph)[0] for ph in ("qa", "review")] if prev else []
+        if not prev:
+            return base
+        recs = [verdict_of(plan, reg, prev, ph)[0] for ph in ("qa", "review")]
         marks = [r["sha"] for r in recs if r and is_ancestor(info["path"], r["sha"], head)]
-        return marks[0] if marks else base
+        return marks[0] if marks else None
     start = start_base(plan, info, task)
     if start != plan["topic"]:
         return base
@@ -1780,7 +1793,10 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
             ahead = "0"
         if int(ahead) > 0:
             row["phase"] = "candidate"
-        elif info["worktrees"] or (row["worktree"] and git(row["worktree"], "status", "--porcelain", "--", *specs(paths))[0]):
+        elif info["worktrees"] or ((start is not None or not base) and row["worktree"]
+                                   and git(row["worktree"], "status", "--porcelain", "--", *specs(paths))[0]):
+            # a no-worktree task before its serial predecessor's verdict has not started: uncommitted work in the
+            # paths they share is the predecessor's
             row["phase"] = "implementing"
     elif (rv or rv_stale) and topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *specs(paths))[0] not in (None, "", "0"):
         # A prior review identifies a task whose branch was removed after integration. Without it, commits on
@@ -1873,7 +1889,7 @@ def status(plan, reg, orca_run=None):
         if row["phase"] == "pending":
             waiting = [d for d in t.get("deps", []) if rows.get(d, {}).get("phase") not in done]
             prev = serial_predecessor(plan, reg, t) if not info["worktrees"] else None
-            if prev and rows[prev]["phase"] != "qa":
+            if prev and rows[prev]["phase"] != "qa" and prev not in waiting:
                 waiting.append(prev)
             if waiting:
                 row["notes"].append("waits for " + ", ".join(waiting))
@@ -1928,7 +1944,6 @@ def status(plan, reg, orca_run=None):
         first = None
         for key in gkeys:
             first = _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf)
-        topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
     # a current subtask review/QA FAIL blocks the task like a task review FAIL: the task lead fixes it (no gate)
     blocked = False
     for t in tasks:
