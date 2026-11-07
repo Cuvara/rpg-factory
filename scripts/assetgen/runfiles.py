@@ -17,15 +17,17 @@ requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sort
   (resolved refs carry sha256) and on run.md's spec block (manifest copies the refs and params); malformed input
   still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
   params or the rendered generation inputs changed is stale. Only when the spec carries style_lock (resolve with the
-  style lock) does the object also hold {"style_lock": {"style": <style ref>, "references": [anchor sha256...]}}, so a
-  spec or run.md written before the style lock hashes exactly as it did.
+  style lock) does the object also hold {"style_lock": style_lock_binding(spec)}: the style ref, the family, the anchor
+  hashes and the relevant rejections (id and content hash), so a review made before the family or the rejection set
+  changed is stale too; a spec or run.md written before the style lock hashes exactly as it did.
 generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
   workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
   that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
   path of the run's copy references/<name> (None or a missing file -> null); style-lock anchors are LoadImage inputs
   anchor-<id>.png, so their copies are bound by content. With spec.style_lock it also holds {"anchors": [{anchor_id,
   sha256}]} of the selected references (absent otherwise). Without a workflow: the spec params.
-style_lock_binding(spec) -> {"style", "references"} of spec.style_lock, or None for a spec without it.
+style_lock_binding(spec) -> {"style", "family", "references": [anchor sha256...], "rejections": [{id, sha256}]} of
+  spec.style_lock (sha256 of a rejection: canonical JSON of its spec.style_lock entry), or None for a spec without it.
 style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] without it).
 workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
   (PrimitiveStringMultiline) it links to.
@@ -183,11 +185,19 @@ def style_lock_references(spec):
     return [r for r in refs if isinstance(r, dict)] if isinstance(refs, list) else []
 
 
+def _canonical_sha256(obj):
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def style_lock_binding(spec):
     lock = spec.get("style_lock") if isinstance(spec, dict) else None
     if not isinstance(lock, dict):
         return None
-    return {"style": lock.get("style"), "references": [r.get("sha256") for r in style_lock_references(spec)]}
+    rej = lock.get("rejections")
+    rejections = [{"id": r.get("id"), "sha256": _canonical_sha256(r)} for r in rej if isinstance(r, dict)]         if isinstance(rej, list) else []
+    return {"style": lock.get("style"), "family": lock.get("family"),
+            "references": [r.get("sha256") for r in style_lock_references(spec)], "rejections": rejections}
 
 
 def requirements_sha256(spec, generation=None):
@@ -202,8 +212,7 @@ def requirements_sha256(spec, generation=None):
     lock = style_lock_binding(spec)
     if lock is not None:  # only with the style lock: older specs keep their hash
         obj["style_lock"] = lock
-    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return _canonical_sha256(obj)
 
 
 def requested_size(workflow, spec):

@@ -438,6 +438,7 @@ def review_rubric(spec, phase):
 def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=(), tiles=(), anchors=()):
     p, s = spec["purpose"], spec["style"]
     rubric = review_rubric(spec, phase)
+    forbidden = s["data"].get("forbidden") if isinstance(s["data"].get("forbidden"), list) else []
     lines = [
         "You are the independent %s reviewer of an asset-gen run (purpose %s, style %s, template %s)."
         % (phase, p["id"], s["id"], spec["template"]["id"]),
@@ -445,6 +446,10 @@ def review_prompt_text(phase, spec, prompt, images, qa_report, binding, sizes=()
         "", "Purpose: %s - %s" % (p["data"].get("title", ""), p["data"].get("description", "")),
         "Style: %s. Prefix: %s Suffix: %s" % (s["data"].get("title", ""), s["data"].get("prefix", ""), s["data"].get("suffix", "")),
         "Style avoid: %s" % ", ".join(s["data"].get("avoid", [])),
+        "Style forbidden (never in the prompt or the image): %s" % (", ".join(
+            x for x in forbidden if isinstance(x, str)) or "none"),
+        "Style outline: %s" % (stylelock.hint_text(s["data"].get("outline")) or "none"),
+        "Style shape language: %s" % (stylelock.hint_text(s["data"].get("shape_language")) or "none"),
         "Hints (the purpose wins for technical constraints): %s" % ("; ".join(
             "%s: %s" % (k, h["text"]) for k, h in sorted(effective_hints(spec).items())) or "none"),
         "Requested params: %s" % ", ".join("%s=%s" % (k, v) for k, v in sorted(spec.get("params", {}).items())),

@@ -987,6 +987,8 @@ variant qp-rubric-001; AG resolve --purpose sprite-2d --style stylized-painterly
 AG qa --run "$RUNS/qp-rubric-001" >/dev/null; AG manifest --run "$RUNS/qp-rubric-001" >/dev/null
 variant qp-rsize-001; rebase qp-rsize-001; AG render --run "$RUNS/qp-rsize-001" --param size=1536x1024 >/dev/null
 AG qa --run "$RUNS/qp-rsize-001" >/dev/null; AG manifest --run "$RUNS/qp-rsize-001" >/dev/null
+# a rejection recorded after the reviews joins spec.style_lock (re-resolve): both reviews are stale
+variant qp-rejbind-001; jq '.style_lock.rejections += [{"id": "r-late", "type": "direction", "reason": "too_detailed", "text": "No rivets."}]'   "$RUNS/qp-rejbind-001/spec.json" > "$TMP/s" && mv "$TMP/s" "$RUNS/qp-rejbind-001/spec.json"; AG manifest --run "$RUNS/qp-rejbind-001" >/dev/null
 variant qp-wfprompt-001; jq '(.[] | select(.class_type == "NineRouterImage") | .inputs.user_prompt) = "Another prompt sent to the node."'   "$RUNS/qp-wfprompt-001/workflow.json" > "$TMP/wf" && mv "$TMP/wf" "$RUNS/qp-wfprompt-001/workflow.json"; AG manifest --run "$RUNS/qp-wfprompt-001" >/dev/null
 variant qp-rqual-001; rebase qp-rqual-001; AG render --run "$RUNS/qp-rqual-001" --param quality=low >/dev/null
 AG qa --run "$RUNS/qp-rqual-001" >/dev/null; AG manifest --run "$RUNS/qp-rqual-001" >/dev/null
@@ -1096,6 +1098,8 @@ case_ qp-rsize-001 gen-run-image-review FAIL 'bound to other requirements' "rend
 case_ qp-wfprompt-001 gen-run-provenance FAIL 'sends another prompt than the recorded one' "workflow.json prompt edited after the record: provenance FAIL"
 case_ qp-wfprompt-001 gen-run-image-review FAIL 'bound to other requirements' "workflow.json prompt edited after the image review: FAIL (prompts are bound)"
 case_ qp-rqual-001 gen-run-image-review FAIL 'bound to other requirements' "render --param quality=low after the image review: FAIL (every generation input is bound)"
+case_ qp-rejbind-001 gen-run-prompt-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the prompt review: FAIL (rejections are bound)"
+case_ qp-rejbind-001 gen-run-image-review FAIL 'bound to other requirements' "a relevant rejection added to spec.style_lock after the image review: FAIL"
 [ "$(st AGEN-qp-rsize-001 gen-run-prompt-review)" = PASS ] && ok "render --param size leaves the prompt review bound (the prompt phase has no size)" \
   || no "rsize prompt review: $(st AGEN-qp-rsize-001 gen-run-prompt-review)" "$(why AGEN-qp-rsize-001 gen-run-prompt-review)"
 got=$(for c in $plugin_checks; do printf '%s=%s ' "$c" "$(st AGEN-qp-edit-001 "$c")"; done)
@@ -1217,6 +1221,7 @@ for name, data, text in (
         ("bad-edges", {"outline": {"text": "x", "edge_darkness": {"max_luminance": 300}}}, "max_luminance must be a number from 0 to 255"),
         ("bad-canvas", {"canvas": {"props": {"aspect": "1x1"}}}, "canvas.props.aspect must be W:H"),
         ("bad-pixels", {"canvas": {"props": {"aspect": "1:1", "width": 512}}}, "an exact pixel canvas is never set"),
+        ("bad-canvas-sev", {"canvas": {"props": {"aspect": "1:1", "severity": "loud"}}}, "canvas.props.severity must be warn or fail"),
         ("bad-forbidden", {"forbidden": "text"}, "forbidden must be a list"),
         ("bad-tone", {"tone": {"tolerance": 3}}, "tone.tolerance must be a number from 0 to 1")):
     p = w("styles/%s.json" % name, dict({"schema": "rpg-factory.assetgen-style/1", "title": name}, **data))
@@ -1224,6 +1229,12 @@ for name, data, text in (
     check(failed(res, text), "lint style: " + text, res)
     os.remove(p)
 check(lint_of("styles", "rpg-base.json")["state"] == "PASS", "lint: structured style fields PASS", lint_of("styles", "rpg-base.json"))
+for sev in ("warn", "fail"):
+    p = w("styles/canvas-%s.json" % sev, {"schema": "rpg-factory.assetgen-style/1", "title": sev,
+                                         "canvas": {"props": {"aspect": "1:1", "min_side": 256, "severity": sev}}})
+    res = lint.lint_file(p, A)
+    check(res["state"] == "PASS", "lint style: canvas severity %s is accepted (consistency.check_canvas grades it)" % sev, res)
+    os.remove(p)
 p = w("purposes/bad-dims.json", {"extends": "icon", "dimensions": ["palette", "smell"], "max_references": -1, "default_family": "Props!", "qa": {"outlines": "yes"}})
 res = lint.lint_file(p, A)
 check(failed(res, "dimensions must be", "max_references must be", "default_family must be", "qa.outlines must be"),
@@ -1521,11 +1532,20 @@ other = copy.deepcopy(spec); other["style_lock"]["references"][0]["sha256"] = "f
 assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "anchor hash not bound"
 other = copy.deepcopy(spec); other["style_lock"]["style"]["version"] = 3
 assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "style ref not bound"
-other = copy.deepcopy(spec); other["style_lock"]["rejections"] = []; other["style_lock"]["override"] = "x"
-assert runfiles.requirements_sha256(other) == runfiles.requirements_sha256(spec), "only style ref and anchor hashes are bound"
+other = copy.deepcopy(spec); other["style_lock"]["override"] = "x"; other["style_lock"]["max_references"] = 9
+assert runfiles.requirements_sha256(other) == runfiles.requirements_sha256(spec), "override and max_references are not bound"
+rej = {"id": "r-new", "type": "direction", "reason": "too_detailed", "text": "No rivets."}
+other = copy.deepcopy(spec); other["style_lock"]["rejections"] = spec["style_lock"]["rejections"] + [rej]
+assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "an added rejection not bound"
+changed = copy.deepcopy(other); changed["style_lock"]["rejections"][-1]["text"] = "No bolts."
+assert runfiles.requirements_sha256(changed) != runfiles.requirements_sha256(other), "rejection content not bound"
+assert runfiles.style_lock_binding(other)["rejections"][-1] == {"id": "r-new", "sha256": hashlib.sha256(json.dumps(
+    rej, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}, runfiles.style_lock_binding(other)
+other = copy.deepcopy(spec); other["style_lock"]["family"] = "characters"
+assert runfiles.requirements_sha256(other) != runfiles.requirements_sha256(spec), "family not bound"
 print("ok")
 EOF
-grep -qx ok "$TMP/o" && ok "requirements_sha256/generation_inputs: style ref and anchor hashes bound with style_lock only; old spec hash unchanged" || no "style lock hashes" "$(cat "$TMP/o")"
+grep -qx ok "$TMP/o" && ok "requirements_sha256/generation_inputs: style ref, family, anchor hashes and rejections (id + content) bound with style_lock only; old spec hash unchanged" || no "style lock hashes" "$(cat "$TMP/o")"
 dg="$RUNS/golden-icon-001"; jq 'del(.style_lock)' "$dg/spec.json" > "$TMP/old-spec.json"
 AG render --spec "$TMP/old-spec.json" --prompt-file "$dg/prompt.md" --out "$TMP/old-wf.json" >/dev/null 2>&1
 [ "$(jq -S . "$TMP/old-wf.json")" = "$(jq -S . "$GOLD/icon.json")" ] \
@@ -1735,12 +1755,24 @@ AG review-cmd --phase prompt --run "$sq" --codex codex --json > "$TMP/rp.json" 2
 jq -r .stdin "$TMP/rp.json" | grep -q "^Must avoid: .*, No fine filigree on props. (rejected direction r-props), No gold trim. (rejected direction too-detailed-001), No noise. (rejected direction too-detailed-002)$" \
   && [ "$(jq -r '(.binding | has("style") or has("anchors")) or (.argv | index("-i") != null) or (.rubric | map(startswith("Not repeated")) | any)' "$TMP/rp.json")" = false ] \
   && ok "review-cmd prompt: direction rejections in Must avoid; no -i, no anchor binding, no rejection rubric items" || no "prompt review" "$(cat "$TMP/err"; jq -r .stdin "$TMP/rp.json")"
+# both phases name the style's forbidden list and the resolved outline and shape_language text (lighting, palette as hints)
+sr_="$SR/sl-rules-001"; rm -rf "$sr_"; cp -R "$sq" "$sr_"
+jq '.style.data.forbidden = ["photo texture", "lens flare"] | .style.data.outline = {"text": "Dark 2px outline.", "severity": "warn"}
+    | .style.data.shape_language = "Chunky rounded silhouettes."' "$sq/spec.json" > "$sr_/spec.json"
+for ph in prompt image; do
+  AG review-cmd --phase $ph --run "$sr_" --codex codex --json > "$TMP/rr.json" 2>"$TMP/err"; rc=$?
+  jq -r .stdin "$TMP/rr.json" > "$TMP/rr.txt"
+  [ $rc -eq 0 ] && grep -qx "Style forbidden (never in the prompt or the image): photo texture, lens flare" "$TMP/rr.txt"     && grep -qx "Style outline: Dark 2px outline." "$TMP/rr.txt" && grep -qx "Style shape language: Chunky rounded silhouettes." "$TMP/rr.txt"     && grep -q "^Hints (the purpose wins for technical constraints): .*palette: " "$TMP/rr.txt"     && ok "review-cmd $ph: style forbidden list, outline and shape_language text for the reviewer" || no "review rules $ph rc=$rc" "$(cat "$TMP/err" "$TMP/rr.txt")"
+done
 # old runs: a spec without style_lock reviews exactly as before
 sl_="$SR/sl-legacy-001"; cp -R "$sq" "$sl_"; jq 'del(.style_lock)' "$sq/spec.json" > "$sl_/spec.json"; rm -rf "$sl_/references"
 AG review-cmd --phase image --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -r '(.binding | keys | join(",")) + " " + (.anchors | length | tostring) + " " + ([.argv[] | select(. == "-i")] | length | tostring)' "$TMP/rl.json")" = "outputs,prompt_sha256,requirements_sha256 0 1" ] \
   && ! jq -r .stdin "$TMP/rl.json" | grep -q "attached anchors\|Not repeated" \
   && ok "review-cmd image on an old spec without style_lock: old binding keys, no anchors, no style rubric items" || no "legacy review rc=$rc" "$(cat "$TMP/err"; jq -c '[.binding, .argv]' "$TMP/rl.json")"
+jq 'del(.style.data.forbidden, .style.data.outline, .style.data.shape_language)' "$sl_/spec.json" > "$TMP/s" && mv "$TMP/s" "$sl_/spec.json"
+AG review-cmd --phase prompt --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; jq -r .stdin "$TMP/rl.json" > "$TMP/rr.txt"
+grep -qx "Style forbidden (never in the prompt or the image): none" "$TMP/rr.txt" && grep -qx "Style outline: none" "$TMP/rr.txt" && grep -qx "Style shape language: none" "$TMP/rr.txt"   && ok "review-cmd: a style without forbidden, outline or shape_language says none" || no "review rules none" "$(cat "$TMP/err" "$TMP/rr.txt")"
 
 # drift (read-only): older version and hash changed
 git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "runs and records"

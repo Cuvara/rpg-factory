@@ -164,7 +164,7 @@ def style_errors(data):
     canvas = data.get("canvas")
     if canvas is not None:
         if not isinstance(canvas, dict):
-            errs.append("canvas must be an object of family -> {aspect, min_side, tolerance}")
+            errs.append("canvas must be an object of family -> {aspect, min_side, tolerance, severity}")
         else:
             for fam, c in sorted(canvas.items()):
                 if not isinstance(c, dict):
@@ -176,7 +176,9 @@ def style_errors(data):
                     errs.append("canvas.%s.min_side must be an integer >= 1" % fam)
                 if "tolerance" in c and not _in(c["tolerance"], 0, 1):
                     errs.append("canvas.%s.tolerance must be a number from 0 to 1" % fam)
-                extra = sorted(set(c) - {"aspect", "min_side", "tolerance"})
+                if "severity" in c and c["severity"] not in SEVERITIES:
+                    errs.append("canvas.%s.severity must be warn or fail" % fam)
+                extra = sorted(set(c) - {"aspect", "min_side", "tolerance", "severity"})
                 if extra:
                     errs.append("canvas.%s: unknown keys %s (an exact pixel canvas is never set)" % (fam, ", ".join(extra)))
     tone = data.get("tone")

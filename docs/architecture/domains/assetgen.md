@@ -70,7 +70,7 @@ A style file carries `version` (an integer from 1) and `status` (`draft`, `activ
 - `lighting`, `shape_language`: `text` and structured keys.
 - `outline`: `text`, and `edge_darkness` (`max_luminance`, `min_ratio`, `severity`) for the edge check.
 - `forbidden[]`: like `avoid`, it joins the prompt's avoid list and the review checklist.
-- `canvas`: per family `{aspect: "W:H", min_side, tolerance}`, never an exact pixel canvas.
+- `canvas`: per family `{aspect: "W:H", min_side, tolerance, severity}` (`severity` `warn` or `fail`), never an exact pixel canvas.
 - `tone`: `{tolerance, severity}` turns on the luminance and saturation check against the anchors.
 
 A purpose may declare these fields:
@@ -114,7 +114,7 @@ The candidates for `references` are the valid active anchors of the run's style 
 3. Strength: `canonical`, `strong`, `supporting`.
 4. ID.
 
-Each pick records `anchor_id`, `family`, `strength`, `dimensions`, `image` (`references/anchor-<id>.png`), `sha256` and `reason[]` (for example `family match`, `dimensions: palette, line`, `strength canonical`). The requirements hash covers the style reference and the reference hashes only when `style_lock` is present, so runs recorded before the style lock keep their hash.
+Each pick records `anchor_id`, `family`, `strength`, `dimensions`, `image` (`references/anchor-<id>.png`), `sha256` and `reason[]` (for example `family match`, `dimensions: palette, line`, `strength canonical`). The requirements hash covers the style reference, the family, the reference hashes and the relevant rejections (ID and content hash of each `spec.style_lock.rejections` entry) only when `style_lock` is present, so a changed rejection set makes earlier reviews stale, and runs recorded before the style lock keep their hash.
 
 `render --run` copies each selected anchor to `<run>/references/anchor-<id>.png`. It refuses when the anchor image no longer has the selected SHA-256. It adds one `LoadImage` node per anchor and a chain of core `ImageBatch` nodes into `NineRouterImage.reference_images`, in both `workflow.json` and `workflow.ui.json` (`scripts/assetgen/assetgen.py` `wire_references`). An `image-edit` reference stays the first image. The agent uploads every `references/*` file with comfy-mcp `upload_file` under its name before `run_workflow`.
 
@@ -131,7 +131,7 @@ With `spec.style_lock`, `qa` adds four rows per output (`scripts/assetgen/consis
 
 A miss is a `WARN`. It is a `FAIL` only when the style field sets `severity: fail`. A row is `NOT_AVAILABLE` when its style field is absent or prose, when there are no anchors (tone), when the purpose has no `qa.outlines` (edges), or when the family has no canvas entry. The style rows are never required checks: `WARN` and `NOT_AVAILABLE` keep the `qa` state, and a style `FAIL` row fails it. The default thresholds are in the `consistency.py` docstring.
 
-The image review (`review-cmd --phase image`) attaches the selected anchors with `-i` after the outputs and tiles. It adds the rubric item "The image matches the attached anchors in palette, lighting, line, detail density and rendering." and one item `Not repeated: <reason> - <text>` per relevant rejection. Its binding adds `style` and `anchors` (`anchor_id`, `sha256`). Claude's own review (`review-image-claude.json`) uses the same rubric and binding. The prompt review lists the direction rejections under "Must avoid".
+The image review (`review-cmd --phase image`) attaches the selected anchors with `-i` after the outputs and tiles. It adds the rubric item "The image matches the attached anchors in palette, lighting, line, detail density and rendering." and one item `Not repeated: <reason> - <text>` per relevant rejection. Its binding adds `style` and `anchors` (`anchor_id`, `sha256`). Claude's own review (`review-image-claude.json`) uses the same rubric and binding. The prompt review lists the direction rejections under "Must avoid". Both review phases also list the style's `forbidden` items and the resolved text of `outline` and `shape_language`, next to the lighting and palette hints, so the reviewer can enforce them.
 
 ### Drift
 
