@@ -67,7 +67,9 @@
   run output under `assetgen/styles/<style-id>/anchors/`; only a person activates it, and it is valid only while its
   source gen-run is approved (the quality check `gen-run-style` also checks the signed approval, the image hash and
   that the approver is not an agent or model). `assetgen.py reject` records a rejected asset or direction with a
-  fixed reason under `rejections/`; relevant rejections feed the prompt's avoid list and the review rubric.
+  fixed reason under `rejections/`; relevant rejections feed the prompt's avoid list and the review rubric, and the requirements hash binds them
+  and the family, so a changed rejection set makes earlier reviews stale. Both reviews also show the style's
+  `forbidden` list, `outline` and `shape_language`.
 - **Style lock: deterministic reference selection.** `resolve` selects valid active anchors of the run's style
   version (family match, dimension overlap, strength, id; capped by `max_references`) with `reason[]` per pick, and
   `render --run` copies them to `<run>/references/anchor-<id>.png` and wires them through `LoadImage` and core
