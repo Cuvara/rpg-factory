@@ -4,7 +4,8 @@
 Usage:
   assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
   assetgen.py show ID [--kind K] [--authoring DIR] [--json]
-  assetgen.py resolve --purpose P [--style S] [--template T] [--authoring DIR] [--out FILE] [--json]
+  assetgen.py resolve --purpose P [--style S] [--template T] [--family F] [--style-override REASON] [--authoring DIR]
+                      [--out FILE] [--json]
   assetgen.py render (--run DIR | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]...
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run DIR [--codex BIN] [--no-write] [--json]
@@ -12,6 +13,10 @@ Usage:
   assetgen.py qa --run DIR [--json]
   assetgen.py manifest --run DIR [--title T] [--prompt-author A] [--generated-by G] [--json]
   assetgen.py publish --run DIR --comfy-url URL [--json]
+  assetgen.py promote-anchor --run DIR --output N|PATH --family F --dimensions a,b --strength S [--id ID] [--json]
+  assetgen.py reject --type asset|direction --reason R [--text T] [--family F] [--run DIR --output N|PATH]
+                     [--style S --authoring DIR] [--any-version] [--id ID] [--json]
+  assetgen.py drift --authoring DIR [--json]
 
 Data layers (scripts/assetgen/layers.py): core purposes/styles/workflow templates under templates/assetgen/, a game
 layer under <authoring>/assetgen/{purposes,styles,templates}/ that overrides (same id) or extends (deep merge, the
@@ -19,6 +24,17 @@ game wins) core ids. resolve prints the merged spec with the source file of ever
 Param precedence, low to high: template default < style params < purpose params < render --param.
 Hint precedence (data/precedence.json): a purpose's constraints.<field> (lighting, background, framing) replaces the
 style hint of that name; resolve records spec.hints and marks the overridden style hint, review prompts use spec.hints.
+
+Style lock (scripts/assetgen/stylelock.py): resolve picks the family (--family, else the purpose's default_family) and
+the style (stylelock.choose: <authoring>/assetgen/project.json, its allowed_styles and families; a style outside them
+or a deprecated style is refused unless --style-override REASON, recorded as spec.style_lock.override and in run.md;
+without project.json the purpose default_style as before) and records spec.style_lock = {project, family,
+family_source, style: {style_id, version, sha256}, override, max_references, references: the selected anchors (valid
+active anchors of that style version, deterministic order, capped) with reason[] per pick, rejections: the relevant
+ones}. render wires each selected anchor as a LoadImage (anchor-<id>.png) and a chain of ImageBatch nodes into
+NineRouterImage.reference_images (an image-edit reference stays first). promote-anchor writes a proposed anchor from a
+manifested run output (a person approves it); reject records a rejected asset or direction; drift lists gen-runs,
+anchors and rejections recorded on an older style version or another style hash.
 
 Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. iron-sword-icon-001):
   spec.json           resolve --out: resolved spec (purpose, style, template with sha256 content hashes, params)
@@ -39,6 +55,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       compact JSON) before IEND of each PNG that has none (prompt chunk kept, idempotent), so the
                       file QA and the reviews hash is the embedded one and dragging it into ComfyUI restores the graph
   references/<name>   image-edit: the original of each LoadImage reference (uploaded with comfy-mcp upload_file)
+  references/anchor-<id>.png  render --run: a copy of each style-lock anchor spec.style_lock.references selected
+                      (refused when the anchor's image no longer has the sha256 resolve selected); the agent uploads
+                      every references/* file with comfy-mcp upload_file under its name before running
   review-prompt.json  Codex verdict {"state": "PASS|FAIL", "findings": [...], "by": "codex", "prompt_sha256": "...",
                       "requirements_sha256": "..."} (review-cmd prompt); the two hashes are the binding review-cmd
                       hands the reviewer to copy back: the prompt, and runfiles.requirements_sha256 of the purpose,
@@ -61,9 +80,10 @@ Failed attempts: a run whose generation, QA or review failed for good keeps its 
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
-Read-only except: resolve/render --out, render --run (workflow.json, workflow.ui.json), embed (outputs/*.png), qa
-(qa.json), manifest (run.md) and review-cmd --phase image of a tileable purpose (review/tile-2x2.png) in the given run
-dir. review-cmd only prints a `codex exec --sandbox read-only` command with absolute paths (it works from any cwd);
+Read-only except: resolve/render --out, render --run (workflow.json, workflow.ui.json, references/anchor-*.png), embed
+(outputs/*.png), qa (qa.json), manifest (run.md) and review-cmd --phase image of a tileable purpose (review/tile-2x2.png)
+in the given run dir, and promote-anchor (assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and
+reject (assetgen/styles/<style>/rejections/<id>.json) in the authoring repo; drift is read-only. review-cmd only prints a `codex exec --sandbox read-only` command with absolute paths (it works from any cwd);
 --no-write (factory-cmd always passes it) never builds the tile: it uses review/tile-2x2.png only when it holds
 the current pixels, else exits 2. The only network call is publish: it POSTs workflow.ui.json to ComfyUI's userdata
 API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
@@ -79,6 +99,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -90,6 +111,7 @@ import lint  # noqa: E402
 import png  # noqa: E402
 import qa  # noqa: E402
 import runfiles  # noqa: E402
+import stylelock  # noqa: E402
 import uiworkflow  # noqa: E402
 
 RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]*-[0-9]{3}$")
@@ -138,6 +160,39 @@ def read_prompt(path):
     if not text:
         fail("prompt %s is empty" % path)
     return text
+
+
+# -- resolve ---------------------------------------------------------------------------------------------------
+
+def resolve_spec(purpose, style, template, authoring, family=None, override=None):
+    """layers.resolve with the style lock: stylelock.choose picks the family and style (project.json, refusals and
+    the override), then spec.style_lock records the project, family, style ref, override, the selected anchors and
+    the relevant rejections."""
+    choice = stylelock.choose(layers.load("purpose", purpose, authoring), authoring, family, style, override)
+    spec = layers.resolve(purpose, choice["style_id"], template, authoring)
+    ref = stylelock.style_ref(spec["style"])
+    cap = stylelock.max_references(spec["purpose"]["data"], spec["template"]["data"])
+    picks = stylelock.select_references(stylelock.valid_anchors(authoring, ref["style_id"]), ref, choice["family"],
+                                        spec["purpose"]["data"].get("dimensions"), cap) if authoring else []
+    rejections = stylelock.relevant_rejections(stylelock.load_rejections(authoring, ref["style_id"]), ref,
+                                               choice["family"]) if authoring else []
+    spec["style_lock"] = {"project": choice["project"], "family": choice["family"], "family_source": choice["family_source"],
+                          "style": ref, "override": choice["override"], "max_references": cap, "references": picks,
+                          "rejections": rejections}
+    return spec
+
+
+def style_lock_lines(lock):
+    """Text lines of spec.style_lock (resolve output)."""
+    st = lock["style"]
+    lines = ["style lock: style %s v%s (sha256 %s), family %s%s, project %s" % (
+        st["style_id"], st["version"] if st["version"] is not None else "-", st["sha256"][:12], lock["family"] or "-",
+        " [%s]" % lock["family_source"] if lock["family_source"] else "", (lock["project"] or {}).get("path") or "none")]
+    if lock["override"]:
+        lines.append("style override: " + lock["override"])
+    lines += ["reference %s  [%s]" % (r["anchor_id"], "; ".join(r["reason"])) for r in lock["references"]]         or ["references: none (max %d)" % lock["max_references"]]
+    lines += ["rejection %s %s %s%s" % (r["id"], r["type"], r["reason"], ": " + r["text"] if r.get("text") else "") for r in lock["rejections"]]
+    return lines
 
 
 # -- render ----------------------------------------------------------------------------------------------------
@@ -242,12 +297,78 @@ def render(spec, prompt, overrides, run_id=None, review_state="NOT_RUN", reviewe
     if errors:
         return None, errors
     workflow = fill(tmpl.get("workflow", {}), values)
+    errors = wire_references(workflow, runfiles.style_lock_references(spec))
+    if errors:
+        return None, errors
     for node in workflow.values():
         meta = node.get("_meta") if isinstance(node, dict) else None
         if isinstance(meta, dict) and isinstance(meta.get("title"), str):
             meta["title"] = review_title(meta["title"], review_state, reviewer)
     e, _ = lint.check_graph(workflow, None)
     return workflow, e
+
+
+def wire_references(workflow, picks):
+    """Adds the selected style-lock anchors to workflow in place: one LoadImage per pick (image anchor-<id>.png) and
+    a chain of ImageBatch nodes feeding NineRouterImage.reference_images. An existing reference_images link (image-edit)
+    stays the first image. New node ids are the next free integers. Returns errors ([] when nothing to wire)."""
+    if not picks:
+        return []
+    targets = [n for n in workflow.values() if isinstance(n, dict) and n.get("class_type") == "NineRouterImage"]
+    if len(targets) != 1:
+        return ["style lock: the template needs exactly one NineRouterImage node to take reference images, found %d" % len(targets)]
+    inputs = targets[0]["inputs"]
+    next_id = [max([int(k) for k in workflow if str(k).isdigit()] or [0])]
+
+    def add(node):
+        next_id[0] += 1
+        workflow[str(next_id[0])] = node
+        return [str(next_id[0]), 0]
+    images = [inputs["reference_images"]] if lint.is_link(inputs.get("reference_images")) else []
+    for pick in picks:
+        aid = pick.get("anchor_id")
+        if not isinstance(aid, str) or not stylelock.ID.match(aid):
+            return ["style lock: reference %r has no valid anchor_id: resolve again" % (aid,)]
+        images.append(add({"class_type": "LoadImage", "inputs": {"image": "anchor-%s.png" % aid},
+                           "_meta": {"title": "Anchor %s (%s)" % (aid, pick.get("strength"))}}))
+    link = images[0]
+    for i, image in enumerate(images[1:], 1):
+        link = add({"class_type": "ImageBatch", "inputs": {"image1": link, "image2": image},
+                    "_meta": {"title": "Reference batch %d" % i}})
+    inputs["reference_images"] = link
+    return []
+
+
+def copy_anchors(run_dir, spec):
+    """render --run: copies each selected anchor PNG to <run>/references/anchor-<id>.png. Errors when an anchor is gone
+    or its image no longer has the sha256 resolve selected (nothing is copied then)."""
+    picks = runfiles.style_lock_references(spec)
+    if not picks:
+        return []
+    runs = os.path.dirname(os.path.abspath(os.path.normpath(run_dir)))
+    # the run's own authoring repo (<authoring>/assetgen/runs/<run-id>) wins over the path resolve recorded
+    authoring = os.path.dirname(os.path.dirname(runs)) if os.path.basename(runs) == "runs" \
+        and os.path.basename(os.path.dirname(runs)) == "assetgen" else spec.get("authoring")
+    style_id = ((spec.get("style_lock") or {}).get("style") or {}).get("style_id")
+    if not authoring or not os.path.isdir(authoring) or not isinstance(style_id, str):
+        return ["style lock: spec.json names anchors but no authoring repo or style: resolve again with --authoring"]
+    records = {r["id"]: r for r in stylelock.load_anchors(authoring, style_id)}
+    plan, errors = [], []
+    for pick in picks:
+        rec = records.get(pick.get("anchor_id"))
+        src = os.path.join(os.path.dirname(rec["path"]), rec["data"].get("image") or "") if rec else None
+        if not src or not os.path.isfile(src):
+            errors.append("style lock: anchor %s of style %s is missing: resolve again" % (pick.get("anchor_id"), style_id))
+        elif qa.sha256(src) != pick.get("sha256"):
+            errors.append("style lock: anchor %s image changed since resolve (sha256 differs): resolve again" % pick.get("anchor_id"))
+        else:
+            plan.append((src, os.path.join(run_dir, "references", "anchor-%s.png" % pick["anchor_id"])))
+    if errors:
+        return errors
+    for src, dst in plan:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst)
+    return []
 
 
 def ui_path(out):
@@ -537,6 +658,8 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
             "trace": {"failed_attempts": failed_attempts(run_dir)},
         },
     }
+    if isinstance(spec.get("style_lock"), dict):  # a spec from before the style lock keeps its run.md shape
+        front["spec"]["style_lock"] = spec["style_lock"]
     return front, bool(old.get("status")) and not same_outputs and old.get("status") != "proposed"
 
 
@@ -550,10 +673,183 @@ def manifest_text(front):
             "- Image review: %s by %s" % (s["image_review"]["state"], s["image_review"]["by"] or "-"),
             "- Claude visual review: %s by %s%s" % (s["claude_image_review"]["state"], s["claude_image_review"]["by"] or "-",
                                                      ", %d finding(s)" % s["claude_image_review"]["findings"] if s["claude_image_review"]["findings"] else ""),
-            "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none"),
-            "- Status: %s (approval is human-only)" % front["status"], "", "## Prompt", "", s["prompt"], "", "## Outputs", ""]
+            "- Failed attempts: %s" % (", ".join(s["trace"]["failed_attempts"]) or "none")]
+    lock = s.get("style_lock")
+    if isinstance(lock, dict):
+        st = lock.get("style") or {}
+        body.append("- Style lock: style `%s` v%s, family %s, project %s, references: %s" % (
+            st.get("style_id"), st.get("version") if st.get("version") is not None else "-", lock.get("family") or "-",
+            (lock.get("project") or {}).get("path") or "none",
+            ", ".join("`%s`" % r.get("anchor_id") for r in lock.get("references") or [] if isinstance(r, dict)) or "none"))
+        if lock.get("override"):
+            body.append("- Style override: %s" % lock["override"])
+    body += ["- Status: %s (approval is human-only)" % front["status"], "", "## Prompt", "", s["prompt"], "", "## Outputs", ""]
     body += ["![%s](%s)" % (o["path"], o["path"]) for o in s["outputs"]] or ["(none)"]
     return "---json\n%s\n---\n%s\n" % (json.dumps(front, indent=2, ensure_ascii=True), "\n".join(body))
+
+
+# -- style lock records: promote-anchor, reject ----------------------------------------------------------------
+
+def run_authoring(run_dir):
+    """(authoring repo, run id) of <authoring>/assetgen/runs/<run-id>; fails for any other layout."""
+    full = os.path.abspath(os.path.normpath(run_dir))
+    runs = os.path.dirname(full)
+    if not RUN_ID.match(os.path.basename(full)) or os.path.basename(runs) != "runs" \
+            or os.path.basename(os.path.dirname(runs)) != "assetgen":
+        fail("--run %s must be <authoring>/assetgen/runs/<slug>-NNN" % run_dir.replace(os.sep, "/"))
+    return os.path.dirname(os.path.dirname(runs)), os.path.basename(full)
+
+
+def run_output(run_dir, output):
+    """The recorded output of a manifested run: (spec, {"path", "sha256"}, absolute path). output is a 1-based index
+    into run.md spec.outputs or its path (outputs/<name> or <name>). Fails when the file's sha256 is not the one
+    run.md records, or qa.json records another sha256 for it."""
+    front = existing_front(os.path.join(run_dir, "run.md"))
+    if not isinstance(front, dict) or not isinstance(front.get("spec"), dict):
+        fail("%s has no run.md front matter: run manifest first" % run_dir.replace(os.sep, "/"))
+    recorded = [o for o in front["spec"].get("outputs") or [] if isinstance(o, dict) and isinstance(o.get("path"), str)]
+    if str(output).isdigit():
+        n = int(output)
+        if not 1 <= n <= len(recorded):
+            fail("--output %s: run.md records %d output(s)" % (output, len(recorded)))
+        pick = recorded[n - 1]
+    else:
+        name = str(output).replace(os.sep, "/")
+        name = name if name.startswith("outputs/") else "outputs/" + os.path.basename(name)
+        match = [o for o in recorded if o["path"] == name]
+        if not match:
+            fail("--output %s is not an output recorded in run.md (%s)" % (output, ", ".join(o["path"] for o in recorded) or "none"))
+        pick = match[0]
+    path = os.path.join(run_dir, *pick["path"].split("/"))
+    actual = qa.sha256(path) if os.path.isfile(path) else None
+    if actual != pick.get("sha256"):
+        fail("%s does not match run.md (recorded sha256 %s, file %s): run qa and manifest again"
+             % (pick["path"], pick.get("sha256"), actual or "missing"))
+    qa_path = os.path.join(run_dir, "qa.json")
+    if os.path.isfile(qa_path):
+        graded = {o.get("path"): o.get("sha256") for o in read_json(qa_path, "qa").get("outputs") or [] if isinstance(o, dict)}
+        if graded.get(pick["path"]) != actual:
+            fail("%s does not match qa.json (graded sha256 %s): run qa and manifest again" % (pick["path"], graded.get(pick["path"])))
+    return front["spec"], {"path": pick["path"], "sha256": actual}, path
+
+
+def run_style_ref(spec):
+    """The style ref a run was resolved with: spec.style_lock.style, else built from the recorded style (a run from
+    before the style lock: id, the recorded style data's version when known, content hash)."""
+    lock = spec.get("style_lock")
+    if isinstance(lock, dict) and isinstance(lock.get("style"), dict):
+        return dict(lock["style"])
+    st = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    if not isinstance(st.get("id"), str):
+        fail("the run records no style")
+    return {"style_id": st["id"], "version": stylelock.style_version(st.get("data") or {}), "sha256": st.get("sha256")}
+
+
+def inside(path, root):
+    path, root = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
+    return os.path.commonpath([path, root]) == root
+
+
+def split_list(text):
+    return [x.strip() for x in str(text or "").split(",") if x.strip()]
+
+
+def promote_anchor(run_dir, output, family, dimensions, strength, anchor_id=None):
+    """Writes <authoring>/assetgen/styles/<style-id>/anchors/<id>.json (status proposed, approved_by null) and copies
+    the output PNG next to it as <id>.png. Never writes an active anchor: a person approves it."""
+    authoring, run_id = run_authoring(run_dir)
+    spec, out, src = run_output(run_dir, output)
+    if not out["path"].lower().endswith(".png"):
+        fail("%s is not a PNG output" % out["path"])
+    ref = run_style_ref(spec)
+    recorded = [o.get("path") for o in spec.get("outputs") or [] if isinstance(o, dict)]
+    aid = anchor_id or "%s-%d" % (run_id, recorded.index(out["path"]) + 1)
+    data = {"schema": stylelock.ANCHOR_SCHEMA, "id": aid, "status": "proposed", "style": ref, "family": family,
+            "dimensions": split_list(dimensions), "strength": strength, "image": aid + ".png", "image_sha256": out["sha256"],
+            "source_run": {"run_id": run_id, "output": out["path"], "sha256": out["sha256"]},
+            "approved_by": None, "approved_on": None}
+    errs = stylelock.anchor_errors(data, ref.get("style_id"), aid)
+    if errs:
+        fail("anchor not written: " + "; ".join(errs))
+    target_dir = os.path.join(stylelock.style_dir(authoring, ref["style_id"]), "anchors")
+    if not inside(target_dir, authoring):
+        fail("style directory %s is outside the authoring repo %s" % (target_dir, authoring))
+    target = os.path.join(target_dir, aid + ".json")
+    if os.path.exists(target) or os.path.exists(os.path.join(target_dir, aid + ".png")):
+        fail("anchor %s already exists in %s: pass another --id" % (aid, target_dir.replace(os.sep, "/")))
+    os.makedirs(target_dir, exist_ok=True)
+    shutil.copyfile(src, os.path.join(target_dir, aid + ".png"))
+    write_json(target, data)
+    return dict(data, path=os.path.relpath(target, authoring).replace(os.sep, "/"))
+
+
+def next_rejection_id(folder, reason):
+    """<reason>-NNN, the lowest free number in the rejections folder (deterministic, no clock)."""
+    stem = reason.replace("_", "-")
+    taken = set(os.listdir(folder)) if os.path.isdir(folder) else set()
+    n = 1
+    while "%s-%03d.json" % (stem, n) in taken:
+        n += 1
+    return "%s-%03d" % (stem, n)
+
+
+def reject(kind, reason, text=None, family=None, run_dir=None, output=None, style=None, authoring=None,
+           any_version=False, rejection_id=None):
+    """Writes <authoring>/assetgen/styles/<style-id>/rejections/<id>.json. An asset rejection names a run output (its
+    style ref and family come from the run); a direction rejection names a style (--authoring and --style) and
+    carries text. --any-version records version null (relevant to every version of the style). Data, not an approval."""
+    run = None
+    if kind == "asset":
+        if not run_dir or output is None:
+            fail("reject --type asset needs --run DIR and --output N|PATH", 2)
+        auth, run_id = run_authoring(run_dir)
+        if authoring and os.path.normcase(os.path.realpath(authoring)) != os.path.normcase(os.path.realpath(auth)):
+            fail("--authoring %s is not the run's authoring repo %s" % (authoring, auth))
+        authoring = auth
+        spec, out, _ = run_output(run_dir, output)
+        ref = run_style_ref(spec)
+        if style and style != ref["style_id"]:
+            fail("--style %s is not the run's style %s" % (style, ref["style_id"]))
+        lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else {}
+        family = family or lock.get("family")
+        run = {"run_id": run_id, "output": out["path"], "sha256": out["sha256"]}
+    else:
+        if run_dir or output is not None:
+            fail("reject --type direction takes no --run or --output (use --type asset)", 2)
+        if not authoring or not style:
+            fail("reject --type direction needs --authoring DIR and --style S", 2)
+        ref = stylelock.style_ref(layers.load("style", style, authoring))
+    if any_version:
+        ref["version"] = None
+    data = {"schema": stylelock.REJECTION_SCHEMA, "id": None, "type": kind, "style": ref, "family": family or None,
+            "reason": reason}
+    if text:
+        data["text"] = text
+    if run:
+        data["run"] = run
+    folder = os.path.join(stylelock.style_dir(authoring, ref["style_id"]), "rejections")
+    data["id"] = rejection_id or next_rejection_id(folder, str(reason))
+    errs = stylelock.rejection_errors(data, ref["style_id"], data["id"])
+    if errs:
+        fail("rejection not written: " + "; ".join(errs))
+    if not inside(folder, authoring):
+        fail("style directory %s is outside the authoring repo %s" % (folder, authoring))
+    target = os.path.join(folder, data["id"] + ".json")
+    if os.path.exists(target):
+        fail("rejection %s already exists in %s: pass another --id" % (data["id"], folder.replace(os.sep, "/")))
+    write_json(target, data)
+    return dict(data, path=os.path.relpath(target, authoring).replace(os.sep, "/"))
+
+
+def drift_text(report):
+    rows = []
+    for i in report["items"]:
+        st, cur = i["style"], i["current"]
+        now = "v%s %s" % (cur["version"], (cur["sha256"] or "")[:12]) if cur else "missing"
+        rows.append("%s %s %s (%s): recorded %s v%s %s, current %s" % (
+            i["state"], i["kind"], i["id"], i["path"], st["style_id"], st.get("version") if st.get("version") is not None else "-",
+            (st.get("sha256") or "-")[:12], now))
+    return "\n".join(rows + ["assetgen drift: %d item(s) behind the current style" % len(report["items"])])
 
 
 # -- CLI -------------------------------------------------------------------------------------------------------
@@ -567,6 +863,7 @@ def main(argv=None):
     c = sp("list"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
     c = sp("show"); c.add_argument("id"); c.add_argument("--kind", choices=list(layers.KINDS)); c.add_argument("--authoring"); c.add_argument("--json", action="store_true")
     c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
+    c.add_argument("--family"); c.add_argument("--style-override", metavar="REASON")
     c.add_argument("--authoring"); c.add_argument("--out"); c.add_argument("--json", action="store_true")
     c = sp("render"); c.add_argument("--run"); c.add_argument("--spec"); c.add_argument("--prompt-file"); c.add_argument("--out")
     c.add_argument("--param", action="append", default=[])
@@ -577,6 +874,14 @@ def main(argv=None):
     c = sp("publish"); c.add_argument("--run", required=True); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); c.add_argument("--run", required=True); c.add_argument("--json", action="store_true")
+    c = sp("promote-anchor"); c.add_argument("--run", required=True); c.add_argument("--output", required=True)
+    c.add_argument("--family", required=True); c.add_argument("--dimensions", required=True)
+    c.add_argument("--strength", required=True, choices=list(stylelock.STRENGTHS)); c.add_argument("--id"); c.add_argument("--json", action="store_true")
+    c = sp("reject"); c.add_argument("--type", required=True, choices=list(stylelock.REJECTION_TYPES), dest="kind")
+    c.add_argument("--reason", required=True, choices=list(stylelock.REASONS)); c.add_argument("--text"); c.add_argument("--family")
+    c.add_argument("--run"); c.add_argument("--output"); c.add_argument("--style"); c.add_argument("--authoring")
+    c.add_argument("--any-version", action="store_true"); c.add_argument("--id"); c.add_argument("--json", action="store_true")
+    c = sp("drift"); c.add_argument("--authoring", required=True); c.add_argument("--json", action="store_true")
     c = sp("manifest"); c.add_argument("--run", required=True); c.add_argument("--title")
     c.add_argument("--prompt-author", default="claude"); c.add_argument("--generated-by", default="claude"); c.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
@@ -594,7 +899,9 @@ def main(argv=None):
             emit(e, a.json, "%s %s (%s; %s)\n%s" % (e["kind"], e["id"], e["layer"], ", ".join(e["files"]), json.dumps(e["data"], indent=1)))
             return 0
         if a.cmd == "resolve":
-            spec = layers.resolve(a.purpose, a.style, a.template, authoring)
+            if a.family is not None and not stylelock.ID.match(a.family):
+                fail("--family %r must be a lowercase id (characters, environment, props, ui, vfx, ...)" % a.family, 2)
+            spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override)
             run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
             if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
                 spec = bind_run(spec, os.path.basename(run_dir))
@@ -605,6 +912,7 @@ def main(argv=None):
                 + ["param %s = %s  [%s]" % (k, v, spec["param_sources"][k]) for k, v in sorted(spec["params"].items())]
                 + ["hint %s = %s  [%s%s]" % (k, h["text"], h["source"], "; style hint overridden by the purpose" if "overrides" in h else "")
                    for k, h in sorted(spec["hints"].items())]
+                + style_lock_lines(spec["style_lock"])
                 + ["%s  [%s]" % (k, v) for k, v in sorted(spec["sources"].items())]))
             return 0
         if a.cmd == "render":
@@ -619,6 +927,8 @@ def main(argv=None):
             prompt, spec = read_prompt(prompt_path), load_spec(spec_path)
             state, reviewer = prompt_review_state(a.run, spec, prompt) if a.run else ("NOT_RUN", "codex")
             workflow, errors = render(spec, prompt, a.param, run_id, state, reviewer)
+            if not errors and a.run:
+                errors = copy_anchors(a.run, spec)
             ui = None
             if not errors:
                 try:
@@ -668,6 +978,19 @@ def main(argv=None):
             emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
                  + "\nassetgen qa: %s (%d PASS, %d FAIL, %d NOT_AVAILABLE)" % (state, counts["PASS"], counts["FAIL"], counts["NOT_AVAILABLE"]))
             return {"PASS": 0, "FAIL": 1}.get(state, 3)
+        if a.cmd == "promote-anchor":
+            rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)
+            emit(rec, a.json, "wrote %s: anchor %s proposed (a person approves it: status active, approved_by, approved_on)"
+                 % (rec["path"], rec["id"]))
+            return 0
+        if a.cmd == "reject":
+            rec = reject(a.kind, a.reason, a.text, a.family, a.run, a.output, a.style, authoring, a.any_version, a.id)
+            emit(rec, a.json, "wrote %s: %s rejection %s (%s)" % (rec["path"], rec["type"], rec["id"], rec["reason"]))
+            return 0
+        if a.cmd == "drift":
+            report = stylelock.drift(authoring)
+            emit(report, a.json, drift_text(report))
+            return 0
         if a.cmd == "manifest":
             front, reset = manifest(a.run, a.title, a.prompt_author, a.generated_by)
             with open(os.path.join(a.run, "run.md"), "w", encoding="utf-8", newline="\n") as f:
