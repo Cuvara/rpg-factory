@@ -180,6 +180,7 @@ run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
+$release && run1 safety bash tests/installed-safety.sh   # release-only, like run-all.sh's installed-safety line
 # a live-lane suite, and a block and an inline check that run a script outside a run line (gated like a suite)
 gated_block() { gated scripts/checks/x.sh && { bash scripts/checks/x.sh block && ok "gated block x" || bad "gated block x"; }; ok "block cheap"; }
 if [ "${WITH_LIVE:-0}" != 0 ]; then
@@ -194,8 +195,12 @@ if [ "${WITH_WS:-0}" != 0 ]; then
   run ws env RPG_FACTORY_WORKSPACE=/ws bash tests/ws.sh
 fi
 [ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
+[ -z "${CFG_CHANGE:-}" ] || git config rpgtest.during "$CFG_CHANGE"
 drain
 runall_finish
+if [ -n "${CHECK_CFG:-}" ]; then
+  if gitcfg_verify >/dev/null; then echo 'cfg unchanged'; else echo 'cfg changed'; rm -f "$GITCFG_COPY"; fi
+fi
 echo "counts $pass $fail $skip"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
 PLAN
@@ -257,11 +262,18 @@ out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
   && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
+out=$(bash "$ROOT/tests/run-all.sh" --list-suites --release); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '
+' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
+out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
 miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
     scripts/checks/netcode-headless.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
   grep -qx "$s" <<<"$real" || miss+=" $s"; done
-for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
+for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
+rel=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites --release)
+[ "$(grep -vx 'tests/installed-safety.sh' <<<"$rel")" = "$real" ] && grep -qx tests/installed-safety.sh <<<"$rel" || miss+=" release:installed-safety"
 [ "$rc" = 0 ] && [ -z "$miss" ] && [ "$(sort <<<"$real" | uniq -d)" = "" ] \
   && good "--list-suites on run-all.sh: suites and gated scripts, no orphan or syntax-check path ($(wc -l <<<"$real") names)" \
   || no "--list-suites (run-all.sh) wrong:$miss" "$real"
@@ -333,6 +345,19 @@ kill -0 "$waiter" 2>/dev/null && grep -q 'waiting for full run ' "$TMP/waiter.ou
 touch "$TMP/held.release"; wait "$holder"; hrc=$?; wait "$waiter"; wrc=$?
 [ "$hrc" = 0 ] && [ "$wrc" = 0 ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good 'waiting full run continues and releases its own lock' || no 'lock handoff' "$(cat "$TMP/holder.out" "$TMP/waiter.out")"
+# The shared-config snapshot is taken once the lock is held: another session's config change while this run waits
+# for the lock is not this run's; a change during its own run still is.
+rm -f "$TMP/held" "$TMP/held.release"
+HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
+for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
+CHECK_CFG=1 cache_plan --no-reuse > "$TMP/waiter.out" 2>&1 & waiter=$!
+for ((i=0; i<100; i++)); do grep -q 'waiting for full run ' "$TMP/waiter.out" && break; sleep 0.1; done
+git -C "$TMP/repo" config rpgtest.wait other-session
+touch "$TMP/held.release"; wait "$holder"; hrc=$?; wait "$waiter"; wrc=$?
+[ "$hrc" = 0 ] && [ "$wrc" = 0 ] && grep -q 'waiting for full run ' "$TMP/waiter.out" && grep -qx 'cfg unchanged' "$TMP/waiter.out"   && good 'config changed by another session while waiting for the lock is not attributed to the waiting run'   || no "snapshot after lock (holder $hrc, waiter $wrc)" "$(cat "$TMP/waiter.out")"
+out=$(CHECK_CFG=1 CFG_CHANGE=mine cache_plan --no-reuse); rc=$?
+[ "$rc" = 0 ] && grep -qx 'cfg changed' <<<"$out" && good 'config changed during the run itself is still detected' || no 'config change during run' "$out"
+git -C "$TMP/repo" config --remove-section rpgtest
 mkdir -p "$TMP/state/locks/run-all-full"
 printf '99999999\n' > "$TMP/state/locks/run-all-full/pid"
 printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
@@ -389,12 +414,17 @@ done
 CT="$TMP/cfgtmp"; mkdir -p "$CT"; reset_cache
 TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" --list-suites >/dev/null; r1=$?
 TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" --only-suites tests/unknown.sh >/dev/null 2>&1; r2=$?
+args=""   # every argument-validation exit (exit 2), before the snapshot
+for a in '--only-suites' '--only-suites=' '-j 0' '--jobs x' '--only-suites tests/installed-safety.sh'; do
+  # shellcheck disable=SC2086
+  TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" $a >/dev/null 2>&1; args+="$? "
+done
 cache_plan >/dev/null; TMPDIR="$CT" cache_plan --reuse >/dev/null; r3=$?
 mkdir -p "$TMP/state/locks/run-all-full"; printf '%s
 ' "$$" > "$TMP/state/locks/run-all-full/pid"
 TMPDIR="$CT" cache_plan --no-reuse --no-wait >/dev/null; r4=$?; rm -rf "$TMP/state/locks/run-all-full"
 left=$(ls -A "$CT")
-[ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, --reuse hit, --no-wait) leave no git-config copy' || no "early-exit temp files (rc $r1 $r2 $r3 $r4)" "$left"
+[ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ "$args" = '2 2 2 2 2 ' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, bad arguments, release-only suite, --reuse hit, --no-wait) leave no git-config copy'   || no "early-exit temp files (rc $r1 $r2 $r3 $r4, arguments $args)" "$left"
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"

@@ -22,9 +22,11 @@
 #   --no-wait       exit 3 when another full run holds the machine-wide lock
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
-#                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one.
-#   --list-suites   print every suite and gated script path run-all can select (one per line, exactly the names
-#                   --only-suites accepts, in run order) and exit 0; runs no check, takes no lock
+#                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
+#                   so does a release-only suite (tests/installed-safety.sh) without --release.
+#   --list-suites   print every suite and gated script path the current flags can select (one per line, exactly
+#                   the names --only-suites accepts, in run order; release-only suites only with --release) and
+#                   exit 0; runs no check, takes no lock
 #   --no-reuse      force suites to run instead of reusing matching input PASS records
 #   --release       the installed plugin must equal the source (install-status CURRENT), the source
 #                   must be committed, and tests/installed-safety.sh must pass against the installed hooks
@@ -36,8 +38,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
-gitcfg_snapshot "$ROOT"      # M4/P0: no test may rewrite the shared git config of the repo this runs in (checked at the end)
 RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stand-in plans set RUNALL_SUITES_FROM)
+RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-suites omits them, --only-suites rejects them without it
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
 list_only=false
 while [ $# -gt 0 ]; do
@@ -299,6 +301,16 @@ for line in text.splitlines():
 sys.stdout.buffer.write(''.join(s + '\n' for s in seen).encode())   # LF on Windows too: callers compare lines
 PY
 }
+release_only() { case " $RELEASE_ONLY " in *" $1 "*) return 0 ;; esac; return 1; }
+list_runnable() { # file: list_suites without the release-only suites unless --release (what the current flags can run)
+  local listed s
+  listed=$(list_suites "$1") || return 1
+  while IFS= read -r s; do
+    s=${s%$'\r'}; [ -n "$s" ] || continue
+    $release || ! release_only "$s" || continue
+    printf '%s\n' "$s"
+  done <<<"$listed"
+}
 suite_selected() {
   local target=$1
   $release && return 0
@@ -449,6 +461,9 @@ runall_prepare() {
     for candidate in "${requested[@]}"; do
       found=false
       while IFS= read -r suite; do [ "${suite%$'\r'}" = "$candidate" ] && { found=true; break; }; done <<<"$listed"
+      if $found && ! $release && release_only "$candidate"; then
+        echo "run-all: release-only suite '$candidate' runs only with --release" >&2; bad=true; continue
+      fi
       $found && continue
       echo "run-all: unknown suite '$candidate' (not a suite run-all runs; see --list-suites)" >&2; bad=true
     done
@@ -463,6 +478,9 @@ runall_prepare() {
     done <<<"$hash_output"
     CACHE_BEFORE=$(input_snapshot) || CACHE_BEFORE=""
   fi
+  # M4/P0: no test may rewrite the shared git config of the repo this runs in (checked at the end). Taken after every
+  # early exit and once the full-run lock is held: what other sessions change while this run waits is not this run's.
+  gitcfg_snapshot "$ROOT"
 }
 runall_finish() {
   local path after
@@ -492,7 +510,7 @@ PY
 
 # sourced (tests/run-all-parallel.test.sh): scheduler and config classifier only, no checks
 [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
-if $list_only; then list_suites "${RUNALL_SUITES_FROM:-$RUNALL_SELF}"; exit; fi
+if $list_only; then list_runnable "${RUNALL_SUITES_FROM:-$RUNALL_SELF}"; exit; fi
 runall_prepare; prep_rc=$?
 [ "$prep_rc" -eq 10 ] && exit 0
 [ "$prep_rc" -eq 0 ] || exit "$prep_rc"
