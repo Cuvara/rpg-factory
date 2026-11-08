@@ -984,7 +984,7 @@ AG qa --run "$fr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
   && jq -r '.results[] | select(.check == "png-edge-fringe") | .reasons | join(" ")' "$TMP/q.json" | grep -q "run assetgen.py defringe on the run" \
   && ok "qa: a coloured low-alpha fringe is a png-edge-fringe FAIL (the only FAIL row), pointing at defringe" || no "fringe qa rc=$rc" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/q.json")"
 AG defringe --run "$fr" > "$TMP/o" 2>&1; rc=$?
-[ $rc -eq 1 ] && grep -qF "qa.json already bind(s) the current outputs" "$TMP/o" && grep -qF "or pass --force and then re-run qa" "$TMP/o" \
+[ $rc -eq 1 ] && grep -qF "qa.json already bind(s) the current outputs" "$TMP/o" && grep -qF "or pass --force and then re-run embed, qa" "$TMP/o" \
   && [ "$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)" = "$orig" ] && [ ! -e "$fr/outputs-raw" ] \
   && ok "defringe refuses outputs qa.json already binds (says to re-run them), nothing written" || no "defringe bound rc=$rc" "$(cat "$TMP/o")"
 AG defringe --run "$fr" --alpha-floor 300 > "$TMP/o" 2>&1; rc=$?
@@ -1061,6 +1061,42 @@ AG review-cmd --phase image --run "$fr" --no-write > /dev/null 2>"$TMP/err"; rc=
 AG review-cmd --phase image --run "$fr" > /dev/null && AG review-cmd --phase image --run "$fr" --no-write --json > "$TMP/rc2.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/rc2.json")" = "$(jq -c .argv "$TMP/rc.json")" ] \
   && ok "review-cmd --no-write uses current composites (same command)" || no "composite no-write current rc=$rc" "$(cat "$TMP/err")"
+# final review P3: the documented post-QA fringe repair (SKILL.md step 7) works end to end: embed, qa FAIL, both image
+# reviews bind the outputs, defringe without --force is refused, defringe --force names qa.json and both reviews stale,
+# then embed, qa PASS and both image reviews again bind the repaired outputs
+fx="$RUNS/fringe-repair-001"; mkrun fringe-repair-001 icon --style stylized-painterly && AG render --run "$fx" >/dev/null
+cp "$fr/outputs-raw/prop.png" "$fx/outputs/prop.png"; AG embed --run "$fx" > /dev/null
+AG qa --run "$fx" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+bound "$fx" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fx/review-image.json"
+bound "$fx" image FAIL claude '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fx/review-image-claude.json"
+fxo=$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)
+[ $rc -eq 1 ] && [ "$(st png-edge-fringe)" = FAIL ] && [ "$(jq -r '.outputs[0].sha256' "$fx/review-image.json")" = "$fxo" ] \
+  && ok "fringe repair: embedded output fails png-edge-fringe, both image reviews bind it" || no "fringe repair qa rc=$rc" "$(cat "$TMP/err")"
+AG defringe --run "$fx" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -qF "qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
+  && grep -qF "pass --force and then re-run embed, qa, review-cmd --phase image (Codex) and Claude's image review (review-image-claude.json)" "$TMP/o" \
+  && [ "$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)" = "$fxo" ] && [ ! -e "$fx/outputs-raw" ] && [ ! -e "$fx/defringe.json" ] \
+  && ok "fringe repair: defringe without --force is refused after qa and the reviews, naming --force and the records to re-run" || no "fringe repair refuse rc=$rc" "$(cat "$TMP/o")"
+AG defringe --run "$fx" --force > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qF "1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
+  && grep -qF "next: embed, qa, review-cmd --phase image (Codex) and Claude's image review (review-image-claude.json)" "$TMP/o" \
+  && grep -qx "stale now (re-run them): qa.json, review-image.json, review-image-claude.json" "$TMP/o" \
+  && [ "$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)" != "$fxo" ] \
+  && ok "fringe repair: defringe --force rewrites the output and lists qa.json and both image reviews as stale" || no "fringe repair force rc=$rc" "$(cat "$TMP/o")"
+AG embed --run "$fx" > "$TMP/o" 2>&1; rc1=$?
+AG qa --run "$fx" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc1 -eq 0 ] && [ $rc -eq 0 ] && [ "$(st png-edge-fringe)" = PASS ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] \
+  && ok "fringe repair: embed, then qa again PASS (png-edge-fringe PASS)" || no "fringe repair requa rc=$rc1/$rc" "$(cat "$TMP/o" "$TMP/err")"
+fxn=$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)
+bound "$fx" image PASS codex > "$fx/review-image.json"; bound "$fx" image PASS claude > "$fx/review-image-claude.json"
+[ "$(jq -r '.outputs[0].sha256' "$fx/review-image.json") $(jq -r '.outputs[0].sha256' "$fx/review-image-claude.json")" = "$fxn $fxn" ] \
+  && [ "$(jq -r '.outputs[0].sha256' "$fx/qa.json")" = "$fxn" ] \
+  && ok "fringe repair: qa.json and both image reviews run again bind the repaired, embedded output" || no "fringe repair rebind" "$(jq -c .outputs "$fx/qa.json" "$fx/review-image.json")"
+step7=$(awk '/^7\. /{p=1} /^8\. /{p=0} p' "$ROOT/skills/asset-gen/SKILL.md" | tr '\n' ' ' | tr -s ' ')
+case "$step7" in *'`assetgen.py defringe --run <run> --force [--alpha-floor N]`'*'`embed`'*'`qa`'*'both image reviews'*'`review-cmd --phase image`'*'`review-image-claude.json`'*)
+  ok "SKILL.md step 7 documents the fringe repair: defringe --run <run> --force, then embed, qa and both image reviews" ;;
+  *) no "SKILL.md step 7 fringe repair" "$step7" ;; esac
+rm -rf "$fx"
 # several outputs: composites per output with alpha (review/composite-<stem>-<bg>.png); an opaque output gets none and defringe skips it
 f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly && AG render --run "$f2" >/dev/null
 cp "$FX/fringe.png" "$f2/outputs/a.png"; cp "$FX/icon-opaque.png" "$f2/outputs/b.png"; ob=$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)

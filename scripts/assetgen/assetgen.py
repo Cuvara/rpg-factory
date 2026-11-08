@@ -912,8 +912,8 @@ def defringe(run_dir, alpha_floor=None, force=False):
     bound = bound_records(run_dir, current)
     if bound and not force:
         fail("%s already bind(s) the current outputs: defringe changes them, so they would be stale. Run defringe after "
-             "fetch_outputs and before qa and the image reviews, or pass --force and then re-run qa, review-cmd --phase "
-             "image (Codex) and Claude's image review" % ", ".join(bound))
+             "fetch_outputs and before qa and the image reviews, or pass --force and then re-run embed, qa, review-cmd "
+             "--phase image (Codex) and Claude's image review (%s)" % (", ".join(bound), CLAUDE_REVIEW))
     record_path = os.path.join(run_dir, DEFRINGE_FILE)
     old = {}
     if os.path.isfile(record_path):
@@ -1517,7 +1517,9 @@ def main(argv=None):
                   "results": rows, "summary": counts, "stale": stale}, a.json,
                  "\n".join("%s %s: %s" % (r["state"], r["output"], r["reason"]) for r in rows)
                  + "\nassetgen defringe: %(defringed)d defringed, %(skipped)d skipped, %(FAIL)d FAIL" % counts
-                 + (" (originals in %s/, record %s); next: embed, qa" % (RAW_DIR, DEFRINGE_FILE) if counts["defringed"] else "")
+                 + (" (originals in %s/, record %s); next: embed, qa" % (RAW_DIR, DEFRINGE_FILE)
+                    + (", review-cmd --phase image (Codex) and Claude's image review (%s)" % CLAUDE_REVIEW if stale else "")
+                    if counts["defringed"] else "")
                  + tail)
             return 1 if counts["FAIL"] else 0
         if a.cmd == "approve-record":

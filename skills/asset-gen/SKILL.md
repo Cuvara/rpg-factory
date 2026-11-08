@@ -65,7 +65,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    `upload_file` of every `<run>/references/*` file under its name -> `run_workflow` (wait) -> `job` until done ->
    `fetch_outputs` with `out_dir` `<run>/outputs` -> for a purpose with alpha `assetgen.py defringe --run <run>
    [--alpha-floor N]` (bleeds opaque neighbour colour into low-alpha edge pixels, originals in `outputs-raw/`,
-   `defringe.json`; 8-bit PNGs only; refused once `qa.json` or a review binds the outputs) -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow into each PNG, replacing
+   `defringe.json`; 8-bit PNGs only; refused once `qa.json` or an image review binds the outputs, unless `--force`) -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow into each PNG, replacing
    a stale one, so QA and the reviews hash the final file and the PNG restores the graph in ComfyUI).
    `run_workflow` opens no canvas tab; `assetgen.py publish --run <run> --comfy-url <URL of the running ComfyUI>`
    (optional) uploads `workflow.ui.json` to Workflows > assetgen (exit 0 PASS, 1 FAIL, 2 usage, 3 `NOT_AVAILABLE`:
@@ -73,16 +73,16 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    `workflow.ui.json` in ComfyUI and drop the PNGs into `outputs/`, then `embed`. Never claim a generation that did not run.
 7. **Check the images.** `assetgen.py qa --run <run>` (exit 0 PASS, 1 FAIL, 3 NOT_AVAILABLE) writes `qa.json`; its
    `style-*` rows are soft (`WARN`: report it; a style `FAIL` fails QA); `png-edge-fringe` (alpha purposes) fails a
-   coloured fringe in low-alpha edge pixels: `defringe`, then `embed` and `qa` again. `review-cmd --phase image --run
-   <run>`, run as printed -> `review-image.json` (same SAME_MODEL fallback as step 4): its prompt states each output's
+   coloured fringe in low-alpha edge pixels: `qa.json` binds the outputs now, so `assetgen.py defringe --run <run> --force
+   [--alpha-floor N]` (lists the records it made stale), then `embed`, `qa` and both image reviews below again
+   (`review-cmd --phase image` and `review-image-claude.json`). `review-cmd --phase image --run <run>`, run as printed -> `review-image.json` (same SAME_MODEL fallback as step 4): its prompt states each output's
    true pixel size and attaches the anchors, for an output with alpha `<run>/review/composite-dark.png` and
    `composite-light.png` (edges judged on both), for a tileable purpose `<run>/review/tile-2x2.png`.
    `/rpg-factory:assetgen review-cmd` appends `--no-write`: it builds no preview and exits 2 when one is missing or
    stale, so run `assetgen.py review-cmd` directly then. Look at every PNG yourself (Read; for alpha the same two
    composites) against the purpose's `image_rubric` (with anchors also the anchor and `Not repeated:` items) and
    write `<run>/review-image-claude.json` (review schema, `"by": "claude"`, binding from `review-cmd --phase image
-   --json`); `manifest` summarises it, the quality plugin WARNs when it is missing, and it never replaces the Codex
-   review. Size and the other deterministic checks are QA's: neither review grades them again.
+   --json`); `manifest` summarises it, the quality plugin WARNs when it is missing, and it never replaces the Codex review. Size and the other deterministic checks are QA's: neither review grades them again.
    Any FAIL: fix the prompt or params and regenerate in a new run directory (next free NNN) with a new prompt review,
    at most 2 regenerations, then stop and report; failed attempts stay without `run.md` and `manifest` lists them in
    `spec.trace.failed_attempts`. A FAIL the service causes, not the prompt (`rpg-factory:comfyui` Pitfalls): stop

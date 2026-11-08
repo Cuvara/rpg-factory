@@ -231,3 +231,8 @@
   1/2/4-bit) is refused with the reason `bit depth N not supported`: `defringe` records the output as `skipped` and
   leaves it byte-identical with no `outputs-raw/` copy, and `review-cmd` builds no composite or tile for it, prints
   the reason on stderr and still hands the output itself to the reviewer.
+- **The documented fringe repair was refused after QA.** `asset-gen` step 7 said to run `defringe` after a
+  `png-edge-fringe` FAIL, but `qa.json` then binds the outputs, so `defringe` refused. Step 7 (and the `comfyui`
+  skill and the domain doc) now document `assetgen.py defringe --run <run> --force [--alpha-floor N]`, then `embed`,
+  `qa` and both image reviews again (`review-cmd --phase image` and `review-image-claude.json`). The refusal and the
+  `next:` hint after a forced run name `embed`, `qa` and both image reviews.
