@@ -395,7 +395,100 @@
     ],
     "no_worktree_markers": [
       "ProjectSettings/ProjectVersion.txt"
-    ]
+    ],
+    "models": {
+      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice').",
+      "scope": {
+        "claude": {
+          "claude-opus-5-5": [
+            "medium",
+            "high"
+          ],
+          "claude-sonnet-5-5": [
+            "medium",
+            "high"
+          ]
+        },
+        "codex": {
+          "gpt-6.1-sol": [
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "agent_tool_alias": {
+        "claude-opus-5-5": "opus",
+        "claude-sonnet-5-5": "sonnet"
+      },
+      "profiles": {
+        "claude": {
+          "lead": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "planner": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "heavy": {
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "standard": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          },
+          "light": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          },
+          "review": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "qa": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        },
+        "codex": {
+          "lead": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "planner": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "heavy": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "standard": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "light": {
+            "model": "gpt-6.1-sol",
+            "effort": "medium"
+          },
+          "review": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "qa": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          }
+        }
+      },
+      "default_grade": "standard",
+      "rubric": {
+        "light": "Mechanical or well-bounded change: rename, typo, doc or text edit, config value, one small function, a test that copies an existing pattern; the answer is obvious from the surrounding code.",
+        "standard": "Ordinary feature or fix inside one module that follows existing patterns and needs some design, new tests and a few connected files.",
+        "heavy": "Hard or risky change: contract, wire or generated paths, concurrency, ECS or tick-loop internals, security or data migration, cross-module refactor, or anything where a wrong guess is costly to find."
+      }
+    }
   },
   "global_rules": [
     {

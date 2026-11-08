@@ -60,6 +60,13 @@ expect_fail ordered-handoff-cycle '(.contracts |= map(if .id == "ui-vfx-sync" th
 if jq '.kind_schemas["ui-flow"] = "docs/schemas/kinds/ui-flow.schema.json"' "$REAL" > "$TMP/foundation-schema.json" && "$CHECKER" --structure-only --registry "$TMP/foundation-schema.json" > "$TMP/foundation-schema.out" 2>&1; then
   echo "PASS foundation kind schema remains exempt"; pass=$((pass + 1))
 else echo "FAIL foundation kind schema should be exempt"; cat "$TMP/foundation-schema.out"; fail=$((fail + 1)); fi
+# j: pipeline.models profiles stay inside the scope and cover every role and grade for every agent in scope.
+expect_fail j-model-outside-scope '.pipeline.models.profiles.claude.lead.model = "claude-haiku-4-5"' 'pipeline.models: profiles claude/lead: claude-haiku-4-5 / medium is outside the scope'
+expect_fail j-effort-outside-scope '.pipeline.models.profiles.codex.light.effort = "low"' 'pipeline.models: profiles codex/light: gpt-6.1-sol / low is outside the scope'
+expect_fail j-missing-role 'del(.pipeline.models.profiles.claude.qa)' 'pipeline.models: profiles claude: missing role/grade qa'
+expect_fail j-missing-agent-profiles 'del(.pipeline.models.profiles.codex)' 'pipeline.models: profiles: agent codex is in scope but has no profiles'
+expect_fail j-bad-default-grade '.pipeline.models.default_grade = "epic"' 'pipeline.models: default_grade must be one of'
+expect_fail j-missing-models 'del(.pipeline.models)' 'registry pipeline.models is missing'
 # g: absent optional repository paths are skipped and reported in a stand-in workspace.
 G="$TMP/optional.json"
 jq '(.repos.server.optional = true) | (.repos.server.path = "absent-server") | (.repos = {server:.repos.server, authoring:.repos.authoring}) | (.domains.engineering.repos = ["server"]) | (.domains |= with_entries(.value.handoffs = [])) | (.modules = [.modules[] | select((.repo == "server" and (.fallback == true or .id == "server.proto")) or .repo == "authoring")]) | (.contracts = []) | (.skills |= with_entries(.value.cite_roots = {})) | (.workspace.root_markers = ["marker"])' "$REAL" > "$G"
