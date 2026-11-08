@@ -468,6 +468,22 @@ for spell in "./backend/shared/proto/wire.proto" "backend//shared/proto/wire.pro
   X=$(plan spell "{$HEAD,\"tasks\":[{\"id\":\"wire\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"$esc\"],\"acceptance\":[\"a\"]}]}")
   expect "validate: path spelling $spell grades heavy like the canonical wire.proto" 0 "^Model: task wire grade heavy \(tier L of the owned paths, contract or generated path\)" validate "$X"
 done
+# routing keeps the path's case even where the owned-path comparison folds it (Windows): force that branch so the
+# test bites on Linux too; mixed-case generated and contract paths must still grade heavy
+if python3 - "$ROOT" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.load(open(sys.argv[1] + "/registry.json", encoding="utf-8"))
+m.norm_path = lambda p: str(p).replace("\\", "/").lower()
+cases = (("netcode", "Runtime/Protocol/Generated/Wire.cs"), ("client", "Assets/Scripts/UI/Hud/Generated/Hud.uxml.g.cs"),
+         ("uitoolkit", "Tests/Runtime/Generated/Screen.uxml.g.cs"))
+tasks = [{"id": k, "repo": k, "paths": [p]} for k, p in cases]
+grades = m.task_grades({"repos": {}, "tasks": tasks}, reg, m.model_policy.load(reg), tasks)
+assert all(g["grade"] == "heavy" for g in grades.values()), grades
+PY
+then pass=$((pass + 1)); echo "PASS  mixed-case generated paths grade heavy with the case-folding norm_path forced"
+else fail=$((fail + 1)); echo "FAIL  mixed-case generated paths grade heavy with the case-folding norm_path forced"; fi
 # the Agent tool takes the model alias only: a model without a valid alias is a usage error, never a silent default
 jq 'del(.pipeline.models.agent_tool_alias["claude-sonnet-5-5"])' "$ROOT/registry.json" > "$TMP/reg-noalias.json"
 jq '.pipeline.models.agent_tool_alias["claude-sonnet-5-5"] = ""' "$ROOT/registry.json" > "$TMP/reg-emptyalias.json"

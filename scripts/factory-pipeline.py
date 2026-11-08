@@ -291,7 +291,7 @@ def print_tier(a, out):
 TIER_GRADE = {"S": "light", "M": "standard", "L": "heavy"}
 
 
-def norm_path(p):
+def route_path(p):
     """A path as the routing engine sees it: forward slashes, no empty or `.` segments (a trailing slash stays, it marks
     a directory), so ./a//b and a/b grade alike."""
     s = str(p).replace("\\", "/")
@@ -302,7 +302,7 @@ def norm_path(p):
 def static_resolve(reg, key, paths):
     """resolve.jq over the given paths alone (no git state, so the result never drifts with the branch), or None with
     the reason when jq is missing or fails."""
-    files = [{"path": norm_path(p), "status": "M", "source": "given"} for p in paths]
+    files = [{"path": route_path(p), "status": "M", "source": "given"} for p in paths]
     try:
         r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files), "--argjson", "subst",
                             "{}", "--argjson", "tools", "{}", "-f", os.path.join(HERE, "lib", "resolve.jq")],
@@ -334,7 +334,7 @@ def task_contexts(plan, reg, tasks):
             if res is None:
                 out[t["id"]] = (None, why)
                 continue
-            mine = {norm_path(p) for p in t["paths"]}
+            mine = {route_path(p) for p in t["paths"]}
             files = [f for f in res.get("files", []) if f.get("path") in mine]
             out[t["id"]] = ({"repos": [{
                 "repo": key, "touched": sorted({f["module"] for f in files if f.get("module")}),
