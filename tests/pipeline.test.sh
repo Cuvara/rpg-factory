@@ -1342,7 +1342,9 @@ expect "retrospective fallback rejects an empty reason" 2 "--fallback must be on
 expect "retrospective fallback must name the paired model" 2 "requires a SAME_MODEL review" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'claude unavailable' --note '401 outage'
 # Exercise acceptance when the fallback is needed, without an archived current paired PASS covering the same slice.
 rm -f "$RSVD/k@s__review__"*"__codex.json"
-expect "retrospective subtask fallback accepts a past outage with models back" 0 "recorded review PASS" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --reviewer claude --state PASS --fallback 'codex unavailable' --note '401 outage' --subplan "$RSS"
+jq '.subtasks[0] += {implementer: "claude", reviewer: "codex"}' "$RSS" > "$TMP/sub-own-reviewer.json"
+expect "retrospective subtask fallback accepts a subplan with its own reviewer" 0 "recorded review PASS" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'codex unavailable' --note '401 outage' --subplan "$TMP/sub-own-reviewer.json"
+expect "verdict rejects undocumented reviewer alias" 2 "unrecognized arguments: --reviewer" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --reviewer claude --state PASS
 expect "gate displays accepted retrospective subtask fallback and note" 0 "NOTE    k: subtask s SAME_MODEL .fallback: codex unavailable.; note: 401 outage" gate "$RSP" --no-run-checks
 if jq -e '.fallback == "codex unavailable" and .note == "401 outage"' "$RSVD/k@s__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  retrospective fallback stores reason and note"
 else fail=$((fail + 1)); echo "FAIL  retrospective fallback stores reason and note"; fi
@@ -1800,6 +1802,34 @@ if case.startswith('subtask-'):
 else:
     verdict('a', 'review', a)
 verdict('a', 'qa', a)
+if case.startswith('subtask-sibling-'):
+    sibling = commit('sibling edit')
+    sibling_paths = ['outside.txt'] if case == 'subtask-sibling-outside' else ['shared.txt']
+    m.pr.record(plan, 'a', 'later', 'implementer', {'agent': 'claude', 'paths': sibling_paths})
+    if case != 'subtask-sibling-missing':
+        by = 'claude' if case == 'subtask-sibling-unpaired' else 'codex'
+        verdict('a', 'review', sibling, by=by, extra=('--subtask', 'later'))
+    if case == 'subtask-sibling-fingerprint':
+        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@later__review*.json'):
+            doc = json.loads(filename.read_text()); doc['fingerprint'] = 'invalid'
+            filename.write_text(json.dumps(doc))
+    if case == 'subtask-sibling-post-review':
+        commit('unreviewed sibling edit')
+    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge sibling work', 'topic-a')
+    head = git('rev-parse', 'HEAD')
+    verdict('a', 'review', head, extra=('--implementer', 'codex'))
+    verdict('a', 'qa', head)
+    verdict('b', 'review', head); verdict('b', 'qa', head)
+    verdict('integration:fixture', 'qa', head)
+    g = m.gate(plan, reg)
+    stale = [x for x in g['blockers'] if 'subtask s recorded' in x and 'stale subtask review:' in x]
+    assert bool(stale) == (case != 'subtask-sibling-covered'), g
+    if stale:
+        assert 'shared.txt' in stale[0], stale
+    else:
+        assert g['state'] == 'READY_FOR_PR', g
+    print(case + ' assertions passed')
+    sys.exit(0)
 if case == 'task-qa':
     row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
     assert row['qa']['task'] == 'a' and row['qa']['sha'] == a, row
@@ -1897,7 +1927,7 @@ else:
             assert not stale_a(False)[0]['blockers']
 print(case + ' assertions passed')
 MULTIWAVE
-for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task repo-path; do
+for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path; do
   out=$(python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$case" 2>&1); rc=$?
   if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  multiwave $case"
   else fail=$((fail + 1)); echo "FAIL  multiwave $case"; echo "$out"; fi

@@ -1354,7 +1354,7 @@ def subtask_implementers(plan, task_id):
     return out
 
 
-def subtask_reviews(plan, reg, task_id, sid, target, stale=None, cache=None):
+def subtask_reviews(plan, reg, task_id, sid, target, stale=None, cache=None, checking=(), after=None):
     """PASS reviews on the target or an ancestor whose reviewed paths are unchanged."""
     vdir = verdict_dir(plan)
     pre = f"{safe_name(task_id)}{SUB_SEP}{safe_name(sid)}__review"
@@ -1367,8 +1367,10 @@ def subtask_reviews(plan, reg, task_id, sid, target, stale=None, cache=None):
         if (isinstance(rec, dict) and rec.get("task") == task_id and rec.get("subtask") == sid
                 and rec.get("phase") == "review" and rec.get("state") == "PASS" and rec.get("fingerprint") == fp
                 and rec.get("sha") and (rec["sha"] == target or is_ancestor(path, rec["sha"], target))):
+            if after and (rec["sha"] == after or not is_ancestor(path, after, rec["sha"])):
+                continue
             paths = rec.get("paths") or recorded_subtask_paths(plan, task_id, sid) or find_task(plan, task_id)["paths"]
-            scope = dict(find_task(plan, task_id), paths=paths)
+            scope = dict(find_task(plan, task_id), paths=paths, _subtasks=tuple(sorted((*checking, sid))))
             changed = uncovered_changes(plan, reg, scope, rec["sha"], target, cache=cache)
             if changed:
                 if stale is not None:
@@ -1426,7 +1428,7 @@ def uncovered_changes(plan, reg, task, sha, target, checking=(), cache=None):
     # cannot affect this result; retaining them would repeat every path through a DAG.
     by_id = {t["id"]: t for t in plan["tasks"]}
     blocked = tuple(sorted(tid for tid in checking if depends(by_id, tid, task["id"])))
-    key = (task["id"], task["repo"], tuple(task["paths"]), sha, target, blocked)
+    key = (task["id"], task["repo"], tuple(task["paths"]), sha, target, blocked, task.get("_subtasks", ()))
     if key not in cache:
         cache[key] = _uncovered_changes(plan, reg, task, sha, target, checking, cache)
     return list(cache[key])
@@ -1470,6 +1472,21 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             if uncovered_changes(plan, reg, t, qa["sha"], target, checking + (task["id"],), cache):
                 continue
         later.append((t, rv, own_start(plan, reg, info, t, rv["sha"])))
+    # A sibling can supersede an earlier slice without a task merge. Require its
+    # own current paired PASS, and credit only commits contained in that review.
+    siblings = []
+    if task.get("_subtasks"):
+        pipe = settings(reg)
+        for sid, impl in subtask_implementers(plan, task["id"]).items():
+            if sid in task["_subtasks"]:
+                continue
+            want = pr.paired(pipe, find_task(plan, task["id"]), impl)
+            for rec in subtask_reviews(plan, reg, task["id"], sid, target, cache=cache,
+                                       checking=task["_subtasks"], after=sha):
+                if rec.get("by") == want or (rec.get("by") == impl and fallback_matches(rec, want)):
+                    paths = rec.get("paths") or recorded_subtask_paths(plan, task["id"], sid)
+                    if paths:
+                        siblings.append((dict(paths=paths), rec))
     bad = set()
     chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
     if rc != 0:
@@ -1501,7 +1518,9 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             ps = (parent_text or "").split()
             touched = files(ps[0], commit) if ps else set(task["paths"])
             for f in touched:
-                covered = False
+                covered = any(owns(s, f) and is_ancestor(path, commit, r["sha"]) for s, r in siblings)
+                if covered:
+                    continue
                 for t, rv, start in later:
                     if not start or not owns(t, f) or not is_ancestor(path, commit, rv["sha"]) or is_ancestor(path, commit, start):
                         continue
@@ -1632,7 +1651,9 @@ def cmd_verdict(a, reg):
         rec["implementer_source"] = source
         rec["implementers"] = subtask_implementers(plan, a.task)
         if a.fallback is not None:
-            want = pr.paired(pipe, sub_item or task, impl)
+            # Gate subtask coverage pairs against the task too, including when
+            # the supplied subplan declares its own reviewer.
+            want = pr.paired(pipe, task, impl)
             if a.by != impl or not fallback_matches(rec, want):
                 die(f"--fallback requires a SAME_MODEL review by implementer {impl} with fallback '{want} unavailable'")
         if (a.fallback is None and disp and disp.get("fallback") and disp["agent"] == a.by == impl
@@ -2493,7 +2514,7 @@ def main():
     v.add_argument("--task", required=True)
     v.add_argument("--phase", required=True, choices=("review", "qa"))
     v.add_argument("--sha", required=True)
-    v.add_argument("--by", "--reviewer", dest="by", required=True)
+    v.add_argument("--by", required=True)
     v.add_argument("--state", required=True)
     v.add_argument("--report")
     v.add_argument("--note")
