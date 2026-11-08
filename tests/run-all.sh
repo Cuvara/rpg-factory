@@ -9,11 +9,17 @@
 #                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
 #                   validate) run alone. Ends with the wall time.
 #   --affected      run only the suites the change touches (tests/affected.py: files changed since
-#                   merge-base(REF|origin/main|main) plus untracked); the cheap inline checks always run.
+#                   merge-base(REF|origin/main|main) plus untracked); the cheap inline checks (JSON parse,
+#                   executable bits, manifest and wording greps, resolver and fixture checks) always run.
 #                   For iteration; the full run (no --affected) is the gate before a PR and for --release.
+#                   With --affected or --only-suites, a check that runs a script outside a suite line (the live
+#                   blocks: scripts/checks/skill-citations.py, scripts/factory-context.sh, and in the live checks
+#                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
+#                   like a suite by that script path, else it counts as not affected.
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when another full run holds the machine-wide lock
-#   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock)
+#   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
+#                   be a gated script above (e.g. scripts/checks/netcode-headless.sh)
 #   --no-reuse      force suites to run instead of reusing matching input PASS records
 #   --release       the installed plugin must equal the source (install-status CURRENT), the source
 #                   must be committed, and tests/installed-safety.sh must pass against the installed hooks
@@ -148,11 +154,18 @@ runl() { _run bg "" live "$@"; }
 runp() { local name="$1" post="$2"; shift 2; _run bg "$post" "" "$name" "$@"; }
 run1() { drain; _run fg "" "" "$@"; }
 block() { if [ -z "$QD" ]; then "$1"; else _run bg replay live "$1" in_block "$1"; fi; }
-in_block() { ( QD=""; "$1"; echo "<end of block>" ); }   # inside the job: the checks print at once
+in_block() { ( QD=""; IN_BLOCK=1; "$1"; echo "<end of block>" ); }   # inside the job: the checks print at once
+IN_BLOCK=""
+# not_affected: count a check the change does not touch (inside a block job, a marker line replay counts)
+not_affected() { if [ -n "$IN_BLOCK" ]; then echo "<not affected>"; else skip=$((skip + 1)); naff=$((naff + 1)); fi; }
+# gated <script>: guard for a check that runs <script> outside a run/runl line (block or inline). In a full run or
+# --release it always runs; with --affected / --only-suites only when <script> is listed or affected.
+gated() { suite_selected "$1" && return 0; not_affected; return 1; }
 replay() { # rc output name: the lines a block printed, counted by their prefix
   local l done=""
   while IFS= read -r l; do
     case "$l" in "PASS  "*) pass=$((pass + 1)) ;; "FAIL  "*) fail=$((fail + 1)); failures+=("${l#FAIL  }") ;; "SKIP  "*) skip=$((skip + 1)) ;;
+      "<not affected>") skip=$((skip + 1)); naff=$((naff + 1)); continue ;;
       "<end of block>") done=1; continue ;; esac
     printf '%s\n' "$l"
   done <<<"$2"
@@ -161,7 +174,7 @@ replay() { # rc output name: the lines a block printed, counted by their prefix
 _run() {
   local mode="$1" post="$2" lane="$3" name="$4"; shift 4; local out s t0 t1 n rc
   suite_of "$@"
-  if [ -n "$s" ] && ! suite_selected "$s"; then skip=$((skip + 1)); naff=$((naff + 1)); return; fi
+  if [ -n "$s" ] && ! suite_selected "$s"; then not_affected; return; fi
   # Postprocessors can turn rc=0 into SKIP/FAIL, so they always grade fresh output.
   local cache_suite="$s"
   case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite="" ;; esac
@@ -403,9 +416,11 @@ runall_prepare; prep_rc=$?
 [ "$prep_rc" -eq 0 ] || exit "$prep_rc"
 
 # ---- syntax
-json_count=0
-while IFS= read -r f; do json_count=$((json_count + 1)); run "json: $f" jq empty "$f"; done \
-  < <(find . -name '*.json' -not -path './.git/*' | sort)
+# one jq process for every file (a job per file cost about 0.3 s each on Windows); on any error, one line per file
+json_files=(); while IFS= read -r f; do json_files+=("$f"); done < <(find . -name '*.json' -not -path './.git/*' | sort)
+json_count=${#json_files[@]}
+if [ "$json_count" -gt 0 ] && jq empty "${json_files[@]}" >/dev/null 2>&1; then for f in "${json_files[@]}"; do ok "json: $f"; done
+else for f in "${json_files[@]}"; do run "json: $f" jq empty "$f"; done; fi
 [ "$json_count" -ge 4 ] && ok "json files found: $json_count" || bad "json files found: $json_count (expected >= 4)"
 for f in scripts/*.sh scripts/checks/*.sh tests/*.sh; do run "bash -n: $f" bash -n "$f"; done
 for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py scripts/lib/guard/*.py testlab/*.py testlab/lab/*.py testlab/tests/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
@@ -414,9 +429,11 @@ run "jq compile: scripts/lib/resolve.jq" \
 find scripts tests -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- executable bits (as recorded in git when available, else filesystem)
-for f in scripts/factory-context.sh scripts/check-registry.sh scripts/git-guard.py scripts/checks/*.py scripts/checks/*.sh \
-         tests/*.sh; do
-  mode=$(git ls-files -s "$f" 2>/dev/null | awk '{print $1}')
+exec_files=(scripts/factory-context.sh scripts/check-registry.sh scripts/git-guard.py scripts/checks/*.py scripts/checks/*.sh tests/*.sh)
+declare -A git_mode=()   # one git call for every file
+while IFS=$'\t' read -r meta f; do git_mode[$f]=${meta%% *}; done < <(git ls-files -s -- "${exec_files[@]}" 2>/dev/null)
+for f in "${exec_files[@]}"; do
+  mode=${git_mode[$f]:-}
   if [ "$mode" = "100755" ] || { [ -z "$mode" ] && [ -x "$f" ]; }; then ok "executable: $f"
   else bad "executable: $f" "git mode=${mode:-untracked}"; fi
 done
@@ -572,7 +589,7 @@ live_citations() {  # MOVED (anchor unique elsewhere) is a warning here and a fa
     fi
   fi
 }
-if $use_ws; then block live_citations
+if $use_ws; then gated scripts/checks/skill-citations.py && block live_citations
 else skp "skill line citations against the repos" "--no-workspace"; fi
 if $use_ws; then runl "routing + history replay" tests/routing.test.sh
 else
@@ -642,7 +659,7 @@ live_context() {
   md=$(scripts/factory-context.sh --repo client 2>&1)
   grep -q "^## client:" <<<"$md" && ok "factory-context markdown renders" || bad "factory-context markdown" "$md"
 }
-if $use_ws; then block live_context
+if $use_ws; then gated scripts/factory-context.sh && block live_context
 else skp "factory-context live checks" "--no-workspace"; fi
 
 # ---- sgl-determinism (ADR-10) against fixtures: banned calls fail, comments/strings/allowed MathF pass
@@ -671,7 +688,8 @@ live_checks() {
   # committed HEAD through a read-only export and report SKIP with the reason - never PASS.
   wsr="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"; cl="$wsr/IndieRPGMMOAdventure"
   pin_files=(Packages/manifest.json Packages/packages-lock.json "Assets/Samples/Netcode/DOTS Sample/.sample-source")
-  if out=$(python3 -B scripts/checks/pin-status.py 2>&1); then ok "pin-status (client pins vs upstream tags)"
+  if ! gated scripts/checks/pin-status.py; then :
+  elif out=$(python3 -B scripts/checks/pin-status.py 2>&1); then ok "pin-status (client pins vs upstream tags)"
   elif [ -n "$(git -C "$cl" status --porcelain -- "${pin_files[@]}" 2>/dev/null)" ]; then
     ph=$(mktemp_win); mkdir -p "$ph/ws/IndieRPGMMOAdventure"
     git -C "$cl" archive HEAD -- "${pin_files[@]}" | tar -x -C "$ph/ws/IndieRPGMMOAdventure"
@@ -683,17 +701,21 @@ live_checks() {
     rm -rf "$ph"
   else bad "pin-status (client pins vs upstream tags)" "$out"; fi
   run "wire-parity (Wire.cs bytes + protocol version)" bash scripts/checks/wire-parity.sh
-  out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.netcode v0.45.0 --client-ref 17b7737^ 2>&1)
-  grep -q "hash=2eb6ddbc4e0c62544fa860b3a4f7e64071918f0b" <<<"$out" && grep -q "DOTSNetworkBridge.cs" <<<"$out" \
-    && ok "pin-plan replays 17b7737 (lock hash + DOTS Sample file)" || bad "pin-plan replay of 17b7737" "$out"
-  out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.dots v99.0.0 2>&1); rc=$?
-  [ $rc -eq 1 ] && grep -q "BLOCKED: tag v99.0.0 not found" <<<"$out" && ok "pin-plan blocks on a missing tag" || bad "pin-plan missing-tag gate" "$out"
+  if gated scripts/checks/pin-plan.py; then
+    out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.netcode v0.45.0 --client-ref 17b7737^ 2>&1)
+    grep -q "hash=2eb6ddbc4e0c62544fa860b3a4f7e64071918f0b" <<<"$out" && grep -q "DOTSNetworkBridge.cs" <<<"$out" \
+      && ok "pin-plan replays 17b7737 (lock hash + DOTS Sample file)" || bad "pin-plan replay of 17b7737" "$out"
+    out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.dots v99.0.0 2>&1); rc=$?
+    [ $rc -eq 1 ] && grep -q "BLOCKED: tag v99.0.0 not found" <<<"$out" && ok "pin-plan blocks on a missing tag" || bad "pin-plan missing-tag gate" "$out"
+  fi
   for p in Netcode UnityDots UIToolkit; do
+    gated scripts/checks/package-ready.py || continue
     out=$(python3 -B scripts/checks/package-ready.py "${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}/$p" 2>&1); rc=$?
     { [ $rc -eq 0 ] && grep -q "READY to tag" <<<"$out"; } || { [ $rc -eq 1 ] && grep -q "NOT READY" <<<"$out"; } \
       && ok "package-ready $p -> $(grep -m1 -oE 'NOT READY|READY to tag v[0-9.]+' <<<"$out")" || bad "package-ready $p" "$out"
   done
-  if command -v dotnet >/dev/null 2>&1 || command -v dotnet.exe >/dev/null 2>&1; then
+  if ! gated scripts/checks/netcode-headless.sh; then :
+  elif command -v dotnet >/dev/null 2>&1 || command -v dotnet.exe >/dev/null 2>&1; then
     out=$(bash scripts/checks/netcode-headless.sh 2>&1); rc=$?
     [ $rc -eq 0 ] && ok "netcode headless tests: $(sed -n 's/^headless tests: //p' <<<"$out")" || bad "netcode headless tests" "$(tail -5 <<<"$out")"
   else skp "netcode headless tests" "no dotnet/dotnet.exe"; fi
@@ -761,5 +783,5 @@ runall_finish
 total=$((pass + fail + skip))
 echo "----"
 echo "wall time: $(( $(date +%s) - t_start ))s (-j $jobs)"
-echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ -n "$AFF" ] && echo " ($naff not affected by the change)")"
+echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ -n "$AFF$only_suites" ] && echo " ($naff not affected by the change)")"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]

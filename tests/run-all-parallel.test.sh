@@ -145,18 +145,20 @@ config_case 'whole section inserted in middle' WARN
 config_case 'core key inserted before new section' FAIL
 
 # Persistence is tested in a disposable git repo with tiny suites; never run the real full suite.
-mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
+mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/scripts/checks" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
 cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
 printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
 printf '#!/usr/bin/env bash\nprintf "b\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/b.sh"
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
+printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
 cat > "$TMP/hashes.py" <<'PY'
 import os, sys
 if sys.argv[1] == 'hashes':
     for suite in sys.argv[2:]:
         print(suite, '-' if suite.endswith('never.sh') else os.environ.get('INPUT_HASH', 'a'*64))
 elif sys.argv[1] == 'changed': print('tests/b.sh')
-elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] == 'tests/b.sh' else 1)
+elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] in os.environ.get('SELECT', 'tests/b.sh').split(',') else 1)
 PY
 cat > "$TMP/cache-plan.sh" <<'PLAN'
 fixture=$1; shift
@@ -169,6 +171,13 @@ runall_prepare; rc=$?
 run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
+# a live-lane suite, and a block and an inline check that run a script outside a run line (gated like a suite)
+gated_block() { gated scripts/checks/x.sh && { bash scripts/checks/x.sh block && ok "gated block x" || bad "gated block x"; }; ok "block cheap"; }
+if [ "${WITH_LIVE:-0}" != 0 ]; then
+  runl live bash tests/live.sh
+  block gated_block
+  gated scripts/checks/x.sh && { bash scripts/checks/x.sh inline && ok "gated inline x" || bad "gated inline x"; }
+fi
 [ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
 drain
 runall_finish
@@ -275,6 +284,23 @@ printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
 out=$(cache_plan --no-reuse); rc=$?
 [ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
+# With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
+# listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
+live_case() { # name want-log want-counts args...
+  local name=$1 wlog=$2 wcounts=$3 j log; shift 3
+  for j in 1 3; do
+    reset_cache
+    out=$(WITH_LIVE=1 cache_plan --no-reuse -j "$j" "$@"); rc=$?
+    log=$(sort "$RUN_LOG" | tr '\n' ' ')
+    [ "$rc" = 0 ] && [ "$log" = "$wlog" ] && grep -qx "counts $wcounts" <<<"$out" \
+      && good "live/gated: $name (-j $j)" || no "live/gated: $name (-j $j): log '$log'" "$out"
+  done
+}
+live_case '--only-suites without them skips them' 'a ' '2 0 4' --only-suites tests/a.sh
+live_case '--only-suites listing them runs them' 'a block inline live ' '5 0 1' --only-suites tests/a.sh,tests/live.sh,scripts/checks/x.sh
+SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh live_case '--affected selecting them runs them' 'b block inline live ' '5 0 1' --affected
+live_case '--affected not selecting them skips them' 'b ' '2 0 4' --affected
+live_case 'a full run runs them' 'a b block inline live ' '6 0 0'
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"
