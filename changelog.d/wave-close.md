@@ -1,0 +1,17 @@
+### Added
+
+- **Pipeline.** `verdict --fallback '<model> unavailable' --note TEXT` records a SAME_MODEL fallback review after the
+  fact, for a review made before dispatch recorded fallbacks (for example during an outage of the paired model).
+  `--note` is required and the reviewer must be the implementer's model; the gate shows it as an accepted fallback
+  with its reason and note, never silently.
+
+### Fixed
+
+- **Pipeline.** The gate judges a subtask review's currency with the multi-wave attribution the task level uses, and
+  from the subtask's own paths instead of the task's whole owned paths: a later wave merged with its own current
+  PASS review no longer makes an earlier subtask review STALE, while unreviewed changes still do.
+- **Pipeline.** A workspace-relative `repos.<key>.path` in a plan is resolved under the workspace wherever the
+  pipeline reads a repo path.
+- **Pipeline.** `tests/routing.test.sh` strips the CR from skill names that Windows `jq -r` prints.
+- **Pipeline.** `tests/affected.py` selects the parallel-policy suite for changes to `scripts/orca-wait.sh` and
+  `tests/orca-wait.test.sh`.

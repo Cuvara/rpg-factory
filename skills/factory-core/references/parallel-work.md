@@ -234,8 +234,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
 - [ ] Diff contains only the task's scope; base and target are the recorded ones.
 - [ ] Diff reviewed by the lead; required checks and QA passed; no open blocking finding.
 - [ ] No baseline or user files touched; shared-package impact named; file ownership clear.
-- [ ] Integrate in dependency order into the task's integration branch, then run the post-integration checks
-      on the combined tree.
+- [ ] Integrate in dependency order into the task's integration branch with `git merge --no-ff` (section 10
+      step 5), then run the post-integration checks on the combined tree.
 - [ ] On a conflict or regression: stop that contribution, diagnose it, and dispatch a scoped fix. Never
       discard work and never resolve a conflict by blindly taking one side.
 
@@ -406,8 +406,10 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    `--agent <its pair>`, recorded with `verdict ... --subtask <sid>`, which keeps it apart from the task review.
    On the task's stable candidate commit the task lead runs
    `dispatch ... --phase review --sha <sha>`, which starts the review in the task worktree (section 6). Record the
-   result: `factory-pipeline.py verdict plan.json --task <id> --phase review --sha <sha> --by <agent>
-   --state PASS|FAIL --report <file>`. A FAIL goes back to the task lead (`status` names `--phase lead`, which
+   result: `factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase review --sha <sha> --by <agent>
+   --state PASS|FAIL --report <file> [--note TEXT] [--implementer AGENT] [--fallback '<model> unavailable']`
+   (`--report` names an existing file, `--note` takes free text; `--implementer` declares the true implementer and is
+   refused when it conflicts with the one the dispatch recorded). A FAIL goes back to the task lead (`status` names `--phase lead`, which
    resumes it in the task worktree or the main checkout of a no-worktree repo): it starts a scoped fix in a fresh
    implementation session there (section 8, "Session lifecycle") and commits it as a new candidate SHA.
    `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
@@ -417,12 +419,20 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    the same model reviews, its prompt and report carry `SAME_MODEL (fallback: <model> unavailable)`, and
    `dispatch --phase review` records that fallback for the candidate SHA. `verdict` stamps the fallback only when
    that SHA's review dispatch was a recorded fallback and `--by` is its reviewer, not from availability at verdict
-   time (`--fallback <model>` is refused while that model is available); the gate accepts a recorded fallback and needs `--allow-same-model` only for an unrecorded
+   time. A same-model review made before dispatch recorded fallbacks (for example during an outage of the paired
+   model) is recorded after the fact with `--fallback '<model> unavailable' --note <why>`: `--note` is required and
+   `--by` must be the implementer's model (the bare form `--fallback <model>` is still refused while that model is
+   available). The gate accepts a recorded fallback and prints it as an accepted
+   fallback with its reason and note, never silently; it needs `--allow-same-model` only for an unrecorded
    SAME_MODEL review. `--runner agent` (Claude only) marks a session planned for Codex SAME_MODEL in its prompt.
    The task lead also runs the per-task QA
    (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`. The run lead
-   follows the tasks with `factory-pipeline.py status plan.json`. A recorded verdict holds for its task's
+   follows the tasks with `factory-pipeline.py status plan.json`. Every task, and every later wave, is integrated
+   with `git merge --no-ff <task branch>`: the gate credits a later wave's changes under an earlier task's or
+   subtask's paths only through the merge commits on the topic's first-parent chain (each later task with its own
+   current PASS review, and QA where required). A fast-forward or a squash leaves those changes unattributed and
+   the earlier review STALE. A recorded verdict holds for its task's
    fingerprint (objective, owned paths, exclusions, acceptance, checks, agents): a plan edit that only changes deps
    keeps it, while changing a task's paths or acceptance makes it stale. Re-run `status` after any plan edit.
 6. **QA.** Once per repo on the integration HEAD, in the integration branch's existing checkout (section 6):
