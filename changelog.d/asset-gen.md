@@ -156,6 +156,13 @@
 
 ### Fixed
 
+- **Style QA is bound to its style inputs.** `qa.json` now records `style_binding` (`runfiles.qa_style_binding`: the
+  style ref with id, version and hash, a hash of the effective style data, the family, and each selected anchor copy
+  under `references/` with its SHA-256, the tone references `style-tone` reads). The quality plugin recomputes it from
+  `spec.json` and the run's anchor copies, and `gen-run-qa` fails a report graded with other style data, version,
+  family or anchors (also one without `style_binding`) as stale: re-run `qa` and `manifest`. Before, a style
+  re-resolved with a fail-severity rule kept an old PASS report acceptable.
+
 - **Size QA vs the real image service.** The 9router image node can ignore `size` entirely (live style-lock e2e,
   2026-11-08: 1672x941 returned for 1536x1024 and 1024x1024 requests), so `concept-2d` could never pass and
   `promote-anchor` refused good outputs. No core purpose's size QA grades the exact size any more: it grades
