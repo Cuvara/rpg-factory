@@ -191,3 +191,9 @@
   real sizes as regression tests.
 - **`embed` stale chunk.** `embed` replaces an existing `workflow` chunk that differs from the current
   `workflow.ui.json` (idempotent when equal), so a re-render no longer leaves the old graph in the PNG.
+- **Agent and model names as approvers.** The shared approver guard (`approve-record --by`, an active anchor's
+  `approved_by`, `gen-run-style`) only knew claude, codex and gpt names, so `approve-record --by gemini-2.5-pro`
+  approved a run. It now refuses the common model and agent families as a whole-word name start, also after a vendor
+  prefix such as `google/` (gemini, llama, mistral, qwen, deepseek, grok, o1/o3/o4, phi-, copilot and others), the
+  registry's `pipeline.agents`, and any name ending in `-bot` or `-agent`; person names such as `Grokowski` are
+  accepted.

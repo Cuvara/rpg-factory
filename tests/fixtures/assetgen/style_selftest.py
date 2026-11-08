@@ -106,11 +106,71 @@ def _():
     a = repo("refuse-agent")
     rd = run_md(a, "r-001")
     before = open(os.path.join(rd, "run.md"), encoding="utf-8").read()
-    for name in ("claude", "Claude-Opus", "codex", "gpt-5", "SAME_MODEL:claude"):
+    for name in ("claude", "Claude-Opus", "codex", "gpt-5", "SAME_MODEL:claude", "agent", "model"):
         refused(lambda: approval.approve_record(rd, name), "agent or model")
-    refused(lambda: approval.approve_record(rd, "gemini-2"), "recorded in this run")
+    refused(lambda: approval.approve_record(run_md(a, "r-002", spec={"prompt_review": {"by": "Rex Reviewer", "state": "PASS"}}),
+                                            " rex reviewer "), "recorded in this run")
     assert open(os.path.join(rd, "run.md"), encoding="utf-8").read() == before, "run.md changed on a refusal"
     assert not os.path.isdir(os.path.join(a, "approvals"))
+
+
+OTHER_MODELS = ("gemini-2.5-pro", "google/gemini-pro", "llama-3", "meta-llama/Llama-3.1-70B", "Mistral-Large",
+                "o3-mini", "o1", "deepseek-r1", "my-agent", "review_bot", "Qwen2.5-VL", "grok-2", "xai/grok", "phi-3",
+                "command-r-plus", "anthropic/claude-sonnet", "openai/gpt-4o", "chatgpt", "Copilot", "fable-5")
+PEOPLE = ("CuongND", "Ana Silva", "Grokowski", "Claudette", "Phil", "Gemma Jones", "O'Brien", "Dana", "Devin Lee", "Cursor Bard")
+
+
+@case("approve_record refuses model names of other vendors and agent suffixes, with no file written")
+def _():
+    a = repo("refuse-vendors")
+    rd = run_md(a, "r-001")
+    md = os.path.join(rd, "run.md")
+    before = open(md, "rb").read()
+    for name in OTHER_MODELS:
+        refused(lambda: approval.approve_record(rd, name), "agent or model")
+        assert open(md, "rb").read() == before, "run.md changed on refusing %r" % name
+    assert not os.path.isdir(os.path.join(a, "approvals")), "a refused call wrote an approval"
+
+
+@case("is_agent_name: person names (whole-word families) are accepted, registry pipeline.agents keys refused")
+def _():
+    for name in PEOPLE:
+        assert not stylelock.is_agent_name(name), name
+    for key in REG["pipeline"]["agents"]:
+        assert stylelock.is_agent_name(key) and stylelock.is_agent_name(key.upper() + "-x"), key
+    a = repo("accept-person")
+    out = approval.approve_record(run_md(a, "r-001"), "Ana Silva", today="2026-11-08")
+    assert out["status"] == "approved" and os.path.isfile(out["approval"]), out
+
+
+@case("anchor_errors refuses an active anchor approved_by a model of another vendor; a person passes")
+def _():
+    base = {"schema": stylelock.ANCHOR_SCHEMA, "id": "a-1", "status": "active", "family": "props",
+            "style": {"style_id": "rpg-base", "version": 1, "sha256": "b" * 64}, "dimensions": ["palette"],
+            "strength": "canonical", "image": "a-1.png", "image_sha256": "c" * 64,
+            "source_run": {"run_id": "src-001", "output": "outputs/a.png", "sha256": "c" * 64}, "approved_on": "2026-11-08"}
+    for name in OTHER_MODELS:
+        errs = stylelock.anchor_errors(dict(base, approved_by=name), "rpg-base", "a-1")
+        assert any("is an agent or model" in e for e in errs), (name, errs)
+    for name in PEOPLE:
+        errs = stylelock.anchor_errors(dict(base, approved_by=name), "rpg-base", "a-1")
+        assert not any("agent or model" in e for e in errs), (name, errs)
+
+
+@case("gen-run-style: an active anchor sourced from this run and approved_by gemini-2.5-pro FAILS")
+def _():
+    a = repo("anchor-gemini")
+    rd = run_md(a, "src-001", status="approved")
+    ref, sha = anchor(a, "a-src", "src-001")
+    p = os.path.join(a, "assetgen", "styles", "rpg-base", "anchors", "a-src.json")
+    data = json.load(open(p, encoding="utf-8"))
+    data["approved_by"] = "gemini-2.5-pro"
+    write(p, data)
+    front = approval.split_front(open(os.path.join(rd, "run.md"), encoding="utf-8").read())[0]
+    front["spec"]["outputs"] = [{"path": "outputs/a.png", "sha256": sha}]
+    ctx = Context(a, REG, "assetgen/runs/src-001/run.md", {}, None, {"authoring": a})
+    rows = [r for r in plugin.check(front, ctx) if r.check == "gen-run-style"]
+    assert len(rows) == 1 and rows[0].state == "FAIL" and         any("without a person's approval" in r and "gemini-2.5-pro" in r for r in rows[0].reasons), rows
 
 
 @case("approve_record refuses a draft run and a run directory outside assetgen/runs")

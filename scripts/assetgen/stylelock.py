@@ -60,8 +60,16 @@ SHA = re.compile(r"\A[0-9a-f]{64}\Z")
 DATE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 ASPECT = re.compile(r"\A[1-9]\d*:[1-9]\d*\Z")
 ID = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
-# names that mark an agent or model, never a person who may approve (approved_by)
-AGENT_NAME = re.compile(r"\A(claude.*|codex.*|gpt.*|same_model:.*)\Z", re.I)
+# AI model and agent families: a name that starts with one as a whole word (not followed by a letter) is an agent
+AGENT_FAMILIES = ("claude", "opus", "sonnet", "haiku", "fable", "anthropic", "codex", "gpt", "chatgpt", "openai",
+                  "gemini", "google-ai", "llama", "meta-llama", "mistral", "mixtral", "codestral", "qwen",
+                  "deepseek", "grok", "xai", "command-r", "cohere", "copilot", "aider")
+AGENT_NAME = re.compile(
+    r"\A(?:same_model:.*"                                  # the same-model review fallback
+    r"|(?:agent|model|bot)"                                 # a bare role word
+    r"|.*[-_](?:bot|agent)"                                 # anything ending in -bot or -agent
+    r"|(?:[\w.-]+/)?"                                       # an optional vendor prefix (anthropic/, google/, ...)
+    r"(?:(?:%s)(?![a-z]).*|o[134](?:-.*)?|phi-.*))\Z" % "|".join(re.escape(f) for f in AGENT_FAMILIES), re.I)
 
 
 class StyleLockError(layers.SpecError):
@@ -82,8 +90,39 @@ def _in(v, lo, hi):
     return _num(v) and lo <= v <= hi
 
 
+def _registry_agents():
+    """The registry's pipeline.agents keys (lowercase); empty when registry.json is unreadable."""
+    try:
+        with open(os.path.join(layers.PLUGIN_ROOT, "registry.json"), encoding="utf-8") as f:
+            agents = json.load(f).get("pipeline", {}).get("agents", {})
+    except (OSError, ValueError, AttributeError):
+        return set()
+    return {k.lower() for k in agents} if isinstance(agents, dict) else set()
+
+
 def is_agent_name(name):
-    return isinstance(name, str) and bool(AGENT_NAME.match(name.strip()))
+    """True when `name` marks an AI agent or model, never a person who may approve (approved_by, approve-record --by).
+
+    The one guard of every approval check (approval.approve_record, anchor_errors, the gen-run-style quality check).
+    Case-insensitive, on the stripped name. An agent name is:
+      - `same_model:<model>` (the same-model review fallback), or a bare `agent`, `model` or `bot`;
+      - anything ending in `-bot` or `-agent` (or `_bot`, `_agent`), e.g. `my-agent`, `review-bot`;
+      - a name that starts with a model or agent family as a whole word (the family is not followed by a letter), after
+        an optional vendor prefix such as `anthropic/`, `google/` or `meta-llama/`: claude, opus, sonnet, haiku, fable,
+        anthropic, codex, gpt, chatgpt, openai, gemini, google-ai, llama, meta-llama, mistral, mixtral,
+        codestral, qwen, deepseek, grok, xai, command-r, cohere, copilot, aider (AGENT_FAMILIES);
+        `o1`, `o3` or `o4` alone or followed by `-` (`o3-mini`); `phi-` followed by anything (`phi-3`);
+      - a key of the registry's pipeline.agents (the agents the delivery pipeline dispatches), as a whole word.
+    Whole word keeps person names: `Grokowski`, `Claudette`, `Phil`, `CuongND`, `Ana Silva`, `Devin Lee` are accepted
+    (devin, bard and cursor are left out on purpose: they are common names and words).
+    """
+    if not isinstance(name, str):
+        return False
+    name = name.strip()
+    if AGENT_NAME.match(name):
+        return True
+    low = name.lower().rsplit("/", 1)[-1]
+    return any(low == k or (low.startswith(k) and not low[len(k)].isalpha()) for k in _registry_agents())
 
 
 def hint_text(value):

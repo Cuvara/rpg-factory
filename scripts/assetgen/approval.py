@@ -101,7 +101,7 @@ def approve_record(run_dir, by, note=None, today=None):
     by = by.strip() if isinstance(by, str) else ""
     if not by:
         raise ApprovalError("approve-record needs --by NAME: the person who approves the run")
-    if stylelock.is_agent_name(by) or by.lower() in ("agent", "model"):
+    if stylelock.is_agent_name(by):
         raise ApprovalError("%r is an agent or model name; only a person approves a gen-run" % by)
     full = os.path.abspath(os.path.normpath(run_dir))
     run_id, runs = os.path.basename(full), os.path.dirname(full)

@@ -1090,6 +1090,16 @@ grep -q "'Robin' is recorded in this run as an agent or reviewer" "$TMP/err"; e5
 [ "$rc1/$e1/$rc2/$rc3/$e3/$rc4/$rc5/$e5" = "2/0/2/1/0/1/1/0" ] && [ -z "$(git -C "$APA" status --porcelain)" ] \
   && ok "approve-record refuses without --by (exit 2), an agent or model name and a name the run records as an agent (exit 1); nothing written" \
   || no "approve-record refusals $rc1/$e1/$rc2/$rc3/$e3/$rc4/$rc5/$e5" "$(cat "$TMP/err"; git -C "$APA" status --porcelain)"
+# model names of other vendors and agent suffixes are refused the same way (the shared stylelock.is_agent_name guard)
+bad=""
+for who in gemini-2.5-pro google/gemini-pro llama-3 Mistral-Large o3-mini deepseek-r1 my-agent; do
+  AG approve-record --run "$ar" --by "$who" > /dev/null 2>"$TMP/err"; rc=$?
+  { [ $rc -eq 1 ] && grep -q "'$who' is an agent or model name" "$TMP/err"; } || bad="$bad $who:$rc"
+done
+[ -z "$bad" ] && [ "$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md)" = "$md0" ] && [ ! -d "$APA/approvals" ] \
+  && [ -z "$(git -C "$APA" status --porcelain)" ] \
+  && ok "approve-record refuses gemini-2.5-pro, google/gemini-pro, llama-3, Mistral-Large, o3-mini, deepseek-r1, my-agent (exit 1); run.md bytes unchanged, no approvals/" \
+  || no "approve-record other-vendor refusals:$bad" "$(cat "$TMP/err"; git -C "$APA" status --porcelain)"
 AG approve-record --run "$ar" --by Dana --note "edges clean on dark and light" > "$TMP/o" 2>"$TMP/err"; rc=$?
 rev=$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md); recf="$APA/approvals/AGEN-fringe-icon-001/assetgen-approval-$rev.json"
 [ $rc -eq 0 ] && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = approved ] && grep -qx -- "- Status: approved (approval is human-only)" "$ar/run.md" \
