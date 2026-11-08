@@ -202,3 +202,10 @@
   carries `cHRM`, `gAMA`, `iCCP` or `sRGB` (never both; `iCCP` wins), `cICP`, `mDCv`, `cLLI` and `pHYs` from before
   the first `IDAT`, in file order, right after `IHDR`, and still drops chunks bound to the old pixel format (`sBIT`,
   `PLTE`, `tRNS`, `bKGD`, `hIST`, `sPLT`).
+- **Review previews dropped colour metadata.** The image review's dark and light composites and the 2x2 tile previews
+  were written untagged, so an output with `gAMA`, `cHRM`, `iCCP` or `sRGB` displayed different body colours and
+  fringe contrast in its preview than in the output (with `gAMA` 100000, opaque 128 displays as 188 in the output
+  and 128 in the preview). Every review preview now carries the output's colour chunks right after `IHDR`, with the
+  `defringe` rules minus `pHYs` (a preview is never placed); the blend runs on the stored values, with the backgrounds
+  in that same space. An untagged output keeps untagged previews, byte for byte, and `--no-write` compares the tagged
+  bytes.

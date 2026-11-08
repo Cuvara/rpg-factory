@@ -1126,6 +1126,64 @@ EOF
 ! grep -q "^rc " "$TMP"/o-* && grep -qx ok "$TMP/o" \
   && ok "defringe keeps cHRM/gAMA/pHYs (file order, after IHDR) and tEXt, iCCP without sRGB, sRGB; drops PLTE/tRNS/sBIT/bKGD/hIST; output decodes, CRCs valid" \
   || no "defringe colour chunks" "$(cat "$TMP"/o-* "$TMP/o")"
+# review previews carry the output's colour chunks (all but pHYs, after IHDR): a composite or tile of a gAMA/iCCP/sRGB
+# output displays its values as the output does; an untagged output keeps untagged previews (bytes as before)
+for r in gama iccp srgb both plain; do
+  mkrun "cprev-$r-001" texture-tileable --style stylized-painterly && AG render --run "$RUNS/cprev-$r-001" >/dev/null
+done
+python3 -B - "$ROOT" "$FX/fringe.png" "$RUNS" <<'EOF'
+import os, struct, sys, zlib
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+src, runs = open(sys.argv[2], "rb").read(), sys.argv[3]
+def ihdr_then(data, extra):
+    pos = 8 + 12 + 13
+    return data[:pos] + b"".join(png.chunk(t, b) for t, b in extra) + data[pos:]
+chrm = struct.pack(">8I", 31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)
+iccp = (b"iCCP", b"icc\0\0" + zlib.compress(b"fake profile"))
+extra = {"gama": [(b"cHRM", chrm), (b"gAMA", struct.pack(">I", 100000)), (b"pHYs", struct.pack(">IIB", 2835, 2835, 1))],
+         "iccp": [iccp], "srgb": [(b"sRGB", b"\x00")], "both": [(b"sRGB", b"\x00"), iccp], "plain": []}
+for r, chunks in extra.items():
+    open(os.path.join(runs, "cprev-%s-001" % r, "outputs", "prop.png"), "wb").write(ihdr_then(src, chunks))
+EOF
+: > "$TMP/cp-err"
+for r in gama iccp srgb both plain; do
+  AG review-cmd --phase image --run "$RUNS/cprev-$r-001" --json > "$TMP/cp-$r.json" 2>>"$TMP/cp-err" || echo "rc $r" >> "$TMP/cp-err"
+done
+python3 -B - "$ROOT" "$RUNS" "$TMP" > "$TMP/o" 2>&1 <<'EOF'
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import imaging, png
+runs, tmp = sys.argv[2], sys.argv[3]
+want = {"gama": ["cHRM", "gAMA"], "iccp": ["iCCP"], "srgb": ["sRGB"], "both": ["iCCP"], "plain": []}
+for r, colour in want.items():
+    run = os.path.join(runs, "cprev-%s-001" % r)
+    cmd = json.load(open(os.path.join(tmp, "cp-%s.json" % r), encoding="utf-8"))
+    assert cmd["tiles"] == ["review/tile-2x2.png"], (r, cmd["tiles"])
+    assert cmd["composites"] == ["review/composite-dark.png", "review/composite-light.png"], (r, cmd["composites"])
+    out = open(os.path.join(run, "outputs", "prop.png"), "rb").read()
+    src_chunks = {t: b for t, b in png.chunks(out)}
+    img = png.decode(os.path.join(run, "outputs", "prop.png"))
+    built = {"review/tile-2x2.png": png.tile_2x2(img), "review/composite-dark.png": imaging.composite(img, "dark"),
+             "review/composite-light.png": imaging.composite(img, "light")}
+    for name, plain in built.items():
+        data = open(os.path.join(run, *name.split("/")), "rb").read()
+        got = list(png.chunks(data))  # every CRC checked
+        types = [t.decode() for t, _ in got]
+        assert types[0] == "IHDR" and types[1:1 + len(colour)] == colour and types[1 + len(colour)] == "IDAT", (r, name, types)
+        assert "pHYs" not in types and not ("sRGB" in types and "iCCP" in types), (r, name, types)
+        assert all(b == src_chunks[t] for t, b in got if t.decode() in colour), (r, name)
+        if not colour:
+            assert data == plain, (r, name, "untagged preview bytes changed")
+        png.decode(os.path.join(run, *name.split("/")))  # Pillow too when installed
+        prev, ref = png.decode_stdlib(data), png.decode_stdlib(plain)
+        assert (prev.width, prev.height, prev.rgba) == (ref.width, ref.height, ref.rgba), (r, name, "pixels differ")
+print("ok")
+EOF
+AG review-cmd --phase image --run "$RUNS/cprev-gama-001" --no-write --json > "$TMP/cp-nw.json" 2>>"$TMP/cp-err"; rc=$?
+[ ! -s "$TMP/cp-err" ] && grep -qx ok "$TMP/o" && [ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/cp-nw.json")" = "$(jq -c .argv "$TMP/cp-gama.json")" ] \
+  && ok "review previews (composites, 2x2 tile) carry the output's cHRM/gAMA, iCCP (never with sRGB) or sRGB after IHDR, no pHYs, CRCs valid, same pixels; untagged output: bytes as before; --no-write accepts them" \
+  || no "preview colour chunks rc=$rc" "$(cat "$TMP/cp-err" "$TMP/o")"
 AG review-cmd --phase image --run "$f2" --json > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -c .composites "$TMP/rc.json")" = '["review/composite-a-dark.png","review/composite-a-light.png"]' ] \
   && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rc.json")" = 4 ] \

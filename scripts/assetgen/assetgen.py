@@ -585,6 +585,20 @@ def composite_name(images, image, background):
     return "review/composite-%s-%s.png" % (os.path.splitext(os.path.basename(image))[0], background)
 
 
+def source_preview(path):
+    """(decoded image, chunks) of an output for its review previews: chunks are its PREVIEW_KEEP colour chunks
+    (colour_chunks rules), which every preview derived from it carries right after IHDR (tagged_preview), so the
+    preview displays its pixel values as the output does. An untagged output gives none: its previews stay untagged."""
+    with open(path, "rb") as f:
+        data = f.read()
+    img = png.decode(path)
+    return img, [(t, b) for t, b in colour_chunks(data) if t in PREVIEW_KEEP]
+
+
+def tagged_preview(data, colour):
+    return after_ihdr(data, colour) if colour else data
+
+
 def derived_preview(run_dir, name, data, write):
     """Writes a review preview (review/*.png, derived from output pixels, never an output). write=False builds nothing:
     the file must already hold exactly these bytes, else exit 2."""
@@ -605,13 +619,15 @@ def derived_preview(run_dir, name, data, write):
 
 
 def review_tiles(run_dir, images, rel, write):
-    """[(tile path relative to the run, source output)] of the 2x2 seam previews. write=False builds nothing: it uses a
-    tile only when its bytes are what review-cmd would build now, else exits 2."""
+    """[(tile path relative to the run, source output)] of the 2x2 seam previews, each with the output's colour chunks
+    (source_preview). write=False builds nothing: it uses a tile only when its bytes are what review-cmd would build
+    now, else exits 2."""
     out = []
     for path, src, name in zip(images, rel, tile_names(images)):
         try:
-            data = png.tile_2x2(png.decode(path))
-        except (png.Invalid, png.Unsupported) as exc:
+            img, colour = source_preview(path)
+            data = tagged_preview(png.tile_2x2(img), colour)
+        except (OSError, png.Invalid, png.Unsupported) as exc:
             print("assetgen: no tiled preview of %s: %s" % (src, exc), file=sys.stderr)
             continue
         derived_preview(run_dir, name, data, write)
@@ -626,20 +642,22 @@ EDGE_RUBRIC = ("The edges of every output with alpha are clean on both the dark 
 
 def review_composites(run_dir, images, rel, write):
     """[(composite path relative to the run, source output, background)] of every output with transparent pixels,
-    composited on the dark and on the light background (imaging.composite) so a reviewer sees its edges. write=False
-    as review_tiles."""
+    composited on the dark and on the light background (imaging.composite) so a reviewer sees its edges. The blend
+    runs on the stored (encoded) values, and the backgrounds are given in that same encoded space; each composite
+    carries the output's colour chunks (source_preview), so body, background and fringe display as they would over
+    that background in the output's own colour interpretation. write=False as review_tiles."""
     out = []
     for path, src in zip(images, rel):
         try:
-            img = png.decode(path)
-        except (png.Invalid, png.Unsupported) as exc:
+            img, colour = source_preview(path)
+        except (OSError, png.Invalid, png.Unsupported) as exc:
             print("assetgen: no composite preview of %s: %s" % (src, exc), file=sys.stderr)
             continue
         if not img.has_alpha or min(img.rgba[3::4]) == 255:
             continue
         for bg in COMPOSITE_BACKGROUNDS:
             name = composite_name(images, path, bg)
-            derived_preview(run_dir, name, imaging.composite(img, bg), write)
+            derived_preview(run_dir, name, tagged_preview(imaging.composite(img, bg), colour), write)
             out.append((name, src, bg))
     return out
 
@@ -786,6 +804,9 @@ DEFRINGE_RINGS = 8
 # defringe carries them right after IHDR. Chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT)
 # and every other chunk are dropped.
 DEFRINGE_KEEP = (b"cHRM", b"gAMA", b"iCCP", b"sRGB", b"cICP", b"mDCv", b"cLLI", b"pHYs")
+# Chunks that say how a preview's pixel values are to be displayed: DEFRINGE_KEEP minus pHYs (a preview is looked at,
+# never placed, so its physical pixel size is irrelevant).
+PREVIEW_KEEP = tuple(t for t in DEFRINGE_KEEP if t != b"pHYs")
 
 
 def colour_chunks(data):
