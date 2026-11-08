@@ -289,20 +289,77 @@ def print_tier(a, out):
 # ---------------------------------------------------------------- model grades
 
 TIER_GRADE = {"S": "light", "M": "standard", "L": "heavy"}
+ICASE = os.name == "nt"  # the file system folds case: owned paths compare case-insensitively (tests force it on Linux)
 
 
 def route_path(p):
     """A path as the routing engine sees it: forward slashes, no empty or `.` segments (a trailing slash stays, it marks
-    a directory), so ./a//b and a/b grade alike."""
+    a directory), so ./a//b and a/b grade alike. The repo root (`.`, `./`) is the empty path."""
     s = str(p).replace("\\", "/")
     segs = [x for x in s.split("/") if x not in ("", ".")]
     return ("/" if s.startswith("/") else "") + "/".join(segs) + ("/" if segs and s.endswith("/") else "")
 
 
+def registry_spellings(reg, key):
+    """Every path the registry names in repo `key` (module paths, plain generated paths, contract ends), globs left out."""
+    out = set()
+    for m in reg.get("modules") or []:
+        if m.get("repo") == key:
+            out.update(x for x in (m.get("paths") or []) + (m.get("generated") or []) if not x.startswith("**/"))
+    for c in reg.get("contracts") or []:
+        out.update(e["path"] for e in [c.get("source") or {}] + (c.get("copies") or [])
+                   if e.get("repo") == key and e.get("path") and not e["path"].startswith("**/"))
+    return out
+
+
+def registry_case(reg, key, p):
+    """`p` with its leading segments in the registry's spelling where the file system folds case (ICASE), so the
+    case-sensitive routing engine sees BACKEND/SHARED/PROTO/WIRE.PROTO as backend/shared/proto/wire.proto. The longest
+    registry path that `p` lies in, or that lies in `p`, supplies the spelling; the rest of `p` keeps its own case."""
+    if not ICASE or not p:
+        return p
+    segs = p.rstrip("/").split("/")
+    low = [x.lower() for x in segs]
+    best = []
+    for e in registry_spellings(reg, key):
+        es = e.rstrip("/").split("/")
+        k = 0
+        while k < min(len(es), len(segs)) and es[k].lower() == low[k]:
+            k += 1
+        if (k == len(es) or k == len(segs)) and k > len(best):
+            best = es[:k]
+    return "/".join(best + segs[len(best):]) + ("/" if p.endswith("/") else "")
+
+
+def is_dir_path(p, repo_path):
+    """An owned path names a directory: the repo root, a trailing slash, a directory on disk in the checkout (read only),
+    or, absent from disk, a last segment without an extension. So Editor/Codegen/Generated and
+    Editor/Codegen/Generated/ grade alike."""
+    if p == "" or p.endswith("/"):
+        return True
+    if repo_path:
+        full = os.path.join(repo_path, p)
+        if os.path.isdir(full):
+            return True
+        if os.path.exists(full):
+            return False
+    return "." not in p.rsplit("/", 1)[-1].lstrip(".")
+
+
+def grade_paths(reg, key, paths, repo_path):
+    """Owned paths in the one spelling grading compares: route_path, the registry's case where the file system folds
+    case, and a trailing slash on every directory. The root stays the empty path."""
+    out = []
+    for p in paths:
+        q = registry_case(reg, key, route_path(p)) if key else route_path(p)
+        out.append(q + "/" if q and not q.endswith("/") and is_dir_path(q, repo_path) else q)
+    return out
+
+
 def static_resolve(reg, key, paths):
     """resolve.jq over the given paths alone (no git state, so the result never drifts with the branch), or None with
     the reason when jq is missing or fails."""
-    files = [{"path": route_path(p), "status": "M", "source": "given"} for p in paths]
+    files = [{"path": p, "status": "M", "source": "given"} for p in paths]
     try:
         r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files), "--argjson", "subst",
                             "{}", "--argjson", "tools", "{}", "-f", os.path.join(HERE, "lib", "resolve.jq")],
@@ -318,32 +375,35 @@ def static_resolve(reg, key, paths):
         return None, "routing engine printed no JSON"
 
 
+def fold(p):
+    return p.lower() if ICASE else p
+
+
 def covers(a, b):
-    """Path `a` (a file, or a directory with or without its trailing slash) is `b` or contains it: resolve.jq's
-    path_matches, used both ways for owned paths."""
-    a = a.rstrip("/")
-    return b.rstrip("/") == a or b.startswith(a + "/")
+    """Path `a` (a file, or a directory with or without its trailing slash; the empty path is the repo root) is `b` or
+    contains it: resolve.jq's path_matches, used both ways for owned paths. Case-insensitive where the file system is."""
+    a, b = fold(a).rstrip("/"), fold(b).rstrip("/")
+    return a == "" or b == a or b.startswith(a + "/")
 
 
 def overlaps_entry(entry, p, roots=()):
-    """A registry contract end or generated path `entry` and an owned path `p` overlap when either contains the other.
-    A `**/*<suffix>` glob matches a file with that suffix, and any owned directory that contains a root (`roots`: the
-    paths of the module the glob belongs to) or, with a trailing slash, lies inside one; with no roots (a contract
-    glob) any owned directory may hold a match."""
+    """A registry contract end or generated path `entry` and an owned path `p` (grade_paths: a directory ends with `/`,
+    the root is empty) overlap when either contains the other. A `**/*<suffix>` glob matches a file with that suffix,
+    and any owned directory that contains a root (`roots`: the paths of the module the glob belongs to) or lies inside
+    one; with no roots (a contract glob) any owned directory may hold a match."""
     if entry.startswith("**/*"):
-        if p.endswith(entry[4:]):
+        if fold(p).endswith(fold(entry[4:])):
             return True
-        if not roots:
-            return p.endswith("/")
-        return any(covers(p, r) or (p.endswith("/") and covers(r, p)) for r in roots)
+        if not (p == "" or p.endswith("/")):
+            return False
+        return not roots or any(covers(p, r) or covers(r, p) for r in roots)
     return covers(entry, p) or covers(p, entry)
 
 
-def owned_overlap(reg, key, paths):
-    """Contracts and generated paths of registry repo `key` an owned path overlaps either way. resolve.jq maps a file
-    to what contains it; an owned directory must also count what it contains (backend/shared/proto/ holds
-    wire.proto). A handoff contract counts only with its source end, as in resolve.jq."""
-    owned = [route_path(p) for p in paths]
+def owned_overlap(reg, key, owned):
+    """Contracts and generated paths of registry repo `key` an owned path (grade_paths spelling) overlaps either way.
+    resolve.jq maps a file to what contains it; an owned directory must also count what it contains
+    (backend/shared/proto/ holds wire.proto). A handoff contract counts only with its source end, as in resolve.jq."""
     contracts = []
     for c in reg.get("contracts") or []:
         ends = [(e, e is c.get("source")) for e in [c.get("source") or {}] + (c.get("copies") or [])
@@ -356,7 +416,7 @@ def owned_overlap(reg, key, paths):
         if m.get("repo") != key:
             continue
         for g in m.get("generated") or []:
-            generated += [{"path": p, "generated_by": g} for p in owned if overlaps_entry(g, p, m.get("paths") or [])]
+            generated += [{"path": p or ".", "generated_by": g} for p in owned if overlaps_entry(g, p, m.get("paths") or [])]
     return contracts, generated
 
 
@@ -368,10 +428,11 @@ def task_context(plan, reg, task):
     if not info["registry"]:
         return plain_context(task["repo"], task["paths"]), None
     key = info["registry"]
-    res, why = static_resolve(reg, key, sorted(set(task["paths"])))
+    owned = sorted(set(grade_paths(reg, key, task["paths"], info["path"])))
+    res, why = static_resolve(reg, key, owned)
     if res is None:
         return None, why
-    contracts, generated = owned_overlap(reg, key, task["paths"])
+    contracts, generated = owned_overlap(reg, key, owned)
     contracts = sorted({c["id"] for c in res.get("contracts", [])} | set(contracts))
     files = res.get("files", [])
     return {"repos": [{
@@ -491,13 +552,13 @@ def norm_path(p):
     p = "/".join(x for x in s.split("/") if x not in ("", "."))
     if p and s.endswith("/"):
         p += "/"
-    return p.lower() if os.name == "nt" else p  # not normcase: it turns / into \ on Windows
+    return p.lower() if ICASE else p  # not normcase: it turns / into \ on Windows
 
 
 def specs(paths):
     """Git pathspecs for owned paths, matched the way norm_path() compares them: case-insensitive where the file system
     is (Windows), so a plan path in another case finds the same changes the owned-path check accepts."""
-    return [f":(icase){p}" for p in paths] if os.name == "nt" else list(paths)
+    return [f":(icase){p}" for p in paths] if ICASE else list(paths)
 
 
 def path_problem(p):
@@ -663,6 +724,15 @@ def validate(plan, reg):
             "no_worktree_repos": no_wt}
 
 
+def gradable(task):
+    """A task the model preview can grade: validation's errors already name anything else (paths that are not
+    non-empty repo-relative strings, an unknown grade), so the preview skips it instead of crashing."""
+    return (isinstance(task, dict) and isinstance(task.get("repo"), str) and task["repo"]
+            and isinstance(task.get("paths"), list) and task["paths"]
+            and all(path_problem(p) is None for p in task["paths"])
+            and (task.get("grade") is None or task.get("grade") in model_policy.GRADES))
+
+
 def plan_models(plan, reg, errors):
     """What every session of the plan runs with (lead, and per task its grade, implement, review and QA), so the run
     lead sees the cost before any dispatch. A broken policy or a role it cannot resolve is an error."""
@@ -681,14 +751,13 @@ def plan_models(plan, reg, errors):
             errors.append(f"{who}: model policy: {e}")
             return None
     out["lead"] = pick(pipe.get("lead_agent") or "claude", "lead", "task lead")
-    tasks = [t for t in plan.get("tasks") or [] if isinstance(t, dict) and id_ok(t.get("id")) and t.get("repo")
-             and isinstance(t.get("paths"), list) and t["paths"] and repo_info(plan, reg, t["repo"])["path"]
-             and t.get("grade", "standard") in model_policy.GRADES]
+    tasks = [t for t in plan.get("tasks") or [] if gradable(t) and id_ok(t.get("id"))
+             and repo_info(plan, reg, t["repo"])["path"]]
     grades = task_grades(plan, reg, policy, tasks)
     for t in tasks:
         impl = t.get("implementer") or pipe["default_implementer"]
-        reviewer = t.get("reviewer") or pipe["review_pairing"].get(impl)
-        if impl not in pipe["agents"] or reviewer not in pipe["agents"]:
+        reviewer = t.get("reviewer") or (pipe["review_pairing"].get(impl) if isinstance(impl, str) else None)
+        if not isinstance(impl, str) or not isinstance(reviewer, str) or impl not in pipe["agents"]                 or reviewer not in pipe["agents"]:
             continue
         g = grades[t["id"]]
         who = f"task {t['id']} ({g['grade']})"
@@ -885,8 +954,8 @@ def subplan_models(sub, plan, reg, errors):
     A broken policy or a grade it cannot resolve for the subtask's model is an error. None when the task is unknown."""
     pipe = settings(reg)
     task = next((t for t in plan.get("tasks") or [] if isinstance(t, dict) and t.get("id") == sub.get("task")), None)
-    if task is None or not task.get("repo") or not task.get("paths"):
-        return None
+    if task is None or not isinstance(task.get("repo"), str) or not isinstance(task.get("paths"), list)             or not task["paths"] or any(path_problem(p) for p in task["paths"]):
+        return None  # validation names what is wrong with the parent task
     try:
         policy = model_policy.load(reg)
     except model_policy.PolicyError as e:

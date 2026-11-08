@@ -472,22 +472,64 @@ for spell in "./backend/shared/proto/wire.proto" "backend//shared/proto/wire.pro
   X=$(plan spell "{$HEAD,\"tasks\":[{\"id\":\"wire\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"$esc\"],\"acceptance\":[\"a\"]}]}")
   expect "validate: path spelling $spell grades heavy like the canonical wire.proto" 0 "^Model: task wire grade heavy \(tier L of the owned paths, contract or generated path\)" validate "$X"
 done
-# routing keeps the path's case even where the owned-path comparison folds it (Windows): force that branch so the
-# test bites on Linux too; mixed-case generated and contract paths must still grade heavy
+# every valid spelling of one owned path grades alike in validate (plan_models, all tasks) and dispatch (one task):
+# case (where the file system folds it: ICASE forced so the table bites on Linux too; routing still gets the
+# registry's spelling), slashes, dot and empty segments, trailing slash, a directory with or without its slash (on
+# disk or not), and the repo root
+mkdir -p "$C/Assets/UI Toolkit/Screens.v2"; : > "$C/Assets/UI Toolkit/LICENSE"
 if python3 - "$ROOT" <<'PY'
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 reg = json.load(open(sys.argv[1] + "/registry.json", encoding="utf-8"))
-m.norm_path = lambda p: str(p).replace("\\", "/").lower()
-cases = (("netcode", "Runtime/Protocol/Generated/Wire.cs"), ("client", "Assets/Scripts/UI/Hud/Generated/Hud.uxml.g.cs"),
-         ("uitoolkit", "Tests/Runtime/Generated/Screen.uxml.g.cs"))
-tasks = [{"id": k, "repo": k, "paths": [p]} for k, p in cases]
-grades = m.task_grades({"repos": {}, "tasks": tasks}, reg, m.model_policy.load(reg), tasks)
-assert all(g["grade"] == "heavy" for g in grades.values()), grades
+policy = m.model_policy.load(reg)
+# (grade, repo, spellings of one path, spellings that differ only in case)
+TABLE = [
+    ("heavy", "server", ["backend/shared/proto/wire.proto", "./backend//shared/proto/wire.proto", "backend\\shared\\proto\\wire.proto"],
+     ["BACKEND/SHARED/PROTO/WIRE.PROTO", "Backend/Shared/Proto/Wire.proto"]),
+    ("heavy", "server", ["backend/shared/proto/", "backend/shared/proto", "backend/./shared/proto//"], ["BACKEND/SHARED/PROTO"]),
+    ("heavy", "netcode", ["Runtime/Protocol/Generated/Wire.cs"], ["runtime/protocol/generated/wire.cs"]),
+    ("heavy", "client", ["Assets/Scripts/UI/Hud/Generated/Hud.uxml.g.cs"], ["assets/scripts/ui/hud/generated/HUD.UXML.G.CS"]),
+    ("heavy", "uitoolkit", ["Editor/Codegen/Generated/", "Editor/Codegen/Generated", "./Editor/Codegen/Generated"],
+     ["editor/codegen/generated"]),
+    ("heavy", "uitoolkit", ["Tests/Runtime/Generated/Screen.uxml.g.cs"], ["TESTS/RUNTIME/GENERATED/SCREEN.UXML.G.CS"]),
+    ("heavy", "client", ["Assets/UI Toolkit/Screens.v2/", "Assets/UI Toolkit/Screens.v2"], []),  # a dotted directory on disk
+    ("light", "client", ["Assets/UI Toolkit/LICENSE"], ["assets/ui toolkit/license"]),  # a file on disk, no extension
+    ("light", "uitoolkit", ["Editor/Foo.cs", "./Editor//Foo.cs"], ["EDITOR/FOO.CS"]),
+    ("light", "server", ["backend/gateway/internal/", "backend/gateway/internal"], ["Backend/Gateway/Internal/"]),
+    ("heavy", "server", [".", "./", ".//"], []),  # the repo root owns every contract and generated path
+    ("heavy", "uitoolkit", [".", "./"], []),
+]
+bad = []
+for icase in (False, True):
+    m.ICASE = icase
+    tasks = []
+    for n, (want, repo, plain, cased) in enumerate(TABLE):
+        for k, p in enumerate(plain + (cased if icase else [])):
+            tasks.append(({"id": f"t{n}-{k}", "repo": repo, "objective": "o", "paths": [p], "acceptance": ["a"]}, want))
+    plan = {"schema": "rpg-factory.pipeline-plan/1", "id": "spell", "title": "t", "topic": "feat/core/spell", "deliver": "pr",
+            "tasks": [t for t, _ in tasks], "_path": sys.argv[1] + "/x.json"}
+    models = m.plan_models(plan, reg, [])["tasks"]
+    for t, want in tasks:
+        alone = m.task_grades(plan, reg, policy, [t])[t["id"]]["grade"]
+        if not (models[t["id"]]["grade"] == alone == want):
+            bad.append((icase, t["repo"], t["paths"][0], want, models[t["id"]]["grade"], alone))
+assert not bad, bad
+# routing (case-sensitive resolve.jq) sees the registry's spelling, never the folded one
+m.ICASE = True
+assert m.grade_paths(reg, "server", ["BACKEND/SHARED/PROTO/WIRE.PROTO", "Backend/Gateway/New/x.go"], None) ==     ["backend/shared/proto/wire.proto", "backend/gateway/New/x.go"]
 PY
-then pass=$((pass + 1)); echo "PASS  mixed-case generated paths grade heavy with the case-folding norm_path forced"
-else fail=$((fail + 1)); echo "FAIL  mixed-case generated paths grade heavy with the case-folding norm_path forced"; fi
+then pass=$((pass + 1)); echo "PASS  every spelling of an owned path grades alike in validate and dispatch (case forced, slashes, dots, dirs, root)"
+else fail=$((fail + 1)); echo "FAIL  every spelling of an owned path grades alike in validate and dispatch"; fi
+rm -rf "$C/Assets/UI Toolkit"  # the fixture paths must not count as changes outside the owned paths later
+# the model preview skips tasks validation already rejects: validate --json keeps returning structured errors
+for paths in '[{"path":"x"}]' '["x",42]' '["../x"]' '[""]'; do
+  X=$(plan badpaths "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":$paths,\"acceptance\":[\"a\"]}]}")
+  out=$(python3 -B "$P" validate "$X" --json 2>&1); rc=$?
+  if [ "$rc" = 1 ] && python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["errors"]' "$out" 2>/dev/null; then
+    pass=$((pass + 1)); echo "PASS  validate --json with paths $paths: structured errors, no crash"
+  else fail=$((fail + 1)); echo "FAIL  validate --json with paths $paths (rc=$rc)"; sed 's/^/      /' <<<"$out" | tail -5; fi
+done
 # an owned directory grades against the contract and generated paths it contains, not only what contains it
 X=$(plan dirs "{$HEAD,\"tasks\":[
  {\"id\":\"proto\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/shared/proto/\"],\"acceptance\":[\"a\"]},
