@@ -47,6 +47,10 @@
       },
       "description": "Asset family (characters, environment, props, ui, vfx, ...) -> a game style that extends the default style."
     },
+    "anchor_family_fallback": {
+      "type": "boolean",
+      "description": "false forbids anchors of another family than the run's as references (none are selected then); default true: they may be selected and resolve warns. A purpose's anchor_family_fallback wins."
+    },
     "art_direction": {
       "type": "array",
       "description": "Upstream approved art-direction-2d / art-direction-3d artifacts.",

@@ -8,13 +8,16 @@ layer merged in), so a bad game value is reported on the game file that holds it
 Style lock (stylelock.py): style version, status and structured fields, purpose default_family/dimensions/
 max_references, <authoring>/assetgen/project.json (styles it names, version match), anchors (structure, image file
 and hash, an active anchor needs a person's approval and an approved source gen-run) and rejections. With an
-authoring repo and no project.json, lint adds a WARN row for assetgen/project.json (style lock off).
+authoring repo and no project.json, lint adds a WARN row for assetgen/project.json (style lock off). An active game
+style without a usable structured style field (palette.colors, tone, canvas, outline.edge_darkness; absent, empty or
+malformed per consistency.field_states, the parsing the style checks use) is a WARN: no style-* QA row can grade.
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
 """
 import json
 import os
 import re
 
+import consistency
 import layers
 import runfiles
 import stylelock
@@ -216,6 +219,20 @@ def style_errors(data):
     return errs + stylelock.style_errors(data)
 
 
+def style_warnings(data, layer):
+    """An active game style (merged) none of whose structured fields a style check can grade with
+    (consistency.usable_fields: absent, empty or malformed) gets no style QA: a WARN naming each field's state."""
+    if not layer.startswith("game") or stylelock.style_status(data) != "active":
+        return []
+    states = consistency.field_states(data)
+    if any(state == "ok" for state, _ in states.values()):
+        return []
+    why = "; ".join("%s %s (%s)" % (consistency.FIELDS[row], states[row][0], states[row][1]) for row in consistency.ROWS)
+    return ["active game style has no usable structured style fields (palette.colors, tone, canvas, "
+            "outline.edge_darkness): %s; no style-* QA row can grade an output, so qa checks nothing of the style; "
+            "add a usable one" % why]
+
+
 def anchor_lint(raw, style_id, ident, path, authoring):
     errs = stylelock.anchor_errors(raw, style_id, ident)
     if errs:
@@ -287,6 +304,7 @@ def lint_data(path, raw, authoring):
             errs += purpose_errors(data, ident, authoring)
         else:
             errs += style_errors(data)
+            warns += style_warnings(data, entry["layer"])
     elif isinstance(raw, dict) and raw.get("schema") == layers.KINDS["template"]["schema"]:
         errs, warns = template_errors(raw, os.path.basename(path))
     elif isinstance(raw, dict) and raw and all(isinstance(n, dict) and "class_type" in n for n in raw.values()):

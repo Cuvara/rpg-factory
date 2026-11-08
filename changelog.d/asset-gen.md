@@ -91,6 +91,25 @@
   `references/style-lock.md` (bootstrap a new game style: exploration `concept-2d` runs, a person picks,
   `promote-anchor`, a person approves, then `project.json` and the game style at version 1; style change and drift);
   `comfyui` documents the anchor wiring and uploading every `references/*` file.
+- **Edge fringe QA and `defringe`.** `qa` adds the row `png-edge-fringe` for purposes with alpha (the colour of
+  low-alpha edge pixels against the adjacent opaque pixels and the output composited on black and white), and
+  `assetgen.py defringe --run DIR [--alpha-floor N]` bleeds opaque neighbour colour into low-alpha pixels (stdlib,
+  premultiply-safe), runs after `fetch_outputs` and before `embed` and QA, keeps the originals under `outputs-raw/`,
+  records the params and the hashes before and after in `defringe.json` (a `- Defringe:` line in `run.md`), starts
+  from the originals when run again, and refuses an approved run and outputs `qa.json` or an image review already
+  binds (unless `--force`, which names the records to re-run).
+- **Composite previews for alpha review.** `review-cmd --phase image` writes and attaches
+  `review/composite-dark.png` and `review/composite-light.png` for every output with alpha, and the rubric asks to
+  judge the edges on both; Claude's own image review uses the same composites. `--no-write` uses them only when
+  they are current, like the tile preview.
+- **Approval verb.** `assetgen.py approve-record --run DIR --by NAME [--note TEXT]` writes the approval record and the
+  `run.md` status `approved` for a person; it refuses a missing `--by`, an agent or model name and a name the run
+  records as an agent or reviewer. The person commits `run.md` and the record in one SSH-signed commit whose signer
+  principal is that name. The `asset-gen` skill runs it only on the person's explicit word and quotes it; the
+  `gen-run` lifecycle allows `proposed` -> `approved`, and `factory-cmd` does not forward the verb.
+- **Cross-family anchors.** `resolve` warns when a selected anchor's family differs from the run's family, and
+  `anchor_family_fallback: false` in a purpose or `project.json` forbids such anchors (`resolve` records the
+  warnings as `spec.warnings`).
 
 ### Changed
 
@@ -122,6 +141,18 @@
 - **Failed attempts.** A failed attempt's run directory stays on disk without `run.md`, the next attempt takes the
   next number, and `manifest` lists the earlier attempts of the series without `run.md` in
   `spec.trace.failed_attempts` (the envelope `trace` stays the engineering trace; documented in `asset-gen`).
+- **`manifest` keeps an approval.** An `approved` run stays `approved`, and its approval stays bound, when `manifest`
+  runs again, nothing the approval binds changed and `run.md` stays byte for byte the same; otherwise it goes back to
+  `proposed` and names the changed fields.
+- **Style bootstrap.** `asset-gen` `references/style-lock.md`: a new game style id has no anchors until runs under it
+  are approved and promoted, so promote again under the game style id or explore under it; step 5 checks the
+  structured `palette`, `tone` and `canvas` fields, and `lint` WARNs on an active game style none of whose
+  structured fields a style check can grade with: absent, empty (`canvas: {}`, `tone: {}`, `palette.colors: []`,
+  `outline.edge_darkness: {}`, a canvas entry with neither `aspect` nor `min_side`) or malformed. The WARN names
+  each field's state; the rule is `consistency.field_states`, the same parsing the `style-*` QA rows use, and such
+  an empty settings object is now `NOT_AVAILABLE` in QA instead of being graded on defaults.
+- **`drift` reports style-id mismatches.** Gen-runs and anchors recorded under another style id than `project.json`
+  are listed (`style-id-mismatch`, the text naming the project style), not only older versions of the same style.
 
 ### Fixed
 
@@ -147,3 +178,49 @@
   purpose and the template.
 - **`lint`.** A bad game-layer value is blamed on the game file that holds it, not on the unchanged core file it
   extends.
+- **Uncommitted approval message.** An approval record that is present but not committed and signed reads
+  "approval present but not committed/signed" instead of "missing" in `gen-run-style`, graded `HUMAN_REQUIRED` like
+  the trace grades it. `artifact-trace` uses the same phrase (still `HUMAN_REQUIRED`) when the record file is on disk
+  but not committed, both with `run.md` uncommitted (it said "missing approval") and with `run.md` committed (it said
+  "approval is not immutable"); no record file for the artifact still reads "missing approval".
+- **`approve-record` immutability and line endings.** `approve-record` never overwrites an approval record: the same
+  approval again is a no-op, another one (by, date or note) for the same `run.md` revision is refused before `run.md`
+  is touched, and a changed `run.md` gets a new revision and a new record. A `run.md` with CRLF line endings parses
+  and keeps them, and the record's `rev` is what `git hash-object` gives the file in its repository (line-ending
+  filters such as `core.autocrlf` applied), so it is the blob the commit binds.
+- **Square size tolerance.** `sprite-2d` and `icon` square checks failed on real service outputs (1322x1190); the
+  square purposes `icon`, `sprite-2d` and `texture-tileable` now set `square_tolerance` 0.15, and a landscape or portrait purpose can set `qa.size.allow_swap` to accept the
+  swapped orientation (1024x1536 returned for 1536x1024; a boolean, default false, checked by `lint`), with these
+  real sizes as regression tests.
+- **`embed` stale chunk.** `embed` replaces an existing `workflow` chunk that differs from the current
+  `workflow.ui.json` (idempotent when equal), so a re-render no longer leaves the old graph in the PNG.
+- **Agent and model names as approvers.** The shared approver guard (`approve-record --by`, an active anchor's
+  `approved_by`, `gen-run-style`) only knew claude, codex and gpt names, so `approve-record --by gemini-2.5-pro`
+  approved a run. It now refuses the common model and agent families as a whole-word name start, also after a vendor
+  prefix such as `google/` (gemini, llama, mistral, qwen, deepseek, grok, o1/o3/o4, phi-, copilot and others), the
+  registry's `pipeline.agents`, and any name ending in `-bot` or `-agent`; person names such as `Grokowski` are
+  accepted.
+- **`defringe` dropped colour metadata.** `defringe` rebuilt each output from its pixels and kept only the text
+  chunks, so `gAMA`, `cHRM`, `iCCP`, `sRGB` and `pHYs` were lost and the opaque body could look different. It now
+  carries `cHRM`, `gAMA`, `iCCP` or `sRGB` (never both; `iCCP` wins), `cICP`, `mDCv`, `cLLI` and `pHYs` from before
+  the first `IDAT`, in file order, right after `IHDR`, and still drops chunks bound to the old pixel format (`sBIT`,
+  `PLTE`, `tRNS`, `bKGD`, `hIST`, `sPLT`).
+- **Review previews dropped colour metadata.** The image review's dark and light composites and the 2x2 tile previews
+  were written untagged, so an output with `gAMA`, `cHRM`, `iCCP` or `sRGB` displayed different body colours and
+  fringe contrast in its preview than in the output (with `gAMA` 100000, opaque 128 displays as 188 in the output
+  and 128 in the preview). Every review preview now carries the output's colour chunks right after `IHDR`, with the
+  `defringe` rules minus `pHYs` (a preview is never placed); the blend runs on the stored values, with the backgrounds
+  in that same space. An untagged output keeps untagged previews, byte for byte, and `--no-write` compares the tagged
+  bytes.
+- **Grayscale outputs became RGBA with a GRAY ICC profile.** `defringe` and the review previews rewrote a gray or
+  gray+alpha output (colour type 0 with `tRNS`, or 4) as RGB(A) while copying its `iCCP`, so a GRAY profile sat on
+  a colour image. A grayscale output now stays grayscale: `defringe` writes it as 8-bit gray+alpha (colour type 4)
+  with its profile, its composites are gray and its tile preview gray+alpha. No PNG it writes carries a profile of
+  the other colour space than its colour type (a GRAY profile on RGB(A), an RGB one on gray): such an `iCCP` is
+  dropped, and the output's `sRGB`, if any, is kept instead. Palette and RGB outputs, and untagged previews, are
+  unchanged byte for byte.
+- **`defringe` and the review previews handled other bit depths as 8-bit.** Both now read the IHDR bit depth and
+  handle only 8-bit PNGs (palette included), which is what the image service produces. Any other depth (16-bit, or
+  1/2/4-bit) is refused with the reason `bit depth N not supported`: `defringe` records the output as `skipped` and
+  leaves it byte-identical with no `outputs-raw/` copy, and `review-cmd` builds no composite or tile for it, prints
+  the reason on stderr and still hands the output itself to the reviewer.

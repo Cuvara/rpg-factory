@@ -3892,7 +3892,7 @@
       "responsibility": "AI image generation: the game layer of asset-gen purposes, styles and ComfyUI workflow templates, and generation run records (gen-run) with prompt, reviews, QA and output hashes.",
       "depends_on": [],
       "rules": [
-        "Approval of a gen-run is human-only (gate assetgen-approval); agents never write approvals.",
+        "Approval of a gen-run is human-only (gate assetgen-approval): an agent runs assetgen.py approve-record only on the person's explicit word (quoted), never approves on its own, and the person commits run.md and the approval record in one signed commit.",
         "The prompt and image reviews come from a model other than the prompt author; a same-model review is an explicit SAME_MODEL fallback, never a silent pass.",
         "No credentials, endpoints or provider URLs in templates or run records; the ComfyUI node reads its own credentials."
       ],
@@ -7938,6 +7938,7 @@
         ],
         "proposed": [
           "reviewed",
+          "approved",
           "rejected",
           "blocked"
         ],

@@ -285,6 +285,33 @@ def _():
         expect(consistency.check_canvas(img, {"canvas": {"props": bad}}, "props"), "FAIL", "malformed")
 
 
+@case("an object without a setting of its check is absent: NOT_AVAILABLE, never graded on defaults")
+def _():
+    expect(consistency.check_tone(MID, {"tone": {}}, [DARK]), "NOT_AVAILABLE", "no tone settings")
+    expect(consistency.check_tone(MID, {"tone": {"text": "muted"}}, [DARK]), "NOT_AVAILABLE", "no tone settings")
+    expect(consistency.check_edges(LINED, {"outline": {"edge_darkness": {}}}, OUTLINES), "NOT_AVAILABLE", "edge_darkness")
+    expect(consistency.check_canvas(solid(RED), {"canvas": {"props": {}}}, "props"), "NOT_AVAILABLE", "neither aspect")
+    expect(consistency.check_canvas(solid(RED), {"canvas": {"props": {"tolerance": 0.1}}}, "props"), "NOT_AVAILABLE")
+    expect(consistency.check_canvas(solid(RED, 16, 16), {"canvas": {"props": {"min_side": 32}}}, "props"), "WARN")
+
+
+@case("field_states / usable_fields come from the checks' own parsing")
+def _():
+    assert consistency.usable_fields({}) == set()
+    assert consistency.usable_fields(None) == set()
+    empty = {"palette": {"colors": []}, "tone": {}, "outline": {"edge_darkness": {}}, "canvas": {}}
+    assert consistency.usable_fields(empty) == set(), consistency.field_states(empty)
+    states = consistency.field_states(empty)
+    assert states["style-palette"][0] == "malformed" and states["style-tone"][0] == "absent", states
+    assert states["style-edges"][0] == "absent" and states["style-canvas"][0] == "absent", states
+    full = dict(EDGES, palette=PALETTE, tone=TONE["tone"], canvas=CANVAS["canvas"])
+    assert consistency.usable_fields(full) == set(consistency.ROWS), consistency.field_states(full)
+    assert consistency.usable_fields({"canvas": {"props": {}, "ui": {"aspect": "2:1"}}}) == {"style-canvas"}
+    bad = consistency.field_states({"canvas": {"props": {"aspect": "square"}}})["style-canvas"]
+    assert bad[0] == "malformed" and "canvas.props" in bad[1], bad
+    assert set(consistency.FIELDS) == set(consistency.ROWS)
+
+
 # sampling and aggregation
 @case("large images are sampled on the SAMPLES grid")
 def _():

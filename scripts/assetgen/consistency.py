@@ -12,15 +12,22 @@ check returns (state, details) with state PASS, WARN, FAIL or NOT_AVAILABLE and 
   style-canvas   style.canvas[<family>]: aspect "W:H" within tolerance (relative, default 0.02) and the short
                  side >= min_side (default 0)
 A check that misses is WARN, or FAIL when its style field sets severity "fail". NOT_AVAILABLE when the style
-field is absent or a prose string, there are no anchors (tone), the purpose has no qa.outlines (edges), there
-is no canvas entry for the family, or there is nothing opaque to measure. Malformed style data is FAIL. Pixels
-are sampled with the same SAMPLES grid as qa.py so a 1536x1024 output stays fast on the stdlib decoder.
+field is absent, a prose string or an object with no setting of its check (tone {}, outline.edge_darkness {}, a
+canvas entry with neither aspect nor min_side), there are no anchors (tone), the purpose has no qa.outlines
+(edges), there is no canvas entry for the family, or there is nothing opaque to measure. Malformed style data is
+FAIL. Pixels are sampled with the same SAMPLES grid as qa.py so a 1536x1024 output stays fast on the stdlib
+decoder. The *_config helpers parse each field for its check; field_states/usable_fields (lint's WARN for an
+active style that no style row can grade) are built from them, so the rule has one source.
 """
 
 SAMPLES = 256  # rows/columns sampled per statistic, as in qa.py
 OPAQUE = 8  # alpha above this counts as opaque, as in qa.py
 EDGE_GRADIENT = 48  # luminance step (0..255) that counts as an edge
 ROWS = ("style-palette", "style-tone", "style-edges", "style-canvas")
+FIELDS = {"style-palette": "palette.colors", "style-tone": "tone", "style-edges": "outline.edge_darkness",
+          "style-canvas": "canvas"}
+TONE_KEYS = ("tolerance", "severity")  # a tone object needs one of them to be a check
+EDGE_KEYS = ("max_luminance", "min_ratio", "severity")  # an edge_darkness object needs one of them
 
 
 def steps(n):
@@ -65,15 +72,29 @@ def opaque_samples(img):
                 yield px
 
 
-def check_palette(img, style):
+def not_graded(state, reason):
+    """(state, details) of a config that cannot grade: absent is NOT_AVAILABLE, malformed is FAIL."""
+    return ("NOT_AVAILABLE" if state == "absent" else "FAIL"), [reason]
+
+
+def palette_config(style):
+    """("ok", (cfg, rgb, max_distance, min_share)), ("absent", reason) or ("malformed", reason)."""
     cfg = (style or {}).get("palette")
     if not isinstance(cfg, dict) or "colors" not in cfg:
-        return "NOT_AVAILABLE", ["style has no structured palette colours"]
+        return "absent", "style has no structured palette colours"
     colors = cfg["colors"]
     rgb = [parse_hex(c.get("hex")) if isinstance(c, dict) else None for c in colors] if isinstance(colors, list) else []
     max_distance, min_share = number(cfg, "max_distance", 48, 0, 441), number(cfg, "min_share", 0.6, 0, 1)
     if not rgb or None in rgb or max_distance is None or min_share is None:
-        return "FAIL", ["malformed style palette (colors [{hex: #rrggbb}], max_distance 0..441, min_share 0..1)"]
+        return "malformed", "malformed style palette (colors [{hex: #rrggbb}], max_distance 0..441, min_share 0..1)"
+    return "ok", (cfg, rgb, max_distance, min_share)
+
+
+def check_palette(img, style):
+    state, got = palette_config(style)
+    if state != "ok":
+        return not_graded(state, got)
+    cfg, rgb, max_distance, min_share = got
     limit = max_distance * max_distance
     total = near = 0
     for r, g, b, _ in opaque_samples(img):
@@ -98,14 +119,23 @@ def tone_stats(img):
     return (lum / n, sat / n) if n else None
 
 
-def check_tone(img, style, anchors):
-    """anchors: png.Image objects or precomputed tone_stats tuples of the selected anchors."""
+def tone_config(style):
+    """("ok", (cfg, tolerance)), ("absent", reason) or ("malformed", reason); anchors are a run-time input."""
     cfg = (style or {}).get("tone")
-    if not isinstance(cfg, dict):
-        return "NOT_AVAILABLE", ["style has no tone settings"]
+    if not isinstance(cfg, dict) or not any(k in cfg for k in TONE_KEYS):
+        return "absent", "style has no tone settings (%s)" % ", ".join(TONE_KEYS)
     tol = number(cfg, "tolerance", 0.05, 0, 1)
     if tol is None:
-        return "FAIL", ["malformed style tone (tolerance 0..1)"]
+        return "malformed", "malformed style tone (tolerance 0..1)"
+    return "ok", (cfg, tol)
+
+
+def check_tone(img, style, anchors):
+    """anchors: png.Image objects or precomputed tone_stats tuples of the selected anchors."""
+    state, got = tone_config(style)
+    if state != "ok":
+        return not_graded(state, got)
+    cfg, tol = got
     stats = [a if isinstance(a, tuple) else tone_stats(a) for a in anchors or ()]
     stats = [s for s in stats if s is not None]
     if not stats:
@@ -123,17 +153,27 @@ def check_tone(img, style, anchors):
     return ("PASS" if ok else miss_state(cfg)), detail
 
 
+def edges_config(style):
+    """("ok", (cfg, max_luminance, min_ratio)), ("absent", reason) or ("malformed", reason); the purpose's
+    qa.outlines is a run-time input."""
+    outline = (style or {}).get("outline")
+    cfg = outline.get("edge_darkness") if isinstance(outline, dict) else None
+    if not isinstance(cfg, dict) or not any(k in cfg for k in EDGE_KEYS):
+        return "absent", "style outline has no edge_darkness settings (%s)" % ", ".join(EDGE_KEYS)
+    max_lum, min_ratio = number(cfg, "max_luminance", 80, 0, 255), number(cfg, "min_ratio", 0.5, 0, 1)
+    if max_lum is None or min_ratio is None:
+        return "malformed", "malformed style outline.edge_darkness (max_luminance 0..255, min_ratio 0..1)"
+    return "ok", (cfg, max_lum, min_ratio)
+
+
 def check_edges(img, style, purpose):
     qa = (purpose or {}).get("qa")
     if not (isinstance(qa, dict) and qa.get("outlines") is True):
         return "NOT_AVAILABLE", ["purpose does not expect outlines (qa.outlines)"]
-    outline = (style or {}).get("outline")
-    cfg = outline.get("edge_darkness") if isinstance(outline, dict) else None
-    if not isinstance(cfg, dict):
-        return "NOT_AVAILABLE", ["style outline has no edge_darkness settings"]
-    max_lum, min_ratio = number(cfg, "max_luminance", 80, 0, 255), number(cfg, "min_ratio", 0.5, 0, 1)
-    if max_lum is None or min_ratio is None:
-        return "FAIL", ["malformed style outline.edge_darkness (max_luminance 0..255, min_ratio 0..1)"]
+    state, got = edges_config(style)
+    if state != "ok":
+        return not_graded(state, got)
+    cfg, max_lum, min_ratio = got
     w, h = img.width, img.height
     edges = dark = 0
     for y in steps(h):
@@ -172,17 +212,29 @@ def parse_aspect(text):
     return w / h if w > 0 and h > 0 else None
 
 
-def check_canvas(img, style, family):
+def canvas_config(style, family):
+    """("ok", (cfg, aspect or None, tolerance, min_side)), ("absent", reason) or ("malformed", reason) of one
+    family's canvas entry; an entry with neither aspect nor min_side measures nothing (absent)."""
     canvas = (style or {}).get("canvas")
     cfg = canvas.get(family) if isinstance(canvas, dict) and family else None
     if cfg is None:
-        return "NOT_AVAILABLE", ["style has no canvas entry for family %s" % (family or "(none)")]
+        return "absent", "style has no canvas entry for family %s" % (family or "(none)")
     if not isinstance(cfg, dict):
-        return "FAIL", ["malformed style canvas.%s (object with aspect, min_side, tolerance)" % family]
+        return "malformed", "malformed style canvas.%s (object with aspect, min_side, tolerance)" % family
+    if "aspect" not in cfg and "min_side" not in cfg:
+        return "absent", "style canvas.%s has neither aspect nor min_side" % family
     want = parse_aspect(cfg["aspect"]) if "aspect" in cfg else None
     tol, min_side = number(cfg, "tolerance", 0.02, 0, 1), number(cfg, "min_side", 0, 0, 1 << 20)
     if ("aspect" in cfg and want is None) or tol is None or min_side is None:
-        return "FAIL", ["malformed style canvas.%s (aspect W:H, min_side >= 0, tolerance 0..1)" % family]
+        return "malformed", "malformed style canvas.%s (aspect W:H, min_side >= 0, tolerance 0..1)" % family
+    return "ok", (cfg, want, tol, min_side)
+
+
+def check_canvas(img, style, family):
+    state, got = canvas_config(style, family)
+    if state != "ok":
+        return not_graded(state, got)
+    cfg, want, tol, min_side = got
     got, short = img.width / img.height, min(img.width, img.height)
     ok = short >= min_side
     detail = ["%dx%d, short side %d (min %d)" % (img.width, img.height, short, min_side)]
@@ -200,6 +252,25 @@ def check_all(img, style, purpose=None, family=None, anchors=()):
         ("style-edges",) + check_edges(img, style, purpose),
         ("style-canvas",) + check_canvas(img, style, family),
     ]
+
+
+def field_states(style):
+    """{row: (state, reason)} of every style row from the style alone, through the *_config helpers the checks
+    use: "ok" (reason "") when the row's check can grade an output with this config, run-time inputs aside
+    (anchors, qa.outlines, the run's family), else "absent" or "malformed". canvas is ok when any family is."""
+    states = {"style-palette": palette_config(style), "style-tone": tone_config(style),
+              "style-edges": edges_config(style)}
+    canvas = (style or {}).get("canvas")
+    fams = [canvas_config(style, f) for f in sorted(canvas)] if isinstance(canvas, dict) else []
+    states["style-canvas"] = (next((s for s in fams if s[0] == "ok"), None)
+                              or next((s for s in fams if s[0] == "malformed"), None)
+                              or ("absent", "style has no canvas entry with aspect or min_side"))
+    return {row: (state, "" if state == "ok" else why) for row, (state, why) in states.items()}
+
+
+def usable_fields(style):
+    """Set of style rows (ROWS) whose check can grade an output with this style's config (field_states ok)."""
+    return {row for row, (state, _) in field_states(style).items() if state == "ok"}
 
 
 def overall(rows):

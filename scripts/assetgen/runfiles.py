@@ -39,7 +39,8 @@ workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_pro
 run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
-  exactly these; the plugin requires a PASS row for each). Malformed input never raises.
+  exactly these; the plugin requires a PASS row for each): png-edge-fringe comes last, only for qa.alpha required.
+  Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
 requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
@@ -68,6 +69,8 @@ def required_checks(purpose_qa):
         checks.append("png-tileable")
     if qa.get("not_blank") is not None:
         checks.append("png-not-blank")
+    if qa.get("alpha") == "required":
+        checks.append("png-edge-fringe")
     return checks
 
 
@@ -100,6 +103,8 @@ def qa_errors(qa):
             errs.append("qa.size.orientation must be one of %s" % sorted(ORIENTATIONS))
         if "square_tolerance" in size and not (_number(size["square_tolerance"]) and 0 <= size["square_tolerance"] < 1):
             errs.append("qa.size.square_tolerance must be a number between 0 and 1")
+        if "allow_swap" in size and not isinstance(size["allow_swap"], bool):
+            errs.append("qa.size.allow_swap must be true or false")
     if qa.get("alpha", "any") not in ALPHA_MODES:
         errs.append("qa.alpha must be one of %s" % sorted(ALPHA_MODES))
     if not isinstance(qa.get("transparent_corners", False), bool):

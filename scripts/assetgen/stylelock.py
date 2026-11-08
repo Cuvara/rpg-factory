@@ -25,6 +25,14 @@ plugin additionally checks the signed approval, the image hash and that approved
 Selection (select_references) is deterministic: no clock, no recency. Candidates are the valid active anchors of
 the run's style id and version, sorted by (family match first, larger dimension overlap with the purpose, strength
 canonical < strong < supporting, id) and capped by max_references (purpose and template, the smaller; default 3).
+An anchor of another family than the run's is a fallback: reference_warnings names each such pick, and
+anchor_family_fallback: false (the purpose's value, else project.json's; default true) forbids it, so only anchors
+of the run's family are selected (none when there are none). A run without a family has no fallback to judge.
+
+Drift (drift) lists gen-runs, anchors and rejections whose recorded style ref is behind the current style
+(older-version, hash-changed, style-missing) and, with project.json, those whose style id is neither the project
+style nor a family style (style-id-mismatch: their anchors never feed a run of the project's styles; a new game style
+id has no anchors until runs under it are approved and promoted).
 """
 import hashlib
 import json
@@ -52,8 +60,16 @@ SHA = re.compile(r"\A[0-9a-f]{64}\Z")
 DATE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 ASPECT = re.compile(r"\A[1-9]\d*:[1-9]\d*\Z")
 ID = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
-# names that mark an agent or model, never a person who may approve (approved_by)
-AGENT_NAME = re.compile(r"\A(claude.*|codex.*|gpt.*|same_model:.*)\Z", re.I)
+# AI model and agent families: a name that starts with one as a whole word (not followed by a letter) is an agent
+AGENT_FAMILIES = ("claude", "opus", "sonnet", "haiku", "fable", "anthropic", "codex", "gpt", "chatgpt", "openai",
+                  "gemini", "google-ai", "llama", "meta-llama", "mistral", "mixtral", "codestral", "qwen",
+                  "deepseek", "grok", "xai", "command-r", "cohere", "copilot", "aider")
+AGENT_NAME = re.compile(
+    r"\A(?:same_model:.*"                                  # the same-model review fallback
+    r"|(?:agent|model|bot)"                                 # a bare role word
+    r"|.*[-_](?:bot|agent)"                                 # anything ending in -bot or -agent
+    r"|(?:[\w.-]+/)?"                                       # an optional vendor prefix (anthropic/, google/, ...)
+    r"(?:(?:%s)(?![a-z]).*|o[134](?:-.*)?|phi-.*))\Z" % "|".join(re.escape(f) for f in AGENT_FAMILIES), re.I)
 
 
 class StyleLockError(layers.SpecError):
@@ -74,8 +90,39 @@ def _in(v, lo, hi):
     return _num(v) and lo <= v <= hi
 
 
+def _registry_agents():
+    """The registry's pipeline.agents keys (lowercase); empty when registry.json is unreadable."""
+    try:
+        with open(os.path.join(layers.PLUGIN_ROOT, "registry.json"), encoding="utf-8") as f:
+            agents = json.load(f).get("pipeline", {}).get("agents", {})
+    except (OSError, ValueError, AttributeError):
+        return set()
+    return {k.lower() for k in agents} if isinstance(agents, dict) else set()
+
+
 def is_agent_name(name):
-    return isinstance(name, str) and bool(AGENT_NAME.match(name.strip()))
+    """True when `name` marks an AI agent or model, never a person who may approve (approved_by, approve-record --by).
+
+    The one guard of every approval check (approval.approve_record, anchor_errors, the gen-run-style quality check).
+    Case-insensitive, on the stripped name. An agent name is:
+      - `same_model:<model>` (the same-model review fallback), or a bare `agent`, `model` or `bot`;
+      - anything ending in `-bot` or `-agent` (or `_bot`, `_agent`), e.g. `my-agent`, `review-bot`;
+      - a name that starts with a model or agent family as a whole word (the family is not followed by a letter), after
+        an optional vendor prefix such as `anthropic/`, `google/` or `meta-llama/`: claude, opus, sonnet, haiku, fable,
+        anthropic, codex, gpt, chatgpt, openai, gemini, google-ai, llama, meta-llama, mistral, mixtral,
+        codestral, qwen, deepseek, grok, xai, command-r, cohere, copilot, aider (AGENT_FAMILIES);
+        `o1`, `o3` or `o4` alone or followed by `-` (`o3-mini`); `phi-` followed by anything (`phi-3`);
+      - a key of the registry's pipeline.agents (the agents the delivery pipeline dispatches), as a whole word.
+    Whole word keeps person names: `Grokowski`, `Claudette`, `Phil`, `CuongND`, `Ana Silva`, `Devin Lee` are accepted
+    (devin, bard and cursor are left out on purpose: they are common names and words).
+    """
+    if not isinstance(name, str):
+        return False
+    name = name.strip()
+    if AGENT_NAME.match(name):
+        return True
+    low = name.lower().rsplit("/", 1)[-1]
+    return any(low == k or (low.startswith(k) and not low[len(k)].isalpha()) for k in _registry_agents())
 
 
 def hint_text(value):
@@ -204,6 +251,8 @@ def purpose_errors(data):
             errs.append("dimensions must be distinct values of %s" % ", ".join(DIMENSIONS))
     if "max_references" in data and not (_int(data["max_references"]) and data["max_references"] >= 0):
         errs.append("max_references must be an integer >= 0")
+    if "anchor_family_fallback" in data and not isinstance(data["anchor_family_fallback"], bool):
+        errs.append("anchor_family_fallback must be true or false")
     qa = data.get("qa")
     if isinstance(qa, dict) and "outlines" in qa and not isinstance(qa["outlines"], bool):
         errs.append("qa.outlines must be true or false")
@@ -242,6 +291,8 @@ def project_errors(data, authoring=None):
     if not isinstance(fams, dict) or not all(isinstance(k, str) and ID.match(k) and isinstance(v, str) and v for k, v in fams.items()):
         errs.append("families must map a family id to a style id")
         fams = {}
+    if "anchor_family_fallback" in data and not isinstance(data["anchor_family_fallback"], bool):
+        errs.append("anchor_family_fallback must be true or false")
     arts = data.get("art_direction", [])
     if not isinstance(arts, list) or not all(isinstance(a, dict) and isinstance(a.get("artifact"), str) and a["artifact"]
                                              and "rev" in a for a in arts):
@@ -483,12 +534,27 @@ def valid_anchors(authoring, style_id):
     return [r for r in load_anchors(authoring, style_id) if anchor_validity(r, authoring)[0]]
 
 
-def select_references(anchors, style, family, dimensions, cap):
-    """Deterministic picks among anchor records (valid ones) for a run of style ref `style` and family."""
+def family_fallback(purpose_data, authoring=None):
+    """anchor_family_fallback of a run: the purpose's value, else project.json's, else true (other-family anchors
+    may be selected, with a warning). A malformed project.json counts as unset here (choose refuses it)."""
+    if isinstance((purpose_data or {}).get("anchor_family_fallback"), bool):
+        return purpose_data["anchor_family_fallback"]
+    try:
+        project = load_project(authoring)
+    except StyleLockError:
+        project = None
+    value = project["data"].get("anchor_family_fallback") if project else None
+    return value if isinstance(value, bool) else True
+
+
+def select_references(anchors, style, family, dimensions, cap, fallback=True):
+    """Deterministic picks among anchor records (valid ones) for a run of style ref `style` and family. fallback
+    False keeps only anchors of the run's family (a run without a family is not filtered)."""
     want = set(dimensions or [])
     rank = {s: i for i, s in enumerate(STRENGTHS)}
     cands = [a["data"] for a in anchors
-             if a["data"]["style"]["style_id"] == style["style_id"] and a["data"]["style"].get("version") == style.get("version")]
+             if a["data"]["style"]["style_id"] == style["style_id"] and a["data"]["style"].get("version") == style.get("version")
+             and (fallback or not family or a["data"]["family"] == family)]
 
     def key(a):
         return (0 if a["family"] == family else 1, -len(set(a["dimensions"]) & want), rank[a["strength"]], a["id"])
@@ -502,6 +568,30 @@ def select_references(anchors, style, family, dimensions, cap):
         picks.append({"anchor_id": a["id"], "family": a["family"], "strength": a["strength"], "dimensions": a["dimensions"],
                       "image": "references/anchor-%s.png" % a["id"], "sha256": a["image_sha256"], "reason": reason})
     return picks
+
+
+def reference_warnings(picks, family, fallback=True, skipped=0):
+    """Warnings of a selection: each pick of another family than the run's, and the anchors a false
+    anchor_family_fallback left out."""
+    out = []
+    if family:
+        out += ["reference %s is a %s anchor, the run's family is %s (cross-family fallback; set anchor_family_fallback: "
+                "false in the purpose or project.json to forbid it)" % (p["anchor_id"], p["family"], family)
+                for p in picks if p["family"] != family]
+    if not fallback and skipped:
+        out.append("anchor_family_fallback is false: %d anchor(s) of other families than %s were not selected"
+                   % (skipped, family))
+    return out
+
+
+def select_with_warnings(anchors, style, family, dimensions, cap, fallback=True):
+    """(picks, warnings): select_references plus reference_warnings."""
+    picks = select_references(anchors, style, family, dimensions, cap, fallback)
+    skipped = 0
+    if not fallback and family:
+        skipped = len(select_references(anchors, style, family, dimensions, len(anchors), True)) \
+            - len(select_references(anchors, style, family, dimensions, len(anchors), False))
+    return picks, reference_warnings(picks, family, fallback, skipped)
 
 
 def relevant_rejections(rejections, style, family):
@@ -579,9 +669,24 @@ def _run_style(front):
     return None
 
 
+def project_styles(authoring):
+    """(project style id, the style ids a run of the project may lock: the project style and the family styles),
+    or (None, None) without a readable project.json."""
+    try:
+        project = load_project(authoring)
+    except StyleLockError:
+        project = None
+    if not project:
+        return None, None
+    pdata = project["data"]
+    return pdata["style"]["id"], {pdata["style"]["id"]} | set((pdata.get("families") or {}).values())
+
+
 def drift(authoring):
-    """Gen-runs, anchors and rejections whose recorded style ref is behind the current style (read-only)."""
+    """Gen-runs, anchors and rejections whose recorded style ref is behind the current style, or whose style id is
+    not one of project.json's styles (read-only)."""
     cache = {}
+    project_style, locked = project_styles(authoring)
 
     def current(sid):
         if sid not in cache:
@@ -614,8 +719,13 @@ def drift(authoring):
     for kind, ident, path, rec in items:
         cur = current(rec["style_id"])
         state = _state(rec, cur)
+        extra = {}
+        if locked is not None and rec["style_id"] not in locked and state != "style-missing":
+            # another style id than the project's: its anchors never feed a project run (its version state kept apart)
+            extra = {"project_style": project_style, "version_state": state}
+            state = "style-id-mismatch"
         if state:
-            out.append({"kind": kind, "id": ident, "path": os.path.relpath(path, os.path.abspath(authoring)).replace(os.sep, "/"),
-                        "state": state, "style": {"style_id": rec["style_id"], "version": rec.get("version"), "sha256": rec.get("sha256")},
-                        "current": cur})
+            out.append(dict({"kind": kind, "id": ident, "path": os.path.relpath(path, os.path.abspath(authoring)).replace(os.sep, "/"),
+                             "state": state, "style": {"style_id": rec["style_id"], "version": rec.get("version"), "sha256": rec.get("sha256")},
+                             "current": cur}, **extra))
     return {"schema": DRIFT_SCHEMA, "items": out}
