@@ -1293,6 +1293,37 @@ EOF
 ! grep -q "^rc " "$TMP"/o-g-* && grep -qx ok "$TMP/o" \
   && ok "grayscale outputs stay grayscale: defringe writes gray+alpha (type 4, also from gray+tRNS) with the GRAY iCCP Pillow reads, composites gray and tile gray+alpha with it; RGB profile kept on RGBA; a GRAY profile never on RGB(A) (sRGB kept)" \
   || no "gray ICC" "$(cat "$TMP"/o-g-* "$TMP/o")"
+# only 8-bit PNGs (IHDR bit depth) are defringed or previewed: a 16-bit gray+tRNS output is skipped with the reason, left
+# byte-identical (no outputs-raw copy) and gets no composite or tile (reason on stderr, the image still reviewed);
+# an 8-bit gray+alpha output next to it still defringes
+bd="$TMP/bit-depth"; mkdir -p "$bd/outputs"
+mkrun "bd16-001" texture-tileable --style stylized-painterly && AG render --run "$RUNS/bd16-001" >/dev/null
+python3 -B - "$ROOT" "$bd" "$RUNS/bd16-001" "$gy/ga/outputs-raw/prop.png" <<'EOF'
+import os, shutil, struct, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+# 3x1 gray (colour type 0), bit depth 16, samples 0, 32768, 65535, tRNS key 0
+d16 = png.encode_raw(3, 1, 16, 0, [b"".join(struct.pack(">H", v) for v in (0, 32768, 65535))], extra=[(b"tRNS", b"\x00\x00")])
+open(os.path.join(sys.argv[2], "outputs", "d16.png"), "wb").write(d16)
+os.makedirs(os.path.join(sys.argv[3], "outputs"), exist_ok=True)
+open(os.path.join(sys.argv[3], "outputs", "prop.png"), "wb").write(d16)
+shutil.copyfile(sys.argv[4], os.path.join(sys.argv[2], "outputs", "ga8.png"))
+EOF
+before=$(sha256sum "$bd/outputs/d16.png" | cut -d' ' -f1)
+AG defringe --run "$bd" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qx "skipped outputs/d16.png: bit depth 16 not supported: only 8-bit PNGs are defringed" "$TMP/o" \
+  && grep -q "^defringed outputs/ga8.png" "$TMP/o" && grep -q "1 defringed, 1 skipped, 0 FAIL" "$TMP/o" \
+  && [ "$(sha256sum "$bd/outputs/d16.png" | cut -d' ' -f1)" = "$before" ] && [ ! -e "$bd/outputs-raw/d16.png" ] && [ -f "$bd/outputs-raw/ga8.png" ] \
+  && [ "$(jq -c '[.outputs[].output]' "$bd/defringe.json")" = '["outputs/ga8.png"]' ] \
+  && ok "defringe: a 16-bit gray+tRNS output is skipped with the bit-depth reason, byte-identical, no raw copy; 8-bit gray+alpha still defringed" \
+  || no "defringe bit depth rc=$rc" "$(cat "$TMP/o")"
+AG review-cmd --phase image --run "$RUNS/bd16-001" --json > "$TMP/bd.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -c '[.composites, .tiles]' "$TMP/bd.json")" = '[[],[]]' ] && [ ! -e "$RUNS/bd16-001/review" ] \
+  && grep -q "no composite preview of outputs/prop.png: bit depth 16 not supported: only 8-bit PNGs are previewed" "$TMP/err" \
+  && grep -q "no tiled preview of outputs/prop.png: bit depth 16 not supported" "$TMP/err" \
+  && [ "$(jq -r '[.argv[] | select(endswith("outputs/prop.png"))] | length' "$TMP/bd.json")" = 1 ] \
+  && ok "review-cmd: a 16-bit output gets no composite or tile (reason on stderr), the output itself still goes to the reviewer" \
+  || no "review bit depth rc=$rc" "$(cat "$TMP/err"; jq -c '[.composites, .tiles]' "$TMP/bd.json")"
 AG review-cmd --phase image --run "$f2" --json > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -c .composites "$TMP/rc.json")" = '["review/composite-a-dark.png","review/composite-a-light.png"]' ] \
   && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rc.json")" = 4 ] \

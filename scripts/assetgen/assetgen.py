@@ -587,11 +587,22 @@ def composite_name(images, image, background):
     return "review/composite-%s-%s.png" % (os.path.splitext(os.path.basename(image))[0], background)
 
 
+def depth_refusal(data, done):
+    """None for an 8-bit PNG (IHDR bit depth 8; palette included), else the reason it is refused: defringe and the
+    review previews handle only 8-bit inputs, what the image service produces (16-bit and 1/2/4-bit are not)."""
+    depth = png.header(data)[2]
+    return None if depth == 8 else "bit depth %d not supported: only 8-bit PNGs are %s" % (depth, done)
+
+
 def source_preview(path):
     """(decoded image, output bytes, gray) of an output for its review previews; gray: a grayscale output (colour
-    type 0 or 4), whose previews are built gray too (png.tile_2x2, imaging.composite with gray=True)."""
+    type 0 or 4), whose previews are built gray too (png.tile_2x2, imaging.composite with gray=True). A PNG that is
+    not 8-bit raises png.Unsupported (depth_refusal): it gets no preview, the image still goes to the reviewer."""
     with open(path, "rb") as f:
         data = f.read()
+    refusal = depth_refusal(data, "previewed")
+    if refusal:
+        raise png.Unsupported(refusal)
     img = png.decode(path)
     return img, data, png.gray_type(png.header(data)[3])
 
@@ -886,7 +897,9 @@ def defringe(run_dir, alpha_floor=None, force=False):
     the params. Text chunks (prompt, workflow) are carried over before IEND, and the colour-management and other safe
     ancillary chunks (cHRM, gAMA, iCCP or sRGB - never both -, cICP, mDCv, cLLI, pHYs) right after IHDR, so the opaque
     body keeps its colour (an iCCP whose profile does not fit the written colour type is dropped, colour_chunks); a
-    grayscale output (colour type 0 or 4) stays grayscale, written as gray+alpha; chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT) are dropped. Refuses an approved run, and outputs
+    grayscale output (colour type 0 or 4) stays grayscale, written as gray+alpha; chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT) are dropped. Only 8-bit PNGs are defringed
+    (depth_refusal): any other bit depth is skipped with the reason and left byte-identical, no outputs-raw copy (skipped,
+    not FAIL: the file is valid and untouched, and qa still grades its edges). Refuses an approved run, and outputs
     that qa.json or an image review already bind unless force (those records must be re-run afterwards)."""
     images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
     if not images:
@@ -916,6 +929,10 @@ def defringe(run_dir, alpha_floor=None, force=False):
         with open(src, "rb") as f:
             data = f.read()
         try:
+            refusal = depth_refusal(data, "defringed")
+            if refusal:
+                rows.append({"output": name, "state": "skipped", "reason": refusal})
+                continue
             img = png.decode(src)
             chunks = text_chunks(data)
             gray = png.gray_type(png.header(data)[3])

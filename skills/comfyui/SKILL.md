@@ -98,8 +98,7 @@ lead's workflow asks for in a run directory or the game layer.
 - **Game override:** prefer `extends` with only the changed fields, so core fixes still reach the game.
 - **Style data for the checks:** structured style fields (`palette` colours, `outline.edge_darkness`, `canvas` per
   family, `tone`, `forbidden`) and purpose `default_family`, `dimensions`, `max_references`, `qa.outlines` are data;
-  a field may stay prose (its `text` is the hint). A changed style gets a new `version`
-  (`docs/architecture/domains/assetgen.md` "Style lock").
+  a field may stay prose (its `text` is the hint). A changed style gets a new `version` (`docs/architecture/domains/assetgen.md` "Style lock").
 
 ## Pitfalls
 
@@ -130,10 +129,11 @@ lead's workflow asks for in a run directory or the game layer.
   `embed` adds the `workflow` chunk (keeps `prompt`; idempotent when equal, a stale chunk is replaced). Run it before
   `qa`: QA and the reviews bind the hash of the embedded file (`scripts/assetgen/assetgen.py` `embed`).
 - **Transparent outputs carry an edge fringe:** the service leaves orange or red speckled colour in the RGB of pixels
-  with alpha 1-31 (and body alpha 251-254), invisible on a checkerboard and visible on a dark background.
-  `defringe` (after `fetch_outputs`, before `embed` and `qa`; originals in `outputs-raw/`, the step in `defringe.json`)
-  bleeds opaque neighbour colour into those pixels, QA's `png-edge-fringe` row (purposes with `qa.alpha` required)
-  grades it (`scripts/assetgen/qa.py`), and the image reviews see `review/composite-dark.png` and `-light.png`.
+  with alpha 1-31 (and body alpha 251-254), invisible on a checkerboard and visible on a dark background. `defringe`
+  (after `fetch_outputs`, before `embed` and `qa`; originals in `outputs-raw/`, the step in `defringe.json`) bleeds
+  opaque neighbour colour into those pixels, QA's `png-edge-fringe` row (purposes with `qa.alpha` required) grades it
+  (`scripts/assetgen/qa.py`), and the image reviews see `review/composite-dark.png` and `-light.png`. Both take 8-bit
+  PNGs only (IHDR bit depth): another depth is `skipped` untouched, no preview (`depth_refusal`).
 - **SaveImage writes into ComfyUI's output folder** under `filename_prefix`: `resolve --out <run>/spec.json` records
   `assetgen/<run-id>` and `render --run` requires that value and refuses `--param filename_prefix`
   (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`

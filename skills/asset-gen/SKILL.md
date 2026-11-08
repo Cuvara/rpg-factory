@@ -65,7 +65,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    `upload_file` of every `<run>/references/*` file under its name -> `run_workflow` (wait) -> `job` until done ->
    `fetch_outputs` with `out_dir` `<run>/outputs` -> for a purpose with alpha `assetgen.py defringe --run <run>
    [--alpha-floor N]` (bleeds opaque neighbour colour into low-alpha edge pixels, originals in `outputs-raw/`,
-   `defringe.json`; refused once `qa.json` or a review binds the outputs) -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow into each PNG, replacing
+   `defringe.json`; 8-bit PNGs only; refused once `qa.json` or a review binds the outputs) -> `assetgen.py embed --run <run>` (mandatory, before `qa`: writes the UI workflow into each PNG, replacing
    a stale one, so QA and the reviews hash the final file and the PNG restores the graph in ComfyUI).
    `run_workflow` opens no canvas tab; `assetgen.py publish --run <run> --comfy-url <URL of the running ComfyUI>`
    (optional) uploads `workflow.ui.json` to Workflows > assetgen (exit 0 PASS, 1 FAIL, 2 usage, 3 `NOT_AVAILABLE`:

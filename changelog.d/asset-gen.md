@@ -219,3 +219,8 @@
   the other colour space than its colour type (a GRAY profile on RGB(A), an RGB one on gray): such an `iCCP` is
   dropped, and the output's `sRGB`, if any, is kept instead. Palette and RGB outputs, and untagged previews, are
   unchanged byte for byte.
+- **`defringe` and the review previews handled other bit depths as 8-bit.** Both now read the IHDR bit depth and
+  handle only 8-bit PNGs (palette included), which is what the image service produces. Any other depth (16-bit, or
+  1/2/4-bit) is refused with the reason `bit depth N not supported`: `defringe` records the output as `skipped` and
+  leaves it byte-identical with no `outputs-raw/` copy, and `review-cmd` builds no composite or tile for it, prints
+  the reason on stderr and still hands the output itself to the reviewer.
