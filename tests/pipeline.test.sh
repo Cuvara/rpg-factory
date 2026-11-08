@@ -391,6 +391,112 @@ assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full
 PY
 then pass=$((pass + 1)); echo "PASS  Orca phases use one-line prompts and complete, immutable persistent specs"
 else fail=$((fail + 1)); echo "FAIL  Orca one-line prompts and persistent specs"; fi
+echo "-- model policy (registry pipeline.models, lib/model_policy.py): grades, roles, scope, override file"
+MOD="--model claude-opus-5-5 --effort medium --json$"
+
+expect "lead in the Unity project (orca agent launch): claude-opus-5-5 medium" 0 "^orca agent launch --agent claude .*$MOD" dispatch "$OK" --task c1 --phase lead --runner orca
+expect "lead (print): the header names model and effort" 0 "^# agent: claude   model: claude-opus-5-5   effort: medium   worktree: " dispatch "$OK" --task gw --phase lead --runner print
+expect "planner (orca): the planner profile" 0 "^orca orchestration worker-start .*--worktree current .*$MOD" planner --request "add a thing" --runner orca
+expect "planner prompt: grade each task with the rubric" 0 "Grade each task light\|standard\|heavy with the rubric \(registry pipeline.models.rubric\)" planner --request "add a thing"
+expect "planner prompt carries the rubric" 0 "^   - heavy: " planner --request "add a thing"
+expect "lead spec: grade each subtask, write grade + grade_reason" 0 "Grade each subtask light\|standard\|heavy .*write .grade. \+ .grade_reason. per subtask \(none: the task's grade, light\)" dispatch "$OK" --task gw --phase lead
+expect "lead spec: never a model outside the scope" 0 "never pass one outside its scope \(exit 2\)" dispatch "$OK" --task gw --phase lead
+expect "lead spec carries the registry rubric" 0 "^- standard: Ordinary feature" dispatch "$OK" --task gw --phase lead
+expect "lead spec names the task grade" 0 '"grade": "light"' dispatch "$OK" --task gw --phase lead
+expect "validate prints the task lead's model" 0 "^Model: task lead claude claude-opus-5-5 medium$" validate "$OK"
+expect "validate: grade derived from tier S is light" 0 "^Model: task gw grade light \(tier S of the owned paths\): implement claude claude-sonnet-5-5 high, review codex gpt-6.1-sol high, qa codex gpt-6.1-sol high$" validate "$OK"
+expect "validate --json carries the models" 0 '"implement": \{' validate "$OK" --json
+GR=$(plan grades "{$HEAD,\"tasks\":[
+ {\"id\":\"wire\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/shared/proto/wire.proto\"],\"acceptance\":[\"a\"],\"implementer\":\"codex\"},
+ {\"id\":\"two\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\",\"backend/nakama/\"],\"acceptance\":[\"a\"]},
+ {\"id\":\"pg\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gameserver-dotnet/\"],\"acceptance\":[\"a\"],\"grade\":\"heavy\",\"grade_reason\":\"tick loop\"}]}")
+expect "validate: a contract path derives heavy; codex heavy implement, claude heavy review" 0 "^Model: task wire grade heavy \(tier L of the owned paths, contract or generated path\): implement codex gpt-6.1-sol high, review claude claude-opus-5-5 high, qa claude claude-sonnet-5-5 high$" validate "$GR"
+expect "lead (orca worktree create): the lead profile, claude-opus-5-5 medium" 0 "^orca worktree create .*--agent claude --prompt .*$MOD" dispatch "$GR" --task two --phase lead --runner orca
+expect "lead (orca agent launch, task worktree exists): claude-opus-5-5 medium" 0 "^orca agent launch --agent claude .*--prompt .*$MOD" dispatch "$OK" --task gw --phase lead --runner orca
+expect "validate: two modules derive standard" 0 "^Model: task two grade standard \(tier M of the owned paths\): implement claude claude-sonnet-5-5 high" validate "$GR"
+expect "validate: the plan's grade wins" 0 "^Model: task pg grade heavy \(plan\): implement claude claude-opus-5-5 high, review codex gpt-6.1-sol high" validate "$GR"
+X=$(plan badgrade "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"],\"grade\":\"huge\"}]}")
+expect "validate: an unknown grade is an error" 1 'ERROR task a: grade "huge" is not one of light, standard, heavy' validate "$X"
+expect "dispatch refuses a plan with an unknown grade" 1 "grade .*huge.* is not one of" dispatch "$X" --task a --phase lead --runner orca
+GSP=$(subplan graded gw '[
+ {"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","grade":"light","grade_reason":"rename"},
+ {"id":"s2","objective":"o","paths":["backend/gateway/b.go"],"implementer":"codex"},
+ {"id":"s3","objective":"o","paths":["backend/gateway/c/"],"implementer":"claude","grade":"heavy","grade_reason":"locking"},
+ {"id":"s4","objective":"o","paths":["backend/gateway/d/"],"implementer":"codex","grade":"heavy"},
+ {"id":"s5","objective":"o","paths":["backend/gateway/e/"],"implementer":"claude","grade":"standard"}]')
+expect "subplan validate: a graded subtask prints its models" 0 "^Model: subtask s1 grade light \(subplan\): implement claude claude-sonnet-5-5 high, review codex gpt-6.1-sol high$" subplan validate "$GSP"
+expect "subplan validate: an ungraded subtask inherits the task grade" 0 "^Model: subtask s2 grade light \(task grade: tier S of the owned paths\): implement codex gpt-6.1-sol medium, review claude claude-opus-5-5 medium$" subplan validate "$GSP"
+expect "subplan validate: a heavy codex subtask gets the heavy claude reviewer" 0 "^Model: subtask s4 grade heavy \(subplan\): implement codex gpt-6.1-sol high, review claude claude-opus-5-5 high$" subplan validate "$GSP"
+expect "subplan validate --json carries the models" 0 '"subtasks": \{' subplan validate "$GSP" --json
+X=$(subplan badgrade gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","grade":"huge"}]')
+expect "subplan validate: an unknown subtask grade is an error" 1 "ERROR subtask s1: grade huge is not one of light, standard, heavy" subplan validate "$X"
+X=$(subplan intgrade gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","grade":3}]')
+expect "subplan validate: a non-string grade is an error" 1 "ERROR subtask s1: .grade. must be a string" subplan validate "$X"
+expect "implement of a light subtask: claude-sonnet-5-5 high" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task gw --phase implement --subplan "$GSP" --subtask s1 --runner orca
+expect "implement of a heavy subtask: claude-opus-5-5 high" 0 "^orca orchestration worker-start .*--model claude-opus-5-5 --effort high --json$" dispatch "$OK" --task gw --phase implement --subplan "$GSP" --subtask s3 --runner orca
+expect "implement of an ungraded codex subtask of a light task: gpt-6.1-sol medium" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort medium --json$" dispatch "$OK" --task gw --phase implement --subplan "$GSP" --subtask s2 --runner orca
+expect "implement of the task (no subplan): the task grade" 0 "^orca orchestration worker-start .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task gw --phase implement --runner orca
+expect "implement --grade heavy overrides the grade" 0 "^orca orchestration worker-start .*--model claude-opus-5-5 --effort high --json$" dispatch "$OK" --task gw --phase implement --grade heavy --runner orca
+expect "codex review: gpt-6.1-sol high" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort high --json$" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
+expect "claude review of a light codex subtask: the review profile" 0 "^orca orchestration worker-start .*--agent claude .*$MOD" dispatch "$OK" --task gw --phase review --sha abc1234 --subplan "$GSP" --subtask s2 --runner orca
+expect "claude review of a heavy subtask: the heavy profile" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-opus-5-5 --effort high --json$" dispatch "$OK" --task gw --phase review --sha abc1234 --subplan "$GSP" --subtask s4 --runner orca
+expect "codex qa: gpt-6.1-sol high" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort high --json$" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
+expect "claude qa: claude-sonnet-5-5 high" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task c2 --phase qa --sha abc1234 --runner orca
+expect "--model inside the scope overrides the profile model" 0 "--model claude-sonnet-5-5 --effort medium --json$" dispatch "$OK" --task gw --phase lead --runner orca --model claude-sonnet-5-5
+expect "--model outside the scope: usage error" 2 "claude claude-haiku-4-5 / medium is outside the model scope .*Nothing was dispatched" dispatch "$OK" --task gw --phase lead --runner orca --model claude-haiku-4-5
+refute "--model outside the scope prints no command" "^orca |^# agent:" dispatch "$OK" --task gw --phase implement --runner orca --model claude-haiku-4-5
+expect "--effort outside the scope: usage error" 2 "claude-sonnet-5-5 / low is outside the model scope" dispatch "$OK" --task gw --phase implement --runner orca --effort low
+expect "--model of another agent's scope: usage error" 2 "codex claude-opus-5-5 / high is outside the model scope" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca --model claude-opus-5-5
+expect "planner --model outside the scope: usage error" 2 "outside the model scope" planner --request "add a thing" --runner orca --model claude-haiku-4-5
+expect "--grade takes light, standard or heavy only" 2 "invalid choice" dispatch "$OK" --task gw --phase implement --grade huge
+# the Agent-tool fallback: the model alias, never an effort; a stderr note and one prompt line say so
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase implement --runner agent 2>/dev/null)
+if jq -e '.model == "sonnet" and (.prompt | test("\nModel: claude-sonnet-5-5 \\(light profile\\), planned effort high\\. The Claude Code Agent tool takes the model alias sonnet but cannot set an effort")) and has("effort") == false' <<<"$out" >/dev/null
+then pass=$((pass + 1)); echo "PASS  --runner agent: JSON carries the model alias and a prompt line on effort"
+else fail=$((fail + 1)); echo "FAIL  --runner agent model alias"; sed 's/^/      /' <<<"$out" | head -10; fi
+expect "--runner agent: a stderr note that effort cannot be set" 0 "--runner agent: model sonnet \(claude-sonnet-5-5\); effort high cannot be set through the Agent tool" dispatch "$OK" --task gw --phase implement --runner agent
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent 2>/dev/null)
+if jq -e '.model == "opus"' <<<"$out" >/dev/null; then pass=$((pass + 1)); echo "PASS  --runner agent: a codex review runs the claude review profile (opus)"
+else fail=$((fail + 1)); echo "FAIL  --runner agent codex review model"; sed 's/^/      /' <<<"$out" | head -10; fi
+# a personal override file narrows the scope and replaces profiles; it is re-checked, never widens the scope
+SON='{"model":"claude-sonnet-5-5","effort":"high"}'
+printf '{"scope":{"claude":{"claude-sonnet-5-5":["high"]}},"profiles":{"claude":{"lead":%s,"planner":%s,"heavy":%s,"review":%s}}}\n' "$SON" "$SON" "$SON" "$SON" > "$TMP/mp-narrow.json"
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-narrow.json" expect "override file: a narrowed scope and its profiles apply" 0 "--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task gw --phase lead --runner orca
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-narrow.json" expect "override file: --model outside the narrowed scope exits 2" 2 "claude-opus-5-5 / high is outside the model scope .*claude: claude-sonnet-5-5: high\)" dispatch "$OK" --task gw --phase implement --runner orca --model claude-opus-5-5
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-narrow.json" expect "override file: validate prints the narrowed models" 0 "^Model: task lead claude claude-sonnet-5-5 high$" validate "$OK"
+printf '{"scope":{"claude":{"claude-sonnet-5-5":["high"]}}}\n' > "$TMP/mp-bad.json"
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-bad.json" expect "override file: a profile left outside the narrowed scope is an error" 1 "profiles claude/lead: claude-opus-5-5 / medium is outside the scope" dispatch "$OK" --task gw --phase lead --runner orca
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-bad.json" refute "override file: a broken policy dispatches nothing" "^orca " dispatch "$OK" --task gw --phase lead --runner orca
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-bad.json" expect "override file: validate is INVALID with a profile outside the scope" 1 "^ERROR model policy .*profiles claude/lead" validate "$OK"
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-bad.json" expect "override file: subplan validate is INVALID too" 1 "^ERROR model policy" subplan validate "$GSP"
+printf '{"scope":{"claude":{"claude-haiku-4-5":["high"]}}}\n' > "$TMP/mp-wide.json"
+RPG_FACTORY_MODEL_POLICY="$TMP/mp-wide.json" expect "override file: widening the scope is an error" 1 "claude/claude-haiku-4-5 is outside the registry scope" dispatch "$OK" --task gw --phase lead --runner orca
+STATE_MP=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/scripts/lib"); import model_policy; print(model_policy.override_path())' "$ROOT")
+mkdir -p "$(dirname "$STATE_MP")"; cp "$TMP/mp-narrow.json" "$STATE_MP"
+expect "override file in the persistent state dir applies without the variable" 0 "--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task gw --phase lead --runner orca
+rm -f "$STATE_MP"
+# a verdict records what the session ran with
+MV=$(plan models-verdict "$(sed 's/"id":"demo"/"id":"demo-models"/' < "$OK")")
+SHA=$(git -C "$S" rev-parse HEAD)
+expect "verdict --model/--effort: recorded and printed" 0 "recorded review PASS for gw at .* by codex gpt-6.1-sol high: " verdict "$MV" --task gw --phase review --sha "$SHA" --by codex --state PASS --model gpt-6.1-sol --effort high
+if python3 -c 'import glob,json,sys; f=glob.glob(sys.argv[1]+"/**/demo-models/gw__review.json",recursive=True)[0]; r=json.load(open(f,encoding="utf-8")); assert r["model"]=="gpt-6.1-sol" and r["effort"]=="high", r' "$TMP/state"
+then pass=$((pass + 1)); echo "PASS  verdict JSON stores model and effort"
+else fail=$((fail + 1)); echo "FAIL  verdict JSON stores model and effort"; fi
+expect "verdict without --model stores none" 0 "recorded qa PASS for gw at [0-9a-f]+ by codex: " verdict "$MV" --task gw --phase qa --sha "$SHA" --by codex --state PASS
+if python3 - "$ROOT" "$GSP" "$GR" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+for doc, schema_name in ((sys.argv[2], "pipeline-subplan"), (sys.argv[3], "pipeline-plan")):
+    schema = json.load(open(f"{sys.argv[1]}/docs/schemas/{schema_name}.schema.json", encoding="utf-8"))
+    value = json.load(open(doc, encoding="utf-8"))
+    assert not m.schema_errors(value, schema, schema), (schema_name, m.schema_errors(value, schema, schema))
+    items = value["subtasks"] if "subtasks" in value else value["tasks"]
+    items[0]["grade"] = "huge"
+    assert m.schema_errors(value, schema, schema), f"{schema_name}: an unknown grade must fail the schema"
+PY
+then pass=$((pass + 1)); echo "PASS  plan and subplan schemas know grade and grade_reason"
+else fail=$((fail + 1)); echo "FAIL  plan and subplan schemas: grade"; fi
 echo "-- dispatch: subplan subtasks and Orca child worktrees"
 CH="^orca orchestration worker-start .*--worktree new-child --name feat/core/demo-gw--"
 expect "subplan placement child: worker-start --worktree new-child from the task branch" 0 "${CH}s2 --base-branch feat/core/demo-gw .*--json$" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
