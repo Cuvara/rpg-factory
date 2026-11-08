@@ -12,10 +12,22 @@ A suite runs when one of these holds (anything unsure runs):
     every tracked Python module on the way (unresolved/dynamic libraries, unnamed leaves run all);
   - the suite file itself changed;
   - a changed file is a path the suite's own text names (scripts/..., skills/..., commands/..., docs/..., ...);
-  - a changed file matches one of the suite's EXTRA patterns (indirect inputs the text does not name).
-Unknown paths otherwise run only suites with matching rules; unknown top-level files run all.
+  - a changed file matches one of the suite's EXTRA patterns (indirect inputs the text does not name);
+  - a changed data file (anything but .py/.sh/.jq) lies in the tree of a code file that would select the suite:
+    code reads data next to it without naming the path (scripts/ui/ui_plan.py reads scripts/ui/data/*.json).
+    The tree of a code file is its tool directory. Under scripts/ and tests/ (many independent tools) it is the
+    first two path components (scripts/ui/** for scripts/ui/ui_plan.py and for scripts/ui/x/y.py); for a file
+    directly in scripts/ or tests/ it is only the files directly in that directory (not scripts/ui/**).
+    Any other top-level directory is one project: the whole directory (testlab/** for testlab/lab/scenarios.py).
+    A README.md is documentation, not data a tool reads: it selects only through the other rules.
+Python imports are read with the ast module (plain, dotted, parenthesized, multiline and relative forms; a
+package member that is a module is an edge) and with a text scan that also sees imports inside strings. A
+tracked Python file that does not parse makes every selection unsure. Unknown paths otherwise run only suites
+with matching rules; unknown top-level files run all. The reuse hash of a suite covers exactly the files that
+select it (plus its literal named paths), so --affected and suite reuse agree.
 Read-only. Integration owns the full run before a PR.
 """
+import ast
 import fnmatch
 import hashlib
 import os
@@ -128,6 +140,36 @@ def load_refs(path, text):
     return {base for line in text.splitlines() if LOAD_LINE.search(line) for base in PY_FILE.findall(line)}
 
 
+FROM_RE = re.compile(r"\bfrom\s+(\.*)([\w.]*)\s+import\s+(?:\(([^)]*)\)|([\w., ]+))")
+IMPORT_RE = re.compile(r"\bimport\s+([\w., ]+)")
+
+
+def text_imports(text):
+    """(level, module, members) of every import a text scan finds, imports inside strings included."""
+    found = set()
+    for dots, module, grouped, clause in FROM_RE.findall(text):
+        members = {part.strip().split(" ")[0] for part in (grouped or clause).split(",")} - {"", "*"}
+        found.add((len(dots), module, tuple(sorted(members))))
+    for clause in IMPORT_RE.findall(text):
+        found.update((0, part.strip().split(" ")[0], ()) for part in clause.split(",") if part.strip())
+    return found
+
+
+def ast_imports(raw):
+    """(level, module, members) of every import statement in Python source; None when it does not parse."""
+    try:
+        tree = ast.parse(raw)
+    except (SyntaxError, ValueError):
+        return None
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update((0, alias.name, ()) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            found.add((node.level, node.module or "", tuple(sorted(a.name for a in node.names if a.name != "*"))))
+    return found
+
+
 @lru_cache(None)
 def library_graph():
     """Reverse static edges over scripts/lib/* and every tracked Python module; scan each file once.
@@ -146,7 +188,7 @@ def library_graph():
                 by_name.setdefault(base, set()).add(p)
     libs = [p for p in nodes if p.startswith("scripts/lib/")]
     reverse = {p: set() for p in nodes}
-    mentioned = {}
+    mentioned, broken = {}, set()
     for path in files:
         if not path.endswith(MENTIONS):
             continue
@@ -160,16 +202,24 @@ def library_graph():
             mentioned.setdefault(base, set()).add(path)
         if not path.endswith(SCANNED) or path in NOT_IMPORTERS:
             continue
-        names = set(re.findall(r"\bfrom\s+([\w.]+)\s+import\b", text))
-        for clause in re.findall(r"\bimport\s+([\w., ]+)", text):
-            names.update(part.strip().split(" ")[0] for part in clause.split(","))
+        imports = text_imports(text)
+        if path.endswith(".py"):
+            parsed = ast_imports(raw)
+            if parsed is None:
+                broken.add(path)
+            else:
+                imports |= parsed
         refs = set()
-        for name in names:
-            refs.update(aliases.get(name, ()))
-        for dots, module, clause in re.findall(r"\bfrom\s+(\.+)([\w.]*)\s+import\s+([\w., ]+)", text):
-            package = "/".join(path.split("/")[:-len(dots)])
-            stems = [module.replace(".", "/")] if module else [part.strip().split(" ")[0] for part in clause.split(",")]
-            refs.update(p for stem in stems for p in (f"{package}/{stem}.py", f"{package}/{stem}/__init__.py") if p in reverse)
+        for level, module, members in imports:
+            if level == 0:
+                for name in [module] + [f"{module}.{m}" if module else m for m in members]:
+                    refs.update(aliases.get(name, ()))
+                continue
+            package = "/".join(path.split("/")[:-level])
+            stem = "/".join(x for x in (package, module.replace(".", "/")) if x)
+            candidates = [f"{stem}.py", f"{stem}/__init__.py"]
+            candidates += [p for m in members for p in (f"{stem}/{m}.py", f"{stem}/{m}/__init__.py")]
+            refs.update(p for p in candidates if p in reverse)
         for base in load_refs(path, text):
             refs.update(by_name.get(base, ()))
         for ref in re.findall(r"\blib/([\w./-]+)", text):
@@ -177,7 +227,7 @@ def library_graph():
         for target in refs:
             if path != target:
                 reverse[target].add(path)
-    return reverse, mentioned
+    return reverse, mentioned, frozenset(broken)
 
 
 def dynamic(path):
@@ -193,7 +243,7 @@ def reaches(path):
     Library modules and the Python modules they reach are followed to their importers. A dynamic library, a
     library nobody imports, and a reached module that has no importer and that no other file names (loaded by a
     computed path) are unsure."""
-    graph, mentioned = library_graph()
+    graph, mentioned, _ = library_graph()
     if path not in graph or not (path.startswith("scripts/lib/") or path.endswith(".py")):
         return frozenset([path])
     todo, seen = [path], set()
@@ -222,19 +272,71 @@ def suite_patterns(suite):
     return {m.rstrip(".,;:)'\"`") for m in PATH_RE.findall(raw.decode("utf-8", errors="replace"))}
 
 
+def tree(path):
+    """(prefix, deep) of the tree whose data files a code file may read unnamed (see the module docstring)."""
+    parts = path.split("/")
+    if parts[0] not in ("scripts", "tests"):
+        return parts[0] + "/", True
+    if len(parts) >= 3:
+        return "/".join(parts[:2]) + "/", True
+    return parts[0] + "/", False
+
+
+def in_tree(path, root):
+    prefix, deep = root
+    return path.startswith(prefix) and (deep or "/" not in path[len(prefix):])
+
+
+@lru_cache(None)
+def code_trees():
+    """Tree -> the tracked code files it belongs to."""
+    roots = {}
+    for p in inventory():
+        if p.endswith(SCANNED) and "/" in p:
+            roots.setdefault(tree(p), []).append(p)
+    return roots
+
+
+@lru_cache(None)
+def owners(path):
+    """Code files whose tree holds a data file (deleted ones too); a code file has none."""
+    if path.endswith(SCANNED) or "/" not in path or path.rsplit("/", 1)[-1] == "README.md":
+        return ()
+    return tuple(p for root, code in code_trees().items() if in_tree(path, root) for p in code)
+
+
+@lru_cache(None)
+def closure(path):
+    """Every file a change to path can reach, the code files whose tree holds it included; None when unsure."""
+    found = set()
+    for start in (path,) + owners(path):
+        reached = reaches(start)
+        if reached is None:
+            return None
+        found |= reached
+    return frozenset(found)
+
+
+@lru_cache(None)
+def selects(path, suite):
+    """A reached path selects the suite: it is the suite, a path its text names or one of its EXTRA patterns."""
+    return path == suite or hit(path, suite_patterns(suite)) or hit(path, EXTRA.get(suite, []))
+
+
+def always(path):
+    return hit(path, GLOBAL) or "/" not in path
+
+
 def needed(files, suite):
-    if any(hit(f, GLOBAL) or "/" not in f for f in files) or suite in files:
+    if any(always(f) for f in files) or suite in files:
         return True
-    named = suite_patterns(suite)
-    if named is None:
+    if suite_patterns(suite) is None or library_graph()[2]:
         return True
     for f in files:
-        reached = reaches(f)
-        if reached is None:
+        reached = closure(f)
+        if reached is None or any(selects(p, suite) for p in reached):
             return True
-        if suite in reached or any(hit(p, named) or hit(p, EXTRA.get(suite, [])) for p in reached):
-            return True
-    return any(hit(f, EXTRA.get(suite, [])) for f in files)
+    return False
 
 
 def hashes(suites):
@@ -245,13 +347,25 @@ def hashes(suites):
             versions.append(result.stdout.splitlines()[0].decode("utf-8", errors="replace") if result.stdout else "absent")
         except (OSError, subprocess.TimeoutExpired):
             versions.append("absent")
+    # one pass over the tree: the files every suite depends on, and per reached path the files that reach it
     files = inventory()
+    common, reached_by = set(), {}
+    for f in files:
+        reached = None if always(f) else closure(f)
+        if reached is None:
+            common.add(f)
+            continue
+        for p in reached:
+            reached_by.setdefault(p, set()).add(f)
     for suite in suites:
-        if suite_patterns(suite) is None or "*" in EXTRA.get(suite, []):
+        if suite_patterns(suite) is None or "*" in EXTRA.get(suite, []) or library_graph()[2]:
             print(suite, "-")
             continue
         digest = hashlib.sha256(repr(versions).encode())
-        inputs = {f for f in files if needed([f], suite)} | {suite}
+        inputs = common | {suite}
+        for p, sources in reached_by.items():
+            if selects(p, suite):
+                inputs |= sources
         # Literal named inputs remain inputs even when deleted/untracked-absent.
         inputs.update(p for p in suite_patterns(suite) if not any(c in p for c in "*?[") and not os.path.isdir(os.path.join(ROOT, p)))
         for path in sorted(inputs):

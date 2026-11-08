@@ -28,6 +28,10 @@ sel 0 "core asset-gen templates reach the assetgen suite (EXTRA)" tests/assetgen
 sel 0 "the gen-run quality plugin reaches the assetgen suite (EXTRA)" tests/assetgen.test.sh scripts/checks/domains/assetgen.py
 sel 1 "an unrelated quality plugin skips the assetgen suite" tests/assetgen.test.sh scripts/checks/domains/vfx.py
 sel 0 "unreadable suite runs (unsure runs)" tests/no-such.test.sh README.md
+sel 0 "UI data next to ui_plan.py selects ui-commands (tree rule)" tests/ui-commands.test.sh scripts/ui/data/intents.json
+sel 0 "UI data next to ui_plan.py selects ui-skill-routing (tree rule)" tests/ui-skill-routing.test.sh scripts/ui/data/intents.json
+sel 1 "UI data skips an unrelated suite" tests/changelog.test.sh scripts/ui/data/intents.json
+sel 0 "a testlab scenario selects the testlab unit tests (tree rule)" testlab/tests/test_lab.py testlab/scenarios/S01-bootstrap.json
 R="$TMP/r"; git init -q -b main "$R"; echo a > "$R/a"; git -C "$R" add a; git -C "$R" -c user.email=t@t -c user.name=t commit -qm a
 git -C "$R" checkout -qb topic; echo b > "$R/b"; git -C "$R" add b; git -C "$R" -c user.email=t@t -c user.name=t commit -qm b; echo c > "$R/c"
 out=$(cd "$R" && python3 -B - "$A" <<'PY'
@@ -63,12 +67,25 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          "scripts/lib/rpkg/__init__.py": "from .part import Y\n", "scripts/lib/rpkg/part.py": "Y = 1\n",
          "scripts/rel-entry.py": "import rpkg\n", "tests/rel.test.sh": "python scripts/rel-entry.py\n",
          # lib -> module nothing imports or names (loaded by a computed path): unsure
-         "scripts/lib/hidden.py": "X = 1\n", "scripts/plugins/dyn.py": "import hidden\n"}
+         "scripts/lib/hidden.py": "X = 1\n", "scripts/plugins/dyn.py": "import hidden\n",
+         # data a script reads next to it without naming the path; an unrelated data file in another tool's tree
+         "scripts/ui/plan.py": "import json\n", "scripts/ui/data/intents.json": "{}\n", "tests/ui.test.sh": "python scripts/ui/plan.py\n",
+         "scripts/other/tool2.py": "x = 1\n", "scripts/other/data/x.json": "{}\n",
+         # a non-scripts top-level directory is one project: testlab/lab code reads testlab/scenarios
+         "testlab/lab/run.py": "x = 1\n", "testlab/scenarios/a.json": "{}\n", "tests/lab.test.sh": "python testlab/lab/run.py\n",
+         # parenthesized multiline import of a package member module (the member has its own suite)
+         "scripts/lib/leaf.py": "X = 1\n", "scripts/plib/__init__.py": "", "scripts/plib/member.py": "import leaf\n",
+         "scripts/paren.py": "from plib import (\n    member,\n)\n", "tests/paren.test.sh": "python scripts/paren.py\n",
+         "tests/member.test.sh": "python scripts/plib/member.py\n",
+         # relative multiline package-member import
+         "scripts/lib/leaf2.py": "X = 1\n", "scripts/rpkg2/__init__.py": "from . import (\n    sub,\n)\n",
+         "scripts/rpkg2/sub.py": "import leaf2\n", "scripts/rel2.py": "import rpkg2\n", "tests/rel2.test.sh": "python scripts/rel2.py\n",
+         "tests/sub.test.sh": "python scripts/rpkg2/sub.py\n"}
 for path, text in files.items():
     p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
 m.ROOT = str(root)
 def reset():
-    for name in ("contents", "inventory", "library_graph", "reaches", "suite_patterns"):
+    for name in ("contents", "inventory", "library_graph", "reaches", "suite_patterns", "code_trees", "owners", "closure", "selects"):
         getattr(m, name).cache_clear()
 def h(suite="tests/example.test.sh"):
     reset(); output = io.StringIO()
@@ -105,6 +122,31 @@ check("wildcard EXTRA cannot reuse", h("scripts/checks/english-only.py") == "-")
 before_delete = h()
 (root / "scripts/entry.py").unlink()
 check("hash changes on missing input", before_delete != h())
+reset()
+check("data next to a reached script selects its suite", m.needed(["scripts/ui/data/intents.json"], "tests/ui.test.sh"))
+check("data next to a script skips an unrelated suite", not m.needed(["scripts/ui/data/intents.json"], "tests/other.test.sh"))
+check("data in another tool's tree skips the suite", not m.needed(["scripts/other/data/x.json"], "tests/ui.test.sh"))
+check("a README.md next to a reached script is not data", not m.needed(["scripts/ui/README.md"], "tests/ui.test.sh"))
+check("a deleted data file next to a reached script selects its suite", m.needed(["scripts/ui/data/gone.json"], "tests/ui.test.sh"))
+check("data anywhere in a non-scripts project selects its suite", m.needed(["testlab/scenarios/a.json"], "tests/lab.test.sh"))
+check("parenthesized package-member import is an edge", m.needed(["scripts/lib/leaf.py"], "tests/paren.test.sh"))
+check("parenthesized import change skips unrelated suite", not m.needed(["scripts/lib/leaf.py"], "tests/other.test.sh"))
+check("relative multiline package-member import is an edge", m.needed(["scripts/lib/leaf2.py"], "tests/rel2.test.sh"))
+check("relative multiline import change skips unrelated suite", not m.needed(["scripts/lib/leaf2.py"], "tests/other.test.sh"))
+ui_before, other_before, paren_before, rel_before = h("tests/ui.test.sh"), h("tests/other.test.sh"), h("tests/paren.test.sh"), h("tests/rel2.test.sh")
+(root / "scripts/other/data/x.json").write_text("[1]\n")
+check("hash ignores a data file in another tool's tree", ui_before == h("tests/ui.test.sh"))
+(root / "scripts/ui/data/intents.json").write_text("[2]\n")
+check("hash changes on data next to a reached script", ui_before != h("tests/ui.test.sh"))
+check("hash of an unrelated suite ignores that data", other_before == h("tests/other.test.sh"))
+(root / "scripts/lib/leaf.py").write_text("X = 2\n")
+check("hash changes through a parenthesized package-member import", paren_before != h("tests/paren.test.sh"))
+(root / "scripts/lib/leaf2.py").write_text("X = 2\n")
+check("hash changes through a relative multiline import", rel_before != h("tests/rel2.test.sh"))
+(root / "scripts/broken.py").write_text("def (:\n")
+reset()
+check("an unparsable Python file makes selection unsure", m.needed(["scripts/lib/leaf.py"], "tests/other.test.sh"))
+check("an unparsable Python file disables reuse", h("tests/other.test.sh") == "-")
 PY
 )
 while IFS= read -r line; do
