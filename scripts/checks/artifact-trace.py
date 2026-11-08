@@ -68,6 +68,20 @@ def front_text(raw):
     return json.loads(m.group(1)) if m else (json.loads(raw) if raw.lstrip().startswith("{") else None)
 
 
+PENDING = "approval present but not committed/signed"  # the phrase gen-run-style uses (checks/domains/assetgen.py)
+
+
+def pending_approval(root, artifact_path, aid, gate, rev):
+    """Path of an approval record on disk for the artifact as committed (rev) or as it is now that does not bind yet:
+    the record is not in HEAD, or it binds a revision of the artifact that is not committed. None when no record
+    file exists for either revision."""
+    for r in dict.fromkeys(x for x in (rev, current_blob(root, artifact_path)) if x):
+        rel = f"approvals/{aid}/{gate}-{r}.json"
+        if os.path.isfile(os.path.join(root, rel)) and (r != rev or not git_blob(root, rel)):
+            return rel
+    return None
+
+
 def approval(root, artifact_path, obj, gate, reg):
     aid = obj["id"]
     rev = git_blob(root, artifact_path)
@@ -76,7 +90,7 @@ def approval(root, artifact_path, obj, gate, reg):
         return "shallow clone"
     full = os.path.join(root, path)
     if not os.path.isfile(full):
-        return "missing approval"
+        return PENDING if pending_approval(root, artifact_path, aid, gate, rev) else "missing approval"
     try:
         data = json.load(open(full, encoding="utf-8"))
     except Exception:
@@ -109,6 +123,8 @@ def approval(root, artifact_path, obj, gate, reg):
         "--",
         "approvals/",
     ).stdout.splitlines()
+    if not adds and not mods and not dels and pending_approval(root, artifact_path, aid, gate, rev):
+        return PENDING
     if len(adds) != 1 or mods or dels:
         return "approval is not immutable"
     domain = reg.get("domains", {}).get(obj.get("domain"), {})

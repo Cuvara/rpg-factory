@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "asset-gen style rejection (<authoring>/assetgen/styles/<style-id>/rejections/<id>.json; scripts/assetgen/stylelock.py)",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "type",
+    "style",
+    "family",
+    "reason"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rpg-factory.assetgen-rejection/1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "type": {
+      "enum": [
+        "asset",
+        "direction"
+      ]
+    },
+    "style": {
+      "type": "object",
+      "required": [
+        "style_id",
+        "version",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "description": "Style reference: the style id, its version (null for a style without one) and layers.content_hash of the merged style data.",
+      "properties": {
+        "style_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "family": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "null: relevant to every family of the style."
+    },
+    "reason": {
+      "enum": [
+        "style_drift",
+        "palette_off",
+        "too_detailed",
+        "wrong_lighting",
+        "wrong_perspective",
+        "text_or_logo",
+        "anatomy",
+        "other"
+      ]
+    },
+    "text": {
+      "type": "string"
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "output",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "output": {
+          "type": "string",
+          "pattern": "^outputs/[^/]+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "asset"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "direction"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reason": {
+            "const": "other"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

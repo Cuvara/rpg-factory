@@ -30,7 +30,7 @@ done
 # -- argument validation (exit 2, no script run)
 for a in "" "bogus" "route" "route nosuchrepo x.go" "route server" "check" "check nosuchrepo" "status extra" "doctor extra" "route server x.go --lead" \
          "doctor --remote" "domain a b" "domain --bogus" "help extra" \
-         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen resolve --purpose icon --out x.json"; do
+         "ui" "ui-figma" "ui-components" "ui-screen" "ui-review" "ui --project" "workflow" "workflow bogus spec.json" "pipeline" "pipeline bogus"          "assetgen" "assetgen bogus" "assetgen render --run x" "assetgen qa --run x" "assetgen manifest --run x" "assetgen embed --run x" "assetgen defringe --run x" "assetgen approve-record --run x --by y" "assetgen publish --run x --comfy-url y" "assetgen promote-anchor --run x --output 1" "assetgen reject --type direction --reason other" "assetgen resolve --purpose icon --out x.json"; do
   python3 -B "$CMD" $a >/dev/null 2>"$TMP/err"; rc=$?
   [ $rc -eq 2 ] && grep -q "status \[--remote\]" "$TMP/err" && ok "usage error -> exit 2: '$a'" || no "expected usage error for '$a' (rc=$rc)"
 done
@@ -183,5 +183,47 @@ done
 python3 -B "$ROOT/scripts/assetgen/assetgen.py" resolve --purpose icon "--ou=$TMP/abbr.json" >/dev/null 2>"$TMP/err"; rc=$?
 [ $rc -eq 2 ] && [ ! -e "$TMP/abbr.json" ] && grep -q "unrecognized arguments: --ou=" "$TMP/err" \
   && ok "assetgen.py itself does not expand --ou to --out (allow_abbrev=False)" || no "assetgen.py --ou rc=$rc" "$(cat "$TMP/err")"
+# publish (network upload to ComfyUI) and embed (rewrites outputs) are assetgen.py verbs, never factory-cmd verbs
+python3 -B "$CMD" assetgen publish --run "$TMP/x-001" --comfy-url y >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "publish uploads to ComfyUI: the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err"   && ok "assetgen publish is not exposed through factory-cmd (exit 2, points at assetgen.py)" || no "assetgen publish rc=$rc: $(head -2 "$TMP/err")"
+python3 -B "$CMD" assetgen embed --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "embed writes into a run directory" "$TMP/err" && ok "assetgen embed is not exposed through factory-cmd (exit 2)" || no "assetgen embed rc=$rc: $(head -2 "$TMP/err")"
+# defringe rewrites outputs and approve-record writes a person's approval record: never factory-cmd verbs
+python3 -B "$CMD" assetgen defringe --run "$TMP/x-001" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "defringe writes into a run directory" "$TMP/err" && ok "assetgen defringe is not exposed through factory-cmd (exit 2)" || no "assetgen defringe rc=$rc: $(head -2 "$TMP/err")"
+python3 -B "$CMD" assetgen "approve-record --run $TMP/x-001 --by Dana" >/dev/null 2>"$TMP/err"; rc=$?
+[ $rc -eq 2 ] && grep -q "approve-record writes a person's approval record: the asset-gen skill runs it only on that person's explicit word" "$TMP/err"   && ok "assetgen approve-record is not exposed through factory-cmd (exit 2, only on the person's explicit word)" || no "assetgen approve-record rc=$rc: $(head -2 "$TMP/err")"
+# style lock: drift is read-only and forwarded (--authoring defaults to the workspace authoring repo);
+# review-cmd --run RUN-ID resolves under the workspace authoring repo (--authoring defaulted), from any directory
+rd="$WS/game-authoring/assetgen/runs/cmd-icon-001"; mkdir -p "$rd"
+python3 -B "$ROOT/scripts/assetgen/assetgen.py" resolve --purpose icon --style house --authoring "$WS/game-authoring" --out "$rd/spec.json" >/dev/null 2>&1
+echo "Command test prompt." > "$rd/prompt.md"
+out=$(cd "$TMP" && python3 -B "$CMD" assetgen review-cmd --phase prompt --run cmd-icon-001 --json); rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r .verdict <<<"$out")" = "$rd/review-prompt.json" ] && [ ! -e "$rd/review-prompt.json" ] \
+  && ok "assetgen review-cmd --run RUN-ID: resolved in the workspace authoring repo (exit 0, nothing written)" || no "assetgen review-cmd run id rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" assetgen resolve --purpose icon --style house); rc=$?
+[ $rc -eq 0 ] && grep -q "^params: " <<<"$out" && ! grep -q "^purpose.title  \[" <<<"$out" \
+  && python3 -B "$CMD" assetgen resolve --purpose icon --style house --verbose | grep -q "^purpose.title  \[" \
+  && ok "assetgen resolve: short summary through factory-cmd, --verbose forwarded" || no "assetgen resolve summary rc=$rc: $(head -5 <<<"$out")"
+rm -rf "$rd"
+# promote-anchor and reject write records into the authoring repo, so they stay assetgen.py verbs
+out=$(python3 -B "$CMD" assetgen drift --json); rc=$?
+[ $rc -eq 0 ] && jq -e '.schema == "rpg-factory.assetgen-drift/1" and (.items | type == "array")' <<<"$out" >/dev/null \
+  && ok "assetgen drift forwarded (exit 0, drift JSON, --authoring defaulted)" || no "assetgen drift rc=$rc: $(head -c 300 <<<"$out")"
+out=$(python3 -B "$CMD" assetgen "drift"); rc=$?
+[ $rc -eq 0 ] && grep -qE "^assetgen drift: [0-9]+ item\(s\) behind the current style" <<<"$out" \
+  && ok "assetgen drift text summary through factory-cmd" || no "assetgen drift text rc=$rc: $(tail -2 <<<"$out")"
+for v in promote-anchor reject; do
+  before=$(find "$WS/game-authoring/assetgen" -type f | sort | md5sum)
+  python3 -B "$CMD" assetgen $v --run "$TMP/x-001" --output 1 --type direction --reason other >/dev/null 2>"$TMP/err"; rc=$?
+  after=$(find "$WS/game-authoring/assetgen" -type f | sort | md5sum)
+  [ $rc -eq 2 ] && [ "$before" = "$after" ] \
+    && grep -q "$v writes a style-lock record into the authoring repo: the asset-gen skill runs scripts/assetgen/assetgen.py directly" "$TMP/err" \
+    && ok "assetgen $v is not exposed through factory-cmd (exit 2, nothing written)" || no "assetgen $v rc=$rc: $(head -2 "$TMP/err")"
+done
+python3 -B "$CMD" help --json | jq -e '.commands[] | select(.verb == "assetgen") | (.args | test("publish|embed|promote-anchor|reject") | not) and (.args | test("drift")) and .read_only' >/dev/null \
+  && ! grep -qE "publish|embed|promote-anchor|reject" "$ROOT/commands/assetgen.md" && grep -q "|drift " "$ROOT/commands/assetgen.md" \
+  && ok "help and /rpg-factory:assetgen list assetgen as read-only with drift, without publish, embed, promote-anchor or reject" \
+  || no "help or commands/assetgen.md names a writing verb or lacks drift"
 total=$((pass + fail)); echo "commands tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
