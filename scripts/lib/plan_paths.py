@@ -1,8 +1,8 @@
 """Read-only plan repository path resolution.
 
-Wire into factory-pipeline.py repo_info by replacing its isabs/join lines with:
-    path, path_reason = plan_paths.resolve_repo_path(path, plan["_path"], reg)
-The caller must surface path_reason when workspace discovery fails.
+Used by factory-pipeline.py repo_info. Bare relative paths are plan-relative;
+paths prefixed with the registry workspace environment variable are workspace-relative.
+The caller surfaces path_reason when workspace discovery fails.
 """
 import os
 

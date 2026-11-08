@@ -84,14 +84,15 @@ docs/schemas/pipeline-plan.schema.json.
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
-          [--subtask ID [--subplan FILE]] [--fallback AGENT]
+          [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
         --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
         per candidate (<task>__<phase>__<sha12>__<by>.json). A task review by a model other than the task's paired
         reviewer never replaces the pair's record for the same SHA (stderr note). A subtask review pairs against the
         subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
-        --fallback (review only, a pipeline agent that is unavailable now) marks a SAME_MODEL fallback by hand.
+        --fallback 'AGENT unavailable' (review only) records a retrospective SAME_MODEL fallback with a required
+        --note explaining the outage. Legacy --fallback AGENT also requires that agent to be unavailable now.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
@@ -141,6 +142,7 @@ sys.path.append(os.path.join(HERE, "lib"))
 import fstate  # noqa: E402
 import pipeline_route as pr  # noqa: E402
 import orca_cmd  # noqa: E402
+import plan_paths  # noqa: E402
 from shells import find_bash  # noqa: E402
 
 SCHEMA = "rpg-factory.pipeline-plan/1"
@@ -304,8 +306,9 @@ def repo_info(plan, reg, key):
     own = (plan.get("repos") or {}).get(key) or {}
     rreg = reg.get("repos", {}).get(own.get("registry", key))
     path = own.get("path") or (orca_cmd.repo_checkout(reg, own.get("registry", key)) if rreg else None)
-    if path and not os.path.isabs(path):
-        path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(plan["_path"])), path))
+    path, path_reason = plan_paths.resolve_repo_path(path, plan.get("_path", os.path.join(os.getcwd(), "plan.json")), reg)
+    if path_reason:
+        die(path_reason)
     base = own.get("base") or (rreg or {}).get("default_branch")
     allowed, reason = orca_cmd.allows_worktree(reg, own.get("registry", key) if rreg else None, path)
     reason = reason.rstrip(". ") if reason else reason  # printed as "No worktree: <reason>." (no double period)
@@ -1139,6 +1142,7 @@ def cmd_dispatch(a, reg):
         if a.runner != "print" and (sub or not (a.paths and a.agent)):
             pr.record(plan, task["id"], sid, "implementer",
                       {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
+                       "paths": paths or task["paths"],
                        "timestamp": now_utc()})
         child_note(place)
         return 0
@@ -1185,6 +1189,7 @@ def cmd_dispatch(a, reg):
     if a.runner != "print":
         pr.record(plan, task["id"], sid, "reviewer",
                   {"agent": started, "sha": sha, "implementer": sub_impl,
+                   "paths": paths or task["paths"],
                    "fallback": pr.paired(pipe, sub or task, sub_impl) if fallback and started == agent else None,
                    "timestamp": now_utc()}, sha)
     child_note(place)
@@ -1349,7 +1354,7 @@ def subtask_implementers(plan, task_id):
     return out
 
 
-def subtask_reviews(plan, reg, task_id, sid, target, stale=None):
+def subtask_reviews(plan, reg, task_id, sid, target, stale=None, cache=None):
     """PASS reviews on the target or an ancestor whose reviewed paths are unchanged."""
     vdir = verdict_dir(plan)
     pre = f"{safe_name(task_id)}{SUB_SEP}{safe_name(sid)}__review"
@@ -1362,14 +1367,43 @@ def subtask_reviews(plan, reg, task_id, sid, target, stale=None):
         if (isinstance(rec, dict) and rec.get("task") == task_id and rec.get("subtask") == sid
                 and rec.get("phase") == "review" and rec.get("state") == "PASS" and rec.get("fingerprint") == fp
                 and rec.get("sha") and (rec["sha"] == target or is_ancestor(path, rec["sha"], target))):
-            paths = rec.get("paths") or find_task(plan, task_id)["paths"]
-            changed, rc = git(path, "diff", "--name-only", rec["sha"], target, "--", *specs(paths))
-            if rc != 0 or changed:
+            paths = rec.get("paths") or recorded_subtask_paths(plan, task_id, sid) or find_task(plan, task_id)["paths"]
+            scope = dict(find_task(plan, task_id), paths=paths)
+            changed = uncovered_changes(plan, reg, scope, rec["sha"], target, cache=cache)
+            if changed:
                 if stale is not None:
-                    stale.update(changed.splitlines() if changed else paths)
+                    stale.update(changed)
                 continue
             out.append(rec)
     return out
+
+
+def recorded_subtask_paths(plan, task_id, sid):
+    """Recover legacy review scope from dispatch provenance or durable task subplans.
+
+    Multiple definitions are unioned conservatively, never narrowed by choosing one.
+    Unknown legacy scope retains the whole-task fallback in the caller.
+    """
+    provenance = pr.recorded(plan, task_id, sid, "implementer") or {}
+    if provenance.get("paths"):
+        return provenance["paths"]
+    folder = os.path.join(verdict_dir(plan), safe_name(task_id))
+    paths = set()
+    task = find_task(plan, task_id)
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not (name.startswith("subplan") and name.endswith(".json")):
+            continue
+        doc = fstate.read_json(os.path.join(folder, name), {})
+        if not isinstance(doc, dict) or doc.get("task") != task_id:
+            continue
+        for sub in doc.get("subtasks", []):
+            if not isinstance(sub, dict) or sub.get("id") != sid:
+                continue
+            scope = sub.get("paths")
+            if (isinstance(scope, list) and scope and all(isinstance(p, str) and not path_problem(p)
+                    and inside_owned(p, task["paths"]) and not excluded_by(p, task.get("exclusions", [])) for p in scope)):
+                paths.update(scope)
+    return sorted(paths)
 
 
 def review_implementer(pipe, plan, task, subtask=None, item=None, disp=None):
@@ -1385,7 +1419,20 @@ def review_implementer(pipe, plan, task, subtask=None, item=None, disp=None):
     return pr.planned(pipe, item or task)[0], "planned routing"
 
 
-def uncovered_changes(plan, reg, task, sha, target, checking=()):
+def uncovered_changes(plan, reg, task, sha, target, checking=(), cache=None):
+    """Memoize attribution only within this evaluation; verdicts may change before the next gate."""
+    cache = {} if cache is None else cache
+    # Only checked descendants can exclude a later covering task. Earlier ancestors
+    # cannot affect this result; retaining them would repeat every path through a DAG.
+    by_id = {t["id"]: t for t in plan["tasks"]}
+    blocked = tuple(sorted(tid for tid in checking if depends(by_id, tid, task["id"])))
+    key = (task["id"], task["repo"], tuple(task["paths"]), sha, target, blocked)
+    if key not in cache:
+        cache[key] = _uncovered_changes(plan, reg, task, sha, target, checking, cache)
+    return list(cache[key])
+
+
+def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     """Owned files changed since sha without current later-task review/QA coverage.
 
     A first-parent topic merge attributes only its introduced side commits. Direct
@@ -1413,14 +1460,14 @@ def uncovered_changes(plan, reg, task, sha, target, checking=()):
         rv = verdict_of(plan, reg, t["id"], "review")[0]
         if not rv or rv.get("state") != "PASS" or not is_ancestor(path, rv["sha"], target):
             continue
-        if uncovered_changes(plan, reg, t, rv["sha"], target, checking + (task["id"],)):
+        if uncovered_changes(plan, reg, t, rv["sha"], target, checking + (task["id"],), cache):
             continue
         qa = None
         if not info["worktrees"] and serial_count(plan, reg, task["repo"]) > 1:
             qa = verdict_of(plan, reg, t["id"], "qa")[0]
             if not qa or qa.get("state") != "PASS" or not is_ancestor(path, rv["sha"], qa["sha"]) or not is_ancestor(path, qa["sha"], target):
                 continue
-            if uncovered_changes(plan, reg, t, qa["sha"], target, checking + (task["id"],)):
+            if uncovered_changes(plan, reg, t, qa["sha"], target, checking + (task["id"],), cache):
                 continue
         later.append((t, rv, own_start(plan, reg, info, t, rv["sha"])))
     bad = set()
@@ -1472,7 +1519,16 @@ def uncovered_changes(plan, reg, task, sha, target, checking=()):
     return sorted(bad)
 
 
-def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
+def fallback_matches(rec, agent):
+    """Accept dispatch/legacy agent IDs and explicit retrospective outage reasons."""
+    return rec.get("fallback") in (agent, f"{agent} unavailable")
+
+
+def fallback_note(rec, agent):
+    return f"SAME_MODEL (fallback: {agent} unavailable)" + (f"; note: {rec['note']}" if rec.get("note") else "")
+
+
+def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model, cache=None):
     """(blockers, notes) for subtasks whose recorded implementer the task review (by rv["by"], paired against impl)
     does not cover: a subtask by another model than impl, or by the task reviewer's own model, needs its own PASS review
     by its pair or a dispatch-recorded SAME_MODEL fallback review; a subtask fallback is never laundered by the task
@@ -1482,14 +1538,15 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model):
     implementers.update(subtask_implementers(plan, t["id"]))
     for sid, x in sorted(implementers.items()):
         want = pr.paired(pipe, t, x)
-        if x == impl and (rv.get("by") == want or (rv.get("by") == x and (rv.get("fallback") == want or allow_same_model))):
+        if x == impl and (rv.get("by") == want or (rv.get("by") == x and (fallback_matches(rv, want) or allow_same_model))):
             continue
         stale = set()
-        recs = subtask_reviews(plan, reg, t["id"], sid, target, stale)
+        recs = subtask_reviews(plan, reg, t["id"], sid, target, stale, cache)
         if any(r.get("by") == want for r in recs):
             continue
-        if any(r.get("by") == x and r.get("fallback") == want for r in recs):
-            notes.append(f"{t['id']}: subtask {sid} SAME_MODEL (fallback: {want} unavailable)")
+        fallback = next((r for r in recs if r.get("by") == x and fallback_matches(r, want)), None)
+        if fallback:
+            notes.append(f"{t['id']}: subtask {sid} {fallback_note(fallback, want)}")
         elif allow_same_model and any(r.get("by") == x for r in recs + [rv]):
             notes.append(f"{t['id']}: subtask {sid} review SAME_MODEL ({x}) accepted by --allow-same-model")
         else:
@@ -1538,17 +1595,27 @@ def cmd_verdict(a, reg):
         rec["note"] = a.note
     if a.subtask:
         rec["subtask"] = a.subtask
-    if a.fallback:
+    if a.fallback is not None:
         if a.phase != "review":
             die("--fallback (the unavailable paired reviewer) goes with --phase review")
-        if a.fallback not in pipe["agents"]:
+        unavailable = a.fallback.removesuffix(" unavailable")
+        retrospective = a.fallback == f"{unavailable} unavailable"
+        if unavailable not in pipe["agents"]:
             die(f"--fallback must be one of {', '.join(pipe['agents'])}")
-        if pr.available(pipe, plan).get(a.fallback, {}).get("available"):
+        if not retrospective and pr.available(pipe, plan).get(a.fallback, {}).get("available"):
             die(f"--fallback {a.fallback} is available now")
-        rec["fallback"] = a.fallback
+        if not (a.note and a.note.strip()):
+            die("--fallback requires --note explaining the fallback")
+        rec["fallback"] = f"{unavailable} unavailable"
     sub_item = load_subtask(a, plan, reg, task) if a.subplan else None
     if a.subtask:
-        rec["paths"] = (sub_item or task)["paths"]
+        provenance = pr.recorded(plan, a.task, a.subtask, "implementer") or {}
+        dispatched = pr.recorded(plan, a.task, a.subtask, "reviewer", full) or {}
+        previous = fstate.read_json(verdict_file(plan, a.task, a.phase, a.subtask), {})
+        if not isinstance(previous, dict) or previous.get("fingerprint") != rec["fingerprint"]:
+            previous = {}
+        rec["paths"] = ((sub_item or {}).get("paths") or dispatched.get("paths") or provenance.get("paths")
+                        or previous.get("paths") or task["paths"])
     if task is not None and a.phase == "review":
         # a fallback only when this candidate's review dispatch was one and started this reviewer
         disp = pr.recorded(plan, a.task, a.subtask, "reviewer", full)
@@ -1564,7 +1631,11 @@ def cmd_verdict(a, reg):
         rec["implementer"] = impl
         rec["implementer_source"] = source
         rec["implementers"] = subtask_implementers(plan, a.task)
-        if (not a.fallback and disp and disp.get("fallback") and disp["agent"] == a.by == impl
+        if a.fallback is not None:
+            want = pr.paired(pipe, sub_item or task, impl)
+            if a.by != impl or not fallback_matches(rec, want):
+                die(f"--fallback requires a SAME_MODEL review by implementer {impl} with fallback '{want} unavailable'")
+        if (a.fallback is None and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
     kept = candidate_file(plan, a.task, a.phase, full, a.by, a.subtask)
@@ -1577,7 +1648,7 @@ def cmd_verdict(a, reg):
         old_impl = (old.get("implementer") or review_implementer(pipe, plan, task)[0]) if isinstance(old, dict) else impl
         want = pr.paired(pipe, task, a.implementer or old_impl)
         new_pair = pr.paired(pipe, task, rec["implementer"])
-        new_paired = a.by == new_pair or (a.by == rec["implementer"] and rec.get("fallback") == new_pair)
+        new_paired = a.by == new_pair or (a.by == rec["implementer"] and fallback_matches(rec, new_pair))
         if (not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
                 and old.get("fingerprint") == rec["fingerprint"]):
             print(f"factory-pipeline: kept the {want} review of {a.task} at {a.sha[:10]} (the task's paired reviewer); "
@@ -1611,6 +1682,7 @@ def worktree_for(path, branch):
 
 
 def gate(plan, reg, allow_same_model=False, run_checks=True):
+    coverage_cache = {}
     pipe = settings(reg)
     v = validate(plan, reg)
     blockers, notes, commands, unverified = list(v["errors"]), [], [], []
@@ -1693,15 +1765,15 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{t['id']}: review {rv.get('state')} at {rv.get('sha', '')[:10]}")
             continue
         if rv.get("by") != want:
-            if rv.get("by") == impl and rv.get("fallback") == want:
-                notes.append(f"{t['id']}: SAME_MODEL (fallback: {want} unavailable)")
+            if rv.get("by") == impl and fallback_matches(rv, want):
+                notes.append(f"{t['id']}: {fallback_note(rv, want)}")
             elif rv.get("by") == impl and allow_same_model:
                 notes.append(f"{t['id']}: review SAME_MODEL ({impl}) accepted by --allow-same-model")
             else:
                 blockers.append(f"{t['id']}: reviewed by {rv.get('by')}, cross-model review needs {want}"
                                 + (" (or --allow-same-model when it is unavailable)" if rv.get("by") == impl else ""))
                 continue
-        sub_blockers, sub_notes = subtask_coverage(plan, reg, pipe, t, rv, impl, heads[key], allow_same_model)
+        sub_blockers, sub_notes = subtask_coverage(plan, reg, pipe, t, rv, impl, heads[key], allow_same_model, coverage_cache)
         blockers += sub_blockers
         notes += sub_notes
         if not info["worktrees"] and serial_count(plan, reg, key) > 1:
@@ -1710,7 +1782,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                 blockers.append(f"{t['id']}: QA {tq.get('state')} at {tq['sha'][:10]}")
             elif tq:
                 _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], tq["sha"])
-                moved = uncovered_changes(plan, reg, t, tq["sha"], heads[key])
+                moved = uncovered_changes(plan, reg, t, tq["sha"], heads[key], cache=coverage_cache)
                 if rc != 0:
                     blockers.append(f"{t['id']}: QA ran on {tq['sha'][:10]}, which does not contain the reviewed commit {rv['sha'][:10]}")
                 elif moved:
@@ -1719,7 +1791,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         if rc != 0:
             blockers.append(f"{t['id']}: reviewed commit {rv['sha'][:10]} is not integrated into {plan['topic']}")
             continue
-        changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key])
+        changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key], cache=coverage_cache)
         if changed:
             blockers.append(f"{t['id']}: review is STALE - owned paths changed after {rv['sha'][:10]}: "
                             + ", ".join(changed[:5]))
@@ -2421,7 +2493,7 @@ def main():
     v.add_argument("--task", required=True)
     v.add_argument("--phase", required=True, choices=("review", "qa"))
     v.add_argument("--sha", required=True)
-    v.add_argument("--by", required=True)
+    v.add_argument("--by", "--reviewer", dest="by", required=True)
     v.add_argument("--state", required=True)
     v.add_argument("--report")
     v.add_argument("--note")
