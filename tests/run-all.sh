@@ -4,6 +4,7 @@
 # Dead parallel workers fail with buffered output; added branch/worktree config sections warn, other mutations fail.
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
+#                         [--only-suites L] [--reuse] [--no-reuse] [--no-wait] [--list-suites]
 #   -j N, --jobs N  run up to N independent suites at once (default 1). Lines print in the -j 1 order with the
 #                   same count and exit code. Read-only live-workspace checks (runl, block) run one at a time
 #                   next to the fixture suites; run1 suites (shared git config guard, installed plugin, claude
@@ -11,7 +12,8 @@
 #   --affected      run only the suites the change touches (tests/affected.py: files changed since
 #                   merge-base(REF|origin/main|main) plus untracked); the cheap inline checks (JSON parse,
 #                   executable bits, manifest and wording greps, resolver and fixture checks) always run.
-#                   For iteration; the full run (no --affected) is the gate before a PR and for --release.
+#                   For iteration and task QA; the full run (no --affected, no --only-suites) is integration
+#                   QA's gate before a PR (once per batch, not each task's) and runs for --release.
 #                   With --affected or --only-suites, a check that runs a script outside a suite line (the live
 #                   blocks: scripts/checks/skill-citations.py, scripts/factory-context.sh, and in the live checks
 #                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
@@ -19,7 +21,10 @@
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when another full run holds the machine-wide lock
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
-#                   be a gated script above (e.g. scripts/checks/netcode-headless.sh)
+#                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
+#                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one.
+#   --list-suites   print every suite and gated script path run-all can select (one per line, exactly the names
+#                   --only-suites accepts, in run order) and exit 0; runs no check, takes no lock
 #   --no-reuse      force suites to run instead of reusing matching input PASS records
 #   --release       the installed plugin must equal the source (install-status CURRENT), the source
 #                   must be committed, and tests/installed-safety.sh must pass against the installed hooks
@@ -32,11 +37,15 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 cd "$ROOT" || exit 1
 gitcfg_snapshot "$ROOT"      # M4/P0: no test may rewrite the shared git config of the repo this runs in (checked at the end)
+RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stand-in plans set RUNALL_SUITES_FROM)
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
+list_only=false
 while [ $# -gt 0 ]; do
   case "$1" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
     --reuse) reuse=true ;; --no-wait) no_wait=true ;; --no-reuse) suite_reuse=false ;;
     --only-suites) only_suites="${2:-}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; }; shift ;;
+    --only-suites=*) only_suites="${1#--only-suites=}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; } ;;
+    --list-suites) list_only=true ;;
     --affected) affected=true ;; --base) base="${2:-}"; shift ;;
     -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; esac
   shift
@@ -153,9 +162,10 @@ run()  { _run bg "" "" "$@"; }
 runl() { _run bg "" live "$@"; }
 runp() { local name="$1" post="$2"; shift 2; _run bg "$post" "" "$name" "$@"; }
 run1() { drain; _run fg "" "" "$@"; }
-block() { if [ -z "$QD" ]; then "$1"; else _run bg replay live "$1" in_block "$1"; fi; }
-in_block() { ( QD=""; IN_BLOCK=1; "$1"; echo "<end of block>" ); }   # inside the job: the checks print at once
-IN_BLOCK=""
+# A block's checks read the live workspace: LIVE_BLOCK keeps every run line inside it out of suite reuse (-j 1 and -j N).
+block() { if [ -z "$QD" ]; then local LIVE_BLOCK=1; "$1"; else _run bg replay live "$1" in_block "$1"; fi; }
+in_block() { ( QD=""; IN_BLOCK=1; LIVE_BLOCK=1; "$1"; echo "<end of block>" ); }   # inside the job: the checks print at once
+IN_BLOCK=""; LIVE_BLOCK=""
 # not_affected: count a check the change does not touch (inside a block job, a marker line replay counts)
 not_affected() { if [ -n "$IN_BLOCK" ]; then echo "<not affected>"; else skip=$((skip + 1)); naff=$((naff + 1)); fi; }
 # gated <script>: guard for a check that runs <script> outside a run/runl line (block or inline). In a full run or
@@ -178,8 +188,9 @@ _run() {
   # Postprocessors can turn rc=0 into SKIP/FAIL, so they always grade fresh output.
   local cache_suite="$s"
   case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite="" ;; esac
-  [ -z "$post$lane" ] || cache_suite=""
-  case " $* " in *" --no-history "*) cache_suite="" ;; esac
+  # never reused: graded by a handler, live lane (runl, block), inside a block, or reading a workspace
+  [ -z "$post$lane$LIVE_BLOCK" ] || cache_suite=""
+  case " $* " in *" --no-history "*|*" RPG_FACTORY_WORKSPACE="*) cache_suite="" ;; esac
   if [ -z "$post" ] && suite_cache_hit "$cache_suite"; then ok "$name (reused $s inputs $suite_hash)"; return; fi
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
     if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
@@ -241,6 +252,47 @@ python_path_fast() {
     PATH="$real:$PATH"; export PATH
     echo "run-all: using real Python directory $real"
   esac
+}
+list_suites() { # file: every suite or gated script a run/runl/runp/run1 line or a gated guard in <file> names, as
+  # suite_of returns it (first tests/, testlab/ or scripts/ argument of the command); syntax checks and paths built
+  # from variables (the bash -n / py_compile loops) are not suites
+  python3 -B - "$1" <<'PY'
+import re, shlex, sys
+text = re.sub(r'\\\r?\n', ' ', open(sys.argv[1], encoding='utf-8').read())
+lead = {'if', 'elif', 'then', 'else', 'do', 'while', 'until', '!', '{'}
+syntax = ('bash -n:', 'py_compile:', 'json:', 'jq compile:')
+punct = lambda t: bool(t) and all(c in '();<>|&' for c in t)
+seen = []
+for line in text.splitlines():
+    if line.lstrip().startswith('#'):
+        continue
+    try:
+        lx = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lx.whitespace_split = True
+        toks = list(lx)
+    except ValueError:
+        continue
+    for i, t in enumerate(toks):
+        if t not in ('run', 'runl', 'runp', 'run1', 'gated') or not (i == 0 or punct(toks[i - 1]) or toks[i - 1] in lead):
+            continue
+        args = []
+        for a in toks[i + 1:]:
+            if punct(a):
+                break
+            args.append(a)
+        if t == 'gated':
+            cmd = args[:1]
+        elif not args or args[0].startswith(syntax):
+            continue
+        else:
+            cmd = args[2:] if t == 'runp' else args[1:]
+        for a in cmd:
+            if a.startswith(('tests/', 'testlab/', 'scripts/')):
+                if '$' not in a and a not in seen:
+                    seen.append(a)
+                break
+sys.stdout.buffer.write(''.join(s + '\n' for s in seen).encode())   # LF on Windows too: callers compare lines
+PY
 }
 suite_selected() {
   local target=$1
@@ -363,15 +415,17 @@ runall_prepare() {
   # All file-backed commands, including syntax checks, are valid suite_of units.
   while IFS= read -r suite; do suites+=("$suite"); done < <(find tests scripts testlab -type f 2>/dev/null | sort)
   if [ -n "$only_suites" ]; then
-    local -a requested; IFS=, read -r -a requested <<<"$only_suites"
+    # only a name a run line runs (--list-suites): any other file would be accepted and silently never run
+    local listed bad=false; local -a requested
+    listed=$(list_suites "${RUNALL_SUITES_FROM:-$RUNALL_SELF}") || { echo "run-all: cannot list the suites" >&2; return 2; }
+    IFS=, read -r -a requested <<<"$only_suites"
     for candidate in "${requested[@]}"; do
       found=false
-      for suite in "${suites[@]}"; do
-        if [ "$suite" = "$candidate" ] && [[ "$candidate" =~ \.(sh|py|jq)$ ]]; then found=true; break; fi
-      done
+      while IFS= read -r suite; do [ "${suite%$'\r'}" = "$candidate" ] && { found=true; break; }; done <<<"$listed"
       $found && continue
-      echo "run-all: unknown suite '$candidate'" >&2; return 2
+      echo "run-all: unknown suite '$candidate' (not a suite run-all runs; see --list-suites)" >&2; bad=true
     done
+    $bad && return 2
   fi
   if $suite_reuse && ! $release; then
     hash_output=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" hashes "${suites[@]}" 2>/dev/null) || hash_output=""
@@ -411,6 +465,7 @@ PY
 
 # sourced (tests/run-all-parallel.test.sh): scheduler and config classifier only, no checks
 [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
+if $list_only; then list_suites "${RUNALL_SUITES_FROM:-$RUNALL_SELF}"; exit; fi
 runall_prepare; prep_rc=$?
 [ "$prep_rc" -eq 10 ] && exit 0
 [ "$prep_rc" -eq 0 ] || exit "$prep_rc"

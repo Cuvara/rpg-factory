@@ -152,6 +152,7 @@ printf '#!/usr/bin/env bash\nprintf "b\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/b
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
+for s in blockrun ws orphan; do printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$RUN_LOG"\n' "$s" > "$TMP/repo/tests/$s.sh"; done
 cat > "$TMP/hashes.py" <<'PY'
 import os, sys
 if sys.argv[1] == 'hashes':
@@ -178,6 +179,12 @@ if [ "${WITH_LIVE:-0}" != 0 ]; then
   block gated_block
   gated scripts/checks/x.sh && { bash scripts/checks/x.sh inline && ok "gated inline x" || bad "gated inline x"; }
 fi
+# workspace readers: a run line inside a block (like sgl-determinism, wire-parity) and one given RPG_FACTORY_WORKSPACE
+blk_run() { run blockrun bash tests/blockrun.sh; }
+if [ "${WITH_WS:-0}" != 0 ]; then
+  block blk_run
+  run ws env RPG_FACTORY_WORKSPACE=/ws bash tests/ws.sh
+fi
 [ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
 drain
 runall_finish
@@ -188,6 +195,7 @@ git -C "$TMP/repo" init -q
 git -C "$TMP/repo" add .
 git -C "$TMP/repo" -c user.name=test -c user.email=test@test commit -qm fixture
 export ROOT_UNDER_TEST="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state" RUNALL_AFFECTED_PY="$TMP/hashes.py" RUN_LOG="$TMP/log"
+export RUNALL_SUITES_FROM="$TMP/cache-plan.sh"   # --only-suites accepts the stand-in plan's run lines
 cache_plan() { bash "$TMP/cache-plan.sh" "$TMP/repo" "$@"; }
 reset_cache() { rm -rf "$TMP/state/run-all"; : > "$RUN_LOG"; }
 reset_cache
@@ -227,6 +235,32 @@ out=$(cache_plan --only-suites tests/a.sh); rc=$?
 out=$(cache_plan --only-suites tests/unknown.sh 2>&1); rc=$?
 [ "$rc" = 2 ] && grep -q "unknown suite 'tests/unknown.sh'" <<<"$out" \
   && good '--only-suites rejects unknown name with exit 2' || no 'unknown suite' "$out"
+# an existing file no run line runs would be accepted and never run: exit 2 naming each such name, nothing runs
+: > "$RUN_LOG"
+out=$(cache_plan --only-suites tests/orphan.sh,tests/a.sh,scripts/lib/fstate.py 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/orphan.sh'" <<<"$out" && grep -q "unknown suite 'scripts/lib/fstate.py'" <<<"$out" \
+  && ! grep -q "'tests/a.sh'" <<<"$out" && [ ! -s "$RUN_LOG" ] \
+  && good '--only-suites rejects every existing file without a run line (exit 2, each named)' || no 'orphan suite' "$out"
+out=$(cache_plan --only-suites=tests/a.sh,tests/blockrun.sh,scripts/checks/x.sh,tests/live.sh); rc=$?
+[ "$rc" = 0 ] && good '--only-suites accepts run lines, block run lines and gated scripts (also --only-suites=L)' || no 'accepted names' "$out"
+# --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
+: > "$RUN_LOG"
+out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+  && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
+real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
+miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
+    scripts/checks/netcode-headless.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
+  grep -qx "$s" <<<"$real" || miss+=" $s"; done
+for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
+[ "$rc" = 0 ] && [ -z "$miss" ] && [ "$(sort <<<"$real" | uniq -d)" = "" ] \
+  && good "--list-suites on run-all.sh: suites and gated scripts, no orphan or syntax-check path ($(wc -l <<<"$real") names)" \
+  || no "--list-suites (run-all.sh) wrong:$miss" "$real"
+out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/handoff-e2e.test.sh,tests/git-guard.test.sh,tests/orca-wait.test.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/handoff-e2e.test.sh'" <<<"$out" && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
+  && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
+  && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
 reset_cache
 out=$(cache_plan --affected --only-suites tests/a.sh); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$RUN_LOG")" = 'a b ' ] \
@@ -301,6 +335,23 @@ live_case '--only-suites listing them runs them' 'a block inline live ' '5 0 1' 
 SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh live_case '--affected selecting them runs them' 'b block inline live ' '5 0 1' --affected
 live_case '--affected not selecting them skips them' 'b ' '2 0 4' --affected
 live_case 'a full run runs them' 'a b block inline live ' '6 0 0'
+# Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
+# RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
+ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh
+plant() { local s k; for s in tests/live.sh tests/blockrun.sh tests/ws.sh; do
+  k=$(printf '%s' "$s" | sha1sum); k=${k%% *}; mkdir -p "$TMP/state/run-all/suites/$k"; printf 'PASS\n' > "$TMP/state/run-all/suites/$k/$(printf 'a%.0s' {1..64})"; done; }
+for j in 1 3; do
+  reset_cache
+  out1=$(WITH_LIVE=1 WITH_WS=1 cache_plan -j "$j" --only-suites "$ws_suites"); rc1=$?
+  published=$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')
+  plant; : > "$RUN_LOG"
+  out=$(WITH_LIVE=1 WITH_WS=1 cache_plan -j "$j" --only-suites "$ws_suites"); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc1" = 0 ] && [ "$published" = 1 ] && [ "$rc" = 0 ] && [ "$log" = 'blockrun live ws ' ] \
+    && grep -q '^PASS  a (reused tests/a.sh inputs ' <<<"$out" && [ "$(grep -c 'reused' <<<"$out")" = 1 ] \
+    && good "workspace readers (block run line, runl, RPG_FACTORY_WORKSPACE) never reused, fixture suite reused (-j $j)" \
+    || no "workspace reader reuse (-j $j): published=$published log '$log'" "$out1"$'\n----\n'"$out"
+done
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"
