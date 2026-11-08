@@ -310,10 +310,14 @@ if "claude" in code.lower():
 qa = next((line for line in table.splitlines() if "| QA |" in line), "")
 if re.search(r"implementer('s)? model|same model|implementing model", qa, re.I):
     errors.append(f"which-model QA row names the implementer's model: '{qa}'")
-section = " ".join(text.split("## 10. ", 1)[-1].split())
-for phrase in required:
-    if phrase not in section:
-        errors.append(f"section 10 lacks the routing rule: '{phrase}'")
+section10 = re.search(r"^## 10\. .*?(?=^## |\Z)", text, re.M | re.S)
+if not section10:
+    errors.append("section 10 missing")
+else:
+    section = " ".join(section10.group(0).split())
+    for phrase in required:
+        if phrase not in section:
+            errors.append(f"section 10 lacks the routing rule: '{phrase}'")
 if root:
     copies = [path.relative_to(root).as_posix() for path in sorted(Path(root).rglob("*.md"))
               if path.relative_to(root).as_posix() != relative
@@ -359,6 +363,8 @@ w_mutate "token rule dropped" "section 10 lacks the routing rule: 'delegates cod
   'sed -i "s/delegates code to Codex and does not implement/may implement/" "$F"'
 w_mutate "fallback marker dropped" "section 10 lacks the routing rule: 'SAME_MODEL (fallback: <model> unavailable)'" \
   'sed -i "s/SAME_MODEL (fallback: <model> unavailable)/SAME_MODEL/g" "$F"'
+w_mutate "which-model section 10 heading renamed" "section 10 missing" \
+  'sed -i "s/^## 10\. /## Ten. /" "$F"'
 w_mutate "which-model table copied into docs" "which-model table copied outside $PW: docs/zz-models.md" \
   'mkdir -p docs && sed -n "/^| Role or kind |/,/^| QA |/p" "$F" > docs/zz-models.md'
 w_mutate "which-model table copied into a skill" "which-model table copied outside $PW: skills/client-integration/SKILL.md" \
@@ -374,9 +380,12 @@ policy, root, relative = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 text = policy.read_text(encoding="utf-8")
 marker = "<!-- policy:qa-tiers -->"
 errors = []
-section = text.split("## 10. ", 1)[-1].split("\n## ", 1)[0]
+section10 = re.search(r"^## 10\. .*?(?=^## |\Z)", text, re.M | re.S)
+section = section10.group(0) if section10 else ""
 match = re.search(re.escape(marker) + r"\s*\n((?:\|[^\n]*\n)+)", section)
-if text.count(marker) != 1 or not match:
+if not section10:
+    errors.append("section 10 missing")
+elif text.count(marker) != 1 or not match:
     errors.append("qa-tiers table missing or marker duplicated")
 else:
     table = match.group(1)
@@ -431,6 +440,8 @@ q_mutate "QA tiers re-QA row drops the task check suites" "qa-tiers row changed:
 q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or docs-only task/s/every owned path/every changed path/" "$F"'
 q_mutate "QA tiers task row requires a full run" "qa-tiers task row permits a full run" \
   'sed -i "/^| Task QA,/s/never a full run/run a full run/" "$F"'
+q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
+  'sed -i "s/^## 10\. /## Ten. /" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
   'sed -n "/^<!-- policy:qa-tiers -->$/,/^$/p" "$F" > skills/client-integration/SKILL.md'
 

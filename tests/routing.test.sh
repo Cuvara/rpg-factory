@@ -74,8 +74,20 @@ history() {
   assert "history $3@$sha: $name" "$key" "$pred" "${files[@]}"
   if [ "$fail" -eq "$before_fail" ] && [ -z "$history_cached_out" ] && [ -n "$cache_file" ]; then
     # Atomic replace via the shared state helper; a cache I/O failure only loses reuse.
-    printf '%s' "$assert_out" | python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from fstate import write_text; write_text(sys.argv[2], sys.stdin.read())' \
-      "$ROOT/scripts/lib" "$cache_file" 2>/dev/null || :
+    # Prune on write: keep the current key's directory and the 3 most recent sibling
+    # key directories (only 64-hex names, so nothing else under routing-replay/ is touched).
+    printf '%s' "$assert_out" | python3 -B -c '
+import os, re, shutil, sys
+sys.path.insert(0, sys.argv[1])
+from fstate import write_text
+write_text(sys.argv[2], sys.stdin.read())
+current = os.path.dirname(os.path.abspath(sys.argv[2])); parent = os.path.dirname(current)
+others = [os.path.join(parent, n) for n in os.listdir(parent)
+          if re.fullmatch(r"[0-9a-f]{64}", n) and os.path.join(parent, n) != current
+          and os.path.isdir(os.path.join(parent, n))]
+for old in sorted(others, key=os.path.getmtime, reverse=True)[3:]:
+    shutil.rmtree(old, ignore_errors=True)
+' "$ROOT/scripts/lib" "$cache_file" 2>/dev/null || :
   fi
 }
 
