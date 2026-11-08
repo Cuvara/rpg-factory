@@ -3,6 +3,10 @@
 Topics for the next plugin plans (base `main`). A topic leaves this file when a plan task covers it; the list
 below says where each earlier topic went. Conventions: `docs/plans/README.md`.
 
+When a topic becomes a plan task, its `checks` name the task's own suites or
+`tests/run-all.sh --affected --base <task base> -j 2`, never a full `tests/run-all.sh`, and its acceptance never
+requires a full run: the one full run of a batch is integration QA (`parallel-work.md` section 10, "QA tiers").
+
 ## Open
 
 ### repo-path-audit

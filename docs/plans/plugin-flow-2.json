@@ -261,6 +261,58 @@
       ],
       "implementer": "codex",
       "reviewer": "claude"
+    },
+    {
+      "id": "qa-tiers",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "QA tiers: stop re-running the full suite. Follow the run lead's approved QA-tiers plan (sections 'Tiers' and 'Changes' 1-6, 'Subtasks'). (1) tests/run-all.sh: one full run per machine via a lock in the persistent state dir (wait / --no-wait exit 3 / stale takeover), a result record per clean tree and --reuse that exits 0 at once on a PASS record of the same tree. (2) tests/affected.py: scripts/lib/* no longer GLOBAL; map lib modules to their importers statically, unsure means run; tests/affected.test.sh. (3) tests/git-guard.test.sh batch mode through scripts/git-guard.py --batch (same evaluate path), ~30 cases keep the real hook process; same case count, record wall time before and after. (4) registry pipeline.qa_tiers {task: affected, integration: full}; dispatch --phase qa names the tier command (task: --affected --base <review base> -j 2, never a full run; integration: --reuse -j 4 under the lock; re-QA: failed suites + --affected from the previous candidate); validate WARNs on a full run in task checks or acceptance. (5) claude docs: QA tiers table in parallel-work.md section 10 (single copy, mutation test), .claude/CLAUDE.md PR rule, Commands (--reuse, --no-wait) and Operating lessons (one full run per machine), changelog fragment. Subtasks: runall-lock-reuse, affected-narrow, guard-batch, pipeline-qa-tier (codex), policy-docs (claude); placement shared. This task's own QA uses the new tier: --affected, never a full run. (6) docs/plans: sync docs/plans/plugin-flow-2.json with the run lead's live plan (repo path stays ../..) and drop full runs from the task checks of the next tasks in docs/plans/backlog.md (claude, part of policy-docs). (7) Speed, measured at 09ef888 (sum of suite times 4973 s): parallel-policy 831 s, git-guard 717 s, routing 393 s, pipeline 312 s, facts 225 s, run-checks 212 s. (a) Suite-level reuse: run-all records per suite a PASS keyed by a hash of the suite's inputs (the suite file + the files affected.py maps to it + GLOBAL inputs + tool versions); a later run (task re-QA or the integration full run) skips a suite whose input hash already PASSED and prints `reused <suite> (inputs <hash>)`; `--no-reuse` forces; unsure mapping means run. (b) tests/parallel-policy.test.sh: build the throwaway copy once and run each mutation's lint only on the mutated file's checks (or in parallel), target under 120 s. (c) tests/routing.test.sh history replay: cache replay results keyed by commit SHA + registry hash; replay only new commits. (d) run-all prepends the real Python directory (sys.executable of python3 -c) to PATH for the suites when python3 resolves to the Windows Store alias (about 70 ms per call; no change to the user's system). (e) tests/pipeline.test.sh: build fixture git repos once and copy them per case instead of re-creating. Record before/after wall times per suite. Subtasks: suite-reuse (codex, tests/run-all.sh with runall-lock-reuse, so one subtask), policy-speed (codex), routing-cache (codex), pipeline-fixtures (codex, with pipeline-qa-tier). Targets: task QA under 10 min including the session; integration full run under 10 min when most suites reuse. (8) User rule 2026-11-08: a task never runs the whole suite. Task QA = exactly the suites of the task's own change: the task `checks` plus the suites tests/affected.py maps to the changed files (narrowed per item 2), each suite once (a check that names a suite already selected is not run twice; suite reuse skips unchanged inputs). dispatch --phase qa prints that one command (`tests/run-all.sh --only-suites <list>` or `--affected --base <review base>` deduplicated with the checks) and the spec forbids a full run. Small tasks (tier S, or every changed path docs/skills/changelog): no separate QA session - the task lead runs the same command after the review PASS and records `verdict --phase qa --by <lead> --note 'tier S: lead ran task suites'`; the gate accepts it for tier S only. The only full run is integration, once per batch, with suite reuse.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "scripts/git-guard.py",
+        "tests/git-guard.test.sh",
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "registry/core.json",
+        "registry.json",
+        "docs/registry.schema.json",
+        "tests/pipeline.test.sh",
+        "skills/factory-core/references/parallel-work.md",
+        ".claude/CLAUDE.md",
+        "tests/parallel-policy.test.sh",
+        "changelog.d/qa-tiers.md",
+        "docs/plans/",
+        "tests/routing.test.sh"
+      ],
+      "exclusions": [],
+      "deps": [
+        "wave-close"
+      ],
+      "checks": [
+        "bash tests/run-all-parallel.test.sh",
+        "bash tests/affected.test.sh",
+        "tests/git-guard.test.sh",
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "python3 -B scripts/build-registry.py --check",
+        "tests/run-all.sh --affected --base plugin-flow-2 -j 2"
+      ],
+      "acceptance": [
+        "lock, reuse and --no-wait tested",
+        "a lib change selects only importer suites (test)",
+        "git-guard suite same case count, under 1/3 wall time",
+        "QA spec names the tier command; validate warns on full runs in task checks",
+        "--affected 0 failed (the integration full run covers the rest)",
+        "suite reuse tested (hit, miss on input change, --no-reuse)",
+        "before/after wall times recorded: parallel-policy < 120 s, git-guard < 1/3",
+        "QA spec runs only the task's suites (test with a fixture plan)",
+        "tier S QA by the lead accepted by gate only for tier S"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
     }
   ]
 }
