@@ -5,11 +5,18 @@
   `--note` is required and the reviewer must be the implementer's model; the gate shows it as an accepted fallback
   with its reason and note, never silently.
 
+### Changed
+
+- **Pipeline.** The bare `verdict --fallback <model>` form now also requires `--note`, like the retrospective
+  `--fallback '<model> unavailable'` form.
+
 ### Fixed
 
 - **Pipeline.** The gate judges a subtask review's currency with the multi-wave attribution the task level uses, and
   from the subtask's own paths instead of the task's whole owned paths: a later wave merged with its own current
-  PASS review no longer makes an earlier subtask review STALE, while unreviewed changes still do.
+  PASS review no longer makes an earlier subtask review STALE, while unreviewed changes still do. A later sibling
+  subtask's own current paired PASS review also covers its changes to an earlier subtask's paths (for example a fix
+  session that edits files an earlier subtask implemented).
 - **Pipeline.** A workspace-relative `repos.<key>.path` in a plan is resolved under the workspace wherever the
   pipeline reads a repo path.
 - **Pipeline.** `tests/routing.test.sh` strips the CR from skill names that Windows `jq -r` prints.
