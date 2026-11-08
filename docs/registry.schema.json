@@ -339,37 +339,61 @@
             },
             "profiles": {
               "type": "object",
-              "description": "agent -> role or grade -> model and effort; every agent in scope has all of planner, lead, review, qa, light, standard, heavy",
+              "description": "agent -> role or grade -> model and effort; every agent in scope has all of planner, lead, review, qa, light, standard, heavy; model and effort are limited per agent to the values of its scope entry (scripts/check-registry.sh checks the exact model/effort pairs)",
               "minProperties": 1,
-              "additionalProperties": {
-                "type": "object",
-                "required": [
-                  "planner",
-                  "lead",
-                  "review",
-                  "qa",
-                  "light",
-                  "standard",
-                  "heavy"
-                ],
-                "additionalProperties": {
-                  "type": "object",
-                  "required": [
-                    "model",
-                    "effort"
-                  ],
-                  "properties": {
-                    "model": {
-                      "type": "string",
-                      "minLength": 1
+              "properties": {
+                "claude": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/agent_profiles"
                     },
-                    "effort": {
-                      "type": "string",
-                      "minLength": 1
+                    {
+                      "additionalProperties": {
+                        "properties": {
+                          "model": {
+                            "enum": [
+                              "claude-opus-5-5",
+                              "claude-sonnet-5-5"
+                            ]
+                          },
+                          "effort": {
+                            "enum": [
+                              "medium",
+                              "high"
+                            ]
+                          }
+                        }
+                      }
                     }
-                  },
-                  "additionalProperties": false
+                  ]
+                },
+                "codex": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/agent_profiles"
+                    },
+                    {
+                      "additionalProperties": {
+                        "properties": {
+                          "model": {
+                            "enum": [
+                              "gpt-6.1-sol"
+                            ]
+                          },
+                          "effort": {
+                            "enum": [
+                              "medium",
+                              "high"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/agent_profiles"
               }
             },
             "default_grade": {
@@ -742,6 +766,36 @@
     }
   },
   "$defs": {
+    "agent_profiles": {
+      "type": "object",
+      "required": [
+        "planner",
+        "lead",
+        "review",
+        "qa",
+        "light",
+        "standard",
+        "heavy"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "model",
+          "effort"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effort": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "check": {
       "type": "object",
       "required": [

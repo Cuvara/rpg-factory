@@ -432,6 +432,19 @@ X=$(subplan badgrade gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a
 expect "subplan validate: an unknown subtask grade is an error" 1 "ERROR subtask s1: grade huge is not one of light, standard, heavy" subplan validate "$X"
 X=$(subplan intgrade gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","grade":3}]')
 expect "subplan validate: a non-string grade is an error" 1 "ERROR subtask s1: .grade. must be a string" subplan validate "$X"
+X=$(plan badparent "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"],\"grade\":\"huge\"}]}")
+BP=$(subplan badparent a '[{"id":"s1","objective":"o","paths":["x/a.go"],"implementer":"claude"}]')
+expect "subplan validate: an unknown parent task grade is an error, never replaced by the default" 1 'ERROR task a: grade "huge" is not one of light, standard, heavy' subplan validate "$BP" --plan "$X"
+refute "subplan validate: an unknown parent task grade is not OK" "^OK$" subplan validate "$BP" --plan "$X"
+refute "subplan validate: an unknown parent task grade prints no inherited model" "^Model: subtask" subplan validate "$BP" --plan "$X"
+for bad in 42 '"s1"' true; do
+  X=$(subplan rawtype gw "$bad")
+  expect "subplan validate: subtasks $bad is INVALID, not a traceback" 1 "ERROR .subtasks. must be a non-empty list of objects" subplan validate "$X"
+  refute "subplan validate: subtasks $bad raises no traceback" "Traceback|TypeError" subplan validate "$X"
+done
+X=$(subplan rawimpl gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":["claude"],"reviewer":{"a":1}}]')
+expect "subplan validate: a non-string implementer and reviewer are errors, not a traceback" 1 "ERROR subtask s1: .implementer. must be a string" subplan validate "$X"
+refute "subplan validate: a non-string implementer raises no traceback" "Traceback|TypeError" subplan validate "$X"
 expect "implement of a light subtask: claude-sonnet-5-5 high" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task gw --phase implement --subplan "$GSP" --subtask s1 --runner orca
 expect "implement of a heavy subtask: claude-opus-5-5 high" 0 "^orca orchestration worker-start .*--model claude-opus-5-5 --effort high --json$" dispatch "$OK" --task gw --phase implement --subplan "$GSP" --subtask s3 --runner orca
 expect "implement of an ungraded codex subtask of a light task: gpt-6.1-sol medium" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort medium --json$" dispatch "$OK" --task gw --phase implement --subplan "$GSP" --subtask s2 --runner orca

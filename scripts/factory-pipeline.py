@@ -849,22 +849,24 @@ def subplan_models(sub, plan, reg, errors):
     except model_policy.PolicyError as e:
         errors.append(str(e))
         return None
-    if task.get("grade", "standard") in model_policy.GRADES:
-        tg = task_grades(plan, reg, policy, [task])[task["id"]]
-    else:  # validate names the plan's bad grade
-        tg = {"grade": policy["default_grade"], "source": "default_grade"}
+    if task.get("grade", "standard") not in model_policy.GRADES:  # the subtasks' inherited grade would be a guess
+        errors.append(f"task {task['id']}: grade {json.dumps(task['grade'])} is not one of {', '.join(model_policy.GRADES)}")
+        return None
+    tg = task_grades(plan, reg, policy, [task])[task["id"]]
     out = {"task": tg, "subtasks": {}}
-    for s in sub.get("subtasks") or []:
-        if not isinstance(s, dict) or not id_ok(s.get("id")) or s.get("implementer") not in pipe["agents"]:
+    raw = sub.get("subtasks")  # validate_subplan already rejected anything but a list of objects
+    for s in raw if isinstance(raw, list) else []:
+        impl = s.get("implementer") if isinstance(s, dict) else None
+        if not isinstance(impl, str) or not id_ok(s.get("id")) or impl not in pipe["agents"]:
             continue
-        reviewer = s.get("reviewer") or pipe["review_pairing"].get(s["implementer"])
+        reviewer = s.get("reviewer") or pipe["review_pairing"].get(impl)
         own = s.get("grade") in model_policy.GRADES
         if "grade" in s and not own:
             continue  # validate_subplan already named the bad grade
         grade = s["grade"] if own else tg["grade"]
         row = {"grade": grade, "source": "subplan" if own else f"task grade: {tg['source']}"}
-        for phase, agent, role in (("implement", s["implementer"], grade), ("review", reviewer, review_role(grade))):
-            if agent not in pipe["agents"]:
+        for phase, agent, role in (("implement", impl, grade), ("review", reviewer, review_role(grade))):
+            if not isinstance(agent, str) or agent not in pipe["agents"]:
                 row[phase] = None  # validate_subplan already named the unknown reviewer
                 continue
             try:
