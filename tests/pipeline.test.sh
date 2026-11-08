@@ -629,13 +629,21 @@ def git(*args):
     assert p.returncode == 0, p.stderr
     return p.stdout.strip()
 git('init', '-q', '-b', 'main')
-(repo / 'code.py').write_text('base'); git('add', '.'); git('commit', '-qm', 'base')
+(repo / 'code.py').write_text('base')
+# stand-in run-all: --list-suites prints the suites it runs (tests/dogfood.sh and installed-safety.sh are not among them)
+(repo / 'tests').mkdir()
+(repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/pipeline.test.sh\\ntests/routing-properties.test.py\\n"; exit 0 ;; esac\n'
+                                          'echo full > "$(dirname "$0")/../full-run"; exit 1\n', newline='\n')
+git('add', '.'); git('commit', '-qm', 'base')
 base = git('rev-parse', 'HEAD'); git('switch', '--no-track', '-c', 'topic')
 (repo / 'code.py').write_text('change'); git('commit', '-qam', 'change'); first = git('rev-parse', 'HEAD')
 task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py'],
         'checks': ['bash tests/pipeline.test.sh', 'env -u TMPDIR tests/pipeline.test.sh',
                    'tests/run-all.sh -j 4', 'tests/run-all.sh --affected --only-suites tests/pipeline.test.sh',
-                   'python3 -B scripts/build-registry.py --check'], 'acceptance': ['full run-all 0 failed']}
+                   'python3 -B scripts/build-registry.py --check', 'tests/dogfood.sh',
+                   'python3 -B tests/routing-properties.test.py',
+                   'tests/run-all.sh --affected --only-suites tests/installed-safety.sh'],
+        'acceptance': ['full run-all 0 failed']}
 plan = {'schema': m.SCHEMA, 'id': 'qa-tiers', 'title': 'QA', 'topic': 'topic', 'tier': 'M',
         'repos': {'fixture': {'path': str(repo), 'base': 'main'}}, 'tasks': [task]}
 pf = work / 'plan.json'
@@ -644,44 +652,78 @@ save()
 git('worktree', 'add', '-q', '-b', 'topic-a', str(work / 'task'), 'topic')
 warnings = m.validate(plan, reg)['warnings']
 assert len([w for w in warnings if 'full runs belong to integration QA' in w]) == 2, warnings
-safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed'])
+safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed',
+                                                                      'tests/run-all.sh --only-suites tests/x.sh 0 failed'])
 assert not m.pr.qa_warnings(safe)
+for text in ['full suite 0 failed', 'the whole suite passes', 'all suites 0 failed', 'entire test suite green']:
+    assert m.pr.qa_warnings(dict(safe, acceptance=[text])), text
+assert not m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count']))
+# without run-all --list-suites nothing is folded: every check stays an extra command, no full run is started
+assert m.pr.qa_checks([task], None)[0] == [] and 'tests/dogfood.sh' in m.pr.qa_checks([task], None)[1]
+old = work / 'old'; (old / 'tests').mkdir(parents=True)
+(old / 'tests' / 'run-all.sh').write_text('echo full > "$(dirname "$0")/../full-run"\n', newline='\n')
+assert m.runall_suites(str(old)) is None and not (old / 'full-run').exists()
+(old / 'tests' / 'run-all.sh').write_text('[ "$1" = --list-suites ] && exit 2\n', newline='\n')
+assert m.runall_suites(str(old)) is None
+assert m.runall_suites(str(repo)) == {'tests/pipeline.test.sh', 'tests/routing-properties.test.py'}
 assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['docs/a.md', 'skills/foo/']))
 assert not m.pr.small_task({'tier': 'M'}, task)
 def cli(*args):
     p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
     assert p.returncode == 0, (args, p.stdout, p.stderr)
     return p.stdout
+def cli_fail(*args):
+    p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
+    assert p.returncode != 0 and '--failed-suites' in p.stderr, (args, p.stdout, p.stderr)
 def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
 out = dispatch('qa', first)
-command = 'tests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2'
+command = ('tests/run-all.sh --affected --base main --only-suites '
+           'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
 assert out.count(command) == 1, out
 assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' in out
-assert 'tests/run-all.sh -j 4' not in out and 'Extra commands:\npython3 -B scripts/build-registry.py --check' in out
+extras = ('Extra commands:\npython3 -B scripts/build-registry.py --check\ntests/dogfood.sh\n'
+          'bash tests/installed-safety.sh')
+assert 'tests/run-all.sh -j 4' not in out and extras in out, out
+assert 'routing-properties.test.py' not in out.split('Extra commands:')[1], out
+assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exists()
 assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)
-assert 'tests/run-all.sh --reuse -j 4' in dispatch('qa', first, 'integration:fixture')
+out = dispatch('qa', first, 'integration:fixture')
+assert 'tests/run-all.sh --reuse -j 4' in out and 'was dropped' not in out and extras in out, out
+lean = m.qa_body(first, [dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
+                 runall={'tests/pipeline.test.sh'})
+assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
+# --failed-suites refusals: a PASS, a review verdict, a path outside tests/
+cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'PASS',
+         '--failed-suites', 'tests/routing.test.sh')
+cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'review', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+         '--failed-suites', 'tests/routing.test.sh')
+cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+         '--failed-suites', 'scripts/check-registry.sh')
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
     '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh')
 (repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
 out = dispatch('qa', second)
-assert '--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing.test.sh -j 2' in out, out
+assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
+        'tests/routing.test.sh -j 2') in out, out
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL')
 assert '--base main ' in dispatch('qa', second)
 def verdict(tid, phase, by, note=None):
     args = ['verdict', str(pf), '--task', tid, '--phase', phase, '--sha', second, '--by', by, '--state', 'PASS']
     if note: args += ['--note', note]
     cli(*args)
-# implementer codex: QA by claude (another model, also the lead) passes as before; QA by codex only as tier S lead QA
+# implementer codex: a QA session by any model passes as before (codex = the one-model fallback); a QA verdict
+# recorded as the lead's own tier S run passes only for a tier S task
 task['implementer'] = 'codex'
 for tier, by, note, allowed in [('S', 'codex', 'tier S: lead ran task suites', True),
+                                ('S', 'claude', 'tier S: lead ran task suites', True),
                                 ('M', 'codex', 'tier S: lead ran task suites', False),
-                                ('S', 'codex', None, False), ('M', 'claude', None, True),
-                                ('M', 'claude', 'tier S: lead ran task suites', True)]:
+                                ('M', 'claude', 'tier S: lead ran task suites', False),
+                                ('S', 'codex', None, True), ('M', 'codex', None, True), ('M', 'claude', None, True)]:
     plan['tier'] = tier; save()
     verdict('a', 'review', 'claude'); verdict('a', 'qa', by, note); verdict('integration:fixture', 'qa', 'claude')
     result = m.gate(plan, reg, run_checks=False)
-    blocked = any('QA by the implementer model' in b for b in result['blockers'])
+    blocked = any('tier S lead QA, but the task is not tier S' in b for b in result['blockers'])
     assert blocked != allowed, (tier, by, note, result)
     if allowed: assert not result['blockers'], result
 plan['tier'] = 'S'; save()

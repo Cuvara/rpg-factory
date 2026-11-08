@@ -154,9 +154,24 @@ def small_task(plan, task):
             all(p.startswith(('docs/', 'skills/', 'changelog.d/')) or p.endswith('.md') for p in paths))
 
 
-def qa_checks(tasks):
-    """Split suite invocations from extra commands; run-all is folded into the tier command."""
+SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)'
+                         r'|python3(?:\s+-B)?\s+(?:\./)?(tests/[\w.-]+\.py)')
+
+
+def suite_command(suite):
+    return ('python3 -B ' if suite.endswith('.py') else 'bash ') + suite
+
+
+def qa_checks(tasks, runall_suites=None):
+    """Split suite invocations from extra commands; run-all is folded into the tier command.
+    runall_suites: the suites `tests/run-all.sh --list-suites` prints in the task checkout. Only those are folded
+    (run-all accepts and skips any other tests/ file); None (no such flag) folds nothing."""
+    known = set(runall_suites or ())
     suites, extra, dropped = set(), [], False
+
+    def add_extra(command):
+        if command not in extra:
+            extra.append(command)
     for task in tasks:
         for check in task.get('checks', []):
             try:
@@ -168,14 +183,18 @@ def qa_checks(tasks):
                 for i, w in enumerate(words):  # suites a run-all check names join the one tier command
                     listed = w.split('=', 1)[1] if w.startswith('--only-suites=') else (
                         words[i + 1] if w == '--only-suites' and i + 1 < len(words) else '')
-                    suites.update(x.strip() for x in listed.split(',') if x.strip())
+                    for x in (x.strip() for x in listed.split(',')):
+                        if x in known:
+                            suites.add(x)
+                        elif x:
+                            add_extra(suite_command(x))
                 continue
             # Only plain suite commands count: compound commands remain explicit extra checks.
-            match = re.fullmatch(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)', check.strip())
-            if match:
-                suites.add(match[1])
-            elif check not in extra:
-                extra.append(check)
+            match = SUITE_CHECK.fullmatch(check.strip())
+            if match and (match[1] or match[2]) in known:
+                suites.add(match[1] or match[2])
+            else:
+                add_extra(check)
     return sorted(suites), extra, dropped
 
 
@@ -184,7 +203,10 @@ def qa_warnings(task):
     if qa_checks([task])[2]:
         out.append(f"task {task.get('id')}: full run in checks; full runs belong to integration QA")
     for text in task.get('acceptance', []):
-        if '--affected' not in text and re.search(r'full.*run-all|run-all\.sh.*0 failed', text, re.I):
+        scoped = '--affected' in text or '--only-suites' in text
+        if not scoped and re.search(r'full.*run-all|run-all\.sh.*0 failed'
+                                    r'|\b(?:full|whole|entire|complete)\s+(?:test\s+)?suites?\b|\ball\s+(?:the\s+)?suites\b',
+                                    text, re.I):
             out.append(f"task {task.get('id')}: full run in acceptance; full runs belong to integration QA")
             break
     return out

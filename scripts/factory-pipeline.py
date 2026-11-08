@@ -73,8 +73,9 @@ docs/schemas/pipeline-plan.schema.json.
         candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
         model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
         no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
-        run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`, run-all
-        checks folded into it, other checks as extra commands. Re-QA after a QA FAIL that recorded --failed-suites:
+        run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
+        is folded into it only when its suite is one `tests/run-all.sh --list-suites` prints in the task checkout
+        (no such flag: none is); other checks are extra commands. Re-QA after a QA FAIL that recorded --failed-suites:
         --base <that FAIL's candidate> plus those suites. A tier-S task (plan or task tier S, or only docs/, skills/,
         changelog.d/, *.md paths) needs no QA session: the task lead may run the command after the review PASS.
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
@@ -109,7 +110,7 @@ docs/schemas/pipeline-plan.schema.json.
         current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
-        QA PASS by the implementer model counts only for a tier-S task with a note starting 'tier S'. With
+        QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push and `gh pr create` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -935,8 +936,25 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
                if not info["worktrees"] else ""))
 
 
-def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False):
-    suites, extra, dropped = pr.qa_checks(tasks)
+def runall_suites(path):
+    """The suites `tests/run-all.sh --list-suites` prints in the checkout, or None without that flag. An older
+    run-all ignores unknown flags and would start a full run, so the flag must appear in the script first."""
+    script = os.path.join(path or ".", "tests", "run-all.sh")
+    try:
+        with open(script, encoding="utf-8", errors="replace") as f:
+            if "--list-suites" not in f.read():
+                return None
+        r = subprocess.run(["bash", "tests/run-all.sh", "--list-suites"], cwd=path or ".", capture_output=True,
+                           text=True, timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return {line.strip() for line in r.stdout.splitlines() if line.strip()}
+
+
+def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None):
+    suites, extra, dropped = pr.qa_checks(tasks, runall)
     suites = sorted(set(suites) | set(failed_suites or []))
     command = "tests/run-all.sh --reuse -j 4" if integration else (
         "tests/run-all.sh --affected --base " + shlex.quote(base)
@@ -948,7 +966,7 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     if small:
         policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
                    "and record verdict --phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'.")
-    if dropped:
+    if dropped and not integration:
         policy += " A full run-all check was dropped and folded into the tier command."
     return ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
             + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, "
@@ -957,7 +975,7 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
             "Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
             + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", []))
             + "\n" + policy + "\nQA tier command:\n" + command
-            + "\nExtra commands:\n" + "\n".join(extra))
+            + ("\nExtra commands:\n" + "\n".join(extra) if extra else ""))
 
 
 def child_at_head(sha, parent):
@@ -1019,7 +1037,7 @@ def cmd_dispatch(a, reg):
                       pr.roles(pipe, {}, avail, next(iter(impls)))["qa"] if len({i[0] for i in impls}) == 1 else
                       pr.choose(pipe.get("qa_prefer", "codex"), "integration qa_prefer", avail))
         print(f"model: qa -> {agent} ({why})", file=sys.stderr)
-        at_head = None
+        at_head, home = None, None
         if info["worktrees"]:
             # the integrated tree is the checkout of plan.topic (where the run lead merges): QA joins it or a child of it
             home = worktree_for(info["path"], plan["topic"])[0] if info["path"] else None
@@ -1045,7 +1063,7 @@ def cmd_dispatch(a, reg):
                 print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
                       "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
-                  + qa_body(a.sha, tasks, at_head, integration=True)
+                  + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan)
         child_note(place)
@@ -1195,7 +1213,8 @@ def cmd_dispatch(a, reg):
             base, failed = previous["sha"], previous["failed_suites"]
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
-                  + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task))
+                  + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
+                            runall=runall_suites(home or info["path"]))
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan)
@@ -1849,13 +1868,13 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         blockers += sub_blockers
         notes += sub_notes
         tq, tq_stale = verdict_of(plan, reg, t["id"], "qa")
-        # QA by another model is accepted as before; QA by the implementer model only as tier S lead QA
-        if tq and not tq_stale and tq.get("state") == "PASS" and tq.get("by") == impl:
-            if pr.small_task(plan, t) and (tq.get("note") or "").startswith("tier S"):
+        # QA eligibility is unchanged; only a tier S lead QA (no QA session) is limited to tier S tasks
+        if tq and not tq_stale and tq.get("state") == "PASS" and (tq.get("note") or "").startswith("tier S"):
+            if pr.small_task(plan, t):
                 notes.append(f"{t['id']}: tier S lead ran task suites")
             else:
-                blockers.append(f"{t['id']}: QA by the implementer model ({impl}) needs a tier S task "
-                                "and a note starting 'tier S'")
+                blockers.append(f"{t['id']}: QA recorded as tier S lead QA, but the task is not tier S; "
+                                "an M/L task needs a QA session (dispatch --phase qa)")
         if not info["worktrees"] and serial_count(plan, reg, key) > 1:
             tq = read_verdict(plan, reg, t["id"], "qa", blockers)  # missing: "<id>: no qa verdict"
             if tq and tq.get("state") != "PASS":
