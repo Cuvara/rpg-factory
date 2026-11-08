@@ -465,21 +465,35 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
 <!-- policy:qa-tiers -->
 | When | Runs | Who |
 |---|---|---|
-| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> --only-suites <check suites> -j 2`: the task's checks plus the suites `tests/affected.py` maps to its changed files, each suite once; never a full run | a fresh QA session in the task worktree |
+| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name plus the suites `tests/affected.py` maps to its changed files, each suite once; other checks are extra commands; never a full run | a fresh QA session in the task worktree |
 | Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
-| Tier S or docs-only task (every changed path docs, skills or changelog) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`, which the gate accepts for tier S only |
+| Tier S or docs-only task (every changed path docs, skills or changelog) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a QA PASS by the implementer's model counts for tier S only |
 | Reviewer | no suites; only a repro test when a finding needs one | the review session |
 | Integration QA, once per batch before the PR | `tests/run-all.sh --reuse -j 4`: the batch's one full run, under the run-all lock, reusing suites whose inputs already passed | the run lead's integration QA session |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session (`.claude/CLAUDE.md` "Releases") |
 
-- **The lock.** A full run (no `--affected` or `--only-suites`) takes a per-machine lock in the persistent state
-  dir; a second full run waits (`waiting for full run <pid> in <checkout>`), `--no-wait` exits 3 instead, and a lock
-  whose holder is dead is taken over.
+- **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
+  under `docs/`, `skills/` or `changelog.d/` or is a `.md` file. The gate accepts a task QA PASS by the
+  implementer's model only for such a task with a note starting `tier S`; a QA PASS by the other model is accepted
+  for every tier.
+- **Re-QA.** A QA FAIL is recorded with `verdict --phase qa --state FAIL --failed-suites <tests/a.sh,...>`. The next
+  `dispatch --phase qa` on a new candidate prints `--affected --base <that FAIL's candidate>` with those suites
+  added to `--only-suites`.
+- **The lock.** A full run (no `--affected` or `--only-suites`, or any `--release` run) takes a per-machine lock in
+  the persistent state dir; a second full run waits (`waiting for full run <pid> in <checkout>`), `--no-wait` exits 3
+  instead, and a lock whose holder is dead is taken over (`run-all: taking over stale full-run lock (<pid>)`).
 - **Reuse.** A full run on a clean tree writes a result record for that tree; `--reuse` exits 0 at once on a PASS
-  record of the same clean tree (`reused full run at <HEAD> ...`). Each suite's PASS is also recorded under a hash of
-  its inputs (the suite file, the files `tests/affected.py` maps to it, the global inputs and the tool versions); a
-  later run skips that suite (`reused <suite> (inputs <hash>)`). `--no-reuse` runs every suite, `--release` never
-  reuses, and an input mapping that is unsure runs the suite.
+  record of the same clean tree with at least the same coverage (`reused full run at <HEAD> (tree <tree>, <date>)`;
+  a `--no-workspace` or `--no-claude` record does not satisfy a run without that flag). Each suite's PASS is also
+  recorded under a hash of its inputs (the suite file, the files `tests/affected.py` maps to it, the global inputs
+  and the tool versions); a later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
+  graded by a postprocessor and live-workspace suites always run, and no record is published when the inputs
+  changed during the run. `--no-reuse` runs every suite, `--release` never reuses, and an input mapping that is
+  unsure runs the suite.
+- **Selection.** `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the
+  checks that run a script outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan,
+  package ready, Netcode headless) are selected like suites by that script path, else they count as not affected;
+  `--only-suites` may name such a script (`tests/run-all.sh` usage header).
 - **Plans.** A task's `checks` name its own suites or the `--affected` command, never a full `tests/run-all.sh`, and
   its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
 

@@ -106,8 +106,10 @@ tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace 
 tests/run-all.sh --no-claude        # skip `claude plugin validate`
 tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh
 tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base (tests/affected.py); not the PR gate
-tests/run-all.sh --only-suites LIST # only the named suites (task QA: the task's checks)
-tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree (integration QA)
+tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected; task QA: the task's checks);
+                                    # with --affected or --only-suites, live blocks and script checks (skill-citations,
+                                    # factory-context, pin-plan, package-ready, netcode-headless...) are gated like suites
+tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree and coverage (integration QA)
 tests/run-all.sh --no-wait          # exit 3 instead of waiting when another full run holds the per-machine lock
 tests/run-all.sh --no-reuse         # run every suite; by default a suite whose input hash already passed is reused
 tests/run-all.sh -j 4               # up to 4 suites at once; same lines, order, count and exit code as -j 1 (default);
