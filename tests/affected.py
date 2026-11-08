@@ -8,7 +8,8 @@
 
 A suite runs when one of these holds (anything unsure runs):
   - a global input changed (GLOBAL: registry, hooks, manifests, run-all itself) - every suite runs;
-  - a library change reaches a named script or suite through static imports (unresolved/dynamic libraries run all);
+  - a library or Python module change reaches a named script or suite through static imports, followed through
+    every tracked Python module on the way (unresolved/dynamic libraries, unnamed leaves run all);
   - the suite file itself changed;
   - a changed file is a path the suite's own text names (scripts/..., skills/..., commands/..., docs/..., ...);
   - a changed file matches one of the suite's EXTRA patterns (indirect inputs the text does not name).
@@ -89,56 +90,126 @@ def inventory():
     return sorted(set((git("ls-files", "-z", "--cached", "--others", "--exclude-standard") or "").split("\0")) - {""})
 
 
+SCANNED = (".py", ".sh", ".jq")
+MENTIONS = SCANNED + (".md", ".json", ".yml", ".yaml", ".toml", ".txt")
+
+
+def module_names(path):
+    """Import names a tracked module answers to: lib-relative dotted names, else its stem and dotted parents."""
+    if path.startswith("scripts/lib/"):
+        module = path[len("scripts/lib/"):].removesuffix(".py").replace("/", ".").removesuffix(".__init__")
+        return {module, module.split(".")[0]}
+    parts = path.removesuffix(".py").split("/")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return {".".join(parts[i:]) for i in range(len(parts))} if parts else set()
+
+
+def code_only(path, text):
+    """Drop comments and Python docstrings: prose that names a script is not an edge."""
+    if path.endswith(".py"):
+        text = re.sub(r"(?m)^[ \t]*[rRbBuU]?(\"\"\"|''')[\s\S]*?\1", "", text)
+    return re.sub(r"(?m)(^|\s)#.*$", r"\1", text)
+
+
+# this file's tables name scripts it never runs; run-all runs suites, a suite change selects itself (both GLOBAL)
+NOT_IMPORTERS = {"tests/affected.py", "tests/run-all.sh"}
+PY_FILE = re.compile(r"[\w-]+\.py\b")
+LOADER = re.compile(r"spec_from_file_location|run_path|exec_module")
+LOAD_LINE = re.compile(r"join\(|/\s*['\"]|['\"]/|__file__|\b(HERE|ROOT|SCRIPTS)\b|subprocess|sys\.executable|\bexec")
+
+
+def load_refs(path, text):
+    """Python file names that code loads or runs: every name in a shell/jq file or in a Python module that loads
+    files (spec_from_file_location), else only names on a line that builds a path or runs a process (a bare
+    name in a message or an allow-list is not a dependency)."""
+    if not path.endswith(".py") or LOADER.search(text):
+        return set(PY_FILE.findall(text))
+    return {base for line in text.splitlines() if LOAD_LINE.search(line) for base in PY_FILE.findall(line)}
+
+
 @lru_cache(None)
 def library_graph():
-    """Reverse static edges; scan each file once, including shell/jq references."""
-    libs = [p for p in inventory() if p.startswith("scripts/lib/")]
-    aliases = {}
-    for p in libs:
-        rel = p[len("scripts/lib/"):]
-        module = rel.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
-        for name in {module, module.split(".")[0]}:
-            aliases.setdefault(name, set()).add(p)
-    reverse = {p: set() for p in libs}
-    for path in inventory():
-        if not path.endswith((".py", ".sh", ".jq")):
+    """Reverse static edges over scripts/lib/* and every tracked Python module; scan each file once.
+
+    An edge A -> B means A imports B by name, names B's file (spec_from_file_location, exec, a shell call) or,
+    for scripts/lib, references lib/<B>. Also returns the file names any tracked text file mentions."""
+    files = inventory()
+    nodes = [p for p in files if p.startswith("scripts/lib/") or p.endswith(".py")]
+    aliases, by_name = {}, {}
+    for p in nodes:
+        if p.endswith(".py"):
+            for name in module_names(p):
+                aliases.setdefault(name, set()).add(p)
+            base = p.rsplit("/", 1)[-1]
+            if base != "__init__.py":
+                by_name.setdefault(base, set()).add(p)
+    libs = [p for p in nodes if p.startswith("scripts/lib/")]
+    reverse = {p: set() for p in nodes}
+    mentioned = {}
+    for path in files:
+        if not path.endswith(MENTIONS):
             continue
         raw = contents(path)
         if raw is None or b"\0" in raw:
             continue
         text = raw.decode("utf-8", errors="replace")
+        if path.endswith(SCANNED):
+            text = code_only(path, text)
+        for base in set(PY_FILE.findall(text)) - {"__init__.py"}:  # a package loaded by path is unsure
+            mentioned.setdefault(base, set()).add(path)
+        if not path.endswith(SCANNED) or path in NOT_IMPORTERS:
+            continue
         names = set(re.findall(r"\bfrom\s+([\w.]+)\s+import\b", text))
         for clause in re.findall(r"\bimport\s+([\w., ]+)", text):
             names.update(part.strip().split(" ")[0] for part in clause.split(","))
         refs = set()
         for name in names:
             refs.update(aliases.get(name, ()))
+        for dots, module, clause in re.findall(r"\bfrom\s+(\.+)([\w.]*)\s+import\s+([\w., ]+)", text):
+            package = "/".join(path.split("/")[:-len(dots)])
+            stems = [module.replace(".", "/")] if module else [part.strip().split(" ")[0] for part in clause.split(",")]
+            refs.update(p for stem in stems for p in (f"{package}/{stem}.py", f"{package}/{stem}/__init__.py") if p in reverse)
+        for base in load_refs(path, text):
+            refs.update(by_name.get(base, ()))
         for ref in re.findall(r"\blib/([\w./-]+)", text):
             refs.update(p for p in libs if p == "scripts/lib/" + ref or p.startswith("scripts/lib/" + ref.rstrip("/") + "/"))
-        for lib in refs:
-            if path != lib:
-                reverse[lib].add(path)
-    return reverse
+        for target in refs:
+            if path != target:
+                reverse[target].add(path)
+    return reverse, mentioned
+
+
+def dynamic(path):
+    raw = contents(path)
+    code = re.sub(rb"(?m)#.*$", b"", raw or b"")
+    return raw is None or re.search(rb"\b(importlib|__import__)\b|sys\.path", code) is not None
 
 
 @lru_cache(None)
 def reaches(path):
-    if not path.startswith("scripts/lib/"):
+    """Every file a change to path can reach through static imports, path included; None when unsure.
+
+    Library modules and the Python modules they reach are followed to their importers. A dynamic library, a
+    library nobody imports, and a reached module that has no importer and that no other file names (loaded by a
+    computed path) are unsure."""
+    graph, mentioned = library_graph()
+    if path not in graph or not (path.startswith("scripts/lib/") or path.endswith(".py")):
         return frozenset([path])
-    graph = library_graph()
     todo, seen = [path], set()
     while todo:
         current = todo.pop()
         if current in seen:
             continue
         seen.add(current)
-        if current.startswith("scripts/lib/"):
-            raw = contents(current)
-            code = re.sub(rb"(?m)#.*$", b"", raw or b"")
-            if raw is None or re.search(rb"\b(importlib|__import__)\b|sys\.path", code):
-                return None
-            todo.extend(graph.get(current, ()))
-    if not any(not p.startswith("scripts/lib/") for p in seen):
+        if current.startswith("scripts/lib/") and dynamic(current):
+            return None
+        importers = graph.get(current, ())
+        if (current != path and current.endswith(".py") and not importers
+                and not mentioned.get(current.rsplit("/", 1)[-1], set()) - {current}):
+            return None
+        todo.extend(importers)
+    if path.startswith("scripts/lib/") and not any(not p.startswith("scripts/lib/") for p in seen):
         return None
     return frozenset(seen)
 

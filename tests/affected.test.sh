@@ -49,7 +49,21 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          "scripts/lib/dynamic.py": "import importlib\n", "scripts/lib/orphan.py": "x=1\n",
          "scripts/lib/compat.sh": "true\n", "tests/shell.test.sh": ". scripts/lib/compat.sh\n",
          "scripts/lib/pkg/__init__.py": "", "scripts/pkg-entry.py": "from pkg import thing\n",
-         "tests/pkg.test.sh": "python scripts/pkg-entry.py\n", "scripts/checks/english-only.py": "pass\n"}
+         "tests/pkg.test.sh": "python scripts/pkg-entry.py\n", "scripts/checks/english-only.py": "pass\n",
+         # lib -> non-lib helper -> entry script: only the entry is named by a suite
+         "scripts/lib/deep.py": "X = 1\n", "scripts/helpers/helper.py": "from deep import X\n",
+         "scripts/tool.py": "import helper\n", "tests/tool.test.sh": "python scripts/tool.py\n",
+         # lib -> module loaded by path (spec_from_file_location) -> loader script
+         "scripts/lib/via_path.py": "X = 1\n", "scripts/checks/plug-in.py": "import via_path\n",
+         "scripts/checks/loader.py": "spec = importlib.util.spec_from_file_location('p', HERE / 'plug-in.py')\n",
+         "tests/loader.test.sh": "python scripts/checks/loader.py\n",
+         # a bare file name in a message is not a dependency
+         "scripts/talk.py": "print('run plug-in.py first')\n", "tests/talk.test.sh": "python scripts/talk.py\n",
+         # relative import inside a lib package
+         "scripts/lib/rpkg/__init__.py": "from .part import Y\n", "scripts/lib/rpkg/part.py": "Y = 1\n",
+         "scripts/rel-entry.py": "import rpkg\n", "tests/rel.test.sh": "python scripts/rel-entry.py\n",
+         # lib -> module nothing imports or names (loaded by a computed path): unsure
+         "scripts/lib/hidden.py": "X = 1\n", "scripts/plugins/dyn.py": "import hidden\n"}
 for path, text in files.items():
     p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
 m.ROOT = str(root)
@@ -68,6 +82,17 @@ check("unimported library remains global", m.needed(["scripts/lib/orphan.py"], "
 check("dynamic library remains global in fixture", m.needed(["scripts/lib/dynamic.py"], "tests/other.test.sh"))
 check("shell library reaches importer", m.needed(["scripts/lib/compat.sh"], "tests/shell.test.sh"))
 check("package reaches importer", m.needed(["scripts/lib/pkg/__init__.py"], "tests/pkg.test.sh"))
+check("library reaches suite through a non-lib helper", m.needed(["scripts/lib/deep.py"], "tests/tool.test.sh"))
+check("non-lib helper change reaches the entry's suite", m.needed(["scripts/helpers/helper.py"], "tests/tool.test.sh"))
+check("helper chain skips unrelated suite", not m.needed(["scripts/lib/deep.py"], "tests/other.test.sh"))
+check("library reaches suite through a module loaded by path", m.needed(["scripts/lib/via_path.py"], "tests/loader.test.sh"))
+check("bare file name in a message is not an edge", not m.needed(["scripts/lib/via_path.py"], "tests/talk.test.sh"))
+check("relative import reaches package importer", m.needed(["scripts/lib/rpkg/part.py"], "tests/rel.test.sh"))
+check("relative import skips unrelated suite", not m.needed(["scripts/lib/rpkg/part.py"], "tests/other.test.sh"))
+check("library reaching an unnamed module stays global", m.needed(["scripts/lib/hidden.py"], "tests/other.test.sh"))
+reset(); tool_before = h("tests/tool.test.sh")
+(root / "scripts/lib/deep.py").write_text("X = 2\n")
+check("hash changes on a library reached through a helper", tool_before != h("tests/tool.test.sh"))
 before = h(); check("hash stable on unchanged tree", before == h())
 (root / "scripts/entry.py").write_text("import outer\nx=2\n")
 after = h(); check("hash changes on direct input", after != before)
