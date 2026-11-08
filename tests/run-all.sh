@@ -56,10 +56,11 @@ AFF=""
 if $affected && ! $release; then
   AFF=$(mktemp_win)/changed.txt
   if python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" changed ${base:+"$base"} > "$AFF"; then echo "affected mode: $(wc -l < "$AFF" | tr -d ' ') changed file(s)"
-  else echo "affected mode: no base, running everything"; AFF=""; fi
+  elif [ -n "$only_suites" ]; then echo "affected mode: no base, running only --only-suites $only_suites"; rm -rf "${AFF%/*}"; AFF=""
+  else echo "affected mode: no base, running everything"; rm -rf "${AFF%/*}"; AFF=""; fi
 fi
 
-pass=0; fail=0; skip=0; naff=0; cleanup=(); failures=()
+pass=0; fail=0; skip=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
 STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
 _ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
@@ -79,6 +80,10 @@ runall_cleanup() {
   local pid
   for pid in $(jobs -p); do kill "$pid" 2>/dev/null || :; done
   [ -z "$QD" ] || rm -rf "$QD"
+  [ -z "$AFF" ] || rm -rf "${AFF%/*}"
+  # every exit (also --list-suites, a --reuse hit, --no-wait, an unknown suite) removes the config copy, except after a
+  # shared-config FAIL, whose message names the copy
+  [ -z "${GITCFG_COPY:-}" ] || [ -n "$GITCFG_KEEP" ] || rm -f "$GITCFG_COPY"
   if [ -n "$LOCK_TOKEN" ] && [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$LOCK_TOKEN" ]; then
     rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
     rmdir "$LOCK" 2>/dev/null || :
@@ -115,7 +120,7 @@ flush() { # print the queue up to the first suite still running
       read -r st secs < "$QD/$i.res"
       if [ "$st" = 137 ] && grep -q 'suite worker died without a result' "$QD/$i.out"; then _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"
       elif [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
-      elif [ "$st" = 0 ]; then suite_cache_pass "${QS[i]}"; _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
+      elif [ "$st" = 0 ]; then suite_cache_pass "${QS[i]}" "$(cat "$QD/$i.out")"; _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
       rm -f "$QD/$i.res" "$QD/$i.out"
     else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
     unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
@@ -195,7 +200,7 @@ _run() {
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
     if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
     t0=$(date +%s)
-    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$cache_suite"; ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$cache_suite" "$out"; ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
     return
   fi
   n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
@@ -318,12 +323,16 @@ suite_cache_hit() {
   $suite_reuse && ! $release && [ -n "$STATE" ] && [ -n "$1" ] || return 1
   suite_cache_file "$1" && [ -f "$cache_file" ] && grep -qx PASS "$cache_file"
 }
-suite_cache_pass() {
+suite_cache_pass() { # suite output
   # Defer publishing until the input snapshot is confirmed unchanged at the end.
   $suite_reuse && ! $release && [ -n "$STATE" ] && [ -n "$1" ] || return 0
+  # A suite that skipped cases (a tool, repo or platform missing) passed only in part: once the tool appears its
+  # inputs are the same, so a record would reuse the partial pass. Such a suite runs again next time.
+  suite_partial "${2:-}" && return 0
   suite_cache_file "$1" || return 0
   CACHE_PATHS+=("$cache_file")
 }
+suite_partial() { grep -Eqi '^[[:space:]]*SKIP([[:space:]:(]|$)|not on PATH|NOT_AVAILABLE' <<<"$1"; }
 input_snapshot() {
   # Includes dirty and untracked bytes, not just status letters or mtimes.
   python3 -B - <<'PY'
@@ -350,21 +359,39 @@ lock_alive() {
   fi
   return 1
 }
+dir_age() { python3 -c 'import os,sys,time; print(int(time.time()-os.stat(sys.argv[1]).st_mtime))' "$1" 2>/dev/null; }
+reclaim_stale() { # a takeover that died inside its reclaim guard must not wedge the lock: remove a guard whose holder
+  # is dead, or one older than 10 s (a takeover holds it for milliseconds)
+  local r="$LOCK/reclaim" rpid age
+  [ -d "$r" ] || return 0
+  rpid=$(cat "$r/pid" 2>/dev/null)
+  if [[ "$rpid" =~ ^[0-9]+$ ]] && kill -0 "$rpid" 2>/dev/null; then
+    age=$(dir_age "$r") && [ "$age" -ge 10 ] || return 0
+  elif [ -z "$rpid" ]; then
+    # the pid is written right after mkdir: give a live holder time to write it
+    age=$(dir_age "$r") && [ "$age" -ge 2 ] || return 0
+  fi
+  echo "run-all: removing stale reclaim guard of the full-run lock (${rpid:-no pid})"
+  rm -f "$r/pid"; rmdir "$r" 2>/dev/null || :
+}
 full_lock() {
   local owner waited=false age
   LOCK="$STATE/locks/run-all-full"; mkdir -p "${LOCK%/*}" || return 1
   until mkdir "$LOCK" 2>/dev/null; do
     # mkdir and metadata publication are separate: give a new holder time to publish.
     if [ ! -f "$LOCK/pid" ]; then
-      age=$(python3 -c 'import os,sys,time; print(int(time.time()-os.stat(sys.argv[1]).st_mtime))' "$LOCK" 2>/dev/null) || continue
+      age=$(dir_age "$LOCK") || continue
       [ "$age" -ge 10 ] || { $no_wait && { echo "waiting for full run unknown in $LOCK"; return 3; }; sleep 0.2; continue; }
     fi
+    reclaim_stale
     if ! lock_alive && mkdir "$LOCK/reclaim" 2>/dev/null; then
+      printf '%s
+' "$$" > "$LOCK/reclaim/pid"
       if ! lock_alive; then
         echo "run-all: taking over stale full-run lock ($(cat "$LOCK/pid" 2>/dev/null))"
         rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
-        rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
-      else rmdir "$LOCK/reclaim" 2>/dev/null || :; fi
+        rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
+      else rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" 2>/dev/null || :; fi
       continue
     fi
     if ! $waited; then echo "waiting for full run $(cat "$LOCK/pid" 2>/dev/null) in $(cat "$LOCK/checkout" 2>/dev/null)"; waited=true; fi
@@ -762,6 +789,7 @@ live_checks() {
       && ok "pin-plan replays 17b7737 (lock hash + DOTS Sample file)" || bad "pin-plan replay of 17b7737" "$out"
     out=$(python3 -B scripts/checks/pin-plan.py com.cuvara.dots v99.0.0 2>&1); rc=$?
     [ $rc -eq 1 ] && grep -q "BLOCKED: tag v99.0.0 not found" <<<"$out" && ok "pin-plan blocks on a missing tag" || bad "pin-plan missing-tag gate" "$out"
+  else not_affected   # two pin-plan checks: gated counted the first
   fi
   for p in Netcode UnityDots UIToolkit; do
     gated scripts/checks/package-ready.py || continue
@@ -831,7 +859,7 @@ if [ -n "${GITCFG_FILE:-}" ]; then
   elif [ -n "${GITCFG_COPY:-}" ] && [ "$(gitcfg_classify "$GITCFG_COPY" "$GITCFG_FILE")" = WARN ]; then
     note "WARN  shared git config: only other sessions' branch/worktree sections were added during the run"
     note "$(diff -u "$GITCFG_COPY" "$GITCFG_FILE" | sed 's/^/      /')"
-  else bad "shared git config changed during the run" "$out"; fi
+  else GITCFG_KEEP=1; bad "shared git config changed during the run" "$out"; fi
 else skp "shared git config unchanged during the run" "not inside a git repository"; fi
 
 runall_finish

@@ -152,13 +152,20 @@ printf '#!/usr/bin/env bash\nprintf "b\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/b
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
+# partial: passes with a SKIP line (a tool missing), like orca-commands without orca
+printf '#!/usr/bin/env bash
+printf "partial\n" >> "$RUN_LOG"
+echo "SKIP  tool not on PATH"
+' > "$TMP/repo/tests/partial.sh"
 for s in blockrun ws orphan; do printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$RUN_LOG"\n' "$s" > "$TMP/repo/tests/$s.sh"; done
 cat > "$TMP/hashes.py" <<'PY'
 import os, sys
 if sys.argv[1] == 'hashes':
     for suite in sys.argv[2:]:
         print(suite, '-' if suite.endswith('never.sh') else os.environ.get('INPUT_HASH', 'a'*64))
-elif sys.argv[1] == 'changed': print('tests/b.sh')
+elif sys.argv[1] == 'changed':
+    if os.environ.get('NO_BASE'): sys.exit(1)
+    print('tests/b.sh')
 elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] in os.environ.get('SELECT', 'tests/b.sh').split(',') else 1)
 PY
 cat > "$TMP/cache-plan.sh" <<'PLAN'
@@ -172,6 +179,7 @@ runall_prepare; rc=$?
 run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
+[ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
 # a live-lane suite, and a block and an inline check that run a script outside a run line (gated like a suite)
 gated_block() { gated scripts/checks/x.sh && { bash scripts/checks/x.sh block && ok "gated block x" || bad "gated block x"; }; ok "block cheap"; }
 if [ "${WITH_LIVE:-0}" != 0 ]; then
@@ -246,7 +254,7 @@ out=$(cache_plan --only-suites=tests/a.sh,tests/blockrun.sh,scripts/checks/x.sh,
 # --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
 : > "$RUN_LOG"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
-[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
   && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
 real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
@@ -281,6 +289,19 @@ WITH_NEVER=1 cache_plan --only-suites tests/never.sh >/dev/null
 out=$(WITH_NEVER=1 cache_plan --only-suites tests/never.sh); rc=$?
 [ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
   && good 'hash - never reuses a suite' || no 'never reuse marker' "$out"
+# a suite that passed with SKIP lines (a missing tool) records no PASS: it runs again once the tool may be there
+for j in 1 3; do
+  reset_cache
+  WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh,tests/a.sh >/dev/null
+  out=$(WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh,tests/a.sh); rc=$?
+  [ "$rc" = 0 ] && [ "$(sort "$RUN_LOG" | tr '
+' ' ')" = 'a partial partial ' ] && grep -q 'reused tests/a.sh' <<<"$out"     && ! grep -q 'reused tests/partial.sh' <<<"$out"     && good "suite output with SKIP / not on PATH is never reused, a clean suite is (-j $j)" || no "partial suite reuse (-j $j): $(tr '
+' ' ' < "$RUN_LOG")" "$out"
+done
+# --affected without a base and --only-suites: the message names what runs, and only that runs
+reset_cache
+out=$(NO_BASE=1 cache_plan --affected --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && grep -q 'no base, running only --only-suites tests/a.sh' <<<"$out" && ! grep -q 'running everything' <<<"$out"   && [ "$(cat "$RUN_LOG")" = a ] && good '--affected without a base and --only-suites says it runs only the listed suites' || no 'no-base message' "$out"
 reset_cache
 out=$(BREAK_SUITE=1 cache_plan); rc=$?
 [ "$rc" = 1 ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
@@ -318,6 +339,17 @@ printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
 out=$(cache_plan --no-reuse); rc=$?
 [ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
+# A takeover that died inside its reclaim guard: before it removed the pid files (dead holder in reclaim/pid), and after
+# (lock holds only an old reclaim dir without pid). Neither wedges the lock, and --no-wait does not exit 3 for ever.
+L="$TMP/state/locks/run-all-full"
+mkdir -p "$L/reclaim"; printf '99999999
+' > "$L/pid"; printf '99999998
+' > "$L/reclaim/pid"
+out=$(timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && grep -q 'removing stale reclaim guard' <<<"$out" && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$L" ]   && good 'reclaim guard of a dead takeover is removed, lock taken over' || no "dead reclaim holder (rc=$rc)" "$out"
+mkdir -p "$L/reclaim"; touch -d '-1 minute' "$L/reclaim" "$L"
+out=$(timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse); rc=$?
+[ "$rc" = 0 ] && grep -q 'removing stale reclaim guard of the full-run lock (no pid)' <<<"$out" && [ ! -d "$L" ]   && good 'old reclaim guard without a pid in a pid-less lock is removed, lock taken over' || no "old pid-less reclaim (rc=$rc)" "$out"
 # With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
 # listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
 live_case() { # name want-log want-counts args...
@@ -352,6 +384,17 @@ for j in 1 3; do
     && good "workspace readers (block run line, runl, RPG_FACTORY_WORKSPACE) never reused, fixture suite reused (-j $j)" \
     || no "workspace reader reuse (-j $j): published=$published log '$log'" "$out1"$'\n----\n'"$out"
 done
+# Every exit removes the shared-config copy (gitcfg_snapshot's mktemp, in $TMPDIR): --list-suites, an unknown suite
+# (exit 2), a --reuse hit (exit 0 before any check) and --no-wait (exit 3)
+CT="$TMP/cfgtmp"; mkdir -p "$CT"; reset_cache
+TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" --list-suites >/dev/null; r1=$?
+TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" --only-suites tests/unknown.sh >/dev/null 2>&1; r2=$?
+cache_plan >/dev/null; TMPDIR="$CT" cache_plan --reuse >/dev/null; r3=$?
+mkdir -p "$TMP/state/locks/run-all-full"; printf '%s
+' "$$" > "$TMP/state/locks/run-all-full/pid"
+TMPDIR="$CT" cache_plan --no-reuse --no-wait >/dev/null; r4=$?; rm -rf "$TMP/state/locks/run-all-full"
+left=$(ls -A "$CT")
+[ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, --reuse hit, --no-wait) leave no git-config copy' || no "early-exit temp files (rc $r1 $r2 $r3 $r4)" "$left"
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"
