@@ -1,6 +1,8 @@
 """Model routing and best-effort per-run availability for the delivery pipeline."""
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -142,4 +144,47 @@ def warnings(pipe, items):
     planned = {a: {'available': True} for a in pipe['agents']}
     if len(items) >= 3 and len({route(pipe, i, planned)[0] for i in items}) == 1:
         out.append('one-model plan: 3 or more tasks/subtasks use one model')
+    return out
+
+
+def small_task(plan, task):
+    """A small plan/task or prose-only ownership permits QA by the lead."""
+    paths = task.get('paths') or []
+    return (plan.get('tier') == 'S' or task.get('tier') == 'S' or bool(paths) and
+            all(p.startswith(('docs/', 'skills/', 'changelog.d/')) or p.endswith('.md') for p in paths))
+
+
+def qa_checks(tasks):
+    """Split suite invocations from extra commands; run-all is folded into the tier command."""
+    suites, extra, dropped = set(), [], False
+    for task in tasks:
+        for check in task.get('checks', []):
+            try:
+                words = shlex.split(check)
+            except ValueError:
+                words = []
+            if any(re.fullmatch(r'(?:\./)?tests/run-all\.sh', w) for w in words):
+                dropped |= not any(w == '--affected' or w.startswith('--only-suites') for w in words)
+                for i, w in enumerate(words):  # suites a run-all check names join the one tier command
+                    listed = w.split('=', 1)[1] if w.startswith('--only-suites=') else (
+                        words[i + 1] if w == '--only-suites' and i + 1 < len(words) else '')
+                    suites.update(x.strip() for x in listed.split(',') if x.strip())
+                continue
+            # Only plain suite commands count: compound commands remain explicit extra checks.
+            match = re.fullmatch(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)', check.strip())
+            if match:
+                suites.add(match[1])
+            elif check not in extra:
+                extra.append(check)
+    return sorted(suites), extra, dropped
+
+
+def qa_warnings(task):
+    out = []
+    if qa_checks([task])[2]:
+        out.append(f"task {task.get('id')}: full run in checks; full runs belong to integration QA")
+    for text in task.get('acceptance', []):
+        if '--affected' not in text and re.search(r'full.*run-all|run-all\.sh.*0 failed', text, re.I):
+            out.append(f"task {task.get('id')}: full run in acceptance; full runs belong to integration QA")
+            break
     return out

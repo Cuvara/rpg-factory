@@ -508,9 +508,9 @@ else fail=$((fail + 1)); echo "FAIL  verdict records"; ls "$VD" | sed 's/^/     
 expect "--subtask goes with a plan task" 2 "--subtask is the id of a subtask" verdict "$G" --task integration:srv --phase qa --sha "$SG" --by codex --state PASS --subtask s2
 expect "Unity tasks need their own QA, one after another" 1 "BLOCKER c1: no qa verdict" gate "$G"
 v --task c1 --phase qa --sha "$C1" --by codex --state PASS
-v --task c2 --phase qa --sha "$C1" --by codex --state PASS
+v --task c2 --phase qa --sha "$C1" --by claude --state PASS
 expect "per-task QA on a commit without the reviewed one blocks" 1 "BLOCKER c2: QA ran on .* does not contain the reviewed commit" gate "$G"
-v --task c2 --phase qa --sha "$C2" --by codex --state PASS
+v --task c2 --phase qa --sha "$C2" --by claude --state PASS
 # every task and integration verdict PASS, but the current subtask s2 review FAIL still blocks gate and status
 expect "a current subtask review FAIL blocks the gate: NOT_READY" 1 "BLOCKER gw: subtask s2 review FAIL at .* by claude" gate "$G"
 expect "status names the subtask FAIL and starts the task lead" 0 "note: subtask s2 review FAIL" status "$G"
@@ -1934,6 +1934,83 @@ for case in covered direct post-review outside-owner invalid-review missing-revi
   if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  multiwave $case"
   else fail=$((fail + 1)); echo "FAIL  multiwave $case"; echo "$out"; fi
 done
+
+echo "-- QA tiers"
+if python3 -B - "$ROOT" "$TMP" <<'QA_TIERS'
+import argparse, contextlib, importlib.util, io, json, os, pathlib, subprocess, sys
+root, tmp = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('qa_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+work = pathlib.Path(tmp) / 'qa-tiers'; work.mkdir()
+repo = work / 'repo'; repo.mkdir()
+os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+git('init', '-q', '-b', 'main')
+(repo / 'code.py').write_text('base'); git('add', '.'); git('commit', '-qm', 'base')
+base = git('rev-parse', 'HEAD'); git('switch', '--no-track', '-c', 'topic')
+(repo / 'code.py').write_text('change'); git('commit', '-qam', 'change'); first = git('rev-parse', 'HEAD')
+task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py'],
+        'checks': ['bash tests/pipeline.test.sh', 'env -u TMPDIR tests/pipeline.test.sh',
+                   'tests/run-all.sh -j 4', 'tests/run-all.sh --affected --only-suites tests/pipeline.test.sh',
+                   'python3 -B scripts/build-registry.py --check'], 'acceptance': ['full run-all 0 failed']}
+plan = {'schema': m.SCHEMA, 'id': 'qa-tiers', 'title': 'QA', 'topic': 'topic', 'tier': 'M',
+        'repos': {'fixture': {'path': str(repo), 'base': 'main'}}, 'tasks': [task]}
+pf = work / 'plan.json'
+def save(): pf.write_text(json.dumps(plan))
+save()
+git('worktree', 'add', '-q', '-b', 'topic-a', str(work / 'task'), 'topic')
+warnings = m.validate(plan, reg)['warnings']
+assert len([w for w in warnings if 'full runs belong to integration QA' in w]) == 2, warnings
+safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed'])
+assert not m.pr.qa_warnings(safe)
+assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['docs/a.md', 'skills/foo/']))
+assert not m.pr.small_task({'tier': 'M'}, task)
+def cli(*args):
+    p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
+    assert p.returncode == 0, (args, p.stdout, p.stderr)
+    return p.stdout
+def dispatch(phase, sha, tid='a'):
+    return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
+out = dispatch('qa', first)
+command = 'tests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2'
+assert out.count(command) == 1, out
+assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' in out
+assert 'tests/run-all.sh -j 4' not in out and 'Extra commands:\npython3 -B scripts/build-registry.py --check' in out
+assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)
+assert 'tests/run-all.sh --reuse -j 4' in dispatch('qa', first, 'integration:fixture')
+cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+    '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh')
+(repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
+out = dispatch('qa', second)
+assert '--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing.test.sh -j 2' in out, out
+cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL')
+assert '--base main ' in dispatch('qa', second)
+def verdict(tid, phase, by, note=None):
+    args = ['verdict', str(pf), '--task', tid, '--phase', phase, '--sha', second, '--by', by, '--state', 'PASS']
+    if note: args += ['--note', note]
+    cli(*args)
+# implementer codex: QA by claude (another model, also the lead) passes as before; QA by codex only as tier S lead QA
+task['implementer'] = 'codex'
+for tier, by, note, allowed in [('S', 'codex', 'tier S: lead ran task suites', True),
+                                ('M', 'codex', 'tier S: lead ran task suites', False),
+                                ('S', 'codex', None, False), ('M', 'claude', None, True),
+                                ('M', 'claude', 'tier S: lead ran task suites', True)]:
+    plan['tier'] = tier; save()
+    verdict('a', 'review', 'claude'); verdict('a', 'qa', by, note); verdict('integration:fixture', 'qa', 'claude')
+    result = m.gate(plan, reg, run_checks=False)
+    blocked = any('QA by the implementer model' in b for b in result['blockers'])
+    assert blocked != allowed, (tier, by, note, result)
+    if allowed: assert not result['blockers'], result
+plan['tier'] = 'S'; save()
+assert 'no separate QA session' in dispatch('qa', second)
+print('QA tier command, dedup, extras, warnings, review, integration, re-QA and S/M gate assertions passed')
+QA_TIERS
+then pass=$((pass + 1)); echo "PASS  QA tiers regression matrix"
+else fail=$((fail + 1)); echo "FAIL  QA tiers regression matrix"; fi
 
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
