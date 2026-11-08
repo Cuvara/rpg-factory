@@ -198,7 +198,8 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   `docs/schemas/pipeline-plan.schema.json`, a task lead's subplan `docs/schemas/pipeline-subplan.schema.json`; verdicts under the persistent state dir `pipeline/<plan id>/`) prints Orca
   or Agent dispatch commands and grades READY_FOR_PR; it never runs agents, pushes or creates worktrees. A repo with
   `worktrees: false` (Unity project) never gets a worktree: tasks run in sequence in the main checkout. Two levels
-  (run lead, one task lead per task worktree) as in `parallel-work.md`.
+  (run lead, one task lead per task worktree) as in `parallel-work.md`. Every dispatch carries `--model/--effort` from the
+  registry `pipeline.models` policy (`lib/model_policy.py`; `parallel-work.md` "Model choice").
 - **Dev tools:** registry `dev_tools[]` → `lib/devtools.py` probes (PATH, TCP services, MCP server and
   plugin names only - never config values) → snapshot "Tools for this change" and doctor "Dev tools".
   Every non-core skill's `## Tools` names exactly its `used_by` tools (skills-lint).

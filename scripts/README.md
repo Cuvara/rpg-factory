@@ -57,7 +57,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
   pollution fingerprints), `runchecks_grade.py` (check parser choice and result grading for `run-checks.py`),
   `artifacts.py` (artifact discovery and quality), `orca_cmd.py` (Orca and Agent dispatch
-  argv), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
+  argv, with `--model`/`--effort`), `model_policy.py` (model scope, role and grade profiles, personal override; `parallel-work.md`
+  "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
   `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
   `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
   `tests/hook-perf.test.sh`
