@@ -144,5 +144,151 @@ config_case 'whole section inserted in middle' WARN
 { head -2 "$TMP/before"; printf '\tbare = false\n[branch "middle"]\n\tremote = origin\n'; tail -2 "$TMP/before"; } > "$TMP/after"
 config_case 'core key inserted before new section' FAIL
 
+# Persistence is tested in a disposable git repo with tiny suites; never run the real full suite.
+mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
+cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
+printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
+printf '#!/usr/bin/env bash\nprintf "b\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/b.sh"
+printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
+cat > "$TMP/hashes.py" <<'PY'
+import os, sys
+if sys.argv[1] == 'hashes':
+    for suite in sys.argv[2:]:
+        print(suite, '-' if suite.endswith('never.sh') else os.environ.get('INPUT_HASH', 'a'*64))
+elif sys.argv[1] == 'changed': print('tests/b.sh')
+elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] == 'tests/b.sh' else 1)
+PY
+cat > "$TMP/cache-plan.sh" <<'PLAN'
+fixture=$1; shift
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+runall_prepare; rc=$?
+[ "$rc" = 10 ] && exit 0
+[ "$rc" = 0 ] || exit "$rc"
+[ -z "${HOLD_MARK:-}" ] || { touch "$HOLD_MARK"; while [ ! -f "$HOLD_MARK.release" ]; do sleep 0.1; done; }
+run a bash tests/a.sh
+run b bash tests/b.sh
+[ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
+[ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
+drain
+runall_finish
+echo "counts $pass $fail $skip"
+[ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
+PLAN
+git -C "$TMP/repo" init -q
+git -C "$TMP/repo" add .
+git -C "$TMP/repo" -c user.name=test -c user.email=test@test commit -qm fixture
+export ROOT_UNDER_TEST="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state" RUNALL_AFFECTED_PY="$TMP/hashes.py" RUN_LOG="$TMP/log"
+cache_plan() { bash "$TMP/cache-plan.sh" "$TMP/repo" "$@"; }
+reset_cache() { rm -rf "$TMP/state/run-all"; : > "$RUN_LOG"; }
+reset_cache
+out=$(cache_plan); rc=$?
+tree=$(git -C "$TMP/repo" rev-parse 'HEAD^{tree}')
+[ "$rc" = 0 ] && [ -f "$TMP/state/run-all/$tree.json" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good 'clean full PASS writes tree record and releases lock' || no 'full PASS record/lock' "$out"
+out=$(cache_plan --reuse); rc=$?
+[ "$rc" = 0 ] && grep -q '^reused full run at ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && good '--reuse hits clean PASS tree without running suites' || no '--reuse clean hit' "$out"
+# Restricted coverage cannot satisfy an unrestricted request.
+python3 - "$TMP/state/run-all/$tree.json" <<'PY'
+import json, sys
+p=sys.argv[1]; r=json.load(open(p)); r['flags']['no_workspace']=True
+with open(p,'w') as f: json.dump(r,f)
+PY
+out=$(cache_plan --reuse --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q '^reused full run' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 4 ] \
+  && good 'restricted full record cannot satisfy full workspace coverage' || no 'full coverage mismatch' "$out"
+echo dirty > "$TMP/repo/untracked"
+out=$(cache_plan --reuse --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q '^reused full run' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 6 ] \
+  && good '--reuse misses a dirty tree' || no '--reuse dirty miss' "$out"
+rm "$TMP/repo/untracked"
+python3 - "$TMP/state/run-all/$tree.json" <<'PY'
+import json, sys
+p=sys.argv[1]; r=json.load(open(p)); r['counts']['fail']=1
+with open(p,'w') as f: json.dump(r,f)
+PY
+out=$(cache_plan --reuse --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q '^reused full run' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 8 ] \
+  && good '--reuse misses a failed tree record' || no '--reuse failed record' "$out"
+reset_cache
+out=$(cache_plan --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$RUN_LOG")" = a ] && [ ! -f "$TMP/state/run-all/$tree.json" ] \
+  && good '--only-suites selects exactly the requested suite, no tree record' || no '--only-suites selection' "$out"
+out=$(cache_plan --only-suites tests/unknown.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/unknown.sh'" <<<"$out" \
+  && good '--only-suites rejects unknown name with exit 2' || no 'unknown suite' "$out"
+reset_cache
+out=$(cache_plan --affected --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$RUN_LOG")" = 'a b ' ] \
+  && good '--affected and --only-suites form a deduplicated union' || no 'affected union' "$out"
+reset_cache
+cache_plan --only-suites tests/a.sh >/dev/null
+out=$(cache_plan --only-suites tests/a.sh -j 3); rc=$?
+[ "$rc" = 0 ] && grep -q 'reused tests/a.sh inputs ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 1 ] \
+  && good 'suite PASS reused with parallel output and unchanged inputs' || no 'suite reuse hit' "$out"
+out=$(INPUT_HASH=$(printf 'b%.0s' {1..64}) cache_plan --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && good 'suite input hash change misses reuse' || no 'suite hash miss' "$out"
+out=$(cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 3 ] \
+  && good '--no-reuse forces suites to execute' || no '--no-reuse' "$out"
+reset_cache
+WITH_NEVER=1 cache_plan --only-suites tests/never.sh >/dev/null
+out=$(WITH_NEVER=1 cache_plan --only-suites tests/never.sh); rc=$?
+[ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && good 'hash - never reuses a suite' || no 'never reuse marker' "$out"
+reset_cache
+out=$(BREAK_SUITE=1 cache_plan); rc=$?
+[ "$rc" = 1 ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l)" -eq 1 ] \
+  && good 'FAIL writes no suite PASS record and full-run lock is released' || no 'FAIL cache and lock' "$out"
+record=$(python3 - "$TMP/state/run-all/$tree.json" <<'PY'
+import json, sys
+r=json.load(open(sys.argv[1]))
+print(r['counts']['fail'], len(r['failed_checks']), r['failed_checks'][0].split()[0])
+PY
+)
+[ "$record" = '1 1 a' ] && good 'failed full-run record includes counts and failed check names' || no 'failed record details' "$record"
+reset_cache
+out=$(CHANGE_INPUT=1 cache_plan --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && [ ! -d "$TMP/state/run-all/suites" ] \
+  && good 'changed inputs prevent suite PASS publication' || no 'input mutation' "$out"
+git -C "$TMP/repo" checkout -- tests/b.sh
+# Hold the first full run until the test explicitly releases it.
+reset_cache
+HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
+for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
+out=$(cache_plan --no-wait --no-reuse); rc=$?
+[ "$rc" = 3 ] && grep -q 'waiting for full run ' <<<"$out" \
+  && good '--no-wait exits 3 while a full run holds the lock' || no '--no-wait contention' "$out"
+cache_plan --no-reuse > "$TMP/waiter.out" 2>&1 & waiter=$!
+for ((i=0; i<100; i++)); do grep -q 'waiting for full run ' "$TMP/waiter.out" && break; sleep 0.1; done
+kill -0 "$waiter" 2>/dev/null && grep -q 'waiting for full run ' "$TMP/waiter.out" \
+  && good 'second full run waits for the first' || no 'lock wait' "$(cat "$TMP/waiter.out")"
+touch "$TMP/held.release"; wait "$holder"; hrc=$?; wait "$waiter"; wrc=$?
+[ "$hrc" = 0 ] && [ "$wrc" = 0 ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good 'waiting full run continues and releases its own lock' || no 'lock handoff' "$(cat "$TMP/holder.out" "$TMP/waiter.out")"
+mkdir -p "$TMP/state/locks/run-all-full"
+printf '99999999\n' > "$TMP/state/locks/run-all-full/pid"
+printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
+out=$(cache_plan --no-reuse); rc=$?
+[ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
+# Unit-level WindowsApps shim: only the sourced runner process changes PATH.
+mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"
+chmod +x "$TMP/WindowsApps/python3"
+cat > "$TMP/python-path.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+PATH="$(path_entry "$FAKE_ALIAS"):$PATH"; before=$PATH
+python_path_fast
+[ "$PATH" = "$(path_entry "$REAL_PY_DIR"):$before" ] && echo 'path prepended'
+PLAN
+out=$(FAKE_ALIAS="$TMP/WindowsApps" REAL_PY_DIR="$TMP/real-python" bash "$TMP/python-path.sh"); rc=$?
+[ "$rc" = 0 ] && grep -q 'using real Python directory' <<<"$out" && grep -q 'path prepended' <<<"$out" \
+  && good 'WindowsApps shim prepends real interpreter directory in runner only' || no 'WindowsApps path' "$out"
+unset RPG_FACTORY_STATE_DIR RUNALL_AFFECTED_PY RUN_LOG ROOT_UNDER_TEST
+
 echo "run-all-parallel tests: $((pass + fail)) run, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
