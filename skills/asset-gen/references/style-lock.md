@@ -30,7 +30,8 @@ Use when the game has no `<A>/assetgen/project.json` yet, or the user asks for a
    structured fields the person confirmed (palette colours, outline, canvas per family, `forbidden`, `tone`), and
    `<A>/assetgen/project.json` (`rpg-factory.assetgen-project/1`: `style` `{id, version}`, `allowed_styles`,
    `families`, `art_direction` refs of the approved art direction). Then `assetgen.py lint --authoring <A>` must
-   show 0 FAIL, and no `WARN` that the active game style has no `palette`, `tone` or `canvas` field: without them
+   show 0 FAIL, and no `WARN` that the active game style has no usable `palette`, `tone` or `canvas` field (an empty
+   object such as `canvas: {}` does not count): without them
    every `style-*` QA row is `NOT_AVAILABLE`, so ask the person for the missing fields.
 
 The anchors of step 3 were promoted under the exploration style's id and version. Anchors only feed runs of the same

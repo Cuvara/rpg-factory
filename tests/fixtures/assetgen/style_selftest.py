@@ -487,7 +487,7 @@ def _():
     bare = write(os.path.join(g, "bare.json"), {"schema": "rpg-factory.assetgen-style/1", "title": "Bare", "version": 1,
                                                "status": "active", "palette": "warm earth tones", "prefix": "art,"})
     res = lint.lint_file(bare, a)
-    assert res["state"] == "WARN" and any("every style-* QA row would be NOT_AVAILABLE" in r for r in res["reasons"]), res
+    assert res["state"] == "WARN" and any(NO_STYLE_QA in r for r in res["reasons"]), res
     res = lint.lint_file(os.path.join(g, "rpg-base.json"), a)
     assert res["state"] == "PASS", res
     for name, extra in (("toned", {"tone": {"tolerance": 0.1}}), ("canvased", {"canvas": {"props": {"aspect": "1:1"}}}),
@@ -501,6 +501,81 @@ def _():
         if os.sep + "styles" + os.sep in path or "/styles/" in path:
             res = lint.lint_file(path, None)
             assert not any("structured style fields" in r for r in res["reasons"]), (path, res)
+
+
+NO_STYLE_QA = "no style-* QA row can grade an output"
+BARE = {"schema": "rpg-factory.assetgen-style/1", "title": "Bare", "version": 1, "status": "active",
+        "palette": "warm earth tones", "prefix": "art,"}
+# (name, extra fields over BARE, lint WARNs): empty or unusable fields WARN, each minimal usable field suppresses it
+FIELD_CASES = (
+    ("canvas-empty", {"canvas": {}}, True),
+    ("canvas-family-empty", {"canvas": {"props": {}}}, True),
+    ("canvas-tolerance-only", {"canvas": {"props": {"tolerance": 0.1}}}, True),
+    ("canvas-prose", {"canvas": "square"}, True),
+    ("tone-empty", {"tone": {}}, True),
+    ("tone-prose", {"tone": "dark"}, True),
+    ("tone-unknown-key", {"tone": {"text": "dark and muted"}}, True),
+    ("palette-colors-empty", {"palette": {"text": "earth", "colors": []}}, True),
+    ("palette-no-colors", {"palette": {"text": "earth"}}, True),
+    ("palette-bad-hex", {"palette": {"text": "earth", "colors": [{"hex": "brown"}]}}, True),
+    ("edges-empty", {"outline": {"text": "dark lines", "edge_darkness": {}}}, True),
+    ("edges-prose", {"outline": "dark lines"}, True),
+    ("all-empty", {"canvas": {}, "tone": {}, "palette": {"text": "earth", "colors": []},
+                   "outline": {"text": "dark lines", "edge_darkness": {}}}, True),
+    ("canvas-aspect", {"canvas": {"props": {"aspect": "1:1"}}}, False),
+    ("canvas-min-side", {"canvas": {"props": {"aspect": "1:1", "min_side": 64}}}, False),
+    ("canvas-one-of-two", {"canvas": {"props": {}, "ui": {"aspect": "2:1"}}}, False),
+    ("tone-tolerance", {"tone": {"tolerance": 0.1}}, False),
+    ("tone-severity", {"tone": {"severity": "fail"}}, False),
+    ("palette-one-colour", {"palette": {"text": "earth", "colors": [{"hex": "#806040"}]}}, False),
+    ("edges-min-ratio", {"outline": {"text": "dark lines", "edge_darkness": {"min_ratio": 0.5}}}, False),
+    ("usable-among-empty", {"canvas": {}, "tone": {"tolerance": 0.1}, "outline": {"text": "x", "edge_darkness": {}}}, False),
+)
+
+
+def warns_no_style_qa(res):
+    return any(NO_STYLE_QA in r for r in res["reasons"])
+
+
+@case("lint WARNs an active game style whose structured fields are empty or unusable; a usable field suppresses it")
+def _():
+    a = repo("lint-fields")
+    g = os.path.join(a, "assetgen", "styles")
+    for name, extra, want in FIELD_CASES:
+        res = lint.lint_file(write(os.path.join(g, name + ".json"), dict(BARE, **extra)), a)
+        assert warns_no_style_qa(res) == want, (name, res)
+        if want:
+            assert res["state"] in ("WARN", "FAIL"), (name, res)
+            text = next(r for r in res["reasons"] if NO_STYLE_QA in r)
+            for field in ("palette.colors", "tone", "canvas", "outline.edge_darkness"):
+                assert field + " absent" in text or field + " malformed" in text, (name, field, text)
+        for status in ("deprecated", "draft"):
+            res = lint.lint_file(write(os.path.join(g, "%s-%s.json" % (name, status)),
+                                       dict(BARE, status=status, **extra)), a)
+            assert not warns_no_style_qa(res), (name, status, res)
+
+
+@case("lint WARN iff consistency.check_all grades no style row of a test image (one rule, consistency.py)")
+def _():
+    import consistency
+    import png
+    a = repo("lint-invariant")
+    g = os.path.join(a, "assetgen", "styles")
+    img = png.Image(64, 64, bytes((128, 96, 64, 255)) * (64 * 64), True, "test")
+    outlines = {"qa": {"outlines": True}}
+    for name, extra, want in FIELD_CASES:
+        style = dict(BARE, **extra)
+        canvas = style.get("canvas")
+        families = sorted(canvas) if isinstance(canvas, dict) and canvas else ["props"]
+        graded = False
+        for fam in families:
+            for row, state, details in consistency.check_all(img, style, outlines, fam, anchors=[img]):
+                # not graded: NOT_AVAILABLE for a config reason, or FAIL on malformed config
+                if not (state == "NOT_AVAILABLE" or (state == "FAIL" and "malformed" in " ".join(details))):
+                    graded = True
+        res = lint.lint_file(write(os.path.join(g, name + ".json"), style), a)
+        assert warns_no_style_qa(res) == (not graded) == want, (name, graded, res)
+        assert (consistency.usable_fields(style) == set()) == want, (name, consistency.field_states(style))
 
 
 def main():

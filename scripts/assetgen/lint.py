@@ -9,14 +9,15 @@ Style lock (stylelock.py): style version, status and structured fields, purpose 
 max_references, <authoring>/assetgen/project.json (styles it names, version match), anchors (structure, image file
 and hash, an active anchor needs a person's approval and an approved source gen-run) and rejections. With an
 authoring repo and no project.json, lint adds a WARN row for assetgen/project.json (style lock off). An active game
-style without structured style fields (palette.colors, tone, canvas, outline.edge_darkness) is a WARN: every style-*
-QA row would be NOT_AVAILABLE.
+style without a usable structured style field (palette.colors, tone, canvas, outline.edge_darkness; absent, empty or
+malformed per consistency.field_states, the parsing the style checks use) is a WARN: no style-* QA row can grade.
 Every file gets one result {path, check: "assetgen-lint", state: PASS|WARN|FAIL, reasons}.
 """
 import json
 import os
 import re
 
+import consistency
 import layers
 import runfiles
 import stylelock
@@ -219,15 +220,17 @@ def style_errors(data):
 
 
 def style_warnings(data, layer):
-    """An active game style (merged) without structured palette colours, tone, canvas or outline edge_darkness gets
-    no style QA: a WARN."""
+    """An active game style (merged) none of whose structured fields a style check can grade with
+    (consistency.usable_fields: absent, empty or malformed) gets no style QA: a WARN naming each field's state."""
     if not layer.startswith("game") or stylelock.style_status(data) != "active":
         return []
-    pal, out = data.get("palette"), data.get("outline")
-    if (isinstance(pal, dict) and pal.get("colors")) or isinstance(data.get("tone"), dict)             or isinstance(data.get("canvas"), dict) or (isinstance(out, dict) and isinstance(out.get("edge_darkness"), dict)):
+    states = consistency.field_states(data)
+    if any(state == "ok" for state, _ in states.values()):
         return []
-    return ["active game style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness): "
-            "every style-* QA row would be NOT_AVAILABLE, so qa checks nothing of the style; add them"]
+    why = "; ".join("%s %s (%s)" % (consistency.FIELDS[row], states[row][0], states[row][1]) for row in consistency.ROWS)
+    return ["active game style has no usable structured style fields (palette.colors, tone, canvas, "
+            "outline.edge_darkness): %s; no style-* QA row can grade an output, so qa checks nothing of the style; "
+            "add a usable one" % why]
 
 
 def anchor_lint(raw, style_id, ident, path, authoring):

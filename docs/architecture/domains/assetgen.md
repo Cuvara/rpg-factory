@@ -153,7 +153,7 @@ Review those runs again or regenerate them. The records stay valid for the versi
 2. A person picks the images that define the style.
 3. `promote-anchor` for each picked image.
 4. A person approves the source gen-runs and activates the anchors.
-5. `project.json` and the game style with `version: 1` and `status: active`, with the structured `palette`, `tone` and `canvas` fields. `lint` gives a `WARN` for an active game style without them, because every `style-*` QA row would be `NOT_AVAILABLE`.
+5. `project.json` and the game style with `version: 1` and `status: active`, with the structured `palette`, `tone` and `canvas` fields. `lint` gives a `WARN` for an active game style without a usable one (absent, empty such as `canvas: {}`, or malformed), because every `style-*` QA row would be `NOT_AVAILABLE`.
 
 Anchors feed only runs of their own style id and version, so a new game style id has no anchors until runs under it are approved and promoted. Either promote again from approved runs under the game style id, or use the game style id as the exploration style in step 1. The `asset-gen` skill runs this flow (`skills/asset-gen/references/style-lock.md`).
 

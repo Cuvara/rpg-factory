@@ -436,9 +436,9 @@ expect_lint link--99 FAIL "node 1 has no output -99" "link output index -99: FAI
 expect_lint link-5 FAIL "node 1 has no output 5" "link output index past the node's outputs: FAIL"
 expect_lint link-true FAIL "IMAGE input must be a link" "link output index true (bool, not an int): FAIL"
 AG lint --authoring "$AUTH" > "$TMP/o" 2>&1 && grep -q "17 PASS, 3 WARN, 0 FAIL" "$TMP/o" && grep -q "^WARN game:assetgen/project.json: no assetgen/project.json" "$TMP/o" \
-  && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no structured style fields (palette.colors, tone, canvas, outline.edge_darkness)" "$TMP/o" \
-  && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no structured style fields" "$TMP/o" \
-  && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
+  && grep -q "^WARN game:assetgen/styles/pixel-art.json: active game style has no usable structured style fields (palette.colors, tone, canvas, outline.edge_darkness): .*no style-\* QA row can grade" "$TMP/o" \
+  && grep -q "^WARN game:assetgen/styles/rpg-dark.json: active game style has no usable structured style fields" "$TMP/o" \
+  && ok "core + game layer lint: 0 FAIL; WARN no assetgen/project.json and (e2e3 item 9) two active game styles without usable structured style fields" || no "full lint" "$(tail -5 "$TMP/o")"
 
 echo "-- fixture PNGs"
 FX="$TMP/png"; mkdir -p "$FX"

@@ -146,8 +146,11 @@
   `proposed` and names the changed fields.
 - **Style bootstrap.** `asset-gen` `references/style-lock.md`: a new game style id has no anchors until runs under it
   are approved and promoted, so promote again under the game style id or explore under it; step 5 checks the
-  structured `palette`, `tone` and `canvas` fields, and `lint` WARNs on an active game style without them (every
-  `style-*` QA row would be `NOT_AVAILABLE`).
+  structured `palette`, `tone` and `canvas` fields, and `lint` WARNs on an active game style none of whose
+  structured fields a style check can grade with: absent, empty (`canvas: {}`, `tone: {}`, `palette.colors: []`,
+  `outline.edge_darkness: {}`, a canvas entry with neither `aspect` nor `min_side`) or malformed. The WARN names
+  each field's state; the rule is `consistency.field_states`, the same parsing the `style-*` QA rows use, and such
+  an empty settings object is now `NOT_AVAILABLE` in QA instead of being graded on defaults.
 - **`drift` reports style-id mismatches.** Gen-runs and anchors recorded under another style id than `project.json`
   are listed (`style-id-mismatch`, the text naming the project style), not only older versions of the same style.
 
