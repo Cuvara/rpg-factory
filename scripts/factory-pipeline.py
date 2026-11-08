@@ -937,15 +937,20 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
 
 
 def runall_suites(path):
-    """The suites `tests/run-all.sh --list-suites` prints in the checkout, or None without that flag. An older
-    run-all ignores unknown flags and would start a full run, so the flag must appear in the script first."""
+    """The suites `tests/run-all.sh --list-suites` prints in the checkout; None when run-all lacks that flag (an
+    older run-all ignores unknown flags and would start a full run, so the flag must appear in the script first) or
+    fails; False when the checkout has no tests/run-all.sh at all (a product repo: QA keeps its own checks)."""
     script = os.path.join(path or ".", "tests", "run-all.sh")
+    if not os.path.isfile(script):
+        return False
     try:
         with open(script, encoding="utf-8", errors="replace") as f:
             if "--list-suites" not in f.read():
                 return None
-        r = subprocess.run(["bash", "tests/run-all.sh", "--list-suites"], cwd=path or ".", capture_output=True,
-                           text=True, timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        # Git Bash, never the System32 WSL launcher a bare "bash" resolves to on Windows
+        r = subprocess.run([find_bash() or "bash", "tests/run-all.sh", "--list-suites"], cwd=path or ".",
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -953,12 +958,30 @@ def runall_suites(path):
     return {line.strip() for line in r.stdout.splitlines() if line.strip()}
 
 
-def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None):
-    suites, extra, dropped = pr.qa_checks(tasks, runall)
-    suites = sorted(set(suites) | set(failed_suites or []))
-    command = "tests/run-all.sh --reuse -j 4" if integration else (
-        "tests/run-all.sh --affected --base " + shlex.quote(base)
-        + (" --only-suites " + shlex.quote(','.join(suites)) if suites else "") + " -j 2")
+QA_TIERS = {"task": "affected", "integration": "full"}  # fallback when the registry has no pipeline.qa_tiers
+
+
+def tier_command(level, base, suites):
+    """The run-all command of a registry pipeline.qa_tiers level: affected (task QA) or full (integration QA)."""
+    if level == "affected" and base:
+        return ("tests/run-all.sh --affected --base " + shlex.quote(base)
+                + (" --only-suites " + shlex.quote(','.join(suites)) if suites else "") + " -j 2")
+    return "tests/run-all.sh --reuse -j 4"
+
+
+def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None,
+            tiers=None):
+    head = ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
+            + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, ")
+    tail = ("regressions, edge and failure cases. A Unity test run waits for the `unity-test` resource; never a second "
+            "Editor.\nReport: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
+            + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", [])))
+    if runall is False:  # no tests/run-all.sh (a product repo): the task checks and the registry fast tier
+        return (head + "run the checks (run-checks.py fast tier for registry repos), " + tail
+                + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", [])))
+    suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
+    key = "integration" if integration else "task"
+    command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites)
     policy = ("Integration QA: one full run per batch and one per machine, under the run-all lock; "
               "reuse a PASS record of the same clean tree." if integration else
               "Task QA: never a full tests/run-all.sh run; integration QA runs it once per batch with suite reuse. "
@@ -968,12 +991,7 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
                    "and record verdict --phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'.")
     if dropped and not integration:
         policy += " A full run-all check was dropped and folded into the tier command."
-    return ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
-            + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, "
-            "run the tier command and extra commands below, regressions, edge and failure cases. A Unity "
-            "test run waits for the `unity-test` resource; never a second Editor.\n"
-            "Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
-            + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", []))
+    return (head + "run the tier command and extra commands below, " + tail
             + "\n" + policy + "\nQA tier command:\n" + command
             + ("\nExtra commands:\n" + "\n".join(extra) if extra else ""))
 
@@ -1063,7 +1081,8 @@ def cmd_dispatch(a, reg):
                 print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
                       "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
-                  + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]))
+                  + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
+                            tiers=pipe.get("qa_tiers"))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan)
         child_note(place)
@@ -1214,7 +1233,7 @@ def cmd_dispatch(a, reg):
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
-                            runall=runall_suites(home or info["path"]))
+                            runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"))
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan)

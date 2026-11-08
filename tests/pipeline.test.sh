@@ -630,9 +630,9 @@ def git(*args):
     return p.stdout.strip()
 git('init', '-q', '-b', 'main')
 (repo / 'code.py').write_text('base')
-# stand-in run-all: --list-suites prints the suites it runs (tests/dogfood.sh and installed-safety.sh are not among them)
+# stand-in run-all: --list-suites prints the suites it runs (tests/dogfood.sh, installed-safety.sh, orca-wait not among them)
 (repo / 'tests').mkdir()
-(repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/pipeline.test.sh\\ntests/routing-properties.test.py\\n"; exit 0 ;; esac\n'
+(repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/pipeline.test.sh\\ntests/routing-properties.test.py\\ntests/routing.test.sh\\n"; exit 0 ;; esac\n'
                                           'echo full > "$(dirname "$0")/../full-run"; exit 1\n', newline='\n')
 git('add', '.'); git('commit', '-qm', 'base')
 base = git('rev-parse', 'HEAD'); git('switch', '--no-track', '-c', 'topic')
@@ -641,7 +641,7 @@ task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'path
         'checks': ['bash tests/pipeline.test.sh', 'env -u TMPDIR tests/pipeline.test.sh',
                    'tests/run-all.sh -j 4', 'tests/run-all.sh --affected --only-suites tests/pipeline.test.sh',
                    'python3 -B scripts/build-registry.py --check', 'tests/dogfood.sh',
-                   'python3 -B tests/routing-properties.test.py',
+                   'python3 -B tests/routing-properties.test.py', 'env -u TMPDIR python3 -B tests/routing-properties.test.py',
                    'tests/run-all.sh --affected --only-suites tests/installed-safety.sh'],
         'acceptance': ['full run-all 0 failed']}
 plan = {'schema': m.SCHEMA, 'id': 'qa-tiers', 'title': 'QA', 'topic': 'topic', 'tier': 'M',
@@ -659,13 +659,44 @@ for text in ['full suite 0 failed', 'the whole suite passes', 'all suites 0 fail
     assert m.pr.qa_warnings(dict(safe, acceptance=[text])), text
 assert not m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count']))
 # without run-all --list-suites nothing is folded: every check stays an extra command, no full run is started
-assert m.pr.qa_checks([task], None)[0] == [] and 'tests/dogfood.sh' in m.pr.qa_checks([task], None)[1]
+assert m.pr.qa_checks([task], None)[0] == [] and '[a] tests/dogfood.sh' in m.pr.qa_checks([task], None)[1]
 old = work / 'old'; (old / 'tests').mkdir(parents=True)
 (old / 'tests' / 'run-all.sh').write_text('echo full > "$(dirname "$0")/../full-run"\n', newline='\n')
 assert m.runall_suites(str(old)) is None and not (old / 'full-run').exists()
 (old / 'tests' / 'run-all.sh').write_text('[ "$1" = --list-suites ] && exit 2\n', newline='\n')
 assert m.runall_suites(str(old)) is None
-assert m.runall_suites(str(repo)) == {'tests/pipeline.test.sh', 'tests/routing-properties.test.py'}
+listed = {'tests/pipeline.test.sh', 'tests/routing-properties.test.py', 'tests/routing.test.sh'}
+assert m.runall_suites(str(repo)) == listed
+assert m.runall_suites(str(work / 'none')) is False  # no tests/run-all.sh: a product repo
+# --list-suites starts Git Bash through find_bash (never a bare "bash": the System32 WSL launcher on Windows)
+real_find_bash = m.find_bash
+m.find_bash = lambda: str(work / 'no-such-bash')
+assert m.runall_suites(str(repo)) is None
+m.find_bash = real_find_bash
+# registry pipeline.qa_tiers picks the tier command; a missing key falls back to task: affected, integration: full
+assert reg['pipeline']['qa_tiers']['task'] == 'affected' and reg['pipeline']['qa_tiers']['integration'] == 'full'
+assert m.tier_command('affected', 'main', []) == 'tests/run-all.sh --affected --base main -j 2'
+assert m.tier_command('full', 'main', ['tests/x.sh']) == 'tests/run-all.sh --reuse -j 4'
+lone = [dict(task, checks=['bash tests/pipeline.test.sh'])]
+assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
+    m.qa_body('x', lone, base='main', runall=listed)
+assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, base='main', runall=listed,
+                                                                       tiers={'task': 'full'})
+assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
+# an unknown --only-suites entry runs as run-all runs it (TMPDIR unset), attributed to its task
+assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'])],
+                      listed)[1] == ['[a] env -u TMPDIR bash tests/session-state.test.sh',
+                                     '[a] env -u TMPDIR python3 -B tests/r.test.py']
+# a repo without tests/run-all.sh keeps the previous body: the task checks and the run-checks.py fast tier
+old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
+            'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
+            'run the checks (run-checks.py fast tier for registry repos), regressions, edge and failure cases. A Unity '
+            'test run waits for the `unity-test` resource; never a second Editor.\n'
+            'Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n'
+            '- [s] tests pass\nChecks:\n- [s] dotnet test x\n- [s] tests/run-all.sh -j 4')
+srv = {'id': 's', 'checks': ['dotnet test x', 'tests/run-all.sh -j 4'], 'acceptance': ['tests pass']}
+for kw in ({'base': 'main'}, {'integration': True}, {'base': 'main', 'failed_suites': ['tests/x.sh']}):
+    assert m.qa_body('x', [srv], runall=False, **kw) == old_body, (kw, m.qa_body('x', [srv], runall=False, **kw))
 assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['docs/a.md', 'skills/foo/']))
 assert not m.pr.small_task({'tier': 'M'}, task)
 def cli(*args):
@@ -682,15 +713,35 @@ command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
 assert out.count(command) == 1, out
 assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' in out
-extras = ('Extra commands:\npython3 -B scripts/build-registry.py --check\ntests/dogfood.sh\n'
-          'bash tests/installed-safety.sh')
+extras = ('Extra commands:\n[a] python3 -B scripts/build-registry.py --check\n[a] tests/dogfood.sh\n'
+          '[a] env -u TMPDIR bash tests/installed-safety.sh')
 assert 'tests/run-all.sh -j 4' not in out and extras in out, out
 assert 'routing-properties.test.py' not in out.split('Extra commands:')[1], out
 assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exists()
 assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)
 out = dispatch('qa', first, 'integration:fixture')
 assert 'tests/run-all.sh --reuse -j 4' in out and 'was dropped' not in out and extras in out, out
-lean = m.qa_body(first, [dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
+# a product repo without tests/run-all.sh: task and integration QA keep its checks and the run-checks.py fast tier
+srv_repo = work / 'srv'; srv_repo.mkdir()
+def sgit(*args):
+    p = subprocess.run(['git', '-C', str(srv_repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+sgit('init', '-q', '-b', 'main'); (srv_repo / 'srv.cs').write_text('base'); sgit('add', '.'); sgit('commit', '-qm', 'base')
+sgit('switch', '--no-track', '-c', 'topic'); (srv_repo / 'srv.cs').write_text('change'); sgit('commit', '-qam', 'change')
+srv_sha = sgit('rev-parse', 'HEAD')
+sgit('worktree', 'add', '-q', '-b', 'topic-s', str(work / 'srv-task'), 'topic')
+srv_plan = {'schema': m.SCHEMA, 'id': 'qa-srv', 'title': 'QA', 'topic': 'topic', 'tier': 'M',
+            'repos': {'srv': {'path': str(srv_repo), 'base': 'main'}},
+            'tasks': [{'id': 's', 'repo': 'srv', 'kind': 'code', 'objective': 'test', 'paths': ['srv.cs'],
+                       'checks': ['dotnet test x'], 'acceptance': ['tests pass']}]}
+srv_pf = work / 'srv-plan.json'; srv_pf.write_text(json.dumps(srv_plan))
+for tid in ('s', 'integration:srv'):
+    out = cli('dispatch', str(srv_pf), '--task', tid, '--phase', 'qa', '--sha', srv_sha, '--runner', 'print')
+    assert 'run the checks (run-checks.py fast tier for registry repos)' in out and 'Checks:\n- [s] dotnet test x' in out, out
+    assert 'QA tier command' not in out and 'tests/run-all.sh' not in out, out
+lean = m.qa_body(first,[dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
                  runall={'tests/pipeline.test.sh'})
 assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
 # --failed-suites refusals: a PASS, a review verdict, a path outside tests/
@@ -701,11 +752,14 @@ cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'review', '--sha', first,
 cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
          '--failed-suites', 'scripts/check-registry.sh')
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
-    '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh')
+    '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh,tests/orca-wait.test.sh')
 (repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
 out = dispatch('qa', second)
 assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
         'tests/routing.test.sh -j 2') in out, out
+# a failed suite run-all does not run (exit 2 under --only-suites) is an extra command instead
+assert 'orca-wait' not in out.split('QA tier command:\n')[1].split('\n')[0], out
+assert '[a] env -u TMPDIR bash tests/orca-wait.test.sh' in out.split('Extra commands:')[1], out
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL')
 assert '--base main ' in dispatch('qa', second)
 def verdict(tid, phase, by, note=None):

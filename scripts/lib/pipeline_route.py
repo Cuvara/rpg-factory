@@ -155,24 +155,29 @@ def small_task(plan, task):
 
 
 SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)'
-                         r'|python3(?:\s+-B)?\s+(?:\./)?(tests/[\w.-]+\.py)')
+                         r'|(?:env -u TMPDIR\s+)*python3(?:\s+-B)?\s+(?:\./)?(tests/[\w.-]+\.py)')
 
 
 def suite_command(suite):
-    return ('python3 -B ' if suite.endswith('.py') else 'bash ') + suite
+    """A suite run on its own, as run-all runs it: several suites need TMPDIR unset, the rest do not mind."""
+    return 'env -u TMPDIR ' + ('python3 -B ' if suite.endswith('.py') else 'bash ') + suite
 
 
-def qa_checks(tasks, runall_suites=None):
+def qa_checks(tasks, runall_suites=None, failed_suites=None):
     """Split suite invocations from extra commands; run-all is folded into the tier command.
     runall_suites: the suites `tests/run-all.sh --list-suites` prints in the task checkout. Only those are folded
-    (run-all accepts and skips any other tests/ file); None (no such flag) folds nothing."""
+    (run-all rejects any other suite name); None (no such flag) folds nothing. failed_suites: the suites a previous
+    QA recorded as failed; those run-all does not run become extra commands. Extras are `[task ids] command`, each
+    command once."""
     known = set(runall_suites or ())
-    suites, extra, dropped = set(), [], False
+    suites, extra, dropped = set(), {}, False
 
-    def add_extra(command):
-        if command not in extra:
-            extra.append(command)
+    def add_extra(tid, command):
+        ids = extra.setdefault(command, [])
+        if tid not in ids:
+            ids.append(tid)
     for task in tasks:
+        tid = str(task.get('id', '?'))
         for check in task.get('checks', []):
             try:
                 words = shlex.split(check)
@@ -187,15 +192,21 @@ def qa_checks(tasks, runall_suites=None):
                         if x in known:
                             suites.add(x)
                         elif x:
-                            add_extra(suite_command(x))
+                            add_extra(tid, suite_command(x))
                 continue
             # Only plain suite commands count: compound commands remain explicit extra checks.
             match = SUITE_CHECK.fullmatch(check.strip())
             if match and (match[1] or match[2]) in known:
                 suites.add(match[1] or match[2])
             else:
-                add_extra(check)
-    return sorted(suites), extra, dropped
+                add_extra(tid, check)
+    ids = ', '.join(str(t.get('id', '?')) for t in tasks)
+    for x in failed_suites or []:
+        if x in known:
+            suites.add(x)
+        else:
+            extra.setdefault(suite_command(x), [ids])
+    return sorted(suites), [f"[{', '.join(t)}] {c}" for c, t in extra.items()], dropped
 
 
 def qa_warnings(task):
