@@ -12,7 +12,9 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Keep `factory-context.sh`, `factory-status.py` and `scripts/checks/` read-only: no fetch (except
   opt-in `--remote` ls-remote), no writes into repos. State is derived from git; the only Factory
   files are per-session mode state and check evidence, resolved through `scripts/lib/fstate.py` (never `$TMPDIR`
-  directly, never relative). Tests set `RPG_FACTORY_STATE_DIR` and `TMPDIR` to a temp dir.
+  directly, never relative). Tests set `RPG_FACTORY_STATE_DIR` and `TMPDIR` to a temp dir. Exceptions, on
+  purpose in the persistent state dir: run-all's full-run lock, tree records and suite PASS records (`run-all/`,
+  `locks/`) and the routing history-replay cache (`routing-replay/`, pruned on write).
 - `run-checks.py` never runs a check in place when it would write into a product repo; pollution is FAIL.
 - Hooks must stay fast (one guard process per command, no repository scan) and must never crash a session.
   No hook snapshots repository state, latches a session or needs an acknowledgement (the tripwire was

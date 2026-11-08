@@ -1,7 +1,7 @@
 ### Added
 
 - **run-all.** One full run per machine: a full `tests/run-all.sh` (no `--affected` or `--only-suites`) and every
-  `--release` run take a lock in the persistent state dir. A second full run waits and prints `waiting for full run <pid> in <checkout>`;
+  `--release` run take a lock in the persistent state dir; the shared-config snapshot is taken after the lock. A second full run waits and prints `waiting for full run <pid> in <checkout>`;
   `--no-wait` exits 3 instead, and a lock whose holder is dead (checked by PID, and by the Windows PID on Git Bash) is taken over
   (`run-all: taking over stale full-run lock (<pid>)`). Only one waiter reclaims a stale lock, and a lock that a new
   holder has not finished writing is not taken over.
@@ -10,7 +10,8 @@
   satisfy a run without that flag) and prints `reused full run at <HEAD> (tree <tree>, <date>)`. `--release` never
   reuses the record.
 - **run-all.** Suite-level reuse: each suite's PASS is recorded under a hash of its inputs (the suite file, the files
-  `tests/affected.py` maps to it, the global inputs and the tool versions), and a later run skips that suite and
+  `tests/affected.py` maps to it, the files under the directories of the scripts the suite reaches, such as
+  `scripts/ui/data/*.json`, the global inputs and the tool versions), and a later run skips that suite and
   prints `PASS  <check> (reused <suite> inputs <hash>)`. Suites graded by a postprocessor, checks that read the live
   workspace (a `run` inside a live block too) and `--no-history` runs are never reused, no record is published when the inputs changed during the run, and a suite that skipped a case for a missing tool
   publishes no PASS record (a later run with the tool runs it).
@@ -18,7 +19,7 @@
 - **run-all.** `--only-suites LIST` runs only the named suites (comma-separated paths), unioned with `--affected` when
   both are given; neither takes the full-run lock. A name run-all does not run (a missing file, or a suite without a
   run-all line such as `tests/dogfood.sh`) exits 2. `--list-suites` (read-only) prints the names `--only-suites`
-  accepts. A one-suite `--only-suites` run took 76 s before and 14 s after.
+  accepts under the current flags (release-only suites need `--release`). A one-suite `--only-suites` run took 76 s before and 14 s after.
 - **run-all.** With `--affected` or `--only-suites`, the live-workspace blocks and the checks that run a script outside
   a suite line (`scripts/checks/skill-citations.py`, `scripts/factory-context.sh`, `scripts/checks/pin-status.py`,
   `pin-plan.py`, `package-ready.py`, `netcode-headless.sh`) are selected like suites by that script path, else they
@@ -26,7 +27,7 @@
 - **run-all.** When `python3` resolves to the Windows Store alias, run-all puts the real Python directory first on
   `PATH` for the suites (about 70 ms saved per call); the user's system is not changed.
 - **Tests.** `tests/affected.py` no longer treats `scripts/lib/*` as global: a lib module selects only the suites of
-  the scripts that import it (static scan; a module it cannot map still selects every suite). It follows import chains through non-lib modules, so a lib
+  the scripts that import it (imports parsed with `ast`; a module it cannot map still selects every suite). It follows import chains through non-lib modules, so a lib
   module imported only by another script module selects the suites of that module's importers.
   `tests/affected.test.sh` covers it. `affected.py hashes SUITE...` prints each suite's input hash for suite reuse
   (`-` when reuse is unsafe).
@@ -36,16 +37,16 @@
   about 96-128 s after.
 - **Pipeline.** QA tiers (registry `pipeline.qa_tiers`): `dispatch --phase qa` prints one tier command. Task QA runs
   `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2` (the suites the task's checks
-  name that `tests/run-all.sh --list-suites` lists, each once; a full `tests/run-all.sh` check is dropped and folded
-  into it, other checks stay extra commands)
+  name that `tests/run-all.sh --list-suites` lists, each once; only a standalone suite or `tests/run-all.sh`
+  invocation is folded into it, a full `tests/run-all.sh` check is dropped, compound checks and other checks stay
+  whole extra commands)
   and its spec forbids a full run. `verdict --phase qa --state FAIL --failed-suites LIST` records the failed suites;
-  the next QA dispatch on a new candidate reruns those that `tests/run-all.sh --list-suites` lists, with
+  the next QA dispatch on a new candidate reruns those that `tests/run-all.sh --list-suites` lists, each once, with
   `--affected --base <that FAIL's candidate>`. The tier commands are read from registry `pipeline.qa_tiers`. A repo
   without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
   QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
   `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
-- **Pipeline.** A tier S task (plan or task tier S, or every owned path under `docs/`, `skills/`, `changelog.d/` or a
-  `.md` file) needs no QA session: the task lead runs the task QA command after the review PASS and records
+- **Pipeline.** A tier S task (plan or task tier S, or every owned path a `.md` file or under `changelog.d/`) needs no QA session: the task lead runs the task QA command after the review PASS and records
   `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`. The gate accepts such a
   lead-run QA verdict (note starting `tier S`, no QA session) only for a tier S task. A QA PASS from a fresh QA
   session is accepted as before for every tier, including the one-model fallback where the implementer's model runs
@@ -64,7 +65,8 @@
   Suite wall time: 831 s before, about 61-115 s after.
 - **Tests.** `tests/routing.test.sh` caches each history replay result in the persistent state dir, keyed by commit
   SHA and a hash of the routing inputs (the suite, the registry, every script, the routing environment and the tool
-  versions), and replays only commits without a cached result (`history replay: <n> cached / <n> replayed`);
+  versions), and replays only commits without a cached result (`history replay: <n> cached / <n> replayed`); each
+  write prunes old cache keys;
   `--no-history` skips the replay.
 - **Tests.** `tests/pipeline.test.sh` captures the output of identical commands once and runs independent cases in
   parallel. Suite wall time: 459 s before, 242 s after.
