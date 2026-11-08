@@ -1137,12 +1137,14 @@ def cmd_dispatch(a, reg):
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
+        start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan)
         # an ad hoc --paths session of its own model (no subtask id) is a slice: the task's record keeps its implementer
         if a.runner != "print" and (sub or not (a.paths and a.agent)):
             pr.record(plan, task["id"], sid, "implementer",
                       {"agent": started, "why": why if started == agent else f"--runner agent runs {started}",
                        "paths": paths or task["paths"],
+                       "start": start,
                        "timestamp": now_utc()})
         child_note(place)
         return 0
@@ -1480,13 +1482,16 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
         for sid, impl in subtask_implementers(plan, task["id"]).items():
             if sid in task["_subtasks"]:
                 continue
+            start = (pr.recorded(plan, task["id"], sid, "implementer") or {}).get("start")
+            if not start or not is_ancestor(path, start, target):
+                continue
             want = pr.paired(pipe, find_task(plan, task["id"]), impl)
             for rec in subtask_reviews(plan, reg, task["id"], sid, target, cache=cache,
                                        checking=task["_subtasks"], after=sha):
                 if rec.get("by") == want or (rec.get("by") == impl and fallback_matches(rec, want)):
                     paths = rec.get("paths") or recorded_subtask_paths(plan, task["id"], sid)
                     if paths:
-                        siblings.append((dict(paths=paths), rec))
+                        siblings.append((dict(paths=paths), rec, start))
     bad = set()
     chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
     if rc != 0:
@@ -1518,7 +1523,9 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             ps = (parent_text or "").split()
             touched = files(ps[0], commit) if ps else set(task["paths"])
             for f in touched:
-                covered = any(owns(s, f) and is_ancestor(path, commit, r["sha"]) for s, r in siblings)
+                covered = any(owns(s, f) and is_ancestor(path, start, commit)
+                              and not is_ancestor(path, commit, start)
+                              and is_ancestor(path, commit, r["sha"]) for s, r, start in siblings)
                 if covered:
                     continue
                 for t, rv, start in later:
@@ -1572,7 +1579,8 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model, cac
             blockers.append(f"{t['id']}: subtask {sid} recorded implementer {x}, but the task review by {rv.get('by')} "
                             f"pairs against {impl}: record `verdict --subtask {sid}` PASS by {want} (or a dispatch-"
                             "recorded SAME_MODEL fallback review)"
-                            + (f"; stale subtask review: changed paths {', '.join(sorted(stale))}; needs {want} review"
+                            + (f"; stale subtask review: changed paths {', '.join(sorted(stale))}; needs {want} review; "
+                               "sibling coverage requires a recorded implementation start (unknown legacy starts receive no credit)"
                                if stale else ""))
     return blockers, notes
 
@@ -1621,7 +1629,9 @@ def cmd_verdict(a, reg):
         retrospective = a.fallback == f"{unavailable} unavailable"
         if unavailable not in pipe["agents"]:
             die(f"--fallback must be one of {', '.join(pipe['agents'])}")
-        if not retrospective and pr.available(pipe, plan).get(a.fallback, {}).get("available"):
+        if retrospective and not a.subtask:
+            die("retrospective --fallback requires --subtask; task reviews use dispatch-recorded fallback or current availability")
+        if not retrospective and pr.available(pipe, plan).get(unavailable, {}).get("available"):
             die(f"--fallback {a.fallback} is available now")
         if not (a.note and a.note.strip()):
             die("--fallback requires --note explaining the fallback")

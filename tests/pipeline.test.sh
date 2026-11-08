@@ -1348,10 +1348,7 @@ expect "verdict rejects undocumented reviewer alias" 2 "unrecognized arguments: 
 expect "gate displays accepted retrospective subtask fallback and note" 0 "NOTE    k: subtask s SAME_MODEL .fallback: codex unavailable.; note: 401 outage" gate "$RSP" --no-run-checks
 if jq -e '.fallback == "codex unavailable" and .note == "401 outage"' "$RSVD/k@s__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  retrospective fallback stores reason and note"
 else fail=$((fail + 1)); echo "FAIL  retrospective fallback stores reason and note"; fi
-expect "retrospective task fallback requires a note" 2 "requires --note" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer claude --fallback 'codex unavailable'
-expect "retrospective task fallback requires same-model review" 2 "requires a SAME_MODEL review" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state PASS --implementer claude --fallback 'codex unavailable' --note 'past outage'
-expect "retrospective task fallback records with a note" 0 "recorded review PASS" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer claude --fallback 'codex unavailable' --note 'past outage'
-expect "gate displays accepted retrospective task fallback and note" 0 "NOTE    k: SAME_MODEL .fallback: codex unavailable.; note: past outage" gate "$RSP" --no-run-checks
+expect "retrospective task fallback requires --subtask" 2 "requires --subtask" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer claude --fallback 'codex unavailable' --note 'past outage'
 rv --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
 rv --task k --subtask s --phase review --sha "$RS2" --by codex --state PASS --subplan "$RSS"
 NOID=$(plan noid '{"schema":"rpg-factory.pipeline-plan/1","id":"noid","title":"t","topic":"feat/core/noid","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[{"repo":"rec","objective":"o","paths":["x/"],"acceptance":["a"]}]}')
@@ -1803,9 +1800,12 @@ else:
     verdict('a', 'review', a)
 verdict('a', 'qa', a)
 if case.startswith('subtask-sibling-'):
+    if case == 'subtask-sibling-pre-start':
+        commit('unreviewed edit before sibling starts')
+    start = git('rev-parse', 'HEAD')
     sibling = commit('sibling edit')
     sibling_paths = ['outside.txt'] if case == 'subtask-sibling-outside' else ['shared.txt']
-    m.pr.record(plan, 'a', 'later', 'implementer', {'agent': 'claude', 'paths': sibling_paths})
+    m.pr.record(plan, 'a', 'later', 'implementer', {'agent': 'claude', 'paths': sibling_paths, **({} if case == 'subtask-sibling-unknown-start' else {'start': start})})
     if case != 'subtask-sibling-missing':
         by = 'claude' if case == 'subtask-sibling-unpaired' else 'codex'
         verdict('a', 'review', sibling, by=by, extra=('--subtask', 'later'))
@@ -1826,6 +1826,8 @@ if case.startswith('subtask-sibling-'):
     assert bool(stale) == (case != 'subtask-sibling-covered'), g
     if stale:
         assert 'shared.txt' in stale[0], stale
+        if case == 'subtask-sibling-unknown-start':
+            assert 'unknown legacy starts receive no credit' in stale[0], stale
     else:
         assert g['state'] == 'READY_FOR_PR', g
     print(case + ' assertions passed')
@@ -1927,7 +1929,7 @@ else:
             assert not stale_a(False)[0]['blockers']
 print(case + ' assertions passed')
 MULTIWAVE
-for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path; do
+for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path; do
   out=$(python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$case" 2>&1); rc=$?
   if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  multiwave $case"
   else fail=$((fail + 1)); echo "FAIL  multiwave $case"; echo "$out"; fi
