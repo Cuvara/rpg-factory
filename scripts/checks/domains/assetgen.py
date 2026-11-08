@@ -33,7 +33,10 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        PASS or a required check is missing contradicts itself and always FAILS; rows for unrecorded
                        outputs FAIL. Style consistency rows (style-*, never required checks) are graded as qa.json says:
                        WARN stays WARN (a soft signal, never FAIL), NOT_AVAILABLE neither grades nor contradicts, and a
-                       style-* FAIL row must agree with a FAIL qa state.
+                       style-* FAIL row must agree with a FAIL qa state. With spec.style_lock qa.json must record the
+                       style inputs it graded with (style_binding = runfiles.qa_style_binding of spec.json and the run's
+                       anchor copies: style ref, effective style data hash, family, anchor copy hashes), else FAIL as
+                       stale (re-run qa and manifest); a report without style_binding counts as stale.
   gen-run-outputs      outputs recorded, inside the run directory, on disk, sha256 equal; no unrecorded outputs/*.png
   gen-run-provenance   provenance {generated_by, tool comfyui, model} complete and equal to spec.generation;
                        the rendered workflow.json is present; run.md spec.params equal the rendered params
@@ -321,6 +324,17 @@ def check(artifact, ctx):
         if disk.get("requested_size") != size:
             fails.append("qa.json was graded for requested size %r, the run now requests %r; re-run qa and manifest"
                          % (disk.get("requested_size"), size))
+        if isinstance(spec_json, dict):
+            now = runfiles.qa_style_binding(spec_json, lambda rel: resolve(rel))
+            was = disk.get("style_binding")
+            if now is not None and not isinstance(was, dict):
+                fails.append("qa.json does not record the style inputs it graded with (style_binding: a report from "
+                             "before the binding); re-run qa and manifest")
+            elif was != now:
+                what = [k for k in ("style", "style_sha256", "family", "anchors")
+                        if (was or {}).get(k) != (now or {}).get(k)] or ["style_lock"]
+                fails.append("qa.json was graded with other style inputs (%s differ from spec.json and the run's "
+                             "anchor copies); re-run qa and manifest" % ", ".join(what))
         if state != "PASS":
             todo.append("QA is %s; run assetgen.py qa until it reports PASS, then manifest" % (state or "missing"))
         for path in recorded:

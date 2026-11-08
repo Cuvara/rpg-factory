@@ -115,7 +115,8 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       spec.claude_image_review; the plugin WARNs when it is missing, unbound or stale. It never replaces
                       the independent review-image.json
   qa.json             qa: rpg-factory.validation/1 results per output, bound to the purpose content hash and the
-                      requested size it graded with (purpose_sha256, requested_size). With spec.style_lock each output
+                      requested size it graded with (purpose_sha256, requested_size) and to the style inputs of its style rows
+                      (style_binding: runfiles.qa_style_binding, null without spec.style_lock). With spec.style_lock each output
                       also gets the style consistency rows style-palette, style-tone, style-edges, style-canvas
                       (qa.py, consistency.py): never required checks, WARN and NOT_AVAILABLE keep the qa state, a style
                       FAIL row (severity fail in the style data) fails it
@@ -911,8 +912,8 @@ def defringe(run_dir, alpha_floor=None, force=False):
     bound = bound_records(run_dir, current)
     if bound and not force:
         fail("%s already bind(s) the current outputs: defringe changes them, so they would be stale. Run defringe after "
-             "fetch_outputs and before qa and the image reviews, or pass --force and then re-run qa, review-cmd --phase "
-             "image (Codex) and Claude's image review" % ", ".join(bound))
+             "fetch_outputs and before qa and the image reviews, or pass --force and then re-run embed, qa, review-cmd "
+             "--phase image (Codex) and Claude's image review (%s)" % (", ".join(bound), CLAUDE_REVIEW))
     record_path = os.path.join(run_dir, DEFRINGE_FILE)
     old = {}
     if os.path.isfile(record_path):
@@ -1516,7 +1517,9 @@ def main(argv=None):
                   "results": rows, "summary": counts, "stale": stale}, a.json,
                  "\n".join("%s %s: %s" % (r["state"], r["output"], r["reason"]) for r in rows)
                  + "\nassetgen defringe: %(defringed)d defringed, %(skipped)d skipped, %(FAIL)d FAIL" % counts
-                 + (" (originals in %s/, record %s); next: embed, qa" % (RAW_DIR, DEFRINGE_FILE) if counts["defringed"] else "")
+                 + (" (originals in %s/, record %s); next: embed, qa" % (RAW_DIR, DEFRINGE_FILE)
+                    + (", review-cmd --phase image (Codex) and Claude's image review (%s)" % CLAUDE_REVIEW if stale else "")
+                    if counts["defringed"] else "")
                  + tail)
             return 1 if counts["FAIL"] else 0
         if a.cmd == "approve-record":
@@ -1546,7 +1549,9 @@ def main(argv=None):
             state = qa.overall(results)
             counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")}
             report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
-                      "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size, "state": state, "results": results, "outputs": outputs, "summary": counts}
+                      "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size,
+                      "style_binding": runfiles.qa_style_binding(spec, lambda rel: os.path.join(a.run, *rel.split("/"))),
+                      "state": state, "results": results, "outputs": outputs, "summary": counts}
             write_json(os.path.join(a.run, "qa.json"), report)
             emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
                  + "\nassetgen qa: %s (%d PASS, %s%d FAIL, %d NOT_AVAILABLE)" % (

@@ -984,7 +984,7 @@ AG qa --run "$fr" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
   && jq -r '.results[] | select(.check == "png-edge-fringe") | .reasons | join(" ")' "$TMP/q.json" | grep -q "run assetgen.py defringe on the run" \
   && ok "qa: a coloured low-alpha fringe is a png-edge-fringe FAIL (the only FAIL row), pointing at defringe" || no "fringe qa rc=$rc" "$(jq -c '.results[] | select(.state != "PASS")' "$TMP/q.json")"
 AG defringe --run "$fr" > "$TMP/o" 2>&1; rc=$?
-[ $rc -eq 1 ] && grep -qF "qa.json already bind(s) the current outputs" "$TMP/o" && grep -qF "or pass --force and then re-run qa" "$TMP/o" \
+[ $rc -eq 1 ] && grep -qF "qa.json already bind(s) the current outputs" "$TMP/o" && grep -qF "or pass --force and then re-run embed, qa" "$TMP/o" \
   && [ "$(sha256sum "$fr/outputs/prop.png" | cut -d' ' -f1)" = "$orig" ] && [ ! -e "$fr/outputs-raw" ] \
   && ok "defringe refuses outputs qa.json already binds (says to re-run them), nothing written" || no "defringe bound rc=$rc" "$(cat "$TMP/o")"
 AG defringe --run "$fr" --alpha-floor 300 > "$TMP/o" 2>&1; rc=$?
@@ -1061,6 +1061,42 @@ AG review-cmd --phase image --run "$fr" --no-write > /dev/null 2>"$TMP/err"; rc=
 AG review-cmd --phase image --run "$fr" > /dev/null && AG review-cmd --phase image --run "$fr" --no-write --json > "$TMP/rc2.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/rc2.json")" = "$(jq -c .argv "$TMP/rc.json")" ] \
   && ok "review-cmd --no-write uses current composites (same command)" || no "composite no-write current rc=$rc" "$(cat "$TMP/err")"
+# final review P3: the documented post-QA fringe repair (SKILL.md step 7) works end to end: embed, qa FAIL, both image
+# reviews bind the outputs, defringe without --force is refused, defringe --force names qa.json and both reviews stale,
+# then embed, qa PASS and both image reviews again bind the repaired outputs
+fx="$RUNS/fringe-repair-001"; mkrun fringe-repair-001 icon --style stylized-painterly && AG render --run "$fx" >/dev/null
+cp "$fr/outputs-raw/prop.png" "$fx/outputs/prop.png"; AG embed --run "$fx" > /dev/null
+AG qa --run "$fx" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+bound "$fx" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fx/review-image.json"
+bound "$fx" image FAIL claude '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fx/review-image-claude.json"
+fxo=$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)
+[ $rc -eq 1 ] && [ "$(st png-edge-fringe)" = FAIL ] && [ "$(jq -r '.outputs[0].sha256' "$fx/review-image.json")" = "$fxo" ] \
+  && ok "fringe repair: embedded output fails png-edge-fringe, both image reviews bind it" || no "fringe repair qa rc=$rc" "$(cat "$TMP/err")"
+AG defringe --run "$fx" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -qF "qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
+  && grep -qF "pass --force and then re-run embed, qa, review-cmd --phase image (Codex) and Claude's image review (review-image-claude.json)" "$TMP/o" \
+  && [ "$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)" = "$fxo" ] && [ ! -e "$fx/outputs-raw" ] && [ ! -e "$fx/defringe.json" ] \
+  && ok "fringe repair: defringe without --force is refused after qa and the reviews, naming --force and the records to re-run" || no "fringe repair refuse rc=$rc" "$(cat "$TMP/o")"
+AG defringe --run "$fx" --force > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qF "1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
+  && grep -qF "next: embed, qa, review-cmd --phase image (Codex) and Claude's image review (review-image-claude.json)" "$TMP/o" \
+  && grep -qx "stale now (re-run them): qa.json, review-image.json, review-image-claude.json" "$TMP/o" \
+  && [ "$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)" != "$fxo" ] \
+  && ok "fringe repair: defringe --force rewrites the output and lists qa.json and both image reviews as stale" || no "fringe repair force rc=$rc" "$(cat "$TMP/o")"
+AG embed --run "$fx" > "$TMP/o" 2>&1; rc1=$?
+AG qa --run "$fx" --json > "$TMP/q.json" 2>"$TMP/err"; rc=$?
+[ $rc1 -eq 0 ] && [ $rc -eq 0 ] && [ "$(st png-edge-fringe)" = PASS ] && [ "$(jq -r .state "$TMP/q.json")" = PASS ] \
+  && ok "fringe repair: embed, then qa again PASS (png-edge-fringe PASS)" || no "fringe repair requa rc=$rc1/$rc" "$(cat "$TMP/o" "$TMP/err")"
+fxn=$(sha256sum "$fx/outputs/prop.png" | cut -d' ' -f1)
+bound "$fx" image PASS codex > "$fx/review-image.json"; bound "$fx" image PASS claude > "$fx/review-image-claude.json"
+[ "$(jq -r '.outputs[0].sha256' "$fx/review-image.json") $(jq -r '.outputs[0].sha256' "$fx/review-image-claude.json")" = "$fxn $fxn" ] \
+  && [ "$(jq -r '.outputs[0].sha256' "$fx/qa.json")" = "$fxn" ] \
+  && ok "fringe repair: qa.json and both image reviews run again bind the repaired, embedded output" || no "fringe repair rebind" "$(jq -c .outputs "$fx/qa.json" "$fx/review-image.json")"
+step7=$(awk '/^7\. /{p=1} /^8\. /{p=0} p' "$ROOT/skills/asset-gen/SKILL.md" | tr '\n' ' ' | tr -s ' ')
+case "$step7" in *'`assetgen.py defringe --run <run> --force [--alpha-floor N]`'*'`embed`'*'`qa`'*'both image reviews'*'`review-cmd --phase image`'*'`review-image-claude.json`'*)
+  ok "SKILL.md step 7 documents the fringe repair: defringe --run <run> --force, then embed, qa and both image reviews" ;;
+  *) no "SKILL.md step 7 fringe repair" "$step7" ;; esac
+rm -rf "$fx"
 # several outputs: composites per output with alpha (review/composite-<stem>-<bg>.png); an opaque output gets none and defringe skips it
 f2="$RUNS/fringe-two-001"; mkrun fringe-two-001 icon --style stylized-painterly && AG render --run "$f2" >/dev/null
 cp "$FX/fringe.png" "$f2/outputs/a.png"; cp "$FX/icon-opaque.png" "$f2/outputs/b.png"; ob=$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)
@@ -1576,6 +1612,22 @@ variant qp-qastylefail-001; qaset qp-qastylefail-001 '[r.__setitem__("state", "F
 AG manifest --run "$RUNS/qp-qastylefail-001" >/dev/null
 variant qp-qastyleagree-001; qaset qp-qastyleagree-001 'obj["state"] = "FAIL"; [r.__setitem__("state", "FAIL") for r in obj["results"] if r["check"] == "style-palette"]'
 AG manifest --run "$RUNS/qp-qastyleagree-001" >/dev/null
+# qa.json is bound to the style inputs it graded (final review P2): a style re-resolved at version 2 with a fail-severity
+# red-only palette into the same run, the reviews refreshed but qa.json and the output bytes kept -> stale; re-running qa
+# grades the new rule; a qa.json without style_binding (made before the binding) is stale too
+STYA="$TMP/style-authoring"; mkdir -p "$STYA/assetgen"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$STYA/assetgen/"
+echo '{"extends": "stylized-painterly", "version": 2, "palette": {"text": "Red only.", "colors": [{"hex": "#ff0000"}], "max_distance": 0, "min_share": 1, "severity": "fail"}}'   > "$STYA/assetgen/styles/stylized-painterly.json"
+restyle() { # restyle NAME: re-resolve the run with the version 2 style, fresh bound reviews, manifest (qa.json kept)
+  local d="$RUNS/$1"; variant "$1"
+  AG resolve --purpose sprite-2d --style stylized-painterly --authoring "$STYA" --out "$d/spec.json" >/dev/null
+  bound "$d" prompt PASS codex > "$d/review-prompt.json"; bound "$d" image PASS codex > "$d/review-image.json"
+  bound "$d" image PASS claude > "$d/review-image-claude.json"; AG manifest --run "$d" >/dev/null
+}
+restyle qp-qastyle-001
+restyle qp-qastyle2-001; AG qa --run "$RUNS/qp-qastyle2-001" >/dev/null; AG manifest --run "$RUNS/qp-qastyle2-001" >/dev/null
+[ "$(jq -r '[.results[] | select(.check == "style-palette") | .state] | join(",")' "$RUNS/qp-qastyle2-001/qa.json")/$(jq -r .state "$RUNS/qp-qastyle2-001/qa.json")" = FAIL/FAIL ]   && cmp -s "$RUNS/qp-qastyle-001/qa.json" "$good/qa.json"   && ok "qa re-run after the style re-resolve grades the version 2 fail-severity palette rule: style-palette FAIL, qa FAIL"   || no "restyled qa" "$(jq -c '[.state, .style_binding, .results]' "$RUNS/qp-qastyle2-001/qa.json")"
+[ "$(jq -r '.style_binding.style.style_id + " " + .style_binding.family + " " + (.style_binding.style_sha256 | test("^[0-9a-f]{64}$") | tostring) + " " + (.style_binding.anchors | length | tostring)' "$good/qa.json")"   = "stylized-painterly $(jq -r .style_lock.family "$good/spec.json") true 0" ]   && ok "qa.json style_binding: style ref, family, effective style data hash, anchors (none selected)" || no "style_binding" "$(jq -c .style_binding "$good/qa.json")"
+variant qp-qanobind-001; qaset qp-qanobind-001 'del obj["style_binding"]'; AG manifest --run "$RUNS/qp-qanobind-001" >/dev/null
 # with spec.style_lock the image reviews bind the style ref and the anchors shown
 variant qp-stylebind-001; bound "$RUNS/qp-stylebind-001" image PASS codex | jq -c '.style.version = 99' > "$RUNS/qp-stylebind-001/review-image.json"
 AG manifest --run "$RUNS/qp-stylebind-001" >/dev/null
@@ -1702,6 +1754,10 @@ case_ qp-stylebindc-001 gen-run-claude-review WARN 'outputs and style lock' "Cla
 [ "$(st AGEN-qp-stylebind-001 gen-run-prompt-review)" = PASS ] && ok "style lock binding: the prompt review is unaffected" || no "stylebind prompt review: $(st AGEN-qp-stylebind-001 gen-run-prompt-review)"
 case_ qp-qastylefail-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows' "a style-* FAIL row in a PASS qa.json contradicts it: FAIL"
 case_ qp-qastyleagree-001 gen-run-qa FAIL 'QA is FAIL' "a style-* FAIL row with a FAIL qa state: the run is not done (FAIL on a proposed run)"
+case_ qp-qastyle-001 gen-run-qa FAIL 'graded with other style inputs (style, style_sha256' "style re-resolved at a new version with a fail palette rule, qa.json and output bytes kept: gen-run-qa FAIL as stale"
+[ "$(st AGEN-qp-qastyle-001 gen-run-image-review)/$(st AGEN-qp-qastyle-001 gen-run-prompt-review)" = PASS/PASS ]   && ok "stale style QA is caught by gen-run-qa while the refreshed reviews are bound" || no "restyled reviews: $(st AGEN-qp-qastyle-001 gen-run-image-review)" "$(why AGEN-qp-qastyle-001 gen-run-image-review)"
+! why AGEN-qp-qastyle2-001 gen-run-qa | grep -q 'other style inputs' && why AGEN-qp-qastyle2-001 gen-run-qa | grep -q 'QA is FAIL'   && ok "re-run qa after the style change: bound to the current style inputs (not stale), QA FAIL from the new rule" || no "restyled qa rerun" "$(why AGEN-qp-qastyle2-001 gen-run-qa)"
+case_ qp-qanobind-001 gen-run-qa FAIL 'does not record the style inputs it graded with' "a PASS qa.json without style_binding (made before the binding): stale, FAIL"
 case_ qp-noclaude-001 gen-run-claude-review WARN 'review-image-claude.json is missing' "no Claude visual review file: WARN"
 [ "$(st AGEN-qp-noclaude-001 gen-run-image-review)" = PASS ] && ok "a missing Claude review leaves the Codex image review PASS" || no "noclaude image review: $(st AGEN-qp-noclaude-001 gen-run-image-review)"
 case_ qp-claudeonly-001 gen-run-image-review FAIL 'review-image.json is missing' "a Claude PASS never replaces the missing Codex image review: FAIL"
@@ -2458,6 +2514,40 @@ AG review-cmd --phase image --run "$sl_" --codex codex --json > "$TMP/rl.json" 2
 jq 'del(.style.data.forbidden, .style.data.outline, .style.data.shape_language)' "$sl_/spec.json" > "$TMP/s" && mv "$TMP/s" "$sl_/spec.json"
 AG review-cmd --phase prompt --run "$sl_" --codex codex --json > "$TMP/rl.json" 2>"$TMP/err"; jq -r .stdin "$TMP/rl.json" > "$TMP/rr.txt"
 grep -qx "Style forbidden (never in the prompt or the image): none" "$TMP/rr.txt" && grep -qx "Style outline: none" "$TMP/rr.txt" && grep -qx "Style shape language: none" "$TMP/rr.txt"   && ok "review-cmd: a style without forbidden, outline or shape_language says none" || no "review rules none" "$(cat "$TMP/err" "$TMP/rr.txt")"
+
+# qa.json binds the anchor copies style-tone read (final review P2): an anchor copy changed with the output bytes kept
+# makes the report stale in the quality plugin; qa re-run binds the new copy
+gqa() { # gqa RUN-DIR AUTHORING: "STATE|reasons" of the plugin's gen-run-qa row for the run's run.md
+  python3 -B - "$ROOT" "$2" "$1" <<'EOF2'
+import importlib.util, json, os, re, sys
+from pathlib import Path
+root, auth, run = Path(sys.argv[1]), Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve()
+sys.path.insert(0, str(root / "scripts" / "checks"))
+from domains._api import Context
+spec = importlib.util.spec_from_file_location("assetgen_plugin_gqa", root / "scripts" / "checks" / "domains" / "assetgen.py")
+plugin = importlib.util.module_from_spec(spec); spec.loader.exec_module(plugin)
+reg = json.load(open(root / "registry.json", encoding="utf-8"))
+path = run / "run.md"
+obj = json.loads(re.match(r"\A---json\s*\n(.*?)\n---", path.read_text(encoding="utf-8"), re.S).group(1))
+ctx = Context(str(auth), reg, path.relative_to(auth).as_posix(), {}, None, {"authoring": auth})
+print("\n".join("%s|%s" % (r.state, "; ".join(r.reasons)) for r in plugin.check(obj, ctx) if r.check == "gen-run-qa"))
+EOF2
+}
+jq '.style.data.tone = {"tolerance": 0.05}' "$TMP/sq-spec.json" > "$sq/spec.json"
+python3 -B -c 'import json, sys; sys.path.insert(0, sys.argv[1]); import layers; p = sys.argv[2]; s = json.load(open(p)); s["purpose"]["sha256"] = layers.content_hash(s["purpose"]["data"]); json.dump(s, open(p, "w"))' "$ROOT/scripts/assetgen" "$sq/spec.json"
+rm -f "$sq/outputs/"*.png; cp "$FX/icon-ok.png" "$sq/outputs/out.png"
+AG qa --run "$sq" >/dev/null; bound "$sq" prompt PASS codex > "$sq/review-prompt.json"; bound "$sq" image PASS codex > "$sq/review-image.json"
+bound "$sq" image PASS claude > "$sq/review-image-claude.json"; AG manifest --run "$sq" >/dev/null
+[ "$(jq -r '[.style_binding.anchors[] | .anchor_id + ":" + .path] | join(",")' "$sq/qa.json")" = "b-strong:references/anchor-b-strong.png,a-canon:references/anchor-a-canon.png,c-supp:references/anchor-c-supp.png" ]   && [ "$(jq -r '.style_binding.anchors[1].sha256' "$sq/qa.json")" = "$(sha256sum "$sq/references/anchor-a-canon.png" | cut -d' ' -f1)" ]   && [ "$(jq -r .style_binding.family "$sq/qa.json")" = props ]   && ok "qa.json style_binding records the family and each selected anchor copy (path, sha256) style-tone read" || no "anchor style_binding" "$(jq -c .style_binding "$sq/qa.json")"
+gqa "$sq" "$SC" > "$TMP/gqa"; grep -Eq "^(PASS|WARN)\|" "$TMP/gqa" && ! grep -q "re-run qa" "$TMP/gqa"   && ok "gen-run-qa PASS (style WARN rows aside) on a style-locked run with anchors and a current style_binding" || no "anchor run gen-run-qa" "$(cat "$TMP/gqa")"
+cp "$sq/references/anchor-a-canon.png" "$TMP/a-canon.png"; cp "$FX/sl-dark.png" "$sq/references/anchor-a-canon.png"
+gqa "$sq" "$SC" > "$TMP/gqa"; grep -q "^FAIL|.*qa.json was graded with other style inputs (anchors differ" "$TMP/gqa" && cmp -s "$FX/icon-ok.png" "$sq/outputs/out.png"   && ok "tone-reference input changed (an anchor copy), output bytes kept: gen-run-qa FAIL as stale" || no "anchor changed gen-run-qa" "$(cat "$TMP/gqa")"
+AG qa --run "$sq" >/dev/null; AG manifest --run "$sq" >/dev/null; gqa "$sq" "$SC" > "$TMP/gqa"
+! grep -q "style inputs" "$TMP/gqa" && ok "qa re-run after the anchor change binds the new copy (not stale)" || no "anchor rerun gen-run-qa" "$(cat "$TMP/gqa")"
+jq '.style_lock.family = "characters"' "$sq/spec.json" > "$TMP/s" && mv "$TMP/s" "$sq/spec.json"
+gqa "$sq" "$SC" > "$TMP/gqa"; grep -q "^FAIL|.*other style inputs (family differ" "$TMP/gqa" && ok "family changed in spec.json after qa: gen-run-qa FAIL as stale" || no "family changed gen-run-qa" "$(cat "$TMP/gqa")"
+cp "$TMP/a-canon.png" "$sq/references/anchor-a-canon.png"; cp "$TMP/sq-spec.json" "$sq/spec.json"
+rm -f "$sq/run.md" "$sq/review-prompt.json" "$sq/review-image.json" "$sq/review-image-claude.json"
 
 # drift (read-only): older version and hash changed
 git -C "$SC" add -A && git -C "$SC" "${G[@]}" commit -qm "runs and records"

@@ -46,6 +46,14 @@ qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid)
 requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
   the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
   (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
+qa_style_binding(spec, locate) -> what the style consistency rows of qa.py evaluate besides the purpose and the output
+  bytes, or None for a spec without style_lock (no style rows): {"style": spec.style_lock.style (the style ref: id,
+  version, sha256), "style_sha256": sha256 of the canonical JSON of the effective style data spec.style.data (what
+  consistency.py reads; {} when it is not an object), "family": spec.style_lock.family (None when not a string),
+  "anchors": [{anchor_id, path, sha256}] of the selected anchors in selection order, path = the pick's image
+  (references/anchor-<id>.png) and sha256 = the bytes of locate(path), the run copy qa.py reads for style-tone (null
+  when it is missing)}. qa.json records it as style_binding and the plugin recomputes it from spec.json and the run's
+  files, so a QA report graded before the style data or version, the family or an anchor copy changed is stale.
 """
 import hashlib
 import json
@@ -216,6 +224,24 @@ def style_lock_binding(spec):
     rejections = [{"id": r.get("id"), "sha256": _canonical_sha256(r)} for r in rej if isinstance(r, dict)]         if isinstance(rej, list) else []
     return {"style": lock.get("style"), "family": lock.get("family"),
             "references": [r.get("sha256") for r in style_lock_references(spec)], "rejections": rejections}
+
+
+def qa_style_binding(spec, locate):
+    lock = spec.get("style_lock") if isinstance(spec, dict) else None
+    if not isinstance(lock, dict):
+        return None
+    style = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    data = style.get("data") if isinstance(style.get("data"), dict) else {}
+    anchors = []
+    for pick in style_lock_references(spec):
+        image = pick.get("image") if isinstance(pick.get("image"), str) and pick.get("image") else None
+        try:
+            digest = _file_sha256(locate(image)) if image else None
+        except (OSError, TypeError, ValueError):
+            digest = None
+        anchors.append({"anchor_id": pick.get("anchor_id"), "path": image, "sha256": digest})
+    return {"style": lock.get("style"), "style_sha256": _canonical_sha256(data),
+            "family": lock.get("family") if isinstance(lock.get("family"), str) else None, "anchors": anchors}
 
 
 def typed_param(name, decl, value):
