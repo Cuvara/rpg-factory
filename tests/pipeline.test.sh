@@ -462,6 +462,28 @@ expect "--effort outside the scope: usage error" 2 "claude-sonnet-5-5 / low is o
 expect "--model of another agent's scope: usage error" 2 "codex claude-opus-5-5 / high is outside the model scope" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca --model claude-opus-5-5
 expect "planner --model outside the scope: usage error" 2 "outside the model scope" planner --request "add a thing" --runner orca --model claude-haiku-4-5
 expect "--grade takes light, standard or heavy only" 2 "invalid choice" dispatch "$OK" --task gw --phase implement --grade huge
+# a non-canonical spelling of a path grades like the canonical one (dot and empty segments are dropped)
+for spell in "./backend/shared/proto/wire.proto" "backend//shared/proto/wire.proto" "backend/./shared//proto/wire.proto" 'backend\shared\proto\wire.proto'; do
+  esc=${spell//\\/\\\\}
+  X=$(plan spell "{$HEAD,\"tasks\":[{\"id\":\"wire\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"$esc\"],\"acceptance\":[\"a\"]}]}")
+  expect "validate: path spelling $spell grades heavy like the canonical wire.proto" 0 "^Model: task wire grade heavy \(tier L of the owned paths, contract or generated path\)" validate "$X"
+done
+# the Agent tool takes the model alias only: a model without a valid alias is a usage error, never a silent default
+jq 'del(.pipeline.models.agent_tool_alias["claude-sonnet-5-5"])' "$ROOT/registry.json" > "$TMP/reg-noalias.json"
+jq '.pipeline.models.agent_tool_alias["claude-sonnet-5-5"] = ""' "$ROOT/registry.json" > "$TMP/reg-emptyalias.json"
+out=$(python3 -B "$P" --registry "$TMP/reg-noalias.json" dispatch "$OK" --task gw --phase implement --runner agent 2>&1); rc=$?
+if [ "$rc" = 2 ] && grep -q "claude-sonnet-5-5 has no Agent-tool model alias" <<<"$out" && ! grep -q '"subagent_type"' <<<"$out"
+then pass=$((pass + 1)); echo "PASS  --runner agent with a model without an alias: usage error, no Agent call"
+else fail=$((fail + 1)); echo "FAIL  --runner agent without an alias (rc=$rc)"; sed 's/^/      /' <<<"$out" | head -10; fi
+out=$(python3 -B "$P" --registry "$TMP/reg-emptyalias.json" dispatch "$OK" --task gw --phase implement --runner agent 2>&1); rc=$?
+if [ "$rc" = 1 ] && grep -q "agent_tool_alias claude-sonnet-5-5: must be a non-empty string" <<<"$out" && ! grep -q '"subagent_type"' <<<"$out"
+then pass=$((pass + 1)); echo "PASS  --runner agent with an empty alias: policy error, no Agent call"
+else fail=$((fail + 1)); echo "FAIL  --runner agent with an empty alias (rc=$rc)"; sed 's/^/      /' <<<"$out" | head -10; fi
+out=$(python3 -B "$P" --registry "$TMP/reg-emptyalias.json" validate "$OK" 2>&1); rc=$?
+if [ "$rc" = 1 ] && grep -q "agent_tool_alias claude-sonnet-5-5: must be a non-empty string" <<<"$out"
+then pass=$((pass + 1)); echo "PASS  validate: an empty Agent-tool alias is a policy error"
+else fail=$((fail + 1)); echo "FAIL  validate with an empty alias (rc=$rc)"; sed 's/^/      /' <<<"$out" | head -10; fi
+expect "--runner orca still works for a model without an alias" 0 "^orca orchestration worker-start" --registry "$TMP/reg-noalias.json" dispatch "$OK" --task gw --phase implement --runner orca
 # the Agent-tool fallback: the model alias, never an effort; a stderr note and one prompt line say so
 out=$(python3 -B "$P" dispatch "$OK" --task gw --phase implement --runner agent 2>/dev/null)
 if jq -e '.model == "sonnet" and (.prompt | test("\nModel: claude-sonnet-5-5 \\(light profile\\), planned effort high\\. The Claude Code Agent tool takes the model alias sonnet but cannot set an effort")) and has("effort") == false' <<<"$out" >/dev/null

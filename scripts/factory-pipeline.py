@@ -291,10 +291,18 @@ def print_tier(a, out):
 TIER_GRADE = {"S": "light", "M": "standard", "L": "heavy"}
 
 
+def norm_path(p):
+    """A path as the routing engine sees it: forward slashes, no empty or `.` segments (a trailing slash stays, it marks
+    a directory), so ./a//b and a/b grade alike."""
+    s = str(p).replace("\\", "/")
+    segs = [x for x in s.split("/") if x not in ("", ".")]
+    return ("/" if s.startswith("/") else "") + "/".join(segs) + ("/" if segs and s.endswith("/") else "")
+
+
 def static_resolve(reg, key, paths):
     """resolve.jq over the given paths alone (no git state, so the result never drifts with the branch), or None with
     the reason when jq is missing or fails."""
-    files = [{"path": str(p).replace("\\", "/"), "status": "M", "source": "given"} for p in paths]
+    files = [{"path": norm_path(p), "status": "M", "source": "given"} for p in paths]
     try:
         r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files), "--argjson", "subst",
                             "{}", "--argjson", "tools", "{}", "-f", os.path.join(HERE, "lib", "resolve.jq")],
@@ -326,7 +334,7 @@ def task_contexts(plan, reg, tasks):
             if res is None:
                 out[t["id"]] = (None, why)
                 continue
-            mine = {str(p).replace("\\", "/") for p in t["paths"]}
+            mine = {norm_path(p) for p in t["paths"]}
             files = [f for f in res.get("files", []) if f.get("path") in mine]
             out[t["id"]] = ({"repos": [{
                 "repo": key, "touched": sorted({f["module"] for f in files if f.get("module")}),
@@ -950,10 +958,12 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
         print(orca_cmd.quote(argv))
     elif a.runner == "agent":
         alias = model_policy.alias(a.policy, m["model"])
-        how = (f"takes the model alias {alias}" if alias else
-               "has no alias for this model (the session runs the Agent tool's default model)")
+        if not alias:
+            die(f"--runner agent: {m['model']} has no Agent-tool model alias (registry pipeline.models.agent_tool_alias: "
+                "opus, sonnet or haiku); the Agent tool would run its default model, possibly outside the model scope. "
+                "Nothing was dispatched. Use --runner orca or print, or add the alias.")
         prompt = (f"Model: {m['model']} ({m['role']} profile), planned effort {m['effort']}. The Claude Code Agent tool "
-                  f"{how} but cannot set an effort: this session runs at its default effort.\n" + prompt)
+                  f"takes the model alias {alias} but cannot set an effort: this session runs at its default effort.\n" + prompt)
         print(f"factory-pipeline: --runner agent: model {alias or 'not settable'} ({m['model']}); effort {m['effort']} "
               "cannot be set through the Agent tool (the session runs at its default effort)", file=sys.stderr)
         # the Agent-tool fallback (no Orca) is Claude only: a fresh Claude session, whatever model the plan names;

@@ -172,6 +172,10 @@ def check(policy):
     alias_map = policy.get("agent_tool_alias")
     if not isinstance(alias_map, dict):
         errors.append("agent_tool_alias must be an object")
+    else:
+        for model, name in alias_map.items():
+            if not isinstance(name, str) or not name.strip():
+                errors.append(f"agent_tool_alias {model}: must be a non-empty string")
     return errors
 
 
@@ -193,7 +197,8 @@ def resolve(policy, agent, role):
 
 def alias(policy, model):
     """The Claude Code Agent tool model alias of a model id (opus, sonnet, haiku), or None."""
-    return (policy.get("agent_tool_alias") or {}).get(model)
+    name = (policy.get("agent_tool_alias") or {}).get(model)
+    return name if isinstance(name, str) and name.strip() else None
 
 
 def rubric(policy):
