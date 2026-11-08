@@ -318,31 +318,67 @@ def static_resolve(reg, key, paths):
         return None, "routing engine printed no JSON"
 
 
-def task_contexts(plan, reg, tasks):
-    """task id -> (routing snapshot of the task's owned paths alone, or None, reason). One jq run per registry repo; a
-    repo the registry does not know is resolved from the paths (plain_context)."""
-    out, groups = {}, {}
-    for t in tasks:
-        info = repo_info(plan, reg, t["repo"])
-        if info["registry"]:
-            groups.setdefault(info["registry"], []).append(t)
-        else:
-            out[t["id"]] = (plain_context(t["repo"], t["paths"]), None)
-    for key, group in groups.items():
-        res, why = static_resolve(reg, key, sorted({p for t in group for p in t["paths"]}))
-        for t in group:
-            if res is None:
-                out[t["id"]] = (None, why)
-                continue
-            mine = {route_path(p) for p in t["paths"]}
-            files = [f for f in res.get("files", []) if f.get("path") in mine]
-            out[t["id"]] = ({"repos": [{
-                "repo": key, "touched": sorted({f["module"] for f in files if f.get("module")}),
-                "files": [{"path": f["path"], "source": "given"} for f in files],
-                "contracts": [{"id": c["id"]} for c in res.get("contracts", [])
-                              if any(h.get("path") in mine for h in c.get("hits", []))],
-                "generated_hits": [h for h in res.get("generated_hits", []) if h.get("path") in mine]}]}, None)
-    return out
+def covers(a, b):
+    """Path `a` (a file, or a directory with or without its trailing slash) is `b` or contains it: resolve.jq's
+    path_matches, used both ways for owned paths."""
+    a = a.rstrip("/")
+    return b.rstrip("/") == a or b.startswith(a + "/")
+
+
+def overlaps_entry(entry, p, roots=()):
+    """A registry contract end or generated path `entry` and an owned path `p` overlap when either contains the other.
+    A `**/*<suffix>` glob matches a file with that suffix, and any owned directory that contains a root (`roots`: the
+    paths of the module the glob belongs to) or, with a trailing slash, lies inside one; with no roots (a contract
+    glob) any owned directory may hold a match."""
+    if entry.startswith("**/*"):
+        if p.endswith(entry[4:]):
+            return True
+        if not roots:
+            return p.endswith("/")
+        return any(covers(p, r) or (p.endswith("/") and covers(r, p)) for r in roots)
+    return covers(entry, p) or covers(p, entry)
+
+
+def owned_overlap(reg, key, paths):
+    """Contracts and generated paths of registry repo `key` an owned path overlaps either way. resolve.jq maps a file
+    to what contains it; an owned directory must also count what it contains (backend/shared/proto/ holds
+    wire.proto). A handoff contract counts only with its source end, as in resolve.jq."""
+    owned = [route_path(p) for p in paths]
+    contracts = []
+    for c in reg.get("contracts") or []:
+        ends = [(e, e is c.get("source")) for e in [c.get("source") or {}] + (c.get("copies") or [])
+                if e.get("repo") == key and e.get("path")]
+        hits = [src for e, src in ends if any(overlaps_entry(e["path"], p) for p in owned)]
+        if hits and (c.get("kind") != "handoff" or any(hits)):
+            contracts.append(c["id"])
+    generated = []
+    for m in reg.get("modules") or []:
+        if m.get("repo") != key:
+            continue
+        for g in m.get("generated") or []:
+            generated += [{"path": p, "generated_by": g} for p in owned if overlaps_entry(g, p, m.get("paths") or [])]
+    return contracts, generated
+
+
+def task_context(plan, reg, task):
+    """(routing snapshot of the task's owned paths alone, or None, reason). Each task resolves on its own: a batch
+    would let one task's paths change another's result (a handoff copy counts only next to its source). A repo the
+    registry does not know is resolved from the paths (plain_context)."""
+    info = repo_info(plan, reg, task["repo"])
+    if not info["registry"]:
+        return plain_context(task["repo"], task["paths"]), None
+    key = info["registry"]
+    res, why = static_resolve(reg, key, sorted(set(task["paths"])))
+    if res is None:
+        return None, why
+    contracts, generated = owned_overlap(reg, key, task["paths"])
+    contracts = sorted({c["id"] for c in res.get("contracts", [])} | set(contracts))
+    files = res.get("files", [])
+    return {"repos": [{
+        "repo": key, "touched": sorted({f["module"] for f in files if f.get("module")}),
+        "files": [{"path": f["path"], "source": "given"} for f in files],
+        "contracts": [{"id": c} for c in contracts],
+        "generated_hits": res.get("generated_hits", []) + generated}]}, None
 
 
 def task_grades(plan, reg, policy, tasks):
@@ -354,9 +390,8 @@ def task_grades(plan, reg, policy, tasks):
             out[t["id"]] = {"grade": t["grade"], "source": "plan"}
         else:
             todo.append(t)
-    ctxs = task_contexts(plan, reg, todo) if todo else {}
     for t in todo:
-        ctx, why = ctxs[t["id"]]
+        ctx, why = task_context(plan, reg, t)
         if ctx is None:
             out[t["id"]] = {"grade": policy["default_grade"], "source": f"default_grade (tier unknown: {why})"}
             continue
