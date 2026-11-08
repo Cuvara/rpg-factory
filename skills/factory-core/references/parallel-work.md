@@ -356,7 +356,9 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
 
 - **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; QA runs go
   to Codex when Claude implemented (QA never runs on the implementer's model, except as a fallback: with one model
-  available, that model runs QA). An explicit `implementer` against
+  available, that model runs QA in a fresh QA session, which the gate accepts for every tier). Only a QA verdict the
+  task lead records itself (no QA session, note starting `tier S`) is limited to tier S tasks ("QA tiers" in section
+  10). An explicit `implementer` against
   the table needs a `reason`: `validate` and `subplan validate` warn without one, and warn when 3 or more tasks or
   subtasks all use one model (warnings, never errors).
 - **Availability never stops a task.** Available agents are detected: each `pipeline.agents.<a>.bin` on PATH,
@@ -465,20 +467,21 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
 <!-- policy:qa-tiers -->
 | When | Runs | Who |
 |---|---|---|
-| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name plus the suites `tests/affected.py` maps to its changed files, each suite once; other checks are extra commands; never a full run | a fresh QA session in the task worktree |
-| Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
-| Tier S or docs-only task (every changed path docs, skills or changelog) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a QA PASS by the implementer's model counts for tier S only |
+| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once; other checks are extra commands; never a full run | a fresh QA session in the task worktree |
+| Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
+| Tier S or docs-only task (every owned path docs, skills, changelog or .md) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
 | Reviewer | no suites; only a repro test when a finding needs one | the review session |
 | Integration QA, once per batch before the PR | `tests/run-all.sh --reuse -j 4`: the batch's one full run, under the run-all lock, reusing suites whose inputs already passed | the run lead's integration QA session |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session (`.claude/CLAUDE.md` "Releases") |
 
 - **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
-  under `docs/`, `skills/` or `changelog.d/` or is a `.md` file. The gate accepts a task QA PASS by the
-  implementer's model only for such a task with a note starting `tier S`; a QA PASS by the other model is accepted
-  for every tier.
+  under `docs/`, `skills/` or `changelog.d/` or is a `.md` file. The gate accepts a QA verdict the task lead ran
+  itself (no QA session, note starting `tier S`) only for such a task. A QA PASS from a fresh QA session is accepted
+  as before for every tier: by the other model, or by the implementer's model as the one-model fallback of the Token
+  rule.
 - **Re-QA.** A QA FAIL is recorded with `verdict --phase qa --state FAIL --failed-suites <tests/a.sh,...>`. The next
   `dispatch --phase qa` on a new candidate prints `--affected --base <that FAIL's candidate>` with those suites
-  added to `--only-suites`.
+  and the task check suites in `--only-suites`.
 - **The lock.** A full run (no `--affected` or `--only-suites`, or any `--release` run) takes a per-machine lock in
   the persistent state dir; a second full run waits (`waiting for full run <pid> in <checkout>`), `--no-wait` exits 3
   instead, and a lock whose holder is dead is taken over (`run-all: taking over stale full-run lock (<pid>)`).
@@ -487,13 +490,16 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
   a `--no-workspace` or `--no-claude` record does not satisfy a run without that flag). Each suite's PASS is also
   recorded under a hash of its inputs (the suite file, the files `tests/affected.py` maps to it, the global inputs
   and the tool versions); a later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
-  graded by a postprocessor and live-workspace suites always run, and no record is published when the inputs
+  graded by a postprocessor and checks that read the live workspace are never reused, and no record is published when the inputs
   changed during the run. `--no-reuse` runs every suite, `--release` never reuses, and an input mapping that is
   unsure runs the suite.
 - **Selection.** `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the
   checks that run a script outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan,
   package ready, Netcode headless) are selected like suites by that script path, else they count as not affected;
-  `--only-suites` may name such a script (`tests/run-all.sh` usage header).
+  `--only-suites` may name such a script (`tests/run-all.sh` usage header). `--only-suites` exits 2 on a name
+  run-all does not run; `tests/run-all.sh --list-suites` (read-only) prints the names it accepts, and
+  `dispatch --phase qa` folds into `--only-suites` only the checks that list names (other checks stay extra
+  commands).
 - **Plans.** A task's `checks` name its own suites or the `--affected` command, never a full `tests/run-all.sh`, and
   its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
 

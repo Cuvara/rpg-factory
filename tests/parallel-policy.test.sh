@@ -383,8 +383,8 @@ else:
     rows = {line.split("|", 2)[1].strip(): line for line in table.splitlines()}
     required = {
         "Task QA, each candidate": ("--affected", "never a full run"),
-        "Re-QA after a FAIL": ("failed suites", "--affected", "previous FAIL candidate"),
-        "Tier S or docs-only task (every changed path docs, skills or changelog)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
+        "Re-QA after a FAIL": ("failed suites", "task check suites", "--affected", "previous FAIL candidate"),
+        "Tier S or docs-only task (every owned path docs, skills, changelog or .md)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
         "Reviewer": ("no suites",),
         "Integration QA, once per batch before the PR": ("--reuse -j 4", "one full run", "lock"),
         "Release": ("--release", "dogfood.sh --installed"),
@@ -427,6 +427,8 @@ q_mutate "QA tiers table removed" "qa-tiers table missing" \
   'sed -i "/^<!-- policy:qa-tiers -->$/,/^$/d" "$F"'
 q_mutate "QA tiers reviewer row removed" "qa-tiers row missing: Reviewer" \
   'sed -i "/^| Reviewer |/d" "$F"'
+q_mutate "QA tiers re-QA row drops the task check suites" "qa-tiers row changed: Re-QA after a FAIL"   'sed -i "/^| Re-QA after a FAIL |/s/, with the task check suites//" "$F"'
+q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or docs-only task/s/every owned path/every changed path/" "$F"'
 q_mutate "QA tiers task row requires a full run" "qa-tiers task row permits a full run" \
   'sed -i "/^| Task QA,/s/never a full run/run a full run/" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
