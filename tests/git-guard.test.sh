@@ -28,9 +28,10 @@ git -C "$SERVER" worktree add -q -b feat/guard/linked-check "$LINKED" develop
 
 pass=0; fail=0
 guard_command() { CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; }
-# Keep the first twelve ordinary cases and all explicit environment overrides on
-# the real hook process. The standalone malformed-input, hook wiring, mode and
-# crash-safety cases below also keep their original process boundaries.
+# Keep the first twelve ordinary cases, the rcheck cases (about 30 in total, one or
+# two per advisory class) and all explicit environment overrides on the real hook
+# process. The standalone malformed-input, hook wiring, mode and crash-safety cases
+# below also keep their original process boundaries.
 real_checks=12
 coproc GUARD_BATCH {
   CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B "$GUARD" --batch |
@@ -83,6 +84,7 @@ check() { # expected cwd command [env] [tool]
   if [ "$got" = "$expected" ]; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
 }
+rcheck() { real_checks=$((real_checks + 1)); check "$@"; }   # this case on the real hook process
 
 # Exercise the real case runner with deterministic empty-output stand-ins. Run in
 # subshells so intentionally failing cases cannot alter the suite's counters.
@@ -235,7 +237,7 @@ check high "$LINKED" 'taskkill //F //IM dotnet.exe'
 check allow "$LINKED" 'taskkill /T /PID 1234 /F'
 
 # read-only commands pass through
-check allow "$SERVER" "git status"
+rcheck allow "$SERVER" "git status"
 check allow "$SERVER" "git diff --stat"
 check allow "$SERVER" "git log --oneline -5"
 check allow "$SERVER" "git stash list"
@@ -248,14 +250,14 @@ check allow "$SERVER" "git add backend/gateway/main.go"
 check allow "$SERVER" "git restore --staged backend/gateway/main.go"
 check allow "$SERVER" 'echo "git reset --hard"'
 # destructive
-check warn "$SERVER" "git reset --hard HEAD~1"
+rcheck warn "$SERVER" "git reset --hard HEAD~1"
 check warn "$SERVER" "git clean -fd"
 check warn "$SERVER" "git checkout -- ."
 check warn "$SERVER" "git restore backend/gateway/main.go"
 check warn "$SERVER" "git stash"
 check warn "$SERVER" "git stash drop"
 check warn "$SERVER" "git branch -D feat/old"
-check warn "$SERVER" "git push --force origin feat/x"
+rcheck warn "$SERVER" "git push --force origin feat/x"
 check warn "$SERVER" "git push origin feat/x"
 check warn "$SERVER" "git rebase develop"
 # staging everything
@@ -264,16 +266,16 @@ check warn "$SERVER" "git add ."
 check warn "$SERVER" "git commit -am wip"
 # protected branches
 check warn "$SERVER" "git commit -m 'fix(gateway): x'"
-check warn "$WS" "git -C rpg-mmo-server commit -m x"
+rcheck warn "$WS" "git -C rpg-mmo-server commit -m x"
 check warn "$WS" "cd IndieRPGMMOAdventure && git commit -m x"
 check allow "$SERVER" "git checkout -b feat/gateway/y && git commit -m 'feat(gateway): y'"
 check allow "$FEATURE" "git commit -m 'feat(gateway): x'"
 check warn "$FEATURE" "git commit --amend --no-edit"
 # tags + submodules
-check high "$SERVER" "git tag sgl-v0.7.0"
+rcheck high "$SERVER" "git tag sgl-v0.7.0"
 check high "$SERVER" "git tag -a v1.2.3 -m release"
-check high "$SERVER" "git tag -d v0.1.0"
-check high "$SERVER" "git push origin --tags"
+rcheck high "$SERVER" "git tag -d v0.1.0"
+rcheck high "$SERVER" "git push origin --tags"
 check high "$SERVER" "git push origin v1.2.3"
 check high "$SERVER" "git push origin refs/tags/core-baseline-v2"
 check high "$SERVER" "git status && git tag v9.9.9"
@@ -385,7 +387,7 @@ check warn "$SERVER" '`which git` push'
 check warn "$SERVER" 'git -c alias.nuke="reset --hard" nuke'
 check warn "$SERVER" 'python3 -c "import os; os.system(\"git reset --hard\")"'
 check warn "$SERVER" 'node -e "require(\"child_process\").execSync(\"git push\")"'
-check high "$SERVER" 'bash -c "git tag v1.0.0"'
+rcheck high "$SERVER" 'bash -c "git tag v1.0.0"'
 check high "$SERVER" 'env GIT_DIR=.git git push origin --tags'
 check high "$SERVER" "sudo git tag sgl-v9.9.9"
 # ---- v2: commit-creating / ref-destroying operations
@@ -404,7 +406,7 @@ check high "$SERVER" "git update-ref refs/tags/v9 HEAD"
 check warn "$SERVER" "git gc --prune=now"
 check warn "$SERVER" "git reflog expire --expire=now --all"
 check warn "$SERVER" "git prune"
-check high "$SERVER" "git push origin HEAD:refs/tags/v2.0.0"
+rcheck high "$SERVER" "git push origin HEAD:refs/tags/v2.0.0"
 check high "$SERVER" "git push --mirror origin"
 check allow "$FEATURE" "git merge develop"
 check allow "$FEATURE" "git cherry-pick abc123"
@@ -421,9 +423,9 @@ check allow "$FEATURE" "git pull"
 check allow "$SERVER" "git merge --abort"
 check allow "$SERVER" "git fetch --prune"
 # ---- v2: gh API / releases
-check high "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/tags/v9 -f sha=abc"
-check high "$SERVER" "gh api repos/Cuvara/x/git/tags -f tag=v9"
-check high "$SERVER" "gh release create v1.0.0"
+rcheck high "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/tags/v9 -f sha=abc"
+rcheck high "$SERVER" "gh api repos/Cuvara/x/git/tags -f tag=v9"
+rcheck high "$SERVER" "gh release create v1.0.0"
 check high "$SERVER" "gh api -X POST repos/Cuvara/x/releases -f tag_name=v1"
 check warn "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/heads/x -f sha=abc"
 check allow "$SERVER" "gh api repos/Cuvara/x/git/refs/tags"
@@ -437,8 +439,8 @@ check allow "$SERVER" "sudo ls /root"
 check allow "$SERVER" 'python3 -c "print(1)"'
 check allow "$SERVER" 'echo $HOME && ls'
 # ---- v2: PowerShell tool
-check high "$SERVER" "git tag v1.2.3" "" PowerShell
-check warn "$SERVER" "git reset --hard; Get-ChildItem" "" PowerShell
+rcheck high "$SERVER" "git tag v1.2.3" "" PowerShell
+rcheck warn "$SERVER" "git reset --hard; Get-ChildItem" "" PowerShell
 check warn "$SERVER" "& 'git.exe' push --force" "" PowerShell
 check warn "$SERVER" "Set-Location ..\\IndieRPGMMOAdventure; git commit -m x" "" PowerShell
 check warn "$SERVER" "git merge feat/x" "" PowerShell
@@ -490,7 +492,7 @@ os.makedirs(os.path.join(sys.argv[1], "latch", key), exist_ok=True)
 for p in (os.path.join(sys.argv[1], "latch", key, "20261014T000000Z-abc123.json"), os.path.join(sys.argv[1], "latch", key + ".json")):
     json.dump({"workspace": sys.argv[2], "session": "other", "message": "[client] pre-existing user file changed"}, open(p, "w"))
 PY
-check allow "$SERVER" "git fetch --tags"
+rcheck allow "$SERVER" "git fetch --tags"
 check allow "$SERVER" "git fetch origin --tags --prune"
 check allow "$SERVER" "touch newfile"
 check allow "$FEATURE" "git commit -m 'feat(gateway): x'"
@@ -498,7 +500,7 @@ check allow "$SERVER" "git switch -c feat/server/after-latch"
 check allow "$SERVER" "python3 build.py"
 check allow "$SERVER" "git status"
 check warn   "$SERVER" "git stash drop"                       # the unrelated git safety rules still apply
-check high  "$SERVER" "git push origin --tags"
+rcheck high  "$SERVER" "git push origin --tags"
 rm -rf "$TMP/rpg-factory/guardtest/LATCH" "$TMP/state/latch"
 # non-Bash payloads are ignored
 out=$(jq -cn '{tool_name:"Read", tool_input:{file_path:"x"}, cwd:"/"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
@@ -629,7 +631,7 @@ check high "$SERVER" "gh api -XPOST repos/Cuvara/rpg-mmo-server/releases -f tag_
 check warn "$SERVER" "gh api -X PATCH repos/Cuvara/rpg-mmo-server -f default_branch=main"
 check warn "$SERVER" "gh api repos/Cuvara/rpg-mmo-server/issues -f title=x"
 check allow "$SERVER" "gh api repos/Cuvara/rpg-mmo-server/pulls --jq '.[].number'"
-check high "$SERVER" "gh repo delete Cuvara/rpg-mmo-server --yes"
+rcheck high "$SERVER" "gh repo delete Cuvara/rpg-mmo-server --yes"
 check high "$SERVER" "gh repo archive Cuvara/rpg-mmo-server"
 check warn "$SERVER" "gh repo edit --default-branch main"
 check warn "$SERVER" "gh repo rename x"
@@ -654,7 +656,7 @@ check high "$SERVER" "bash -c 'gh repo delete Cuvara/Netcode --yes'"
 check high "$OUT" "gh repo delete Cuvara/Netcode --yes"
 check high "$OUT" "gh api -X DELETE repos/Cuvara/UnityDots"
 check warn "$OUT" "gh api -X PUT repos/Cuvara/UIToolkit/branches/main/protection --input p.json"
-check allow "$OUT" "gh repo delete someone/scratch --yes"
+rcheck allow "$OUT" "gh repo delete someone/scratch --yes"
 
 # ---- v0.4: local ref / remote / config mutations on protected branches
 git -C "$SERVER" branch feat/x 2>/dev/null
