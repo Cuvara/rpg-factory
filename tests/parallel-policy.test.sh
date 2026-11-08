@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The parallel-work policy checks in tests/skills-lint.sh bite: on a throwaway copy of this plugin the pristine
-# copy passes the lint, and each mutation (lost link, copied policy text, blocking wording variants, gate-create, a
+# copy passes the relevant production lint sections, and each mutation (lost link, copied policy text, blocking wording variants, gate-create, a
 # dropped safety rule, a missing policy file) makes the copy's own lint FAIL with the expected message. The same
 # harness proves the allowed-tools coverage lint bites (a script use the skill's allowed-tools does not grant).
 # One minimal copy (the tracked and untracked files minus what neither the lint nor its tools read), one cheap copy
-# of it per mutation, and the mutations' lints run concurrently (PARALLEL_POLICY_JOBS, default 4); results print in
+# of only the lint inputs per mutation, and the relevant lint sections run concurrently (PARALLEL_POLICY_JOBS, default 4); results print in
 # the order below. A mutation command that itself fails is a FAIL (the copy is writable even for read-only sources).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -39,19 +39,65 @@ ro_err=$( (cd "$RO_DST" && echo 'zz-ro-mutation' >> "$RO_F") 2>&1 ); ro_rc=$?
 if [ $ro_rc -eq 0 ] && tail -n 1 "$RO_DST/$RO_F" | grep -qx 'zz-ro-mutation'; then ok "read-only source file still mutates in the copy"
 else no "read-only source file did not mutate in the copy (rc=$ro_rc)" "$ro_err"; fi
 chmod -R u+w "$RO_SRC"
-lint() { (cd "$1" && CLAUDE_PLUGIN_ROOT="$1" bash tests/skills-lint.sh 2>&1); }
 PW=skills/factory-core/references/parallel-work.md
 
-out=$(lint "$P"); rc=$?
-[ $rc -eq 0 ] && ! grep -q 'parallel-work' <<<"$(grep '^FAIL' <<<"$out")" && ok "pristine copy passes the lint" || no "pristine copy (rc=$rc)" "$(grep '^FAIL' <<<"$out")"
+# Extract the production checks, rather than duplicate their implementation. Fail closed if
+# their section boundaries move: a missing section must never make a mutation pass.
+python3 -B - "$P/tests/skills-lint.sh" "$TMP" <<'PY_SECTIONS'
+import sys
+from pathlib import Path
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+for name, start, end in (
+    ("allowed", "allow_out=$(", "# every skill appears everywhere"),
+    ("parallel", 'pw="skills/factory-core/references/parallel-work.md"', "# the budget warning itself"),
+):
+    section = source.split(start, 1)[1].split(end, 1)
+    assert len(section) == 2, name + " lint section boundary missing"
+    Path(sys.argv[2], name + ".sh").write_text(start + section[0], encoding="utf-8")
+PY_SECTIONS
+[ $? -eq 0 ] || exit 1
+lint_mutation() {
+  local root="$1" section="$2"
+  (cd "$root" && ROOT="$root"; fail=0
+    ok() { :; }
+    bad() { echo "FAIL  $*"; fail=$((fail + 1)); }
+    . "$TMP/$section.sh"
+    [ "$fail" -eq 0 ])
+}
+out=$(lint_mutation "$P" parallel); rc=$?
+[ "$rc" -eq 0 ] && ok "pristine parallel-work lint section passes" || no "pristine parallel-work lint (rc=$rc)" "$out"
+out=$(lint_mutation "$P" allowed); rc=$?
+[ "$rc" -eq 0 ] && ok "pristine allowed-tools lint section passes" || no "pristine allowed-tools lint (rc=$rc)" "$out"
+
+# Only these files are read by the extracted checks; script contents are not read,
+# but their names determine allowed-tools coverage. Use one Python copy operation
+# per worker rather than spawning cp/mkdir for each file on Windows.
+python3 -B - "$P" "$TMP/lint-inputs" <<'PY_INPUTS'
+import shutil, sys
+from pathlib import Path
+src, dst = map(Path, sys.argv[1:])
+shutil.copytree(src / "skills", dst / "skills")
+for pattern in ("scripts/*", "scripts/checks/*"):
+    for path in src.glob(pattern):
+        if path.is_file():
+            target = dst / path.relative_to(src)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.touch()
+PY_INPUTS
+[ $? -eq 0 ] || exit 1
 
 # mutate <name> <expected FAIL text> <shell commands run inside a fresh copy>: queued; `grade` runs and checks them
 MN=(); ME=(); MC=()
 mutate() { MN+=("$1"); ME+=("$2"); MC+=("$3"); }
 lint_one() { # index: fresh copy, mutation, lint -> $TMP/r<i>.rc / .out
-  local M="$TMP/m$1"; rm -rf "$M"; cp -r "$P" "$M"
+  local M="$TMP/m$1" section=parallel
+  case "${ME[$1]}" in *allowed-tools*|*not\ covered*|server-ops:*) section=allowed ;; esac
+  python3 -B - "$TMP/lint-inputs" "$M" <<'PY_COPY'
+import shutil, sys
+shutil.copytree(sys.argv[1], sys.argv[2])
+PY_COPY
   (cd "$M" && eval "${MC[$1]}") > "$TMP/r$1.merr" 2>&1; echo $? > "$TMP/r$1.mrc"
-  lint "$M" > "$TMP/r$1.out"; echo $? > "$TMP/r$1.rc"; rm -rf "$M"
+  lint_mutation "$M" "$section" > "$TMP/r$1.out"; echo $? > "$TMP/r$1.rc"; rm -rf "$M"
 }
 grade() {
   local i out rc mrc jobs="${PARALLEL_POLICY_JOBS:-4}"
@@ -133,36 +179,50 @@ RETIRED_PHRASES=(
   'always starts a sub-session that does not commit'
 )
 policy_markers() {
-  local f="$1" id n got errs=() p hits
-  for id in "${POLICY_IDS[@]}"; do
-    n=$(grep -cxF -- "<!-- policy:$id -->" "$f")
-    if [ "$n" -eq 0 ]; then errs+=("marker missing: policy:$id"); continue; fi
-    if [ "$n" -gt 1 ]; then errs+=("marker duplicated: policy:$id appears $n times"); continue; fi
-    got=$(awk -v m="<!-- policy:$id -->" 'f && NF { print; exit } $0 == m { f = 1 }' "$f")
-    [ "$got" = "${POLICY_SENTENCE[$id]}" ] || errs+=("sentence changed under policy:$id: '$got'")
-  done
-  local table
-  table=$(awk '$0 == "<!-- policy:placement-table -->" { f = 1; next } f && /^\|/ { print; t = 1; next } f && t { exit }' "$f")
-  for p in "${PLACEMENT_ROWS[@]}"; do
-    grep -qF -- "$p" <<<"$table" || errs+=("placement table row missing: '$p'")
-  done
-  for p in "${RETIRED_PHRASES[@]}"; do
-    hits=$(grep -niF -- "$p" "$f" | head -1)
-    [ -z "$hits" ] || errs+=("retired shortcut phrasing '$p': $hits")
-  done
-  # Section 10 step 4 keeps the child exception: a shared implement session never commits, a child one commits on
-  # its own child branch (section 4 "Child worktrees").
-  local step4
-  step4=$(awk '/^4\. \*\*Cross-model review\.\*\*/ { f = 1 } f && /^5\. / { exit } f' "$f" | tr '\n' ' ' | tr -s ' ')
-  if [ -z "$step4" ]; then errs+=("section 10 step 4 (Cross-model review) missing")
-  else
-    for p in 'in the shared placement starts a sub-session that does not commit' 'commits on its own child branch'; do
-      grep -qF -- "$p" <<<"$step4" || errs+=("section 10 step 4 lacks the child exception: '$p'")
-    done
-  fi
-  [ ${#errs[@]} -eq 0 ] && return 0
-  printf '%s\n' "${errs[@]}"; return 1
+  # Batch the marker checks in one process on Windows; keep the shell data above
+  # as the single source for canonical sentences and expected diagnostics.
+  local args=() id
+  for id in "${POLICY_IDS[@]}"; do args+=("$id" "${POLICY_SENTENCE[$id]}"); done
+  python3 -B - "$1" "${#POLICY_IDS[@]}" "${args[@]}" "${PLACEMENT_ROWS[@]}" -- "${RETIRED_PHRASES[@]}" <<'PY_MARKERS'
+import re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+lines = text.splitlines()
+count = int(sys.argv[2]); args = sys.argv[3:]; errors = []
+for i in range(count):
+    name, sentence = args[2*i:2*i+2]
+    marker = "<!-- policy:" + name + " -->"
+    positions = [i for i, line in enumerate(lines) if line == marker]
+    if not positions:
+        errors.append("marker missing: policy:" + name); continue
+    if len(positions) > 1:
+        errors.append(f"marker duplicated: policy:{name} appears {len(positions)} times"); continue
+    got = next((line for line in lines[positions[0]+1:] if line.strip()), "")
+    if got != sentence:
+        errors.append(f"sentence changed under policy:{name}: '{got}'")
+match = re.search(r"<!-- policy:placement-table -->\s*\n((?:\|[^\n]*\n)+)", text)
+table = match.group(1) if match else ""
+rest = args[2*count:]; split = rest.index("--")
+for row in rest[:split]:
+    if row not in table:
+        errors.append(f"placement table row missing: '{row}'")
+for phrase in rest[split+1:]:
+    hit = next((f"{i}:{line}" for i, line in enumerate(lines, 1) if phrase.lower() in line.lower()), None)
+    if hit:
+        errors.append(f"retired shortcut phrasing '{phrase}': {hit}")
+match = re.search(r"^4\. \*\*Cross-model review\.\*\*.*?(?=^5\. |\Z)", text, re.M | re.S)
+if not match:
+    errors.append("section 10 step 4 (Cross-model review) missing")
+else:
+    step = " ".join(match.group().split())
+    for phrase in ("in the shared placement starts a sub-session that does not commit", "commits on its own child branch"):
+        if phrase not in step:
+            errors.append(f"section 10 step 4 lacks the child exception: '{phrase}'")
+print("\n".join(errors), end="\n" if errors else "")
+sys.exit(bool(errors))
+PY_MARKERS
 }
+
 s_out=$(policy_markers "$ROOT/$PW" 2>&1); s_rc=$?
 [ $s_rc -eq 0 ] && ok "two-level policy markers intact in $PW" || no "two-level policy markers broken in $PW (rc=$s_rc)" "$s_out"
 # s_mutate <name> <expected text|PASS> <commands in a copy of the policy file $F>: the checker must FAIL with that
@@ -225,41 +285,63 @@ s_mutate "step 4 says implement never commits" "retired shortcut phrasing 'alway
 WHICH_MODEL_ROWS=('| lead, plan, orchestration | claude |' '| docs, policy ' '| design '
   '| code, test, fix, refactor, generated | codex |' '| review | the other model |'
   '| QA | the model that did not implement (`qa_prefer` codex when codex did not implement) |')
-WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'full QA runs go to Codex when Claude implemented'
+WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'QA runs go to Codex when Claude implemented'
   'RPG_FACTORY_AGENTS'
   '--down <agent>' 'SAME_MODEL (fallback: <model> unavailable)' 'no command fails because a model is missing')
 which_model() {
-  local f="$1" root="${2:-}" p x table code qa sec copies errs=()
-  table=$(awk '$0 == "<!-- policy:which-model -->" { f = 1; next } f && /^\|/ { print; t = 1; next } f && t { exit }' "$f")
-  if [ -z "$table" ]; then echo "which-model table missing"; return 1; fi
-  for p in "${WHICH_MODEL_ROWS[@]}"; do grep -qF -- "$p" <<<"$table" || errs+=("which-model table row missing: '$p'"); done
-  [ "$(wc -l <<<"$table")" -le 8 ] || errs+=("which-model table longer than 8 lines")
-  code=$(grep -F '| code' <<<"$table")
-  ! grep -qi 'claude' <<<"$code" || errs+=("which-model table names claude for code: '$code'")
-  qa=$(grep -F '| QA |' <<<"$table")
-  ! grep -qiE "implementer('s)? model|same model|implementing model" <<<"$qa" \
-    || errs+=("which-model QA row names the implementer's model: '$qa'")
-  sec=$(awk '/^## 10\. / { f = 1 } f' "$f" | tr '\n' ' ' | tr -s ' ')
-  for p in "${WHICH_MODEL_REQUIRED[@]}"; do grep -qF -- "$p" <<<"$sec" || errs+=("section 10 lacks the routing rule: '$p'"); done
-  if [ -n "$root" ]; then
-    copies=$(grep -rlF --include='*.md' -- "${POLICY_SENTENCE[which-model]}" "$root" 2>/dev/null \
-      | while IFS= read -r x; do printf '%s\n' "${x#"$root"/}"; done | grep -vxF "$PW")
-    [ -z "$copies" ] || errs+=("which-model table copied outside $PW: $(echo $copies)")
-  fi
-  [ ${#errs[@]} -eq 0 ] && return 0
-  printf '%s\n' "${errs[@]}"; return 1
+  python3 -B - "$1" "${2:-}" "$PW" "${#WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_REQUIRED[@]}" <<'PY_MODEL'
+import re, sys
+from pathlib import Path
+file, root, relative, count = sys.argv[1:5]
+count = int(count); rows = sys.argv[5:5+count]; required = sys.argv[5+count:]
+text = Path(file).read_text(encoding="utf-8"); errors = []
+match = re.search(r"<!-- policy:which-model -->\s*\n((?:\|[^\n]*\n)+)", text)
+if not match:
+    print("which-model table missing"); sys.exit(1)
+table = match.group(1)
+for row in rows:
+    if row not in table:
+        errors.append(f"which-model table row missing: '{row}'")
+if len(table.splitlines()) > 8:
+    errors.append("which-model table longer than 8 lines")
+code = next((line for line in table.splitlines() if "| code" in line), "")
+if "claude" in code.lower():
+    errors.append(f"which-model table names claude for code: '{code}'")
+qa = next((line for line in table.splitlines() if "| QA |" in line), "")
+if re.search(r"implementer('s)? model|same model|implementing model", qa, re.I):
+    errors.append(f"which-model QA row names the implementer's model: '{qa}'")
+section = " ".join(text.split("## 10. ", 1)[-1].split())
+for phrase in required:
+    if phrase not in section:
+        errors.append(f"section 10 lacks the routing rule: '{phrase}'")
+if root:
+    copies = [path.relative_to(root).as_posix() for path in sorted(Path(root).rglob("*.md"))
+              if path.relative_to(root).as_posix() != relative
+              and "| Role or kind | Model | Registry |" in path.read_text(encoding="utf-8")]
+    if copies:
+        errors.append("which-model table copied outside " + relative + ": " + " ".join(copies))
+print("\n".join(errors), end="\n" if errors else "")
+sys.exit(bool(errors))
+PY_MODEL
 }
+
 w_out=$(which_model "$ROOT/$PW" "$P" 2>&1); w_rc=$?
 [ $w_rc -eq 0 ] && ok "which-model table intact, single copy" || no "which-model table (rc=$w_rc)" "$w_out"
 w_mutate() { # <name> <expected text> <commands run in a fresh copy $T of the tree; $F is its policy file>
   local T="$TMP/wm" merr out rc
-  rm -rf "$T"; cp -r "$P" "$T"
+  # Reuse one overlay: these mutations touch only the policy and two known
+  # duplicate destinations. Restore all three before each case.
+  mkdir -p "$T/${PW%/*}" "$T/docs" "$T/skills/client-integration"
+  cp "$P/$PW" "$T/$PW"
+  cp "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md"
+  rm -f "$T/docs/zz-models.md"
   if ! merr=$(cd "$T" && F="$T/$PW" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if diff -rq "$P" "$T" >/dev/null; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$P/$PW" "$T/$PW" && cmp -s "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md" && [ ! -f "$T/docs/zz-models.md" ]; then
+    no "$1: mutation changed nothing"; return
+  fi
   out=$(which_model "$T/$PW" "$T" 2>&1); rc=$?
   if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> which-model check FAIL: $2"
   else no "$1: which-model check did not fail with '$2' (rc=$rc)" "$out"; fi
-  rm -rf "$T"
 }
 w_mutate "which-model code row removed" "which-model table row missing: '| code, test, fix, refactor, generated | codex |'" \
   'sed -i "/^| code, test, fix, refactor, generated |/d" "$F"'
@@ -271,8 +353,8 @@ w_mutate "which-model table grows past 8 lines" "which-model table longer than 8
   'sed -i "/^| review | the other model |/i | asset | claude | x |\n| data | codex | x |" "$F"'
 w_mutate "which-model QA row names the implementer's model" "which-model QA row names the implementer's model" \
   'sed -i "s/^| QA | the model that did not implement (\`qa_prefer\` codex when codex did not implement) |/| QA | the implementer'"'"'s model; long full-suite QA prefers codex |/" "$F"'
-w_mutate "QA token rule loses the implementer condition" "section 10 lacks the routing rule: 'full QA runs go to Codex when Claude implemented'" \
-  'perl -0pi -e "s/full QA runs go\s+to Codex when Claude implemented/full QA runs go to Codex/" "$F"'
+w_mutate "QA token rule loses the implementer condition" "section 10 lacks the routing rule: 'QA runs go to Codex when Claude implemented'" \
+  'perl -0pi -e "s/QA runs go\s+to Codex when Claude implemented/QA runs go to Codex/" "$F"'
 w_mutate "token rule dropped" "section 10 lacks the routing rule: 'delegates code to Codex and does not implement'" \
   'sed -i "s/delegates code to Codex and does not implement/may implement/" "$F"'
 w_mutate "fallback marker dropped" "section 10 lacks the routing rule: 'SAME_MODEL (fallback: <model> unavailable)'" \
@@ -281,6 +363,74 @@ w_mutate "which-model table copied into docs" "which-model table copied outside 
   'mkdir -p docs && sed -n "/^| Role or kind |/,/^| QA |/p" "$F" > docs/zz-models.md'
 w_mutate "which-model table copied into a skill" "which-model table copied outside $PW: skills/client-integration/SKILL.md" \
   'printf "\n| Role or kind | Model | Registry |\n|---|---|---|\n| code | codex | x |\n" >> skills/client-integration/SKILL.md'
+
+# QA tiers stay under their marker in section 10, with one canonical table.
+# Inspect the whole tree for copies, including untracked Markdown.
+qa_tiers() {
+  python3 -B - "$1" "$2" "$PW" <<'PY_QA'
+import re, sys
+from pathlib import Path
+policy, root, relative = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+text = policy.read_text(encoding="utf-8")
+marker = "<!-- policy:qa-tiers -->"
+errors = []
+section = text.split("## 10. ", 1)[-1].split("\n## ", 1)[0]
+match = re.search(re.escape(marker) + r"\s*\n((?:\|[^\n]*\n)+)", section)
+if text.count(marker) != 1 or not match:
+    errors.append("qa-tiers table missing or marker duplicated")
+else:
+    table = match.group(1)
+    rows = {line.split("|", 2)[1].strip(): line for line in table.splitlines()}
+    required = {
+        "Task QA, each candidate": ("--affected", "never a full run"),
+        "Re-QA after a FAIL": ("failed suites", "--affected", "previous FAIL candidate"),
+        "Tier S or docs-only task (every changed path docs, skills or changelog)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
+        "Reviewer": ("no suites",),
+        "Integration QA, once per batch before the PR": ("--reuse -j 4", "one full run", "lock"),
+        "Release": ("--release", "dogfood.sh --installed"),
+    }
+    for label, phrases in required.items():
+        row = rows.get(label, "")
+        if not row:
+            errors.append("qa-tiers row missing: " + label)
+        elif any(phrase not in row for phrase in phrases):
+            errors.append("qa-tiers row changed: " + label)
+    task = rows.get("Task QA, each candidate", "")
+    if re.search(r"(?<!never a )full run", task, re.I):
+        errors.append("qa-tiers task row permits a full run")
+header = "| When | Runs | Who |"
+for path in sorted(root.rglob("*.md")):
+    if path.relative_to(root).as_posix() == relative:
+        continue
+    contents = path.read_text(encoding="utf-8")
+    if header in contents or marker in contents:
+        errors.append("qa-tiers table copied outside " + relative + ": " + path.relative_to(root).as_posix())
+print("\n".join(errors), end="\n" if errors else "")
+sys.exit(bool(errors))
+PY_QA
+}
+q_out=$(qa_tiers "$ROOT/$PW" "$P" 2>&1); q_rc=$?
+[ "$q_rc" -eq 0 ] && ok "QA tiers table intact, single copy" || no "QA tiers table (rc=$q_rc)" "$q_out"
+q_mutate() {
+  local T="$TMP/qa-tiers" F merr out rc
+  F="$T/$PW"
+  mkdir -p "${F%/*}" "$T/skills/client-integration"
+  cp "$P/$PW" "$F"
+  rm -f "$T/skills/client-integration/SKILL.md"
+  if ! merr=$(cd "$T" && F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if cmp -s "$P/$PW" "$F" && [ ! -f "$T/skills/client-integration/SKILL.md" ]; then no "$1: mutation changed nothing"; return; fi
+  out=$(qa_tiers "$F" "$T" 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> QA tiers check FAIL: $2"
+  else no "$1: QA tiers check did not fail with '$2' (rc=$rc)" "$out"; fi
+}
+q_mutate "QA tiers table removed" "qa-tiers table missing" \
+  'sed -i "/^<!-- policy:qa-tiers -->$/,/^$/d" "$F"'
+q_mutate "QA tiers reviewer row removed" "qa-tiers row missing: Reviewer" \
+  'sed -i "/^| Reviewer |/d" "$F"'
+q_mutate "QA tiers task row requires a full run" "qa-tiers task row permits a full run" \
+  'sed -i "/^| Task QA,/s/never a full run/run a full run/" "$F"'
+q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
+  'sed -n "/^<!-- policy:qa-tiers -->$/,/^$/p" "$F" > skills/client-integration/SKILL.md'
 
 # Section 5 keeps the Orca-first runner rule: inside Orca, planner/dispatch refuse --runner agent without
 # --orca-unavailable, and the reason (Agent-tool task leads are invisible in Orca) stays with it. Phrases are
