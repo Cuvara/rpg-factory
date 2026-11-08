@@ -33,15 +33,47 @@ def hook(pairs):
 json.load(open(sys.argv[1], encoding="utf-8"), object_pairs_hook=hook)' "$REGISTRY" 2>&1)
 if [ -n "$dups" ]; then echo "FAIL: $REGISTRY has duplicate keys (the last one wins silently): $(sort -u <<<"$dups" | tr '\n' ' ')"; exit 1; fi
 
+# The plan schema owns pipeline kinds; schema copies must preserve its order too.
+pipeline_kinds=$(python3 -B - "$PLUGIN_ROOT" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+plan_path = "docs/schemas/pipeline-plan.schema.json"
+errors = []
+def read_enum(path, keys):
+    try:
+        value = json.loads((root / path).read_text(encoding="utf-8"))
+        for key in keys:
+            value = value[key]
+        if not isinstance(value, list) or not value or any(not isinstance(k, str) for k in value):
+            raise ValueError("expected a non-empty string enum")
+        return value
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        errors.append(f"pipeline kind enum: {path}: {exc}")
+        return None
+kinds = read_enum(plan_path, ("properties", "tasks", "items", "properties", "kind", "enum"))
+for path, keys, suffix in (
+    ("docs/schemas/pipeline-subplan.schema.json", ("properties", "subtasks", "items", "properties", "kind", "enum"), []),
+    ("docs/registry.schema.json", ("properties", "pipeline", "properties", "agent_routing", "propertyNames", "enum"), ["default"]),
+):
+    copy = read_enum(path, keys)
+    if kinds is not None and copy is not None and copy != kinds + suffix:
+        errors.append(f"pipeline kind enum: {path} differs from {plan_path}")
+if errors:
+    print("\n".join("FAIL: " + error for error in errors))
+    sys.exit(1)
+print(json.dumps(kinds + ["default"]))
+PY
+) || { echo "$pipeline_kinds"; exit 1; }
+
 # ---- structure (jq emits one line per problem)
-problems=$(jq -r '
+problems=$(jq -r --argjson pipeline_kinds "$pipeline_kinds" '
   . as $r
   | ([.modules[].id]) as $ids
   | (
       (["schema_version","workspace","tiers","result_states","tools","repos","modules","global_rules"][]
         | select($r[.] == null) | "missing top-level key: \(.)"),
       (($r.pipeline.agent_routing // {}) | to_entries[]
-        | select((.key | IN("lead","plan","docs","policy","design","code","test","fix","refactor","generated","default") | not)
+        | select((.key as $kind | $pipeline_kinds | index($kind) == null)
           or $r.pipeline.agents[.value] == null) | "pipeline.agent_routing: invalid kind or agent \(.key)"),
       (select($r.pipeline.qa_prefer != null and ($r.pipeline.agents // {})[$r.pipeline.qa_prefer] == null) | "pipeline.qa_prefer: unknown agent"),
       (($r.pipeline.available_agents // [])[] | select($r.pipeline.agents[.] == null) | "pipeline.available_agents: unknown agent \(.)"),
