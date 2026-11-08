@@ -782,6 +782,32 @@ def embed(run_dir):
 DEFRINGE_FILE = "defringe.json"
 RAW_DIR = "outputs-raw"
 DEFRINGE_RINGS = 8
+# Ancillary chunks that stay valid for the rewritten 8-bit RGBA image (colour management, HDR metadata, pixel size);
+# defringe carries them right after IHDR. Chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT)
+# and every other chunk are dropped.
+DEFRINGE_KEEP = (b"cHRM", b"gAMA", b"iCCP", b"sRGB", b"cICP", b"mDCv", b"cLLI", b"pHYs")
+
+
+def colour_chunks(data):
+    """The DEFRINGE_KEEP (type, body) chunks of PNG bytes found before the first IDAT, in file order, the first of each
+    type only; iCCP wins over sRGB when an (invalid) input has both, so the output never carries both."""
+    found, seen = [], set()
+    for ctype, body in png.chunks(data):
+        if ctype == b"IDAT":
+            break
+        if ctype in DEFRINGE_KEEP and ctype not in seen:
+            seen.add(ctype)
+            found.append((ctype, body))
+    return [(t, b) for t, b in found if not (t == b"sRGB" and b"iCCP" in seen)]
+
+
+def after_ihdr(data, extra):
+    """PNG bytes with the extra (type, body) chunks right after IHDR (which png.chunks has validated)."""
+    first = next(iter(png.chunks(data)))
+    if first[0] != b"IHDR":
+        raise png.Invalid("first chunk is not IHDR")
+    pos = 8 + 12 + len(first[1])
+    return data[:pos] + b"".join(png.chunk(t, b) for t, b in extra) + data[pos:]
 
 
 def bound_records(run_dir, outputs):
@@ -818,7 +844,9 @@ def defringe(run_dir, alpha_floor=None, force=False):
     original goes to outputs-raw/<name> first; defringe.json records the params and each output's before/after sha256
     (file bytes), its after_pixels_sha256 (decoded pixels: embed after defringe keeps them) and stats. Running it again
     on outputs it wrote (same pixels) starts from the kept originals, so the result depends only on the originals and
-    the params. Text chunks (prompt, workflow) are carried over. Refuses an approved run, and outputs
+    the params. Text chunks (prompt, workflow) are carried over before IEND, and the colour-management and other safe
+    ancillary chunks (cHRM, gAMA, iCCP or sRGB - never both -, cICP, mDCv, cLLI, pHYs) right after IHDR, so the opaque
+    body keeps its colour; chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT) are dropped. Refuses an approved run, and outputs
     that qa.json or an image review already bind unless force (those records must be re-run afterwards)."""
     images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
     if not images:
@@ -850,6 +878,7 @@ def defringe(run_dir, alpha_floor=None, force=False):
         try:
             img = png.decode(src)
             chunks = text_chunks(data)
+            colour = colour_chunks(data)
         except (png.Invalid, png.Unsupported) as exc:
             rows.append({"output": name, "state": "FAIL", "reason": str(exc)})
             continue
@@ -857,7 +886,7 @@ def defringe(run_dir, alpha_floor=None, force=False):
             rows.append({"output": name, "state": "skipped", "reason": "no transparent pixels: nothing to defringe"})
             continue
         new, stats = imaging.defringe(img, alpha_floor, DEFRINGE_RINGS)
-        new = rebuild(new, lambda t, b: True, chunks)
+        new = rebuild(after_ihdr(new, colour), lambda t, b: True, chunks)
         if not again:
             os.makedirs(os.path.dirname(raw), exist_ok=True)
             shutil.copyfile(path, raw)

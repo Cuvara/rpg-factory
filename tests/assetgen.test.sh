@@ -1068,6 +1068,64 @@ AG defringe --run "$f2" > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 0 ] && grep -q "^skipped outputs/b.png: no transparent pixels" "$TMP/o" && grep -q "1 defringed, 1 skipped, 0 FAIL" "$TMP/o" \
   && [ "$(sha256sum "$f2/outputs/b.png" | cut -d' ' -f1)" = "$ob" ] && [ ! -e "$f2/outputs-raw/b.png" ] \
   && ok "defringe skips an output without transparent pixels (untouched, no raw copy)" || no "defringe skip rc=$rc" "$(cat "$TMP/o")"
+# defringe keeps the colour-management and other safe ancillary chunks (in file order, right after IHDR) and the text
+# chunks, never adds sRGB next to iCCP, and drops chunks bound to the old pixel format (PLTE, tRNS, sBIT, bKGD, hIST)
+cc="$TMP/colour-chunks"; mkdir -p "$cc"
+python3 -B - "$ROOT" "$FX/fringe.png" "$cc" <<'EOF'
+import os, struct, sys, zlib
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+src, cc = open(sys.argv[2], "rb").read(), sys.argv[3]
+def ihdr_then(data, extra):
+    pos = 8 + 12 + 13
+    return data[:pos] + b"".join(png.chunk(t, b) for t, b in extra) + data[pos:]
+def save(name, data):
+    os.makedirs(os.path.join(cc, name, "outputs"), exist_ok=True)
+    open(os.path.join(cc, name, "outputs", "prop.png"), "wb").write(data)
+chrm = struct.pack(">8I", 31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000)
+save("gama", png.add_text(ihdr_then(src, [(b"sBIT", b"\x08\x08\x08\x08"), (b"cHRM", chrm), (b"gAMA", struct.pack(">I", 45455)),
+                                          (b"bKGD", b"\x00\x10\x00\x10\x00\x10"), (b"pHYs", struct.pack(">IIB", 2835, 2835, 1))]),
+                          "prompt", "p"))
+save("iccp", ihdr_then(src, [(b"iCCP", b"icc\0\0" + zlib.compress(b"fake profile"))]))
+save("srgb", ihdr_then(src, [(b"sRGB", b"\x00")]))
+# 16x16 palette image: transparent background, an 8x8 opaque body and a 1-pixel low-alpha cyan ring around it
+rows = [bytes(0 if not (3 <= x <= 12 and 3 <= y <= 12) else 1 if (4 <= x <= 11 and 4 <= y <= 11) else 2 for x in range(16))
+        for y in range(16)]
+save("palette", png.encode_raw(16, 16, 8, 3, rows, extra=[(b"gAMA", struct.pack(">I", 45455)),
+                                                         (b"PLTE", b"\x00\x00\x00\x78\x3c\x14\x00\xc8\xff"),
+                                                         (b"bKGD", b"\x00"), (b"hIST", b"\x00\x01\x00\x01\x00\x01"),
+                                                         (b"tRNS", b"\x00\xff\x10")]))
+EOF
+for r in gama iccp srgb palette; do AG defringe --run "$cc/$r" > "$TMP/o-$r" 2>&1 || echo "rc $r" >> "$TMP/o-$r"; done
+python3 -B - "$ROOT" "$cc" > "$TMP/o" 2>&1 <<'EOF'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+cc = sys.argv[2]
+def types(run, where="outputs"):
+    data = open(os.path.join(cc, run, where, "prop.png"), "rb").read()
+    out = []
+    for t, _ in png.chunks(data):  # every CRC checked
+        if not (t == b"IDAT" and out and out[-1] == "IDAT"):
+            out.append(t.decode())
+    img = png.decode(os.path.join(cc, run, where, "prop.png"))
+    return out, img
+want = {"gama": ["IHDR", "cHRM", "gAMA", "pHYs", "IDAT", "tEXt", "IEND"], "iccp": ["IHDR", "iCCP", "IDAT", "IEND"],
+        "srgb": ["IHDR", "sRGB", "IDAT", "IEND"], "palette": ["IHDR", "gAMA", "IDAT", "IEND"]}
+for run, chunks in want.items():
+    got, img = types(run)
+    assert got == chunks, (run, got)
+    raw = png.decode(os.path.join(cc, run, "outputs-raw", "prop.png"))
+    assert (img.width, img.height) == (raw.width, raw.height) and img.rgba[3::4] == raw.rgba[3::4], run
+    assert any(img.rgba[i:i + 3] != raw.rgba[i:i + 3] for i in range(0, len(img.rgba), 4) if 0 < raw.rgba[i + 3] < 255), run
+a = open(os.path.join(cc, "gama", "outputs-raw", "prop.png"), "rb").read()
+b = open(os.path.join(cc, "gama", "outputs", "prop.png"), "rb").read()
+assert [x for x in png.chunks(a) if x[0] in (b"cHRM", b"gAMA", b"pHYs", b"tEXt")] == [x for x in png.chunks(b) if x[0] in (b"cHRM", b"gAMA", b"pHYs", b"tEXt")]
+print("ok")
+EOF
+! grep -q "^rc " "$TMP"/o-* && grep -qx ok "$TMP/o" \
+  && ok "defringe keeps cHRM/gAMA/pHYs (file order, after IHDR) and tEXt, iCCP without sRGB, sRGB; drops PLTE/tRNS/sBIT/bKGD/hIST; output decodes, CRCs valid" \
+  || no "defringe colour chunks" "$(cat "$TMP"/o-* "$TMP/o")"
 AG review-cmd --phase image --run "$f2" --json > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -c .composites "$TMP/rc.json")" = '["review/composite-a-dark.png","review/composite-a-light.png"]' ] \
   && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rc.json")" = 4 ] \

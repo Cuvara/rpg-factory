@@ -197,3 +197,8 @@
   prefix such as `google/` (gemini, llama, mistral, qwen, deepseek, grok, o1/o3/o4, phi-, copilot and others), the
   registry's `pipeline.agents`, and any name ending in `-bot` or `-agent`; person names such as `Grokowski` are
   accepted.
+- **`defringe` dropped colour metadata.** `defringe` rebuilt each output from its pixels and kept only the text
+  chunks, so `gAMA`, `cHRM`, `iCCP`, `sRGB` and `pHYs` were lost and the opaque body could look different. It now
+  carries `cHRM`, `gAMA`, `iCCP` or `sRGB` (never both; `iCCP` wins), `cICP`, `mDCv`, `cLLI` and `pHYs` from before
+  the first `IDAT`, in file order, right after `IHDR`, and still drops chunks bound to the old pixel format (`sBIT`,
+  `PLTE`, `tRNS`, `bKGD`, `hIST`, `sPLT`).
