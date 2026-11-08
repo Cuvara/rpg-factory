@@ -74,10 +74,12 @@ docs/schemas/pipeline-plan.schema.json.
         model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
         no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
         run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
-        is folded into it only when its suite is one `tests/run-all.sh --list-suites` prints in the task checkout
-        (no such flag: none is); other checks are extra commands. Re-QA after a QA FAIL that recorded --failed-suites:
-        --base <that FAIL's candidate> plus those suites. A tier-S task (plan or task tier S, or only docs/, skills/,
-        changelog.d/, *.md paths) needs no QA session: the task lead may run the command after the review PASS.
+        is folded into it only when it is one standalone suite or run-all command and its suite is one
+        `tests/run-all.sh --list-suites` prints in the task checkout (no such flag: none is; a release-only suite
+        never is); other checks, compound commands included, are extra commands, each suite once. Re-QA after a QA
+        FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
+        task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
+        run the command after the review PASS.
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]

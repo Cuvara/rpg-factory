@@ -17,7 +17,7 @@ pass=0; fail=0
 # Capture once: consecutive assertions on one command (same arguments, directory, PATH and env prefix, no other
 # top-level command in between) share one run of factory-pipeline.py. The DEBUG trap (top level only: functions and
 # subshells do not inherit it) drops the capture before every other command - git, a verdict, a file edit, a plan.
-# verdict and agents always run (they write state). PIPELINE_TEST_REUSE=0 runs every assertion's command;
+# verdict, agents and a dispatch without --runner print always run (they write state). PIPELINE_TEST_REUSE=0 runs every assertion's command;
 # PIPELINE_TEST_REUSE=check also re-runs each reused command and fails the case when its output or exit code differs.
 REUSE="${PIPELINE_TEST_REUSE:-1}"; MEMO_KEY=; MEMO_ENV=(); MEMO_OUT=; MEMO_RC=0; MEMO_SPEC=; MEMO_SRC=; reused=0
 memo_trap() {
@@ -33,7 +33,7 @@ pp() {
   local IFS=$'\x1f' key n env=
   for n in "${MEMO_ENV[@]}"; do env+="$n=${!n-}$IFS"; done
   key="$PWD$IFS$PATH$IFS${ORCA_WORKTREE_ID-}$IFS$env$IFS$*"
-  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]; then
+  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]      && { [[ "$IFS$*$IFS" != *"${IFS}dispatch$IFS"* ]] || [[ "$IFS$*$IFS" == *"${IFS}--runner${IFS}print$IFS"* ]]; }; then
     OUT="$MEMO_OUT"; RC="$MEMO_RC"; reused=$((reused + 1))
     if [ "$REUSE" = check ]; then
       local fresh rc; fresh=$(python3 -B "$P" "$@" 2>&1); rc=$?
@@ -699,6 +699,44 @@ for kw in ({'base': 'main'}, {'integration': True}, {'base': 'main', 'failed_sui
     assert m.qa_body('x', [srv], runall=False, **kw) == old_body, (kw, m.qa_body('x', [srv], runall=False, **kw))
 assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['docs/a.md', 'skills/foo/']))
 assert not m.pr.small_task({'tier': 'M'}, task)
+# tier S prose is .md anywhere, changelog.d/ and skills/ directories: a schema or JSON under docs/ is a machine input
+for paths in (['docs/schemas/pipeline-plan.schema.json'], ['docs/registry.schema.json'], ['docs/a.md', 'docs/x.json'],
+              ['skills/foo/run.py'], ['docs/plans/']):
+    assert not m.pr.small_task({'tier': 'M'}, dict(task, paths=paths)), paths
+assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['changelog.d/x.md', 'changelog.d/', 'skills/foo', 'x/y.md']))
+# a compound check is one complete extra command: never split, never dropped, run-all inside it is not folded
+for compound in ('tests/run-all.sh --only-suites tests/pipeline.test.sh && python3 -B scripts/build-registry.py --check',
+                 'tests/run-all.sh --affected || true', 'tests/run-all.sh --affected; echo done',
+                 'tests/run-all.sh --affected | tail -1', '(tests/run-all.sh --affected)', 'bash tests/pipeline.test.sh && true',
+                 'echo $(tests/run-all.sh --affected)', 'tests/run-all.sh --affected > out.txt'):
+    assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + compound], False), compound
+# a standalone run-all with an env or bash prefix is folded; a full one is flagged as dropped
+assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR bash tests/run-all.sh --only-suites tests/routing.test.sh'])],
+                      listed) == (['tests/routing.test.sh'], [], False)
+assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR X=1 tests/run-all.sh -j 4'])], listed) == ([], [], True)
+assert m.pr.qa_checks([dict(task, checks=['echo tests/run-all.sh'])], listed) == ([], ['[a] echo tests/run-all.sh'], False)
+# validate still warns on a full run inside a compound check; a scoped one is fine
+assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
+assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
+assert not m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
+# re-QA: a failed suite already among the extra checks (any invocation form) runs once, under its first form
+for form in ('tests/dogfood.sh', 'bash tests/dogfood.sh', 'env -u TMPDIR tests/dogfood.sh'):
+    assert m.pr.qa_checks([dict(task, checks=[form])], listed, ['tests/dogfood.sh']) == ([], ['[a] ' + form], False), form
+assert m.pr.qa_checks([dict(task, checks=['tests/dogfood.sh', 'bash tests/dogfood.sh',
+                                          'tests/run-all.sh --only-suites tests/dogfood.sh'])], listed,
+                      ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] tests/dogfood.sh', '[a] env -u TMPDIR bash tests/x.sh'], False)
+two = [dict(task, id='a', checks=['tests/dogfood.sh']), dict(task, id='b', checks=['bash tests/dogfood.sh'])]
+assert m.pr.qa_checks(two, listed, ['tests/dogfood.sh'])[1] == ['[a, b] tests/dogfood.sh']
+# release-only suites stay extras, also against the REAL `tests/run-all.sh --list-suites` of this checkout
+real = m.runall_suites(root)
+assert real and 'tests/pipeline.test.sh' in real, real
+for check in ('tests/installed-safety.sh', 'env -u TMPDIR tests/installed-safety.sh', 'tests/dogfood.sh',
+              'tests/run-all.sh --affected --only-suites tests/installed-safety.sh,tests/dogfood.sh'):
+    got = m.pr.qa_checks([dict(task, checks=[check, 'bash tests/pipeline.test.sh'])], real, ['tests/installed-safety.sh'])
+    assert got[0] == ['tests/pipeline.test.sh'], (check, got)
+    assert any('installed-safety.sh' in x for x in got[1]) or 'installed-safety' not in check, (check, got)
+    assert any('dogfood.sh' in x for x in got[1]) or 'dogfood' not in check, (check, got)
+    assert len([x for x in got[1] if 'installed-safety.sh' in x]) == 1, (check, got)
 def cli(*args):
     p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
     assert p.returncode == 0, (args, p.stdout, p.stderr)

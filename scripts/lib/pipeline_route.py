@@ -147,15 +147,24 @@ def warnings(pipe, items):
     return out
 
 
+def prose_path(path):
+    """Prose for tier S: a .md file anywhere, changelog.d/, or a skills/ path that is not a non-.md file (a skill
+    directory holds .md files). docs/ alone is not prose: docs/schemas/*.json and docs/*.json are machine inputs."""
+    if path.endswith('.md') or path.startswith('changelog.d/'):
+        return True
+    return path.startswith('skills/') and '.' not in path.rstrip('/').rsplit('/', 1)[-1]
+
+
 def small_task(plan, task):
     """A small plan/task or prose-only ownership permits QA by the lead."""
     paths = task.get('paths') or []
-    return (plan.get('tier') == 'S' or task.get('tier') == 'S' or bool(paths) and
-            all(p.startswith(('docs/', 'skills/', 'changelog.d/')) or p.endswith('.md') for p in paths))
+    return (plan.get('tier') == 'S' or task.get('tier') == 'S' or bool(paths) and all(prose_path(p) for p in paths))
 
 
 SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)'
                          r'|(?:env -u TMPDIR\s+)*python3(?:\s+-B)?\s+(?:\./)?(tests/[\w.-]+\.py)')
+# suites `--list-suites` may print that run-all runs only with --release: never folded into the task tier command
+RELEASE_ONLY = frozenset({'tests/installed-safety.sh'})
 
 
 def suite_command(suite):
@@ -163,27 +172,52 @@ def suite_command(suite):
     return 'env -u TMPDIR ' + ('python3 -B ' if suite.endswith('.py') else 'bash ') + suite
 
 
+def runall_words(check):
+    """The arguments of a check that is exactly one standalone run-all invocation (an optional `env [-u VAR]... [VAR=x]...`
+    and `bash` prefix), else None. A compound command (&&, ||, ;, |, redirection, subshell, substitution) is None:
+    it stays one complete extra command, never split or dropped."""
+    if re.search(r'[;&|<>()`]|\$\(', check):
+        return None
+    try:
+        words = shlex.split(check)
+    except ValueError:
+        return None
+    i = 0
+    if words[:1] == ['env']:
+        i = 1
+        while i < len(words):
+            if words[i] == '-u' and i + 1 < len(words):
+                i += 2
+            elif re.fullmatch(r'[A-Za-z_]\w*=.*', words[i]):
+                i += 1
+            else:
+                break
+    if words[i:i + 1] == ['bash']:
+        i += 1
+    if i < len(words) and re.fullmatch(r'(?:\./)?tests/run-all\.sh', words[i]):
+        return words[i + 1:]
+    return None
+
+
 def qa_checks(tasks, runall_suites=None, failed_suites=None):
     """Split suite invocations from extra commands; run-all is folded into the tier command.
     runall_suites: the suites `tests/run-all.sh --list-suites` prints in the task checkout. Only those are folded
-    (run-all rejects any other suite name); None (no such flag) folds nothing. failed_suites: the suites a previous
-    QA recorded as failed; those run-all does not run become extra commands. Extras are `[task ids] command`, each
-    command once."""
-    known = set(runall_suites or ())
-    suites, extra, dropped = set(), {}, False
+    (run-all rejects any other suite name), except release-only suites; None (no such flag) folds nothing.
+    failed_suites: the suites a previous QA recorded as failed; those run-all does not run become extra commands.
+    Extras are `[task ids] command`, each command once and each recognised suite once (by suite path)."""
+    known = set(runall_suites or ()) - RELEASE_ONLY
+    suites, extra, by_suite, dropped = set(), {}, {}, False
 
-    def add_extra(tid, command):
+    def add_extra(tid, command, suite=None):
+        command = by_suite.setdefault(suite, command) if suite else command
         ids = extra.setdefault(command, [])
         if tid not in ids:
             ids.append(tid)
     for task in tasks:
         tid = str(task.get('id', '?'))
         for check in task.get('checks', []):
-            try:
-                words = shlex.split(check)
-            except ValueError:
-                words = []
-            if any(re.fullmatch(r'(?:\./)?tests/run-all\.sh', w) for w in words):
+            words = runall_words(check)
+            if words is not None:
                 dropped |= not any(w == '--affected' or w.startswith('--only-suites') for w in words)
                 for i, w in enumerate(words):  # suites a run-all check names join the one tier command
                     listed = w.split('=', 1)[1] if w.startswith('--only-suites=') else (
@@ -192,26 +226,39 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
                         if x in known:
                             suites.add(x)
                         elif x:
-                            add_extra(tid, suite_command(x))
+                            add_extra(tid, suite_command(x), x)
                 continue
             # Only plain suite commands count: compound commands remain explicit extra checks.
             match = SUITE_CHECK.fullmatch(check.strip())
-            if match and (match[1] or match[2]) in known:
-                suites.add(match[1] or match[2])
+            suite = match and (match[1] or match[2])
+            if suite and suite in known:
+                suites.add(suite)
             else:
-                add_extra(tid, check)
-    ids = ', '.join(str(t.get('id', '?')) for t in tasks)
+                add_extra(tid, check, suite or None)
+    ids = [str(t.get('id', '?')) for t in tasks]
     for x in failed_suites or []:
         if x in known:
             suites.add(x)
-        else:
-            extra.setdefault(suite_command(x), [ids])
+        elif x not in by_suite:
+            for tid in ids:
+                add_extra(tid, suite_command(x), x)
     return sorted(suites), [f"[{', '.join(t)}] {c}" for c, t in extra.items()], dropped
+
+
+def full_run(check):
+    """A check that starts a full run-all: one command of it (standalone or a part of a compound command) runs
+    tests/run-all.sh without --affected or --only-suites."""
+    for part in re.split(r'&&|\|\||[;|&()`\n]', check):
+        words = part.split()
+        if (any(re.fullmatch(r'(?:\./)?tests/run-all\.sh', w) for w in words)
+                and not any(w == '--affected' or w.startswith('--only-suites') for w in words)):
+            return True
+    return False
 
 
 def qa_warnings(task):
     out = []
-    if qa_checks([task])[2]:
+    if any(full_run(c) for c in task.get('checks', [])):
         out.append(f"task {task.get('id')}: full run in checks; full runs belong to integration QA")
     for text in task.get('acceptance', []):
         scoped = '--affected' in text or '--only-suites' in text
