@@ -19,6 +19,7 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
 - `factory-cmd.py` - entry point behind the slash commands (`status`, `route`, `check`, `doctor`, `ui*`, `assetgen`). `tests/commands.test.sh`, `tests/ui-commands.test.sh`
 - `assetgen/assetgen.py` - asset-gen engine: list, show, resolve, render, lint, review-cmd (prints the Codex command), qa, manifest; writes only into the given run directory. `tests/assetgen.test.sh`
 - `factory-workflow.py` - plan, status, dispatch and report registry-routed artifact workflows. `tests/workflow.test.sh`
+- `orca-wait.sh` - the run lead's single waiter for one Orca Run: loops `orca orchestration check --wait` for worker_done, escalation or question, acks heartbeats, prints the first real message (left unacked for the caller); one instance per Run through a lock under the state dir. `tests/orca-wait.test.sh`
 
 ## Checks (`checks/`, read-only evidence scripts)
 

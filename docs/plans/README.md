@@ -30,9 +30,9 @@ grades those new verdicts.
 - **Workspace-relative:** `"${RPG_FACTORY_WORKSPACE}/<repo>"` (or `$RPG_FACTORY_WORKSPACE/<repo>`), resolved
   against the workspace root from the environment, else the registry's workspace discovery.
 
-`scripts/lib/plan_paths.py` (`resolve_repo_path`) implements both forms. `factory-pipeline.py` resolves
-plan-relative paths today; a later task wires `plan_paths.resolve_repo_path` into its `repo_info`, which adds the
-workspace-relative form.
+`scripts/lib/plan_paths.py` (`resolve_repo_path`) implements both forms, and `factory-pipeline.py` resolves every
+repo path through it (`repo_info`), so both plan-relative and workspace-relative paths work wherever the pipeline
+reads a repo path.
 
 ## Rules
 

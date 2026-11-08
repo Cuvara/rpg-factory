@@ -1333,6 +1333,24 @@ if jq -e '.implementer == "claude"' "$RSVD/k@s3__review__${RS:0:12}__codex.json"
 else fail=$((fail + 1)); echo "FAIL  verdict --subtask takes the implementer its review dispatch routed"; fi
 expect "verdict --fallback refuses an unknown agent" 2 "--fallback must be one of claude, codex" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --fallback gemini
 expect "verdict --fallback goes with review only" 2 "--fallback .* goes with --phase review" verdict "$RSP" --task k --phase qa --sha "$RS2" --by claude --state PASS --fallback codex
+expect "retrospective fallback requires a note" 2 "requires --note" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'codex unavailable'
+RPG_FACTORY_AGENTS=claude expect "legacy manual fallback also requires a note" 2 "requires --note" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback codex
+expect "retrospective fallback rejects a blank note" 2 "requires --note" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'codex unavailable' --note ' '
+expect "retrospective fallback requires same-model review" 2 "requires a SAME_MODEL review" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by codex --state PASS --fallback 'codex unavailable' --note '401 outage'
+expect "retrospective fallback validates unavailable model" 2 "--fallback must be one of" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'codex offline' --note '401 outage'
+expect "retrospective fallback rejects an empty reason" 2 "--fallback must be one of" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback '' --note '401 outage'
+expect "retrospective fallback must name the paired model" 2 "requires a SAME_MODEL review" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'claude unavailable' --note '401 outage'
+# Exercise acceptance when the fallback is needed, without an archived current paired PASS covering the same slice.
+rm -f "$RSVD/k@s__review__"*"__codex.json"
+jq '.subtasks[0] += {implementer: "claude", reviewer: "codex"}' "$RSS" > "$TMP/sub-own-reviewer.json"
+expect "retrospective subtask fallback accepts a subplan with its own reviewer" 0 "recorded review PASS" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'codex unavailable' --note '401 outage' --subplan "$TMP/sub-own-reviewer.json"
+expect "verdict rejects undocumented reviewer alias" 2 "unrecognized arguments: --reviewer" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --reviewer claude --state PASS
+expect "gate displays accepted retrospective subtask fallback and note" 0 "NOTE    k: subtask s SAME_MODEL .fallback: codex unavailable.; note: 401 outage" gate "$RSP" --no-run-checks
+if jq -e '.fallback == "codex unavailable" and .note == "401 outage"' "$RSVD/k@s__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  retrospective fallback stores reason and note"
+else fail=$((fail + 1)); echo "FAIL  retrospective fallback stores reason and note"; fi
+expect "retrospective task fallback requires --subtask" 2 "requires --subtask" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer claude --fallback 'codex unavailable' --note 'past outage'
+rv --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+rv --task k --subtask s --phase review --sha "$RS2" --by codex --state PASS --subplan "$RSS"
 NOID=$(plan noid '{"schema":"rpg-factory.pipeline-plan/1","id":"noid","title":"t","topic":"feat/core/noid","repos":{"rec":{"path":"rec","base":"develop"}},"tasks":[{"repo":"rec","objective":"o","paths":["x/"],"acceptance":["a"]}]}')
 expect "status of a task without id: INVALID" 1 "INVALID" status "$NOID"
 refute "status of a task without id: no traceback" "Traceback" status "$NOID"
@@ -1699,6 +1717,9 @@ if case.startswith('serial-'):
     (repo / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
     git('add', 'ProjectSettings')
 base = commit('base')
+if case.startswith('subtask-'):
+    commit('outside base', 'outside.txt')
+    base = git('rev-parse', 'HEAD')
 git('switch', '--no-track', '-c', 'topic')
 plan = {'schema': m.SCHEMA, 'id': 'multiwave-' + case, 'title': 'test', 'topic': 'topic',
         'repos': {'fixture': {'path': str(repo), 'base': 'main'}},
@@ -1707,9 +1728,26 @@ plan = {'schema': m.SCHEMA, 'id': 'multiwave-' + case, 'title': 'test', 'topic':
                   {'id': 'b', 'repo': 'fixture', 'kind': 'code', 'objective': 'second',
                    'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['a']}]}
 pf = work / 'plan.json'; plan['_path'] = str(pf)
+if case.startswith('subtask-'):
+    plan['tasks'][0]['paths'] = ['.']  # task owns the directory, subtask owns only shared.txt
+    plan['tasks'][1]['paths'] = ['shared.txt', 'outside.txt']
 def save():
     pf.write_text(json.dumps(plan))
 save()
+if case == 'repo-path':
+    workspace = work / 'workspace'; workspace.mkdir()
+    for marker in reg['workspace']['root_markers']:
+        (workspace / marker).mkdir(parents=True, exist_ok=True)
+    os.environ[reg['workspace']['root_env']] = str(workspace)
+    for value in ('$' + reg['workspace']['root_env'] + '/repo', '${' + reg['workspace']['root_env'] + '}/repo'):
+        plan['repos']['fixture']['path'] = value
+        assert m.repo_info(plan, reg, 'fixture')['path'] == str(workspace / 'repo')
+    plan['repos']['fixture']['path'] = str(repo)
+    assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
+    plan['repos']['fixture']['path'] = 'repo'
+    assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
+    print(case + ' assertions passed')
+    sys.exit(0)
 def cli(*args, rc=0):
     r = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
                        capture_output=True, text=True)
@@ -1748,8 +1786,52 @@ if case.startswith('serial-'):
     sys.exit(0)
 git('switch', '--no-track', '-c', 'topic-a')
 a = commit('a')
-verdict('a', 'review', a)
+if case.startswith('subtask-'):
+    m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
+    verdict('a', 'review', a, by='codex', extra=('--subtask', 's'))
+    if case == 'subtask-legacy':
+        folder = pathlib.Path(m.verdict_dir(plan)) / 'a'; folder.mkdir()
+        (folder / 'subplan-old.json').write_text(json.dumps({'task': 'a', 'subtasks': [{'id': 's', 'paths': ['shared.txt']}]}))
+        m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude'})
+        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@s__review*.json'):
+            doc = json.loads(filename.read_text()); doc.pop('paths', None); filename.write_text(json.dumps(doc))
+    verdict('a', 'review', a, extra=('--implementer', 'codex'))
+else:
+    verdict('a', 'review', a)
 verdict('a', 'qa', a)
+if case.startswith('subtask-sibling-'):
+    if case == 'subtask-sibling-pre-start':
+        commit('unreviewed edit before sibling starts')
+    start = git('rev-parse', 'HEAD')
+    sibling = commit('sibling edit')
+    sibling_paths = ['outside.txt'] if case == 'subtask-sibling-outside' else ['shared.txt']
+    m.pr.record(plan, 'a', 'later', 'implementer', {'agent': 'claude', 'paths': sibling_paths, **({} if case == 'subtask-sibling-unknown-start' else {'start': start})})
+    if case != 'subtask-sibling-missing':
+        by = 'claude' if case == 'subtask-sibling-unpaired' else 'codex'
+        verdict('a', 'review', sibling, by=by, extra=('--subtask', 'later'))
+    if case == 'subtask-sibling-fingerprint':
+        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@later__review*.json'):
+            doc = json.loads(filename.read_text()); doc['fingerprint'] = 'invalid'
+            filename.write_text(json.dumps(doc))
+    if case == 'subtask-sibling-post-review':
+        commit('unreviewed sibling edit')
+    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge sibling work', 'topic-a')
+    head = git('rev-parse', 'HEAD')
+    verdict('a', 'review', head, extra=('--implementer', 'codex'))
+    verdict('a', 'qa', head)
+    verdict('b', 'review', head); verdict('b', 'qa', head)
+    verdict('integration:fixture', 'qa', head)
+    g = m.gate(plan, reg)
+    stale = [x for x in g['blockers'] if 'subtask s recorded' in x and 'stale subtask review:' in x]
+    assert bool(stale) == (case != 'subtask-sibling-covered'), g
+    if stale:
+        assert 'shared.txt' in stale[0], stale
+        if case == 'subtask-sibling-unknown-start':
+            assert 'unknown legacy starts receive no credit' in stale[0], stale
+    else:
+        assert g['state'] == 'READY_FOR_PR', g
+    print(case + ' assertions passed')
+    sys.exit(0)
 if case == 'task-qa':
     row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
     assert row['qa']['task'] == 'a' and row['qa']['sha'] == a, row
@@ -1800,20 +1882,25 @@ else:
     else:
         git('switch', '--no-track', '-c', 'topic-b')
         b = commit('b')
+        if case.startswith('subtask-'):
+            b = commit('outside later wave', 'outside.txt')
         verdict('b', 'review', b)
-        if case == 'post-review':
+        if case in ('post-review', 'subtask-post-review'):
             commit('unreviewed b')
         if case == 'outside-owner':
             plan['tasks'][1]['paths'] = ['other.txt']; save()
             verdict('b', 'review', b)
         git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge b', 'topic-b')
-        if case == 'direct':
+        if case in ('direct', 'subtask-direct'):
             commit('unreviewed topic')
+        if case == 'subtask-same-task':
+            commit('later first-task edit')
+            verdict('a', 'review', git('rev-parse', 'HEAD'), extra=('--implementer', 'codex'))
         if case == 'invalid-review':
             plan['tasks'][1]['objective'] = 'review fingerprint changed'; save()
-        if case == 'missing-review':
+        if case in ('missing-review', 'subtask-missing-review'):
             pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()
-        if case == 'evil-merge':
+        if case in ('evil-merge', 'subtask-evil-merge'):
             # A merge commit can introduce content absent from either parent.
             git('switch', '--no-track', '-c', 'evil-side')
             commit('side', 'other.txt')
@@ -1823,6 +1910,16 @@ else:
             git('add', 'shared.txt'); git('commit', '-qm', 'evil merge')
         head = git('rev-parse', 'HEAD')
         verdict('integration:fixture', 'qa', head)
+        if case.startswith('subtask-'):
+            g = m.gate(plan, reg)
+            stale = [x for x in g['blockers'] if 'stale subtask review:' in x]
+            assert bool(stale) == (case not in ('subtask-covered', 'subtask-legacy')), g
+            if stale:
+                assert 'shared.txt' in stale[0] and 'outside.txt' not in stale[0], stale
+            if case in ('subtask-covered', 'subtask-legacy'):
+                assert g['state'] == 'READY_FOR_PR', g
+            print(case + ' assertions passed')
+            sys.exit(0)
         g, row = stale_a(case != 'covered')
         if case == 'covered':
             assert g['state'] == 'READY_FOR_PR', g
@@ -1832,7 +1929,7 @@ else:
             assert not stale_a(False)[0]['blockers']
 print(case + ' assertions passed')
 MULTIWAVE
-for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa; do
+for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path; do
   out=$(python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$case" 2>&1); rc=$?
   if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  multiwave $case"
   else fail=$((fail + 1)); echo "FAIL  multiwave $case"; echo "$out"; fi

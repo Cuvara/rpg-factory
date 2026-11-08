@@ -189,12 +189,16 @@
       "id": "gate-multiwave",
       "repo": "plugin",
       "kind": "fix",
-      "objective": "Gate and status correctness for multi-wave plans (seen in plan plugin-flow; branch reviews under pipeline/plugin-flow/branch-review/ in the pipeline state dir). (1) A later wave editing an earlier task's paths turns the earlier task's review STALE and the gate NOT_READY forever: accept the earlier review when the later changes are covered by the later task's own review and QA (attribute commits to tasks by the merge commits on the topic) and still fail on unreviewed changes. (2) Record the true implementer model per task in the verdict and use it for the pairing check. (3) status marks a QA STALE right after recording it. (4) verdict --report accepts free text as a path: require an existing file or use --note. (5) gate STALE vs status disagreement on shared dependent paths. A test in tests/pipeline.test.sh for each.",
+      "objective": "Gate and status correctness for multi-wave plans (seen in plan plugin-flow; branch reviews under pipeline/plugin-flow/branch-review/ in the pipeline state dir). (1) A later wave editing an earlier task's paths turns the earlier task's review STALE and the gate NOT_READY forever: accept the earlier review when the later changes are covered by the later task's own review and QA (attribute commits to tasks by the merge commits on the topic) and still fail on unreviewed changes. (2) Record the true implementer model per task in the verdict and use it for the pairing check. (3) status marks a QA STALE right after recording it. (4) verdict --report accepts free text as a path: require an existing file or use --note. (5) gate STALE vs status disagreement on shared dependent paths. A test in tests/pipeline.test.sh for each. (6) changelog.d/agent-routing.md lists never-shipped behaviour under Fixed: move those entries to Added (docs subtask, claude). Also tie the kind enum copies (docs/schemas/pipeline-subplan.schema.json, docs/registry.schema.json, scripts/check-registry.sh) to docs/schemas/pipeline-plan.schema.json with a test.",
       "paths": [
         "scripts/factory-pipeline.py",
         "scripts/lib/pipeline_route.py",
         "tests/pipeline.test.sh",
-        "changelog.d/gate-multiwave.md"
+        "changelog.d/gate-multiwave.md",
+        "changelog.d/agent-routing.md",
+        "docs/schemas/",
+        "docs/registry.schema.json",
+        "scripts/check-registry.sh"
       ],
       "exclusions": [
         "registry/",
@@ -211,6 +215,48 @@
       "acceptance": [
         "gate READY on a two-wave fixture where wave 2 edits wave 1 paths with its own review",
         "each item tested",
+        "full run-all 0 failed"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "wave-close",
+      "repo": "plugin",
+      "kind": "fix",
+      "objective": "Close plan plugin-flow-2 so its own gate can reach READY_FOR_PR. (1) codex: the gate's SUBTASK review staleness ignores the multi-wave attribution that the task level now uses: gate on plugin-flow-2 HEAD reports agent-routing subtasks fix3-code / fix4-docs and checks-hygiene ui-catalog-rc stale because later waves (merged --no-ff, each with its own PASS review and QA) changed files; apply the same attribution helper to subtask records, and compute a subtask's changed paths from the subtask's own paths, not the task's whole owned directory (agent-routing owns changelog.d/, so every later fragment counted). (2) codex: reviews made before dispatch recorded fallbacks (agent-routing fix2-code/fix3-code were Claude sessions during a Codex 401 outage) cannot be accepted today: add `verdict --subtask <id> --fallback '<model> unavailable' --note <why>` that records a SAME_MODEL fallback review after the fact, shown by gate as an accepted fallback, never silent. (3) codex: wire scripts/lib/plan_paths.resolve_repo_path into factory-pipeline.py repo_info (workspace-relative repos.<k>.path); tests/routing.test.sh:166 strips CR from Windows jq skill names; tests/affected.py selects parallel-policy for scripts/orca-wait.sh and tests/orca-wait.test.sh. (4) claude docs: parallel-work.md says later waves integrate with merge --no-ff (the gate credits them only through merge commits) and the verdict usage lists --note, --implementer and --fallback; scripts/README.md lists scripts/orca-wait.sh; sync docs/plans/plugin-flow-2.json with the run lead's live plan (repo path stays '../..') and rewrite docs/plans/backlog.md from the run lead's next-topic notes (portable: no machine paths; drop items this plan finished). Kinds: code/test subtasks codex, docs claude.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/plan_paths.py",
+        "tests/pipeline.test.sh",
+        "tests/routing.test.sh",
+        "tests/affected.py",
+        "scripts/README.md",
+        "skills/factory-core/references/parallel-work.md",
+        "tests/parallel-policy.test.sh",
+        "docs/plans/",
+        "changelog.d/wave-close.md"
+      ],
+      "exclusions": [
+        "registry/",
+        "registry.json"
+      ],
+      "deps": [
+        "gate-multiwave",
+        "work-state-in-repo",
+        "checks-hygiene",
+        "run-all-robust"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/routing.test.sh",
+        "tests/run-all.sh -j 4"
+      ],
+      "acceptance": [
+        "gate on a multi-wave fixture with subtask reviews reaches READY_FOR_PR; unreviewed subtask changes stay STALE",
+        "fallback verdict recorded after the fact is shown by gate",
+        "docs/plans has no machine path",
         "full run-all 0 failed"
       ],
       "implementer": "codex",
