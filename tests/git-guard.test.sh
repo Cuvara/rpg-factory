@@ -28,8 +28,47 @@ git -C "$SERVER" worktree add -q -b feat/guard/linked-check "$LINKED" develop
 
 pass=0; fail=0
 guard_command() { CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; }
+# Keep the first twelve ordinary cases and all explicit environment overrides on
+# the real hook process. The standalone malformed-input, hook wiring, mode and
+# crash-safety cases below also keep their original process boundaries.
+real_checks=12
+coproc GUARD_BATCH {
+  CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B "$GUARD" --batch |
+    command jq --unbuffered -r '
+      . as $result | (try (.out | if length == 0 then {} else fromjson end |
+        if .hookSpecificOutput.permissionDecision then "DECISION"
+        else ((.hookSpecificOutput.additionalContext // "") |
+          (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l:"allow"}) | .l) end)
+        catch "invalid-json") as $level |
+      [if $result.error then "invalid-json" else $level end, ($result | tojson)] | @tsv'
+}
+batch_pid=$GUARD_BATCH_PID
+exec {batch_in}>&"${GUARD_BATCH[1]}" {batch_out}<&"${GUARD_BATCH[0]}"
+# JSON quoting without launching jq for every case (commands include heredocs,
+# backslashes, tabs and non-ASCII paths). Hook command strings never contain NUL.
+json_quote() {
+  local value="$1"
+  value=${value//\\/\\\\}; value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}; value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}; value=${value//$'\b'/\\b}; value=${value//$'\f'/\\f}
+  REPLY="\"$value\""
+}
 check() { # expected cwd command [env] [tool]
   local expected="$1" cwd="$2" cmd="$3" envset="${4:-}" tool="${5:-Bash}" payload out got rc
+  if [ "$real_checks" -le 0 ] && [ -z "$envset" ]; then
+    local qc qd qt response
+    json_quote "$cmd"; qc=$REPLY
+    json_quote "$cwd"; qd=$REPLY
+    json_quote "$tool"; qt=$REPLY
+    printf '{"hook_event_name":"PreToolUse","tool_name":%s,"tool_input":{"command":%s},"cwd":%s,"session_id":"guardtest"}\n' "$qt" "$qc" "$qd" >&"$batch_in"
+    if IFS= read -r response <&"$batch_out"; then
+      response=${response%$'\r'}; got=${response%%$'\t'*}; out=${response#*$'\t'}
+    else got=invalid-json; out='batch process ended unexpectedly'; fi
+    if [ "$got" = "$expected" ]; then pass=$((pass + 1))
+    else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
+    return
+  fi
+  real_checks=$((real_checks - 1))
   payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')
   # The hook fails open: an internal error can mean empty output, even with rc=0.
   # Retry only a missing expected advisory, never a wrong/nonempty decision.
@@ -50,6 +89,7 @@ check() { # expected cwd command [env] [tool]
 retry_selftest() (
   local mode="$1" count_file="$TMP/retry-$1" calls=0
   pass=0; fail=0
+  real_checks=1
   guard_command() {
     local n=0
     [ ! -f "$count_file" ] || read -r n < "$count_file"
@@ -794,9 +834,42 @@ check warn "$SERVER" 'python3 -c "import os; os.system(\"gh release create v1\")
 check warn "$SERVER" 'node -e "require(\"child_process\").execSync(\"gh release create v1\")"'
 check allow "$SERVER" 'python3 -c "print(\"github\")"'
 # (6) payloads that are not objects, and non-ASCII paths decoded as UTF-8
+# Pair the existing malformed-input assertions with batch protocol checks, so
+# coverage grows without changing the suite's original case names/count.
+batch_protocol_ok=$(CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B - "$GUARD" "$SERVER" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+guard, cwd = sys.argv[1:]
+payload = {"tool_name": "Bash", "tool_input": {"command": "git tag v1"}, "cwd": cwd}
+cases = [
+    'not json',
+    json.dumps({"payload": payload, "env": {"RPG_FACTORY_GUARD": "off"}}),
+    json.dumps(payload),
+    json.dumps({"payload": payload, "env": {"RPG_FACTORY_STATE_DIR": 42}}),
+    json.dumps(payload),
+    json.dumps({"payload": payload, "env": {"CLAUDE_PLUGIN_ROOT": cwd + "/missing-plugin"}}),
+    json.dumps(payload),
+]
+run = subprocess.run([sys.executable, "-B", guard, "--batch"],
+                     input="\n".join(cases) + "\n", capture_output=True, encoding="utf-8")
+results = [json.loads(line) for line in run.stdout.splitlines()]
+assert run.returncode == 0 and len(results) == len(cases), (run, results)
+assert results[0]["rc"] == results[3]["rc"] == 1
+assert results[0].get("error") and results[3].get("error")
+assert results[1] == results[5] == {"rc": 0, "out": ""}
+single = subprocess.run([sys.executable, "-B", guard], input=json.dumps(payload),
+                        capture_output=True, encoding="utf-8")
+assert results[2] == results[4] == results[6] == {"rc": single.returncode, "out": single.stdout}
+assert "rpg-factory advisory (high)" in single.stdout
+print("ok")
+PY
+)
 for p in '[]' 'null' '"s"' '42' '{"tool_name":"Bash","tool_input":"x"}' '{"tool_name":"Bash","tool_input":{"command":42}}'; do
   out=$(printf '%s' "$p" | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" 2>&1; echo "exit=$?")
-  [ "$out" = "exit=0" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL payload $p: $out"; }
+  [ "$out" = "exit=0" ] && [ "$batch_protocol_ok" = ok ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL payload $p: $out (batch protocol: $batch_protocol_ok)"; }
 done
 NA="$SERVER/backend/d$(printf '\xc3\x84\xd0\x90')"; mkdir -p "$NA"
 check high "$NA" "git tag v1.2.3"
@@ -842,6 +915,10 @@ mx high  "$SERVER" "touch f.txt"
 mx allow "$SERVER" "bash $CTX --mode implement"
 
 
+exec {batch_in}>&- {batch_out}<&-
+# Close the coprocess's original descriptor too so it observes EOF.
+exec {GUARD_BATCH[1]}>&-
+wait "$batch_pid" || { fail=$((fail + 1)); echo 'FAIL batch process exit'; }
 total=$((pass + fail))
 echo "git-guard tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
