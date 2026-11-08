@@ -209,3 +209,10 @@
   `defringe` rules minus `pHYs` (a preview is never placed); the blend runs on the stored values, with the backgrounds
   in that same space. An untagged output keeps untagged previews, byte for byte, and `--no-write` compares the tagged
   bytes.
+- **Grayscale outputs became RGBA with a GRAY ICC profile.** `defringe` and the review previews rewrote a gray or
+  gray+alpha output (colour type 0 with `tRNS`, or 4) as RGB(A) while copying its `iCCP`, so a GRAY profile sat on
+  a colour image. A grayscale output now stays grayscale: `defringe` writes it as 8-bit gray+alpha (colour type 4)
+  with its profile, its composites are gray and its tile preview gray+alpha. No PNG it writes carries a profile of
+  the other colour space than its colour type (a GRAY profile on RGB(A), an RGB one on gray): such an `iCCP` is
+  dropped, and the output's `sRGB`, if any, is kept instead. Palette and RGB outputs, and untagged previews, are
+  unchanged byte for byte.

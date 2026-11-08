@@ -118,6 +118,24 @@ check("defringe recolours every soft pixel next to the body", dstats["recoloured
 soft = [fixed.rgba[i:i + 3] for i in range(0, len(fixed.rgba), 4) if 0 < fixed.rgba[i + 3] < imaging.OPAQUE]
 check("defringed soft pixels take the body colour", soft and all(tuple(px) == WOOD for px in soft), soft[:3])
 check("defringe is deterministic", imaging.defringe(fringe) == (data, dstats))
+check("defringe gray=True of a colour image stays RGBA, bytes as without it",
+      imaging.defringe(fringe, gray=True) == (data, dstats))
+gray_fringe = png.Image(fringe.width, fringe.height,
+                        bytes(v for i in range(0, len(fringe.rgba), 4) for v in (fringe.rgba[i],) * 3 + (fringe.rgba[i + 3],)),
+                        True, "test")
+gdata, gstats = imaging.defringe(gray_fringe, gray=True)
+gfixed = decode_bytes("gray-defringed", gdata)
+check("defringe gray=True of a gray image writes gray+alpha (type 4) with the RGBA result's pixels",
+      png.header(gdata)[3] == 4 and gfixed.rgba == decode_bytes("gray-rgba", imaging.defringe(gray_fringe)[0]).rgba)
+for bg in imaging.BACKGROUNDS:
+    gcomp = imaging.composite(gray_fringe, bg, gray=True)
+    check("composite %s gray=True of a gray image is gray (type 0), same pixels as RGB" % bg,
+          png.header(gcomp)[3] == 0 and decode_bytes("gc-" + bg, gcomp).rgba
+          == decode_bytes("gcr-" + bg, imaging.composite(gray_fringe, bg)).rgba)
+check("composite gray=True over a coloured background stays RGB",
+      png.header(imaging.composite(gray_fringe, (0, 255, 0), gray=True))[3] == 2)
+check("tile_2x2 gray=True: gray+alpha for a gray image, RGBA bytes as before for a colour one",
+      png.header(png.tile_2x2(gray_fringe, True))[3] == 4 and png.tile_2x2(fringe, True) == png.tile_2x2(fringe))
 
 data16, fstats = imaging.defringe(fringe, alpha_floor=16)
 floored = decode_bytes("fringe-floor16", data16)

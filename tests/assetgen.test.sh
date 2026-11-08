@@ -1184,6 +1184,115 @@ AG review-cmd --phase image --run "$RUNS/cprev-gama-001" --no-write --json > "$T
 [ ! -s "$TMP/cp-err" ] && grep -qx ok "$TMP/o" && [ $rc -eq 0 ] && [ "$(jq -c .argv "$TMP/cp-nw.json")" = "$(jq -c .argv "$TMP/cp-gama.json")" ] \
   && ok "review previews (composites, 2x2 tile) carry the output's cHRM/gAMA, iCCP (never with sRGB) or sRGB after IHDR, no pHYs, CRCs valid, same pixels; untagged output: bytes as before; --no-write accepts them" \
   || no "preview colour chunks rc=$rc" "$(cat "$TMP/cp-err" "$TMP/o")"
+# grayscale outputs stay grayscale with their GRAY ICC profile (defringe and review previews), and no RGB(A) PNG ever
+# carries a GRAY profile: an iCCP of the other colour space than the written colour type is dropped (sRGB kept then)
+gy="$TMP/gray-icc"; mkdir -p "$gy"
+for r in ga ga-preview; do mkrun "gicc-$r-001" texture-tileable --style stylized-painterly && AG render --run "$RUNS/gicc-$r-001" >/dev/null; done
+python3 -B - "$ROOT" "$FX/fringe.png" "$gy" "$RUNS" <<'EOF'
+import os, struct, sys, zlib
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import png
+src, gy, runs = png.decode(sys.argv[2]), sys.argv[3], sys.argv[4]
+def icc(space, tags):
+    # ICC v2 display profile: 128-byte header, tag table, tag data (4-byte aligned)
+    table, data, off = b"", b"", 128 + 4 + 12 * len(tags)
+    for sig, body in tags:
+        body += b"\0" * (-len(body) % 4)
+        table += sig + struct.pack(">II", off + len(data), len(body))
+        data += body
+    size = off + len(data)
+    head = (struct.pack(">I", size) + b"lcms" + struct.pack(">I", 0x02100000) + b"mntr" + space + b"XYZ "
+            + struct.pack(">6H", 2026, 1, 1, 0, 0, 0) + b"acsp" + b"\0" * 4 + b"\0" * 4 + b"\0" * 8 + b"\0" * 8
+            + struct.pack(">I", 0) + struct.pack(">3i", 0xF6D6, 0x10000, 0xD32D) + b"\0" * 4 + b"\0" * 16 + b"\0" * 28)
+    assert len(head) == 128
+    return head + struct.pack(">I", len(tags)) + table + data
+desc = b"desc" + b"\0" * 4 + struct.pack(">I", 5) + b"gray\0" + struct.pack(">II", 0, 0) + struct.pack(">HB", 0, 0) + b"\0" * 67
+wtpt = b"XYZ " + b"\0" * 4 + struct.pack(">3i", 0xF6D6, 0x10000, 0xD32D)
+trc = b"curv" + b"\0" * 4 + struct.pack(">IH", 1, 0x0233)
+gray_icc = icc(b"GRAY", [(b"desc", desc), (b"wtpt", wtpt), (b"kTRC", trc)])
+rgb_icc = icc(b"RGB ", [(b"desc", desc), (b"wtpt", wtpt), (b"rTRC", trc), (b"gTRC", trc), (b"bTRC", trc)])
+open(os.path.join(gy, "gray.icc"), "wb").write(gray_icc)
+iccp = lambda name, prof: (b"iCCP", name + b"\0\0" + zlib.compress(prof))
+w, h, d = src.width, src.height, src.rgba
+# gray+alpha (type 4) from the fringe fixture: its red channel as gray, its alpha kept (the soft edge is off-colour)
+ga = [bytes(v for x in range(w) for v in (d[(y * w + x) * 4], d[(y * w + x) * 4 + 3])) for y in range(h)]
+def save(where, data):
+    os.makedirs(os.path.join(where, "outputs"), exist_ok=True)
+    open(os.path.join(where, "outputs", "prop.png"), "wb").write(data)
+save(os.path.join(gy, "ga"), png.encode_raw(w, h, 8, 4, ga, extra=[iccp(b"gray", gray_icc)]))
+save(os.path.join(runs, "gicc-ga-preview-001"), png.encode_raw(w, h, 8, 4, ga, extra=[iccp(b"gray", gray_icc)]))
+# gray (type 0) + tRNS key 0: transparent background, gray body
+g0 = [bytes(0 if not (4 <= x <= 11 and 4 <= y <= 11) else 200 for x in range(16)) for y in range(16)]
+save(os.path.join(gy, "g0"), png.encode_raw(16, 16, 8, 0, g0, extra=[iccp(b"gray", gray_icc), (b"tRNS", b"\x00\x00")]))
+# RGBA with an RGB profile: unchanged behaviour (RGBA, the profile kept)
+rgba = png.encode(w, h, d)
+save(os.path.join(gy, "rgb"), rgba[:33] + png.chunk(*iccp(b"rgb", rgb_icc)) + rgba[33:])
+# RGBA forced: an RGBA output with a GRAY profile (invalid input) and sRGB: the GRAY profile is dropped, sRGB kept
+save(os.path.join(gy, "forced"), rgba[:33] + png.chunk(b"sRGB", b"\x00") + png.chunk(*iccp(b"gray", gray_icc)) + rgba[33:])
+EOF
+for r in ga g0 rgb forced; do AG defringe --run "$gy/$r" > "$TMP/o-g-$r" 2>&1 || echo "rc $r" >> "$TMP/o-g-$r"; done
+cp "$RUNS/gicc-ga-preview-001/outputs/prop.png" "$RUNS/gicc-ga-001/outputs/prop.png" && AG defringe --run "$RUNS/gicc-ga-001" > "$TMP/o-g-run" 2>&1 \
+  && AG review-cmd --phase image --run "$RUNS/gicc-ga-001" --json > "$TMP/gp.json" 2>>"$TMP/o-g-run" \
+  && AG review-cmd --phase image --run "$RUNS/gicc-ga-preview-001" --json > "$TMP/gp2.json" 2>>"$TMP/o-g-run" || echo "rc run" >> "$TMP/o-g-run"
+python3 -B - "$ROOT" "$gy" "$RUNS" > "$TMP/o" 2>&1 <<'EOF'
+import io, os, sys, zlib
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts", "assetgen"))
+import assetgen, imaging, png
+gy, runs = sys.argv[2], sys.argv[3]
+gray_icc = open(os.path.join(gy, "gray.icc"), "rb").read()
+def info(path):
+    data = open(path, "rb").read()
+    found = {t: b for t, b in png.chunks(data)}  # every CRC checked
+    prof = zlib.decompress(found[b"iCCP"].split(b"\0", 1)[1][1:]) if b"iCCP" in found else None
+    return png.header(data)[3], prof, found, data
+def pillow_profile(path):
+    pil = png.pillow()
+    if pil is None:
+        return gray_icc
+    img = pil.open(path)
+    img.load()
+    prof = img.info.get("icc_profile")
+    try:
+        from PIL import ImageCms
+        assert ImageCms.ImageCmsProfile(io.BytesIO(prof)).profile.xcolor_space.strip() == "GRAY", path
+    except ImportError:
+        pass
+    return prof
+for r, want in (("ga", 4), ("g0", 4)):
+    out = os.path.join(gy, r, "outputs", "prop.png")
+    ctype, prof, _, _ = info(out)
+    assert (ctype, prof) == (want, gray_icc), (r, ctype, prof is not None)
+    assert pillow_profile(out) == gray_icc, r
+    raw, new = png.decode(os.path.join(gy, r, "outputs-raw", "prop.png")), png.decode(out)
+    assert raw.rgba[3::4] == new.rgba[3::4] and png.is_gray(new.rgba), r
+ctype, prof, found, _ = info(os.path.join(gy, "rgb", "outputs", "prop.png"))
+assert ctype == 6 and png.icc_space(found[b"iCCP"]) == b"RGB ", "rgb"
+ctype, prof, found, _ = info(os.path.join(gy, "forced", "outputs", "prop.png"))
+assert ctype == 6 and prof is None and found.get(b"sRGB") == b"\x00", ("forced", ctype, sorted(found))
+# imaging and colour_chunks directly: a non-gray image never comes out gray, a GRAY profile never goes on RGB(A)
+src = png.decode(os.path.join(gy, "rgb", "outputs-raw", "prop.png"))
+assert png.header(imaging.defringe(src, gray=True)[0])[3] == 6
+assert png.header(imaging.composite(src, "dark", gray=True))[3] == 2 and png.header(png.tile_2x2(src, True))[3] == 6
+ga = open(os.path.join(gy, "ga", "outputs-raw", "prop.png"), "rb").read()
+for t in (2, 3, 6):
+    assert [c for c, _ in assetgen.colour_chunks(ga, t)] == [], t
+assert [c for c, _ in assetgen.colour_chunks(ga, 4)] == [b"iCCP"] == [c for c, _ in assetgen.colour_chunks(ga, 0)]
+# review previews of a grayscale output (defringed and as fetched): gray composites, gray+alpha tile, the GRAY profile
+for run in ("gicc-ga-001", "gicc-ga-preview-001"):
+    for name, want in (("composite-dark", 0), ("composite-light", 0), ("tile-2x2", 4)):
+        path = os.path.join(runs, run, "review", name + ".png")
+        ctype, prof, _, _ = info(path)
+        assert (ctype, prof) == (want, gray_icc), (run, name, ctype)
+        assert pillow_profile(path) == gray_icc, (run, name)
+    img = png.decode(os.path.join(runs, run, "outputs", "prop.png"))
+    plain = png.decode_stdlib(open(os.path.join(runs, run, "review", "composite-dark.png"), "rb").read())
+    ref = png.decode_stdlib(imaging.composite(img, "dark"))
+    assert plain.rgba == ref.rgba, (run, "composite pixels differ from the RGB composite")
+print("ok")
+EOF
+! grep -q "^rc " "$TMP"/o-g-* && grep -qx ok "$TMP/o" \
+  && ok "grayscale outputs stay grayscale: defringe writes gray+alpha (type 4, also from gray+tRNS) with the GRAY iCCP Pillow reads, composites gray and tile gray+alpha with it; RGB profile kept on RGBA; a GRAY profile never on RGB(A) (sRGB kept)" \
+  || no "gray ICC" "$(cat "$TMP"/o-g-* "$TMP/o")"
 AG review-cmd --phase image --run "$f2" --json > "$TMP/rc.json" 2>"$TMP/err"; rc=$?
 [ $rc -eq 0 ] && [ "$(jq -c .composites "$TMP/rc.json")" = '["review/composite-a-dark.png","review/composite-a-light.png"]' ] \
   && [ "$(jq '[.argv[] | select(. == "-i")] | length' "$TMP/rc.json")" = 4 ] \

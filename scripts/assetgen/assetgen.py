@@ -74,7 +74,9 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       "opaque"}, "outputs": [{"output", "raw", "before_sha256", "after_sha256", "after_pixels_sha256",
                       "stats"}]}
                       (imaging.defringe: opaque neighbour colour bled into the pixels with 0 < alpha < 224, alpha kept
-                      except --alpha-floor N sets alpha below N to 0; text chunks carried over). Run it after
+                      except --alpha-floor N sets alpha below N to 0; text chunks carried over; a grayscale output
+                      stays grayscale, as gray+alpha, with its GRAY iCCP; an iCCP profile of the other colour space
+                      than the written colour type is dropped, in the review previews too). Run it after
                       fetch_outputs and before embed, qa and the reviews; run again, it starts from outputs-raw/, so
                       the result depends only on the originals and the params. It refuses an approved run.md, and
                       outputs that qa.json or an image review already bind unless --force (they are stale then and
@@ -586,17 +588,20 @@ def composite_name(images, image, background):
 
 
 def source_preview(path):
-    """(decoded image, chunks) of an output for its review previews: chunks are its PREVIEW_KEEP colour chunks
-    (colour_chunks rules), which every preview derived from it carries right after IHDR (tagged_preview), so the
-    preview displays its pixel values as the output does. An untagged output gives none: its previews stay untagged."""
+    """(decoded image, output bytes, gray) of an output for its review previews; gray: a grayscale output (colour
+    type 0 or 4), whose previews are built gray too (png.tile_2x2, imaging.composite with gray=True)."""
     with open(path, "rb") as f:
         data = f.read()
     img = png.decode(path)
-    return img, [(t, b) for t, b in colour_chunks(data) if t in PREVIEW_KEEP]
+    return img, data, png.gray_type(png.header(data)[3])
 
 
-def tagged_preview(data, colour):
-    return after_ihdr(data, colour) if colour else data
+def tagged_preview(preview, source):
+    """The preview bytes with the source output's PREVIEW_KEEP colour chunks right after IHDR (colour_chunks rules for
+    the preview's own colour type: an iCCP profile of the other colour space is dropped), so the preview displays its
+    pixel values as the output does. An untagged output gives none: its previews stay untagged, byte for byte."""
+    colour = [(t, b) for t, b in colour_chunks(source, png.header(preview)[3]) if t in PREVIEW_KEEP]
+    return after_ihdr(preview, colour) if colour else preview
 
 
 def derived_preview(run_dir, name, data, write):
@@ -625,8 +630,8 @@ def review_tiles(run_dir, images, rel, write):
     out = []
     for path, src, name in zip(images, rel, tile_names(images)):
         try:
-            img, colour = source_preview(path)
-            data = tagged_preview(png.tile_2x2(img), colour)
+            img, source, gray = source_preview(path)
+            data = tagged_preview(png.tile_2x2(img, gray), source)
         except (OSError, png.Invalid, png.Unsupported) as exc:
             print("assetgen: no tiled preview of %s: %s" % (src, exc), file=sys.stderr)
             continue
@@ -649,7 +654,7 @@ def review_composites(run_dir, images, rel, write):
     out = []
     for path, src in zip(images, rel):
         try:
-            img, colour = source_preview(path)
+            img, source, gray = source_preview(path)
         except (OSError, png.Invalid, png.Unsupported) as exc:
             print("assetgen: no composite preview of %s: %s" % (src, exc), file=sys.stderr)
             continue
@@ -657,7 +662,7 @@ def review_composites(run_dir, images, rel, write):
             continue
         for bg in COMPOSITE_BACKGROUNDS:
             name = composite_name(images, path, bg)
-            derived_preview(run_dir, name, tagged_preview(imaging.composite(img, bg), colour), write)
+            derived_preview(run_dir, name, tagged_preview(imaging.composite(img, bg, gray), source), write)
             out.append((name, src, bg))
     return out
 
@@ -800,8 +805,9 @@ def embed(run_dir):
 DEFRINGE_FILE = "defringe.json"
 RAW_DIR = "outputs-raw"
 DEFRINGE_RINGS = 8
-# Ancillary chunks that stay valid for the rewritten 8-bit RGBA image (colour management, HDR metadata, pixel size);
-# defringe carries them right after IHDR. Chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT)
+# Ancillary chunks that stay valid for the rewritten 8-bit RGBA or gray+alpha image (colour management, HDR metadata,
+# pixel size); defringe carries them right after IHDR, except an iCCP that does not fit the written colour type
+# (colour_chunks). Chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT)
 # and every other chunk are dropped.
 DEFRINGE_KEEP = (b"cHRM", b"gAMA", b"iCCP", b"sRGB", b"cICP", b"mDCv", b"cLLI", b"pHYs")
 # Chunks that say how a preview's pixel values are to be displayed: DEFRINGE_KEEP minus pHYs (a preview is looked at,
@@ -809,9 +815,18 @@ DEFRINGE_KEEP = (b"cHRM", b"gAMA", b"iCCP", b"sRGB", b"cICP", b"mDCv", b"cLLI", 
 PREVIEW_KEEP = tuple(t for t in DEFRINGE_KEEP if t != b"pHYs")
 
 
-def colour_chunks(data):
+def icc_fits(body, color_type):
+    """False when the iCCP profile's colour space (png.icc_space) is readable and is not the one the PNG spec requires
+    for color_type: GRAY for gray (0, 4), RGB for colour (2, 3, 6). An unreadable profile is kept as it was."""
+    space = png.icc_space(body)
+    return space is None or space == (b"GRAY" if png.gray_type(color_type) else b"RGB ")
+
+
+def colour_chunks(data, color_type=None):
     """The DEFRINGE_KEEP (type, body) chunks of PNG bytes found before the first IDAT, in file order, the first of each
-    type only; iCCP wins over sRGB when an (invalid) input has both, so the output never carries both."""
+    type only; iCCP wins over sRGB when an (invalid) input has both, so the output never carries both. color_type: the
+    colour type of the PNG that will carry them; an iCCP whose profile does not fit it (icc_fits: a GRAY profile on
+    RGB(A), an RGB one on gray) is dropped, and then the input's sRGB, if any, is kept."""
     found, seen = [], set()
     for ctype, body in png.chunks(data):
         if ctype == b"IDAT":
@@ -819,7 +834,10 @@ def colour_chunks(data):
         if ctype in DEFRINGE_KEEP and ctype not in seen:
             seen.add(ctype)
             found.append((ctype, body))
-    return [(t, b) for t, b in found if not (t == b"sRGB" and b"iCCP" in seen)]
+    if color_type is not None:
+        found = [(t, b) for t, b in found if t != b"iCCP" or icc_fits(b, color_type)]
+    icc = any(t == b"iCCP" for t, _ in found)
+    return [(t, b) for t, b in found if not (t == b"sRGB" and icc)]
 
 
 def after_ihdr(data, extra):
@@ -867,7 +885,8 @@ def defringe(run_dir, alpha_floor=None, force=False):
     on outputs it wrote (same pixels) starts from the kept originals, so the result depends only on the originals and
     the params. Text chunks (prompt, workflow) are carried over before IEND, and the colour-management and other safe
     ancillary chunks (cHRM, gAMA, iCCP or sRGB - never both -, cICP, mDCv, cLLI, pHYs) right after IHDR, so the opaque
-    body keeps its colour; chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT) are dropped. Refuses an approved run, and outputs
+    body keeps its colour (an iCCP whose profile does not fit the written colour type is dropped, colour_chunks); a
+    grayscale output (colour type 0 or 4) stays grayscale, written as gray+alpha; chunks bound to the old pixel format (sBIT, PLTE, tRNS, bKGD, hIST, sPLT) are dropped. Refuses an approved run, and outputs
     that qa.json or an image review already bind unless force (those records must be re-run afterwards)."""
     images = sorted(glob.glob(os.path.join(run_dir, "outputs", "*.png")))
     if not images:
@@ -899,15 +918,15 @@ def defringe(run_dir, alpha_floor=None, force=False):
         try:
             img = png.decode(src)
             chunks = text_chunks(data)
-            colour = colour_chunks(data)
+            gray = png.gray_type(png.header(data)[3])
         except (png.Invalid, png.Unsupported) as exc:
             rows.append({"output": name, "state": "FAIL", "reason": str(exc)})
             continue
         if not img.has_alpha or min(img.rgba[3::4]) == 255:
             rows.append({"output": name, "state": "skipped", "reason": "no transparent pixels: nothing to defringe"})
             continue
-        new, stats = imaging.defringe(img, alpha_floor, DEFRINGE_RINGS)
-        new = rebuild(after_ihdr(new, colour), lambda t, b: True, chunks)
+        new, stats = imaging.defringe(img, alpha_floor, DEFRINGE_RINGS, gray)
+        new = rebuild(after_ihdr(new, colour_chunks(data, png.header(new)[3])), lambda t, b: True, chunks)
         if not again:
             os.makedirs(os.path.dirname(raw), exist_ok=True)
             shutil.copyfile(path, raw)

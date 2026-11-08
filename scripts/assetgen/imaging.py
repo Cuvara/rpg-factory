@@ -18,16 +18,19 @@ edge_fringe(img) -> (state, details): the png-edge-fringe QA row (qa.py adds it 
   FAIL).
 edge_fringe_stats(img) -> dict behind edge_fringe (None without alpha): soft_edge, off_colour, share,
   max_composite_delta, opaque, body_251_254.
-defringe(img, alpha_floor=None, rings=8) -> (PNG bytes, stats): colour bleed into soft pixels. Every pixel with
+defringe(img, alpha_floor=None, rings=8, gray=False) -> (PNG bytes, stats): colour bleed into soft pixels. Every pixel with
   0 < alpha < OPAQUE takes the alpha-weighted mean RGB of its 8 neighbours that are opaque; pixels reached in
   ring k (k = 2..rings) take the mean of the neighbours recoloured in an earlier ring (weighted by their alpha). A
   ring is computed from the image before that ring, so the result does not depend on scan order. Alpha is never
   changed except that alpha_floor N (0..OPAQUE) sets every alpha below N to 0. Opaque pixels and alpha 0 pixels keep
   their bytes. Soft pixels no ring reaches (no opaque pixel within rings px) keep their colour (stats unreached).
-  stats: soft, recoloured, unreached, rings_used, alpha_floor, floored.
-composite(img, background) -> PNG bytes (8-bit RGB) of the image over a background: "dark" (#202020), "light"
+  stats: soft, recoloured, unreached, rings_used, alpha_floor, floored. The PNG is 8-bit RGBA; with gray=True (a
+  grayscale source) it is 8-bit gray+alpha when every pixel has R = G = B, which holds for a gray input (each ring
+  averages equal channels the same way), else RGBA.
+composite(img, background, gray=False) -> PNG bytes (8-bit RGB) of the image over a background: "dark" (#202020), "light"
   (#e0e0e0), "checker" (16 px squares of #999999 and #666666, top-left #999999) or an (r, g, b) tuple. A pixel
-  with alpha 0 equals the background; out = round((c x a + bg x (255 - a)) / 255) per channel.
+  with alpha 0 equals the background; out = round((c x a + bg x (255 - a)) / 255) per channel. With gray=True (a grayscale source)
+  and a gray result (R = G = B everywhere: a gray image over dark, light or checker), the PNG is 8-bit gray.
 BACKGROUNDS: the named backgrounds in review order (dark, light, checker).
 """
 import png
@@ -107,7 +110,7 @@ def edge_fringe(img):
         body] + (["run assetgen.py defringe on the run, then QA again"] if bad else [])
 
 
-def defringe(img, alpha_floor=None, rings=8):
+def defringe(img, alpha_floor=None, rings=8, gray=False):
     if alpha_floor is not None and not (isinstance(alpha_floor, int) and not isinstance(alpha_floor, bool)
                                         and 0 <= alpha_floor <= OPAQUE):
         raise ValueError("alpha_floor must be an integer from 0 to %d" % OPAQUE)
@@ -154,6 +157,8 @@ def defringe(img, alpha_floor=None, rings=8):
                 floored += 1
     stats = {"soft": soft, "recoloured": recoloured, "unreached": len(pending), "rings_used": used,
              "alpha_floor": alpha_floor, "floored": floored}
+    if gray and png.is_gray(out):
+        return png.encode_gray(w, h, bytes(out)), stats
     return png.encode(w, h, bytes(out)), stats
 
 
@@ -162,7 +167,7 @@ def _blend_table(bg):
     return bytes((c * a + bg * (255 - a) + 127) // 255 for a in range(256) for c in range(256))
 
 
-def composite(img, background):
+def composite(img, background, gray=False):
     if isinstance(background, str):
         if background == "checker":
             colours = CHECKER
@@ -199,4 +204,6 @@ def composite(img, background):
                 row[o + 1] = tables[colour[1]][k | d[i + 1]]
                 row[o + 2] = tables[colour[2]][k | d[i + 2]]
         rows.append(bytes(row))
+    if gray and all(r[0::3] == r[1::3] == r[2::3] for r in rows):
+        return png.encode_raw(w, h, 8, 0, [r[0::3] for r in rows])
     return png.encode_raw(w, h, 8, 2, rows)
