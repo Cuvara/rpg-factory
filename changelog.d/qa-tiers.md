@@ -2,8 +2,9 @@
 
 - **run-all.** One full run per machine: a full `tests/run-all.sh` (no `--affected` or `--only-suites`) and every
   `--release` run take a lock in the persistent state dir. A second full run waits and prints `waiting for full run <pid> in <checkout>`;
-  `--no-wait` exits 3 instead, and a lock whose holder is dead is taken over
-  (`run-all: taking over stale full-run lock (<pid>)`).
+  `--no-wait` exits 3 instead, and a lock whose holder is dead (checked by PID, and by the Windows PID on Git Bash) is taken over
+  (`run-all: taking over stale full-run lock (<pid>)`). Only one waiter reclaims a stale lock, and a lock that a new
+  holder has not finished writing is not taken over.
 - **run-all.** A full run on a clean tree writes a result record for that tree; `--reuse` exits 0 at once on a PASS
   record of the same clean tree with at least the same coverage (a `--no-workspace` or `--no-claude` record does not
   satisfy a run without that flag) and prints `reused full run at <HEAD> (tree <tree>, <date>)`. `--release` never
@@ -11,7 +12,8 @@
 - **run-all.** Suite-level reuse: each suite's PASS is recorded under a hash of its inputs (the suite file, the files
   `tests/affected.py` maps to it, the global inputs and the tool versions), and a later run skips that suite and
   prints `PASS  <check> (reused <suite> inputs <hash>)`. Suites graded by a postprocessor, checks that read the live
-  workspace (a `run` inside a live block too) and `--no-history` runs are never reused, and no record is published when the inputs changed during the run.
+  workspace (a `run` inside a live block too) and `--no-history` runs are never reused, no record is published when the inputs changed during the run, and a suite that skipped a case for a missing tool
+  publishes no PASS record (a later run with the tool runs it).
   `--no-reuse` runs every suite; `--release` never reuses.
 - **run-all.** `--only-suites LIST` runs only the named suites (comma-separated paths), unioned with `--affected` when
   both are given; neither takes the full-run lock. A name run-all does not run (a missing file, or a suite without a
@@ -24,7 +26,8 @@
 - **run-all.** When `python3` resolves to the Windows Store alias, run-all puts the real Python directory first on
   `PATH` for the suites (about 70 ms saved per call); the user's system is not changed.
 - **Tests.** `tests/affected.py` no longer treats `scripts/lib/*` as global: a lib module selects only the suites of
-  the scripts that import it (static scan; a module it cannot map still selects every suite).
+  the scripts that import it (static scan; a module it cannot map still selects every suite). It follows import chains through non-lib modules, so a lib
+  module imported only by another script module selects the suites of that module's importers.
   `tests/affected.test.sh` covers it. `affected.py hashes SUITE...` prints each suite's input hash for suite reuse
   (`-` when reuse is unsafe).
 - **Guard.** `scripts/git-guard.py --batch` evaluates JSON-line cases in one process through the same evaluation as
@@ -36,7 +39,9 @@
   name that `tests/run-all.sh --list-suites` lists, each once; a full `tests/run-all.sh` check is dropped and folded
   into it, other checks stay extra commands)
   and its spec forbids a full run. `verdict --phase qa --state FAIL --failed-suites LIST` records the failed suites;
-  the next QA dispatch on a new candidate reruns them with `--affected --base <that FAIL's candidate>`. Integration
+  the next QA dispatch on a new candidate reruns those that `tests/run-all.sh --list-suites` lists, with
+  `--affected --base <that FAIL's candidate>`. The tier commands are read from registry `pipeline.qa_tiers`. A repo
+  without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
   QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
   `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
 - **Pipeline.** A tier S task (plan or task tier S, or every owned path under `docs/`, `skills/`, `changelog.d/` or a
@@ -52,7 +57,7 @@
   release) with the lock and reuse rules: a task never runs the whole suite, reviewers run no suites, and the only
   full run of a batch is integration QA. It replaces the "at most two concurrent full runs" rule with one full run
   per machine. `.claude/CLAUDE.md` follows: the PR rule names integration QA's full run (or a reused PASS record of
-  the same tree), and Commands lists `--reuse`, `--no-wait`, `--only-suites` and `--no-reuse`.
+  the same tree), and Commands lists `--reuse`, `--no-wait`, `--only-suites`, `--list-suites` and `--no-reuse`.
 - **Tests.** `tests/parallel-policy.test.sh` builds one minimal throwaway plugin copy, copies only the lint inputs
   per mutation and runs only the lint sections a mutation reaches, concurrently (`PARALLEL_POLICY_JOBS`, default 4).
   It also checks the QA tiers table: one copy under its marker, the required rows, no full run in the task row.

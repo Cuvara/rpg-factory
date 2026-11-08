@@ -109,6 +109,7 @@ tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base
 tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected; task QA: the task's checks);
                                     # with --affected or --only-suites, live blocks and script checks (skill-citations,
                                     # factory-context, pin-plan, package-ready, netcode-headless...) are gated like suites
+tests/run-all.sh --list-suites      # print the suite names --only-suites accepts (read-only, runs no checks)
 tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree and coverage (integration QA)
 tests/run-all.sh --no-wait          # exit 3 instead of waiting when another full run holds the per-machine lock
 tests/run-all.sh --no-reuse         # run every suite; by default a suite whose input hash already passed is reused
