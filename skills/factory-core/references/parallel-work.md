@@ -409,7 +409,8 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    result: `factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase review --sha <sha> --by <agent>
    --state PASS|FAIL --report <file> [--note TEXT] [--implementer AGENT] [--fallback '<model> unavailable']`
    (`--report` names an existing file, `--note` takes free text; `--implementer` declares the true implementer and is
-   refused when it conflicts with the one the dispatch recorded). A FAIL goes back to the task lead (`status` names `--phase lead`, which
+   refused when it conflicts with the one the dispatch recorded; the retrospective `--fallback '<model> unavailable'`
+   needs `--subtask <sid>`). A FAIL goes back to the task lead (`status` names `--phase lead`, which
    resumes it in the task worktree or the main checkout of a no-worktree repo): it starts a scoped fix in a fresh
    implementation session there (section 8, "Session lifecycle") and commits it as a new candidate SHA.
    `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
@@ -420,9 +421,11 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    `dispatch --phase review` records that fallback for the candidate SHA. `verdict` stamps the fallback only when
    that SHA's review dispatch was a recorded fallback and `--by` is its reviewer, not from availability at verdict
    time. A same-model review made before dispatch recorded fallbacks (for example during an outage of the paired
-   model) is recorded after the fact with `--fallback '<model> unavailable' --note <why>`: `--note` is required and
-   `--by` must be the implementer's model (the bare form `--fallback <model>` is still refused while that model is
-   available). The gate accepts a recorded fallback and prints it as an accepted
+   model) is recorded after the fact for a subtask review only, with `verdict --subtask <sid> --fallback '<model>
+   unavailable' --note <why>`: `--subtask` and `--note` are required and `--by` must be the implementer's model (the
+   bare form `--fallback <model>` is still refused while that model is available). The task level refuses the
+   retrospective form: a task review keeps a dispatch-recorded fallback or `gate --allow-same-model`. The gate
+   accepts a recorded fallback and prints it as an accepted
    fallback with its reason and note, never silently; it needs `--allow-same-model` only for an unrecorded
    SAME_MODEL review. `--runner agent` (Claude only) marks a session planned for Codex SAME_MODEL in its prompt.
    The task lead also runs the per-task QA
