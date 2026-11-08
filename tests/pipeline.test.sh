@@ -1254,6 +1254,8 @@ RPG_FACTORY_AGENTS=claude expect "claude-only: the code task is implemented by c
 expect "codex back: the review pairs against the recorded claude implementer" 0 "implement -> claude \(recorded implementer: fallback: codex unavailable\)" dispatch "$RP" --task k --phase review --sha "$RS" --runner print
 expect "codex back: the review of the recorded claude implementation goes to codex" 0 "^# agent: codex" dispatch "$RP" --task k --phase review --sha "$RS" --runner print
 expect "verdict records the recorded implementer" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS
+expect "explicit task implementer cannot contradict dispatch" 2 "--implementer codex conflicts with recorded implementer claude for k" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS --implementer codex
+expect "explicit task implementer matching dispatch is accepted" 0 "recorded review PASS for k" verdict "$RP" --task k --phase review --sha "$RS" --by claude --state PASS --implementer claude
 expect "a claude review of the recorded claude implementation is not cross-model" 1 "BLOCKER k: reviewed by claude, cross-model review needs codex" gate "$RP" --no-run-checks
 RPG_FACTORY_AGENTS=codex expect "codex-only: the docs task is implemented by codex (fallback)" 0 "implement -> codex" dispatch "$RP" --task d --phase implement --runner orca
 expect "claude back: the review of the recorded codex implementation goes to claude" 0 "^# agent: claude" dispatch "$RP" --task d --phase review --sha "$RS" --runner print
@@ -1288,6 +1290,14 @@ rv() { python3 -B "$P" verdict "$RSP" "$@" >/dev/null || echo "verdict failed: $
 RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s
 RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase implement --subplan "$RSS" --subtask s2
 rs dispatch "$RSP" --task k --phase review --sha "$RS2"
+rv --task k --phase review --sha "$RS2" --by claude --state PASS
+expect "unanimous claude subtasks require codex task review by default" 1 "reviewed by claude, cross-model review needs codex" gate "$RSP" --no-run-checks
+expect "explicit subtask implementer cannot contradict dispatch" 2 "--implementer codex conflicts with recorded implementer claude for k subtask s" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+expect "explicit subtask implementer matching dispatch is accepted" 0 "recorded review PASS for k subtask s" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --implementer claude
+expect "explicit task implementer without dispatch is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+expect "explicit implementer preserves its paired reviewer record" 0 "kept the claude review of k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state FAIL --implementer codex
+if jq -e '.by == "claude" and .state == "PASS" and .implementer == "codex"' "$RSVD/k__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  explicit implementer keeps paired PASS intact"
+else fail=$((fail + 1)); echo "FAIL  explicit implementer keeps paired PASS intact"; fi
 rv --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
 rv --task integration:rec --phase qa --sha "$RS2" --by codex --state PASS
 expect "a claude fallback subtask is not laundered by the claude task review once codex is back" 1 "BLOCKER k: subtask s recorded implementer claude, but the task review by claude pairs against codex: record .verdict --subtask s. PASS by codex" gate "$RSP" --no-run-checks
@@ -1758,6 +1768,8 @@ elif case in ('report', 'implementer', 'override', 'legacy-implementer'):
         m.pr.record(plan, 'a', 's1', 'implementer', {'agent': 'claude'})
         m.pr.record(plan, 'a', 's2', 'implementer', {'agent': 'claude'})
         extra = ('--implementer', 'codex') if case == 'override' else ()
+        if extra:
+            pathlib.Path(m.verdict_file(plan, 'a', 'review')).unlink()  # exercise a fresh explicit declaration, not review preservation
         verdict('a', 'review', a, by='codex', extra=extra)
         rv = record('a', 'review')
         assert rv['implementer'] == ('codex' if extra else 'claude'), rv
@@ -1783,6 +1795,7 @@ else:
         assert row['qa']['task'] == 'a', row
         s = m.status(plan, reg)
         assert any('integration QA' in n and 'STALE' in n for r in s['tasks'] for n in r['notes']), s
+        assert all(sum('integration QA' in n and 'STALE' in n for n in r['notes']) == 1 for r in s['tasks']), s
         assert not any(n.startswith('qa verdict is STALE') for r in s['tasks'] for n in r['notes']), s
     else:
         git('switch', '--no-track', '-c', 'topic-b')

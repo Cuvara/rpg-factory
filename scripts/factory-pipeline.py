@@ -83,7 +83,7 @@ docs/schemas/pipeline-plan.schema.json.
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
         names it. --orca-unavailable goes with --runner agent only.
-  verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE]
+  verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback AGENT]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
@@ -1556,6 +1556,10 @@ def cmd_verdict(a, reg):
         # the subtask), else the planned routing of the subtask (--subplan) or the task
         impl, source = review_implementer(pipe, plan, task, a.subtask, sub_item, disp)
         if a.implementer:
+            recorded = pr.recorded(plan, a.task, a.subtask, "implementer")
+            if recorded and recorded.get("agent") != a.implementer:
+                die(f"--implementer {a.implementer} conflicts with recorded implementer {recorded.get('agent')} "
+                    f"for {a.task}" + (f" subtask {a.subtask}" if a.subtask else ""))
             impl, source = a.implementer, "explicit"
         rec["implementer"] = impl
         rec["implementer_source"] = source
@@ -1571,10 +1575,10 @@ def cmd_verdict(a, reg):
         # without --subtask) never replaces the paired reviewer's record for the same candidate
         old = fstate.read_json(path)
         old_impl = (old.get("implementer") or review_implementer(pipe, plan, task)[0]) if isinstance(old, dict) else impl
-        want = pr.paired(pipe, task, old_impl)
+        want = pr.paired(pipe, task, a.implementer or old_impl)
         new_pair = pr.paired(pipe, task, rec["implementer"])
         new_paired = a.by == new_pair or (a.by == rec["implementer"] and rec.get("fallback") == new_pair)
-        if (not a.implementer and not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
+        if (not new_paired and isinstance(old, dict) and old.get("by") == want and old.get("sha") == full
                 and old.get("fingerprint") == rec["fingerprint"]):
             print(f"factory-pipeline: kept the {want} review of {a.task} at {a.sha[:10]} (the task's paired reviewer); "
                   f"this {a.by} review is kept per candidate only: {kept}. A subtask review takes --subtask <id>.",
@@ -2185,7 +2189,8 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
         why = "no integration QA" + (" (its verdict is STALE: the plan changed)" if iq_stale else "")
     for tid in mine:
         rows[tid]["phase"] = "integrated"
-        rows[tid]["notes"].append(why + f" for {key}: the gate needs it at the integration HEAD")
+        if not iq_stale:  # task_status already notes a plan-stale integration verdict on every row
+            rows[tid]["notes"].append(why + f" for {key}: the gate needs it at the integration HEAD")
         if first:
             rows[tid]["notes"].append(f"integration QA of {first} runs first in this checkout: wait for its verdict")
             rows[tid]["next"] = None
