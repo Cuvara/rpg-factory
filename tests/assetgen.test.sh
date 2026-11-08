@@ -1100,6 +1100,24 @@ rev=$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md); recf="$AP
 AG manifest --run "$ar" --prompt-author robin > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 0 ] && grep -q "AGEN-fringe-icon-001 approved$" "$TMP/o" && [ "$(git -C "$APA" hash-object assetgen/runs/fringe-icon-001/run.md)" = "$rev" ] \
   && ok "manifest after approve-record keeps approved and writes the same run.md bytes (the record's rev still binds)" || no "manifest after approval rc=$rc" "$(cat "$TMP/o")"
+# a CRLF run.md (a Windows checkout, or an editor that wrote CRLF) approved with approve-record: manifest keeps the
+# file's line endings, so a no-op manifest leaves it approved and byte-identical; a real change still resets
+APC="$TMP/approve-crlf"; cp -R "$APA" "$APC"; cr="$APC/assetgen/runs/fringe-icon-001"
+crlf() { python3 -B -c 'import sys; t = open(sys.argv[1], "rb").read(); sys.exit(0 if t.count(b"\r\n") == t.count(b"\n") > 0 else 1)' "$1"; }
+fstatus() { tr -d '\r' < "$1" | sed -n '/^---json$/,/^---$/p' | sed '1d;$d' | jq -r .status; }
+python3 -B -c 'import sys; p = sys.argv[1]; t = open(p, "rb").read().replace(b"\r\n", b"\n"); open(p, "wb").write(t.replace(b"\n", b"\r\n"))' "$cr/run.md"
+AG approve-record --run "$cr" --by Dana --note "edges clean on dark and light" > /dev/null 2>"$TMP/err"; rc1=$?
+b0=$(sha256sum < "$cr/run.md")
+AG manifest --run "$cr" --prompt-author robin > "$TMP/o" 2>&1; rc=$?
+[ $rc1 -eq 0 ] && [ $rc -eq 0 ] && grep -q "AGEN-fringe-icon-001 approved$" "$TMP/o" && [ "$(sha256sum < "$cr/run.md")" = "$b0" ] \
+  && crlf "$cr/run.md" && [ "$(fstatus "$cr/run.md")" = approved ] \
+  && ok "manifest on an approved CRLF run.md: still approved, bytes unchanged (CRLF kept, the approval blob still binds)" \
+  || no "manifest CRLF approved rc1=$rc1 rc=$rc" "$(cat "$TMP/err" "$TMP/o")"
+AG manifest --run "$cr" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 0 ] && grep -qF "AGEN-fringe-icon-001 proposed (approval no longer binds, changed: spec.prompt_author" "$TMP/o" \
+  && [ "$(fstatus "$cr/run.md")" = proposed ] && crlf "$cr/run.md" \
+  && ok "manifest with a real change on an approved CRLF run.md: proposed, names the field, keeps CRLF" \
+  || no "manifest CRLF change rc=$rc" "$(cat "$TMP/o")"
 python3 -B "$ROOT/scripts/checks/artifact-quality.py" "$APA" --registry "$ROOT/registry.json" --domain assetgen --json > "$TMP/aq.json" 2>"$TMP/err"
 lc=$(jq -r '[.results[] | select(.artifact == "AGEN-fringe-icon-001" and .check == "lifecycle") | .state] | join(",")' "$TMP/aq.json")
 ta=$(jq -r '[.results[] | select(.artifact == "AGEN-fringe-icon-001" and .check == "trace-approval") | .state] | join(",")' "$TMP/aq.json")
@@ -1274,6 +1292,7 @@ variant qp-invalid-001; printf 'no verdict here\n' > "$RUNS/qp-invalid-001/revie
 variant qp-qadisk-001; qaset qp-qadisk-001 'obj["state"] = "FAIL"; obj["results"][0]["state"] = "FAIL"'
 variant qp-qacontra-001; qaset qp-qacontra-001 'obj["results"][1]["state"] = "FAIL"'; AG manifest --run "$RUNS/qp-qacontra-001" >/dev/null
 variant qp-qapart-001; qaset qp-qapart-001 'obj["results"] = [r for r in obj["results"] if r["check"] != "png-corners"]'; AG manifest --run "$RUNS/qp-qapart-001" >/dev/null
+variant qp-qafringe-001; qaset qp-qafringe-001 'obj["results"] = [r for r in obj["results"] if r["check"] != "png-edge-fringe"]'; AG manifest --run "$RUNS/qp-qafringe-001" >/dev/null
 variant qp-qana-001; qaset qp-qana-001 'obj["state"] = "NOT_AVAILABLE"; obj["results"] = [{"output": "outputs/qp-icon.png", "check": "png-valid", "state": "NOT_AVAILABLE", "reasons": ["16-bit"]}]'
 AG manifest --run "$RUNS/qp-qana-001" >/dev/null
 variant qp-qaspec-001; python3 -B -c 'import json, sys; p = sys.argv[1]; s = json.load(open(p)); s["purpose"]["data"]["qa"] = {}; json.dump(s, open(p, "w"))' "$RUNS/qp-qaspec-001/spec.json"
@@ -1400,6 +1419,11 @@ case_ qp-invalid-001 gen-run-image-review FAIL 'holds no JSON verdict' "review f
 case_ qp-qadisk-001 gen-run-qa FAIL 'differs from qa.json (FAIL)' "qa.json FAIL while run.md claims PASS: FAIL"
 case_ qp-qacontra-001 gen-run-qa FAIL 'claims PASS but contradicts its own rows' "qa.json PASS with a failing row: FAIL"
 case_ qp-qapart-001 gen-run-qa FAIL 'lacks the required check(s) png-corners' "qa.json PASS without a purpose-required check: FAIL"
+case_ qp-qafringe-001 gen-run-qa FAIL 'lacks the required check(s) png-edge-fringe' "qa.json PASS without png-edge-fringe for an alpha purpose: FAIL (a required check)"
+[ "$(jq -r '.purpose.data.qa.alpha' "$good/spec.json")" = required ] && [ "$(st AGEN-qp-icon-001 gen-run-qa)" = PASS ] \
+  && [ "$(jq -r '[.results[] | select(.check == "png-edge-fringe") | .state] | unique | join(",")' "$good/qa.json")" = PASS ] \
+  && ok "gen-run-qa PASS for an alpha purpose whose qa.json carries a PASS png-edge-fringe row" \
+  || no "alpha purpose with png-edge-fringe: $(st AGEN-qp-icon-001 gen-run-qa)" "$(why AGEN-qp-icon-001 gen-run-qa)"
 case_ qp-qana-001 gen-run-qa FAIL 'NOT_AVAILABLE does not grade PASS' "NOT_AVAILABLE QA never grades PASS"
 case_ qp-qaspec-001 gen-run-qa FAIL 'spec.json purpose is not the purpose the run recorded' "spec.json purpose edited after the run: FAIL"
 case_ qp-qapurp-001 gen-run-qa FAIL 'graded with another purpose qa block' "qa.json graded with an older purpose qa block: FAIL"

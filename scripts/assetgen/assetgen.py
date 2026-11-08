@@ -1006,7 +1006,7 @@ def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude")
         # the approval record binds the run.md blob: any other byte (another --title or --prompt-author, a body line)
         # would leave an approved run.md that no approval binds, so it goes back to proposed and names the fields
         with open(os.path.join(run_dir, "run.md"), encoding="utf-8", newline="") as f:
-            if f.read() != manifest_text(front, run_dir):
+            if f.read() != manifest_text(front, run_dir, run_md_newline(run_dir)):
                 front["status"] = "proposed"
                 changes = unbound_changes(old, front) or ["run.md body"]
     reset = bool(old.get("status")) and old.get("status") != "proposed" and front["status"] == "proposed"
@@ -1022,7 +1022,18 @@ def unbound_changes(old, new):
     return out + ["spec." + k for k in sorted(set(o) | set(n)) if o.get(k) != n.get(k)]
 
 
-def manifest_text(front, run_dir=None):
+def run_md_newline(run_dir):
+    """The line ending of an existing run.md (CRLF when its first line ends in CRLF, else LF): a re-run manifest
+    keeps it, so an unchanged approved run.md stays byte-identical (its approval record binds that blob)."""
+    try:
+        with open(os.path.join(run_dir, "run.md"), "rb") as f:
+            first = f.readline()
+    except OSError:
+        return "\n"
+    return "\r\n" if first.endswith(b"\r\n") else "\n"
+
+
+def manifest_text(front, run_dir=None, newline="\n"):
     s = front["spec"]
     body = ["# " + front["title"], "",
             "- Purpose: `%s` (%s), style `%s`, template `%s`" % (s["purpose"]["id"], s["purpose"]["layer"], s["style"]["id"], s["template"]["id"]),
@@ -1047,7 +1058,8 @@ def manifest_text(front, run_dir=None):
             body.append("- Style override: %s" % lock["override"])
     body += ["- Status: %s (approval is human-only)" % front["status"], "", "## Prompt", "", s["prompt"], "", "## Outputs", ""]
     body += ["![%s](%s)" % (o["path"], o["path"]) for o in s["outputs"]] or ["(none)"]
-    return "---json\n%s\n---\n%s\n" % (json.dumps(front, indent=2, ensure_ascii=True), "\n".join(body))
+    text = "---json\n%s\n---\n%s\n" % (json.dumps(front, indent=2, ensure_ascii=True), "\n".join(body))
+    return text.replace("\n", newline) if newline != "\n" else text
 
 
 # -- style lock records: promote-anchor, reject ----------------------------------------------------------------
@@ -1469,8 +1481,9 @@ def main(argv=None):
             return 0
         if a.cmd == "manifest":
             front, reset, changes = manifest(a.run, a.title, a.prompt_author, a.generated_by)
-            with open(os.path.join(a.run, "run.md"), "w", encoding="utf-8", newline="\n") as f:
-                f.write(manifest_text(front, a.run))
+            newline = run_md_newline(a.run)
+            with open(os.path.join(a.run, "run.md"), "w", encoding="utf-8", newline="") as f:
+                f.write(manifest_text(front, a.run, newline))
             note = (" (approval no longer binds, changed: %s; status reset to proposed)" % ", ".join(changes) if changes
                     else " (outputs changed: status reset to proposed)" if reset else "")
             emit(front, a.json, "wrote %s/run.md: %s %s%s" % (a.run.replace(os.sep, "/"), front["id"], front["status"], note))

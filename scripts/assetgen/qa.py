@@ -24,9 +24,10 @@ runfiles.required_checks(qa), which the gen-run quality plugin also requires as 
                       pixels with alpha > 8 >= min_coverage
   png-edge-fringe     only for qa.alpha required: imaging.edge_fringe (soft edge pixels, alpha 1-31 next to the
                       opaque body, whose RGB is far from the body colour, the speckled fringe of e2e barrel-prop-001;
-                      body alpha 251-254 is noted, never graded). Not a required check (runfiles.required_checks is
-                      unchanged), but a graded row: FAIL makes the qa state FAIL like any other row; NOT_AVAILABLE
-                      (no alpha) comes with a png-alpha FAIL anyway. assetgen.py defringe repairs it.
+                      body alpha 251-254 is noted, never graded). A required check for qa.alpha required (the last
+                      one in runfiles.required_checks), so the gen-run quality plugin rejects a qa.json without the
+                      row: FAIL makes the qa state FAIL like any other row; NOT_AVAILABLE (no alpha) comes with a
+                      png-alpha FAIL anyway. assetgen.py defringe repairs it.
   purpose-qa          FAIL (one row for outputs/, nothing graded) when the purpose qa block is malformed
                       (runfiles.qa_errors; the same rules lint reports)
 Style consistency rows (only for a spec with style_lock; consistency.check_all over the style data spec.style.data,
@@ -253,11 +254,10 @@ def run_qa(run_dir, spec, requested_size):
                   "png-alpha": lambda: check_alpha(img, qa.get("alpha", "any")),
                   "png-corners": lambda: check_corners(img),
                   "png-tileable": lambda: check_tileable(img, qa["tileable"].get("max_seam_error", 0.06)),
-                  "png-not-blank": lambda: check_not_blank(img, qa["not_blank"])}
+                  "png-not-blank": lambda: check_not_blank(img, qa["not_blank"]),
+                  "png-edge-fringe": lambda: imaging.edge_fringe(img)}
         for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
             add(rel, name_, checks[name_]())
-        if qa.get("alpha") == "required":
-            add(rel, "png-edge-fringe", imaging.edge_fringe(img))
         if lock is not None:
             family = lock.get("family") if isinstance(lock.get("family"), str) else None
             for row, state, details in consistency.check_all(img, style_data, data, family, anchors):
