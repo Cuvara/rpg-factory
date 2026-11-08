@@ -46,7 +46,7 @@
   without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
   QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
   `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
-- **Pipeline.** A tier S task (plan or task tier S, or every owned path a `.md` file or under `changelog.d/`) needs no QA session: the task lead runs the task QA command after the review PASS and records
+- **Pipeline.** A tier S task (plan or task tier S, or every owned path prose: a `.md` file anywhere, a path under `changelog.d/` or a `skills/` directory path; a non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are not prose) needs no QA session: the task lead runs the task QA command after the review PASS and records
   `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`. The gate accepts such a
   lead-run QA verdict (note starting `tier S`, no QA session) only for a tier S task. A QA PASS from a fresh QA
   session is accepted as before for every tier, including the one-model fallback where the implementer's model runs

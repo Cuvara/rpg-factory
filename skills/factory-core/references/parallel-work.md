@@ -40,7 +40,7 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
 3. reviews each sub-session's diff and commits that subtask itself with explicit paths (a child subtask: merges
    the child branch into the task branch and removes the child, section 4);
 4. with every subtask committed, starts a fresh cross-model review session and a QA session on that HEAD in the
-   same worktree (a tier S or docs-only task: no QA session, the task lead runs the task QA command itself after the
+   same worktree (a tier S or prose-only task: no QA session, the task lead runs the task QA command itself after the
    review PASS, section 10 "QA tiers"); a FAIL goes to a fresh fix session;
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
 6. reports to the run lead (section 3) and records the review and QA verdicts.
@@ -469,13 +469,15 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
 |---|---|---|
 | Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once; other checks are extra commands; never a full run | a fresh QA session in the task worktree |
 | Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
-| Tier S or docs-only task (every owned path docs, skills, changelog or .md) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
+| Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
 | Reviewer | no suites; only a repro test when a finding needs one | the review session |
 | Integration QA, once per batch before the PR | `tests/run-all.sh --reuse -j 4`: the batch's one full run, under the run-all lock, reusing suites whose inputs already passed | the run lead's integration QA session |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session (`.claude/CLAUDE.md` "Releases") |
 
 - **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
-  under `docs/`, `skills/` or `changelog.d/` or is a `.md` file. The gate accepts a QA verdict the task lead ran
+  prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/` directory
+  path (no dot in its last segment). A non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are machine
+  inputs, not prose: `docs/` alone does not make a task tier S. The gate accepts a QA verdict the task lead ran
   itself (no QA session, note starting `tier S`) only for such a task. A QA PASS from a fresh QA session is accepted
   as before for every tier: by the other model, or by the implementer's model as the one-model fallback of the Token
   rule.

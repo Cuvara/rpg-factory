@@ -393,7 +393,7 @@ else:
     required = {
         "Task QA, each candidate": ("--affected", "never a full run"),
         "Re-QA after a FAIL": ("failed suites", "task check suites", "--affected", "previous FAIL candidate"),
-        "Tier S or docs-only task (every owned path docs, skills, changelog or .md)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
+        "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
         "Reviewer": ("no suites",),
         "Integration QA, once per batch before the PR": ("--reuse -j 4", "one full run", "lock"),
         "Release": ("--release", "dogfood.sh --installed"),
@@ -437,7 +437,8 @@ q_mutate "QA tiers table removed" "qa-tiers table missing" \
 q_mutate "QA tiers reviewer row removed" "qa-tiers row missing: Reviewer" \
   'sed -i "/^| Reviewer |/d" "$F"'
 q_mutate "QA tiers re-QA row drops the task check suites" "qa-tiers row changed: Re-QA after a FAIL"   'sed -i "/^| Re-QA after a FAIL |/s/, with the task check suites//" "$F"'
-q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or docs-only task/s/every owned path/every changed path/" "$F"'
+q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/every owned path/every changed path/" "$F"'
+q_mutate "QA tiers tier S row counts docs/ as prose again" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/a .md file, under changelog.d\/ or a skills\/ directory/docs, skills, changelog or .md/" "$F"'
 q_mutate "QA tiers task row requires a full run" "qa-tiers task row permits a full run" \
   'sed -i "/^| Task QA,/s/never a full run/run a full run/" "$F"'
 q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
