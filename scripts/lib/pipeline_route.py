@@ -83,7 +83,8 @@ _cache = {}
 def available(pipe, plan):
     """plan None (the planner): no per-run marks."""
     path = marks_path(plan) if plan is not None else None
-    stamp = os.stat(path).st_mtime_ns if path and os.path.exists(path) else None
+    # content, not mtime: two writes within the timer resolution (Windows) share an mtime
+    stamp = open(path, 'rb').read() if path and os.path.exists(path) else None
     key = (id(pipe), plan.get('id') if plan is not None else None, os.environ.get('RPG_FACTORY_AGENTS'), os.environ.get('PATH'), stamp)
     if key in _cache:
         return _cache[key]
