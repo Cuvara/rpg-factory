@@ -4,6 +4,13 @@
  "description": "Orthographic front/side/back reference sheet for 3D modelling.",
  "handoff_domain": "art3d",
  "default_template": "image-generate",
+ "default_family": "characters",
+ "dimensions": [
+  "shape",
+  "palette",
+  "line"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1536x1024",
   "background": "opaque",
@@ -11,7 +18,8 @@
  },
  "prompt": {
   "guidance": [
-   "Ask for an orthographic turnaround: front, side and back views side by side.",
+   "Ask for an orthographic turnaround: front, side and back views side by side on one compact landscape sheet (about 3:2, the requested size).",
+   "Each view fills most of the sheet height with small, even margins; never a long thin strip of small figures.",
    "Same scale, same pose (A-pose or T-pose for characters) and aligned baselines in every view.",
    "Plain light neutral background, flat lighting, no perspective."
   ],
@@ -25,7 +33,8 @@
    "perspective",
    "dramatic lighting",
    "cropped views",
-   "text labels"
+   "text labels",
+   "long thin strip of small views"
   ]
  },
  "prompt_rubric": [
@@ -43,10 +52,17 @@
   "All requested views are present and consistent in proportions.",
   "Views share scale and baseline; no perspective distortion."
  ],
+ "constraints": {
+  "lighting": "Flat, even lighting with no cast shadows, rim light or dramatic key light.",
+  "background": "Plain light neutral background."
+ },
  "qa": {
   "size": {
-   "mode": "min",
-   "expect": "1024x1024"
+   "mode": "orientation",
+   "orientation": "landscape",
+   "allow_swap": false,
+   "min_side": 512,
+   "min_pixels": 1000000
   },
   "alpha": "any",
   "not_blank": {

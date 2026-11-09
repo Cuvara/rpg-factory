@@ -4,6 +4,12 @@
  "description": "Seamless, opaque surface texture (albedo reference) for materials.",
  "handoff_domain": "art3d",
  "default_template": "image-generate",
+ "default_family": "environment",
+ "dimensions": [
+  "palette",
+  "texture"
+ ],
+ "max_references": 3,
  "params": {
   "size": "1024x1024",
   "background": "opaque",
@@ -43,10 +49,16 @@
   "No visible seam or repeating focal feature when tiled 2x2.",
   "Lighting is flat; no baked directional light."
  ],
+ "constraints": {
+  "lighting": "Even, flat lighting with no baked light direction and no cast shadows."
+ },
  "qa": {
   "size": {
-   "mode": "aspect",
-   "expect": "1024x1024"
+   "mode": "orientation",
+   "expect": "1024x1024",
+   "square_tolerance": 0.15,
+   "min_side": 512,
+   "min_pixels": 262144
   },
   "alpha": "forbidden",
   "tileable": {

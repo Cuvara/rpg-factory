@@ -1,0 +1,10 @@
+{
+ "schema": "rpg-factory.assetgen-precedence/1",
+ "note": "Who wins when a style hint and a purpose constraint name the same field (layers.resolve -> spec.hints). purpose: a technical constraint of the asset type; the purpose's constraints.<field> replaces the style's <field> and resolve marks the style hint overridden, so the prompt writer sees one value. style: taste only the style sets; a purpose may not constrain it (lint FAIL). Param precedence (size, background, quality) is separate: purpose params always beat style params.",
+ "hints": {
+  "lighting": "purpose",
+  "background": "purpose",
+  "framing": "purpose",
+  "palette": "style"
+ }
+}

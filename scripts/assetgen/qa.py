@@ -4,22 +4,46 @@ Per output PNG (results keyed by output path, rpg-factory.validation/1 states); 
 runfiles.required_checks(qa), which the gen-run quality plugin also requires as PASS rows:
   png-valid           decodes (Pillow when present, else the stdlib decoder; NOT_AVAILABLE when neither can)
   png-size            qa.size.mode: exact (= expect), min (width and height >= expect), aspect (ratio within
-                      aspect_tolerance, default 0.02, and the short side >= min_side, default 256), any.
-                      expect defaults to the requested size (workflow.json, else spec params); "auto" = any.
-                      The 9router gateway may return another size than requested, so exact is opt-in.
+                      aspect_tolerance, default 0.02, and, with min_area, width x height >= min_area x the expected
+                      pixel count), orientation (landscape, portrait or square: qa.size.orientation, or "auto" to
+                      take it from expect; square when the long side is at most square_tolerance, default 0.05,
+                      longer than the short side), area (no aspect at all), any.
+                      qa.size.allow_swap (default false): for aspect and for a landscape or portrait orientation,
+                      true also accepts the swapped size (1024x1536 for 1536x1024); false fails it. Each purpose
+                      declares it: the service may return the other orientation (e2e: 1024x1536 for 1536x1024).
+                      aspect, orientation and area also need the short side >= min_side (default 256) and, with
+                      min_pixels, width x height >= min_pixels (absolute). expect defaults to the requested size
+                      (workflow.json, else spec params); "auto" = any (orientation auto with expect auto too).
+                      The 9router image service ignores the requested size (e2e: 1672x941 returned for 1536x1024
+                      and 1024x1024 requests), so the core purposes grade orientation or area plus these floors.
   png-alpha           qa.alpha: required (alpha channel and some transparent pixels), forbidden (fully opaque), any
   png-corners         qa.transparent_corners: the four corner pixels have alpha <= 8
   png-tileable        qa.tileable.max_seam_error: wrap-around edge difference minus the interior
                       neighbour difference (0..1 scale) must stay at or under the limit
   png-not-blank       qa.not_blank: luminance stddev >= min_stddev (0..255) and, with alpha, the share of
                       pixels with alpha > 8 >= min_coverage
+  png-edge-fringe     only for qa.alpha required: imaging.edge_fringe (soft edge pixels, alpha 1-31 next to the
+                      opaque body, whose RGB is far from the body colour, the speckled fringe of e2e barrel-prop-001;
+                      body alpha 251-254 is noted, never graded). A required check for qa.alpha required (the last
+                      one in runfiles.required_checks), so the gen-run quality plugin rejects a qa.json without the
+                      row: FAIL makes the qa state FAIL like any other row; NOT_AVAILABLE (no alpha) comes with a
+                      png-alpha FAIL anyway. assetgen.py defringe repairs it.
   purpose-qa          FAIL (one row for outputs/, nothing graded) when the purpose qa block is malformed
                       (runfiles.qa_errors; the same rules lint reports)
+Style consistency rows (only for a spec with style_lock; consistency.check_all over the style data spec.style.data,
+the purpose data, spec.style_lock.family and the run's copies of the selected anchors, references/anchor-<id>.png
+of spec.style_lock.references; a missing or undecodable copy is left out, so tone is NOT_AVAILABLE without one):
+  style-palette, style-tone, style-edges, style-canvas  PASS, WARN, FAIL or NOT_AVAILABLE (consistency.py). They are
+                      never required checks (runfiles.required_checks is unchanged): WARN and NOT_AVAILABLE do not
+                      change the qa state, a style FAIL row (the style field sets severity fail) makes it FAIL.
+A spec without style_lock (resolved before the style lock) gets no style rows: its qa.json is what it was.
 """
 import hashlib
 import math
 import os
 
+import consistency
+import imaging
 import png
 import runfiles
 
@@ -46,23 +70,68 @@ def parse_size(text):
     return (w, h) if w > 0 and h > 0 else None
 
 
+def orientation_of(w, h, tol):
+    if max(w, h) <= min(w, h) * (1 + tol):
+        return "square"
+    return "landscape" if w > h else "portrait"
+
+
+def floor_detail(img, cfg):
+    """The absolute floors of aspect, orientation and area: short side >= min_side (default 256), with min_pixels
+    width x height >= min_pixels. Returns (ok, detail parts)."""
+    side, area = min(img.width, img.height), img.width * img.height
+    min_side, min_pixels = cfg.get("min_side", 256), cfg.get("min_pixels")
+    ok = side >= min_side and (min_pixels is None or area >= min_pixels)
+    detail = ["short side %d (min %d)" % (side, min_side)]
+    if min_pixels is not None:
+        detail.append("area %d px (min %d)" % (area, min_pixels))
+    return ok, detail
+
+
 def check_size(img, cfg, requested):
     mode = cfg.get("mode", "any")
+    got = "%dx%d" % (img.width, img.height)
+    if mode == "area":
+        ok, detail = floor_detail(img, cfg)
+        return ("PASS" if ok else "FAIL"), ["%s, expected area (any aspect): %s" % (got, ", ".join(detail))]
     raw = cfg.get("expect", requested)
     expect = parse_size(raw)
-    got = "%dx%d" % (img.width, img.height)
+    want_orient = cfg.get("orientation", "auto")
+    if mode == "orientation" and want_orient != "auto":
+        raw, expect = "%s orientation" % want_orient, (0, 0)  # the expected size plays no part
     if mode != "any" and expect is None and raw != "auto":
         return "FAIL", ["%s, expected size %r is not WIDTHxHEIGHT with positive dimensions" % (got, raw)]
     if mode == "any" or expect is None:
         return "PASS", ["%s (size mode any%s)" % (got, "" if mode == "any" else ", expected size auto")]
     ew, eh = expect
+    swap = cfg.get("allow_swap") is True
     if mode == "exact":
         ok = (img.width, img.height) == expect
     elif mode == "min":
         ok = img.width >= ew and img.height >= eh
+    elif mode == "orientation":
+        tol = cfg.get("square_tolerance", 0.05)
+        want = want_orient if want_orient != "auto" else orientation_of(ew, eh, tol)
+        have = orientation_of(img.width, img.height, tol)
+        ok, detail = floor_detail(img, cfg)
+        swapped = {"landscape": "portrait", "portrait": "landscape"}.get(want) == have
+        ok = ok and (have == want or (swapped and swap))
+        source = "" if want_orient != "auto" else " (from %dx%d)" % (ew, eh)
+        if swapped:
+            source += ", swap %s (qa.size.allow_swap)" % ("accepted" if swap else "not accepted")
+        return ("PASS" if ok else "FAIL"), ["%s is %s, expected orientation %s%s (square within %d%%): %s"
+                                            % (got, have, want, source, round(tol * 100), ", ".join(detail))]
     else:
-        tol, min_side = cfg.get("aspect_tolerance", 0.02), cfg.get("min_side", 256)
-        ok = abs(img.width / img.height - ew / eh) <= tol * (ew / eh) and min(img.width, img.height) >= min_side
+        tol, min_area = cfg.get("aspect_tolerance", 0.02), cfg.get("min_area")
+        ratio, want = img.width / img.height, ew / eh
+        ok, floors = floor_detail(img, cfg)
+        fits = abs(ratio - want) <= tol * want or (swap and abs(1 / ratio - want) <= tol * want)
+        ok = ok and fits and (min_area is None or img.width * img.height >= min_area * ew * eh)
+        detail = ["aspect %.3f (expected %.3f +/- %d%%%s)" % (ratio, want, round(tol * 100), ", or swapped" if swap else "")]
+        if min_area is not None:
+            detail.append("area %d px (min %d%% of %d)" % (img.width * img.height, round(min_area * 100), ew * eh))
+        detail += floors
+        return ("PASS" if ok else "FAIL"), ["%s, expected %s %dx%d: %s" % (got, mode, ew, eh, ", ".join(detail))]
     return ("PASS" if ok else "FAIL"), ["%s, expected %s %dx%d" % (got, mode, ew, eh)]
 
 
@@ -128,6 +197,23 @@ def check_not_blank(img, cfg):
     return ("PASS" if ok else "FAIL"), ["luminance stddev %.2f (min %.2f), coverage %.1f%% (min %.1f%%)" % (std, min_std, cover * 100, min_cov * 100)]
 
 
+def style_anchors(run_dir, spec):
+    """tone_stats of the decodable run copies of the selected anchors, in selection order."""
+    stats = []
+    for pick in runfiles.style_lock_references(spec):
+        image = pick.get("image")
+        path = os.path.join(run_dir, *image.split("/")) if isinstance(image, str) and image else None
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            tone = consistency.tone_stats(png.decode(path))
+        except (png.Invalid, png.Unsupported, OSError):
+            continue
+        if tone is not None:
+            stats.append(tone)
+    return stats
+
+
 def run_qa(run_dir, spec, requested_size):
     """(results, outputs) for every outputs/*.png of the run."""
     purpose = spec.get("purpose") if isinstance(spec, dict) else None
@@ -146,6 +232,10 @@ def run_qa(run_dir, spec, requested_size):
 
     def add(rel, check, verdict):
         results.append({"output": rel, "check": check, "state": verdict[0], "reasons": verdict[1]})
+    lock = spec.get("style_lock") if isinstance(spec.get("style_lock"), dict) else None
+    style = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    style_data = style.get("data") if isinstance(style.get("data"), dict) else {}
+    anchors = style_anchors(run_dir, spec) if lock is not None else []
     for name in files:
         rel, path = "outputs/" + name, os.path.join(out_dir, name)
         item = {"path": rel, "sha256": sha256(path)}
@@ -164,12 +254,24 @@ def run_qa(run_dir, spec, requested_size):
                   "png-alpha": lambda: check_alpha(img, qa.get("alpha", "any")),
                   "png-corners": lambda: check_corners(img),
                   "png-tileable": lambda: check_tileable(img, qa["tileable"].get("max_seam_error", 0.06)),
-                  "png-not-blank": lambda: check_not_blank(img, qa["not_blank"])}
+                  "png-not-blank": lambda: check_not_blank(img, qa["not_blank"]),
+                  "png-edge-fringe": lambda: imaging.edge_fringe(img)}
         for name_ in runfiles.required_checks(qa)[1:]:  # png-valid is the first required check, added above
             add(rel, name_, checks[name_]())
+        if lock is not None:
+            family = lock.get("family") if isinstance(lock.get("family"), str) else None
+            for row, state, details in consistency.check_all(img, style_data, data, family, anchors):
+                add(rel, row, (state, details))
     return results, outputs
 
 
+def is_style_row(row):
+    return str(row.get("check", "")).startswith("style-")
+
+
 def overall(results):
+    """FAIL when any row is FAIL; NOT_AVAILABLE when a non-style row is; style WARN and NOT_AVAILABLE never count."""
     states = {r["state"] for r in results}
-    return "FAIL" if "FAIL" in states else ("NOT_AVAILABLE" if "NOT_AVAILABLE" in states else "PASS")
+    if "FAIL" in states:
+        return "FAIL"
+    return "NOT_AVAILABLE" if any(r["state"] == "NOT_AVAILABLE" for r in results if not is_style_row(r)) else "PASS"

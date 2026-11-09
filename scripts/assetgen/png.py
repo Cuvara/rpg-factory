@@ -12,6 +12,17 @@ encode(width, height, rgba, alpha=True) -> PNG bytes (8-bit RGBA, or RGB when al
 encode_raw(width, height, bit_depth, color_type, rows, interlace=0, extra=()) -> PNG bytes from raw scanline bytes
   (test fixtures: formats the stdlib decoder does not handle; extra [(type, body)] chunks such as PLTE and tRNS go
   before IDAT).
+text_keywords(data) -> the keywords of the tEXt, zTXt and iTXt chunks of PNG bytes (raises Invalid).
+add_text(data, keyword, text) -> the PNG bytes with a tEXt chunk keyword=text inserted right before IEND (CRC set;
+  every other chunk, and anything after IEND, kept byte for byte). text must be Latin-1 (JSON with ensure_ascii).
+tile_2x2(img, gray=False) -> PNG bytes of the Image repeated 2x2: a seam preview for tileable textures. 8-bit RGBA;
+  with gray=True (a grayscale source) and R = G = B everywhere, 8-bit gray+alpha (gray when it has no alpha).
+is_gray(rgba) -> True when every pixel of RGBA bytes has R = G = B.
+encode_gray(width, height, rgba, alpha=True) -> PNG bytes (8-bit gray+alpha, or gray when alpha=False; filter 0) of
+  RGBA bytes whose pixels all have R = G = B (else ValueError).
+gray_type(color_type) -> True for the grayscale colour types (0 gray, 4 gray+alpha).
+icc_space(body) -> the colour space signature (ICC header bytes 16-19, e.g. b"GRAY", b"RGB ") of an iCCP chunk body,
+  None when it cannot be read (no NUL-terminated name, compression method other than 0, bad zlib data, short header).
 """
 import os
 import struct
@@ -205,3 +216,69 @@ def encode(width, height, rgba, alpha=True):
         line = rgba[y * width * 4:(y + 1) * width * 4]
         rows.append(line if alpha else bytes(b for i, b in enumerate(line) if i % 4 != 3))
     return encode_raw(width, height, 8, 6 if n == 4 else 2, rows)
+
+
+def is_gray(rgba):
+    r = rgba[0::4]
+    return r == rgba[1::4] == rgba[2::4]
+
+
+def encode_gray(width, height, rgba, alpha=True):
+    if not is_gray(rgba):
+        raise ValueError("encode_gray needs R = G = B in every pixel")
+    n = 2 if alpha else 1
+    px = bytearray(width * height * n)
+    px[0::n] = rgba[0::4]
+    if alpha:
+        px[1::2] = rgba[3::4]
+    stride = width * n
+    rows = [px[y * stride:(y + 1) * stride] for y in range(height)]
+    return encode_raw(width, height, 8, 4 if alpha else 0, rows)
+
+
+def gray_type(color_type):
+    return color_type in (0, 4)
+
+
+def icc_space(body):
+    _name, sep, rest = body.partition(b"\0")
+    if not sep or not rest or rest[0] != 0:
+        return None
+    try:
+        profile = zlib.decompressobj().decompress(rest[1:], 20)
+    except zlib.error:
+        return None
+    return profile[16:20] if len(profile) >= 20 else None
+
+
+TEXT_CHUNKS = (b"tEXt", b"zTXt", b"iTXt")
+
+
+def text_keywords(data):
+    return {body.split(b"\0", 1)[0].decode("latin-1") for ctype, body in chunks(data) if ctype in TEXT_CHUNKS}
+
+
+def add_text(data, keyword, text):
+    key = keyword.encode("latin-1")
+    if not 1 <= len(key) <= 79 or b"\0" in key:
+        raise ValueError("tEXt keyword must be 1-79 Latin-1 bytes without NUL")
+    body = key + b"\0" + text.encode("latin-1")
+    pos = 8
+    for ctype, cbody in chunks(data):  # validates signature, lengths and CRCs up to IEND
+        if ctype == b"IEND":
+            return data[:pos] + chunk(b"tEXt", body) + data[pos:]
+        pos += 12 + len(cbody)
+    raise Invalid("missing IEND")
+
+
+def tile_2x2(img, gray=False):
+    if gray and is_gray(img.rgba):
+        alpha = img.has_alpha or min(img.rgba[3::4]) < 255
+        return encode_gray(img.width * 2, img.height * 2, tile_rgba(img), alpha)
+    return encode(img.width * 2, img.height * 2, tile_rgba(img))
+
+
+def tile_rgba(img):
+    stride = img.width * 4
+    rows = [img.rgba[y * stride:(y + 1) * stride] * 2 for y in range(img.height)]
+    return b"".join(rows + rows)

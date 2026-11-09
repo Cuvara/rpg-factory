@@ -4,6 +4,12 @@
  "description": "Edit or restyle an existing image given as a reference image.",
  "handoff_domain": "art2d",
  "default_template": "image-edit",
+ "dimensions": [
+  "palette",
+  "lighting",
+  "texture"
+ ],
+ "max_references": 3,
  "params": {
   "size": "auto",
   "background": "auto",
@@ -39,7 +45,9 @@
  ],
  "qa": {
   "size": {
-   "mode": "any"
+   "mode": "area",
+   "min_side": 512,
+   "min_pixels": 262144
   },
   "alpha": "any",
   "not_blank": {

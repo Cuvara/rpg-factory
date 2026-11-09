@@ -1,6 +1,8 @@
 {
  "schema": "rpg-factory.assetgen-style/1",
  "title": "Anime cel-shaded",
+ "version": 1,
+ "status": "active",
  "prefix": "Anime style cel-shaded game art,",
  "suffix": "clean line art, two-tone cel shading, vivid colors.",
  "avoid": [

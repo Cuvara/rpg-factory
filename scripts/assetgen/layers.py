@@ -9,6 +9,12 @@ A game file with a core id and no "extends" replaces the core entry (override). 
 "extends": "<id>" is deep-merged onto that entry (objects merge key by key, the game wins; lists and scalars are
 replaced). "extends" naming its own id means the core entry of that id; any other id resolves in the game layer
 first, then core. Every leaf of the merged data records the file it came from (sources: dotted path -> label).
+
+Style hints versus purpose constraints (data/precedence.json): a field marked "purpose" there (lighting, background,
+framing) is a technical constraint; a purpose's constraints.<field> replaces the style's <field>, and resolve records
+spec.hints.<field> = {text, from: purpose, source, overrides: {text, source}} so the prompt writer uses one value and
+sees the style hint marked overridden. A "style" field (palette) is taste only the style sets. A style field may be
+prose (a string) or a structured object (stylelock.py); its hint is the object's `text`.
 """
 import hashlib
 import json
@@ -24,8 +30,17 @@ KINDS = {
 }
 
 
+PRECEDENCE = os.path.join(HERE, "data", "precedence.json")
+
+
 class SpecError(Exception):
     pass
+
+
+def precedence():
+    """{field: "purpose"|"style"} from data/precedence.json."""
+    with open(PRECEDENCE, encoding="utf-8") as f:
+        return json.load(f)["hints"]
 
 
 def canonical(obj):
@@ -176,9 +191,30 @@ def resolve(purpose, style=None, template=None, authoring=None):
     for prefix, entry in (("purpose", p), ("style", s), ("template", t)):
         for path, src in entry["sources"].items():
             sources[prefix + "." + path] = src
+    hints = resolve_hints(p, s)
 
     def ref(e):
         return {"id": e["id"], "layer": e["layer"], "files": e["files"], "sha256": content_hash(e["data"]), "data": e["data"]}
     return {"schema": "rpg-factory.assetgen-spec/1", "authoring": os.path.abspath(authoring) if authoring else None,
             "purpose": ref(p), "style": ref(s), "template": ref(t),
-            "params": params, "param_sources": param_sources, "sources": sources}
+            "params": params, "param_sources": param_sources, "hints": hints, "sources": sources}
+
+
+def resolve_hints(p, s):
+    """spec.hints: the one text per hint field the prompt writer uses (see the module docstring)."""
+    constraints = p["data"].get("constraints")
+    constraints = constraints if isinstance(constraints, dict) else {}
+    hints = {}
+    for field, winner in sorted(precedence().items()):
+        style_value, purpose_text = s["data"].get(field), constraints.get(field)
+        # a structured style field (palette, lighting, ...) is an object whose hint is its text
+        style_text = style_value.get("text") if isinstance(style_value, dict) else style_value
+        style_src = s["sources"].get(field + ".text" if isinstance(style_value, dict) else field, "style")
+        purpose_src = p["sources"].get("constraints." + field, "purpose")
+        if winner == "purpose" and isinstance(purpose_text, str) and purpose_text:
+            hints[field] = {"text": purpose_text, "from": "purpose", "source": purpose_src}
+            if isinstance(style_text, str) and style_text:
+                hints[field]["overrides"] = {"text": style_text, "source": style_src}
+        elif isinstance(style_text, str) and style_text:
+            hints[field] = {"text": style_text, "from": "style", "source": style_src}
+    return hints

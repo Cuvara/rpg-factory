@@ -1,6 +1,8 @@
 {
  "schema": "rpg-factory.assetgen-style/1",
  "title": "Pixel art",
+ "version": 1,
+ "status": "active",
  "prefix": "Clean pixel art game asset,",
  "suffix": "crisp pixels, limited palette, no anti-aliasing blur.",
  "avoid": [

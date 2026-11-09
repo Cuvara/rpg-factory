@@ -7,25 +7,53 @@ read_verdict(path, phase) -> {by, state, findings, prompt_sha256, requirements_s
   PASS or FAIL is found. The binding fields are what review-cmd told the reviewer to copy back unchanged: the
   sha256 of the prompt it reviewed and the requirements_sha256 it judged against (both phases) and, for the image
   phase, [{path, sha256}] of the images it saw. A verdict without them, or with other values than the run's
-  current prompt, requirements and outputs, is unbound or stale.
+  current prompt, requirements and outputs, is unbound or stale. With the style lock the image binding also names
+  "style" (the style ref) and "anchors" ([{anchor_id, sha256}] of the anchors attached); an image verdict that carries
+  them keeps them ({"style": dict or None, "anchors": [...]}), a verdict without them has neither key (older runs keep
+  their shape).
 requirements_sha256(spec, generation=None) -> sha256 of the canonical JSON (sorted keys, compact separators) of
-  {purpose, style, template: their content sha256, params: the resolved params, generation: generation}. generation
-  is None for the prompt review and generation_inputs(workflow, spec) for the image review. Works on spec.json
-  (resolved refs carry sha256) and on run.md's spec block (manifest copies the refs and params); malformed input
-  still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
-  params or the rendered generation inputs changed is stale.
+  {purpose, style, template: their content sha256, params: spec params, generation: generation}. generation
+  is None for the prompt review and generation_inputs(workflow, spec) for the image review. A review binding passes
+  the spec with the rendered params (rendered_params: what the review prompt shows), so a render --param that changes
+  a param after a review makes it stale. Works on spec.json (resolved refs carry sha256) and on run.md's spec block
+  (manifest copies the refs and the rendered params); malformed input still gives a hash. A review made before the purpose (rubric, qa, ...), the style, the template, the resolved
+  params or the rendered generation inputs changed is stale. Only when the spec carries style_lock (resolve with the
+  style lock) does the object also hold {"style_lock": style_lock_binding(spec)}: the style ref, the family, the anchor
+  hashes and the relevant rejections (id and content hash), so a review made before the family or the rejection set
+  changed is stale too; a spec or run.md written before the style lock hashes exactly as it did.
 generation_inputs(workflow, spec, locate=None) -> the effective inputs the images were generated with: the whole
   workflow.json graph, prompts included (a workflow re-rendered with another prompt is stale; the plugin also checks
   that the 9router prompt inputs equal the recorded prompt), so every render --param override is bound, plus {"references": {name: sha256}} for every LoadImage input; locate(name) gives the
-  path of the run's copy references/<name> (None or a missing file -> null). Without a workflow: the spec params.
+  path of the run's copy references/<name> (None or a missing file -> null); style-lock anchors are LoadImage inputs
+  anchor-<id>.png, so their copies are bound by content. With spec.style_lock it also holds {"anchors": [{anchor_id,
+  sha256}]} of the selected references (absent otherwise). Without a workflow: the spec params.
+rendered_params(workflow, spec) -> (params, source): spec.json params with each template param read back from the
+  rendered workflow.json (source "workflow.json"; "spec.json" without a workflow). manifest records them as run.md
+  spec.params, the review prompts show them, and the review bindings and the plugin hash them.
+typed_param(name, decl, value) -> value coerced to its template param type (ValueError naming the param).
+style_lock_binding(spec) -> {"style", "family", "references": [anchor sha256...], "rejections": [{id, sha256}]} of
+  spec.style_lock (sha256 of a rejection: canonical JSON of its spec.style_lock entry), or None for a spec without it.
+style_lock_references(spec) -> the selected anchor picks of spec.style_lock ([] without it).
+workflow_prompts(workflow) -> the prompts the 9router nodes send: their user_prompt, or the value of the prompt node
+  (PrimitiveStringMultiline) it links to.
+run_filename_prefix(run_id) -> assetgen/<run_id>, the SaveImage filename_prefix every record of the run carries.
 reference_names(workflow) -> the LoadImage input names of a workflow (image-edit references).
 required_checks(purpose_qa) -> the QA check names every output must carry for that purpose qa block (qa.py runs
-  exactly these; the plugin requires a PASS row for each). Malformed input never raises.
+  exactly these; the plugin requires a PASS row for each): png-edge-fringe comes last, only for qa.alpha required.
+  Malformed input never raises.
 qa_errors(purpose_qa) -> what is malformed in a purpose qa block ([] when valid). lint reports these, qa.py grades a
   run whose purpose qa block is malformed FAIL instead of guessing, and the plugin fails such a run.
 requested_size(workflow, spec) -> the size the run asked for: the NineRouterImage size input of workflow.json, else
   the resolved spec's size param, else "auto". qa.json records it next to the purpose content hash it graded with
   (purpose_sha256), so a QA report made before the size or the purpose qa block changed is stale.
+qa_style_binding(spec, locate) -> what the style consistency rows of qa.py evaluate besides the purpose and the output
+  bytes, or None for a spec without style_lock (no style rows): {"style": spec.style_lock.style (the style ref: id,
+  version, sha256), "style_sha256": sha256 of the canonical JSON of the effective style data spec.style.data (what
+  consistency.py reads; {} when it is not an object), "family": spec.style_lock.family (None when not a string),
+  "anchors": [{anchor_id, path, sha256}] of the selected anchors in selection order, path = the pick's image
+  (references/anchor-<id>.png) and sha256 = the bytes of locate(path), the run copy qa.py reads for style-tone (null
+  when it is missing)}. qa.json records it as style_binding and the plugin recomputes it from spec.json and the run's
+  files, so a QA report graded before the style data or version, the family or an anchor copy changed is stale.
 """
 import hashlib
 import json
@@ -34,8 +62,10 @@ import re
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")  # positive dimensions only
-SIZE_MODES = {"exact", "min", "aspect", "any"}
+SIZE_MODES = {"exact", "min", "aspect", "orientation", "area", "any"}
+ORIENTATIONS = {"landscape", "portrait", "square", "auto"}
 ALPHA_MODES = {"required", "forbidden", "any"}
+PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 def required_checks(purpose_qa):
@@ -47,6 +77,8 @@ def required_checks(purpose_qa):
         checks.append("png-tileable")
     if qa.get("not_blank") is not None:
         checks.append("png-not-blank")
+    if qa.get("alpha") == "required":
+        checks.append("png-edge-fringe")
     return checks
 
 
@@ -71,6 +103,16 @@ def qa_errors(qa):
             errs.append("qa.size.aspect_tolerance must be a number between 0 and 1")
         if "min_side" in size and not (_number(size["min_side"]) and size["min_side"] >= 0):
             errs.append("qa.size.min_side must be a number >= 0")
+        if "min_area" in size and not (_number(size["min_area"]) and 0 < size["min_area"] <= 1):
+            errs.append("qa.size.min_area must be a number above 0 and at most 1 (share of the expected pixel count)")
+        if "min_pixels" in size and not (_number(size["min_pixels"]) and size["min_pixels"] >= 1):
+            errs.append("qa.size.min_pixels must be a number >= 1 (absolute pixel count)")
+        if size.get("orientation", "auto") not in ORIENTATIONS:
+            errs.append("qa.size.orientation must be one of %s" % sorted(ORIENTATIONS))
+        if "square_tolerance" in size and not (_number(size["square_tolerance"]) and 0 <= size["square_tolerance"] < 1):
+            errs.append("qa.size.square_tolerance must be a number between 0 and 1")
+        if "allow_swap" in size and not isinstance(size["allow_swap"], bool):
+            errs.append("qa.size.allow_swap must be true or false")
     if qa.get("alpha", "any") not in ALPHA_MODES:
         errs.append("qa.alpha must be one of %s" % sorted(ALPHA_MODES))
     if not isinstance(qa.get("transparent_corners", False), bool):
@@ -94,14 +136,31 @@ def qa_errors(qa):
 
 
 PROMPT_NODES = ("NineRouterImage", "NineRouterChat")
+TEXT_NODES = ("PrimitiveStringMultiline", "PrimitiveString")  # a prompt node: its "value" is the text it outputs
+RUN_PREFIX = "assetgen/"
+
+
+def run_filename_prefix(run_id):
+    """The one filename_prefix of a run: resolve writes it into <run>/spec.json, render, the review prompts and run.md
+    read it from there."""
+    return RUN_PREFIX + run_id
 
 
 def workflow_prompts(workflow):
-    """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent)."""
+    """The user_prompt inputs of the 9router nodes of a workflow (what was actually sent); a link to a prompt node
+    (TEXT_NODES) gives that node's value, any other link stays as the link."""
     if not isinstance(workflow, dict):
         return []
-    return [n["inputs"].get("user_prompt") for n in workflow.values() if isinstance(n, dict)
-            and n.get("class_type") in PROMPT_NODES and isinstance(n.get("inputs"), dict)]
+    out = []
+    for n in workflow.values():
+        if not (isinstance(n, dict) and n.get("class_type") in PROMPT_NODES and isinstance(n.get("inputs"), dict)):
+            continue
+        v = n["inputs"].get("user_prompt")
+        src = workflow.get(v[0]) if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str) else None
+        if isinstance(src, dict) and src.get("class_type") in TEXT_NODES and isinstance(src.get("inputs"), dict):
+            v = src["inputs"].get("value")
+        out.append(v)
+    return out
 
 
 def reference_names(workflow):
@@ -137,9 +196,114 @@ def generation_inputs(workflow, spec, locate=None):
                 refs[name] = _file_sha256(locate(os.path.basename(name)) if locate else None)
             except (OSError, TypeError, ValueError):
                 refs[name] = None
-        return {"graph": graph, "references": refs}
+        out = {"graph": graph, "references": refs}
+        lock = style_lock_binding(spec)
+        if lock is not None:
+            out["anchors"] = [{"anchor_id": r.get("anchor_id"), "sha256": r.get("sha256")} for r in style_lock_references(spec)]
+        return out
     params = spec.get("params") if isinstance(spec, dict) else None
     return params if isinstance(params, dict) else {}
+
+
+def style_lock_references(spec):
+    lock = spec.get("style_lock") if isinstance(spec, dict) else None
+    refs = lock.get("references") if isinstance(lock, dict) else None
+    return [r for r in refs if isinstance(r, dict)] if isinstance(refs, list) else []
+
+
+def _canonical_sha256(obj):
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def style_lock_binding(spec):
+    lock = spec.get("style_lock") if isinstance(spec, dict) else None
+    if not isinstance(lock, dict):
+        return None
+    rej = lock.get("rejections")
+    rejections = [{"id": r.get("id"), "sha256": _canonical_sha256(r)} for r in rej if isinstance(r, dict)]         if isinstance(rej, list) else []
+    return {"style": lock.get("style"), "family": lock.get("family"),
+            "references": [r.get("sha256") for r in style_lock_references(spec)], "rejections": rejections}
+
+
+def qa_style_binding(spec, locate):
+    lock = spec.get("style_lock") if isinstance(spec, dict) else None
+    if not isinstance(lock, dict):
+        return None
+    style = spec.get("style") if isinstance(spec.get("style"), dict) else {}
+    data = style.get("data") if isinstance(style.get("data"), dict) else {}
+    anchors = []
+    for pick in style_lock_references(spec):
+        image = pick.get("image") if isinstance(pick.get("image"), str) and pick.get("image") else None
+        try:
+            digest = _file_sha256(locate(image)) if image else None
+        except (OSError, TypeError, ValueError):
+            digest = None
+        anchors.append({"anchor_id": pick.get("anchor_id"), "path": image, "sha256": digest})
+    return {"style": lock.get("style"), "style_sha256": _canonical_sha256(data),
+            "family": lock.get("family") if isinstance(lock.get("family"), str) else None, "anchors": anchors}
+
+
+def typed_param(name, decl, value):
+    """value coerced to the param type of its template declaration; raises ValueError naming the param."""
+    t = decl.get("type")
+    if t == "int" and not isinstance(value, int):
+        value = int(value)
+    elif t == "number" and not isinstance(value, (int, float)):
+        value = float(value)
+    elif t == "bool" and not isinstance(value, bool):
+        if str(value).lower() not in ("true", "false"):
+            raise ValueError("param %s: expected true or false, got %r" % (name, value))
+        value = str(value).lower() == "true"
+    elif t in ("string", "enum"):
+        value = str(value)
+    if t == "enum" and value not in decl.get("options", []):
+        raise ValueError("param %s: %r is not one of %s" % (name, value, decl.get("options")))
+    return value
+
+
+def rendered_params(workflow, spec):
+    """(params, source): the resolved spec params with each template param the template workflow places read back from
+    workflow (a whole "{{name}}" value as is, a placeholder inside a string by matching the template string), so a
+    render --param shows. source is "workflow.json", or "spec.json" without a workflow. The prompt is not a param here."""
+    spec = spec if isinstance(spec, dict) else {}
+    params = dict(spec["params"]) if isinstance(spec.get("params"), dict) else {}
+    tmpl = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    data = tmpl.get("data") if isinstance(tmpl.get("data"), dict) else {}
+    if not isinstance(workflow, dict) or not isinstance(data.get("workflow"), dict):
+        return params, "spec.json"
+    declared = data.get("params") if isinstance(data.get("params"), dict) else {}
+    found = {}
+
+    def walk(t, r):
+        if isinstance(t, dict) and isinstance(r, dict):
+            for k, v in t.items():
+                if k in r:
+                    walk(v, r[k])
+        elif isinstance(t, list) and isinstance(r, list) and len(t) == len(r):
+            for a, b in zip(t, r):
+                walk(a, b)
+        elif isinstance(t, str):
+            whole = PLACEHOLDER.fullmatch(t.strip())
+            if whole:
+                found.setdefault(whole.group(1), r)
+                return
+            names = PLACEHOLDER.findall(t)
+            if names and isinstance(r, str):
+                pattern = "".join("(.*?)" if i % 2 else re.escape(part)
+                                  for i, part in enumerate(PLACEHOLDER.split(t)))
+                m = re.fullmatch(pattern, r, re.S)
+                for name, value in zip(names, m.groups() if m else ()):
+                    found.setdefault(name, value)
+    walk(data["workflow"], workflow)
+    for name, value in found.items():
+        if name == "prompt" or not isinstance(declared.get(name), dict):
+            continue
+        try:
+            params[name] = typed_param(name, declared[name], value)
+        except (ValueError, TypeError):
+            params[name] = value
+    return params, "workflow.json"
 
 
 def requirements_sha256(spec, generation=None):
@@ -151,8 +315,10 @@ def requirements_sha256(spec, generation=None):
     params = spec.get("params")
     obj = {"purpose": ref("purpose"), "style": ref("style"), "template": ref("template"),
            "params": params if isinstance(params, dict) else {}, "generation": generation}
-    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    lock = style_lock_binding(spec)
+    if lock is not None:  # only with the style lock: older specs keep their hash
+        obj["style_lock"] = lock
+    return _canonical_sha256(obj)
 
 
 def requested_size(workflow, spec):
@@ -195,7 +361,18 @@ def read_verdict(path, phase):
         v = obj.get(key)
         return v if isinstance(v, str) and SHA256.match(v) else None
     findings = obj.get("findings")
-    return {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
-            "findings": len(findings) if isinstance(findings, list) else 0,
-            "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
-            "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}
+    out = {"by": obj.get("by") if isinstance(obj.get("by"), str) and obj.get("by") else None, "state": obj["state"],
+           "findings": len(findings) if isinstance(findings, list) else 0,
+           "prompt_sha256": digest("prompt_sha256"), "requirements_sha256": digest("requirements_sha256"),
+           "outputs": _outputs(obj.get("outputs")) if phase == "image" else []}
+    if phase == "image" and ("style" in obj or "anchors" in obj):
+        out["style"] = obj.get("style") if isinstance(obj.get("style"), dict) else None
+        out["anchors"] = _anchors(obj.get("anchors"))
+    return out
+
+
+def _anchors(value):
+    if not isinstance(value, list):
+        return []
+    return [{"anchor_id": a.get("anchor_id"), "sha256": a.get("sha256")} for a in value
+            if isinstance(a, dict) and isinstance(a.get("anchor_id"), str) and isinstance(a.get("sha256"), str)]

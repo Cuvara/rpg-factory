@@ -194,6 +194,26 @@ if state!="HUMAN_REQUIRED": raise SystemExit(1)
 PY
 result=$?
 if [ "$result" -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# an approval record on disk that is not committed yet: "approval present but not committed/signed" (the gen-run-style
+# phrase), still HUMAN_REQUIRED; no record file for the artifact stays "missing approval"
+pending_case() { # name: fresh|both|record|absent
+  local U="$T/pending-$1"; mkdir -p "$U"; git -C "$U" init -q -b main
+  git -C "$U" config user.name Fixture; git -C "$U" config user.email fixture@example.test
+  if [ "$1" != fresh ]; then python3 "$T/make.py" "$U" draft; git -C "$U" add spec.md; git -C "$U" commit -qm draft; fi
+  python3 "$T/make.py" "$U" approved
+  [ "$1" = record ] || [ "$1" = absent ] && { git -C "$U" add spec.md; git -C "$U" commit -qm approved; }
+  if [ "$1" != absent ]; then
+    local r; r=$(git -C "$U" hash-object -- spec.md); mkdir -p "$U/approvals/FX-test-001"
+    printf '{"artifact":"FX-test-001","gate":"review","scope":"fixture","rev":"%s","by":"fixture-approver","date":"2026-11-08"}\n' "$r" > "$U/approvals/FX-test-001/review-$r.json"
+  fi
+  local before; before=$(git -C "$U" status --porcelain --untracked-files=all; git -C "$U" rev-parse HEAD 2>/dev/null)
+  python3 -B "$ROOT/scripts/checks/artifact-trace.py" "$U" --registry "$T/reg.json" --repos product="$P" | head -1
+  [ "$before" = "$(git -C "$U" status --porcelain --untracked-files=all; git -C "$U" rev-parse HEAD 2>/dev/null)" ] || echo 'artifact-trace changed the repo'
+}
+for shape in fresh both record; do
+  got=$(pending_case "$shape"); [[ "$got" == 'HUMAN_REQUIRED FX-test-001 approval present but not committed/signed' ]] && ok "approval record on disk, not committed ($shape) is present but not committed/signed" || bad "pending approval $shape: $got"
+done
+got=$(pending_case absent); [[ "$got" == 'HUMAN_REQUIRED FX-test-001 missing approval' ]] && ok 'no approval record file stays missing approval' || bad "absent approval: $got"
 # asset manifest records: anyOf (source_rev or hash) must not short-circuit the other schema rules
 A="$T/assets"; mkdir -p "$A"; git -C "$A" init -q -b main
 asset() { # name json-patch
