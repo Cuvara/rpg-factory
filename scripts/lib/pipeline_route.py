@@ -180,11 +180,39 @@ def suite_command(suite):
     return 'env -u TMPDIR ' + ('python3 -B ' if suite.endswith('.py') else 'bash ') + suite
 
 
+def strip_comments(check):
+    """The check without its shell comments: an unquoted, unescaped `#` that starts a word comments out the rest of its
+    line, never the newline (command boundaries survive). None on unbalanced quotes or a trailing backslash (unsure)."""
+    out, quote, i, n = [], None, 0, len(check)
+    while i < n:
+        c = check[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == '\\':
+            if i + 1 >= n:
+                return None
+            out.append(check[i:i + 2])
+            i += 2
+            continue
+        elif quote == '"':
+            quote = None if c == '"' else quote
+        elif c in '\'"':
+            quote = c
+        elif c == '#' and (not out or out[-1][-1:].isspace() or out[-1][-1:] in SHELL_PUNCT):
+            while i < n and check[i] not in '\n\r':
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return None if quote else ''.join(out)
+
+
 def runall_words(check):
     """The arguments of a check that is exactly one standalone run-all invocation (an optional `env [-u VAR]... [VAR=x]...`
     and `bash` prefix), else None. A compound command (&&, ||, ;, |, redirection, subshell, substitution) is None:
-    it stays one complete extra command, never split or dropped."""
-    if COMPOUND.search(check):
+    it stays one complete extra command, never split or dropped. Comments are dropped first (`# --affected` is no flag)."""
+    check = strip_comments(check)
+    if check is None or COMPOUND.search(check):
         return None
     try:
         words = shlex.split(check)
@@ -268,9 +296,13 @@ def full_run(check):
     """A check that starts a full run-all: one command of it (standalone or a part of a compound command) runs
     tests/run-all.sh without --affected or --only-suites. Shell operators and redirections split words even without
     spaces (`tests/run-all.sh>qa.log`, `2>&1`, `|tee`); a redirection target is no argument; a quoted word (`bash -c
-    '...'`) or an assignment value is checked as a command of its own. Unbalanced quotes: any run-all inside is full."""
-    lexer = shlex.shlex(check, posix=True, punctuation_chars=SHELL_PUNCT)
-    lexer.whitespace, lexer.whitespace_split = ' \t', True
+    '...'`) or an assignment value is checked as a command of its own. A comment ends at its line end: the next line
+    stays a command of its own. Unbalanced quotes (anything unparsable): any run-all inside is full."""
+    stripped = strip_comments(check)
+    if stripped is None:
+        return bool(re.search(r'tests/run-all\.sh', check))
+    lexer = shlex.shlex(stripped, posix=True, punctuation_chars=SHELL_PUNCT)
+    lexer.whitespace, lexer.whitespace_split, lexer.commenters = ' \t', True, ''
     try:
         tokens = list(lexer)
     except ValueError:

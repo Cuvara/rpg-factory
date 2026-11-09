@@ -755,6 +755,20 @@ for scoped in ('tests/run-all.sh --affected>qa.log', 'tests/run-all.sh --affecte
                'bash -c "tests/run-all.sh --affected">qa.log'):
     assert not m.pr.full_run(scoped), scoped
     assert m.pr.qa_checks([dict(task, checks=[scoped])], listed) == ([], ['[a] ' + scoped], False), scoped
+# a shell comment ends at its line end: the next line stays a command of its own (a full run there is marked)
+for commented in ('tests/run-all.sh --affected # scoped\ntests/run-all.sh', 'tests/run-all.sh --affected #c\r\ntests/run-all.sh -j 4',
+                  'tests/run-all.sh --affected;#x\ntests/run-all.sh', 'true # c\n\ntests/run-all.sh',
+                  'bash -c "true # c\ntests/run-all.sh"', 'echo "#"; tests/run-all.sh', 'echo \\# x; tests/run-all.sh',
+                  'tests/run-all.sh \\'):
+    assert m.pr.full_run(commented), repr(commented)
+    assert m.pr.qa_checks([dict(task, checks=[commented])], listed) == (
+        [], ['[a] ' + m.pr.DO_NOT_RUN + commented], False), repr(commented)
+# a flag or a run-all inside a comment is no argument; `#` inside a word starts no comment
+assert m.pr.full_run('tests/run-all.sh # --affected')
+assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh # --affected'])], listed) == ([], [], True)
+for scoped in ('tests/run-all.sh --affected # tests/run-all.sh', 'echo a#b; tests/run-all.sh --affected'):
+    assert not m.pr.full_run(scoped), scoped
+assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --affected # scoped'])], listed) == ([], [], False)
 # a wrapped scoped run-all is no full run: a plain extra, neither dropped nor marked
 assert m.pr.qa_checks([dict(task, checks=["bash -c 'tests/run-all.sh --affected -j 2'"])], listed) == (
     [], ["[a] bash -c 'tests/run-all.sh --affected -j 2'"], False)
