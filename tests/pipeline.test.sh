@@ -477,12 +477,16 @@ done
 # registry's spelling), slashes, dot and empty segments, trailing slash, a directory with or without its slash (on
 # disk or not), and the repo root
 mkdir -p "$C/Assets/UI Toolkit/Screens.v2"; : > "$C/Assets/UI Toolkit/LICENSE"
-if python3 - "$ROOT" <<'PY'
-import importlib.util, json, sys
+if python3 - "$ROOT" "$C" <<'PY'
+import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 reg = json.load(open(sys.argv[1] + "/registry.json", encoding="utf-8"))
 policy = m.model_policy.load(reg)
+# the two rows below grade by what is on disk (file vs directory guess): their case-folded spellings only exist
+# where the fixture file system folds case; on a case-sensitive one the folded path is not found and is guessed
+# as a directory, which production never does because ICASE is only true on a folding file system
+FOLDS = os.path.exists(os.path.join(sys.argv[2], "assets/ui toolkit/license"))
 # (grade, repo, spellings of one path, spellings that differ only in case)
 TABLE = [
     ("heavy", "server", ["backend/shared/proto/wire.proto", "./backend//shared/proto/wire.proto", "backend\\shared\\proto\\wire.proto"],
@@ -493,8 +497,9 @@ TABLE = [
     ("heavy", "uitoolkit", ["Editor/Codegen/Generated/", "Editor/Codegen/Generated", "./Editor/Codegen/Generated"],
      ["editor/codegen/generated"]),
     ("heavy", "uitoolkit", ["Tests/Runtime/Generated/Screen.uxml.g.cs"], ["TESTS/RUNTIME/GENERATED/SCREEN.UXML.G.CS"]),
-    ("heavy", "client", ["Assets/UI Toolkit/Screens.v2/", "Assets/UI Toolkit/Screens.v2"], []),  # a dotted directory on disk
-    ("light", "client", ["Assets/UI Toolkit/LICENSE"], ["assets/ui toolkit/license"]),  # a file on disk, no extension
+    ("heavy", "client", ["Assets/UI Toolkit/Screens.v2/", "Assets/UI Toolkit/Screens.v2"],
+     ["assets/ui toolkit/screens.v2"] if FOLDS else []),  # a dotted directory on disk
+    ("light", "client", ["Assets/UI Toolkit/LICENSE"], ["assets/ui toolkit/license"] if FOLDS else []),  # a file on disk, no extension
     ("light", "uitoolkit", ["Editor/Foo.cs", "./Editor//Foo.cs"], ["EDITOR/FOO.CS"]),
     ("light", "server", ["backend/gateway/internal/", "backend/gateway/internal"], ["Backend/Gateway/Internal/"]),
     ("heavy", "server", [".", "./", ".//"], []),  # the repo root owns every contract and generated path
