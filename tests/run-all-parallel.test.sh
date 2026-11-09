@@ -155,7 +155,7 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/
 # partial: passes with a SKIP line (a tool missing), like orca-commands without orca
 printf '#!/usr/bin/env bash
 printf "partial\n" >> "$RUN_LOG"
-echo "SKIP  tool not on PATH"
+echo "${PARTIAL_LINE:-SKIP  tool not on PATH}"
 ' > "$TMP/repo/tests/partial.sh"
 for s in blockrun ws orphan; do printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$RUN_LOG"\n' "$s" > "$TMP/repo/tests/$s.sh"; done
 cat > "$TMP/hashes.py" <<'PY'
@@ -310,6 +310,26 @@ for j in 1 3; do
 ' ' ')" = 'a partial partial ' ] && grep -q 'reused tests/a.sh' <<<"$out"     && ! grep -q 'reused tests/partial.sh' <<<"$out"     && good "suite output with SKIP / not on PATH is never reused, a clean suite is (-j $j)" || no "partial suite reuse (-j $j): $(tr '
 ' ' ' < "$RUN_LOG")" "$out"
 done
+# Only result lines mark a partial pass: a PASS case whose name says NOT_AVAILABLE (ui-catalog, assetgen, pipeline) is
+# reused like any clean suite; a NOT_AVAILABLE result line is not.
+partial_line_case() { # want(reused|run) line
+  local j
+  for j in 1 3; do
+    reset_cache
+    PARTIAL_LINE=$2 WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh >/dev/null
+    out=$(PARTIAL_LINE=$2 WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh); rc=$?
+    if [ "$1" = reused ]; then
+      [ "$rc" = 0 ] && grep -q 'reused tests/partial.sh' <<<"$out" && [ "$(cat "$RUN_LOG")" = partial ]         && good "suite output '$2' is a clean pass, reused (-j $j)" || no "clean pass not reused: '$2' (-j $j)" "$out"
+    else
+      [ "$rc" = 0 ] && ! grep -q 'reused tests/partial.sh' <<<"$out" && [ "$(tr '
+' ' ' < "$RUN_LOG")" = 'partial partial ' ]         && good "suite output '$2' is a partial pass, never reused (-j $j)" || no "partial pass reused: '$2' (-j $j)" "$out"
+    fi
+  done
+}
+partial_line_case reused 'PASS  orca missing: NOT_AVAILABLE, cleanup stays CLEAN'
+partial_line_case reused 'ok  probe prints tool not on PATH as NOT_AVAILABLE'
+partial_line_case run 'NOT_AVAILABLE  unity: not on PATH'
+partial_line_case run '  SKIP: Windows-form TMPDIR parser pass'
 # --affected without a base and --only-suites: the message names what runs, and only that runs
 reset_cache
 out=$(NO_BASE=1 cache_plan --affected --only-suites tests/a.sh); rc=$?
@@ -375,6 +395,31 @@ out=$(timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc
 mkdir -p "$L/reclaim"; touch -d '-1 minute' "$L/reclaim" "$L"
 out=$(timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse); rc=$?
 [ "$rc" = 0 ] && grep -q 'removing stale reclaim guard of the full-run lock (no pid)' <<<"$out" && [ ! -d "$L" ]   && good 'old reclaim guard without a pid in a pid-less lock is removed, lock taken over' || no "old pid-less reclaim (rc=$rc)" "$out"
+# Three-way takeover race: this run judged the lock stale and takes the reclaim guard, but meanwhile another takeover
+# removed the stale lock and a new holder created a fresh one (pid not yet written) that the guard now sits in. The run
+# re-checks under the guard and leaves the new holder's lock alone (stale lock with a dead pid, and one without a pid).
+cat > "$TMP/race-plan.sh" <<'PLAN'
+fixture=$1; shift
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+eval "orig_lock_still_stale () $(declare -f lock_still_stale | tail -n +2)"
+lock_still_stale() { # the other takeover and the new holder act between this run's checks and its re-check
+  if [ ! -f "$LOCK.raced" ]; then
+    touch "$LOCK.raced"; mv "$LOCK" "$LOCK.old"; mkdir "$LOCK"; mv "$LOCK.old/reclaim" "$LOCK/"; rm -rf "$LOCK.old"
+  fi
+  orig_lock_still_stale "$@"
+}
+runall_prepare; rc=$?
+echo "prepare rc=$rc"
+PLAN
+for kind in pid nopid; do
+  rm -rf "$L" "$L.raced"; mkdir -p "$L"
+  if [ "$kind" = pid ]; then printf '99999999
+' > "$L/pid"; else touch -d '-1 minute' "$L"; fi
+  out=$(timeout 60 bash "$TMP/race-plan.sh" "$TMP/repo" --no-reuse --no-wait 2>&1); rc=$?
+  [ -f "$L.raced" ] && grep -q 'prepare rc=3' <<<"$out" && ! grep -q 'taking over stale full-run lock' <<<"$out"     && [ -d "$L" ] && [ ! -e "$L/reclaim" ]     && good "takeover race ($kind): the new holder's fresh lock is kept, this run waits" || no "takeover race ($kind)" "$out"
+done
+rm -rf "$L" "$L.raced"
 # With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
 # listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
 live_case() { # name want-log want-counts args...

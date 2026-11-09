@@ -344,7 +344,9 @@ suite_cache_pass() { # suite output
   suite_cache_file "$1" || return 0
   CACHE_PATHS+=("$cache_file")
 }
-suite_partial() { grep -Eqi '^[[:space:]]*SKIP([[:space:]:(]|$)|not on PATH|NOT_AVAILABLE' <<<"$1"; }
+# Only result lines count: a SKIP or NOT_AVAILABLE line (a tool, repo or platform missing). The words inside a PASS
+# line (a case named "orca missing: NOT_AVAILABLE") are a case name, not a partial pass.
+suite_partial() { grep -Eqi '^[[:space:]]*(SKIP|NOT_AVAILABLE)([[:space:]:(]|$)' <<<"$1"; }
 input_snapshot() {
   # Includes dirty and untracked bytes, not just status letters or mtimes.
   python3 -B - <<'PY'
@@ -386,8 +388,17 @@ reclaim_stale() { # a takeover that died inside its reclaim guard must not wedge
   echo "run-all: removing stale reclaim guard of the full-run lock (${rpid:-no pid})"
   rm -f "$r/pid"; rmdir "$r" 2>/dev/null || :
 }
+# identity of a directory: a fresh lock created at the same path differs (inode, and creation time where the platform
+# has one; mtime is no use, the reclaim mkdir itself changes it)
+dir_ident() { python3 -c 'import os,sys; st=os.stat(sys.argv[1]); b=getattr(st,"st_birthtime_ns",None)
+print(st.st_dev, st.st_ino, b if b is not None else (st.st_ctime_ns if os.name=="nt" else ""))' "$1" 2>/dev/null; }
+lock_still_stale() { # stale-pid stale-ident: under the reclaim guard, the lock is still the stale one this process
+  # judged. Another takeover may have removed it and a new holder created a fresh lock (pid not yet written) that this
+  # guard now sits in: removing that would let two full runs start.
+  [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$1" ] && [ -n "$2" ] && [ "$(dir_ident "$LOCK")" = "$2" ] && ! lock_alive
+}
 full_lock() {
-  local owner waited=false age
+  local owner waited=false age stale_pid stale_ident
   LOCK="$STATE/locks/run-all-full"; mkdir -p "${LOCK%/*}" || return 1
   until mkdir "$LOCK" 2>/dev/null; do
     # mkdir and metadata publication are separate: give a new holder time to publish.
@@ -396,10 +407,11 @@ full_lock() {
       [ "$age" -ge 10 ] || { $no_wait && { echo "waiting for full run unknown in $LOCK"; return 3; }; sleep 0.2; continue; }
     fi
     reclaim_stale
+    stale_pid=$(cat "$LOCK/pid" 2>/dev/null); stale_ident=$(dir_ident "$LOCK")
     if ! lock_alive && mkdir "$LOCK/reclaim" 2>/dev/null; then
       printf '%s
 ' "$$" > "$LOCK/reclaim/pid"
-      if ! lock_alive; then
+      if lock_still_stale "$stale_pid" "$stale_ident"; then
         echo "run-all: taking over stale full-run lock ($(cat "$LOCK/pid" 2>/dev/null))"
         rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
         rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
