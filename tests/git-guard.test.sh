@@ -28,11 +28,13 @@ git -C "$SERVER" worktree add -q -b feat/guard/linked-check "$LINKED" develop
 
 pass=0; fail=0
 guard_command() { CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; }
-# Keep the first twelve ordinary cases, the rcheck cases (about 30 in total, one or
-# two per advisory class) and all explicit environment overrides on the real hook
-# process. The standalone malformed-input, hook wiring, mode and crash-safety cases
-# below also keep their original process boundaries.
+# Keep the first twelve ordinary cases, every rcheck case (one or two per advisory
+# class) and all explicit environment overrides on the real hook process. The
+# standalone malformed-input, hook wiring, mode and crash-safety cases below also
+# keep their original process boundaries. Env cases never use the real_checks
+# budget; the end of the file asserts the exact real-hook count (12 + rchecks).
 real_checks=12
+real_hook_cases=0; rcheck_cases=0
 coproc GUARD_BATCH {
   CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B "$GUARD" --batch |
     command jq --unbuffered -r '
@@ -69,7 +71,7 @@ check() { # expected cwd command [env] [tool]
     else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
     return
   fi
-  real_checks=$((real_checks - 1))
+  if [ -z "$envset" ]; then real_checks=$((real_checks - 1)); real_hook_cases=$((real_hook_cases + 1)); fi
   payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')
   # The hook fails open: an internal error can mean empty output, even with rc=0.
   # Retry only a missing expected advisory, never a wrong/nonempty decision.
@@ -84,7 +86,7 @@ check() { # expected cwd command [env] [tool]
   if [ "$got" = "$expected" ]; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
 }
-rcheck() { real_checks=$((real_checks + 1)); check "$@"; }   # this case on the real hook process
+rcheck() { real_checks=$((real_checks + 1)); rcheck_cases=$((rcheck_cases + 1)); check "$@"; }   # this case on the real hook process
 
 # Exercise the real case runner with deterministic empty-output stand-ins. Run in
 # subshells so intentionally failing cases cannot alter the suite's counters.
@@ -869,9 +871,16 @@ assert "rpg-factory advisory (high)" in single.stdout
 print("ok")
 PY
 )
+# A protocol failure fails only the first payload case, with its own message.
+first_payload=1
 for p in '[]' 'null' '"s"' '42' '{"tool_name":"Bash","tool_input":"x"}' '{"tool_name":"Bash","tool_input":{"command":42}}'; do
   out=$(printf '%s' "$p" | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" 2>&1; echo "exit=$?")
-  [ "$out" = "exit=0" ] && [ "$batch_protocol_ok" = ok ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL payload $p: $out (batch protocol: $batch_protocol_ok)"; }
+  if [ "$out" != "exit=0" ]; then fail=$((fail + 1)); echo "FAIL payload $p: $out"
+  elif [ -n "$first_payload" ] && [ "$batch_protocol_ok" != ok ]; then
+    fail=$((fail + 1)); printf 'FAIL batch protocol: %s
+' "${batch_protocol_ok:-no output (assertion failed)}"
+  else pass=$((pass + 1)); fi
+  first_payload=
 done
 NA="$SERVER/backend/d$(printf '\xc3\x84\xd0\x90')"; mkdir -p "$NA"
 check high "$NA" "git tag v1.2.3"
@@ -921,6 +930,10 @@ exec {batch_in}>&- {batch_out}<&-
 # Close the coprocess's original descriptor too so it observes EOF.
 exec {GUARD_BATCH[1]}>&-
 wait "$batch_pid" || { fail=$((fail + 1)); echo 'FAIL batch process exit'; }
+if [ "$real_hook_cases" -ne $((12 + rcheck_cases)) ]; then
+  fail=$((fail + 1)); echo "FAIL real-hook cases: $real_hook_cases, want $((12 + rcheck_cases)) (12 + $rcheck_cases rchecks)"
+fi
+echo "git-guard real-hook cases: $real_hook_cases (12 + $rcheck_cases rchecks; env cases also on the real hook)"
 total=$((pass + fail))
 echo "git-guard tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
