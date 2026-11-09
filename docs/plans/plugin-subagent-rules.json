@@ -50,7 +50,7 @@
       "kind": "policy",
       "grade": "standard",
       "grade_reason": "policy prose with a canonical marker sentence and its mutation test",
-      "objective": "Write the single policy copy: a new subsection '### In-session subagents' in skills/delivery/references/delivery.md section 8 (after 'Session lifecycle'): pipeline session versus in-session subagent; subagents are read-only scouts (reasons: the gate pairs reviews against the recorded implementer and a subagent's edits are unrecorded; one shared index; parallel writes already exist as subtasks; the token gain is reading many files and returning a short conclusion); the per-role table (run lead, planner, task lead, implement, review, QA: access, when, max parallel, limits; the data lives in registry pipeline.subagents); the default subagent model is Claude Sonnet 5.5 (claude-sonnet-5-5) through the rpg-factory:factory-explorer agent, Codex subagents use the pipeline.subagents codex model; general rules (use one only when the answer needs many files or an open search and only the conclusion matters, otherwise Read/Grep directly; a short brief with objective, paths and return format path:line, at most 200 words; never edits, git writes, Orca, dispatch or verdict, nested subagents; model inside pipeline.models.scope; a subagent is never a review or QA verdict; a reviewer never uses a subagent of the other model, for example codex:codex-rescue in a Claude review; the session report names the subagents used in one line). Canonical marker line '<!-- policy:subagents-read-only -->' followed by 'In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.' and add it to the policy sentence list with a mutation case in tests/parallel-policy.test.sh (or wherever the base keeps that lint). One-line pointers: skills/factory-core/SKILL.md step 7, skills/delivery/SKILL.md if it lists rules, docs/codex.md and AGENTS.md (Codex: multi_agent feature, subagent model from pipeline.subagents, set [agents] default_subagent_model inside the scope, no nesting). Changelog fragment changelog.d/subagent-policy.md.",
+      "objective": "Write the single policy copy: a new subsection '### In-session subagents' in skills/delivery/references/delivery.md section 8 (after 'Session lifecycle'): pipeline session versus in-session subagent; subagents are read-only scouts (reasons: the gate pairs reviews against the recorded implementer and a subagent's edits are unrecorded; one shared index; parallel writes already exist as subtasks; the token gain is reading many files and returning a short conclusion); the per-role table (run lead, planner, task lead, implement, review, QA: access, when, max parallel, limits; the data lives in registry pipeline.subagents); the default subagent model is Claude Sonnet 5.5 (claude-sonnet-5-5) through the rpg-factory:factory-explorer agent, Codex subagents use the pipeline.subagents codex model; general rules (use one only when the answer needs many files or an open search and only the conclusion matters, otherwise Read/Grep directly; a short brief with objective, paths and return format path:line, at most 200 words; never edits, git writes, Orca, dispatch or verdict, nested subagents; model inside pipeline.models.scope; a subagent is never a review or QA verdict; a reviewer never uses a subagent of the other model, for example codex:codex-rescue in a Claude review; the session report names the subagents used in one line). Canonical marker line '<!-- policy:subagents-read-only -->' followed by 'In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.' and add it to the policy sentence list with a mutation case in tests/parallel-policy.test.sh (or wherever the base keeps that lint). One-line pointers: skills/factory-core/SKILL.md step 7, skills/delivery/SKILL.md if it lists rules, docs/codex.md and AGENTS.md (Codex: multi_agent feature, subagent model from pipeline.subagents, set [agents] default_subagent_model inside the scope, no nesting). Changelog fragment changelog.d/subagent-policy.md. Also retarget tests/orca-commands.test.sh to read the Orca commands from skills/delivery/references/delivery.md (it still reads parallel-work.md after the flow-4 split 9d21098 and fails at the base).",
       "paths": [
         "skills/delivery/references/delivery.md",
         "skills/delivery/SKILL.md",
@@ -59,13 +59,15 @@
         "docs/codex.md",
         "AGENTS.md",
         "tests/parallel-policy.test.sh",
-        "changelog.d/subagent-policy.md"
+        "changelog.d/subagent-policy.md",
+        "tests/orca-commands.test.sh"
       ],
       "deps": [],
       "checks": [
         "env -u TMPDIR tests/parallel-policy.test.sh",
         "tests/skills-lint.sh",
-        "python3 -B scripts/changelog.py check"
+        "python3 -B scripts/changelog.py check",
+        "tests/orca-commands.test.sh"
       ],
       "acceptance": [
         "one policy copy (delivery.md) with the marker sentence and the per-role table",
