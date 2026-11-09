@@ -248,6 +248,9 @@ else
   bad "parallel-work: $pw missing"
 fi
 
+# the budget warning itself: silent at the budget, a WARN line (never a failure) above it
+[ -z "$(core_budget "$CORE_BUDGET")" ] && [[ "$(core_budget $((CORE_BUDGET + 1)))" == "WARN  factory-core: SKILL.md has $((CORE_BUDGET + 1)) lines"* ]]   && ok || bad "factory-core line budget: WARN line missing or wrong above $CORE_BUDGET lines"
+
 # plugin agents (agents/*.md): read-only by construction. Frontmatter `tools` must list no write-capable tool
 # (a missing `tools` grants all of them) and `model` must be a value of registry pipeline.models.agent_tool_alias.
 agent_lint() { # <agents dir> <registry.json>: one line per finding
@@ -298,7 +301,8 @@ good_alias=$(jq -r '.pipeline.models.agent_tool_alias | to_entries[0].value' "$R
 mk_agent() { printf -- '---\nname: x\ndescription: d\n%s\n---\nbody\n' "$2" > "$1"; }
 mk_agent "$agent_tmp/good/a.md" "tools: Read, Grep, Glob, Bash
 model: $good_alias"
-[ -z "$(agent_lint "$agent_tmp/good" "$ROOT/registry.json")" ] && ok || bad "agent lint: flags a read-only agent with a valid model"
+good_out=$(agent_lint "$agent_tmp/good" "$ROOT/registry.json"); good_rc=$?
+[ $good_rc -eq 0 ] && [ -z "$good_out" ] && ok || bad "agent lint: flags a read-only agent with a valid model (rc=$good_rc)"
 n=0
 for broken in "tools: Read, Write
 model: $good_alias" "tools: Read, Edit
@@ -313,9 +317,6 @@ model: not-a-model" "tools: Read, Grep"; do
   [ -n "$(agent_lint "$agent_tmp/bad" "$ROOT/registry.json" | grep "^m$n.md:")" ] && ok || bad "agent lint: mutation $n ($(head -1 <<<"$broken")) not reported"
 done
 rm -rf "$agent_tmp"
-
-# the budget warning itself: silent at the budget, a WARN line (never a failure) above it
-[ -z "$(core_budget "$CORE_BUDGET")" ] && [[ "$(core_budget $((CORE_BUDGET + 1)))" == "WARN  factory-core: SKILL.md has $((CORE_BUDGET + 1)) lines"* ]]   && ok || bad "factory-core line budget: WARN line missing or wrong above $CORE_BUDGET lines"
 
 total=$((pass + fail))
 echo "skills lint: $total checks, $pass passed, $fail failed"
