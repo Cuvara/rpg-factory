@@ -3,7 +3,7 @@
 # (ownership, cycles, cross-model review, the no-worktree rule for Unity projects, exclusive resources), dispatch
 # commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate. Never touches the real workspace.
 # case-map: dogfood tests/dogfood.sh tests/dogfood/*
-# case-map: model-routing docs/registry.schema.json docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
+# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
 # case-map: model-policy docs/schemas/pipeline-subplan.schema.json
 # case-map: subplan docs/schemas/pipeline-subplan.schema.json
@@ -38,9 +38,12 @@ SELECTED="${SELECTED//,/ }"
 # a selector that names no case (`--case ,`) is a usage error, never "run everything"
 [ -z "$SELECTED" ] || [ -n "${SELECTED//[[:space:]]/}" ] || { printf 'Empty case selector
 ' >&2; usage >&2; exit 2; }
+unique_selected=
 for selected in $SELECTED; do
   [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+  [[ " $unique_selected " == *" $selected "* ]] || unique_selected+=" $selected"
 done
+SELECTED="$unique_selected"
 if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
 [ -n "$SELECTED" ] || SELECTED="$CASES"
 case_deps() {
@@ -143,14 +146,26 @@ if [ "${SELECTED// /}" = cli-selftest ]; then
   want=$(printf '%s
 ' $CASES)
   [ "$rc" -eq 0 ] && [ "$listed" = "$want" ] && sok "--list-cases exits 0 and lists the $(wc -w <<<"$CASES") cases" || sno "--list-cases rc=$rc, listed: $(head -c 200 <<<"$listed")"
+  if [ "${PIPELINE_SELFTEST_CHILD:-0}" != 1 ]; then
   start="$EPOCHREALTIME"
   one=$(bash "$self" --case tier 2>&1); rc=$?
   n_one=$(sed -n 's/^pipeline tests: \([0-9]*\) run.*/\1/p' <<<"$one"); sections=$(grep -c '^-- ' <<<"$one")
-  if [ "$rc" -eq 0 ] && [ "${n_one:-0}" -gt 0 ] && [ "${n_one:-0}" -lt 20 ] && [ "$sections" = 1 ]; then sok "--case tier exits 0 and runs $n_one assertions in $sections section, not the full run"
-  else sno "--case tier rc=$rc, ${n_one:-?} assertions, $sections sections (want exit 0, a few assertions, one section)"; fi
+  n_failed=$(sed -n 's/^pipeline tests: [0-9]* run, [0-9]* passed, \([0-9]*\) failed.*/\1/p' <<<"$one")
+  if [ "$rc" -eq 0 ] && [ "$n_failed" = 0 ] && [ "${n_one:-0}" -gt 0 ] && [ "${n_one:-0}" -lt 20 ] && [ "$sections" = 1 ]; then sok "--case tier exits 0 and runs $n_one assertions in $sections section, not the full run"
+  else sno "--case tier rc=$rc, ${n_one:-?} assertions, ${n_failed:-?} failed, $sections sections (want exit 0, zero failures, a few assertions, one section)"; fi
+    for form in comma repeated; do
+      if [ "$form" = comma ]; then args=(--case cli-selftest,cli-selftest)
+      else args=(--case cli-selftest --only cli-selftest); fi
+      duplicate=$(PIPELINE_SELFTEST_CHILD=1 bash "$self" "${args[@]}" 2>&1); rc=$?
+      summary=$(grep -c '^pipeline tests: [0-9]* run, [0-9]* passed, 0 failed$' <<<"$duplicate")
+      marker=$(grep -c '^PASS  --help exits 0$' <<<"$duplicate")
+      if [ "$rc" -eq 0 ] && [ "$summary" = 1 ] && [ "$marker" = 1 ]; then sok "$form duplicate selector runs cli-selftest once"
+      else sno "$form duplicate selector rc=$rc, $summary successful summaries, $marker self-test markers"; fi
+    done
   elapsed=$(( ${EPOCHREALTIME/./} - ${start/./} ))
   [ "${PIPELINE_TEST_TIMES:-0}" != 1 ] || printf 'TIME  cli-selftest child run %d.%03ds
 ' "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
+  fi
   total=$((spass + sfail)); echo "pipeline tests: $total run, $spass passed, $sfail failed"
   [ "$sfail" -eq 0 ]; exit
 fi
