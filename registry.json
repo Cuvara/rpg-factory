@@ -216,6 +216,20 @@
       "fallback": "none needed; asset-gen: a Claude review recorded as SAME_MODEL:claude (grades WARN, never PASS)"
     },
     {
+      "id": "codex-subagents",
+      "kind": "binary",
+      "probes": [
+        "bin:codex",
+        "codex:subagents"
+      ],
+      "provides": "Codex in-session subagents for Codex task sessions: multi_agent on and the subagent model inside pipeline.models.scope, read from two config keys only (agents.default_subagent_model, agents.subagent.model).",
+      "used_by": [
+        "delivery"
+      ],
+      "required": false,
+      "fallback": "set [agents] default_subagent_model to the pipeline.subagents codex model in the Codex config and run codex features enable multi_agent; Claude-only runs need nothing"
+    },
+    {
       "id": "dotnet",
       "kind": "binary",
       "probes": [
