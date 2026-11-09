@@ -1,3 +1,0 @@
-### Changed
-
-- **Pipeline.** Orca first inside Orca: in an Orca session (`ORCA_WORKTREE_ID` or `ORCA_AGENT_HOOK_ENDPOINT` set) with the runtime reachable, `factory-pipeline.py planner` and `dispatch` default to `--runner orca` and refuse `--runner agent` (exit 2, naming `--runner orca`) unless `--orca-unavailable <reason>` is given; the reason is written into the session prompt so the report names it. Outside Orca `--runner agent` works as before. Reason: Agent-tool task leads with plain git worktrees are invisible in Orca, where the user works. `parallel-work.md` section 5 states the rule and `tests/parallel-policy.test.sh` checks it.

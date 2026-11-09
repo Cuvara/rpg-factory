@@ -4,6 +4,591 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-09
+
+Model policy for the delivery pipeline (leads pick model and effort per session inside a user-defined scope; Codex workers on gpt-6.1-terra), asset-gen core skills, and the work merged since 1.5.0.
+
+### Added
+
+- **Asset generation engine.** `scripts/assetgen/assetgen.py` (`list`, `show`, `resolve`, `render`, `lint`,
+  `review-cmd`, `qa`, `manifest`; stdlib only, Pillow optional) turns a purpose, a game style and a ComfyUI workflow
+  template into a reviewed, QA'd and recorded generation run. Core data under `templates/assetgen/`: purposes
+  `concept-2d`, `sprite-2d`, `icon`, `ui-element`, `texture-tileable`, `ref-3d-turnaround`, `image-edit`; styles
+  `stylized-painterly`, `pixel-art`, `low-poly`, `realistic-pbr`, `anime-cel`, `flat-ui`; API-format templates
+  `image-generate` and `image-edit` (`rpg-factory.comfy-template/1`: `{{param}}` placeholders, typed params,
+  `output_node`). A game layer `<authoring>/assetgen/{purposes,styles,templates}/` overrides or `extends` core ids.
+  `render` is strict, `lint` checks data and workflows offline against a node snapshot and rejects URLs, host
+  addresses and credentials (malformed nested data and out-of-range link indices are FAIL rows, never a traceback), `review-cmd` only prints a read-only `codex exec` command, and `qa` checks PNG validity,
+  size (exact, min, aspect or any), alpha, transparent corners, tileable seams and blank images. The stdlib PNG
+  decoder applies gray, RGB and palette `tRNS` transparency like Pillow. Every parser refuses abbreviated options.
+- **Domain `assetgen`.** Module `authoring.assetgen` (`assetgen/`), artifact kind `gen-run`
+  (`docs/schemas/kinds/gen-run.schema.json`), quality plugin `scripts/checks/domains/assetgen.py` (the reviewer
+  model differs from the prompt author; the review files, not the `run.md` summary, are the evidence and each verdict
+  is bound to the prompt and output SHA-256s and a requirements hash (purpose, style and template content hashes,
+  resolved params, and for the image review the whole `workflow.json` graph and the reference images kept in `references/`) that `review-cmd` handed the reviewer, so a missing,
+  contradicting or stale review fails, also after a purpose is re-resolved with a stricter rubric; `qa.json` must be PASS with a PASS row for every check the purpose requires, `NOT_AVAILABLE` never
+  grades PASS, and a QA report graded with an older purpose qa block or requested size is stale; output hashes, provenance, refs), human gate `assetgen-approval`,
+  handoffs `assetgen-to-art2d`, `-art3d`, `-ui` and `-vfx`, and the `comfy-mcp` dev tool (MCP server plus a
+  ComfyUI service probe, headless or Desktop). A same-model review is allowed only as the explicit fallback
+  `"by": "SAME_MODEL:<model>"`, which grades WARN, never PASS.
+- **Skills.** Lead `asset-gen`: the generation workflow (route, pick, resolve, prompt, Codex prompt review with at
+  most 2 fix rounds, render, comfy-mcp `server_info` -> `validate_workflow` -> `run_workflow` -> `fetch_outputs`, QA
+  plus visual and Codex image review with at most 2 regenerations, `manifest`, human approval, handoff, promotion
+  into the game layer on request). Tech skill `comfyui` (paths `assetgen/`; used by `asset-gen`, `art-2d`,
+  `art-3d`, `ui-ux`, `vfx`): template format, layer precedence, comfy-mcp setup and tool sequence, the 9router
+  image node's pitfalls (credentials read by the node, returned size, unsupported model ids, no local models),
+  Desktop and headless ports, and adding a purpose, style or template.
+- **Commands.** `/rpg-factory:assetgen` (`factory-cmd.py assetgen`) runs the read-only engine verbs `list`, `show`,
+  `resolve`, `lint` and `review-cmd`. It defaults `--authoring` to the workspace authoring repo when that repo has
+  `assetgen/`, and it refuses `render`, `qa`, `manifest` and `--out` with any abbreviation of it (`--ou=FILE`).
+- **Tests.** `tests/assetgen.test.sh` (in run-all, selected by `--affected` for engine, template and quality-plugin
+  changes), routing scenarios (`assetgen/` -> lead `asset-gen` with tech `comfyui`; `art2d/` without it), the
+  `asset-gen` dogfood scenario and the `asset-gen-icon` eval.
+- **ComfyUI-visible runs.** `render` also writes `<run>/workflow.ui.json`, the same graph in ComfyUI frontend
+  (LiteGraph) format with node layout, titles, links, `widgets_values` and the run id, which converts back to the API
+  graph. The core templates feed the prompt through a `PrimitiveStringMultiline` node titled
+  `Prompt (Claude, Codex review <state>)`. New verbs: `assetgen.py embed --run DIR` (mandatory after
+  `fetch_outputs`, before `qa`) writes the UI workflow as a `workflow` tEXt chunk into each output PNG, idempotent and
+  keeping the `prompt` chunk, so dragging the PNG into ComfyUI restores the graph; `assetgen.py publish --run DIR
+  --comfy-url URL` (optional, not exposed through `factory-cmd.py`) uploads `workflow.ui.json` through ComfyUI's
+  userdata API to Workflows > assetgen, and reports `NOT_AVAILABLE` without writing anything when ComfyUI is not
+  reachable.
+- **Claude's visual review is recorded.** The agent writes `<run>/review-image-claude.json` (review schema and the
+  image review binding, `"by": "claude"`), `manifest` records it as `spec.claude_image_review` and summarises it in
+  `run.md`, and the quality check `gen-run-claude-review` WARNs when it is missing, unbound or stale and FAILs when it
+  contradicts `run.md` or is a FAIL verdict on a proposed run; it never replaces the Codex image review.
+- **Image review inputs.** `review-cmd --phase image` states the true pixel size of every output, and for purposes
+  with a tileable check it passes a 2x2 tiled preview (`<run>/review/tile-2x2.png`) to the reviewer.
+- **Skills.** `asset-gen` and `comfyui` document `embed` and `publish`, that comfy-mcp `run_workflow` posts to
+  `/prompt` and never opens a canvas tab, Claude's own image review file, and that the generate step reports an
+  outdated `comfyui_9router` node pack from `server_info` without updating it.
+- **Style lock: project style config.** `<authoring>/assetgen/project.json` (`rpg-factory.assetgen-project/1`:
+  default `style` `{id, version}`, `allowed_styles`, `families` mapping an asset family to a game sub-style,
+  `art_direction` refs) is the single source of the game's style. `resolve --family F` (else the purpose's
+  `default_family`) picks the style, refuses a style outside the project or a deprecated one unless
+  `--style-override REASON` (recorded in `spec.style_lock.override` and `run.md`), and keeps today's behaviour with a
+  lint `WARN` when the game has no `project.json`. Schemas `docs/schemas/assetgen-{project,anchor,rejection}.schema.json`.
+- **Style lock: versioned, structured styles.** Styles carry `version` and `status` (`draft`, `active`,
+  `deprecated`) and optional structured fields (`palette` colours, `lighting`, `outline` with `edge_darkness`,
+  `shape_language`, `forbidden[]`, `canvas` per family, `tone`); a prose string still works. Purposes gain
+  `default_family`, `dimensions`, `max_references` and `qa.outlines`. Every spec, review binding, anchor, rejection
+  and gen-run records the style reference `{style_id, version, sha256}`.
+- **Style lock: anchors and rejections.** `assetgen.py promote-anchor` writes a `proposed` anchor from a manifested
+  run output under `assetgen/styles/<style-id>/anchors/`; only a person activates it, and it is valid only while its
+  source gen-run is approved (the quality check `gen-run-style` also checks the signed approval, the image hash and
+  that the approver is not an agent or model). `assetgen.py reject` records a rejected asset or direction with a
+  fixed reason under `rejections/`; relevant rejections feed the prompt's avoid list and the review rubric, and the requirements hash binds them
+  and the family, so a changed rejection set makes earlier reviews stale. Both reviews also show the style's
+  `forbidden` list, `outline` and `shape_language`.
+- **Style lock: deterministic reference selection.** `resolve` selects valid active anchors of the run's style
+  version (family match, dimension overlap, strength, id; capped by `max_references`) with `reason[]` per pick, and
+  `render --run` copies them to `<run>/references/anchor-<id>.png` and wires them through `LoadImage` and core
+  `ImageBatch` nodes into `NineRouterImage.reference_images` (an image-edit reference stays first).
+- **Style lock: consistency QA.** `qa` adds the soft rows `style-palette`, `style-tone`, `style-edges` and
+  `style-canvas` (`scripts/assetgen/consistency.py`; `WARN` by default, `FAIL` only when the style says so,
+  `NOT_AVAILABLE` without the style field), and the image review attaches the selected anchors, adds an anchor
+  rubric item and one `Not repeated:` item per relevant rejection, and binds the style ref and anchor hashes.
+- **Style lock: drift.** `assetgen.py drift --authoring DIR` (read-only, `rpg-factory.assetgen-drift/1`) lists
+  gen-runs, anchors and rejections recorded on an older style version, a changed style hash or a missing style.
+  `/rpg-factory:assetgen drift` forwards it; `factory-cmd.py assetgen` refuses `promote-anchor` and `reject`,
+  because they write into the authoring repo.
+- **Style lock: quality checks.** The quality plugin adds `gen-run-style` (style reference, recorded anchors exist,
+  are active, approved by a person, with matching image bytes and an approved source gen-run; an active anchor
+  promoted from an unapproved run fails; image reviews bind the style reference and anchors). The new fast check
+  `assetgen-lint` (`assetgen.py lint --authoring .`) lints the game layer, `project.json`, anchors and rejections.
+- **Style lock docs and skills.** `docs/architecture/domains/assetgen.md` section "Style lock"; `asset-gen` gains
+  the family, override, anchor upload, style-row and rejection steps and a reference
+  `references/style-lock.md` (bootstrap a new game style: exploration `concept-2d` runs, a person picks,
+  `promote-anchor`, a person approves, then `project.json` and the game style at version 1; style change and drift);
+  `comfyui` documents the anchor wiring and uploading every `references/*` file.
+- **Edge fringe QA and `defringe`.** `qa` adds the row `png-edge-fringe` for purposes with alpha (the colour of
+  low-alpha edge pixels against the adjacent opaque pixels and the output composited on black and white), and
+  `assetgen.py defringe --run DIR [--alpha-floor N]` bleeds opaque neighbour colour into low-alpha pixels (stdlib,
+  premultiply-safe), runs after `fetch_outputs` and before `embed` and QA, keeps the originals under `outputs-raw/`,
+  records the params and the hashes before and after in `defringe.json` (a `- Defringe:` line in `run.md`), starts
+  from the originals when run again, and refuses an approved run and outputs `qa.json` or an image review already
+  binds (unless `--force`, which names the records to re-run).
+- **Composite previews for alpha review.** `review-cmd --phase image` writes and attaches
+  `review/composite-dark.png` and `review/composite-light.png` for every output with alpha, and the rubric asks to
+  judge the edges on both; Claude's own image review uses the same composites. `--no-write` uses them only when
+  they are current, like the tile preview.
+- **Approval verb.** `assetgen.py approve-record --run DIR --by NAME [--note TEXT]` writes the approval record and the
+  `run.md` status `approved` for a person; it refuses a missing `--by`, an agent or model name and a name the run
+  records as an agent or reviewer. The person commits `run.md` and the record in one SSH-signed commit whose signer
+  principal is that name. The `asset-gen` skill runs it only on the person's explicit word and quotes it; the
+  `gen-run` lifecycle allows `proposed` -> `approved`, and `factory-cmd` does not forward the verb.
+- **Cross-family anchors.** `resolve` warns when a selected anchor's family differs from the run's family, and
+  `anchor_family_fallback: false` in a purpose or `project.json` forbids such anchors (`resolve` records the
+  warnings as `spec.warnings`).
+- **Changelog fragments.** Each change adds `changelog.d/<topic>.md` (Keep a Changelog `###` sections) instead of
+  editing `CHANGELOG.md`, which conflicted in about 19 of the merges in this repository's history.
+  `scripts/changelog.py` validates (`check`), previews (`preview`) and, at release, writes the `## [X.Y.Z]` section and
+  removes the fragments (`release X.Y.Z [--summary TEXT]`). run-all fails when `[Unreleased]` gets a direct entry, and
+  `scripts/release-check.py` requires `changelog.d/` to hold no fragment (`tests/changelog.test.sh`,
+  `tests/release-check.test.sh`).
+- **Doctor and SessionStart.** When `python3` on PATH is the Windows Store alias (`\WindowsApps\`), doctor and the
+  SessionStart advisory say each hook call starts about 70 ms slower and suggest putting the real interpreter first
+  on PATH. Detection only: nothing is changed (`tests/install-status.test.sh`, `tests/hook-perf.test.sh`).
+- **Pipeline.** Orca child worktrees at both levels. A subplan subtask takes `placement` (`shared`, the default, or `child`) and a `reason` (required for `child`); `subplan validate` rejects an unknown placement, `child` without a reason and `child` in a no-worktree repo (Unity project). `dispatch --subplan <file> --subtask <id>` (implement, review, qa) defaults `--paths`, the agent (implementer for implement, reviewer for review) and the placement from the subtask; `--placement shared|child` overrides it. A child prints `orca orchestration worker-start ... --worktree new-child --name <task branch>--<subtask or phase> --base-branch <task branch or --sha>`: a child implement session commits on its child branch and the task lead merges it and removes the child at once. `--phase lead` creates a new task worktree as an Orca child of the integration checkout by default (`orca worktree create ... --parent-worktree path:<checkout that has plan.topic checked out>`; Orca lineage only, the git layout is unchanged); without such a checkout it falls back to `--no-parent` with a stderr note, `--placement shared` forces `--no-parent` and `--placement child` is accepted with the same result as the default (an existing task worktree and a no-worktree repo are unchanged), and `--task integration:<repo> --phase qa --placement child` runs the QA in a child at the SHA. Every child command and spec says never to create or remove a child while a full `tests/run-all.sh` runs (shared `.git/config`); a child in a no-worktree repo is a usage error.
+- **Pipeline.** `status` lists each task's leftover child worktrees (`children`: path, branch, merged; status schema updated) with a merge-then-`orca worktree rm` note, lists the leftover children of each repo's integration checkout (integration QA or a helper session) once per repo in `integration_children` (repo, path, branch, merged and a merge-then-`orca worktree rm` note), and `cleanup` names each one as "child of <task>" or "child of integration:<repo>" (its `orca worktree rm` command once merged and clean; a child with uncommitted changes or a failing `git status` is kept and named, like a task worktree). A child is found by its name (`<parent branch>--...`) or, for any other name, by Orca's lineage (`parentWorktreeId` / `childWorktreeIds` from the read-only `orca worktree list --json`, read only when a worktree is not already explained); only children of this run's task worktrees and integration checkout count, and without a working `orca` the naming rule alone applies (never an error).
+- **Pipeline.** `verdict --subtask <id>` records a subtask's review or QA in its own file; every verdict is also kept per candidate (`<task>__<phase>__<sha12>__<by>.json`). A subtask review or QA of this plan version that is not PASS on the newest applicable candidate blocks `gate` (NOT_READY) and `status` (no gate step; the task lead is started to fix it) until a `verdict --subtask <id>` PASS on that commit or a newer one that contains it. Only records on the commit being graded (the integration HEAD in `gate`, the task candidate in `status`) or an ancestor of it apply, and among those the one no other applicable record contains decides: a late PASS on an older candidate never resolves a newer FAIL, and a PASS on a fix left on an unmerged child branch never resolves a FAIL on the integrated commit.
+- **Citations.** `scripts/checks/skill-citations.py --fix` rewrites the line spec of every MOVED citation in place
+  (only the digits inside the backticks; encoding and line endings are kept), and `--strict` counts MOVED as a failure.
+- **Docs.** `AGENTS.md` at the repo root for Codex: it points at `.claude/CLAUDE.md` as the authoritative guide and
+  adds only the Codex-only notes (Git Bash, reinstall after edits, `factory-cmd.py` instead of slash commands, hook
+  trust review). `scripts/README.md` indexes every script entrypoint with its purpose and covering test suite.
+- **Lint.** `tests/skills-lint.sh` prints a `WARN` line (not a failure) when `factory-core` `SKILL.md` exceeds a
+  140-line budget; the 160-line cap is unchanged.
+- **Two-level eval.** `evals/pipeline-two-level/` asks for a multi-file plugin change and grades the tool transcript:
+  the session acts as the run lead and must run a successful `factory-pipeline.py dispatch --phase lead` with
+  `--runner print` (running `tier` or writing a plan alone fails; the match is anchored on the Bash `command`, so an
+  `echo` of the dispatch command does not count), and never edits the requested task files itself
+  (implementing in the run lead's own session fails, even with a correct final report).
+- **Two-level dogfood scenario.** The opt-in `tests/dogfood.sh --two-level` runs a real headless session on a throwaway
+  clone of the plugin with a multi-file plugin task and passes only when the session dispatches a task lead
+  (`factory-pipeline.py dispatch --phase lead --runner print`) and edits none of the task files. A dispatch counts only
+  when its output carries the printed task-lead spec and no error (a pipe such as `| head` hides a failed exit status).
+  The grading is offline too: `tests/dogfood.sh --grade-two-level <transcript.jsonl> [<clone dir>]` grades a recorded
+  transcript without a model call (the disk check only with a clone dir); `tests/pipeline.test.sh` runs it on
+  synthetic transcripts.
+- **Cleanup names the dispatch specs.** `factory-pipeline.py cleanup` lists the plan's spec files under
+  `<state dir>/pipeline/<plan id>/specs/` (count and directory) as kept state; it never deletes them and they do not
+  affect CLEAN.
+- **Delivery pipeline.** `scripts/factory-pipeline.py` (and `/rpg-factory:pipeline`) runs the parallel-work policy
+  end to end: `tier` (S/M/L from the routing snapshot), `validate` for a `plan.json` (disjoint owned paths,
+  cycles, waves, cross-model reviewer, exclusive resources; schema `docs/schemas/pipeline-plan.schema.json`),
+  `planner` and `dispatch` (exact `orca orchestration` worker starts or the Agent fallback for implement, review
+  and QA), `verdict` (review and QA results keyed by the candidate SHA) and `gate` (READY_FOR_PR only when every
+  task is integrated, reviewed PASS by the other model on unchanged paths, QA PASS on the integration HEAD, the
+  trees are clean, every change sits in a task's owned paths, each verdict matches the current plan's task and
+  the fast checks are PASS and current; `--no-run-checks` gives UNVERIFIED, never a delivery). With the user's `deliver: pr` the lead pushes and
+  opens the PR the gate prints; merging stays with the user (`git-safety.md` rule 5). Settings live in registry
+  `pipeline`; QA uses `templates/pipeline/qa-report.md` (`tests/pipeline.test.sh`).
+- **No worktrees in Unity projects.** `repos.client.worktrees: false` (and any repo with
+  `ProjectSettings/ProjectVersion.txt` at its root): every role works in the main checkout, the repo's tasks run
+  one after another with review and QA each, and Unity test runs are one shared exclusive resource
+  (`pipeline.exclusive_resources`).
+- **Cleanup after every task.** `parallel-work.md` section 8 is mandatory: when a task is done the lead removes
+  the run's worktrees (`git worktree remove`, never `--force`), deletes task branches already in the integration
+  branch (`git branch -d`), and ends every Claude and Codex worker session (`orca orchestration worker-release`,
+  background agents stopped). `factory-pipeline.py cleanup` lists what is left and prints the commands; it must
+  report CLEAN before the final report.
+- **Commands.** `/rpg-factory:domain [<id>] [--json]` (`factory-cmd.py domain`): every registry domain with its lead,
+  repos and artifact counts, or one domain with artifact kinds, quality and human gates, handoffs, artifacts by
+  status, stale upstreams, FAIL and HUMAN_REQUIRED artifacts and next steps (JSON schema `rpg-factory.domain/1`).
+  Read-only and data-driven: a new registry domain needs no code change; an unknown id exits 2 listing the domains.
+- **Commands.** `factory-cmd.py help [--json]` lists every verb with its arguments, read-only flag, an example, the
+  Claude form (`/rpg-factory:<verb>`) and the Codex form (`python3 -B <plugin root>/scripts/factory-cmd.py <verb>`)
+  (JSON schema `rpg-factory.commands/1`); agents and Codex discover the commands there.
+- **Commands.** `--json` for `status`, `route` (file and `--domain`/`--kind` forms), `check` (passed to
+  `run-checks.py --json`) and `doctor` (`rpg-factory.doctor/1`: install, registry, workspace, repos, tools, hooks,
+  dev_tools).
+- Show optional authoring domains in Factory status, including artifact lifecycle counts, stale upstreams, quality failures, human gates, and follow-ups owned by domain leads.
+- **Operating lessons in the repo.** `.claude/CLAUDE.md` gains an "Operating lessons" section (no worktree or
+  branch creation while run-all runs, `git switch --no-track -c`, Git Bash never WSL, citation `--fix` before a
+  release gate, at most two concurrent full run-all runs, `git update-index --chmod=+x` on Windows, quoting shell
+  examples, the learning loop), pointed to from `AGENTS.md`. New `docs/dogfood.md` (linked from the
+  `tests/dogfood.sh` and `tests/dogfood-codex.sh` headers) says how to classify and report nondeterministic dogfood
+  failures and lists the known traps. `parallel-work.md` adds the full test run as a shared resource, the
+  Codex-else-Claude rule, Orca message traps (escalation from non-workers, heartbeats in `check --wait`, multi-line
+  prompts under `cmd.exe`, confirming a Codex worker picked up its prompt), session count under memory pressure and
+  which plan edits keep verdicts.
+- **Model policy for the delivery pipeline.** Registry `pipeline.models` holds a model scope per agent (Claude, Codex),
+  profiles per role (planner, lead, implement by grade, review, QA) and a grade rubric; `scripts/check-registry.sh` and
+  `docs/registry.schema.json` reject a profile outside the scope. Plan tasks and subplan subtasks take an optional
+  `grade` (`light|standard|heavy`) and `grade_reason`; without one the grade comes from the tier (S light, M standard,
+  L, contract and generated paths heavy) and a subtask inherits its task's grade. `validate` and `subplan validate`
+  print the resolved model and effort. `planner` and `dispatch` accept `--grade`, `--model` and `--effort` (a value
+  outside the scope exits 2) and pass `--model/--effort` to `orca orchestration worker-start`, `orca worktree create`
+  and `orca agent launch`; the Agent-tool runner passes a model alias and notes that effort cannot be set; `verdict`
+  stores the optional model and effort. A personal override file (`$RPG_FACTORY_MODEL_POLICY` or
+  `<persistent state dir>/model-policy.json`) may narrow the scope and replace profiles. The policy is described once, in
+  `parallel-work.md` section 10, "Model choice" (`scripts/lib/model_policy.py`, `tests/pipeline.test.sh`). Codex workers
+  use `gpt-6.1-sol` at effort `high` for planner, lead, review and `heavy`, and `gpt-6.1-terra` at `high` for `light`,
+  `standard` and `qa`.
+- **Pipeline status.** `factory-pipeline.py status <plan.json> [--json]` (schema `rpg-factory.pipeline-status/1`,
+  `docs/schemas/pipeline-status.schema.json`) shows how far each task got - pending, implementing, candidate, reviewed
+  (PASS or FAIL with its SHA), integrated or qa - derived from git and the recorded verdicts, with the next command per
+  task, the ready wave and the tasks to dispatch now, and the gate once every task has QA and every repo has its
+  integration QA PASS at the integration HEAD (also after the per-task QA of a Unity project; until then the next
+  command is that integration QA), so status names the gate only when the gate can pass. A new lead session resumes a
+  run from it without the old session's context. Read-only. `/rpg-factory:pipeline status` runs it.
+- **Registry fragments.** `registry.json` is now built from `registry/` by `scripts/build-registry.py`: `core.json`
+  (shared sections), `engineering/<repo>.json`, `engineering/skills.json`, `engineering/contracts.json` and
+  `domains/<domain>.json` (a domain's modules, contracts, skills, kinds and lifecycles). Parallel domain branches
+  edit different files; replaying this repository's merges found `registry.json` conflicts in every parallel domain
+  merge of 1.3.0. Readers still read the one committed `registry.json`. `--check` (run-all) fails when it is not the
+  build or an entry sits in the wrong fragment; `scripts/new-skill.py` writes the fragments. The one-time migration
+  reorders `registry.json` (entries grouped by fragment) without changing its content (`tests/registry-fragments.test.sh`).
+- **CODEOWNERS by domain.** `.github/CODEOWNERS` maps each domain's fragment, skills, templates, checks, adapters,
+  docs and tests to an owner; the registry-fragments suite keeps its paths and domains current.
+- **Pipeline.** `factory-pipeline.py cleanup` and `status` list the settled Orca workers of a task lead's Run that are not released, with their `orca orchestration worker-release --dispatch <id>` commands. The Run comes from the new optional plan task field `orca_run` (not part of the verdict fingerprint) or from `--orca-run <id>` (repeatable, `run:<id>` accepted). The check is read-only (`orca orchestration worker-list --run <id> --json`, every page): a released worker and a running worker are no finding; an unreleased settled worker makes cleanup LEFTOVER and puts its release command first in the status `next` list. Without orca, or when the call fails, the Run prints a NOT_AVAILABLE line and nothing fails. `status --json` keeps stdout to the status schema and prints the same `Workers:` lines (NOT_AVAILABLE, UNRELEASED) on stderr.
+- **`tests/run-all.sh --affected [--base REF]`.** Runs only the suites a change touches (`tests/affected.py`: files
+  changed since the merge-base with `origin/main`/`main` plus untracked files; a suite runs when it is the changed
+  file, names it, lists it as an indirect input, or a global input such as the registry or `scripts/lib/` changed).
+  Cheap inline checks always run; `--release` ignores it. Every suite line now shows its duration
+  (`tests/affected.test.sh`).
+- **Parallel run-all.** `tests/run-all.sh -j N` (`--jobs N`) runs up to N independent suites at once. Each suite's
+  output is buffered and every line, inline checks included, prints in the `-j 1` order with its time; the count and
+  the exit code are those of a serial run. The read-only live-workspace checks (`runl`, `block`) form a lane that runs
+  one suite at a time next to the fixture suites; `run1` suites (the shared git config guard suite, the
+  installed-plugin safety suite, `claude plugin validate`) wait for every queued suite and run alone. The longest
+  suites start first. The default stays `-j 1`; the run ends with its wall time, and CI uses `-j 4`
+  (`tests/run-all-parallel.test.sh`).
+- **testlab dev tool.** Registry `dev_tools` lists `testlab` for `measure`, probed by the new `plugin-file:<path>`
+  kind (a file of this plugin exists, here `testlab/testlab.py`) in `scripts/lib/devtools.py`, `check-registry.sh` and
+  the registry schema (`tests/devtools.test.sh`).
+- **Line-budget test.** `tests/line-budget.test.sh` fails when `scripts/lib/gitguard.py`, `scripts/lib/context.py` or
+  `scripts/run-checks.py` reaches 500 lines, so the split-big-scripts budget cannot regress silently.
+- **Parallel work.** `parallel-work.md` section 8 gains "Session lifecycle": one worktree per task for its whole life, and one fresh worker session per dispatch, never reused. The implementer, reviewer, QA worker and any fix run as separate fresh sessions in that task worktree or in an Orca child of it (`child-worktrees.md`; reviewer and QA read-only, after checking that `git rev-parse HEAD` is the candidate SHA); review and QA never get a new task worktree, and integration QA runs in the integration branch's checkout, never in a task worktree. Each session is released in the turn it reports, in every repo, and the task worktree stays (in a no-worktree repo only the task work is serialized: the next task starts after the previous task's QA verdict); a task is integrated when its review PASS is recorded, in wave order, and its worktree is removed only after that PASS and integration. The lead keeps only `plan.json` and integration state and hands off after each wave through `factory-pipeline.py status plan.json`. Sections 1, 4, 6, 8 (cleanup) and 10 (review step) follow the same rule (dispatch placement: `task-lead-in-worktree.md`).
+- **Docs.** `.claude/CLAUDE.md` "Developing this plugin": every plugin task runs through `factory-pipeline.py` with a `plan.json` naming the plugin checkout, small disjoint tasks and cross-model review. The skill-author skill plans scaffold, content and routing/dogfood as separate tasks; `AGENTS.md` points Codex at the same flow.
+- **Pipeline task lead.** `factory-pipeline.py dispatch <plan.json> --task <id> --phase lead [--report-to <run id>]`
+  starts ONE task-lead session per plan task, with the task spec plus the task-lead rules: plan and split the task
+  into subtasks with disjoint paths, one fresh Claude or Codex session per subtask in the same worktree, sub-sessions
+  that do not commit, the task lead commits per subtask, cross-model review and QA sessions in that worktree, a fresh
+  fix session after a FAIL, every session released as it reports, a `status` report to the run lead (branch, HEAD,
+  verdicts, checks), never push, merge or remove the worktree. Orca forbids nested workers, so `--runner orca` prints
+  a handoff instead of a worker start: `orca worktree create --branch <topic>-<task> --parent-worktree path:<integration
+  checkout> --agent ... --prompt ...` for a new task worktree (`--no-parent` only without such a checkout or with
+  `--placement shared`, `child-worktrees.md`), `orca agent launch --worktree path:<dir> --prompt ...` to resume in it; the task lead
+  creates its own Orca Run and reports with `orca orchestration send --to run:<id> --type status`. In a no-worktree
+  repo (Unity project) the task lead runs in the main checkout and dispatch never prints a worktree create or a new
+  top-level worker. `status` names `--phase lead` as the next command of a pending task.
+- **Pipeline subplan.** `factory-pipeline.py subplan validate <subplan.json> [--plan PATH] [--json]`
+  (`docs/schemas/pipeline-subplan.schema.json`) checks a task lead's split of one plan task: subtask paths inside the
+  task's owned paths and outside its exclusions, overlapping subtasks ordered by deps, known deps and no cycle, an
+  implementer that is a pipeline agent and a reviewer of the other model (registry `pipeline.review_pairing`), and
+  well-formed subtasks; it prints the waves (one subtask per wave in a no-worktree repo).
+
+### Changed
+
+- **`--run` takes a run id.** Every `--run` accepts the run id as well as the run directory; an id resolves under
+  `<authoring>/assetgen/runs/` (with `--authoring`, else the current repo).
+- **Short `resolve` output.** `resolve` prints a short summary (style lock, references, rejections, key params,
+  warnings); the source file of every field and param only with `--verbose` or `--json`.
+- **`asset-gen` skill: a service FAIL stops regenerating.** After a FAIL the service causes, not the prompt (for
+  example a returned size that ignores the request), the agent stops regenerating, runs `manifest` on the last attempt
+  with its QA FAIL visible and reports; the earlier attempts stay without `run.md`.
+- **`comfyui` skill.** It names the service ignoring `size` as a known issue, and says that `server_info`'s outdated
+  flag for a node pack compares the pack hash with ComfyUI's own commit, so it is unreliable for a pack inside the
+  ComfyUI checkout: the agent reports it as unverified and never prompts or performs an update on that signal alone.
+- **2D Art.** Generated images may become production sources, but only through a human-approved `gen-run` handed
+  off by `assetgen-to-art2d`. Any other generated image stays a concept draft. Art 3D, UI/UX and VFX accept
+  approved gen-runs through their handoff contracts and name `rpg-factory:comfyui` for inspecting a generation.
+- **Registry.** The `codex` dev tool is also used by `asset-gen`, for the independent prompt and image review.
+- **Docs.** The skill counts are now 14 specialised skills and 11 tech skills (`.claude/CLAUDE.md`, plugin and
+  marketplace manifests, README, factory-core Skills, skill-contract diagram).
+- **Tests.** `tests/new-skill.test.sh` reads the lead count from the registry instead of a fixed number.
+- **Purpose over style.** A purpose's `constraints` (lighting, background, framing; precedence in
+  `scripts/assetgen/data/precedence.json`, the palette stays a style hint) win over the style's hint of the same name.
+  `resolve` writes `spec.hints` and marks each overridden style hint, and the review prompts use those hints, so the
+  prompt writer never sees both. `ref-3d-turnaround` and `texture-tileable` carry lighting constraints; lint fails a
+  constraint on a style-only hint.
+- **`ref-3d-turnaround`.** QA checks the aspect of the requested size with a 25% tolerance and a minimum area (90% of
+  the requested pixel count, new `qa.size.min_area`) instead of a minimum width and height, and the prompt guidance
+  asks for a compact landscape sheet whose views fill most of its height.
+- **Failed attempts.** A failed attempt's run directory stays on disk without `run.md`, the next attempt takes the
+  next number, and `manifest` lists the earlier attempts of the series without `run.md` in
+  `spec.trace.failed_attempts` (the envelope `trace` stays the engineering trace; documented in `asset-gen`).
+- **`manifest` keeps an approval.** An `approved` run stays `approved`, and its approval stays bound, when `manifest`
+  runs again, nothing the approval binds changed and `run.md` stays byte for byte the same; otherwise it goes back to
+  `proposed` and names the changed fields.
+- **Style bootstrap.** `asset-gen` `references/style-lock.md`: a new game style id has no anchors until runs under it
+  are approved and promoted, so promote again under the game style id or explore under it; step 5 checks the
+  structured `palette`, `tone` and `canvas` fields, and `lint` WARNs on an active game style none of whose
+  structured fields a style check can grade with: absent, empty (`canvas: {}`, `tone: {}`, `palette.colors: []`,
+  `outline.edge_darkness: {}`, a canvas entry with neither `aspect` nor `min_side`) or malformed. The WARN names
+  each field's state; the rule is `consistency.field_states`, the same parsing the `style-*` QA rows use, and such
+  an empty settings object is now `NOT_AVAILABLE` in QA instead of being graded on defaults.
+- **`drift` reports style-id mismatches.** Gen-runs and anchors recorded under another style id than `project.json`
+  are listed (`style-id-mismatch`, the text naming the project style), not only older versions of the same style.
+- **Hooks.** Cheaper hook calls. The file guard no longer loads the whole git guard (it compiled it on every Read only
+  to find the workspace): the shared path helpers (`find_workspace`, `main_checkout`, `linked_worktree`,
+  `native_path`, `native_abs`) live once in `scripts/lib/workspace.py`, used by the git guard, the file guard and
+  the routing engine. The git guard moved to `scripts/lib/gitguard.py`; `scripts/git-guard.py` is a small hook
+  entry that re-exports every guard name. Hook entry points (git guard, file guard, Skill hook, Codex hook,
+  SessionStart) cache compiled bytecode under `<state dir>/pycache` (`scripts/lib/hookspeed.py`; the plugin tree stays
+  free of `__pycache__`; `RPG_FACTORY_PYCACHE=off` disables it). Write tools cache a repository's submodule paths
+  (`git ls-files -s`) in the state dir per work tree and `.git/index` stat, and recompute when the index changes.
+  Measured on Windows (median of 10, real interpreter): git guard `git status` 63-95 ms to 55-66 ms, file guard
+  Read 71-80 ms to 58-60 ms, Write 87-88 ms to 55-66 ms (`tests/hook-perf.test.sh`).
+- **Pipeline.** Shorter dispatch specs: the task-lead rules are seven short lines (commands spelled once), the implement, review and QA specs keep objective, owned paths, checks and report format, and the task spec JSON puts each key on one line. For the plugin-flow child-worktrees task the lead spec went from 55 to 24 lines and the implement spec from 47 to 17.
+- **Citations.** A citation whose anchor is no longer within the cited lines +/- 3 but occurs exactly once in the
+  file, or exactly once within +/- 40 lines, is now MOVED (reported with the shifted spec, exit 0) instead of FAIL.
+  `tests/run-all.sh` prints MOVED citations as warnings with the `--fix` hint; `tests/run-all.sh --release` runs the
+  check with `--strict`. A missing file or anchor, several far candidates, an unanchored citation and a line past the
+  end still fail.
+- **Core.** `factory-core` `SKILL.md` shrinks from 160 to 124 lines: the mode table, the routing details of workflow
+  step 4, the validation-state table and the git-safety advisory list now live only in their references
+  (`skill-contract.md` "Routing", `validation.md`, `git-safety.md`, `workflows.md`). The 12 workflow steps keep their
+  marks and commands.
+- **factory-core drives the two-level flow.** `skills/factory-core/SKILL.md` names the main session the run lead
+  (plans, dispatches, integrates, reports; never edits task files) and one task lead per task. Step 6 writes a
+  `plan.json` for every tier (S is a one-task plan with its own task lead), runs `dispatch --phase lead` per ready
+  task and `status` to resume; Unity (no-worktree) repos keep the task lead and every session in the main checkout,
+  subtasks in sequence. Step 7 (task lead) runs `subplan validate` and one fresh sub-session per subtask, committing
+  each with explicit paths. Step 11 (task lead) dispatches cross-model review (Codex reviews Claude's code and Claude
+  reviews Codex's; without Codex a fresh Claude session marked SAME_MODEL) and QA; step 12 (run lead) gates, opens the
+  PR, releases every session and runs `cleanup` until CLEAN. `AGENTS.md` and `.claude/CLAUDE.md` point to these steps.
+- **Pipeline tier flows.** Registry `pipeline.tiers.S|M|L.flow` describe the two-level flow: the run lead writes the
+  plan and dispatches one task lead per task (no-worktree repo: main checkout, in sequence), task leads run
+  sub-sessions, cross-model review and QA, the run lead integrates and never implements.
+- **Docs.** README, `docs/codex.md` and the factory-core "Commands" section list every verb with its Claude and
+  Codex form.
+- Share read-only artifact discovery, upstream revision checks, quality grouping, and domain summaries between workflow and status commands without changing workflow output.
+- **Guard.** `scripts/lib/gitguard.py` loads the `scripts/lib/guard/` package by path under the unique name
+  `rpgf_guard`, so no module named `guard` is imported and no other `guard` module on `sys.path` can shadow it or
+  be shadowed by it. Behaviour and public names are unchanged; `tests/hook-perf.test.sh` asserts the package name and
+  its cached bytecode.
+- **Pipeline.** Orca first inside Orca: in an Orca session (`ORCA_WORKTREE_ID` or `ORCA_AGENT_HOOK_ENDPOINT` set) with the runtime reachable, `factory-pipeline.py planner` and `dispatch` default to `--runner orca` and refuse `--runner agent` (exit 2, naming `--runner orca`) unless `--orca-unavailable <reason>` is given; the reason is written into the session prompt so the report names it. Outside Orca `--runner agent` works as before. Reason: Agent-tool task leads with plain git worktrees are invisible in Orca, where the user works. `parallel-work.md` section 5 states the rule and `tests/parallel-policy.test.sh` checks it.
+- **Pipeline.** The task-lead spec printed by `dispatch --phase lead` says to release every implement, review and QA session the moment it reports, its candidate is superseded or it stops, not at task end; to check with `status --orca-run <run id>`; and to name its Orca Run id in the report. `parallel-work.md` section 8 names the check.
+- **Pipeline.** The task lead is always a Claude session, whatever the task's implementer: registry `pipeline.lead_agent` (`"claude"`, the default when the key is missing) picks the agent of `dispatch --phase lead`, and `--agent codex` on `--phase lead` prints a warning and keeps Claude. Implementation, review and QA sessions keep the cross-model pairing. `parallel-work.md` states the rule under the new `policy:task-lead-claude` marker, linted by `tests/parallel-policy.test.sh`, and factory-core `SKILL.md` step 6 says it.
+- **Faster test cycle.** `tests/parallel-policy.test.sh` builds one minimal plugin copy with a single `tar` pipe
+  instead of one `cp` per file and runs its mutation lints concurrently (`PARALLEL_POLICY_JOBS`, default 4; about 11 to
+  4 minutes on Windows). `tests/new-skill.test.sh` copies only the tracked and untracked files the scaffolder and
+  lints read, no longer the whole checkout including `.git`. Assertions and counts are unchanged.
+- **run-all.** Suites read `/dev/null` instead of the caller's stdin, the Codex packaging suite runs through the
+  scheduler (so `--affected` can skip it), the live workspace checks sit together after the fixture suites, and the
+  git environment isolation suite moved next to `claude plugin validate` at the end.
+- **`run-checks.py` grading moved to `scripts/lib/runchecks_grade.py`.** `parser_for()` and `grade()` (which parser a
+  registry check uses and how its output grades) now live in the library module; `run-checks.py` imports them back,
+  so its `--json` output is unchanged and the script is back under its 500-line budget.
+- Split git guard logic, check process execution and snapshot rendering into focused modules while preserving existing behavior and public imports.
+- Extend Python syntax and release-policy wording checks to the extracted modules, including advisory wording in snapshot rendering.
+- **Pipeline placement.** `dispatch --phase implement|review|qa` joins the task's existing worktree (found by the task
+  branch in `git worktree list`, `--worktree path:<it>`) and never creates one: a missing task worktree is an error
+  (exit 1, run `--phase lead` first). `--phase implement --paths <subtask paths>` starts a sub-session limited to those
+  paths that does not commit (a `child` placement commits on its child branch only, `child-worktrees.md`). Integration QA (`--task integration:<repo> --phase qa`) runs in the existing checkout of
+  the integration branch, never in a task worktree; none is an error, no worktree is created.
+- **Agent fallback.** `--runner agent` starts Claude sessions only: a session planned for Codex runs as a fresh Claude
+  session whose prompt says SAME_MODEL, and its review counts as SAME_MODEL.
+- **Parallel work.** `parallel-work.md` describes the two levels (sections 1, 3, 4, 5, 6, 7, 8 and 10): the run lead
+  gives each task one worktree and one task-lead session and integrates; the task lead runs subtasks, cross-model
+  review, QA and fixes as fresh sessions in that worktree. It records the Orca nesting limit and the Unity rule (task
+  lead, subtasks, review and QA in the main checkout, one after another; Unity test runs exclusive). Every session is
+  released as it reports, in every repo; a no-worktree repo serializes only its task work. `.claude/CLAUDE.md`,
+  `AGENTS.md` and the skill-author skill point to it.
+
+### Fixed
+
+- **Style QA is bound to its style inputs.** `qa.json` now records `style_binding` (`runfiles.qa_style_binding`: the
+  style ref with id, version and hash, a hash of the effective style data, the family, and each selected anchor copy
+  under `references/` with its SHA-256, the tone references `style-tone` reads). The quality plugin recomputes it from
+  `spec.json` and the run's anchor copies, and `gen-run-qa` fails a report graded with other style data, version,
+  family or anchors (also one without `style_binding`) as stale: re-run `qa` and `manifest`. Before, a style
+  re-resolved with a fail-severity rule kept an old PASS report acceptable.
+
+- **Size QA vs the real image service.** The 9router image node can ignore `size` entirely (live style-lock e2e,
+  2026-11-08: 1672x941 returned for 1536x1024 and 1024x1024 requests), so `concept-2d` could never pass and
+  `promote-anchor` refused good outputs. No core purpose's size QA grades the exact size any more: it grades
+  orientation or aspect with a tolerance, a minimum area and a minimum short side that real outputs meet, per purpose
+  in data, with regression tests on the real returned sizes. Every core purpose has a short side and an area floor
+  (`icon`, `sprite-2d`, `texture-tileable`, `ui-element` and `image-edit` 512 px and 512x512 pixels), so a 256x256
+  output fails each.
+- **Review prompt params.** The requested params in the review prompts and `run.md` `spec.params` come from the
+  rendered workflow, so a `render --param` value is the one the reviewer and the record see, never the `spec.json`
+  value it replaced. Each review is bound to exactly those params: a `render --param` that changes a param after a
+  review makes it stale (render title, `review-cmd` and the quality check agree; the same params again keep it
+  bound), and the quality check FAILs a `run.md` `spec.params` that differs from the rendered params instead of
+  substituting `spec.json`.
+- **Size double-counted in the image review.** The image review prompt states QA's verdict as context and tells the
+  reviewer not to grade size or the other deterministic checks again; they belong to QA only.
+- **`filename_prefix`.** `spec.json`, the review prompts and `run.md` record the same `assetgen/<run-id>` prefix that
+  `render` writes into the workflow.
+- **`review-cmd`.** The printed command uses absolute paths, so it works from any working directory.
+- **`asset-gen` skill.** It documents `show --kind purpose <id>`: a bare `show image-edit` was ambiguous between the
+  purpose and the template.
+- **`lint`.** A bad game-layer value is blamed on the game file that holds it, not on the unchanged core file it
+  extends.
+- **Uncommitted approval message.** An approval record that is present but not committed and signed reads
+  "approval present but not committed/signed" instead of "missing" in `gen-run-style`, graded `HUMAN_REQUIRED` like
+  the trace grades it. `artifact-trace` uses the same phrase (still `HUMAN_REQUIRED`) when the record file is on disk
+  but not committed, both with `run.md` uncommitted (it said "missing approval") and with `run.md` committed (it said
+  "approval is not immutable"); no record file for the artifact still reads "missing approval".
+- **`approve-record` immutability and line endings.** `approve-record` never overwrites an approval record: the same
+  approval again is a no-op, another one (by, date or note) for the same `run.md` revision is refused before `run.md`
+  is touched, and a changed `run.md` gets a new revision and a new record. A `run.md` with CRLF line endings parses
+  and keeps them, and the record's `rev` is what `git hash-object` gives the file in its repository (line-ending
+  filters such as `core.autocrlf` applied), so it is the blob the commit binds.
+- **Square size tolerance.** `sprite-2d` and `icon` square checks failed on real service outputs (1322x1190); the
+  square purposes `icon`, `sprite-2d` and `texture-tileable` now set `square_tolerance` 0.15, and a landscape or portrait purpose can set `qa.size.allow_swap` to accept the
+  swapped orientation (1024x1536 returned for 1536x1024; a boolean, default false, checked by `lint`), with these
+  real sizes as regression tests.
+- **`embed` stale chunk.** `embed` replaces an existing `workflow` chunk that differs from the current
+  `workflow.ui.json` (idempotent when equal), so a re-render no longer leaves the old graph in the PNG.
+- **Agent and model names as approvers.** The shared approver guard (`approve-record --by`, an active anchor's
+  `approved_by`, `gen-run-style`) only knew claude, codex and gpt names, so `approve-record --by gemini-2.5-pro`
+  approved a run. It now refuses the common model and agent families as a whole-word name start, also after a vendor
+  prefix such as `google/` (gemini, llama, mistral, qwen, deepseek, grok, o1/o3/o4, phi-, copilot and others), the
+  registry's `pipeline.agents`, and any name ending in `-bot` or `-agent`; person names such as `Grokowski` are
+  accepted.
+- **`defringe` dropped colour metadata.** `defringe` rebuilt each output from its pixels and kept only the text
+  chunks, so `gAMA`, `cHRM`, `iCCP`, `sRGB` and `pHYs` were lost and the opaque body could look different. It now
+  carries `cHRM`, `gAMA`, `iCCP` or `sRGB` (never both; `iCCP` wins), `cICP`, `mDCv`, `cLLI` and `pHYs` from before
+  the first `IDAT`, in file order, right after `IHDR`, and still drops chunks bound to the old pixel format (`sBIT`,
+  `PLTE`, `tRNS`, `bKGD`, `hIST`, `sPLT`).
+- **Review previews dropped colour metadata.** The image review's dark and light composites and the 2x2 tile previews
+  were written untagged, so an output with `gAMA`, `cHRM`, `iCCP` or `sRGB` displayed different body colours and
+  fringe contrast in its preview than in the output (with `gAMA` 100000, opaque 128 displays as 188 in the output
+  and 128 in the preview). Every review preview now carries the output's colour chunks right after `IHDR`, with the
+  `defringe` rules minus `pHYs` (a preview is never placed); the blend runs on the stored values, with the backgrounds
+  in that same space. An untagged output keeps untagged previews, byte for byte, and `--no-write` compares the tagged
+  bytes.
+- **Grayscale outputs became RGBA with a GRAY ICC profile.** `defringe` and the review previews rewrote a gray or
+  gray+alpha output (colour type 0 with `tRNS`, or 4) as RGB(A) while copying its `iCCP`, so a GRAY profile sat on
+  a colour image. A grayscale output now stays grayscale: `defringe` writes it as 8-bit gray+alpha (colour type 4)
+  with its profile, its composites are gray and its tile preview gray+alpha. No PNG it writes carries a profile of
+  the other colour space than its colour type (a GRAY profile on RGB(A), an RGB one on gray): such an `iCCP` is
+  dropped, and the output's `sRGB`, if any, is kept instead. Palette and RGB outputs, and untagged previews, are
+  unchanged byte for byte.
+- **`defringe` and the review previews handled other bit depths as 8-bit.** Both now read the IHDR bit depth and
+  handle only 8-bit PNGs (palette included), which is what the image service produces. Any other depth (16-bit, or
+  1/2/4-bit) is refused with the reason `bit depth N not supported`: `defringe` records the output as `skipped` and
+  leaves it byte-identical with no `outputs-raw/` copy, and `review-cmd` builds no composite or tile for it, prints
+  the reason on stderr and still hands the output itself to the reviewer.
+- **The documented fringe repair was refused after QA.** `asset-gen` step 7 said to run `defringe` after a
+  `png-edge-fringe` FAIL, but `qa.json` then binds the outputs, so `defringe` refused. Step 7 (and the `comfyui`
+  skill and the domain doc) now document `assetgen.py defringe --run <run> --force [--alpha-floor N]`, then `embed`,
+  `qa` and both image reviews again (`review-cmd --phase image` and `review-image-claude.json`). The refusal and the
+  `next:` hint after a forced run name `embed`, `qa` and both image reviews.
+- **Codex role.** `AGENTS.md` no longer lets Codex act as the run lead or a task lead: Codex runs only as a session a
+  Claude task lead starts (implementer, cross-model reviewer, QA); the run lead is the main Claude Code session and the
+  task lead is always Claude (registry `pipeline.lead_agent`). `AGENTS.md` points to the `.claude/CLAUDE.md` operating
+  lessons for Git Bash instead of restating the WSL lesson. `tests/parallel-policy.test.sh` fails when `AGENTS.md`
+  names Codex as run lead or task lead.
+- **Child implement sessions.** `parallel-work.md` section 10 step 4 states the child exception: a shared-placement
+  implement session never commits, a child session commits on its own child branch and the task lead merges and
+  removes it. `tests/parallel-policy.test.sh` checks the step under a policy marker.
+- **Parallel-work wording.** Section 4 says which placement default applies to which phase (`dispatch --phase lead`
+  defaults to `child`, every other session to `shared`) and that a no-worktree (Unity) repo's task branch is the plan
+  `topic`; section 8 removes a leftover child with `orca worktree rm --worktree path:<child>`.
+- **Changelog.** The task-lead and session-lifecycle fragments name `--parent-worktree` as the task worktree default and
+  the child-worktree exception.
+- **factory-core allowed-tools.** The `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py` form the
+  pipeline prints is granted, not only the form without `-B`.
+- **Pipeline: Unity aliases.** `status` and `dispatch` serialize no-worktree tasks by checkout, as `validate` does: two
+  plan repo keys that name one Unity checkout are never both ready, the second task waits for the first one's QA, and
+  per-task QA counts every alias of the checkout (also in the gate). `status` offers a no-worktree checkout's
+  integration QA only after every task of the checkout, under any alias, passed per-task QA, and runs the aliases'
+  integration QAs one at a time, so no QA session runs beside a task lead in one Unity checkout. The gate counts
+  every alias's owned paths on the shared integration branch, so their changes are not stray.
+- **Pipeline: dependent tasks with shared paths.** `status` counts only a task's own commits: a task branch cut from the
+  integration branch starts at its fork point (no own commits while it is still on the topic's first-parent chain),
+  and a no-worktree task starts after its serial predecessor's last verdict (before that verdict it has not started).
+  A dependent task that owns an earlier task's paths is no longer a review candidate before its first commit, in a
+  worktree repo and in a no-worktree (Unity) repo.
+- **Pipeline: child names.** Review and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`, so the review
+  and the QA of one candidate, or a subtask whose implement child still exists, never collide in Orca. A child
+  command also says on stderr to run it from the parent worktree (integration QA included).
+- **Pipeline: one id rule.** Task and subtask ids follow the schemas' pattern `^[A-Za-z0-9][A-Za-z0-9_.-]*$` in
+  `validate`, `subplan validate`, `dispatch` and `verdict`; `subplan validate` rejects unknown subplan and subtask keys,
+  and `validate` rejects a task id `integration_<repo>` (it would share the integration QA's verdict file).
+- **Pipeline: case on Windows.** The gate's and `status`'s git pathspecs for owned paths are case-insensitive on
+  Windows, matching the owned-path check, so a plan path in another case no longer hides a stale review.
+- **Pipeline: Agent fallback for a child.** `--runner agent` with child placement uses the Agent tool's
+  `isolation: worktree` and never tells the session to run `git worktree add`.
+- **Pipeline.** Plans and subplans with a UTF-8 BOM (PowerShell `Out-File`/`Set-Content`) load instead of failing with a JSON error.
+- **Pipeline.** A task review recorded by a model other than the task's paired reviewer (a paired review of a Codex subtask without `--subtask`) no longer overwrites the pair's review of the same SHA; it is kept per candidate and named on stderr.
+- **One-line Orca prompts.** cmd.exe cut multi-line `orca` arguments at the first newline, so a dispatched session
+  received only the first line of its spec. Every `--runner orca` dispatch (planner, task lead, implement, review, QA)
+  now stores the full spec under `<state dir>/pipeline/<plan id>/specs/` and passes a one-line prompt pointing to that
+  absolute file; the planner's prompt also ends with `Request: <text>`, whitespace collapsed to single spaces.
+- **Pending status for unstarted tasks.** `factory-pipeline.py status` keeps a task with no branch, worktree or review
+  pending: commits on the integration branch from an earlier task with the same owned paths no longer make it a
+  `candidate` at the integration HEAD.
+- **Planner specs in a reserved directory.** Planner specs moved from `pipeline/planner/` (which a plan with id
+  `planner` would share) to `pipeline/_planner/`; `validate` rejects a plan id whose state directory is `_planner`.
+- **Spec path test on short Windows paths.** `tests/pipeline.test.sh` compares spec directories by real, case-folded
+  path, so an 8.3 short `TEMP` (Windows CI runners) no longer fails the check.
+- **Note for unreviewed integration commits.** `status` keeps an unstarted task pending but notes when its owned paths
+  already have commits on the integration branch and no review record exists ("integrated earlier? check before
+  dispatching again").
+- **Workflow dispatch for Orca.** `factory-workflow.py dispatch --runner orca` printed
+  `orca orchestration worker-start --task "<spec>"`, which Orca rejects (`--task` takes a task id and a start needs
+  `--agent`); it now prints `--spec ... --agent ... --worktree ...` and never a new worktree for a Unity project.
+- Isolate devtools fixtures from inherited Codex runtime markers so real user MCP and plugin names cannot change test expectations.
+- **Timeout test no longer depends on machine load.** `tests/run-checks.test.sh` bounded the whole
+  `run-checks.py --timeout 1` call at 8 s wall clock, which failed under two concurrent full run-all runs (8.97 s,
+  10.83 s). A timed-out check's result now carries a `timeout` record measured by the runner
+  (`limit_s`, `timed_out_after_s`, `killed_after_s`, `cleanup_grace_s`, `verified`; `scripts/lib/procrun.py`), and the
+  test asserts that the tree was killed after the limit and within the runner's cleanup grace. A negative case keeps a
+  never-killed hung child failing the bound.
+- **`tests/ui-commands.test.sh` diagnostics.** The `components settings` case prints every asserted value on failure
+  and no longer reads a previous case's output.
+- **Remaining load-sensitive tests.** The Windows grandchild probe in `tests/run-checks.test.sh` no longer takes a
+  reused PID for a survivor: a live process at that PID counts only when it started no later than the check's own
+  post-spawn timestamp, and the probe prints the tasklist row and both times on failure (a live grandchild still
+  fails). `tests/session-state.test.sh` checks the file-lock retries on a fake clock instead of real elapsed time,
+  and `tests/run-all-parallel.test.sh` relies on overlap evidence instead of comparing `-j 3` and `-j 1` wall time.
+- **Timeout tree check under load.** When bash needs more than the 1 s limit to reach `echo $!`, the check is killed
+  before it writes `child.pid` (seen in 6 of 90 runs under a process-spawn storm). The test now accepts that case when
+  the runner's own record verifies the whole tree is gone, and still fails without a verified record. Every
+  `t-timeout-tree` failure now prints the result's state, reason, exit, duration, timeout record and output tail
+  (or the raw output head when there is no result).
+- **`run-checks.py` bash flavor probe.** On Windows, a `uname` probe that fails to start or exits non-zero no longer makes
+  the flavor `unknown` at once (that BLOCKs every check of the run). The probe now runs up to 3 times, and a probe that
+  ran keeps its answer. The "cannot be resolved" BLOCKED reason now names what is missing (workspace, workspace path,
+  checkout path, HEAD), the selected bash, its flavor and each probe answer. A timeout reason no longer repeats
+  `cleanup=`.
+- **Docs.** The `scripts/README.md` library index lists the current `lib/` modules (guard package, snapshot rendering,
+  workspace helpers, process runner, artifacts, Orca commands), and `docs/architecture/ui-skills.md` names
+  `scripts/lib/snapshot_render.py` for the snapshot Next line.
+- **Guard.** Dropped a duplicate import in `scripts/lib/guard/common.py` and the blank line at the end of six guard
+  modules (`git diff --check` is clean).
+- **Tests.** `tests/artifact-quality.test.sh` puts `scripts/lib` on `sys.path` before it loads `scripts/lib/tools.py`
+  by path, so the suite no longer fails on `codexconfig` when run on its own.
+- **Pipeline.** `factory-pipeline.py dispatch --phase lead|implement` branches a later-wave task (one with deps)
+  from the plan's `topic` integration branch when it exists, so it carries the earlier waves; `repos.<key>.base`
+  stays the comparison base of `status` and the gate.
+- **Pipeline tier for unregistered repos.** `factory-pipeline.py tier --plan <plan.json> --repo <key> --paths <files>`
+  tiers a `plan.repos` entry the registry does not know (the plugin repo itself) from the paths alone (modules:
+  `skills/<name>`, `scripts/lib`, `scripts`, `tests`, `registry`, `docs`, `hooks`, `commands`, and one `other` module for
+  anything else; no contracts or generated paths) instead of failing with
+  `factory-context: unknown repo`. A registry repo key still goes through `factory-context.sh`.
+- **`pipeline subplan` through the command entry point.** `factory-cmd.py pipeline` (and the `/rpg-factory:pipeline`
+  slash command) rejected `subplan` with the usage error, so a task lead could not run `pipeline subplan validate`
+  that way. `subplan` is now a pipeline verb and the usage text and `help` list it.
+- **Pipeline test on Linux.** `tests/pipeline.test.sh` expected the Orca `--worktree path:...` argument quoted; `shlex.quote`
+  leaves a POSIX path unquoted, so main CI failed on ubuntu after PR #75. The two dispatch cases accept both forms.
+- **Tests.** `tests/install-status.test.sh` isolates the caller's Codex runtime markers (`CODEX_THREAD_ID`, `PLUGIN_ROOT`, `PLUGIN_DATA`): inside a Codex session they made the plugin look like a Codex install and one of 47 cases failed.
+- **testlab.** `testlab/tests/test_framegc.py` now runs in run-all next to the other testlab unit tests.
+- **domains test.** The base P4 regression proof drops dev tools probed by `plugin-file:`, a kind its frozen checker
+  predates.
+- **Skill author.** The validate step names a changelog fragment instead of a `CHANGELOG.md` `[Unreleased]` entry.
+- **Pipeline paths.** Owned and subtask paths that are absolute or contain a `..` segment are rejected (plan
+  `validate`, `subplan validate`, `dispatch --paths`) before any containment, exclusion or overlap comparison.
+- **Only the task lead commits.** `status` names `--phase lead` after a review FAIL in every repo (the task lead
+  resumes in its task worktree or the main checkout and starts a fresh fix session), and `dispatch --phase implement`
+  never prints a committing worker: in a no-worktree repo it is a sub-session in the main checkout that does not
+  commit, with or without `--paths`. `dispatch --paths` overlapping a task exclusion is refused (exit 2), with the
+  exclusion test of `subplan validate`. `parallel-work.md` drops the S-tier shortcut: an S task is a one-task plan
+  with its own task lead; the run lead never implements a task in its own session.
+- **Parallel-policy test.** `tests/parallel-policy.test.sh` makes its plugin copy writable (tar kept read-only modes,
+  so `echo >> file` mutations silently did nothing and their cases failed) and reports a FAIL when a mutation command
+  itself fails; a regression case copies a read-only source file and mutates it.
+- **Two-level policy guard.** `parallel-work.md` states its two-level rules as canonical sentences, each under a
+  marker comment (`<!-- policy:run-lead-never-implements -->`, `policy:only-task-lead-commits`,
+  `policy:no-worktree-repo`). `tests/parallel-policy.test.sh` no longer matches free prose: each marker must appear
+  exactly once with its exact canonical sentence on the next non-empty line, and no line may carry a retired
+  shortcut phrasing (fixed-string denylist). Mutations (marker deleted or duplicated, sentence changed, old shortcut
+  re-added) fail; a rewording outside the markers passes.
+- **Task-lead prompt.** `dispatch --phase lead --report-to` accepts `<id>` and `run:<id>` (no more `--to run:run:<id>`);
+  in a no-worktree repo rule 9 no longer mentions removing a worktree; a registry `worktrees_reason` ending in a period
+  no longer prints a double period.
+- **Pipeline: no-worktree dependent tasks.** In a no-worktree (Unity) repo, a task starts only after its serial
+  predecessor's current QA PASS on the shared integration branch: until then `status` keeps it pending (it waits for
+  the predecessor) instead of offering a review of the predecessor's commits in the paths both tasks own. A pending
+  task that both depends on and follows its predecessor names it once in its "waits for" note.
+- **Pipeline: STALE QA in dispatch.** `dispatch --task integration:<key> --phase qa` of a no-worktree checkout, and
+  `dispatch --phase lead|implement` of the next task in it, read each task's QA as `status` does: a QA PASS recorded
+  for an older version of the task is STALE and still counts as open.
+- **Pipeline: subtask verdict files.** A subtask's verdicts are named `<task>@<subtask>__<phase>...`, which no task id
+  can produce: task `a__sub-b` and subtask `b` of task `a` no longer share `a__sub-b__review.json`. Task verdict file
+  names are unchanged; older `<task>__sub-<subtask>__...` records still count for the task and subtask they name unless
+  new-style records exist for that subtask and phase, in which case the new-style records take precedence.
+- **Pipeline: command hint.** `/rpg-factory:pipeline`'s argument hint lists `subplan`; `status` no longer runs an
+  unused git call after the integration QA rows.
+
 ## [1.5.0] - 2026-11-05
 
 Feature release: Codex CLI plugin. The same checkout installs into Codex CLI with the same skills, scripts and
