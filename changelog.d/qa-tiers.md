@@ -26,6 +26,8 @@
   a suite line (`scripts/checks/skill-citations.py`, `scripts/factory-context.sh`, `scripts/checks/pin-status.py`,
   `pin-plan.py`, `package-ready.py`, `netcode-headless.sh`) are selected like suites by that script path, else they
   count as not affected; `--only-suites` may name such a script.
+- **run-all.** `--affected` selects the suites with one `tests/affected.py select-many` call per run instead of one
+  call per suite.
 - **run-all.** When `python3` resolves to the Windows Store alias, run-all puts the real Python directory first on
   `PATH` for the suites (about 70 ms saved per call); the user's system is not changed.
 - **Tests.** `tests/affected.py` no longer treats `scripts/lib/*` as global: a lib module selects only the suites of
@@ -54,8 +56,6 @@
   spec as an extra command `DO NOT RUN (...; report it NOT_RUN)`. Without a review base the task QA command is
   `tests/run-all.sh --only-suites <check suites> -j 2`; with no check suites either, the spec prints `NONE` and asks
   the task lead for a base. When two extra commands run the same suite, the `env -u TMPDIR` form is kept.
-- **run-all.** `--affected` selects the suites with one `tests/affected.py select-many` call per run instead of one
-  call per suite.
   `verdict --failed-suites` accepts any suite `tests/run-all.sh --list-suites` lists (for example
   `testlab/tests/test_lab.py` and `scripts/check-registry.sh`).
 - **Pipeline.** A tier S task (plan or task tier S, or every owned path prose: a `.md` file anywhere, a path under `changelog.d/` or a `skills/` directory path; a non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are not prose) needs no QA session: the task lead runs the task QA command after the review PASS and records
