@@ -18,8 +18,10 @@
 #                   blocks: scripts/checks/skill-citations.py, scripts/factory-context.sh, and in the live checks
 #                   scripts/checks/pin-status.py, pin-plan.py, package-ready.py, netcode-headless.sh) is selected
 #                   like a suite by that script path, else it counts as not affected.
+#                   Suites with a case map receive --case A,B for only the affected cases (shown in results).
+#                   An explicit --only-suites name runs all its cases. Case subsets never publish suite PASS records.
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
-#   --no-wait       exit 3 when another full run holds the machine-wide lock
+#   --no-wait       exit 3 when the full-run lock or every targeted test slot is busy
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
 #                   be a gated script above (e.g. scripts/checks/netcode-headless.sh). A name that is not in
 #                   --list-suites (no run line runs it, e.g. tests/handoff-e2e.test.sh) exits 2, naming each one;
@@ -33,6 +35,9 @@
 #   --workspace-only run only checks requiring the live workspace or Claude; conflicts with --no-workspace and --release
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
+#   Targeted runs (--affected / --only-suites) share RPG_FACTORY_TEST_SLOTS machine-wide slots (default 2;
+#                   0 disables the cap), under the persistent state directory's locks/run-all-slots/<n>.
+#                   Busy slots queue with a wait message; dead holders are reclaimed. Full runs keep their own lock.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
@@ -68,6 +73,7 @@ fi
 
 pass=0; fail=0; skip=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
 STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
+SLOT=""; SLOT_TOKEN=""
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
 _ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
 _bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
@@ -93,6 +99,10 @@ runall_cleanup() {
   if [ -n "$LOCK_TOKEN" ] && [ "$(cat "$LOCK/owner" 2>/dev/null)" = "$LOCK_TOKEN" ]; then
     rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
     rmdir "$LOCK" 2>/dev/null || :
+  fi
+  if [ -n "$SLOT_TOKEN" ] && [ "$(cat "$SLOT/owner" 2>/dev/null)" = "$SLOT_TOKEN" ]; then
+    rm -f "$SLOT/owner" "$SLOT/pid" "$SLOT/checkout" "$SLOT/started" "$SLOT/winpid"
+    rmdir "$SLOT" 2>/dev/null || :
   fi
 }
 [ "$jobs" -gt 1 ] && QD=$(mktemp_win)
@@ -193,16 +203,19 @@ replay() { # rc output name: the lines a block printed, counted by their prefix
   [ -n "$done" ] || _bad "checks block $3 ended early (rc=$1)"
 }
 _run() {
-  local mode="$1" post="$2" lane="$3" name="$4"; shift 4; local out s t0 t1 n rc
+  local mode="$1" post="$2" lane="$3" name="$4"; shift 4; local out s t0 t1 n rc case_list=""
   suite_of "$@"
   if [ -n "$s" ] && ! suite_selected "$s"; then not_affected; return; fi
   # Postprocessors can turn rc=0 into SKIP/FAIL, so they always grade fresh output.
   local cache_suite="$s"
-  case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite="" ;; esac
+  suite_cases_for "$s"; case_list=$suite_cases
+  case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite=""; case_list="" ;; esac
   # never reused: graded by a handler, live lane (runl, block), inside a block, or reading a workspace
   [ -z "$post$lane$LIVE_BLOCK" ] || cache_suite=""
   case " $* " in *" --no-history "*|*" RPG_FACTORY_WORKSPACE="*) cache_suite="" ;; esac
+  [ -z "$case_list" ] || name="$name (cases $case_list)"
   if [ -z "$post" ] && suite_cache_hit "$cache_suite"; then ok "$name (reused $s inputs $suite_hash)"; return; fi
+  if [ -n "$case_list" ]; then set -- "$@" --case "$case_list"; cache_suite=""; fi
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
     if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
     t0=$(date +%s)
@@ -334,11 +347,28 @@ list_runnable() { # file: list_suites without the release-only suites unless --r
 # affected_select <suite...>: one affected.py call answers suite_selected for every candidate (the import graph is
 # built once per run, before any job forks); a name outside the candidates, or a failed call, asks per suite.
 affected_select() {
-  local picked
-  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" select-many "$AFF" "$@") || return 0
-  AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'"${picked//$'\r'/}"$'\n'
+  local picked suite cases
+  if picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" select-many "$AFF" "$@"); then
+    AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'"${picked//$'\r'/}"$'\n'
+  fi
+  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" cases "$AFF" "$@") || return 0
+  while read -r suite cases; do
+    suite=${suite%$'\r'}; cases=${cases%$'\r'}
+    [ -n "$suite" ] && [ -n "$cases" ] && [ "$cases" != ALL ] || continue
+    CASE_SUITES+=("$suite"); CASE_LISTS+=("$cases")
+  done <<<"$picked"
 }
 AFF_ASKED=""; AFF_PICKED=""
+CASE_SUITES=(); CASE_LISTS=()
+suite_cases_for() {
+  local i; suite_cases=""
+  $release && return 0
+  case ",$only_suites," in *",$1,"*) return 0 ;; esac
+  for i in "${!CASE_SUITES[@]}"; do
+    [ "${CASE_SUITES[i]}" = "$1" ] && { suite_cases=${CASE_LISTS[i]}; break; }
+  done
+  return 0
+}
 suite_selected() {
   local target=$1
   $release && return 0
@@ -417,7 +447,7 @@ reclaim_stale() { # a takeover that died inside its reclaim guard must not wedge
     # the pid is written right after mkdir: give a live holder time to write it
     age=$(dir_age "$r") && [ "$age" -ge 2 ] || return 0
   fi
-  echo "run-all: removing stale reclaim guard of the full-run lock (${rpid:-no pid})"
+  echo "run-all: removing stale reclaim guard of ${1:-the full-run lock} (${rpid:-no pid})"
   rm -f "$r/pid"; rmdir "$r" 2>/dev/null || :
 }
 # identity of a directory: a fresh lock created at the same path differs (inode, and creation time where the platform
@@ -428,6 +458,15 @@ lock_still_stale() { # stale-pid stale-ident: under the reclaim guard, the lock 
   # judged. Another takeover may have removed it and a new holder created a fresh lock (pid not yet written) that this
   # guard now sits in: removing that would let two full runs start.
   [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$1" ] && [ -n "$2" ] && [ "$(dir_ident "$LOCK")" = "$2" ] && ! lock_alive
+}
+lock_publish() {
+  LOCK_TOKEN="$$-$RANDOM-$(date +%s)"
+  printf '%s\n' "$LOCK_TOKEN" > "$LOCK/owner"
+  printf '%s\n' "$$" > "$LOCK/pid"
+  printf '%s\n' "$ROOT" > "$LOCK/checkout"
+  date -u +%FT%TZ > "$LOCK/started"
+  # Other MSYS/Cygwin runtimes cannot resolve this runtime's shell PID.
+  cat "/proc/$$/winpid" > "$LOCK/winpid" 2>/dev/null || rm -f "$LOCK/winpid"
 }
 full_lock() {
   local owner waited=false age stale_pid stale_ident
@@ -455,14 +494,48 @@ full_lock() {
     $no_wait && return 3
     sleep 0.2
   done
-  LOCK_TOKEN="$$-$RANDOM-$(date +%s)"
-  printf '%s\n' "$LOCK_TOKEN" > "$LOCK/owner"
-  printf '%s\n' "$$" > "$LOCK/pid"
-  printf '%s\n' "$ROOT" > "$LOCK/checkout"
-  date -u +%FT%TZ > "$LOCK/started"
-  # the Windows PID lets lock_alive see a holder from another MSYS/Cygwin runtime (its MSYS pid means nothing here);
-  # Git Bash ps has no -o, /proc/<pid>/winpid is what MSYS and Cygwin provide
-  cat "/proc/$$/winpid" > "$LOCK/winpid" 2>/dev/null || rm -f "$LOCK/winpid"
+  lock_publish
+}
+test_slot() {
+  # Dynamic locals let the full-run lock's liveness and reclaim helpers inspect this slot without changing LOCK.
+  local LOCK="" LOCK_TOKEN="" cap=${RPG_FACTORY_TEST_SLOTS:-2} i age stale_pid stale_ident
+  local waited=false holders count
+  [[ "$cap" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "run-all: RPG_FACTORY_TEST_SLOTS needs a non-negative integer, got '$cap'" >&2; return 2; }
+  [ "$cap" != 0 ] || return 0
+  mkdir -p "$STATE/locks/run-all-slots" || return 1
+  while :; do
+    holders=""; count=0
+    for ((i=1; i<=cap; i++)); do
+      LOCK="$STATE/locks/run-all-slots/$i"
+      if ! mkdir "$LOCK" 2>/dev/null; then
+        # A fresh directory without metadata may still be publishing its PID.
+        age=0
+        [ -f "$LOCK/pid" ] || age=$(dir_age "$LOCK") || age=0
+        if [ -f "$LOCK/pid" ] || [ "$age" -ge 10 ]; then
+          reclaim_stale "test slot $i"
+          stale_pid=$(cat "$LOCK/pid" 2>/dev/null); stale_ident=$(dir_ident "$LOCK")
+          if [ -n "$stale_ident" ] && ! lock_alive && mkdir "$LOCK/reclaim" 2>/dev/null; then
+            printf '%s\n' "$$" > "$LOCK/reclaim/pid"
+            if lock_still_stale "$stale_pid" "$stale_ident"; then
+              echo "run-all: taking over stale test slot $i ($stale_pid)"
+              rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
+              rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" "$LOCK" 2>/dev/null || :
+            else rm -f "$LOCK/reclaim/pid"; rmdir "$LOCK/reclaim" 2>/dev/null || :; fi
+          fi
+        fi
+        if ! mkdir "$LOCK" 2>/dev/null; then
+          count=$((count + 1))
+          holders+="${holders:+, }$(cat "$LOCK/pid" 2>/dev/null || echo unknown) in $(cat "$LOCK/checkout" 2>/dev/null || echo "$LOCK")"
+          continue
+        fi
+      fi
+      lock_publish || return 1
+      SLOT=$LOCK; SLOT_TOKEN=$LOCK_TOKEN; return 0
+    done
+    if ! $waited; then echo "run-all: waiting for a test slot ($count in use: $holders)"; waited=true; fi
+    $no_wait && return 3
+    sleep 0.2
+  done
 }
 full_reuse() {
   $reuse && ! $release && $CLEAN_START && [ -n "$TREE" ] || return 1
@@ -516,6 +589,7 @@ runall_prepare() {
     done
     $bad && return 2
   fi
+  if ! $full_run && { $affected || [ -n "$only_suites" ]; }; then test_slot || return $?; fi
   [ -z "$AFF" ] || affected_select "${suites[@]}"
   if $suite_reuse && ! $release; then
     hash_output=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" hashes "${suites[@]}" 2>/dev/null) || hash_output=""
