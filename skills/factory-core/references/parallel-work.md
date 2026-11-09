@@ -390,3 +390,34 @@ A no-worktree (Unity) repo never gets a worktree; its task lead and all its sess
    reports CLEAN.
 
 This policy introduces no tripwire, no latch and no new confirmation step.
+
+### Model choice
+
+Every pipeline session (planner, task lead, implementer, review, QA) starts with an explicit model and effort, not the
+CLI default. This subsection is the only copy of the policy; the data lives in registry `pipeline.models`, the code in
+`scripts/lib/model_policy.py`.
+
+- **Scope.** `pipeline.models.scope` lists, per agent (`claude`, `codex`), the models and efforts that may run at all.
+  Every profile must lie inside the scope (`scripts/check-registry.sh` and `docs/registry.schema.json` enforce it).
+  Codex runs `gpt-6.1-sol` for planner, lead, review and `heavy`, and `gpt-6.1-terra` for `light`, `standard` and `qa`
+  (all at effort `high`), the counterpart of `claude-sonnet-5-5` at `high` on Claude.
+- **Roles and profiles.** `pipeline.models.profiles.<agent>` maps a role to a model and effort. The roles are
+  `planner`, `lead` (the task lead, `--phase lead`), `implement` (takes the profile of the subtask or task grade),
+  `review` and `qa`. The review of a `heavy` task uses the `heavy` profile, so a hard diff gets a strong reviewer.
+- **Grades.** A grade is `light`, `standard` or `heavy`. A task or subtask carries an optional `grade` and
+  `grade_reason` (`docs/schemas/pipeline-plan.schema.json`, `docs/schemas/pipeline-subplan.schema.json`). Without a
+  grade the pipeline derives one from the task tier: S is `light`, M is `standard`, L, contract paths and generated
+  paths are `heavy`. A subtask without a grade inherits its task's grade. The rubric that tells a lead which grade to
+  write is `pipeline.models.rubric`; the task lead grades each subtask with it and records the reason.
+- **Checks.** `validate` and `subplan validate` reject an unknown grade and a grade the policy cannot resolve, and print
+  the resolved model and effort per task or subtask, so the lead sees the cost before it dispatches.
+- **Flags.** `planner` and `dispatch` accept `--grade light|standard|heavy`, `--model ID` and `--effort LEVEL` as
+  explicit overrides. A model or effort outside the scope is a usage error (exit 2); the pipeline never dispatches it.
+  `verdict` accepts optional `--model` and `--effort` and stores them with the verdict.
+- **Runners.** The `orca` runner adds `--model` and `--effort` to `orca orchestration worker-start`, `orca worktree create`
+  and `orca agent launch`. The Agent-tool runner passes only a model alias (`pipeline.models.agent_tool_alias`): the
+  Agent tool cannot set an effort, so the output and the prompt say so. The `print` runner shows model and effort in its
+  header.
+- **Personal override.** An optional JSON file with the same keys, at `$RPG_FACTORY_MODEL_POLICY` or
+  `<persistent state dir>/model-policy.json`, may narrow `scope` and replace `profiles`. The result is checked again
+  and an out-of-scope profile is an error. It is not committed; it lets one person limit their own spend.

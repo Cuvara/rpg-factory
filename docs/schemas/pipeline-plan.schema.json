@@ -146,6 +146,18 @@
             "type": "string",
             "minLength": 1,
             "description": "The task lead's own Orca Run id (from its report; run:<id> accepted). status and cleanup list that Run's settled workers that are not released (read-only worker-list). Not part of the verdict fingerprint."
+          },
+          "grade": {
+            "enum": [
+              "light",
+              "standard",
+              "heavy"
+            ],
+            "description": "Model grade of the task (registry pipeline.models.rubric). Default: derived from its tier (S light, M standard, L or contract/generated paths heavy). Its implement sessions run with the grade's profile; a heavy task's review runs with the heavy profile."
+          },
+          "grade_reason": {
+            "type": "string",
+            "description": "One line: why this grade (the rubric sentence it matches)."
           }
         },
         "additionalProperties": false
