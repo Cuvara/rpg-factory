@@ -2,8 +2,9 @@
 """Delivery pipeline for one Factory task: tier, plan validation, dispatch commands, review/QA verdicts, PR gate.
 
 Policy: skills/delivery/references/delivery.md (generic), skills/factory-core/references/parallel-work.md (RPG specifics). Settings: registry.json `pipeline` (tiers, agents,
-cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Plan format:
-docs/schemas/pipeline-plan.schema.json.
+cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Settings fall back to
+skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_REGISTRY=none or a missing registry
+file; a plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
@@ -196,6 +197,9 @@ def die(msg, code=2):
 
 def load_registry(path):
     if path == "none" or not os.path.isfile(path):
+        if path != "none":
+            print(f"factory-pipeline: registry {path} not found: using skills/delivery/pipeline-defaults.json",
+                  file=sys.stderr)
         path = os.path.join(ROOT, "skills", "delivery", "pipeline-defaults.json")
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
