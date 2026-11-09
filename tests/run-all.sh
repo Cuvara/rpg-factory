@@ -403,14 +403,15 @@ full_lock() {
   until mkdir "$LOCK" 2>/dev/null; do
     # mkdir and metadata publication are separate: give a new holder time to publish.
     if [ ! -f "$LOCK/pid" ]; then
-      age=$(dir_age "$LOCK") || continue
+      age=$(dir_age "$LOCK") || { sleep 0.2; continue; }   # gone (mkdir retries) or unreadable: never spin
       [ "$age" -ge 10 ] || { $no_wait && { echo "waiting for full run unknown in $LOCK"; return 3; }; sleep 0.2; continue; }
     fi
     reclaim_stale
     stale_pid=$(cat "$LOCK/pid" 2>/dev/null); stale_ident=$(dir_ident "$LOCK")
+    # no identity (lock just removed, or stat failed): no takeover can be judged; back off like the other wait paths
+    [ -n "$stale_ident" ] || { $no_wait && [ -d "$LOCK" ] && return 3; sleep 0.2; continue; }
     if ! lock_alive && mkdir "$LOCK/reclaim" 2>/dev/null; then
-      printf '%s
-' "$$" > "$LOCK/reclaim/pid"
+      printf '%s\n' "$$" > "$LOCK/reclaim/pid"
       if lock_still_stale "$stale_pid" "$stale_ident"; then
         echo "run-all: taking over stale full-run lock ($(cat "$LOCK/pid" 2>/dev/null))"
         rm -f "$LOCK/owner" "$LOCK/pid" "$LOCK/checkout" "$LOCK/started" "$LOCK/winpid"
@@ -427,7 +428,9 @@ full_lock() {
   printf '%s\n' "$$" > "$LOCK/pid"
   printf '%s\n' "$ROOT" > "$LOCK/checkout"
   date -u +%FT%TZ > "$LOCK/started"
-  ps -p $$ -o winpid= 2>/dev/null | tr -d ' ' > "$LOCK/winpid" || :
+  # the Windows PID lets lock_alive see a holder from another MSYS/Cygwin runtime (its MSYS pid means nothing here);
+  # Git Bash ps has no -o, /proc/<pid>/winpid is what MSYS and Cygwin provide
+  cat "/proc/$$/winpid" > "$LOCK/winpid" 2>/dev/null || rm -f "$LOCK/winpid"
 }
 full_reuse() {
   $reuse && ! $release && $CLEAN_START && [ -n "$TREE" ] || return 1

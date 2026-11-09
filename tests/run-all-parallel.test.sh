@@ -355,6 +355,13 @@ git -C "$TMP/repo" checkout -- tests/b.sh
 reset_cache
 HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
 for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
+# the holder records its Windows PID where the runtime has one (MSYS/Cygwin /proc/<pid>/winpid), and no file elsewhere
+HL="$TMP/state/locks/run-all-full"; hpid=$(cat "$HL/pid" 2>/dev/null)
+if [ -r "/proc/$hpid/winpid" ]; then
+  [ -n "$hpid" ] && [ "$(cat "$HL/winpid" 2>/dev/null)" = "$(cat "/proc/$hpid/winpid")" ]     && good 'full-run lock records the holder Windows PID' || no 'winpid recorded' "pid=$hpid winpid=$(cat "$HL/winpid" 2>&1)"
+else
+  [ -n "$hpid" ] && [ ! -e "$HL/winpid" ] && good 'full-run lock records no Windows PID without /proc/<pid>/winpid'     || no 'no winpid file' "pid=$hpid $(ls "$HL" 2>&1)"
+fi
 out=$(cache_plan --no-wait --no-reuse); rc=$?
 [ "$rc" = 3 ] && grep -q 'waiting for full run ' <<<"$out" \
   && good '--no-wait exits 3 while a full run holds the lock' || no '--no-wait contention' "$out"
@@ -384,6 +391,26 @@ printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
 out=$(cache_plan --no-reuse); rc=$?
 [ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
   && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
+# A holder from another MSYS/Cygwin runtime: its MSYS pid is dead here but its Windows PID is alive (stand-in
+# tasklist.exe), so the lock is kept; once the Windows PID is gone as well, it is taken over.
+L0="$TMP/state/locks/run-all-full"; mkdir -p "$TMP/winbin" "$L0"
+cat > "$TMP/winbin/tasklist.exe" <<'STUB'
+#!/usr/bin/env bash
+[ "$*" = "//FI PID eq ${LIVE_WINPID:-none} //NH" ] && { echo "bash.exe   $LIVE_WINPID Console   1   11,184 K"; exit 0; }
+echo 'INFO: No tasks are running which match the specified criteria.'
+STUB
+chmod +x "$TMP/winbin/tasklist.exe"
+WINBIN="$TMP/winbin"; if command -v cygpath >/dev/null 2>&1; then WINBIN=$(cygpath -u "$WINBIN"); fi  # C:/ splits PATH
+printf '99999999
+' > "$L0/pid"; printf '4242
+' > "$L0/winpid"
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && ! grep -q 'taking over stale full-run lock' <<<"$out" && [ "$(cat "$L0/winpid" 2>/dev/null)" = 4242 ]   && good 'lock with a dead MSYS pid and a live Windows PID is not taken over' || no "live winpid (rc=$rc)" "$out"
+mkdir -p "$L0"; printf '99999999
+' > "$L0/pid"; printf '4242
+' > "$L0/winpid"
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=1 timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$L0" ]   && good 'lock whose MSYS pid and Windows PID are both dead is taken over' || no "dead winpid (rc=$rc)" "$out"
 # A takeover that died inside its reclaim guard: before it removed the pid files (dead holder in reclaim/pid), and after
 # (lock holds only an old reclaim dir without pid). Neither wedges the lock, and --no-wait does not exit 3 for ever.
 L="$TMP/state/locks/run-all-full"
