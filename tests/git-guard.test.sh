@@ -21,8 +21,7 @@
 set -uo pipefail
 CASES='retry-selftest skill-read process-kill policy wrappers commit-ops gh-api v2-misc worktrees latch modes tech-skills remote-mutations local-refs classification mode-switch cli-selftest'
 usage() {
-  printf '%s
-' 'Usage: git-guard.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
+  printf '%s\n' 'Usage: git-guard.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
 }
 SELECTED=; list_cases=0
 while [ "$#" -gt 0 ]; do
@@ -31,18 +30,15 @@ while [ "$#" -gt 0 ]; do
     --list-cases) list_cases=1; shift ;;
     --case|--only) [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }; SELECTED+=" $2"; shift 2 ;;
     --case=*|--only=*) [ -n "${1#*=}" ] || { usage >&2; exit 2; }; SELECTED+=" ${1#*=}"; shift ;;
-    *) printf 'Unknown argument: %s
-' "$1" >&2; usage >&2; exit 2 ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 # Validate before the fixture workspace or any temp dir exists.
 SELECTED="${SELECTED//,/ }"
 for selected in $SELECTED; do
-  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s
-' "$selected" >&2; exit 2; }
+  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
 done
-if [ "$list_cases" = 1 ]; then printf '%s
-' $CASES; exit 0; fi
+if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
 all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
 has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -950,8 +946,7 @@ for p in '[]' 'null' '"s"' '42' '{"tool_name":"Bash","tool_input":"x"}' '{"tool_
   out=$(printf '%s' "$p" | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" 2>&1; echo "exit=$?")
   if [ "$out" != "exit=0" ]; then fail=$((fail + 1)); echo "FAIL payload $p: $out"
   elif [ -n "$first_payload" ] && [ "$batch_protocol_ok" != ok ]; then
-    fail=$((fail + 1)); printf 'FAIL batch protocol: %s
-' "${batch_protocol_ok:-no output (assertion failed)}"
+    fail=$((fail + 1)); printf 'FAIL batch protocol: %s\n' "${batch_protocol_ok:-no output (assertion failed)}"
   else pass=$((pass + 1)); fi
   first_payload=
 done
@@ -1011,10 +1006,10 @@ if has_case cli-selftest; then
   [ "$rc" -eq 2 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL unknown argument exited $rc, want 2"; }
   bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL unknown case exited $rc, want 2"; }
-  n_one=$(bash "$self" --case skill-read 2>&1 | sed -n 's/^git-guard tests: \([0-9]*\) run.*/\1/p')
-  # one child run builds its own fixture; in a full run the parent has run more assertions than the one case
+  n_one=$(bash "$self" --case retry-selftest 2>&1 | sed -n 's/^git-guard tests: \([0-9]*\) run.*/\1/p')
+  # the cheapest case (retry-selftest, ~12 s: fixture build + 3 assertions) keeps the child run short; one child run builds its own fixture; in a full run the parent has run more assertions than the one case
   if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then pass=$((pass + 1))
-  else fail=$((fail + 1)); echo "FAIL --case skill-read ran ${n_one:-?} assertions; the full run has $((pass + fail))"; fi
+  else fail=$((fail + 1)); echo "FAIL --case retry-selftest ran ${n_one:-?} assertions; the full run has $((pass + fail))"; fi
 fi
 exec {batch_in}>&- {batch_out}<&-
 # Close the coprocess's original descriptor too so it observes EOF.

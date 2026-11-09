@@ -672,10 +672,10 @@ if has_case cli-selftest; then
   [ "$rc" -eq 2 ] && ok "unknown argument exits 2" || no "unknown argument exited $rc, want 2"
   bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] && ok "unknown case exits 2" || no "unknown case exited $rc, want 2"
-  n_one=$(bash "$self" --case agents-roles 2>&1 | sed -n 's/^parallel-policy: \([0-9]*\) checks.*/\1/p')
-  # in a full run the parent has run more checks than the one case
-  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then ok "--case agents-roles runs $n_one checks, fewer than a full run"
-  else no "--case agents-roles ran ${n_one:-?} checks; the full run has $((pass + fail))"; fi
+  n_one=$(bash "$self" --case plan-paths 2>&1 | sed -n 's/^parallel-policy: \([0-9]*\) checks.*/\1/p')
+  # plan-paths is the cheapest case (~2 s); in a full run the parent has run more checks than the one case
+  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then ok "--case plan-paths runs $n_one checks, fewer than a full run"
+  else no "--case plan-paths ran ${n_one:-?} checks; the full run has $((pass + fail))"; fi
 fi
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

@@ -15,8 +15,7 @@
 set -uo pipefail
 CASES='tasks task-scope history cli-selftest'
 usage() {
-  printf '%s
-' 'Usage: routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'     '--no-history skips the replay of real commits (history scenarios print SKIP).'
+  printf '%s\n' 'Usage: routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'     '--no-history skips the replay of real commits (history scenarios print SKIP).'
 }
 history=true; SELECTED=; list_cases=0
 while [ "$#" -gt 0 ]; do
@@ -26,18 +25,15 @@ while [ "$#" -gt 0 ]; do
     --list-cases) list_cases=1; shift ;;
     --case|--only) [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }; SELECTED+=" $2"; shift 2 ;;
     --case=*|--only=*) [ -n "${1#*=}" ] || { usage >&2; exit 2; }; SELECTED+=" ${1#*=}"; shift ;;
-    *) printf 'Unknown argument: %s
-' "$1" >&2; usage >&2; exit 2 ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 # Validate before any fixture or temp dir exists.
 SELECTED="${SELECTED//,/ }"
 for selected in $SELECTED; do
-  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s
-' "$selected" >&2; exit 2; }
+  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
 done
-if [ "$list_cases" = 1 ]; then printf '%s
-' $CASES; exit 0; fi
+if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
 all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
 has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -59,8 +55,7 @@ assert() {
   if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
     jq -c --arg name "$name" --arg repo "$repo" '.repos[0] | {name: $name, repo: $repo,
         routing: (.routing | {lead, co_leads, legs, follow_ups, tech, ambiguous}),
-        touched, checks: [.checks[].id]}' <<<"$out" >> "$ROUTING_GOLDEN_OUT" 2>/dev/null       || printf '{"name":%s,"error":true}
-' "$(jq -Rn --arg n "$name" '$n')" >> "$ROUTING_GOLDEN_OUT"
+        touched, checks: [.checks[].id]}' <<<"$out" >> "$ROUTING_GOLDEN_OUT" 2>/dev/null       || printf '{"name":%s,"error":true}\n' "$(jq -Rn --arg n "$name" '$n')" >> "$ROUTING_GOLDEN_OUT"
   fi
   if jq -e ".repos[0] | $pred" <<<"$out" >/dev/null 2>&1; then
     pass=$((pass + 1)); echo "PASS  $name"
@@ -375,10 +370,10 @@ if has_case cli-selftest; then
   [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown argument exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown argument exited $rc, want 2"; }
   bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown case exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown case exited $rc, want 2"; }
-  n_one=$(bash "$self" --no-history --case task-scope 2>&1 | sed -n 's/^routing tests: \([0-9]*\) run.*/\1/p')
-  # in a full run the parent has run more assertions than the one case
-  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail + skip)) ]; }; then pass=$((pass + 1)); echo "PASS  --case task-scope runs ${n_one} assertions, fewer than a full run"
-  else fail=$((fail + 1)); echo "FAIL  --case task-scope ran ${n_one:-?} assertions; the full run has $((pass + fail + skip))"; fi
+  n_one=$(bash "$self" --no-history --case history 2>&1 | sed -n 's/^routing tests: \([0-9]*\) run.*/\1/p')
+  # --no-history --case history only prints SKIP lines (~3 s); in a full run the parent has run more assertions than the one case
+  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail + skip)) ]; }; then pass=$((pass + 1)); echo "PASS  --case history runs ${n_one} assertions, fewer than a full run"
+  else fail=$((fail + 1)); echo "FAIL  --case history ran ${n_one:-?} assertions; the full run has $((pass + fail + skip))"; fi
 fi
 
 total=$((pass + fail + skip))
