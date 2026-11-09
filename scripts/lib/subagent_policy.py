@@ -151,6 +151,6 @@ def rule(reg, role, agent):
     except (KeyError, TypeError) as exc:
         raise SubagentPolicyError(f"registry pipeline.subagents.models.{agent} is incomplete ({exc})")
     if spec.get("own_model"):
-        clause = f"they run on your own model ({clause}), never the other one, and the verdict stays yours"
+        clause = f"they stay on your own agent, {agent} ({clause}), never the other agent, and the verdict stays yours"
     return (f"Subagents: read-only scouts only, at most {spec['max_parallel']} in parallel, only when {spec['when']}; "
             f"never {_join(forbidden)}; {clause}.")

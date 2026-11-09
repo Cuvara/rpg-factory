@@ -90,8 +90,12 @@ for role in ROLES:
                    codex["model"] in text and codex["effort"] in text, text)
             expect(label + ": does not name the Claude agent type", claude["agent"] not in text, text)
         if spec.get("own_model"):
-            expect(label + ": own model and the verdict stays the reviewer's",
-                   "your own model" in text and "verdict stays yours" in text, text)
+            expect(label + ": own agent named, verdict stays the reviewer's, no own-model claim",
+                   f"your own agent, {agent} (" in text and "never the other agent" in text
+                   and "verdict stays yours" in text and "your own model" not in text, text)
+            subagent_model = claude["model"] if agent == "claude" else codex["model"]
+            expect(label + ": own-agent clause names the subagent model",
+                   f"your own agent, {agent} (" in text and subagent_model in text.split("your own agent,")[1], text)
         else:
             expect(label + ": no own-model clause", "own model" not in text and "verdict" not in text.replace(
                 "dispatch or verdict", ""), text)
@@ -126,7 +130,7 @@ changed("codex model and effort change shows",
         lambda b: b["models"]["codex"].update(model="gpt-6.1-sol", effort="high"), "lead", "codex",
         "gpt-6.1-sol with effort high")
 changed("own_model on another role shows", lambda b: b["roles"]["lead"].update(own_model=True), "lead", "claude",
-        "your own model")
+        "your own agent, claude (")
 changed("access none on a role shows", lambda b: b["roles"]["implement"].update(access="none", max_parallel=0,
                                                                               when="not here"),
         "implement", "claude", "Subagents: none in this session (not here)")
@@ -154,7 +158,7 @@ def check_registry(reg):
     path = os.path.join(TMP, "registry-copy.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(reg, fh)
-    # a path with a drive letter or backslashes would confuse bash and jq: pass it as the shell sees it
+    # run the real script in a bash subprocess on the temp copy, passed unchanged through --registry
     proc = subprocess.run(["bash", os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only",
                            "--registry", path], capture_output=True, text=True, env=dict(os.environ))
     return proc.returncode, proc.stdout + proc.stderr
