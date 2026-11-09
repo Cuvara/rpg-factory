@@ -4,6 +4,206 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-09
+
+Agent routing between Claude and Codex with availability fallback, QA tiers (full-run lock, suite reuse, narrower --affected), CI as the full-suite gate with run-all --workspace-only, worker stall detection, multi-wave gate attribution and post-merge cleanup.
+
+### Added
+
+- Route pipeline implementation, planning, review and QA by task kind and available models, with per-run MODEL_UNAVAILABLE marks and automatic SAME_MODEL fallback reviews. A subtask needs an implementer or a kind; routing honors the registry routing defaults and candidate agents, and detects Orca account availability with UTF-8 output. `validate` does not probe availability, and the planner reads no per-run MODEL_UNAVAILABLE marks.
+- Record the model `dispatch --phase implement` started per task and subtask; review, QA, `verdict` and the gate pair against that record (else the planned routing), never current availability, so a model that returns after a fallback does not review its own work as cross-model.
+- `verdict` stamps a SAME_MODEL fallback only when that candidate's `dispatch --phase review` was a fallback for the same reviewer, and refuses `--fallback` for available models, unknown agents and QA verdicts; `verdict --subtask` pairs against the subtask's routing (its record, its review dispatch, or `--subplan`), not the task's.
+- Bind subtask review coverage to its reviewed paths: later edits require a fresh paired review; legacy verdicts conservatively cover all task paths.
+- The gate does not let a task review launder a subtask: a subtask whose recorded implementer differs from the one the task review paired against, or is the task reviewer's own model, needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review (noted `SAME_MODEL (fallback: <pair> unavailable)`).
+- Warn about unexplained model overrides and plans using only one model; expose model choices and reasons in dispatch and status. `status` reports a plan task without `id` as INVALID, and `check-registry.sh` accepts a registry without `pipeline.qa_prefer`.
+- **`tests/run-all.sh --workspace-only`.** Runs only what CI cannot run: the live-workspace suites and checks
+  (facts, live pin status, skill citations, routing history replay, `claude plugin validate`), with the suite reuse.
+- **`-h` / `--help`.** `tests/run-all.sh` prints its usage header and exits 0. An unknown argument exits 2 with the
+  usage header and never starts a run.
+- **Pipeline.** Multi-wave plans: the gate accepts an earlier wave's review when a later wave's changes under its paths
+  are covered by the later task's own current PASS review (and QA where required), with commits attributed to tasks
+  by the topic's merge commits. Unreviewed changes and evil merges still block. `status` judges review currency with
+  the same rule, so `status` and the gate agree on shared dependent paths.
+- **Pipeline.** `verdict` records the true implementer of a task (the task record, else the unanimous subtask records,
+  else the review dispatch or the planned routing) and the subtask implementers; `--implementer` declares it (refused
+  when it conflicts with an implementer the dispatch recorded), and the gate pairs the review against the recorded
+  implementer.
+- **Pipeline.** `status` shows a task's own current QA and reports integration QA staleness as such; a QA recorded a
+  moment ago is never STALE.
+- **Pipeline.** `verdict --report` requires an existing file; `--note TEXT` takes free text.
+- **Pipeline.** `check-registry.sh` ties the kind enum copies (the subplan schema and the registry schema
+  `agent_routing`) to `docs/schemas/pipeline-plan.schema.json` and fails when one differs.
+- **run-all.** One full run per machine: a full `tests/run-all.sh` (no `--affected` or `--only-suites`) and every
+  `--release` run take a lock in the persistent state dir; the shared-config snapshot is taken after the lock. A second full run waits and prints `waiting for full run <pid> in <checkout>`;
+  `--no-wait` exits 3 instead, and a lock whose holder is dead is taken over. A holder counts as alive when its PID
+  answers `kill -0` or, on Git Bash, when the Windows PID it recorded from `/proc/$$/winpid` is in `tasklist.exe`, so a
+  full run started from another MSYS or Cygwin runtime is not taken over. Takeover prints
+  `run-all: taking over stale full-run lock (<pid>)`. Only one waiter reclaims a stale lock, and a lock that a new
+  holder has not finished writing is not taken over.
+- **run-all.** A full run on a clean tree writes a result record for that tree; `--reuse` exits 0 at once on a PASS
+  record of the same clean tree with at least the same coverage (a `--no-workspace` or `--no-claude` record does not
+  satisfy a run without that flag) and prints `reused full run at <HEAD> (tree <tree>, <date>)`. `--release` never
+  reuses the record.
+- **run-all.** Suite-level reuse: each suite's PASS is recorded under a hash of its inputs (`tests/affected.py hashes`,
+  the conservative rule: the suite file, the paths it names, every file in the tree of each code file the suite
+  reaches, such as `scripts/ui/data/*.json`, helpers with a caller edge included, the global inputs and the tool
+  versions; only `scripts/lib` stays narrowed to its importers, suites directly in `tests/` are not tree data and the
+  index docs `scripts/README.md` and `tests/README.md` count only where a suite names them), and a later run skips that suite and
+  prints `PASS  <check> (reused <suite> inputs <hash>)`. Suites graded by a postprocessor, checks that read the live
+  workspace (a `run` inside a live block too) and `--no-history` runs are never reused, no record is published when the inputs changed during the run, and a suite that skipped a case for a missing tool
+  publishes no PASS record (a later run with the tool runs it).
+  `--no-reuse` runs every suite; `--release` never reuses.
+- **run-all.** `--only-suites LIST` runs only the named suites (comma-separated paths), unioned with `--affected` when
+  both are given; neither takes the full-run lock. A name run-all does not run (a missing file, or a suite without a
+  run-all line such as `tests/dogfood.sh`) exits 2. `--list-suites` (read-only) prints the names `--only-suites`
+  accepts under the current flags (release-only suites need `--release`). A one-suite `--only-suites` run took 76 s before and 14 s after.
+- **run-all.** With `--affected` or `--only-suites`, the live-workspace blocks and the checks that run a script outside
+  a suite line (`scripts/checks/skill-citations.py`, `scripts/factory-context.sh`, `scripts/checks/pin-status.py`,
+  `pin-plan.py`, `package-ready.py`, `netcode-headless.sh`) are selected like suites by that script path, else they
+  count as not affected; `--only-suites` may name such a script.
+- **run-all.** `--affected` selects the suites with one `tests/affected.py select-many` call per run instead of one
+  call per suite.
+- **run-all.** When `python3` resolves to the Windows Store alias, run-all puts the real Python directory first on
+  `PATH` for the suites (about 70 ms saved per call); the user's system is not changed.
+- **Tests.** `tests/affected.py` no longer treats `scripts/lib/*` as global. Selection (`--affected`, `select`,
+  `select-many`) follows the narrow static graph: Python imports (parsed with `ast`, plus a text scan) and the shell
+  and jq helpers a script loads or runs by name, through every tracked code file on the way, so a lib module or a
+  helper selects only the suites of the scripts that reach it; a module it cannot map still selects every suite. A
+  miss there is caught by the integration full run. `affected.py hashes SUITE...` prints each suite's input hash for
+  suite reuse (`-` when reuse is unsafe) under the conservative tree rule above, because a false PASS is the risk
+  there. `tests/affected.test.sh` covers both rules.
+- **Guard.** `scripts/git-guard.py --batch` evaluates JSON-line cases in one process through the same evaluation as
+  the hook. `tests/git-guard.test.sh` runs most cases through it and keeps a representative set on the real hook
+  process (exit codes, `; exit 0` wiring, crash safety); the case count is unchanged. Suite wall time: 717 s before,
+  about 96-128 s after.
+- **Pipeline.** QA tiers (registry `pipeline.qa_tiers`): `dispatch --phase qa` prints one tier command. Task QA runs
+  `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2` (the suites the task's checks
+  name that `tests/run-all.sh --list-suites` lists, each once; only a plain standalone suite command or a plain
+  scoped `tests/run-all.sh` invocation is folded into it, every other check that mentions run-all is printed
+  `DO NOT RUN`, other checks stay whole extra commands)
+  and its spec forbids a full run. `verdict --phase qa --state FAIL --failed-suites LIST` records the failed suites;
+  the next QA dispatch on a new candidate reruns those that `tests/run-all.sh --list-suites` lists, each once, with
+  `--affected --base <that FAIL's candidate>`. The tier commands are read from registry `pipeline.qa_tiers`. A repo
+  without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
+  QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
+  `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
+- **Pipeline.** Task QA never prints a runnable full run, and no check is dropped silently. A `tests/run-all.sh`
+  check is folded into the tier command only when it is one plain standalone scoped invocation: an optional
+  `env -u TMPDIR` and `bash` prefix, plain flag tokens (no quote, backslash, `#`, `$`, backtick, operator,
+  redirection or newline) and `--affected` or `--only-suites` among them. Every other check that mentions run-all,
+  a plain full run included (`tests/run-all.sh -j 4`, `tests/run-all.sh -j 4 && ...`, `bash -c "tests/run-all.sh -j 4"`,
+  `sh tests/run-all.sh`, a quoted, escaped or commented form), is printed in the QA spec as an extra command
+  `DO NOT RUN (...; report it NOT_RUN)`; the QA session reports it NOT_RUN. Without a review base the task QA command is
+  `tests/run-all.sh --only-suites <check suites> -j 2`; with no check suites either, the spec prints `NONE` and asks
+  the task lead for a base. When two extra commands run the same suite, the `env -u TMPDIR` form is kept.
+  `verdict --failed-suites` accepts any suite `tests/run-all.sh --list-suites` lists (for example
+  `testlab/tests/test_lab.py` and `scripts/check-registry.sh`).
+- **Pipeline.** A tier S task (plan or task tier S, or every owned path prose: a `.md` file anywhere, a path under `changelog.d/` or a `skills/` directory path; a non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are not prose) needs no QA session: the task lead runs the task QA command after the review PASS and records
+  `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`. The gate accepts such a
+  lead-run QA verdict (note starting `tier S`, no QA session) only for a tier S task. A QA PASS from a fresh QA
+  session is accepted as before for every tier, including the one-model fallback where the implementer's model runs
+  QA.
+- **Pipeline.** The gate judges a subtask review's currency with the multi-wave attribution the task level uses, and
+  from the subtask's own paths instead of the task's whole owned paths: a later wave merged with its own current
+  PASS review does not make an earlier subtask review STALE, while unreviewed changes still do. A later sibling
+  subtask's own current paired PASS review also covers its changes to an earlier subtask's paths (for example a fix
+  session that edits files an earlier subtask implemented). That credit covers only the sibling's commits made after
+  it started (its recorded implement dispatch); a sibling without a recorded start gets no credit.
+- **Pipeline.** `verdict --subtask <id> --fallback '<model> unavailable' --note TEXT` records a SAME_MODEL fallback
+  subtask review after the fact, for a review made before dispatch recorded fallbacks (for example during an outage
+  of the paired model). The retrospective form is for subtask reviews only: without `--subtask` it is refused, and a
+  task review keeps a dispatch-recorded fallback or `gate --allow-same-model`. `--note` is required and the reviewer must be the implementer's model; the gate shows it as an accepted fallback
+  with its reason and note, never silently. The bare `verdict --fallback <model>` form also requires `--note`.
+- **Pipeline.** A workspace-relative `repos.<key>.path` in a plan is resolved under the workspace wherever the
+  pipeline reads a repo path.
+- **Tests.** `tests/affected.py` selects the parallel-policy suite for changes to `scripts/orca-wait.sh` and
+  `tests/orca-wait.test.sh`.
+- **Plans in the repo.** `docs/plans/` holds the plugin's pipeline plans (`docs/plans/<topic>.json`, starting with
+  `plugin-flow-2.json`), the backlog (`docs/plans/backlog.md`) and run reports (`docs/plans/<plan>/report.md`), so a
+  run can resume from any clone. `docs/plans/README.md` states what stays in the per-machine state dir (verdicts,
+  specs, subplans, Orca state: a new machine re-runs review and QA) and the portable `repos.<key>.path` forms.
+  `tests/parallel-policy.test.sh` fails on any machine-specific absolute path under `docs/plans/`.
+- **Portable plan repo paths.** `scripts/lib/plan_paths.py` (`resolve_repo_path`) resolves a plan-relative path and
+  `${RPG_FACTORY_WORKSPACE}/<repo>` against the workspace root; a later task wires it into `factory-pipeline.py`.
+- **Run lead waiter.** `scripts/orca-wait.sh --run <id>` waits on a Run for `worker_done`, `escalation` or
+  `question`, acks heartbeats, keeps waiting on timeout, prints the first real message and exits; one instance per
+  Run by a lock file in the state dir (`tests/orca-wait.test.sh`, fake `orca`).
+- **Run report rule.** The run lead writes `docs/plans/<plan>/report.md` at integration (sessions, verdicts, checks,
+  limitations) and commits it with the integration.
+- **Worker stalls.** The Orca waiter reports stalled workers and exits 5; `pipeline_route.stall_reason` identifies model availability failures in terminal output.
+
+### Changed
+
+- **CI is the full-suite gate.** Integration QA before the PR is `tests/run-all.sh --workspace-only`; after the PR
+  opens, CI green (`gh pr checks <pr> --watch`) is the merge gate; no full local run before a PR.
+  `dispatch --task integration:<repo> --phase qa` prints `--workspace-only` for the plugin repo, `gate` prints the CI watch with the PR commands, and registry
+  `pipeline.qa_tiers` integration is `ci+workspace`. The full
+  `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for releases. While CI runs, start the next
+  task (`.claude/CLAUDE.md`, `parallel-work.md` section 10 "QA tiers").
+- **Lead worktree.** `dispatch --phase lead` creates a new task worktree with
+  `git worktree add --no-track -b <branch> <path> <base>` and starts the lead with
+  `orca agent launch --worktree path:<path>`: `orca worktree create` writes `branch.<name>.base` into the shared
+  `.git/config`, which breaks other sessions' full runs (`parallel-work.md` section 4).
+- **Cleanup after the PR merges.** `parallel-work.md` section 8 adds the after-merge step: once the integration PR
+  is merged into main, the run lead removes the integration checkout or worktree (not the main checkout), deletes
+  every merged task branch and the integration branch locally (`git branch -d`) and on origin
+  (`git push origin --delete <branch>`, only branches of this plan that main contains), releases every worker and
+  starts the next plan from main. The run lead passes `factory-pipeline.py cleanup plan.json --after-merge` once the
+  PR is merged: it lists these commands and reports CLEAN only when none is left (a plan `repos` path that no longer
+  exists is LEFTOVER; the path must point at the main checkout).
+- **Core.** `parallel-work.md` section 10 has a "QA tiers" table (task QA, re-QA, tier S, reviewer, integration QA,
+  release) with the lock and reuse rules: a task never runs the whole suite, reviewers run no suites, and the only
+  full run of a batch is integration QA. It replaces the "at most two concurrent full runs" rule with one full run
+  per machine. `.claude/CLAUDE.md` follows: the PR rule names integration QA's full run (or a reused PASS record of
+  the same tree), and Commands lists `--reuse`, `--no-wait`, `--only-suites`, `--list-suites` and `--no-reuse`.
+- **Tests.** `tests/parallel-policy.test.sh` builds one minimal throwaway plugin copy, copies only the lint inputs
+  per mutation and runs only the lint sections a mutation reaches, concurrently (`PARALLEL_POLICY_JOBS`, default 4).
+  It also checks the QA tiers table: one copy under its marker, the required rows, no full run in the task row.
+  Suite wall time: 831 s before, about 61-115 s after.
+- **Tests.** `tests/routing.test.sh` caches each history replay result in the persistent state dir, keyed by commit
+  SHA and a hash of the routing inputs (the suite, the registry, every script, the routing environment and the tool
+  versions), and replays only commits without a cached result (`history replay: <n> cached / <n> replayed`); each
+  write prunes old cache keys;
+  `--no-history` skips the replay.
+- **Tests.** `tests/pipeline.test.sh` captures the output of identical commands once and runs independent cases in
+  parallel. It does not copy prebuilt fixture repos: per-case setup is a few git commands, and the time is in the
+  `factory-pipeline.py` CLI calls. Suite wall time: 459 s before, 242 s after.
+- **Pipeline.** Refinements of the agent routing: `dispatch --runner print` is a preview and writes no implementer or
+  reviewer model record; `agents --down` without `--reason` prints MODEL_UNAVAILABLE once; `validate` and
+  `subplan validate` warn about an unexplained implementer override also for items without `kind`, against the default
+  routing; a legacy subtask verdict is suppressed only by the modern record of the same subtask with the current
+  fingerprint, not by a subtask id that extends it.
+- **Pipeline.** The plan kind list comes from `docs/schemas/pipeline-plan.schema.json` instead of a hard-coded copy; the
+  `factory-pipeline.py` docstring documents the `agents` verb and the print preview.
+- **Workflow.** `factory-workflow.py dispatch` routes its agent through the pipeline routing helper (default routing,
+  availability fallback) instead of reading `pipeline.default_implementer`.
+- **run-all.** The shared git config check reports WARN with the `diff -u` when the only change during the run is whole added `[branch "..."]` or `[worktree]` sections (another session adding a branch or worktree). Any other change still fails: a changed or removed key, a key added inside an existing section, a duplicate of an existing section, or an added unrelated section.
+- **Parallel work policy.** `parallel-work.md` section 5 names `scripts/orca-wait.sh` as the run lead's single
+  waiter; section 8 adds the run report and the lesson that plan edits are atomic (write a copy, validate it, then
+  replace the plan).
+
+### Fixed
+
+- **Checks.** `tests/facts.test.sh` grades each registry fact against the committed tree (a temporary `HEAD`
+  export per repo) instead of the working tree, and prints a note when uncommitted changes would give a different
+  result (untracked files included), so an uncommitted Unity `ProjectSettings` edit no longer fails
+  `enter-playmode-options`. Probes run with a disposable index, so a git probe never rewrites a product repo's
+  `.git/index`, and each repo is exported once per run.
+- **Checks.** A timed-out check's process tree is killed even when the POSIX `ps` listing fails or is missing
+  (`scripts/lib/procrun.py`); `tests/run-checks.test.sh` covers it and reaps zombies in the timeout-tree case.
+- **UI.** `scripts/ui/ui_catalog.py` checks the `git cat-file --batch` and `ls-tree` return codes and guards
+  truncated output: a failing read is NOT_AVAILABLE with its reason instead of a crash or a silently empty catalog.
+- **Tests.** `tests/orca-commands.test.sh` checks flag values against the usage choice list and covers
+  `orca orchestration worker-start --worktree new-child` and `orca worktree create --parent-worktree`.
+- **Tests.** Resolve Git Bash explicitly for pipeline enum-copy registry checks so Windows CI does not launch WSL.
+- Resolve pipeline model and effort profiles after agent routing and availability fallback, including task and subtask validation previews.
+- `pipeline_route.available` keyed its cache on the marks file mtime, so a mark set and cleared within the
+  timer resolution (Windows CI) returned the stale availability. The key is now the file content.
+- **run-all.** `tests/run-all.sh -j N` no longer hangs when a suite worker dies without writing its result: the scheduler records each worker's PID and grades the suite FAIL with its buffered output and the line `suite worker died without a result (pid N)`. Later suites still run and the counts stay correct (`tests/run-all-parallel.test.sh` kills a stand-in suite).
+- **Tests.** `tests/git-guard.test.sh` retries a case once when it expects an advisory and the guard printed nothing, and prints a `RETRY` line with the first try's return code; empty output twice still fails, and an expected allow is never retried. The root cause of the empty output under load is not proven: the guard fails open (git probes time out after 5 s and return nothing, and internal errors are swallowed), so this is mitigated by a visible retry, not fixed at the root.
+- **Tests.** `tests/ui-figma-env.test.sh` fresh-heartbeat fixtures no longer go stale on a loaded machine: they stamp the heartbeat one hour ahead (`figma_env.py` has no clock override and only treats ages over 60 s as stale); the stale case keeps its 2020 timestamp.
+- **Tests.** `tests/routing.test.sh` strips the CR from skill names that Windows `jq -r` prints.
+
 ## [1.6.0] - 2026-11-09
 
 Model policy for the delivery pipeline (leads pick model and effort per session inside a user-defined scope; Codex workers on gpt-6.1-terra), asset-gen core skills, and the work merged since 1.5.0.
