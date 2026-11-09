@@ -76,6 +76,13 @@ for arg in ('-h','--help'):
 p=subprocess.run([sys.executable,'-B',str(pipeline),'--unknown'], capture_output=True,text=True); check('unknown argument',p.returncode==2 and 'usage:' in p.stderr)
 env=os.environ.copy(); env['RPG_FACTORY_REGISTRY']='none'
 p=subprocess.run([sys.executable,'-B',str(pipeline),'tier','--json','--plan',str(pf),'--repo','plain','--paths','src/file.txt'],capture_output=True,text=True,env=env); check('environment fallback',p.returncode==0,p.stderr)
+# --registry before and after the verb, as SKILL.md documents it; the value after the verb wins
+plan['no_worktree_markers']=[]; write()
+base=[sys.executable,'-B',str(pipeline)]
+for name,argv in (('before verb',['--registry','none','validate',str(pf)]),('after verb',['validate',str(pf),'--registry','none']),('documented form',['--registry','none','tier','--json','--plan',str(pf),'--repo','plain','--paths','src/file.txt'])):
+    p=subprocess.run(base+argv,capture_output=True,text=True); check('registry flag '+name, p.returncode==0 and 'not found' not in p.stderr, p.stdout+p.stderr)
+p=subprocess.run(base+['--registry',str(tmp/'missing.json'),'validate',str(pf),'--registry','none'],capture_output=True,text=True); check('registry flag after verb wins', p.returncode==0 and 'not found' not in p.stderr, p.stdout+p.stderr)
+p=subprocess.run(base+['validate',str(pf),'--registry',str(tmp/'missing.json')],capture_output=True,text=True); check('registry flag after verb applies', p.returncode==0 and 'not found: using' in p.stderr, p.stdout+p.stderr)
 print(f'delivery-generic: {passed+failed} checks, {passed} passed, {failed} failed')
 sys.exit(bool(failed))
 PY

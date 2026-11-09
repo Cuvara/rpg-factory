@@ -23,12 +23,13 @@ dispatched session follows its spec and never merges or pushes. Policy: [referen
 
 ## Flow
 
-Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; add `--registry none` outside an RPG workspace.
+Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; outside an RPG workspace run
+`python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py --registry none <verb>` (the option also works after the verb).
 
 1. **Tier.** `tier --plan plan.json --repo <key> --paths <files>` (a plan naming the repo by path; a registry repo:
    `tier -- --repo <key> --paths <files>`) prints S, M or L and the flow. Every tier gets a `plan.json` and
    a task lead; S is a one-task plan. The run lead never implements.
-2. **Plan.** Write `plan.json` (`docs/schemas/pipeline-plan.schema.json`): `repos.<key>.path` names the checkout,
+2. **Plan.** Write `plan.json` (`${CLAUDE_PLUGIN_ROOT}/docs/schemas/pipeline-plan.schema.json`): `repos.<key>.path` names the checkout,
    each task has owned paths, deps, a `kind` and a branch. Small tasks with disjoint owned paths. A repo marked
    `worktrees: false`, or one holding a configured no-worktree marker, runs its tasks in sequence in the main checkout.
    `validate plan.json` must print OK.
