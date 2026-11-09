@@ -127,15 +127,7 @@ from lib import fstate
 from lib.pipeline_route import stall_reason
 
 now = time.time() * 1000
-state = fstate.read_json(path, {})
-if not isinstance(state, dict):
-    state = {}
-if now - state.get('last_poll', 0) < int(interval):
-    sys.exit(0)
-state['last_poll'] = now
-old = state.get('workers', {})
-if not isinstance(old, dict):
-    old = {}
+state = {}
 
 def call(args):
     proc = subprocess.run([shutil.which('orca') or 'orca', 'orchestration'] + args, capture_output=True,
@@ -148,6 +140,16 @@ def call(args):
     return doc['result']
 
 try:
+    state = fstate.read_json(path, {})
+    if (not isinstance(state, dict) or not isinstance(state.get('last_poll', 0), (int, float))
+            or not isinstance(state.get('workers', {}), dict)
+            or any(not isinstance(v, dict) or not isinstance(v.get('since', now), (int, float))
+                   for v in state.get('workers', {}).values())):
+        state = {}
+    if now - state.get('last_poll', 0) < int(interval):
+        sys.exit(0)
+    state['last_poll'] = now
+    old = state.get('workers', {})
     workers, cursor = [], None
     while True:
         args = ['worker-list', '--run', run, '--terminal-state', 'active', '--json']
@@ -169,10 +171,16 @@ try:
         dispatch = worker['dispatchId']
         if str(worker.get('dispatchStatus', '')).lower() in ('completed', 'failed', 'cancelled'):
             continue
-        result = call(['worker-read', '--dispatch', dispatch, '--source', 'terminal', '--limit', '40', '--json'])
-        tail = result.get('terminal', {}).get('tail')
-        if not isinstance(tail, (str, list)) or (isinstance(tail, list) and not all(isinstance(x, str) for x in tail)):
-            raise ValueError('worker-read returned invalid terminal tail')
+        try:
+            result = call(['worker-read', '--dispatch', dispatch, '--source', 'terminal', '--limit', '40', '--json'])
+            tail = result.get('terminal', {}).get('tail')
+            if not isinstance(tail, (str, list)) or (isinstance(tail, list) and not all(isinstance(x, str) for x in tail)):
+                raise ValueError('worker-read returned invalid terminal tail')
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError, subprocess.SubprocessError) as exc:
+            print('WARN: worker-read {}: {}'.format(dispatch, ' '.join(str(exc).split())), file=sys.stderr)
+            if dispatch in old:
+                current[dispatch] = old[dispatch]
+            continue
         digest = hashlib.sha256(json.dumps(tail, ensure_ascii=True).encode()).hexdigest()
         prior = old.get(dispatch, {})
         since = prior.get('since', now) if isinstance(prior, dict) and prior.get('hash') == digest else now
@@ -180,7 +188,9 @@ try:
         reason = stall_reason(tail)
         if not reason and now - since >= int(threshold):
             reason = 'frozen: output unchanged for ' + str(int((now - since) // 60000)) + ' min'
-        reason_key = 'frozen' if reason and reason.startswith('frozen:') else reason
+        reason_key = ('frozen' if reason and reason.startswith('frozen:') else
+                      'usage limit' if reason and reason.startswith('MODEL_UNAVAILABLE: usage limit') else
+                      'reconnecting' if reason else None)
         prior_reason = prior.get('reported') if isinstance(prior, dict) else None
         if reason_key == 'frozen' and isinstance(prior, dict) and prior.get('hash') != digest:
             prior_reason = None
@@ -190,6 +200,14 @@ try:
             agent = provider.get('id') or 'unknown'
             stalls.append((dispatch, agent, ' '.join(reason.split())))
     state['workers'] = current
+    for name in os.listdir(os.path.dirname(path)):
+        candidate = os.path.join(os.path.dirname(path), name)
+        if name.endswith('.workers.json') and candidate != path:
+            try:
+                if time.time() - os.stat(candidate).st_mtime > 7 * 86400:
+                    os.remove(candidate)
+            except OSError:
+                pass
     fstate.write_json(path, state)
     for dispatch, agent, reason in stalls:
         print('STALL\t{}\t{}\t{}'.format(dispatch, agent, reason))

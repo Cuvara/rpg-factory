@@ -19,17 +19,24 @@ def _safe(x):
 def stall_reason(text):
     """Return a reason for factory-pipeline.py agents --down, if the tail indicates a stall."""
     lines = text.splitlines() if isinstance(text, str) else [line for item in text for line in item.splitlines()]
-    for pattern, reason in ((r'\b(?:429\s*[:=-]?\s*(?:too many requests|status|error|http|code)\b|'
-                             r'(?:status|error|http|code)\s*[:= -]*\b429\b|'
-                             r'usage limit reached\b|you(?:\'ve| have) hit your usage limit\b|'
-                             r'rate limit(?:ed)? (?:reached|exceeded)\b|quota exceeded\b)', 'usage limit'),
-                            (r'^[^\w\r\n]*reconnecting\b|\bstream disconnected\b', 'reconnecting')):
-        for line in lines:
-            if line.lstrip().startswith(('+', '-')):
-                continue
-            if re.search(pattern, line, re.IGNORECASE):
-                detail = reason + (' (429)' if reason == 'usage limit' and '429' in line else '')
-                return 'MODEL_UNAVAILABLE: ' + detail + ' - ' + line.strip()[:120]
+    lines = [line for line in lines if line.strip()][-12:]
+    for line in lines:
+        stripped = line.lstrip()
+        if re.match(r'(?:[\u23bf\u2502\u2514|>+\-]|\d+\s)', stripped):
+            continue
+        status = re.sub(r'^[^\w\r\n]+', '', stripped)
+        usage = (r"(?:you(?:'ve| have) hit your usage limit\b|"
+                 r'stream error\b.*(?:\b429\b|too many requests)|'
+                 r'api error\s*:\s*429\b|api error\b.*(?:rate_limit|overloaded)|'
+                 r'(?:claude )?usage limit reached\b.*\b(?:reset|resets|try again)\b|'
+                 r'error\s*:\s*429\s+too many requests\b)')
+        if re.match(usage, status, re.IGNORECASE):
+            detail = 'usage limit' + (' (429)' if re.search(r'\b429\b', status) else '')
+        elif re.match(r'reconnecting(?:\.\.\.|\u2026|\s+\d+/\d+)', status, re.IGNORECASE):
+            detail = 'reconnecting'
+        else:
+            continue
+        return 'MODEL_UNAVAILABLE: ' + detail + ' - ' + line.strip()[:120]
     return None
 
 

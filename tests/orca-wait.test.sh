@@ -20,7 +20,11 @@ if [ "${2:-}" = worker-list ] || [ "${2:-}" = worker-read ]; then
   printf '%s\n' "$*" >> "$FAKE_DIR/workers-argv"
   if [ "${FAKE_WORKER_FAIL:-}" = yes ]; then exit 1; fi
   if [ "$2" = worker-list ]; then
-    cat "$FAKE_DIR/worker-list"
+    if [ "${FAKE_PAGES:-}" = yes ] && [[ " $* " == *' --cursor page2 '* ]]; then
+      cat "$FAKE_DIR/worker-list-page2"
+    else cat "$FAKE_DIR/worker-list"; fi
+  elif [ "${FAKE_READ_FAIL:-}" = yes ] && [[ " $* " == *' --dispatch ctx-bad '* ]]; then
+    exit 1
   elif [ "${FAKE_CHANGING:-}" = yes ]; then
     printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$(cat "$FAKE_DIR/step")"
   else
@@ -72,12 +76,17 @@ python3 -B - "$ROOT" <<'PY'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))
 from pipeline_route import stall_reason
-positive = ['HTTP 429', '429 Too Many Requests', 'error: 429', 'usage limit reached',
-            'You have hit your usage limit', "You've hit your usage limit", 'rate limited exceeded',
-            'rate limit reached', 'quota exceeded', '\u25a0 Reconnecting... 2/5', 'stream disconnected']
-negative = ['run-all: 512 checks, 429 passed, 0 failed', 'commit 4291abc feat',
-            '\u2193 429 tokens', 'grep rate limit middleware',
-            "+for tail in '429 usage limit' 'Reconnecting'; do ."]
+positive = ['\u25a0 Reconnecting... 2/5', '\u26a0 stream error: exceeded retry limit, last status: 429 Too Many Requests',
+            "\u25a0 You've hit your usage limit. Try again in 2 hours.", 'You have hit your usage limit',
+            'API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}',
+            'Claude usage limit reached. Your limit will resets at 3pm', 'Error: 429 Too Many Requests',
+            'Reconnecting\u2026', 'Reconnecting 2/5']
+negative = ["positive = ['HTTP 429', ...", '   140  if quota exceeded then',
+            'grep -n "usage limit reached" log', 'Error: 429 tests passed', 'status: 429 of 512 done',
+            '  Reconnecting to database...', 'run-all: 512 checks, 429 passed, 0 failed',
+            'commit 4291abc feat', '\u2193 429 tokens', '  \u23bf  \u25a0 Reconnecting... 2/5',
+            '| Reconnecting...', '\u2502 Reconnecting...', '\u2514 Reconnecting...', '> Reconnecting...',
+            '+ Reconnecting...', '- Reconnecting...', 'Reconnecting...\n' + '\n'.join(['working'] * 12)]
 assert all(stall_reason(s) and stall_reason([s]) for s in positive)
 assert all(stall_reason(s) is None and stall_reason([s]) is None for s in negative)
 PY
@@ -142,7 +151,7 @@ status=$?
 
 echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"dispatched","projection":{"provider":{"id":"codex"}}}]}}' > "$TMP/worker-list"
 export FAKE_MODE=polling
-for tail in 'HTTP 429' '■ Reconnecting... 2/5'; do
+for tail in 'API Error: 429 Too Many Requests' '■ Reconnecting... 2/5'; do
   rm -f "$TMP/step" "$TMP/workers-argv"
   printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$tail" > "$TMP/worker-read"
   PYTHONIOENCODING=cp1252 bash "$ROOT/scripts/orca-wait.sh" --run "limit-${tail%% *}" --timeout-ms 100 --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
@@ -152,18 +161,45 @@ for tail in 'HTTP 429' '■ Reconnecting... 2/5'; do
   else no "$tail stall report"; fi
 done
 grep -q -- '--timeout-ms 10' "$TMP/argv" && ok "worker polling caps wait timeout" || no "wait timeout not capped"
-[ -f "$TMP/state/orca-wait/limit-HTTP.lock.workers.json" ] && ok "worker state persists after exit" || no "worker state missing"
+[ -n "$(find "$TMP/state/orca-wait" -name 'limit-API*.workers.json' -print)" ] && ok "worker state persists after exit" || no "worker state missing"
 
 rm -f "$TMP/step"
-echo '{"ok":true,"result":{"terminal":{"tail":"HTTP 429"}}}' > "$TMP/worker-read"
-FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run limit-HTTP --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+echo '{"ok":true,"result":{"terminal":{"tail":"API Error: 429 Too Many Requests"}}}' > "$TMP/worker-read"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run limit-API --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "same stall reported only once" || no "same stall repeated"
 rm -f "$TMP/step"
-echo '{"ok":true,"result":{"terminal":{"tail":"quota exceeded"}}}' > "$TMP/worker-read"
-bash "$ROOT/scripts/orca-wait.sh" --run limit-HTTP --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+echo '{"ok":true,"result":{"terminal":{"tail":"Reconnecting... 2/5"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run limit-API --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
-[ "$status" -eq 5 ] && grep -q 'quota exceeded' "$TMP/poll.out" && ok "changed stall reason reported" || no "changed stall reason missed"
+[ "$status" -eq 5 ] && grep -q 'Reconnecting' "$TMP/poll.out" && ok "changed stall category reported" || no "changed stall category missed"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"Reconnecting... 3/5"}}}' > "$TMP/worker-read"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run limit-API --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "reconnect progress deduplicated" || no "reconnect repeated"
+
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-bad"}],"page":{"hasMore":true,"nextCursor":"page2"}}}' > "$TMP/worker-list"
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","projection":{"provider":{"id":"codex"}}}],"page":{"hasMore":false}}}' > "$TMP/worker-list-page2"
+echo '{"ok":true,"result":{"terminal":{"tail":"Reconnecting... 2/5"}}}' > "$TMP/worker-read"
+rm -f "$TMP/step" "$TMP/workers-argv"
+FAKE_PAGES=yes FAKE_READ_FAIL=yes bash "$ROOT/scripts/orca-wait.sh" --run pages --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'ctx-test' "$TMP/poll.out" && grep -q 'WARN: worker-read ctx-bad' "$TMP/poll.err" && grep -q -- '--cursor page2' "$TMP/workers-argv" && ok "pagination and failed worker read preserve second worker stall" || no "pagination or per-worker failure"
+
+echo '{"last_poll":"bad","workers":{"ctx-test":42}}' > "$TMP/state/orca-wait/malformed.lock.workers.json"
+echo '{}' > "$TMP/state/orca-wait/expired.workers.json"
+python3 -B - "$TMP/state/orca-wait/expired.workers.json" <<'PY'
+import os, sys, time
+old = time.time() - 8 * 86400
+os.utime(sys.argv[1], (old, old))
+PY
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test"}]}}' > "$TMP/worker-list"
+rm -f "$TMP/step"
+bash "$ROOT/scripts/orca-wait.sh" --run malformed --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q STALL "$TMP/poll.out" && ! grep -q Traceback "$TMP/poll.err" && ok "malformed state recovers" || no "malformed state recovery"
+[ ! -e "$TMP/state/orca-wait/expired.workers.json" ] && ok "old worker state pruned" || no "old worker state retained"
 
 rm -f "$TMP/step"
 echo '{"ok":true,"result":{"terminal":{"tail":"working"}}}' > "$TMP/worker-read"
