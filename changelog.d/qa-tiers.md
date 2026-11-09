@@ -48,11 +48,14 @@
   without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
   QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
   `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
-- **Pipeline.** Task QA never prints a full run. A check that is a full `tests/run-all.sh` run, or contains one (a
-  compound command, `bash -c "tests/run-all.sh -j 4"`, `sh tests/run-all.sh`), is printed in the QA spec as
-  `DO NOT RUN (...; report it NOT_RUN)`. Without a review base the task QA command is
+- **Pipeline.** Task QA never prints a full run. A standalone `tests/run-all.sh` check (optionally behind `env` or
+  `bash`) is folded into the tier command, and a full one is dropped. A compound or wrapped check that contains a full
+  run (`tests/run-all.sh -j 4 && ...`, `bash -c "tests/run-all.sh -j 4"`, `sh tests/run-all.sh`) is printed in the QA
+  spec as an extra command `DO NOT RUN (...; report it NOT_RUN)`. Without a review base the task QA command is
   `tests/run-all.sh --only-suites <check suites> -j 2`; with no check suites either, the spec prints `NONE` and asks
-  the task lead for a base. When two checks run the same suite, the `env -u TMPDIR` form is kept.
+  the task lead for a base. When two extra commands run the same suite, the `env -u TMPDIR` form is kept.
+- **run-all.** `--affected` selects the suites with one `tests/affected.py select-many` call per run instead of one
+  call per suite.
   `verdict --failed-suites` accepts any suite `tests/run-all.sh --list-suites` lists (for example
   `testlab/tests/test_lab.py` and `scripts/check-registry.sh`).
 - **Pipeline.** A tier S task (plan or task tier S, or every owned path prose: a `.md` file anywhere, a path under `changelog.d/` or a `skills/` directory path; a non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are not prose) needs no QA session: the task lead runs the task QA command after the review PASS and records
