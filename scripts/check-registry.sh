@@ -339,6 +339,17 @@ PY4
 )
 [ -n "$mp_err" ] && problems="${problems:+$problems$'\n'}$mp_err"
 
+# pipeline.subagents: roles, access and parallel limits, models inside pipeline.models.scope (lib/subagent_policy.py)
+sa_err=$(python3 -B - "$REGISTRY" "$PLUGIN_ROOT/scripts/lib" <<'PY5'
+import json, sys
+sys.path.insert(0, sys.argv[2])
+import subagent_policy
+for e in subagent_policy.check(json.load(open(sys.argv[1], encoding="utf-8"))):
+    print("pipeline.subagents: " + e)
+PY5
+)
+[ -n "$sa_err" ] && problems="${problems:+$problems$'\n'}$sa_err"
+
 all=$(printf '%s%s' "${problems:+$problems$'\n'}" "$missing" | sed '/^$/d')
 if [ -n "$all" ]; then
   echo "$all"
