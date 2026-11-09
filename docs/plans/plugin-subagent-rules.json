@@ -139,7 +139,10 @@
         "registry/core.json",
         "registry.json",
         "tests/devtools.test.sh",
-        "changelog.d/doctor-codex-subagents.md"
+        "changelog.d/doctor-codex-subagents.md",
+        "scripts/check-registry.sh",
+        "docs/registry.schema.json",
+        "tests/domains.test.sh"
       ],
       "deps": [
         "registry"
