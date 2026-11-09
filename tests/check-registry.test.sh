@@ -67,8 +67,14 @@ expect_fail j-missing-role 'del(.pipeline.models.profiles.claude.qa)' 'pipeline.
 expect_fail j-missing-agent-profiles 'del(.pipeline.models.profiles.codex)' 'pipeline.models: profiles: agent codex is in scope but has no profiles'
 expect_fail j-bad-default-grade '.pipeline.models.default_grade = "epic"' 'pipeline.models: default_grade must be one of'
 # j: the JSON Schema alone enforces the per-agent model and effort enums (the scope is widened so check-registry.sh's scope check passes).
-expect_fail j-schema-model-enum '(.pipeline.models.scope.claude["claude-haiku-4-5"] = ["medium"]) | (.pipeline.models.profiles.claude.lead.model = "claude-haiku-4-5")' 'schema: pipeline/models/profiles/claude/lead/model'
-expect_fail j-schema-effort-enum '(.pipeline.models.scope.codex["gpt-6.1-sol"] += ["low"]) | (.pipeline.models.profiles.codex.light.effort = "low")' 'schema: pipeline/models/profiles/codex/light/effort'
+# check-registry.sh validates the schema only when python3 jsonschema is installed, so these two cases need it too.
+if python3 -c "import jsonschema" 2>/dev/null; then
+  expect_fail j-schema-model-enum '(.pipeline.models.scope.claude["claude-haiku-4-5"] = ["medium"]) | (.pipeline.models.profiles.claude.lead.model = "claude-haiku-4-5")' 'schema: pipeline/models/profiles/claude/lead/model'
+  expect_fail j-schema-effort-enum '(.pipeline.models.scope.codex["gpt-6.1-sol"] += ["low"]) | (.pipeline.models.profiles.codex.light.effort = "low")' 'schema: pipeline/models/profiles/codex/light/effort'
+else
+  echo "SKIP j-schema-model-enum: python3 jsonschema not installed"
+  echo "SKIP j-schema-effort-enum: python3 jsonschema not installed"
+fi
 expect_fail j-missing-models 'del(.pipeline.models)' 'registry pipeline.models is missing'
 expect_fail j-empty-alias '.pipeline.models.agent_tool_alias["claude-opus-5-5"] = ""' 'pipeline.models: agent_tool_alias claude-opus-5-5: must be a non-empty string'
 # g: absent optional repository paths are skipped and reported in a stand-in workspace.
