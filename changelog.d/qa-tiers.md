@@ -2,8 +2,10 @@
 
 - **run-all.** One full run per machine: a full `tests/run-all.sh` (no `--affected` or `--only-suites`) and every
   `--release` run take a lock in the persistent state dir; the shared-config snapshot is taken after the lock. A second full run waits and prints `waiting for full run <pid> in <checkout>`;
-  `--no-wait` exits 3 instead, and a lock whose holder is dead (checked by PID, and by the Windows PID on Git Bash) is taken over
-  (`run-all: taking over stale full-run lock (<pid>)`). Only one waiter reclaims a stale lock, and a lock that a new
+  `--no-wait` exits 3 instead, and a lock whose holder is dead is taken over. A holder counts as alive when its PID
+  answers `kill -0` or, on Git Bash, when the Windows PID it recorded from `/proc/$$/winpid` is in `tasklist.exe`, so a
+  full run started from another MSYS or Cygwin runtime is not taken over. Takeover prints
+  `run-all: taking over stale full-run lock (<pid>)`. Only one waiter reclaims a stale lock, and a lock that a new
   holder has not finished writing is not taken over.
 - **run-all.** A full run on a clean tree writes a result record for that tree; `--reuse` exits 0 at once on a PASS
   record of the same clean tree with at least the same coverage (a `--no-workspace` or `--no-claude` record does not
@@ -46,6 +48,13 @@
   without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
   QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
   `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
+- **Pipeline.** Task QA never prints a full run. A check that is a full `tests/run-all.sh` run, or contains one (a
+  compound command, `bash -c "tests/run-all.sh -j 4"`, `sh tests/run-all.sh`), is printed in the QA spec as
+  `DO NOT RUN (...; report it NOT_RUN)`. Without a review base the task QA command is
+  `tests/run-all.sh --only-suites <check suites> -j 2`; with no check suites either, the spec prints `NONE` and asks
+  the task lead for a base. When two checks run the same suite, the `env -u TMPDIR` form is kept.
+  `verdict --failed-suites` accepts any suite `tests/run-all.sh --list-suites` lists (for example
+  `testlab/tests/test_lab.py` and `scripts/check-registry.sh`).
 - **Pipeline.** A tier S task (plan or task tier S, or every owned path prose: a `.md` file anywhere, a path under `changelog.d/` or a `skills/` directory path; a non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are not prose) needs no QA session: the task lead runs the task QA command after the review PASS and records
   `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`. The gate accepts such a
   lead-run QA verdict (note starting `tier S`, no QA session) only for a tier S task. A QA PASS from a fresh QA
@@ -69,4 +78,5 @@
   write prunes old cache keys;
   `--no-history` skips the replay.
 - **Tests.** `tests/pipeline.test.sh` captures the output of identical commands once and runs independent cases in
-  parallel. Suite wall time: 459 s before, 242 s after.
+  parallel. It does not copy prebuilt fixture repos: per-case setup is a few git commands, and the time is in the
+  `factory-pipeline.py` CLI calls. Suite wall time: 459 s before, 242 s after.
