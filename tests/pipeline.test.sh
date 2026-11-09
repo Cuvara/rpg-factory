@@ -707,9 +707,10 @@ assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites 
     m.qa_body('x', lone, base='main', runall=listed)
 assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
     m.qa_body('x', lone, base='main', runall=listed, tiers={'task': 'full'})
-assert 'QA tier command:\ntests/run-all.sh --workspace-only\ngh pr checks <pr> --watch' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
+assert 'QA tier command:\ntests/run-all.sh --workspace-only' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
+assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'})
-assert 'wait for CI to finish, and report its result' in m.qa_body('x', lone, integration=True, runall=listed)
+assert 'CI green is the full-suite gate after the PR opens' in m.qa_body('x', lone, integration=True, runall=listed)
 handoff = io.StringIO()
 with contextlib.redirect_stdout(handoff):
     m.emit_lead_handoff(reg, 'claude', 'prompt', {'new': True, 'repo': 'path:' + str(repo),
@@ -897,7 +898,7 @@ assert 'routing-properties.test.py' not in out.split('Extra commands:')[1], out
 assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exists()
 assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)
 out = dispatch('qa', first, 'integration:fixture')
-assert 'tests/run-all.sh --workspace-only' in out and 'gh pr checks <pr> --watch' in out and 'tests/run-all.sh --reuse -j 4' not in out and extras in out, out
+assert 'tests/run-all.sh --workspace-only' in out and 'gh pr checks' not in out and 'tests/run-all.sh --reuse -j 4' not in out and extras in out, out
 # a product repo without tests/run-all.sh: task and integration QA keep its checks and the run-checks.py fast tier
 srv_repo = work / 'srv'; srv_repo.mkdir()
 def sgit(*args):
@@ -1784,6 +1785,7 @@ expect "mark model down" 0 "MODEL_UNAVAILABLE: revoked" agents "$G" --down codex
 expect "restore model availability" 0 "codex: available" agents "$G" --up codex
 
 expect "READY prints the PR command against the base branch" 0 "gh pr create --base develop --head feat/core/demo" gate "$G"
+expect "READY prints the CI merge gate" 0 "gh pr checks <pr> --watch" gate "$G"
 cp "$G" "$TMP/gate.bak"; sed -i 's/"objective":"o","paths":\["backend/"objective":"changed","paths":["backend/' "$G"
 expect "a changed task in the plan makes its verdicts STALE" 1 "gw: review verdict is STALE - the plan" gate "$G"
 cp "$TMP/gate.bak" "$G"
@@ -2580,24 +2582,32 @@ git -C "$M" push -q origin feat/merged feat/merged-task feat/merged-other
 MP=$(plan merged "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$M\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
 refute "unmerged integration worktree stays" "worktree remove .*merged-topic" cleanup "$MP"
 git -C "$M" merge -q --ff-only feat/merged; git -C "$M" push -q origin main
-expect "merged integration worktree is removable" 1 "worktree remove .*merged-topic" cleanup "$MP"
-expect "merged integration branch is removable" 1 "branch -d feat/merged$" cleanup "$MP"
-expect "merged task branch is removable" 1 "branch -d feat/merged-task$" cleanup "$MP"
-expect "merged remote branch is removable" 1 "push origin --delete feat/merged-task$" cleanup "$MP"
-expect "merged remote integration branch is removable" 1 "push origin --delete feat/merged$" cleanup "$MP"
-expect "unmerged remote branch is kept" 1 "remote branch feat/merged-other is not in main" cleanup "$MP"
-refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-other$" cleanup "$MP"
-refute "primary checkout is never removed" "worktree remove .*merged-repo$" cleanup "$MP"
+refute "without after-merge the integration worktree stays" "worktree remove .*merged-topic" cleanup "$MP"
+refute "without after-merge remote branches stay" "push origin --delete" cleanup "$MP"
+expect "merged integration worktree is removable" 1 "worktree remove .*merged-topic" cleanup "$MP" --after-merge
+expect "merged integration branch is removable" 1 "branch -d feat/merged$" cleanup "$MP" --after-merge
+expect "merged task branch is removable" 1 "branch -d feat/merged-task$" cleanup "$MP" --after-merge
+expect "merged remote branch is removable" 1 "push origin --delete feat/merged-task$" cleanup "$MP" --after-merge
+expect "merged remote integration branch is removable" 1 "push origin --delete feat/merged$" cleanup "$MP" --after-merge
+expect "unmerged remote branch is kept" 1 "remote branch feat/merged-other is not in main" cleanup "$MP" --after-merge
+refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-other$" cleanup "$MP" --after-merge
+refute "primary checkout is never removed" "worktree remove .*merged-repo$" cleanup "$MP" --after-merge
+MWP=$(plan merged-wt "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged-wt\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$MW\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
+expect "integration checkout removal runs from primary checkout" 1 "git -C .*merged-repo worktree remove .*merged-topic" cleanup "$MWP" --after-merge
 echo dirty > "$MW/wip"
-expect "dirty integration worktree is kept" 1 "KEPT  srv: worktree .*merged-topic has uncommitted changes" cleanup "$MP"
-refute "dirty integration worktree is not removed" "worktree remove .*merged-topic" cleanup "$MP"
+expect "dirty integration worktree is kept" 1 "KEPT  srv: worktree .*merged-topic has uncommitted changes" cleanup "$MP" --after-merge
+refute "dirty integration worktree is not removed" "worktree remove .*merged-topic" cleanup "$MP" --after-merge
 rm "$MW/wip"
 git -C "$M" worktree remove "$MW"
 git -C "$M" branch -d feat/merged-task feat/merged >/dev/null
-git -C "$M" push -q origin --delete feat/merged-task feat/merged feat/merged-other
+git -C "$M" push -q origin --delete feat/merged
+expect "merged remote task remains removable without topic refs" 1 "push origin --delete feat/merged-task$" cleanup "$MP" --after-merge
+MISSING=$(plan missing "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"missing\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$MW\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
+expect "missing integration checkout is LEFTOVER and names the main checkout remedy" 1 "KEPT  srv: repo path .*merged-topic is missing - point repos.srv.path at the main checkout" cleanup "$MISSING" --after-merge
+git -C "$M" push -q origin --delete feat/merged-task feat/merged-other
 git -C "$M" branch -D feat/merged-other >/dev/null
-expect "cleanup is clean after removal" 0 "^Cleanup: CLEAN" cleanup "$MP"
-expect "clean cleanup names the next plan" 0 "^Next: start the next plan from main$" cleanup "$MP"
+expect "cleanup is clean after removal" 0 "^Cleanup: CLEAN" cleanup "$MP" --after-merge
+expect "clean cleanup names the next plan" 0 "^Next: start the next plan from main$" cleanup "$MP" --after-merge
 
 echo "-- model routing"
 for case in $ROUTING_CASES; do bg_report "routing $case" "routing-$case"; done
