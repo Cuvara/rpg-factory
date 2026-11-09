@@ -536,17 +536,23 @@ left=$(ls -A "$CT")
 [ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ "$args" = '2 2 2 2 2 ' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, bad arguments, release-only suite, --reuse hit, --no-wait) leave no git-config copy'   || no "early-exit temp files (rc $r1 $r2 $r3 $r4, arguments $args)" "$left"
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
+printf '#!/usr/bin/env bash
+exit 0
+' > "$TMP/real-python/python.exe"; chmod +x "$TMP/real-python/python.exe"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"
 chmod +x "$TMP/WindowsApps/python3"
 cat > "$TMP/python-path.sh" <<'PLAN'
 . "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+unset -f python3; unset RUNALL_REAL_PYTHON   # an outer run-all on an alias machine exports its python3 function
 PATH="$(path_entry "$FAKE_ALIAS"):$PATH"; before=$PATH
 python_path_fast
 [ "$PATH" = "$(path_entry "$REAL_PY_DIR"):$before" ] && echo 'path prepended'
+[ "$(type -t python3)" = function ] && [ "$RUNALL_REAL_PYTHON" = "$(path_entry "$REAL_PY_DIR")/python.exe" ] && echo 'alias bypassed'
 PLAN
 out=$(FAKE_ALIAS="$TMP/WindowsApps" REAL_PY_DIR="$TMP/real-python" bash "$TMP/python-path.sh"); rc=$?
 [ "$rc" = 0 ] && grep -q 'using real Python directory' <<<"$out" && grep -q 'path prepended' <<<"$out" \
-  && good 'WindowsApps shim prepends real interpreter directory in runner only' || no 'WindowsApps path' "$out"
+  && grep -q 'alias bypassed' <<<"$out" \
+  && good 'WindowsApps shim prepends real interpreter directory and calls python.exe directly, in runner only' || no 'WindowsApps path' "$out"
 unset RPG_FACTORY_STATE_DIR RUNALL_AFFECTED_PY RUN_LOG ROOT_UNDER_TEST
 
 echo "run-all-parallel tests: $((pass + fail)) run, $pass passed, $fail failed"

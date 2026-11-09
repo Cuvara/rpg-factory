@@ -261,6 +261,13 @@ python_path_fast() {
     if command -v cygpath >/dev/null 2>&1; then real=$(cygpath -u "$real") || return 0; fi
     [ -d "$real" ] || return 0
     PATH="$real:$PATH"; export PATH
+    # The real directory has no python3.exe, so python3 still hits the alias. The Python install manager's alias runs
+    # `python3 -B - <file>` as <file> through its shebang (a .sh file starts bash), so call python.exe directly.
+    if [ ! -e "$real/python3.exe" ] && [ -x "$real/python.exe" ]; then
+      RUNALL_REAL_PYTHON="$real/python.exe"; export RUNALL_REAL_PYTHON
+      python3() { "$RUNALL_REAL_PYTHON" "$@"; }
+      export -f python3
+    fi
     echo "run-all: using real Python directory $real"
   esac
 }
@@ -551,7 +558,7 @@ PY
 
 # sourced (tests/run-all-parallel.test.sh): scheduler and config classifier only, no checks
 [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
-if $list_only; then list_runnable "${RUNALL_SUITES_FROM:-$RUNALL_SELF}"; exit; fi
+if $list_only; then python_path_fast >/dev/null; list_runnable "${RUNALL_SUITES_FROM:-$RUNALL_SELF}"; exit; fi
 runall_prepare; prep_rc=$?
 [ "$prep_rc" -eq 10 ] && exit 0
 [ "$prep_rc" -eq 0 ] || exit "$prep_rc"

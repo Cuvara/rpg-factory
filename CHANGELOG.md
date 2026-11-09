@@ -184,6 +184,10 @@ Agent routing between Claude and Codex with availability fallback, QA tiers (ful
 
 ### Fixed
 
+- `tests/run-all.sh` on Windows with the Python install manager's `python3` alias: the alias runs
+  `python3 -B - <file>` as `<file>` through its shebang, so `--only-suites` and `--list-suites` failed ("cannot list
+  the suites") and Git Bash forks crashed. When the real Python directory has no `python3.exe`, run-all calls its
+  `python.exe` directly (exported `python3` function), also for `--list-suites`.
 - **Checks.** `tests/facts.test.sh` grades each registry fact against the committed tree (a temporary `HEAD`
   export per repo) instead of the working tree, and prints a note when uncommitted changes would give a different
   result (untracked files included), so an uncommitted Unity `ProjectSettings` edit no longer fails
