@@ -174,8 +174,13 @@ RUNALL_WORD = re.compile(r'(?:\./)?tests/run-all\.sh')
 # and `bash` prefix, then plain flag tokens. No quote, backslash, `#`, `$`, backtick, operator, redirection or newline:
 # anything else that mentions run-all is DO_NOT_RUN, so no shell-parsing edge case can hide a full run.
 RUNALL_PLAIN = re.compile(r'(?:env -u TMPDIR[ \t]+)?(?:bash[ \t]+)?(?:\./)?tests/run-all\.sh((?:[ \t]+[A-Za-z0-9=,./:-]+)*)')
-DO_NOT_RUN = ('DO NOT RUN (run-all inside a check that is not one plain scoped run-all; full runs belong to '
-              'integration QA; report it NOT_RUN): ')
+DO_NOT_RUN = ('DO NOT RUN (run-all inside a check that is not one plain scoped run-all over known suites; full runs '
+              'belong to integration QA; report it NOT_RUN): ')
+# run-all flags (tests/run-all.sh's argument loop) a plain scoped check may carry; --release and --list-suites are no
+# task QA. RUNALL_VALUE_FLAGS take the next word as their value.
+RUNALL_FLAGS = frozenset({'--no-workspace', '--no-claude', '--reuse', '--no-wait', '--no-reuse'})
+RUNALL_VALUE_FLAGS = frozenset({'--only-suites', '--base', '-j', '--jobs'})
+SUITE_PATH = re.compile(r'tests/[\w.-]+\.(?:sh|py)')
 
 
 def suite_command(suite):
@@ -211,12 +216,47 @@ def strip_comments(check):
     return None if quote else ''.join(out)
 
 
+def runall_args(words):
+    """run-all's own argument loop over the words after tests/run-all.sh (tests/run-all.sh's `case "$1"`): a flag that
+    takes a value consumes the next word, as there. Returns (affected, only-suites value or None, unknown words); a
+    word run-all ignores (`--only-suitesXYZ`, `--affected=1`) is unknown, and a value that is itself a flag (`--base
+    --affected`) is unknown too: run-all would take it as the value, never as the flag."""
+    affected, only, unknown, i = False, None, [], 0
+    while i < len(words):
+        w = words[i]
+        if w in RUNALL_VALUE_FLAGS:
+            value = words[i + 1] if i + 1 < len(words) else ''
+            if not value or value.startswith('-'):
+                unknown.append(w)
+            elif w == '--only-suites':
+                only = value
+            i += 2
+            continue
+        if w.startswith('--only-suites='):
+            if w[len('--only-suites='):]:
+                only = w[len('--only-suites='):]
+            else:
+                unknown.append(w)
+        elif w == '--affected':
+            affected = True
+        elif not (w in RUNALL_FLAGS or re.fullmatch(r'-j[0-9]+|--jobs=[0-9]+', w)):
+            unknown.append(w)
+        i += 1
+    return affected, only, unknown
+
+
 def runall_words(check):
-    """The flag words of a check that is exactly one plain, scoped run-all invocation (RUNALL_PLAIN with --affected or
-    --only-suites among the flags), else None."""
+    """The --only-suites entries of a check that is exactly one plain, scoped run-all invocation (RUNALL_PLAIN, only
+    flags run-all knows, with --affected or a non-empty --only-suites list), else None. An empty list: --affected
+    alone."""
     match = RUNALL_PLAIN.fullmatch(check.strip(' \t'))
-    words = match[1].split() if match else []
-    return words if any(w == '--affected' or w.startswith('--only-suites') for w in words) else None
+    if not match:
+        return None
+    affected, only, unknown = runall_args(match[1].split())
+    entries = [x for x in (only or '').split(',') if x]
+    if unknown or only is not None and not entries or not (affected or entries):
+        return None
+    return entries
 
 
 def mentions_runall(check):
@@ -252,16 +292,18 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
     for task in tasks:
         tid = str(task.get('id', '?'))
         for check in task.get('checks', []):
-            words = runall_words(check)
-            if words is not None:
-                for i, w in enumerate(words):  # suites a run-all check names join the one tier command
-                    listed = w.split('=', 1)[1] if w.startswith('--only-suites=') else (
-                        words[i + 1] if w == '--only-suites' and i + 1 < len(words) else '')
-                    for x in (x.strip() for x in listed.split(',')):
-                        if x in known:
-                            suites.add(x)
-                        elif x:
-                            add_extra(tid, suite_command(x), x)
+            entries = runall_words(check)
+            # every entry must be a suite run-all lists (when the list is known) or at least a suite path, never
+            # run-all itself (`--only-suites tests/run-all.sh` must not become a runnable full run): else the whole
+            # check is DO NOT RUN and no command is generated from any of its entries
+            if entries is not None and all(
+                    not mentions_runall(x) and (x in known if runall_suites is not None else SUITE_PATH.fullmatch(x))
+                    for x in entries):
+                for x in entries:  # suites a run-all check names join the one tier command
+                    if x in known:
+                        suites.add(x)
+                    else:
+                        add_extra(tid, suite_command(x), x)
                 continue
             if mentions_runall(check):  # not one plain scoped run-all: never runnable, whatever the shell makes of it
                 add_extra(tid, DO_NOT_RUN + check)
@@ -315,8 +357,13 @@ def full_run(check):
             if inner and full_run(inner):
                 return True
     commands.append(words)
-    return any(any(RUNALL_WORD.fullmatch(w) for w in ws)
-               and not any(w == '--affected' or w.startswith('--only-suites') for w in ws) for ws in commands)
+    for ws in commands:
+        at = next((i for i, w in enumerate(ws) if RUNALL_WORD.fullmatch(w)), None)
+        if at is not None:
+            affected, only, _ = runall_args(ws[at + 1:])
+            if not (affected or any((only or '').split(','))):
+                return True
+    return False
 
 
 def qa_warnings(task):

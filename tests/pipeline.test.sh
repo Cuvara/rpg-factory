@@ -689,10 +689,40 @@ assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites 
 assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
     m.qa_body('x', lone, base='main', runall=listed, tiers={'task': 'full'})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
-# an unknown --only-suites entry runs as run-all runs it (TMPDIR unset), attributed to its task
-assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'])],
-                      listed)[1] == ['[a] env -u TMPDIR bash tests/session-state.test.sh',
-                                     '[a] env -u TMPDIR python3 -B tests/r.test.py']
+# without a known suite list, an --only-suites suite path runs as run-all runs it (TMPDIR unset), attributed to its task
+unknown = 'tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'
+assert m.pr.qa_checks([dict(task, checks=[unknown])], None)[1] == ['[a] env -u TMPDIR bash tests/session-state.test.sh',
+                                                                  '[a] env -u TMPDIR python3 -B tests/r.test.py']
+# with the list known, an entry run-all does not list makes the whole check DO NOT RUN (run-all would reject it)
+assert m.pr.qa_checks([dict(task, checks=[unknown])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + unknown], False)
+# r11 review: an --only-suites entry that is run-all itself never becomes a runnable command (a full run), known list
+# or not, and neither does a sibling entry of the same check; nor a non-suite path when the list is unknown
+for check in ('tests/run-all.sh --only-suites tests/run-all.sh', 'tests/run-all.sh --only-suites=./tests/run-all.sh',
+              'tests/run-all.sh --affected --only-suites tests/routing.test.sh,tests/run-all.sh',
+              'tests/run-all.sh --only-suites scripts/x.sh', 'tests/run-all.sh --only-suites tests/x'):
+    for known in (listed, None):
+        got = m.pr.qa_checks([dict(task, checks=[check])], known)
+        assert got == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), (check, known, got)
+# r11 review: only an exact --only-suites token with a list, or --only-suites=LIST, scopes a check; any other flag
+# word run-all ignores or misreads (a flag taken as a value) leaves a full run: DO NOT RUN, and validate warns
+for check in ('tests/run-all.sh --only-suitesXYZ', 'tests/run-all.sh --only-suitesXYZ tests/routing.test.sh',
+              'tests/run-all.sh --only-suites', 'tests/run-all.sh --only-suites=', 'tests/run-all.sh --only-suites=,',
+              'tests/run-all.sh --only-suites --affected', 'tests/run-all.sh --base --affected',
+              'tests/run-all.sh -j --affected', 'tests/run-all.sh --affected=1', 'tests/run-all.sh --affectedX',
+              'tests/run-all.sh --affected --bogus', 'tests/run-all.sh --affected --release',
+              'tests/run-all.sh --affected --list-suites'):
+    for known in (listed, None):
+        got = m.pr.qa_checks([dict(task, checks=[check])], known)
+        assert got == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), (check, known, got)
+for check in ('tests/run-all.sh --only-suitesXYZ', 'tests/run-all.sh --only-suites=', 'tests/run-all.sh --base --affected',
+              'tests/run-all.sh --affected=1', 'true && tests/run-all.sh --only-suitesXYZ tests/x.sh'):
+    assert m.pr.full_run(check), check
+for check in ('tests/run-all.sh --only-suites tests/x.sh', 'tests/run-all.sh --only-suites=tests/x.sh -j 2',
+              'tests/run-all.sh --base main --affected --jobs=2 --no-reuse'):
+    assert not m.pr.full_run(check), check
+assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --no-wait --reuse --no-reuse -j2 --jobs 2 --no-workspace '
+                                          '--no-claude --base main --only-suites tests/routing.test.sh'])],
+                      listed) == (['tests/routing.test.sh'], [], False)
 # a repo without tests/run-all.sh keeps the previous body: the task checks and the run-checks.py fast tier
 old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
             'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
@@ -776,8 +806,13 @@ for scoped in ("bash -c 'tests/run-all.sh --affected -j 2'", 'tests/run-all.sh -
 for form in ('tests/dogfood.sh', 'bash tests/dogfood.sh', 'env -u TMPDIR tests/dogfood.sh'):
     assert m.pr.qa_checks([dict(task, checks=[form])], listed, ['tests/dogfood.sh']) == ([], ['[a] ' + form], False), form
 assert m.pr.qa_checks([dict(task, checks=['tests/dogfood.sh', 'bash tests/dogfood.sh',
-                                          'tests/run-all.sh --only-suites tests/dogfood.sh'])], listed,
+                                          'tests/run-all.sh --only-suites tests/dogfood.sh'])], None,
                       ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] env -u TMPDIR bash tests/dogfood.sh',
+                                                                   '[a] env -u TMPDIR bash tests/x.sh'], False)
+# the same with run-all's list known: the --only-suites check names a suite run-all does not list, so DO NOT RUN
+dog = 'tests/run-all.sh --only-suites tests/dogfood.sh'
+assert m.pr.qa_checks([dict(task, checks=['tests/dogfood.sh', 'bash tests/dogfood.sh', dog])], listed,
+                      ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] tests/dogfood.sh', '[a] ' + m.pr.DO_NOT_RUN + dog,
                                                                    '[a] env -u TMPDIR bash tests/x.sh'], False)
 # the same suite with and without `env -u TMPDIR`: the env form wins, in the first form's place, task ids merged
 assert m.pr.qa_checks([dict(task, checks=['tests/x.sh', 'python3 -B scripts/y.py', 'env -u TMPDIR tests/x.sh'])],
@@ -791,13 +826,17 @@ runall_text = pathlib.Path(root, 'tests', 'run-all.sh').read_text(encoding='utf-
 assert set(re.search(r'^RELEASE_ONLY="([^"]*)"', runall_text, re.M)[1].split()) == m.pr.RELEASE_ONLY
 real = m.runall_suites(root)
 assert real and 'tests/pipeline.test.sh' in real, real
-for check in ('tests/installed-safety.sh', 'env -u TMPDIR tests/installed-safety.sh', 'tests/dogfood.sh',
-              'tests/run-all.sh --affected --only-suites tests/installed-safety.sh,tests/dogfood.sh'):
+for check in ('tests/installed-safety.sh', 'env -u TMPDIR tests/installed-safety.sh', 'tests/dogfood.sh'):
     got = m.pr.qa_checks([dict(task, checks=[check, 'bash tests/pipeline.test.sh'])], real, ['tests/installed-safety.sh'])
     assert got[0] == ['tests/pipeline.test.sh'], (check, got)
     assert any('installed-safety.sh' in x for x in got[1]) or 'installed-safety' not in check, (check, got)
     assert any('dogfood.sh' in x for x in got[1]) or 'dogfood' not in check, (check, got)
     assert len([x for x in got[1] if 'installed-safety.sh' in x]) == 1, (check, got)
+# run-all rejects a release-only or unlisted --only-suites entry without --release: that check is DO NOT RUN
+check = 'tests/run-all.sh --affected --only-suites tests/installed-safety.sh,tests/dogfood.sh'
+got = m.pr.qa_checks([dict(task, checks=[check, 'bash tests/pipeline.test.sh'])], real, ['tests/installed-safety.sh'])
+assert got == (['tests/pipeline.test.sh'], ['[a] ' + m.pr.DO_NOT_RUN + check,
+                                           '[a] env -u TMPDIR bash tests/installed-safety.sh'], False), got
 def cli(*args):
     p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
     assert p.returncode == 0, (args, p.stdout, p.stderr)
@@ -815,7 +854,7 @@ assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was 
 # the full run-all check is marked DO NOT RUN, in its place among the extras, never folded or runnable
 extras = ('Extra commands:\n[a] ' + m.pr.DO_NOT_RUN + 'tests/run-all.sh -j 4\n'
           '[a] python3 -B scripts/build-registry.py --check\n[a] tests/dogfood.sh\n'
-          '[a] env -u TMPDIR bash tests/installed-safety.sh')
+          '[a] ' + m.pr.DO_NOT_RUN + 'tests/run-all.sh --affected --only-suites tests/installed-safety.sh')
 assert out.count('tests/run-all.sh -j 4') == 1 and extras in out, out
 assert 'routing-properties.test.py' not in out.split('Extra commands:')[1], out
 assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exists()
