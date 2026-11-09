@@ -62,7 +62,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 7. **Implement (M, task lead).** `subplan validate`, then one short, fresh sub-session per subtask
    (`--phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per its `placement`:
    delivery.md section 4); the task lead commits or merges each. Requested scope only; module rules; generated paths via their generator.
-   Code goes to Codex, prose to Claude: the "Which model" table (delivery.md section 10); the task lead does not implement.
+   Code goes to Codex, prose to Claude: the "Which model" table (delivery.md section 10); the task lead does not implement; in-session subagents are read-only scouts (delivery.md section 8 "In-session subagents").
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
    both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
 9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
