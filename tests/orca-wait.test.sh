@@ -68,6 +68,20 @@ chmod +x "$TMP/bin/orca"
 printf '@bash "%%~dp0orca" %%*\r\n' > "$TMP/bin/orca.cmd"
 echo '{"ok":true,"result":{"workers":[]}}' > "$TMP/worker-list"
 export PATH="$(path_entry "$TMP/bin"):$PATH"
+python3 -B - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))
+from pipeline_route import stall_reason
+positive = ['HTTP 429', '429 Too Many Requests', 'error: 429', 'usage limit reached',
+            'You have hit your usage limit', "You've hit your usage limit", 'rate limited exceeded',
+            'rate limit reached', 'quota exceeded', '\u25a0 Reconnecting... 2/5', 'stream disconnected']
+negative = ['run-all: 512 checks, 429 passed, 0 failed', 'commit 4291abc feat',
+            '\u2193 429 tokens', 'grep rate limit middleware',
+            "+for tail in '429 usage limit' 'Reconnecting'; do ."]
+assert all(stall_reason(s) and stall_reason([s]) for s in positive)
+assert all(stall_reason(s) is None and stall_reason([s]) is None for s in negative)
+PY
+[ "$?" -eq 0 ] && ok "stall reason recognizes provider errors without healthy text false positives" || no "stall reason cases"
 bash "$ROOT/scripts/orca-wait.sh" --run sequence --timeout-ms 25 --types worker_done,status > "$TMP/out" 2> "$TMP/err"
 status=$?
 [ "$status" -eq 0 ] && ok "heartbeat, timeout, real delivery exits 0" || no "sequence exits 0"
@@ -128,42 +142,58 @@ status=$?
 
 echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"dispatched","projection":{"provider":{"id":"codex"}}}]}}' > "$TMP/worker-list"
 export FAKE_MODE=polling
-for tail in '429 usage limit' 'Reconnecting'; do
+for tail in 'HTTP 429' '■ Reconnecting... 2/5'; do
   rm -f "$TMP/step" "$TMP/workers-argv"
   printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$tail" > "$TMP/worker-read"
-  bash "$ROOT/scripts/orca-wait.sh" --run "limit-${tail%% *}" --timeout-ms 100 --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+  PYTHONIOENCODING=cp1252 bash "$ROOT/scripts/orca-wait.sh" --run "limit-${tail%% *}" --timeout-ms 100 --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
   status=$?
   if [ "$status" -eq 5 ] && grep -q $'STALL\tctx-test\tcodex\tMODEL_UNAVAILABLE:' "$TMP/poll.out" && grep -q 'NEXT.*--down codex --reason' "$TMP/poll.out"; then
     ok "$tail reports model unavailable and exits 5"
   else no "$tail stall report"; fi
 done
 grep -q -- '--timeout-ms 10' "$TMP/argv" && ok "worker polling caps wait timeout" || no "wait timeout not capped"
-[ -f "$TMP/state/orca-wait/limit-429.lock.workers.json" ] && ok "worker state persists after exit" || no "worker state missing"
+[ -f "$TMP/state/orca-wait/limit-HTTP.lock.workers.json" ] && ok "worker state persists after exit" || no "worker state missing"
+
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"HTTP 429"}}}' > "$TMP/worker-read"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run limit-HTTP --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "same stall reported only once" || no "same stall repeated"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"quota exceeded"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run limit-HTTP --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'quota exceeded' "$TMP/poll.out" && ok "changed stall reason reported" || no "changed stall reason missed"
 
 rm -f "$TMP/step"
 echo '{"ok":true,"result":{"terminal":{"tail":"working"}}}' > "$TMP/worker-read"
 bash "$ROOT/scripts/orca-wait.sh" --run frozen --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 5 ] && grep -q 'frozen: output unchanged' "$TMP/poll.out" && ok "unchanged worker stalls" || no "frozen worker not reported"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"working again"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run frozen --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'frozen: output unchanged' "$TMP/poll.out" && ok "changed output can freeze again" || no "second freeze missed"
 
 rm -f "$TMP/step"
-FAKE_CHANGING=yes FAKE_DELIVER_AT=4 bash "$ROOT/scripts/orca-wait.sh" --run changing --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+FAKE_CHANGING=yes FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run changing --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "changing output does not stall" || no "changing output stalled"
 
 echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"completed"}]}}' > "$TMP/worker-list"
 rm -f "$TMP/step" "$TMP/workers-argv"
-FAKE_DELIVER_AT=3 bash "$ROOT/scripts/orca-wait.sh" --run completed --stall-poll-ms 10 --stall-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run completed --stall-poll-ms 10 --stall-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 0 ] && ! grep -q worker-read "$TMP/workers-argv" && ok "completed dispatch skipped" || no "completed dispatch read"
 
 rm -f "$TMP/step"
-FAKE_WORKER_FAIL=yes FAKE_DELIVER_AT=3 bash "$ROOT/scripts/orca-wait.sh" --run poll-failure --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+FAKE_WORKER_FAIL=yes FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run poll-failure --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 0 ] && grep -q 'WARN: worker poll:' "$TMP/poll.err" && grep -q worker_done "$TMP/poll.out" && ok "worker failure warns and preserves delivery" || no "worker failure interrupted delivery"
 
 rm -f "$TMP/step" "$TMP/workers-argv"
-FAKE_DELIVER_AT=3 bash "$ROOT/scripts/orca-wait.sh" --run disabled --stall-poll-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run disabled --stall-poll-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
 status=$?
 [ "$status" -eq 0 ] && [ ! -e "$TMP/workers-argv" ] && ok "disabled polling makes no worker calls" || no "disabled polling called workers"
 

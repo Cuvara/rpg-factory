@@ -19,9 +19,14 @@ def _safe(x):
 def stall_reason(text):
     """Return a reason for factory-pipeline.py agents --down, if the tail indicates a stall."""
     lines = text.splitlines() if isinstance(text, str) else [line for item in text for line in item.splitlines()]
-    for pattern, reason in ((r'429|usage limit|rate limit|too many requests|quota exceeded', 'usage limit'),
-                            (r'reconnecting', 'reconnecting')):
+    for pattern, reason in ((r'\b(?:429\s*[:=-]?\s*(?:too many requests|status|error|http|code)\b|'
+                             r'(?:status|error|http|code)\s*[:= -]*\b429\b|'
+                             r'usage limit reached\b|you(?:\'ve| have) hit your usage limit\b|'
+                             r'rate limit(?:ed)? (?:reached|exceeded)\b|quota exceeded\b)', 'usage limit'),
+                            (r'^[^\w\r\n]*reconnecting\b|\bstream disconnected\b', 'reconnecting')):
         for line in lines:
+            if line.lstrip().startswith(('+', '-')):
+                continue
             if re.search(pattern, line, re.IGNORECASE):
                 detail = reason + (' (429)' if reason == 'usage limit' and '429' in line else '')
                 return 'MODEL_UNAVAILABLE: ' + detail + ' - ' + line.strip()[:120]

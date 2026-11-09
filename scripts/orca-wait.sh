@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # One consuming waiter per Run. Real deliveries remain unacknowledged for the caller.
+# Frozen stalls are advisory: a worker may be inside a long quiet command.
 # Exit codes: 0 real delivery; 2 usage / NOT_AVAILABLE / invalid receipt or state;
 # 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 130 INT; 143 TERM.
 set -uo pipefail
@@ -14,7 +15,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [[ -n "$run" && "$timeout" =~ ^[1-9][0-9]*$ && -n "$types" && "$stall_poll" =~ ^[0-9]+$ && "$stall_ms" =~ ^[0-9]+$ ]] || {
-  echo "ERROR: --run and a positive --timeout-ms are required" >&2; exit 2;
+  echo "ERROR: --run and a positive --timeout-ms are required; --stall-poll-ms and --stall-ms must be nonnegative integers" >&2; exit 2;
 }
 command -v orca >/dev/null 2>&1 || { echo "NOT_AVAILABLE: orca is not on PATH" >&2; exit 2; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -117,8 +118,9 @@ PY
     ack$'\t'*) ack=${parsed#*$'\t'} ;;
     wait)
       if [ -z "$ack" ] && [ "$stall_poll" -gt 0 ]; then
-        python3 -B - "$ROOT" "$run" "$state.workers.json" "$stall_poll" "$stall_ms" <<'PY'
+        python3 -B - "$ROOT" "$run" "$state.workers.json" "$stall_poll" "$stall_ms" <<'PY' &
 import hashlib, json, os, shlex, shutil, subprocess, sys, time
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 root, run, path, interval, threshold = sys.argv[1:]
 sys.path[:0] = [os.path.join(root, 'scripts'), os.path.join(root, 'scripts', 'lib')]
 from lib import fstate
@@ -137,7 +139,7 @@ if not isinstance(old, dict):
 
 def call(args):
     proc = subprocess.run([shutil.which('orca') or 'orca', 'orchestration'] + args, capture_output=True,
-                          encoding='utf-8', errors='replace', timeout=60)
+                          encoding='utf-8', errors='replace', timeout=20)
     if proc.returncode:
         raise ValueError(args[0] + ' exited ' + str(proc.returncode))
     doc = json.loads(proc.stdout)
@@ -178,7 +180,12 @@ try:
         reason = stall_reason(tail)
         if not reason and now - since >= int(threshold):
             reason = 'frozen: output unchanged for ' + str(int((now - since) // 60000)) + ' min'
-        if reason:
+        reason_key = 'frozen' if reason and reason.startswith('frozen:') else reason
+        prior_reason = prior.get('reported') if isinstance(prior, dict) else None
+        if reason_key == 'frozen' and isinstance(prior, dict) and prior.get('hash') != digest:
+            prior_reason = None
+        current[dispatch]['reported'] = reason_key
+        if reason and reason_key != prior_reason:
             provider = (worker.get('projection') or {}).get('provider') or {}
             agent = provider.get('id') or 'unknown'
             stalls.append((dispatch, agent, ' '.join(reason.split())))
@@ -191,14 +198,15 @@ try:
                 shlex.quote(agent), shlex.quote(reason[len('MODEL_UNAVAILABLE: '):])))
     if stalls:
         sys.exit(5)
-except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError) as exc:
+except (OSError, UnicodeError, ValueError, TypeError, AttributeError, subprocess.SubprocessError) as exc:
     try:
         fstate.write_json(path, state)
     except OSError:
         pass
     print('WARN: worker poll: ' + ' '.join(str(exc).split()), file=sys.stderr)
 PY
-        poll_status=$?
+        child=$!
+        wait "$child"; poll_status=$?; child=
         [ "$poll_status" -ne 5 ] || exit 5
       fi
       ack= ;;
