@@ -399,6 +399,8 @@ CLI default. This subsection is the only copy of the policy; the data lives in r
 
 - **Scope.** `pipeline.models.scope` lists, per agent (`claude`, `codex`), the models and efforts that may run at all.
   Every profile must lie inside the scope (`scripts/check-registry.sh` and `docs/registry.schema.json` enforce it).
+  Codex runs `gpt-6.1-sol` for planner, lead, review and `heavy`, and `gpt-6.1-terra` for `light`, `standard` and `qa`
+  (all at effort `high`), the counterpart of `claude-sonnet-5-5` at `high` on Claude.
 - **Roles and profiles.** `pipeline.models.profiles.<agent>` maps a role to a model and effort. The roles are
   `planner`, `lead` (the task lead, `--phase lead`), `implement` (takes the profile of the subtask or task grade),
   `review` and `qa`. The review of a `heavy` task uses the `heavy` profile, so a hard diff gets a strong reviewer.

@@ -413,6 +413,10 @@
           "gpt-6.1-sol": [
             "medium",
             "high"
+          ],
+          "gpt-6.1-terra": [
+            "medium",
+            "high"
           ]
         }
       },
@@ -465,19 +469,19 @@
             "effort": "high"
           },
           "standard": {
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.1-terra",
             "effort": "high"
           },
           "light": {
-            "model": "gpt-6.1-sol",
-            "effort": "medium"
+            "model": "gpt-6.1-terra",
+            "effort": "high"
           },
           "review": {
             "model": "gpt-6.1-sol",
             "effort": "high"
           },
           "qa": {
-            "model": "gpt-6.1-sol",
+            "model": "gpt-6.1-terra",
             "effort": "high"
           }
         }

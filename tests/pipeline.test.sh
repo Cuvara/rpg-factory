@@ -408,7 +408,7 @@ expect "lead spec: never a model outside the scope" 0 "never pass one outside it
 expect "lead spec carries the registry rubric" 0 "^- standard: Ordinary feature" dispatch "$LT" --task gw --phase lead
 expect "lead spec names the task grade" 0 '"grade": "light"' dispatch "$LT" --task gw --phase lead
 expect "validate prints the task lead's model" 0 "^Model: task lead claude claude-opus-5-5 medium$" validate "$LT"
-expect "validate: grade derived from tier S is light" 0 "^Model: task gw grade light \(tier S of the owned paths\): implement claude claude-sonnet-5-5 high, review codex gpt-6.1-sol high, qa codex gpt-6.1-sol high$" validate "$LT"
+expect "validate: grade derived from tier S is light" 0 "^Model: task gw grade light \(tier S of the owned paths\): implement claude claude-sonnet-5-5 high, review codex gpt-6.1-sol high, qa codex gpt-6.1-terra high$" validate "$LT"
 expect "validate --json carries the models" 0 '"implement": \{' validate "$LT" --json
 GR=$(plan grades "{$HEAD,\"tasks\":[
  {\"id\":\"wire\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/shared/proto/wire.proto\"],\"acceptance\":[\"a\"],\"implementer\":\"codex\"},
@@ -429,7 +429,7 @@ GSP=$(subplan graded gw '[
  {"id":"s4","objective":"o","paths":["backend/gateway/internal/d/"],"implementer":"codex","grade":"heavy"},
  {"id":"s5","objective":"o","paths":["backend/gateway/internal/e/"],"implementer":"claude","grade":"standard"}]' light.json)
 expect "subplan validate: a graded subtask prints its models" 0 "^Model: subtask s1 grade light \(subplan\): implement claude claude-sonnet-5-5 high, review codex gpt-6.1-sol high$" subplan validate "$GSP"
-expect "subplan validate: an ungraded subtask inherits the task grade" 0 "^Model: subtask s2 grade light \(task grade: tier S of the owned paths\): implement codex gpt-6.1-sol medium, review claude claude-opus-5-5 medium$" subplan validate "$GSP"
+expect "subplan validate: an ungraded subtask inherits the task grade" 0 "^Model: subtask s2 grade light \(task grade: tier S of the owned paths\): implement codex gpt-6.1-terra high, review claude claude-opus-5-5 medium$" subplan validate "$GSP"
 expect "subplan validate: a heavy codex subtask gets the heavy claude reviewer" 0 "^Model: subtask s4 grade heavy \(subplan\): implement codex gpt-6.1-sol high, review claude claude-opus-5-5 high$" subplan validate "$GSP"
 expect "subplan validate --json carries the models" 0 '"subtasks": \{' subplan validate "$GSP" --json
 X=$(subplan badgrade gw '[{"id":"s1","objective":"o","paths":["backend/gateway/a/"],"implementer":"claude","grade":"huge"}]')
@@ -451,13 +451,13 @@ expect "subplan validate: a non-string implementer and reviewer are errors, not 
 refute "subplan validate: a non-string implementer raises no traceback" "Traceback|TypeError" subplan validate "$X"
 expect "implement of a light subtask: claude-sonnet-5-5 high" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$LT" --task gw --phase implement --subplan "$GSP" --subtask s1 --runner orca
 expect "implement of a heavy subtask: claude-opus-5-5 high" 0 "^orca orchestration worker-start .*--model claude-opus-5-5 --effort high --json$" dispatch "$LT" --task gw --phase implement --subplan "$GSP" --subtask s3 --runner orca
-expect "implement of an ungraded codex subtask of a light task: gpt-6.1-sol medium" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort medium --json$" dispatch "$LT" --task gw --phase implement --subplan "$GSP" --subtask s2 --runner orca
+expect "implement of an ungraded codex subtask of a light task: gpt-6.1-terra high" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-terra --effort high --json$" dispatch "$LT" --task gw --phase implement --subplan "$GSP" --subtask s2 --runner orca
 expect "implement of the task (no subplan): the task grade" 0 "^orca orchestration worker-start .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$LT" --task gw --phase implement --runner orca
 expect "implement --grade heavy overrides the grade" 0 "^orca orchestration worker-start .*--model claude-opus-5-5 --effort high --json$" dispatch "$LT" --task gw --phase implement --grade heavy --runner orca
 expect "codex review: gpt-6.1-sol high" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort high --json$" dispatch "$LT" --task gw --phase review --sha abc1234 --runner orca
 expect "claude review of a light codex subtask: the review profile" 0 "^orca orchestration worker-start .*--agent claude .*$MOD" dispatch "$LT" --task gw --phase review --sha abc1234 --subplan "$GSP" --subtask s2 --runner orca
 expect "claude review of a heavy subtask: the heavy profile" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-opus-5-5 --effort high --json$" dispatch "$LT" --task gw --phase review --sha abc1234 --subplan "$GSP" --subtask s4 --runner orca
-expect "codex qa: gpt-6.1-sol high" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-sol --effort high --json$" dispatch "$LT" --task gw --phase qa --sha abc1234 --runner orca
+expect "codex qa: gpt-6.1-terra high" 0 "^orca orchestration worker-start .*--agent codex .*--model gpt-6.1-terra --effort high --json$" dispatch "$LT" --task gw --phase qa --sha abc1234 --runner orca
 expect "claude qa: claude-sonnet-5-5 high" 0 "^orca orchestration worker-start .*--agent claude .*--model claude-sonnet-5-5 --effort high --json$" dispatch "$OK" --task c2 --phase qa --sha abc1234 --runner orca
 expect "--model inside the scope overrides the profile model" 0 "--model claude-sonnet-5-5 --effort medium --json$" dispatch "$LT" --task gw --phase lead --runner orca --model claude-sonnet-5-5
 expect "--model outside the scope: usage error" 2 "claude claude-haiku-4-5 / medium is outside the model scope .*Nothing was dispatched" dispatch "$LT" --task gw --phase lead --runner orca --model claude-haiku-4-5

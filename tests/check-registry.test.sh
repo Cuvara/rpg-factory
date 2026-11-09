@@ -62,7 +62,7 @@ if jq '.kind_schemas["ui-flow"] = "docs/schemas/kinds/ui-flow.schema.json"' "$RE
 else echo "FAIL foundation kind schema should be exempt"; cat "$TMP/foundation-schema.out"; fail=$((fail + 1)); fi
 # j: pipeline.models profiles stay inside the scope and cover every role and grade for every agent in scope.
 expect_fail j-model-outside-scope '.pipeline.models.profiles.claude.lead.model = "claude-haiku-4-5"' 'pipeline.models: profiles claude/lead: claude-haiku-4-5 / medium is outside the scope'
-expect_fail j-effort-outside-scope '.pipeline.models.profiles.codex.light.effort = "low"' 'pipeline.models: profiles codex/light: gpt-6.1-sol / low is outside the scope'
+expect_fail j-effort-outside-scope '.pipeline.models.profiles.codex.light.effort = "low"' 'pipeline.models: profiles codex/light: gpt-6.1-terra / low is outside the scope'
 expect_fail j-missing-role 'del(.pipeline.models.profiles.claude.qa)' 'pipeline.models: profiles claude: missing role/grade qa'
 expect_fail j-missing-agent-profiles 'del(.pipeline.models.profiles.codex)' 'pipeline.models: profiles: agent codex is in scope but has no profiles'
 expect_fail j-bad-default-grade '.pipeline.models.default_grade = "epic"' 'pipeline.models: default_grade must be one of'
@@ -70,7 +70,7 @@ expect_fail j-bad-default-grade '.pipeline.models.default_grade = "epic"' 'pipel
 # check-registry.sh validates the schema only when python3 jsonschema is installed, so these two cases need it too.
 if python3 -c "import jsonschema" 2>/dev/null; then
   expect_fail j-schema-model-enum '(.pipeline.models.scope.claude["claude-haiku-4-5"] = ["medium"]) | (.pipeline.models.profiles.claude.lead.model = "claude-haiku-4-5")' 'schema: pipeline/models/profiles/claude/lead/model'
-  expect_fail j-schema-effort-enum '(.pipeline.models.scope.codex["gpt-6.1-sol"] += ["low"]) | (.pipeline.models.profiles.codex.light.effort = "low")' 'schema: pipeline/models/profiles/codex/light/effort'
+  expect_fail j-schema-effort-enum '(.pipeline.models.scope.codex["gpt-6.1-terra"] += ["low"]) | (.pipeline.models.profiles.codex.light.effort = "low")' 'schema: pipeline/models/profiles/codex/light/effort'
 else
   echo "SKIP j-schema-model-enum: python3 jsonschema not installed"
   echo "SKIP j-schema-effort-enum: python3 jsonschema not installed"

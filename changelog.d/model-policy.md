@@ -10,4 +10,6 @@
   and `orca agent launch`; the Agent-tool runner passes a model alias and notes that effort cannot be set; `verdict`
   stores the optional model and effort. A personal override file (`$RPG_FACTORY_MODEL_POLICY` or
   `<persistent state dir>/model-policy.json`) may narrow the scope and replace profiles. The policy is described once, in
-  `parallel-work.md` section 10, "Model choice" (`scripts/lib/model_policy.py`, `tests/pipeline.test.sh`).
+  `parallel-work.md` section 10, "Model choice" (`scripts/lib/model_policy.py`, `tests/pipeline.test.sh`). Codex workers
+  use `gpt-6.1-sol` at effort `high` for planner, lead, review and `heavy`, and `gpt-6.1-terra` at `high` for `light`,
+  `standard` and `qa`.
