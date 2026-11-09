@@ -30,6 +30,7 @@
 #   --no-reuse      force suites to run instead of reusing matching input PASS records
 #   --release       the installed plugin must equal the source (install-status CURRENT), the source
 #                   must be committed, and tests/installed-safety.sh must pass against the installed hooks
+#   --workspace-only run only checks requiring the live workspace or Claude; conflicts with --no-workspace and --release
 #   --no-workspace  skip checks that need the RPG MMO workspace on disk
 #   --no-claude     skip `claude plugin validate`
 set -uo pipefail
@@ -41,17 +42,20 @@ cd "$ROOT" || exit 1
 RUNALL_SELF="$ROOT/tests/run-all.sh"   # the run lines --list-suites reads (stand-in plans set RUNALL_SUITES_FROM)
 RELEASE_ONLY="tests/installed-safety.sh"   # run only with --release: --list-suites omits them, --only-suites rejects them without it
 use_ws=true; use_claude=true; release=false; affected=false; base=""; jobs=1; reuse=false; no_wait=false; suite_reuse=true; only_suites=""
-list_only=false
+list_only=false; workspace_only=false
 while [ $# -gt 0 ]; do
-  case "$1" in --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
+  case "$1" in --workspace-only) workspace_only=true ;; -h|--help) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF"; exit 0 ;; --no-workspace) use_ws=false ;; --no-claude) use_claude=false ;; --release) release=true ;;
     --reuse) reuse=true ;; --no-wait) no_wait=true ;; --no-reuse) suite_reuse=false ;;
     --only-suites) only_suites="${2:-}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; }; shift ;;
     --only-suites=*) only_suites="${1#--only-suites=}"; [ -n "$only_suites" ] || { echo "run-all: --only-suites needs a list" >&2; exit 2; } ;;
     --list-suites) list_only=true ;;
     --affected) affected=true ;; --base) base="${2:-}"; shift ;;
-    -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; esac
+    -j|--jobs) jobs="${2:-}"; shift ;; -j*) jobs="${1#-j}" ;; --jobs=*) jobs="${1#--jobs=}" ;; *) sed -n '1{/^#!/d;}; /^set -uo pipefail/q; /^#/p' "$RUNALL_SELF" >&2; exit 2 ;; esac
   shift
 done
+if $workspace_only && { ! $use_ws || $release; }; then
+  echo "run-all: --workspace-only conflicts with --no-workspace and --release" >&2; exit 2
+fi
 case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive integer, got '$jobs'" >&2; exit 2 ;; esac
 t_start=$(date +%s)
 AFF=""
@@ -263,14 +267,23 @@ python_path_fast() {
 list_suites() { # file: every suite or gated script a run/runl/runp/run1 line or a gated guard in <file> names, as
   # suite_of returns it (first tests/, testlab/ or scripts/ argument of the command); syntax checks and paths built
   # from variables (the bash -n / py_compile loops) are not suites
-  python3 -B - "$1" <<'PY'
+  python3 -B - "$1" "$workspace_only" <<'PY'
 import re, shlex, sys
 text = re.sub(r'\\\r?\n', ' ', open(sys.argv[1], encoding='utf-8').read())
 lead = {'if', 'elif', 'then', 'else', 'do', 'while', 'until', '!', '{'}
 syntax = ('bash -n:', 'py_compile:', 'json:', 'jq compile:')
 punct = lambda t: bool(t) and all(c in '();<>|&' for c in t)
 seen = []
+in_workspace = False
 for line in text.splitlines():
+    if line.strip() == '# workspace-list-begin':
+        in_workspace = True
+        continue
+    if line.strip() == '# workspace-list-end':
+        in_workspace = False
+        continue
+    if sys.argv[2] == 'true' and not in_workspace and '# workspace-list' not in line:
+        continue
     if line.lstrip().startswith('#'):
         continue
     try:
@@ -471,7 +484,7 @@ runall_prepare() {
   TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null) || TREE=""
   HEAD_SHA=$(git rev-parse HEAD 2>/dev/null) || HEAD_SHA=""
   [ -n "$TREE" ] && clean_tree && CLEAN_START=true
-  full_run=false; if $release || { ! $affected && [ -z "$only_suites" ]; }; then full_run=true; fi
+  full_run=false; if $release || { ! $workspace_only && ! $affected && [ -z "$only_suites" ]; }; then full_run=true; fi
   if $full_run; then
     full_reuse && return 10
     full_lock || return $?
@@ -543,6 +556,7 @@ runall_prepare; prep_rc=$?
 [ "$prep_rc" -eq 10 ] && exit 0
 [ "$prep_rc" -eq 0 ] || exit "$prep_rc"
 
+if ! $workspace_only; then
 # ---- syntax
 # one jq process for every file (a job per file cost about 0.3 s each on Windows); on any error, one line per file
 json_files=(); while IFS= read -r f; do json_files+=("$f"); done < <(find . -name '*.json' -not -path './.git/*' | sort)
@@ -641,9 +655,11 @@ find testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 # ---- registry
 run "registry structure" scripts/check-registry.sh --structure-only
 run "registry domain rules + optional repos" tests/check-registry.test.sh
-if $use_ws; then runl "registry paths exist in workspace" scripts/check-registry.sh
+fi
+if $use_ws; then runl "registry paths exist in workspace" scripts/check-registry.sh # workspace-list
 else skp "registry paths exist in workspace" "--no-workspace"; fi
 
+if ! $workspace_only; then
 # ---- git guard, skill contract lint, routing (task + historical replay)
 run "cross-platform helpers + UTF-8 output (Linux, WSL, Windows git-bash)" env -u TMPDIR tests/compat.test.sh
 run "git-guard unit tests" tests/git-guard.test.sh
@@ -697,6 +713,8 @@ run "asset-gen engine, core templates, image QA, gen-run quality plugin (temp au
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+fi
+# workspace-list-begin
 if ! $use_ws; then skp "orca commands cited in parallel-work.md" "--no-workspace"
 elif ! command -v orca >/dev/null 2>&1; then skp "orca commands cited in parallel-work.md" "orca not on PATH"
 else run "orca commands cited in parallel-work.md exist in orca --help" tests/orca-commands.test.sh; fi
@@ -732,6 +750,8 @@ else
   cleanup+=("$SW")  # removed after the last suite ended (with -j N this one may still be running)
 fi
 
+# workspace-list-end
+if ! $workspace_only; then
 # ---- resolver behaviour (pure jq, no workspace needed)
 resolve() { # repo files-json
   jq -c --arg repo "$1" --argjson files "$2" --argjson subst '{"{dotnet}":"dotnet.exe","{plugin_root}":"/p"}' \
@@ -761,6 +781,8 @@ expect "{plugin_root} substituted in package-pins" 'any(.checks[]; .run == "pyth
 r=$(resolve server '[]')
 expect "no files -> no checks" '.checks == [] and .touched == []' "$r"
 
+fi
+# workspace-list-begin
 # ---- live context script (read-only against the real workspace)
 live_context() {
   local out out2 md
@@ -790,6 +812,8 @@ live_context() {
 if $use_ws; then gated scripts/factory-context.sh && block live_context
 else skp "factory-context live checks" "--no-workspace"; fi
 
+# workspace-list-end
+if ! $workspace_only; then
 # ---- sgl-determinism (ADR-10) against fixtures: banned calls fail, comments/strings/allowed MathF pass
 dt=$(mktemp_win)
 printf '%s\n' 'class A {' '  float F(float x) => MathF.Sqrt(x) + MathF.Abs(x); // MathF.Sin(x) in a comment' \
@@ -806,6 +830,8 @@ python3 -B scripts/checks/sgl-determinism.py "$dt" >/dev/null 2>&1; [ $? -eq 2 ]
   && ok "sgl-determinism: empty directory is an error, not a pass" || bad "sgl-determinism empty dir"
 rm -rf "$dt"
 
+fi
+# workspace-list-begin
 # ---- Factory check scripts against the live workspace (read-only)
 live_checks() {
   local wsr cl pin_files out hout ph r p rc
@@ -855,6 +881,8 @@ $use_ws && block live_checks
 if $use_ws; then
   runl "factory-status on the real workspace (read-only)" python3 -B scripts/factory-status.py
 fi
+# workspace-list-end
+if ! $workspace_only; then
 ist=$(python3 -B scripts/install-status.py --json 2>/dev/null | jq -r .state)
 if $release; then
   [ "$ist" = "CURRENT" ] && ok "installed plugin == source (release gate)" || bad "installed plugin == source (release gate)" "$(python3 -B scripts/install-status.py)"
@@ -887,6 +915,7 @@ rm -rf "$T"
 
 # ---- alone (run1): the shared git config guard suite, then Claude Code's own validator
 run1 "git environment isolation + shared-config guard (throwaway repos)" env -u TMPDIR tests/git-env-isolation.test.sh
+fi
 if $use_claude && command -v claude >/dev/null 2>&1; then
   run1 "claude plugin validate --strict . (marketplace)" claude plugin validate --strict .
   run1 "claude plugin validate --strict .claude-plugin/plugin.json (plugin + skills)" claude plugin validate --strict .claude-plugin/plugin.json
@@ -900,13 +929,13 @@ drain
 find scripts tests testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 
 # ---- the shared git config (common dir) must be byte-identical to what it was when the run started
-if [ -n "${GITCFG_FILE:-}" ]; then
+if ! $workspace_only && [ -n "${GITCFG_FILE:-}" ]; then
   if out=$(gitcfg_verify); then ok "shared git config unchanged during the run"
   elif [ -n "${GITCFG_COPY:-}" ] && [ "$(gitcfg_classify "$GITCFG_COPY" "$GITCFG_FILE")" = WARN ]; then
     note "WARN  shared git config: only other sessions' branch/worktree sections were added during the run"
     note "$(diff -u "$GITCFG_COPY" "$GITCFG_FILE" | sed 's/^/      /')"
   else GITCFG_KEEP=1; bad "shared git config changed during the run" "$out"; fi
-else skp "shared git config unchanged during the run" "not inside a git repository"; fi
+elif ! $workspace_only; then skp "shared git config unchanged during the run" "not inside a git repository"; fi
 
 runall_finish
 total=$((pass + fail + skip))
