@@ -12,3 +12,6 @@
 - **Tests.** The marker, which-model, qa-tiers and Orca-first checks in `tests/parallel-policy.test.sh` now read
   `skills/delivery/references/delivery.md`, where the generic policy moved; the lint-driven mutations stay on
   `parallel-work.md`.
+- **Tests.** `tests/orca-commands.test.sh` reads the cited Orca commands, the child placements and the "also deletes
+  the checked-out local branch" caveat from `skills/delivery/references/delivery.md`, where split commit 9d21098
+  moved them, and still checks the commands `parallel-work.md` cites.

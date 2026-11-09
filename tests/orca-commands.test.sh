@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Every `orca ...` command cited in skills/factory-core/references/parallel-work.md exists in the installed Orca
+# Every `orca ...` command cited in skills/delivery/references/delivery.md (the generic policy) and
+# skills/factory-core/references/parallel-work.md (RPG specifics) exists in the installed Orca
 # CLI: `orca <cmd> <sub>` in `orca --help`, `orca orchestration <sub>` in `orca orchestration --help`, and each
 # `--flag` cited in the same code span in that command's own `--help`. A made-up command or flag must fail the
 # same checker. Prints SKIP and exits 0 when orca is not on PATH (CI).
@@ -59,25 +60,25 @@ for cmd, sub in cmds:
 PY
 }
 
-out=$(check "$ROOT/skills/factory-core/references/parallel-work.md")
+DELIVERY="$ROOT/skills/delivery/references/delivery.md"
+PARALLEL="$ROOT/skills/factory-core/references/parallel-work.md"
+out=$(check "$DELIVERY")
 n=$(grep -c '^OK ' <<<"$out"); missing=$(grep '^MISSING ' <<<"$out")
-[ -z "$missing" ] && [ "$n" -ge 10 ] && ok "parallel-work.md: $n cited orca commands exist in orca --help ($(orca --version 2>/dev/null | head -1))" \
-  || no "parallel-work.md cites orca commands that do not exist (or too few found: $n)" "$missing"
-grep -q '^OK orca orchestration worker-start$' <<<"$out" && grep -q '^OK orca skills get$' <<<"$out" && grep -q '^OK orca status$' <<<"$out" \
-  && ok "the checker saw worker-start, skills get and status" || no "expected commands not extracted" "$out"
-grep -q '^OK orca status --json$' <<<"$out" && grep -q '^OK orca orchestration worker-start --worktree$' <<<"$out" \
-  && ok "the cited flags --json and --worktree exist in their commands' --help" || no "cited flags not checked" "$out"
-# the two child placements factory-pipeline dispatch prints (parallel-work.md section 1 placement table)
-grep -q '^OK orca orchestration worker-start --worktree new-child$' <<<"$out" \
-  && grep -q '^OK orca worktree create --parent-worktree$' <<<"$out" \
-  && ok "worker-start --worktree new-child and worktree create --parent-worktree are checked against orca" \
-  || no "child placement commands not extracted or not verified" "$out"
+[ -z "$missing" ] && [ "$n" -ge 10 ] && ok "delivery.md: $n cited orca commands exist in orca --help ($(orca --version 2>/dev/null | head -1))"   || no "delivery.md cites orca commands that do not exist (or too few found: $n)" "$missing"
+# parallel-work.md keeps a few RPG-specific citations; they must exist too
+pout=$(check "$PARALLEL")
+pmissing=$(grep '^MISSING ' <<<"$pout")
+[ -z "$pmissing" ] && ok "parallel-work.md: $(grep -c '^OK ' <<<"$pout") cited orca commands exist in orca --help"   || no "parallel-work.md cites orca commands that do not exist" "$pmissing"
+grep -q '^OK orca orchestration worker-start$' <<<"$out" && grep -q '^OK orca skills get$' <<<"$out" && grep -q '^OK orca status$' <<<"$out"   && ok "the checker saw worker-start, skills get and status" || no "expected commands not extracted" "$out"
+grep -q '^OK orca status --json$' <<<"$out" && grep -q '^OK orca orchestration worker-start --worktree$' <<<"$out"   && ok "the cited flags --json and --worktree exist in their commands' --help" || no "cited flags not checked" "$out"
+# the two child placements factory-pipeline dispatch prints (delivery.md section 1 placement table)
+grep -q '^OK orca orchestration worker-start --worktree new-child$' <<<"$out"   && grep -q '^OK orca worktree create --parent-worktree$' <<<"$out"   && ok "worker-start --worktree new-child and worktree create --parent-worktree are checked against orca"   || no "child placement commands not extracted or not verified" "$out"
 
 # the policy's cleanup caveat matches Orca: `orca worktree rm` says it deletes the checked-out branch
 if orca worktree rm --help 2>&1 | grep -qi 'delete the checked-out local branch'; then
-  grep -qF 'also deletes the checked-out local branch' "$ROOT/skills/factory-core/references/parallel-work.md"     && ok "orca worktree rm deletes merged branches and parallel-work.md says so"     || no "orca worktree rm deletes merged branches but parallel-work.md does not warn about it"
+  grep -qF 'also deletes the checked-out local branch' "$DELIVERY"     && ok "orca worktree rm deletes merged branches and delivery.md says so"     || no "orca worktree rm deletes merged branches but delivery.md does not warn about it"
 else
-  ok "orca worktree rm --help no longer mentions branch deletion (caveat in parallel-work.md is conservative)"
+  ok "orca worktree rm --help no longer mentions branch deletion (caveat in delivery.md is conservative)"
 fi
 
 # the checker bites: made-up commands and flags are reported MISSING

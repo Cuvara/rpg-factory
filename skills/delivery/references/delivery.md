@@ -357,7 +357,7 @@ A **pipeline session** is dispatched and recorded: a lead, an implementation sub
 - Parallel writes already exist as subtasks with disjoint owned paths (section 10).
 - The token gain is reading many files in the subagent's context and returning a short conclusion.
 
-The table is the policy; the data lives in registry `pipeline.subagents`, which holds it.
+Registry `pipeline.subagents` holds the values of this table.
 
 | Role | Access | When | Max parallel | Limits |
 |---|---|---|---|---|
