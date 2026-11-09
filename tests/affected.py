@@ -37,9 +37,12 @@ select it under the conservative tree rule (plus its literal named paths).
 Two uses, two tree rules. select / select-many (task QA iteration) use the narrow rule above: a code file with
 a caller edge follows its edges only, so a library change selects only its importers; a miss there is caught by
 the integration full run. hashes (suite reuse at that full run, where a false PASS is the risk) use the
-conservative rule: every file in the tree of every code file a suite reaches is an input, code files with caller
-edges included (a helper one script names and another runs by a computed path); only the index docs stay
-named-only, library modules stay narrowed by the import graph, and suites directly in tests/ are not tree data.
+conservative rule, a fixpoint: every file in the tree of every code file a suite reaches is an input, code files
+with caller edges included (a helper one script names and another runs by a computed path), plus every module an
+included code file imports, loads or runs, plus the trees of those, until nothing new is added (a library a helper
+in a reached script's tree imports is an input of that script's suites). Only the index docs stay named-only,
+library modules are included by import as single files (not their scripts/lib tree), and suites directly in
+tests/ are not tree data.
 Read-only. Integration owns the full run before a PR.
 """
 import ast
@@ -346,13 +349,30 @@ def owners(path, conservative=False):
 
 @lru_cache(None)
 def closure(path, conservative=False):
-    """Every file a change to path can reach, the code files whose tree holds it included; None when unsure."""
-    found = set()
-    for start in (path,) + owners(path, conservative):
+    """Every file a change to path can reach, the code files whose tree holds it included; None when unsure.
+
+    narrow (selection): the tree owners of path itself only. conservative (reuse hashes): a fixpoint - the owners of
+    every reached file are reached too, and their callers and owners in turn, so a library change reaches a script
+    whose tree holds a helper that imports it (owners() keeps named library modules single files)."""
+    if not conservative:
+        found = set()
+        for start in (path,) + owners(path):
+            reached = reaches(start)
+            if reached is None:
+                return None
+            found |= reached
+        return frozenset(found)
+    found, todo = set(), [path]
+    while todo:
+        start = todo.pop()
+        if start in found:
+            continue
         reached = reaches(start)
         if reached is None:
             return None
+        new = reached - found
         found |= reached
+        todo.extend(owner for p in new for owner in owners(p, True) if owner not in found)
     return frozenset(found)
 
 

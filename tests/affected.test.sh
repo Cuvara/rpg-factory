@@ -104,7 +104,13 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          # mixed callers (review r10): another tree's script runs the helper by name, the script next to it by a computed path
          "scripts/uiy/plan.py": "import json\n", "scripts/uiy/step.sh": "true\n", "tests/uiy.test.sh": "python scripts/uiy/plan.py\n",
          "scripts/runner/run.py": "import os, subprocess\nsubprocess.run(['bash', os.path.join(ROOT, 'scripts/uiy/step.sh')])\n",
-         "tests/runner.test.sh": "python scripts/runner/run.py\n"}
+         "tests/runner.test.sh": "python scripts/runner/run.py\n",
+         # transitive mixed callers (review r11): the helper next to a computed caller imports a library
+         "scripts/uiz/plan.py": "import os, subprocess\nsubprocess.run(['python', os.path.join(HERE, STEP + '.py')])\n",
+         "scripts/uiz/step.py": "from value import VALUE\n", "scripts/lib/value.py": "VALUE = 1\n",
+         "tests/uiz.test.sh": "python scripts/uiz/plan.py\n",
+         "scripts/runz/run.py": "import os, subprocess\nsubprocess.run(['python', os.path.join(ROOT, 'scripts/uiz/step.py')])\n",
+         "tests/runz.test.sh": "python scripts/runz/run.py\n"}
 for path, text in files.items():
     p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
 m.ROOT = str(root)
@@ -193,6 +199,14 @@ uiy_before, runner_before, other_before = h("tests/uiy.test.sh"), h("tests/runne
 check("mixed callers: hash of the computed caller's suite changes (conservative tree rule)", uiy_before != h("tests/uiy.test.sh"))
 check("mixed callers: hash of the explicit caller's suite changes", runner_before != h("tests/runner.test.sh"))
 check("mixed callers: hash of an unrelated suite ignores the helper", other_before == h("tests/other.test.sh"))
+reset()
+check("transitive mixed callers: select stays narrow (the library selects only the explicit caller's suite)",
+      m.needed(["scripts/lib/value.py"], "tests/runz.test.sh") and not m.needed(["scripts/lib/value.py"], "tests/uiz.test.sh"))
+uiz_before, runz_before, other_before = h("tests/uiz.test.sh"), h("tests/runz.test.sh"), h("tests/other.test.sh")
+(root / "scripts/lib/value.py").write_text("VALUE = 2\n")
+check("transitive mixed callers: hash of the computed caller's suite changes on the helper's library", uiz_before != h("tests/uiz.test.sh"))
+check("transitive mixed callers: hash of the explicit caller's suite changes", runz_before != h("tests/runz.test.sh"))
+check("transitive mixed callers: hash of an unrelated suite ignores the library", other_before == h("tests/other.test.sh"))
 (root / "scripts/README.md").write_text("# scripts 2\n")
 check("hash ignores the scripts/ index doc", example_before == h())
 (root / "scripts/lib/leaf.py").write_text("X = 2\n")
