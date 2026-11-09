@@ -33,7 +33,13 @@ Python imports are read with the ast module (plain, dotted, parenthesized, multi
 package member that is a module is an edge) and with a text scan that also sees imports inside strings. A
 tracked Python file that does not parse makes every selection unsure. Unknown paths otherwise run only suites
 with matching rules; unknown top-level files run all. The reuse hash of a suite covers exactly the files that
-select it (plus its literal named paths), so --affected and suite reuse agree.
+select it under the conservative tree rule (plus its literal named paths).
+Two uses, two tree rules. select / select-many (task QA iteration) use the narrow rule above: a code file with
+a caller edge follows its edges only, so a library change selects only its importers; a miss there is caught by
+the integration full run. hashes (suite reuse at that full run, where a false PASS is the risk) use the
+conservative rule: every file in the tree of every code file a suite reaches is an input, code files with caller
+edges included (a helper one script names and another runs by a computed path); only the index docs stay
+named-only, library modules stay narrowed by the import graph, and suites directly in tests/ are not tree data.
 Read-only. Integration owns the full run before a PR.
 """
 import ast
@@ -323,19 +329,26 @@ def named(path):
 
 
 @lru_cache(None)
-def owners(path):
-    """Code files whose tree holds a file (deleted ones too): every file but a code file with a caller edge or an
-    index doc."""
-    if "/" not in path or path in INDEX_DOCS or (path.endswith(SCANNED) and named(path)):
+def owners(path, conservative=False):
+    """Code files whose tree holds a file (deleted ones too): every file but an index doc and a code file with a
+    caller edge. conservative (reuse hashes): a code file with a caller edge is tree data too, except a library
+    module (scripts/lib: the import graph narrows it) and a code file directly in tests/ (a suite run-all runs)."""
+    if "/" not in path or path in INDEX_DOCS:
         return ()
+    if path.endswith(SCANNED):
+        if conservative:
+            if path.startswith("scripts/lib/") and named(path) or tree(path) == ("tests/", False):
+                return ()
+        elif named(path):
+            return ()
     return tuple(p for root, code in code_trees().items() if in_tree(path, root) for p in code if p != path)
 
 
 @lru_cache(None)
-def closure(path):
+def closure(path, conservative=False):
     """Every file a change to path can reach, the code files whose tree holds it included; None when unsure."""
     found = set()
-    for start in (path,) + owners(path):
+    for start in (path,) + owners(path, conservative):
         reached = reaches(start)
         if reached is None:
             return None
@@ -377,7 +390,7 @@ def hashes(suites):
     files = inventory()
     common, reached_by = set(), {}
     for f in files:
-        reached = None if always(f) else closure(f)
+        reached = None if always(f) else closure(f, conservative=True)
         if reached is None:
             common.add(f)
             continue

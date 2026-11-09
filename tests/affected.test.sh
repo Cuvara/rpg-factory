@@ -61,8 +61,8 @@ spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = impo
 root = pathlib.Path(sys.argv[2]) / "hash-fixture"; root.mkdir()
 subprocess.run(["git", "init", "-q", str(root)], check=True)
 files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from inner import VALUE\n",
-         "scripts/entry.py": "import outer\n", "scripts/unrelated.py": "x = 1\n",
-         "tests/example.test.sh": "python scripts/entry.py\n", "tests/other.test.sh": "python scripts/unrelated.py\n",
+         "scripts/entry.py": "import outer\n", "scripts/unrel/unrelated.py": "x = 1\n",
+         "tests/example.test.sh": "python scripts/entry.py\n", "tests/other.test.sh": "python scripts/unrel/unrelated.py\n",
          "scripts/lib/dynamic.py": "import importlib\n", "scripts/lib/orphan.py": "x=1\n",
          "scripts/lib/compat.sh": "true\n", "tests/shell.test.sh": ". scripts/lib/compat.sh\n",
          "scripts/lib/pkg/__init__.py": "", "scripts/pkg-entry.py": "from pkg import thing\n",
@@ -100,7 +100,11 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          # a script runs helpers it names by subprocess (review r9): the helpers are named, their call edges are followed
          "scripts/uix/plan.py": "import os, subprocess\nsubprocess.run(['bash', os.path.join(HERE, 'run-helper.sh')])\n"
                                 "subprocess.run(['jq', '-f', os.path.join(HERE, 'shape.jq')])\nALLOWED = {'listed.sh'}\n",
-         "scripts/uix/run-helper.sh": "true\n", "scripts/uix/listed.sh": "true\n", "scripts/uix/shape.jq": ".\n", "tests/uix.test.sh": "python scripts/uix/plan.py\n"}
+         "scripts/uix/run-helper.sh": "true\n", "scripts/uix/listed.sh": "true\n", "scripts/uix/shape.jq": ".\n", "tests/uix.test.sh": "python scripts/uix/plan.py\n",
+         # mixed callers (review r10): another tree's script runs the helper by name, the script next to it by a computed path
+         "scripts/uiy/plan.py": "import json\n", "scripts/uiy/step.sh": "true\n", "tests/uiy.test.sh": "python scripts/uiy/plan.py\n",
+         "scripts/runner/run.py": "import os, subprocess\nsubprocess.run(['bash', os.path.join(ROOT, 'scripts/uiy/step.sh')])\n",
+         "tests/runner.test.sh": "python scripts/runner/run.py\n"}
 for path, text in files.items():
     p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
 m.ROOT = str(root)
@@ -133,7 +137,7 @@ check("hash changes on a library reached through a helper", tool_before != h("te
 before = h(); check("hash stable on unchanged tree", before == h())
 (root / "scripts/entry.py").write_text("import outer\nx=2\n")
 after = h(); check("hash changes on direct input", after != before)
-(root / "scripts/unrelated.py").write_text("x=2\n")
+(root / "scripts/unrel/unrelated.py").write_text("x=2\n")
 check("hash ignores unrelated script", after == h())
 (root / "scripts/lib/inner.py").write_text("VALUE=2\n")
 check("hash changes on transitive library", after != h())
@@ -182,6 +186,13 @@ uix_before = h("tests/uix.test.sh")
 (root / "scripts/uix/shape.jq").write_text(".a\n")
 check("hash changes on a named helper .jq a reached script runs", uix_before != h("tests/uix.test.sh"))
 check("hash of an unrelated suite ignores those helpers", other_before == h("tests/other.test.sh"))
+check("mixed callers: select keeps the narrow rule (the named helper follows its edges only)",
+      m.needed(["scripts/uiy/step.sh"], "tests/runner.test.sh") and not m.needed(["scripts/uiy/step.sh"], "tests/uiy.test.sh"))
+uiy_before, runner_before, other_before = h("tests/uiy.test.sh"), h("tests/runner.test.sh"), h("tests/other.test.sh")
+(root / "scripts/uiy/step.sh").write_text("false\n")
+check("mixed callers: hash of the computed caller's suite changes (conservative tree rule)", uiy_before != h("tests/uiy.test.sh"))
+check("mixed callers: hash of the explicit caller's suite changes", runner_before != h("tests/runner.test.sh"))
+check("mixed callers: hash of an unrelated suite ignores the helper", other_before == h("tests/other.test.sh"))
 (root / "scripts/README.md").write_text("# scripts 2\n")
 check("hash ignores the scripts/ index doc", example_before == h())
 (root / "scripts/lib/leaf.py").write_text("X = 2\n")
