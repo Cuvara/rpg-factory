@@ -3,8 +3,9 @@
 
 Policy: skills/delivery/references/delivery.md (generic), skills/factory-core/references/parallel-work.md (RPG specifics). Settings: registry.json `pipeline` (tiers, agents,
 cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Settings fall back to
-skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_REGISTRY=none or a missing registry
-file; a plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
+skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
+file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
+script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
@@ -196,13 +197,24 @@ def die(msg, code=2):
 
 
 def load_registry(path):
-    if path == "none" or not os.path.isfile(path):
+    defaults = path == "none" or not os.path.isfile(path)
+    if defaults:
         if path != "none":
             print(f"factory-pipeline: registry {path} not found: using skills/delivery/pipeline-defaults.json",
                   file=sys.stderr)
         path = os.path.join(ROOT, "skills", "delivery", "pipeline-defaults.json")
     with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+        reg = json.load(fh)
+    if defaults:
+        reg["_defaults"] = True  # private mark: pipeline_argv adds `--registry none` to the commands printed for a next session
+    return reg
+
+
+def pipeline_argv(reg):
+    """The command prefix printed for a next session: python3 -B <this script>, plus `--registry none` when the defaults are
+    in effect (the next session would otherwise load the RPG registry); with a registry nothing is added."""
+    argv = ["python3", "-B", os.path.abspath(__file__)]
+    return argv + ["--registry", "none"] if reg.get("_defaults") else argv
 
 
 def settings(reg):
@@ -1203,7 +1215,7 @@ def cmd_planner(a, reg):
               "   and `grade_reason` (one line) per task; the grade picks the model and effort of its sessions:"
               + rubric_lines(a.policy, "   ") + "\n"
               f"3. Write plan.json ({SCHEMA}, docs/schemas/pipeline-plan.schema.json) and run\n"
-              "   `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py validate plan.json` until it prints OK.\n"
+              f"   `python3 -B ${{CLAUDE_PLUGIN_ROOT}}/scripts/factory-pipeline.py{' --registry none' if reg.get('_defaults') else ''} validate plan.json` until it prints OK.\n"
               "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.")
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
     emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
@@ -1263,9 +1275,9 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
-    me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
+    me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
@@ -1527,7 +1539,7 @@ def cmd_dispatch(a, reg):
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
             where = "this task worktree"
-        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy)
+        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg)
         lead = model_roles["lead"][0]
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
@@ -2843,7 +2855,7 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
 
 def status(plan, reg, orca_run=None):
     v = validate(plan, reg)
-    me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
+    me = orca_cmd.quote(pipeline_argv(reg))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     tasks = plan.get("tasks", [])
     if v["errors"]:
@@ -3023,7 +3035,7 @@ def cmd_agents(a, reg):
 
 def main():
     ap = argparse.ArgumentParser(prog="factory-pipeline.py", description=__doc__.split("\n")[0])
-    ap.add_argument("--registry", default=os.environ.get("RPG_FACTORY_REGISTRY", os.path.join(ROOT, "registry.json")))
+    ap.add_argument("--registry", default=os.environ.get("RPG_FACTORY_PIPELINE_REGISTRY", os.path.join(ROOT, "registry.json")))
     # the same option after the verb; SUPPRESS keeps the top-level value unless it is given there (and then it wins)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--registry", default=argparse.SUPPRESS)

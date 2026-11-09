@@ -8,7 +8,7 @@ allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*)
 # Delivery
 
 The generic delivery flow for any repository. It needs no registry and no workspace layout: the pipeline script
-reads `${CLAUDE_SKILL_DIR}/pipeline-defaults.json` when no RPG registry is present (`--registry none`). Task: $ARGUMENTS
+reads `${CLAUDE_SKILL_DIR}/pipeline-defaults.json` when you pass `--registry none` (or set `RPG_FACTORY_PIPELINE_REGISTRY=none`); the installed plugin always ships `registry.json`, so the flag selects the defaults. Task: $ARGUMENTS
 **Codex:** resolve `${CLAUDE_PLUGIN_ROOT}` as `PLUGIN_ROOT` in hooks, otherwise two directories above this skill's containing directory; use that absolute root for commands. Load other skills by reading their `SKILL.md`.
 **Layering:** in a workspace routed by `rpg-factory:factory-core`, run factory-core first: it adds the registry, routing,
 checks, human gates and the RPG specifics (`rpg-factory:factory-core`, its parallel-work.md: Unity no-worktree
