@@ -616,7 +616,7 @@ else:
 print(case + ' assertions passed')
 MULTIWAVE
 cat > "$TMP/qa-tiers.py" <<'QA_TIERS'
-import argparse, contextlib, importlib.util, io, json, os, pathlib, subprocess, sys
+import argparse, contextlib, importlib.util, io, json, os, pathlib, re, subprocess, sys
 root, tmp = sys.argv[1:]
 spec = importlib.util.spec_from_file_location('qa_pipeline', root + '/scripts/factory-pipeline.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -676,12 +676,18 @@ m.find_bash = real_find_bash
 # registry pipeline.qa_tiers picks the tier command; a missing key falls back to task: affected, integration: full
 assert reg['pipeline']['qa_tiers']['task'] == 'affected' and reg['pipeline']['qa_tiers']['integration'] == 'full'
 assert m.tier_command('affected', 'main', []) == 'tests/run-all.sh --affected --base main -j 2'
-assert m.tier_command('full', 'main', ['tests/x.sh']) == 'tests/run-all.sh --reuse -j 4'
 lone = [dict(task, checks=['bash tests/pipeline.test.sh'])]
+assert m.tier_command('full', 'main', ['tests/x.sh']) == 'tests/run-all.sh --reuse -j 4'
+# task QA never gets a full run: without a base only the check suites, with no suites the lead must give a base
+for level in ('affected', 'full'):
+    assert m.tier_command(level, '', ['tests/x.sh'], task=True) == 'tests/run-all.sh --only-suites tests/x.sh -j 2'
+    assert m.tier_command(level, None, [], task=True).startswith('NONE: the review base is missing')
+    assert '--reuse' not in m.tier_command(level, None, [], task=True)
+assert 'QA tier command:\ntests/run-all.sh --only-suites tests/pipeline.test.sh -j 2' in m.qa_body('x', lone, runall=listed)
 assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
     m.qa_body('x', lone, base='main', runall=listed)
-assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, base='main', runall=listed,
-                                                                       tiers={'task': 'full'})
+assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
+    m.qa_body('x', lone, base='main', runall=listed, tiers={'task': 'full'})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 # an unknown --only-suites entry runs as run-all runs it (TMPDIR unset), attributed to its task
 assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'])],
@@ -708,7 +714,9 @@ assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['changelog.d/x.md', 'cha
 for compound in ('tests/run-all.sh --only-suites tests/pipeline.test.sh && python3 -B scripts/build-registry.py --check',
                  'tests/run-all.sh --affected || true', 'tests/run-all.sh --affected; echo done',
                  'tests/run-all.sh --affected | tail -1', '(tests/run-all.sh --affected)', 'bash tests/pipeline.test.sh && true',
-                 'echo $(tests/run-all.sh --affected)', 'tests/run-all.sh --affected > out.txt'):
+                 'echo $(tests/run-all.sh --affected)', 'tests/run-all.sh --affected > out.txt',
+                 'tests/run-all.sh --affected\npython3 -B scripts/build-registry.py --check',
+                 'tests/run-all.sh --affected\r\npython3 -B scripts/build-registry.py --check'):
     assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + compound], False), compound
 # a standalone run-all with an env or bash prefix is folded; a full one is flagged as dropped
 assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR bash tests/run-all.sh --only-suites tests/routing.test.sh'])],
@@ -719,15 +727,32 @@ assert m.pr.qa_checks([dict(task, checks=['echo tests/run-all.sh'])], listed) ==
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
 assert not m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
+for wrapped in ("bash -c 'tests/run-all.sh -j 4'", 'bash -c "tests/run-all.sh"', "bash -c 'true && tests/run-all.sh'",
+                'tests/run-all.sh --affected\ntests/run-all.sh -j 4'):
+    assert m.pr.full_run(wrapped), wrapped
+assert not m.pr.full_run("bash -c 'tests/run-all.sh --affected -j 2'")
+# a compound check with a full run inside stays one extra, marked not to run (task QA never starts a full run)
+for compound in ('tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check',
+                 "bash -c 'tests/run-all.sh -j 4' > out.txt", 'tests/run-all.sh --affected\ntests/run-all.sh'):
+    assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + compound], False), compound
+assert m.pr.DO_NOT_RUN.startswith('DO NOT RUN') and 'NOT_RUN' in m.pr.DO_NOT_RUN
 # re-QA: a failed suite already among the extra checks (any invocation form) runs once, under its first form
 for form in ('tests/dogfood.sh', 'bash tests/dogfood.sh', 'env -u TMPDIR tests/dogfood.sh'):
     assert m.pr.qa_checks([dict(task, checks=[form])], listed, ['tests/dogfood.sh']) == ([], ['[a] ' + form], False), form
 assert m.pr.qa_checks([dict(task, checks=['tests/dogfood.sh', 'bash tests/dogfood.sh',
                                           'tests/run-all.sh --only-suites tests/dogfood.sh'])], listed,
-                      ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] tests/dogfood.sh', '[a] env -u TMPDIR bash tests/x.sh'], False)
+                      ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] env -u TMPDIR bash tests/dogfood.sh',
+                                                                   '[a] env -u TMPDIR bash tests/x.sh'], False)
+# the same suite with and without `env -u TMPDIR`: the env form wins, in the first form's place, task ids merged
+assert m.pr.qa_checks([dict(task, checks=['tests/x.sh', 'python3 -B scripts/y.py', 'env -u TMPDIR tests/x.sh'])],
+                      listed) == ([], ['[a] env -u TMPDIR tests/x.sh', '[a] python3 -B scripts/y.py'], False)
+envs = [dict(task, id='a', checks=['bash tests/x.sh']), dict(task, id='b', checks=['env -u TMPDIR bash tests/x.sh', 'tests/x.sh'])]
+assert m.pr.qa_checks(envs, listed)[1] == ['[a, b] env -u TMPDIR bash tests/x.sh']
 two = [dict(task, id='a', checks=['tests/dogfood.sh']), dict(task, id='b', checks=['bash tests/dogfood.sh'])]
 assert m.pr.qa_checks(two, listed, ['tests/dogfood.sh'])[1] == ['[a, b] tests/dogfood.sh']
 # release-only suites stay extras, also against the REAL `tests/run-all.sh --list-suites` of this checkout
+runall_text = pathlib.Path(root, 'tests', 'run-all.sh').read_text(encoding='utf-8')
+assert set(re.search(r'^RELEASE_ONLY="([^"]*)"', runall_text, re.M)[1].split()) == m.pr.RELEASE_ONLY
 real = m.runall_suites(root)
 assert real and 'tests/pipeline.test.sh' in real, real
 for check in ('tests/installed-safety.sh', 'env -u TMPDIR tests/installed-safety.sh', 'tests/dogfood.sh',

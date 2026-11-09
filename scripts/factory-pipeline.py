@@ -963,11 +963,16 @@ def runall_suites(path):
 QA_TIERS = {"task": "affected", "integration": "full"}  # fallback when the registry has no pipeline.qa_tiers
 
 
-def tier_command(level, base, suites):
-    """The run-all command of a registry pipeline.qa_tiers level: affected (task QA) or full (integration QA)."""
-    if level == "affected" and base:
-        return ("tests/run-all.sh --affected --base " + shlex.quote(base)
-                + (" --only-suites " + shlex.quote(','.join(suites)) if suites else "") + " -j 2")
+def tier_command(level, base, suites, task=False):
+    """The run-all command of a registry pipeline.qa_tiers level: affected (task QA) or full (integration QA).
+    Task QA never gets a full run, whatever the level: without a base it runs only the check suites."""
+    only = " --only-suites " + shlex.quote(','.join(suites)) if suites else ""
+    if task or level == "affected":
+        if base:
+            return "tests/run-all.sh --affected --base " + shlex.quote(base) + only + " -j 2"
+        return ("tests/run-all.sh" + only + " -j 2" if suites else
+                "NONE: the review base is missing; the task lead must give one "
+                "(tests/run-all.sh --affected --base <base> -j 2). Never a full run.")
     return "tests/run-all.sh --reuse -j 4"
 
 
@@ -983,7 +988,8 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
                 + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", [])))
     suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
     key = "integration" if integration else "task"
-    command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites)
+    command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
+                           task=not integration)
     policy = ("Integration QA: one full run per batch and one per machine, under the run-all lock; "
               "reuse a PASS record of the same clean tree." if integration else
               "Task QA: never a full tests/run-all.sh run; integration QA runs it once per batch with suite reuse. "

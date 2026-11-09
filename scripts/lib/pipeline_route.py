@@ -163,8 +163,13 @@ def small_task(plan, task):
 
 SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)'
                          r'|(?:env -u TMPDIR\s+)*python3(?:\s+-B)?\s+(?:\./)?(tests/[\w.-]+\.py)')
-# suites `--list-suites` may print that run-all runs only with --release: never folded into the task tier command
+# Suites run-all runs only with --release (its RELEASE_ONLY): never folded into the task tier command. A constant on
+# purpose: --list-suites already omits them without --release, so this second guard needs no extra run-all call;
+# tests/pipeline.test.sh fails when it differs from run-all's list.
 RELEASE_ONLY = frozenset({'tests/installed-safety.sh'})
+# any command separator, grouping, redirection or substitution the shell accepts, newlines included
+COMPOUND = re.compile(r'[;&|<>()`\n\r]|\$\(')
+DO_NOT_RUN = 'DO NOT RUN (a full run-all inside; full runs belong to integration QA; report it NOT_RUN): '
 
 
 def suite_command(suite):
@@ -176,7 +181,7 @@ def runall_words(check):
     """The arguments of a check that is exactly one standalone run-all invocation (an optional `env [-u VAR]... [VAR=x]...`
     and `bash` prefix), else None. A compound command (&&, ||, ;, |, redirection, subshell, substitution) is None:
     it stays one complete extra command, never split or dropped."""
-    if re.search(r'[;&|<>()`]|\$\(', check):
+    if COMPOUND.search(check):
         return None
     try:
         words = shlex.split(check)
@@ -204,12 +209,21 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
     runall_suites: the suites `tests/run-all.sh --list-suites` prints in the task checkout. Only those are folded
     (run-all rejects any other suite name), except release-only suites; None (no such flag) folds nothing.
     failed_suites: the suites a previous QA recorded as failed; those run-all does not run become extra commands.
-    Extras are `[task ids] command`, each command once and each recognised suite once (by suite path)."""
+    Extras are `[task ids] command`, each command once and each recognised suite once (by suite path; the
+    `env -u TMPDIR` form wins: several suites need TMPDIR unset). A compound check with a full run inside is marked
+    DO_NOT_RUN: task QA never starts a full run (validate warns on it)."""
     known = set(runall_suites or ()) - RELEASE_ONLY
     suites, extra, by_suite, dropped = set(), {}, {}, False
 
     def add_extra(tid, command, suite=None):
-        command = by_suite.setdefault(suite, command) if suite else command
+        if suite:
+            old = by_suite.setdefault(suite, command)
+            if old != command and '-u TMPDIR' in command and '-u TMPDIR' not in old:
+                by_suite[suite] = command  # the first form's position and task ids stay
+                renamed = [(command if c == old else c, t) for c, t in extra.items()]
+                extra.clear()
+                extra.update(renamed)
+            command = by_suite[suite]
         ids = extra.setdefault(command, [])
         if tid not in ids:
             ids.append(tid)
@@ -233,6 +247,8 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
             suite = match and (match[1] or match[2])
             if suite and suite in known:
                 suites.add(suite)
+            elif COMPOUND.search(check) and full_run(check):
+                add_extra(tid, DO_NOT_RUN + check)
             else:
                 add_extra(tid, check, suite or None)
     ids = [str(t.get('id', '?')) for t in tasks]
@@ -248,8 +264,8 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
 def full_run(check):
     """A check that starts a full run-all: one command of it (standalone or a part of a compound command) runs
     tests/run-all.sh without --affected or --only-suites."""
-    for part in re.split(r'&&|\|\||[;|&()`\n]', check):
-        words = part.split()
+    for part in re.split(r'&&|\|\||[;|&()`\n\r]', check):
+        words = [w.strip('\'"') for w in part.split()]  # quotes of `bash -c '...'` stay on the words
         if (any(re.fullmatch(r'(?:\./)?tests/run-all\.sh', w) for w in words)
                 and not any(w == '--affected' or w.startswith('--only-suites') for w in words)):
             return True
