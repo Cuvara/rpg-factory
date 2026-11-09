@@ -337,7 +337,7 @@
     }
   ],
   "pipeline": {
-    "description": "Delivery pipeline (scripts/factory-pipeline.py, policy references/parallel-work.md): task tiers, the agents that implement and review, cross-model review pairing and shared exclusive resources.",
+    "description": "Delivery pipeline (scripts/factory-pipeline.py, policy skills/delivery/references/delivery.md, RPG specifics in skills/factory-core/references/parallel-work.md): task tiers, the agents that implement and review, cross-model review pairing and shared exclusive resources.",
     "tiers": {
       "S": {
         "max_repos": 1,

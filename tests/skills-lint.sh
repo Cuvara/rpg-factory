@@ -28,7 +28,13 @@ for dir in skills/*/; do
   grep -qiE "use (at|when)" <<<"$desc" && ok || bad "$s: description must say when to use it ('Use when ...')"
   { [ "$s" = "factory-core" ] || grep -qiE "\bnot\b" <<<"$desc"; } && ok || bad "$s: description must say what it is NOT for"
   [ -n "$(fm "$f" argument-hint)" ] && ok || bad "$s: argument-hint missing"
-  grep -q 'factory-context.sh' <<<"$(fm "$f" allowed-tools)" && ok || bad "$s: allowed-tools must grant factory-context.sh"
+  # delivery is repo-agnostic: it runs the pipeline script, not the RPG snapshot
+  { [ "$s" = "delivery" ] || grep -q 'factory-context.sh' <<<"$(fm "$f" allowed-tools)"; } && ok || bad "$s: allowed-tools must grant factory-context.sh"
+  if [ "$s" = "delivery" ]; then
+    for form in 'python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*' 'python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*'; do
+      grep -qF -- "Bash($form)" <<<"$(fm "$f" allowed-tools)" && ok || bad "delivery: allowed-tools lacks Bash($form)"
+    done
+  fi
   lines=$(wc -l < "$f")
   [ "$lines" -le 160 ] && ok || bad "$s: SKILL.md has $lines lines (> 160)"
   [ "$s" = "factory-core" ] && core_budget "$lines"
@@ -39,7 +45,7 @@ for dir in skills/*/; do
   done
   markers=$(grep -nE 'TODO|TBD|FIXME' "$f" "$dir"/references/*.md 2>/dev/null || true)
   if [ -n "$markers" ] && { [ "$s" != game-design ] || printf '%s\n' "$markers" | grep -vE '([Nn]umbers?|gameplay values).*`TBD`|`TBD`.*(number|gameplay value)' >/dev/null; }; then bad "$s: TODO/TBD left"; else ok; fi
-  if [ "$s" != "factory-core" ]; then
+  if [ "$s" != "factory-core" ] && [ "$s" != "delivery" ]; then  # the core kind: factory-core and the generic delivery
     grep -q 'Prerequisite:\*\* follow `rpg-factory:factory-core`' "$f" && ok || bad "$s: missing Core prerequisite line"
     kind=$(jq -r --arg s "$s" '.skills[$s].kind // ""' registry.json)
     if [ "$kind" = "tech" ]; then secs=("Applies when" "Scope" "Architecture" "Idioms" "Pitfalls" "Testing" "Tools")
@@ -127,8 +133,8 @@ elif [ -z "$tools_out" ]; then ok; else bad "dev tools sections:"; echo "$tools_
 
 # allowed-tools covers every plugin script a skill tells the agent to run (else unattended runs hit a
 # permission prompt). Uses: `${CLAUDE_PLUGIN_ROOT}/scripts/<path>` in SKILL.md or references/ (all skills), and
-# a backticked bare script name that is a file in scripts/ or scripts/checks/ (non-core skills; factory-core's
-# references also document maintainer tools and guards it never runs). An entry `Bash(<interp> ${CLAUDE_PLUGIN_ROOT}/
+# a backticked bare script name that is a file in scripts/ or scripts/checks/ (non-core skills; the references of
+# factory-core and delivery also document maintainer tools, guards and the RPG layer they never run). An entry `Bash(<interp> ${CLAUDE_PLUGIN_ROOT}/
 # scripts/<pattern>:*)` covers a use when <pattern> matches its path under scripts/ (fnmatch: `*` is a wildcard, so
 # `checks/*` covers every check) and, when the use names an interpreter, it equals <interp> (Claude Code
 # matches the command prefix, so `python3 -B` is not covered by a `python3` entry).
@@ -145,13 +151,13 @@ for f in sorted(glob.glob(f"{root}/skills/*/SKILL.md")):
     lines = open(f, encoding="utf-8").read().splitlines()
     end = lines.index("---", 1) if lines[:1] == ["---"] and "---" in lines[1:] else 0
     allowed = next((l[len("allowed-tools: "):] for l in lines[1:end] if l.startswith("allowed-tools: ")), "")
-    entries = re.findall(r"Bash\(([^ ()]+) \$\{CLAUDE_PLUGIN_ROOT\}/scripts/([^:()]+):\*\)", allowed)
+    entries = re.findall(r"Bash\(([^ ()]+(?: -B)?) \$\{CLAUDE_PLUGIN_ROOT\}/scripts/([^:()]+):\*\)", allowed)
     srcs = [(f, lines, end)] + [(r, open(r, encoding="utf-8").read().splitlines(), 0) for r in sorted(glob.glob(f"{d}/references/*.md"))]
     for src, text, skip in srcs:
         for i, line in enumerate(text[skip:], skip + 1):
             uses = {(m.group(1), m.group(2)) for m in
                     re.finditer(r"(?:\b((?:bash|sh|python3?)(?: -B)?) )?\$\{CLAUDE_PLUGIN_ROOT\}/scripts/([A-Za-z0-9_./-]+)", line)}
-            if s != "factory-core":
+            if s not in ("factory-core", "delivery"):  # the core kind documents tools of the RPG layer it never runs
                 for code in re.findall(r"`([^`]+)`", line):
                     if "CLAUDE_PLUGIN_ROOT" in code:
                         continue
@@ -198,25 +204,43 @@ if [ -z "$claims" ]; then ok; else bad "skills claim unavailable design/web trig
 english_out=$(cd "$ROOT" && python3 -B scripts/checks/english-only.py --enforce 2>&1)
 if [ $? -eq 0 ]; then ok "English-only: $(tail -1 <<<"$english_out")"; else bad "English-only findings:"; echo "$english_out" | sed 's/^/      /'; fi
 
-# parallel-work policy: one canonical copy in factory-core/references/parallel-work.md, linked from the
-# files that defer to it, never blocking, and keeping the release and human-gate rules
+# parallel-work policy: the generic policy has one canonical copy in skills/delivery/references/delivery.md
+# ($dw, repo-agnostic, read through rpg-factory:delivery) and the RPG specifics one in factory-core/references/
+# parallel-work.md ($pw); both linked from the files that defer to them, never blocking, and keeping the
+# release and human-gate rules
 pw="skills/factory-core/references/parallel-work.md"
+dw="skills/delivery/references/delivery.md"
 if [ -f "$pw" ]; then
   ok
+  if [ -f "$dw" ]; then
+    ok
+    grep -q 'references/delivery\.md' skills/delivery/SKILL.md && ok || bad "parallel-work: skills/delivery/SKILL.md does not link delivery.md"
+    grep -q 'rpg-factory:delivery' skills/factory-core/SKILL.md && ok || bad "parallel-work: skills/factory-core/SKILL.md does not name rpg-factory:delivery"
+    for w in UnityIndie rpg-mmo-server IndieRPGMMOAdventure; do  # generic: the skill and its policy name no product
+      hits=$(grep -n -- "$w" skills/delivery/SKILL.md "$dw" | head -1)
+      [ -z "$hits" ] && ok || bad "parallel-work: repo-agnostic delivery text names '$w': $hits"
+    done
+  else
+    bad "parallel-work: $dw missing"
+  fi
   for f in skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md skills/factory-core/references/report.md; do
     grep -q 'parallel-work\.md' "$f" && ok || bad "parallel-work: $f does not link parallel-work.md"
   done
   for p in 'Lead/Integrator' 'worker-start' 'stable candidate commit'; do
-    copies=$(grep -liF -- "$p" skills/*/SKILL.md skills/*/references/*.md 2>/dev/null | grep -vxF "$pw")
-    [ -z "$copies" ] && ok || bad "parallel-work: policy phrase '$p' copied outside $pw: $(echo $copies)"
+    copies=$(grep -liF -- "$p" skills/*/SKILL.md skills/*/references/*.md 2>/dev/null | grep -vxF -e "$pw" -e "$dw")
+    [ -z "$copies" ] && ok || bad "parallel-work: policy phrase '$p' copied outside $pw and $dw: $(echo $copies)"
   done
-  blocking=$(grep -niE 'ask the user|prompt the user|wait for (the user.s |user |explicit )?(approval|confirmation)|(get|obtain|need|needs|require|requires) (the user.s |user |explicit )?(approval|confirmation)|confirm with the user|until the user|permissionDecision' "$pw")
-  [ -z "$blocking" ] && ok || bad "parallel-work: blocking wording in $pw: $(head -1 <<<"$blocking")"
-  gates=$(grep -n 'gate-create' "$pw" | grep -viE '\bnever\b')
-  [ -z "$gates" ] && ok || bad "parallel-work: gate-create outside a 'never' sentence: $(head -1 <<<"$gates")"
-  if grep -qF 'orca worktree rm' "$pw"; then  # it also deletes merged local branches; the policy keeps branches
-    grep -qF 'also deletes the checked-out local branch' "$pw" && ok       || bad "parallel-work: $pw cites orca worktree rm without its branch-deletion caveat"
-  fi
+  for f in "$pw" "$dw"; do
+    [ -f "$f" ] || continue
+    blocking=$(grep -niE 'ask the user|prompt the user|wait for (the user.s |user |explicit )?(approval|confirmation)|(get|obtain|need|needs|require|requires) (the user.s |user |explicit )?(approval|confirmation)|confirm with the user|until the user|permissionDecision' "$f")
+    [ -z "$blocking" ] && ok || bad "parallel-work: blocking wording in $f: $(head -1 <<<"$blocking")"
+    gates=$(grep -n 'gate-create' "$f" | grep -viE '\bnever\b')
+    [ -z "$gates" ] && ok || bad "parallel-work: gate-create outside a 'never' sentence in $f: $(head -1 <<<"$gates")"
+    if grep -qF 'orca worktree rm' "$f"; then  # it also deletes merged local branches; the policy keeps branches
+      grep -qF 'also deletes the checked-out local branch' "$f" && ok \
+        || bad "parallel-work: $f cites orca worktree rm without its branch-deletion caveat"
+    fi
+  done
   for p in 'rule 5' 'explicit release authorization' 'human_gates'; do
     grep -qF -- "$p" "$pw" && ok || bad "parallel-work: safety rule missing from $pw: '$p'"
   done
