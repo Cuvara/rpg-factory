@@ -16,6 +16,22 @@ no() { fail=$((fail+1)); echo "FAIL  $1"; }
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/orca" <<'SH'
 #!/usr/bin/env bash
+if [ "${2:-}" = worker-list ] || [ "${2:-}" = worker-read ]; then
+  printf '%s\n' "$*" >> "$FAKE_DIR/workers-argv"
+  if [ "${FAKE_WORKER_FAIL:-}" = yes ]; then exit 1; fi
+  if [ "$2" = worker-list ]; then
+    if [ "${FAKE_PAGES:-}" = yes ] && [[ " $* " == *' --cursor page2 '* ]]; then
+      cat "$FAKE_DIR/worker-list-page2"
+    else cat "$FAKE_DIR/worker-list"; fi
+  elif [ "${FAKE_READ_FAIL:-}" = yes ] && [[ " $* " == *' --dispatch ctx-bad '* ]]; then
+    exit 1
+  elif [ "${FAKE_CHANGING:-}" = yes ]; then
+    printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$(cat "$FAKE_DIR/step")"
+  else
+    cat "$FAKE_DIR/worker-read"
+  fi
+  exit 0
+fi
 printf '%s\n' "$*" >> "$FAKE_DIR/argv"
 if [[ " $* " == *' --wait '* ]]; then
   echo '{"_keepalive":true,"elapsedMs":15000}' >&2
@@ -35,6 +51,15 @@ fi
 n=0
 [ ! -f "$FAKE_DIR/step" ] || read -r n < "$FAKE_DIR/step"
 n=$((n+1)); echo "$n" > "$FAKE_DIR/step"
+if [ "${FAKE_MODE:-sequence}" = polling ]; then
+  sleep 0.05
+  if [ "$n" -ge "${FAKE_DELIVER_AT:-20}" ]; then
+    echo '{"ok":true,"result":{"deliveryId":"done","messages":[{"type":"worker_done"}]}}'
+  else
+    echo '{"ok":true,"result":{"messages":[]}}'
+  fi
+  exit 0
+fi
 case "$n" in
   1) echo '{"ok":true,"result":{"deliveryId":"hb-42","messages":[{"type":"heartbeat"}]}}' ;;
   2) echo '{"ok":true,"result":{"deliveryId":null,"messages":[],"count":0}}' ;;
@@ -44,7 +69,38 @@ case "$n" in
 esac
 SH
 chmod +x "$TMP/bin/orca"
+printf '@bash "%%~dp0orca" %%*\r\n' > "$TMP/bin/orca.cmd"
+echo '{"ok":true,"result":{"workers":[]}}' > "$TMP/worker-list"
 export PATH="$(path_entry "$TMP/bin"):$PATH"
+python3 -B - "$ROOT" <<'PY'
+import os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], 'scripts', 'lib'))
+from pipeline_route import stall_reason
+positive = ['\u25a0 Reconnecting... 2/5', '\u26a0 stream error: exceeded retry limit, last status: 429 Too Many Requests',
+            "\u25a0 You've hit your usage limit. Try again in 2 hours.", 'You have hit your usage limit',
+            'API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}',
+            'Claude usage limit reached. Your limit will resets at 3pm',
+            'Reconnecting\u2026', 'Reconnecting 2/5', '  \u23bf \u00a0API Error: 429 {"type":"error"}',
+            '  \u23bf \u00a0Claude usage limit reached. resets 3pm',
+            '  \u23bf  API Error: 429 {"type":"error"}',
+            '\u00a0 \u23bf \u00a0API Error: 429 {"type":"error"}',
+            '\u00a0 \u25a0 Reconnecting... 2/5',
+            '\u2022 Reconnecting... 2/5 (12s \u2022 esc to interrupt)',
+            '\u25a0 stream disconnected before completion: error sending request']
+negative = ["positive = ['HTTP 429', ...", '   140  if quota exceeded then',
+            'grep -n "usage limit reached" log', 'Error: 429 tests passed', 'status: 429 of 512 done',
+            '  Reconnecting to database...', 'run-all: 512 checks, 429 passed, 0 failed',
+            'commit 4291abc feat', '\u2193 429 tokens', '  \u23bf  \u25a0 Reconnecting... 2/5',
+            '| Reconnecting...', '\u2502 Reconnecting...', '\u2514 Reconnecting...', '> Reconnecting...',
+            '+ Reconnecting...', '- Reconnecting...', 'Error: 429 Too Many Requests',
+            "    '  \u25a0 Reconnecting... 2/5' MODEL_UNAVAILABLE: reconnecting - ...",
+            "  \u2514 '| Reconnecting...' MODEL_UNAVAILABLE", '    Reconnecting... 2/5',
+            '\u00a0    \u23bf \u00a0API Error: 429', '\u00a0  \u25a0 Reconnecting... 2/5',
+            'Reconnecting...\n' + '\n'.join(['working'] * 12)]
+assert all(stall_reason(s) and stall_reason([s]) for s in positive)
+assert all(stall_reason(s) is None and stall_reason([s]) is None for s in negative)
+PY
+[ "$?" -eq 0 ] && ok "stall reason recognizes provider errors without healthy text false positives" || no "stall reason cases"
 bash "$ROOT/scripts/orca-wait.sh" --run sequence --timeout-ms 25 --types worker_done,status > "$TMP/out" 2> "$TMP/err"
 status=$?
 [ "$status" -eq 0 ] && ok "heartbeat, timeout, real delivery exits 0" || no "sequence exits 0"
@@ -102,6 +158,90 @@ bash_bin=$(command -v bash)
 PATH="$(path_entry "$TMP/empty")" "$bash_bin" "$ROOT/scripts/orca-wait.sh" --run missing > "$TMP/missing.out" 2>&1
 status=$?
 [ "$status" -eq 2 ] && grep -q 'NOT_AVAILABLE' "$TMP/missing.out" && ok "missing orca exits 2 with NOT_AVAILABLE" || no "missing orca not diagnosed"
+
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"dispatched","projection":{"provider":{"id":"codex"}}}]}}' > "$TMP/worker-list"
+export FAKE_MODE=polling
+for tail in 'API Error: 429 Too Many Requests' '■ Reconnecting... 2/5'; do
+  rm -f "$TMP/step" "$TMP/workers-argv"
+  printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$tail" > "$TMP/worker-read"
+  PYTHONIOENCODING=cp1252 bash "$ROOT/scripts/orca-wait.sh" --run "limit-${tail%% *}" --timeout-ms 100 --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+  status=$?
+  if [ "$status" -eq 5 ] && grep -q $'STALL\tctx-test\tcodex\tMODEL_UNAVAILABLE:' "$TMP/poll.out" && grep -q 'NEXT.*python3 -B scripts/factory-pipeline.py agents <plan> --down codex --reason' "$TMP/poll.out"; then
+    ok "$tail reports model unavailable and exits 5"
+  else no "$tail stall report"; fi
+done
+grep -q -- '--timeout-ms 10' "$TMP/argv" && ok "worker polling caps wait timeout" || no "wait timeout not capped"
+[ -n "$(find "$TMP/state/orca-wait" -name 'limit-API*.workers.json' -print)" ] && ok "worker state persists after exit" || no "worker state missing"
+
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"API Error: 429 Too Many Requests"}}}' > "$TMP/worker-read"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run limit-API --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "same stall reported only once" || no "same stall repeated"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"Reconnecting... 2/5"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run limit-API --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'Reconnecting' "$TMP/poll.out" && ok "changed stall category reported" || no "changed stall category missed"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"Reconnecting... 3/5"}}}' > "$TMP/worker-read"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run limit-API --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "reconnect progress deduplicated" || no "reconnect repeated"
+
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-bad"}],"page":{"hasMore":true,"nextCursor":"page2"}}}' > "$TMP/worker-list"
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","projection":{"provider":{"id":"codex"}}}],"page":{"hasMore":false}}}' > "$TMP/worker-list-page2"
+echo '{"ok":true,"result":{"terminal":{"tail":"Reconnecting... 2/5"}}}' > "$TMP/worker-read"
+rm -f "$TMP/step" "$TMP/workers-argv"
+FAKE_PAGES=yes FAKE_READ_FAIL=yes bash "$ROOT/scripts/orca-wait.sh" --run pages --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'ctx-test' "$TMP/poll.out" && grep -q 'WARN: worker-read ctx-bad' "$TMP/poll.err" && grep -q -- '--cursor page2' "$TMP/workers-argv" && ok "pagination and failed worker read preserve second worker stall" || no "pagination or per-worker failure"
+
+echo '{"last_poll":"bad","workers":{"ctx-test":42}}' > "$TMP/state/orca-wait/malformed.lock.workers.json"
+echo '{}' > "$TMP/state/orca-wait/expired.workers.json"
+python3 -B - "$TMP/state/orca-wait/expired.workers.json" <<'PY'
+import os, sys, time
+old = time.time() - 8 * 86400
+os.utime(sys.argv[1], (old, old))
+PY
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test"}]}}' > "$TMP/worker-list"
+rm -f "$TMP/step"
+bash "$ROOT/scripts/orca-wait.sh" --run malformed --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q STALL "$TMP/poll.out" && ! grep -q Traceback "$TMP/poll.err" && ok "malformed state recovers" || no "malformed state recovery"
+[ ! -e "$TMP/state/orca-wait/expired.workers.json" ] && ok "old worker state pruned" || no "old worker state retained"
+
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"working"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run frozen --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'frozen: output unchanged' "$TMP/poll.out" && ok "unchanged worker stalls" || no "frozen worker not reported"
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"working again"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run frozen --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'frozen: output unchanged' "$TMP/poll.out" && ok "changed output can freeze again" || no "second freeze missed"
+
+rm -f "$TMP/step"
+FAKE_CHANGING=yes FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run changing --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "changing output does not stall" || no "changing output stalled"
+
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"completed"}]}}' > "$TMP/worker-list"
+rm -f "$TMP/step" "$TMP/workers-argv"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run completed --stall-poll-ms 10 --stall-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q worker-read "$TMP/workers-argv" && ok "completed dispatch skipped" || no "completed dispatch read"
+
+rm -f "$TMP/step"
+FAKE_WORKER_FAIL=yes FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run poll-failure --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && grep -q 'WARN: worker poll:' "$TMP/poll.err" && grep -q worker_done "$TMP/poll.out" && ok "worker failure warns and preserves delivery" || no "worker failure interrupted delivery"
+
+rm -f "$TMP/step" "$TMP/workers-argv"
+FAKE_DELIVER_AT=2 bash "$ROOT/scripts/orca-wait.sh" --run disabled --stall-poll-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && [ ! -e "$TMP/workers-argv" ] && ok "disabled polling makes no worker calls" || no "disabled polling called workers"
 
 echo "orca-wait: $((pass+fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
