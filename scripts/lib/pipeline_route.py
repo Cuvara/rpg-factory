@@ -181,6 +181,15 @@ DO_NOT_RUN = ('DO NOT RUN (run-all inside a check that is not one plain scoped r
 RUNALL_FLAGS = frozenset({'--no-workspace', '--no-claude', '--reuse', '--no-wait', '--no-reuse'})
 RUNALL_VALUE_FLAGS = frozenset({'--only-suites', '--base', '-j', '--jobs'})
 SUITE_PATH = re.compile(r'tests/[\w.-]+\.(?:sh|py)')
+# a suite path verdict --failed-suites accepts without run-all's list (run-all itself excluded: RUNALL_WORD)
+FAILED_SUITE_PATH = re.compile(r'(?:tests|testlab|scripts)/(?:[\w.-]+/)*[\w.-]+\.(?:sh|py)')
+DO_NOT_RUN_FAILED = ('DO NOT RUN (a recorded failed suite that is run-all itself or no suite path; full runs belong '
+                     'to integration QA; report it NOT_RUN): ')
+
+
+def failed_suite_ok(name):
+    """A failed suite a re-QA may run on its own: a suite path, never run-all (that would be a full run)."""
+    return (bool(FAILED_SUITE_PATH.fullmatch(name)) and '..' not in name.split('/') and not mentions_runall(name))
 
 
 def suite_command(suite):
@@ -268,7 +277,8 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
     """Split suite invocations from extra commands; run-all is folded into the tier command.
     runall_suites: the suites `tests/run-all.sh --list-suites` prints in the task checkout. Only those are folded
     (run-all rejects any other suite name), except release-only suites; None (no such flag) folds nothing.
-    failed_suites: the suites a previous QA recorded as failed; those run-all does not run become extra commands.
+    failed_suites: the suites a previous QA recorded as failed; those run-all does not run become extra commands,
+    except run-all itself or a name that is no suite path (failed_suite_ok): DO_NOT_RUN_FAILED, never runnable.
     Extras are `[task ids] command`, each command once and each recognised suite once (by suite path; the
     `env -u TMPDIR` form wins: several suites need TMPDIR unset). Only a plain scoped run-all (runall_words) is folded;
     any other check that mentions run-all (a full run, compound, wrapped, quoted, escaped or commented) is marked
@@ -317,8 +327,11 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
                 add_extra(tid, check, suite or None)
     ids = [str(t.get('id', '?')) for t in tasks]
     for x in failed_suites or []:
-        if x in known:
+        if x in known and not mentions_runall(x):
             suites.add(x)
+        elif not failed_suite_ok(x):  # run-all itself or no suite path: never a runnable command
+            for tid in ids:
+                add_extra(tid, DO_NOT_RUN_FAILED + x)
         elif x not in by_suite:
             for tid in ids:
                 add_extra(tid, suite_command(x), x)

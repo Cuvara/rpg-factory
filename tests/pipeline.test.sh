@@ -837,6 +837,13 @@ check = 'tests/run-all.sh --affected --only-suites tests/installed-safety.sh,tes
 got = m.pr.qa_checks([dict(task, checks=[check, 'bash tests/pipeline.test.sh'])], real, ['tests/installed-safety.sh'])
 assert got == (['tests/pipeline.test.sh'], ['[a] ' + m.pr.DO_NOT_RUN + check,
                                            '[a] env -u TMPDIR bash tests/installed-safety.sh'], False), got
+# a recorded failed suite that is run-all itself (any spelling) or no suite path is DO NOT RUN, never a runnable extra
+for bad in ('tests/run-all.sh', './tests/run-all.sh', 'tests/run-a"ll".sh', 'docs/x.md', 'tests/../x.sh'):
+    for runall in (real, None):
+        got = m.pr.qa_checks([dict(task, checks=['bash tests/pipeline.test.sh'])], runall, [bad])
+        assert got[1][-1] == '[a] ' + m.pr.DO_NOT_RUN_FAILED + bad, (bad, got)
+        assert not any(e.startswith('[a] env') and 'run-all' in e for e in got[1]), (bad, got)
+assert not m.pr.failed_suite_ok('tests/run-all.sh') and m.pr.failed_suite_ok('tests/orca-wait.test.sh')
 def cli(*args):
     p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
     assert p.returncode == 0, (args, p.stdout, p.stderr)
@@ -889,9 +896,14 @@ cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--
          '--failed-suites', 'tests/routing.test.sh')
 cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'review', '--sha', first, '--by', 'claude', '--state', 'FAIL',
          '--failed-suites', 'tests/routing.test.sh')
-for bad in ('docs/x.md', 'tests/../x.sh', 'tests/x.txt', 'tools/lab.sh,tests/routing.test.sh', 'tests/routing.test.sh,../x.sh'):
+for bad in ('docs/x.md', 'tests/../x.sh', 'tests/x.txt', 'tools/lab.sh,tests/routing.test.sh', 'tests/routing.test.sh,../x.sh',
+            'tests/run-all.sh', 'tests/routing.test.sh,tests/run-all.sh', './tests/run-all.sh'):
     cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
              '--failed-suites', bad)
+p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'verdict', str(pf), '--task', 'a',
+                    '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL', '--failed-suites',
+                    'tests/run-all.sh'], capture_output=True, text=True)
+assert p.returncode == 2 and 'never names tests/run-all.sh' in p.stderr, (p.returncode, p.stderr)
 # suites run-all lists outside tests/ (testlab/tests/test_lab.py, scripts/check-registry.sh) are accepted
 for good in ('scripts/check-registry.sh', 'testlab/tests/test_lab.py'):
     cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',

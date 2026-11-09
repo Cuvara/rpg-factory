@@ -104,7 +104,7 @@ docs/schemas/pipeline-plan.schema.json.
         --fallback 'AGENT unavailable' (review only) records a retrospective SAME_MODEL fallback with a required
         --note explaining the outage. Legacy --fallback AGENT also requires that agent to be unavailable now.
         --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
-        scripts)/ .sh or .py paths), the next QA dispatch reruns them.
+        scripts)/ .sh or .py paths; never tests/run-all.sh), the next QA dispatch reruns them.
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
@@ -1706,10 +1706,12 @@ def cmd_verdict(a, reg):
             die("--failed-suites goes with --phase qa --state FAIL")
         failed = sorted({s.strip() for s in a.failed_suites.split(',') if s.strip()})
         listed = None  # run-all's --list-suites, read only when a name is outside the (tests|testlab|scripts)/ form
+        if any(pr.mentions_runall(s) for s in failed):
+            die("--failed-suites never names tests/run-all.sh: a re-QA reruns failed suites, never a full run")
 
         def suite_ok(s):
             nonlocal listed
-            if re.fullmatch(r'(?:tests|testlab|scripts)/(?:[\w.-]+/)*[\w.-]+\.(?:sh|py)', s) and ".." not in s.split("/"):
+            if pr.failed_suite_ok(s):
                 return True
             if listed is None:
                 listed = runall_suites(repo_info(plan, reg, key)["path"]) or set()
