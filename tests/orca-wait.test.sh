@@ -16,6 +16,18 @@ no() { fail=$((fail+1)); echo "FAIL  $1"; }
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/orca" <<'SH'
 #!/usr/bin/env bash
+if [ "${2:-}" = worker-list ] || [ "${2:-}" = worker-read ]; then
+  printf '%s\n' "$*" >> "$FAKE_DIR/workers-argv"
+  if [ "${FAKE_WORKER_FAIL:-}" = yes ]; then exit 1; fi
+  if [ "$2" = worker-list ]; then
+    cat "$FAKE_DIR/worker-list"
+  elif [ "${FAKE_CHANGING:-}" = yes ]; then
+    printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$(cat "$FAKE_DIR/step")"
+  else
+    cat "$FAKE_DIR/worker-read"
+  fi
+  exit 0
+fi
 printf '%s\n' "$*" >> "$FAKE_DIR/argv"
 if [[ " $* " == *' --wait '* ]]; then
   echo '{"_keepalive":true,"elapsedMs":15000}' >&2
@@ -35,6 +47,15 @@ fi
 n=0
 [ ! -f "$FAKE_DIR/step" ] || read -r n < "$FAKE_DIR/step"
 n=$((n+1)); echo "$n" > "$FAKE_DIR/step"
+if [ "${FAKE_MODE:-sequence}" = polling ]; then
+  sleep 0.05
+  if [ "$n" -ge "${FAKE_DELIVER_AT:-20}" ]; then
+    echo '{"ok":true,"result":{"deliveryId":"done","messages":[{"type":"worker_done"}]}}'
+  else
+    echo '{"ok":true,"result":{"messages":[]}}'
+  fi
+  exit 0
+fi
 case "$n" in
   1) echo '{"ok":true,"result":{"deliveryId":"hb-42","messages":[{"type":"heartbeat"}]}}' ;;
   2) echo '{"ok":true,"result":{"deliveryId":null,"messages":[],"count":0}}' ;;
@@ -44,6 +65,8 @@ case "$n" in
 esac
 SH
 chmod +x "$TMP/bin/orca"
+printf '@bash "%%~dp0orca" %%*\r\n' > "$TMP/bin/orca.cmd"
+echo '{"ok":true,"result":{"workers":[]}}' > "$TMP/worker-list"
 export PATH="$(path_entry "$TMP/bin"):$PATH"
 bash "$ROOT/scripts/orca-wait.sh" --run sequence --timeout-ms 25 --types worker_done,status > "$TMP/out" 2> "$TMP/err"
 status=$?
@@ -102,6 +125,47 @@ bash_bin=$(command -v bash)
 PATH="$(path_entry "$TMP/empty")" "$bash_bin" "$ROOT/scripts/orca-wait.sh" --run missing > "$TMP/missing.out" 2>&1
 status=$?
 [ "$status" -eq 2 ] && grep -q 'NOT_AVAILABLE' "$TMP/missing.out" && ok "missing orca exits 2 with NOT_AVAILABLE" || no "missing orca not diagnosed"
+
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"dispatched","projection":{"provider":{"id":"codex"}}}]}}' > "$TMP/worker-list"
+export FAKE_MODE=polling
+for tail in '429 usage limit' 'Reconnecting'; do
+  rm -f "$TMP/step" "$TMP/workers-argv"
+  printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$tail" > "$TMP/worker-read"
+  bash "$ROOT/scripts/orca-wait.sh" --run "limit-${tail%% *}" --timeout-ms 100 --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+  status=$?
+  if [ "$status" -eq 5 ] && grep -q $'STALL\tctx-test\tcodex\tMODEL_UNAVAILABLE:' "$TMP/poll.out" && grep -q 'NEXT.*--down codex --reason' "$TMP/poll.out"; then
+    ok "$tail reports model unavailable and exits 5"
+  else no "$tail stall report"; fi
+done
+grep -q -- '--timeout-ms 10' "$TMP/argv" && ok "worker polling caps wait timeout" || no "wait timeout not capped"
+[ -f "$TMP/state/orca-wait/limit-429.lock.workers.json" ] && ok "worker state persists after exit" || no "worker state missing"
+
+rm -f "$TMP/step"
+echo '{"ok":true,"result":{"terminal":{"tail":"working"}}}' > "$TMP/worker-read"
+bash "$ROOT/scripts/orca-wait.sh" --run frozen --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 5 ] && grep -q 'frozen: output unchanged' "$TMP/poll.out" && ok "unchanged worker stalls" || no "frozen worker not reported"
+
+rm -f "$TMP/step"
+FAKE_CHANGING=yes FAKE_DELIVER_AT=4 bash "$ROOT/scripts/orca-wait.sh" --run changing --stall-poll-ms 10 --stall-ms 30 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q STALL "$TMP/poll.out" && ok "changing output does not stall" || no "changing output stalled"
+
+echo '{"ok":true,"result":{"workers":[{"dispatchId":"ctx-test","dispatchStatus":"completed"}]}}' > "$TMP/worker-list"
+rm -f "$TMP/step" "$TMP/workers-argv"
+FAKE_DELIVER_AT=3 bash "$ROOT/scripts/orca-wait.sh" --run completed --stall-poll-ms 10 --stall-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && ! grep -q worker-read "$TMP/workers-argv" && ok "completed dispatch skipped" || no "completed dispatch read"
+
+rm -f "$TMP/step"
+FAKE_WORKER_FAIL=yes FAKE_DELIVER_AT=3 bash "$ROOT/scripts/orca-wait.sh" --run poll-failure --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && grep -q 'WARN: worker poll:' "$TMP/poll.err" && grep -q worker_done "$TMP/poll.out" && ok "worker failure warns and preserves delivery" || no "worker failure interrupted delivery"
+
+rm -f "$TMP/step" "$TMP/workers-argv"
+FAKE_DELIVER_AT=3 bash "$ROOT/scripts/orca-wait.sh" --run disabled --stall-poll-ms 0 > "$TMP/poll.out" 2> "$TMP/poll.err"
+status=$?
+[ "$status" -eq 0 ] && [ ! -e "$TMP/workers-argv" ] && ok "disabled polling makes no worker calls" || no "disabled polling called workers"
 
 echo "orca-wait: $((pass+fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

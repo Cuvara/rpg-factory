@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # One consuming waiter per Run. Real deliveries remain unacknowledged for the caller.
 # Exit codes: 0 real delivery; 2 usage / NOT_AVAILABLE / invalid receipt or state;
-# 3 lock held / acquisition busy; 4 orca failure; 130 INT; 143 TERM.
+# 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 130 INT; 143 TERM.
 set -uo pipefail
-run= timeout=60000 types=worker_done,escalation,question
+run= timeout=60000 types=worker_done,escalation,question stall_poll=180000 stall_ms=900000
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --run|--timeout-ms|--types)
+    --run|--timeout-ms|--types|--stall-poll-ms|--stall-ms)
       [ "$#" -ge 2 ] || { echo "ERROR: $1 needs a value" >&2; exit 2; }
-      case "$1" in --run) run=$2 ;; --timeout-ms) timeout=$2 ;; --types) types=$2 ;; esac
+      case "$1" in --run) run=$2 ;; --timeout-ms) timeout=$2 ;; --types) types=$2 ;; --stall-poll-ms) stall_poll=$2 ;; --stall-ms) stall_ms=$2 ;; esac
       shift 2 ;;
-    *) echo "Usage: orca-wait.sh --run ID [--timeout-ms N] [--types T]" >&2; exit 2 ;;
+    *) echo "Usage: orca-wait.sh --run ID [--timeout-ms N] [--types T] [--stall-poll-ms N] [--stall-ms N]" >&2; exit 2 ;;
   esac
 done
-[[ -n "$run" && "$timeout" =~ ^[1-9][0-9]*$ && -n "$types" ]] || {
+[[ -n "$run" && "$timeout" =~ ^[1-9][0-9]*$ && -n "$types" && "$stall_poll" =~ ^[0-9]+$ && "$stall_ms" =~ ^[0-9]+$ ]] || {
   echo "ERROR: --run and a positive --timeout-ms are required" >&2; exit 2;
 }
 command -v orca >/dev/null 2>&1 || { echo "NOT_AVAILABLE: orca is not on PATH" >&2; exit 2; }
@@ -63,12 +63,14 @@ response="$state.$$.response"
 stderr="$response.stderr"
 trap 'rm -f "$response" "$stderr"; cleanup' EXIT
 ack=
+wait_timeout=$timeout
+if [ "$stall_poll" -gt 0 ] && [ "$stall_poll" -lt "$timeout" ]; then wait_timeout=$stall_poll; fi
 while :; do
   args=(orchestration check --run "$run" --json)
   if [ -n "$ack" ]; then
     args+=(--ack "$ack")
   else
-    args+=(--wait --types "$types" --timeout-ms "$timeout")
+    args+=(--wait --types "$types" --timeout-ms "$wait_timeout")
   fi
   orca "${args[@]}" > "$response" 2> "$stderr" &
   child=$!
@@ -113,7 +115,93 @@ PY
   case "$parsed" in
     real) cat "$response"; exit 0 ;;
     ack$'\t'*) ack=${parsed#*$'\t'} ;;
-    wait) ack= ;;
+    wait)
+      if [ -z "$ack" ] && [ "$stall_poll" -gt 0 ]; then
+        python3 -B - "$ROOT" "$run" "$state.workers.json" "$stall_poll" "$stall_ms" <<'PY'
+import hashlib, json, os, shlex, shutil, subprocess, sys, time
+root, run, path, interval, threshold = sys.argv[1:]
+sys.path[:0] = [os.path.join(root, 'scripts'), os.path.join(root, 'scripts', 'lib')]
+from lib import fstate
+from lib.pipeline_route import stall_reason
+
+now = time.time() * 1000
+state = fstate.read_json(path, {})
+if not isinstance(state, dict):
+    state = {}
+if now - state.get('last_poll', 0) < int(interval):
+    sys.exit(0)
+state['last_poll'] = now
+old = state.get('workers', {})
+if not isinstance(old, dict):
+    old = {}
+
+def call(args):
+    proc = subprocess.run([shutil.which('orca') or 'orca', 'orchestration'] + args, capture_output=True,
+                          encoding='utf-8', errors='replace', timeout=60)
+    if proc.returncode:
+        raise ValueError(args[0] + ' exited ' + str(proc.returncode))
+    doc = json.loads(proc.stdout)
+    if not isinstance(doc, dict) or doc.get('ok') is False or not isinstance(doc.get('result'), dict):
+        raise ValueError(args[0] + ' returned an invalid receipt')
+    return doc['result']
+
+try:
+    workers, cursor = [], None
+    while True:
+        args = ['worker-list', '--run', run, '--terminal-state', 'active', '--json']
+        if cursor:
+            args += ['--cursor', cursor]
+        result = call(args)
+        rows = result.get('workers')
+        if not isinstance(rows, list):
+            raise ValueError('worker-list returned invalid workers')
+        workers.extend(rows)
+        page = result.get('page') or {}
+        cursor = page.get('nextCursor') if page.get('hasMore') else None
+        if not cursor:
+            break
+    current, stalls = {}, []
+    for worker in workers:
+        if not isinstance(worker, dict) or not isinstance(worker.get('dispatchId'), str):
+            raise ValueError('worker-list returned invalid worker')
+        dispatch = worker['dispatchId']
+        if str(worker.get('dispatchStatus', '')).lower() in ('completed', 'failed', 'cancelled'):
+            continue
+        result = call(['worker-read', '--dispatch', dispatch, '--source', 'terminal', '--limit', '40', '--json'])
+        tail = result.get('terminal', {}).get('tail')
+        if not isinstance(tail, (str, list)) or (isinstance(tail, list) and not all(isinstance(x, str) for x in tail)):
+            raise ValueError('worker-read returned invalid terminal tail')
+        digest = hashlib.sha256(json.dumps(tail, ensure_ascii=True).encode()).hexdigest()
+        prior = old.get(dispatch, {})
+        since = prior.get('since', now) if isinstance(prior, dict) and prior.get('hash') == digest else now
+        current[dispatch] = {'hash': digest, 'since': since}
+        reason = stall_reason(tail)
+        if not reason and now - since >= int(threshold):
+            reason = 'frozen: output unchanged for ' + str(int((now - since) // 60000)) + ' min'
+        if reason:
+            provider = (worker.get('projection') or {}).get('provider') or {}
+            agent = provider.get('id') or 'unknown'
+            stalls.append((dispatch, agent, ' '.join(reason.split())))
+    state['workers'] = current
+    fstate.write_json(path, state)
+    for dispatch, agent, reason in stalls:
+        print('STALL\t{}\t{}\t{}'.format(dispatch, agent, reason))
+        if reason.startswith('MODEL_UNAVAILABLE: '):
+            print('NEXT\tfactory-pipeline.py agents <plan> --down {} --reason {}'.format(
+                shlex.quote(agent), shlex.quote(reason[len('MODEL_UNAVAILABLE: '):])))
+    if stalls:
+        sys.exit(5)
+except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError) as exc:
+    try:
+        fstate.write_json(path, state)
+    except OSError:
+        pass
+    print('WARN: worker poll: ' + ' '.join(str(exc).split()), file=sys.stderr)
+PY
+        poll_status=$?
+        [ "$poll_status" -ne 5 ] || exit 5
+      fi
+      ack= ;;
     *) echo "ERROR: unrecognized receipt classification" >&2; exit 2 ;;
   esac
 done
