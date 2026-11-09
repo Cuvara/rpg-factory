@@ -16,6 +16,18 @@ def _safe(x):
     return ''.join(c if c.isalnum() or c in '-_.' else '_' for c in str(x))
 
 
+def stall_reason(text):
+    """Return a reason for factory-pipeline.py agents --down, if the tail indicates a stall."""
+    lines = text.splitlines() if isinstance(text, str) else [line for item in text for line in item.splitlines()]
+    for pattern, reason in ((r'429|usage limit|rate limit|too many requests|quota exceeded', 'usage limit'),
+                            (r'reconnecting', 'reconnecting')):
+        for line in lines:
+            if re.search(pattern, line, re.IGNORECASE):
+                detail = reason + (' (429)' if reason == 'usage limit' and '429' in line else '')
+                return 'MODEL_UNAVAILABLE: ' + detail + ' - ' + line.strip()[:120]
+    return None
+
+
 def marks_path(plan):
     return os.path.join(fstate.persistent(), 'pipeline', _safe(plan.get('id')), 'agents.json')
 
