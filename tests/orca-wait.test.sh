@@ -79,14 +79,19 @@ from pipeline_route import stall_reason
 positive = ['\u25a0 Reconnecting... 2/5', '\u26a0 stream error: exceeded retry limit, last status: 429 Too Many Requests',
             "\u25a0 You've hit your usage limit. Try again in 2 hours.", 'You have hit your usage limit',
             'API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}',
-            'Claude usage limit reached. Your limit will resets at 3pm', 'Error: 429 Too Many Requests',
-            'Reconnecting\u2026', 'Reconnecting 2/5']
+            'Claude usage limit reached. Your limit will resets at 3pm',
+            'Reconnecting\u2026', 'Reconnecting 2/5', '  \u23bf  API Error: 429 {"type":"error"}',
+            '\u2022 Reconnecting... 2/5 (12s \u2022 esc to interrupt)',
+            '\u25a0 stream disconnected before completion: error sending request']
 negative = ["positive = ['HTTP 429', ...", '   140  if quota exceeded then',
             'grep -n "usage limit reached" log', 'Error: 429 tests passed', 'status: 429 of 512 done',
             '  Reconnecting to database...', 'run-all: 512 checks, 429 passed, 0 failed',
             'commit 4291abc feat', '\u2193 429 tokens', '  \u23bf  \u25a0 Reconnecting... 2/5',
             '| Reconnecting...', '\u2502 Reconnecting...', '\u2514 Reconnecting...', '> Reconnecting...',
-            '+ Reconnecting...', '- Reconnecting...', 'Reconnecting...\n' + '\n'.join(['working'] * 12)]
+            '+ Reconnecting...', '- Reconnecting...', 'Error: 429 Too Many Requests',
+            "    '  \u25a0 Reconnecting... 2/5' MODEL_UNAVAILABLE: reconnecting - ...",
+            "  \u2514 '| Reconnecting...' MODEL_UNAVAILABLE", '    Reconnecting... 2/5',
+            'Reconnecting...\n' + '\n'.join(['working'] * 12)]
 assert all(stall_reason(s) and stall_reason([s]) for s in positive)
 assert all(stall_reason(s) is None and stall_reason([s]) is None for s in negative)
 PY

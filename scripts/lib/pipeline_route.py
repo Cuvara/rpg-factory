@@ -21,18 +21,19 @@ def stall_reason(text):
     lines = text.splitlines() if isinstance(text, str) else [line for item in text for line in item.splitlines()]
     lines = [line for line in lines if line.strip()][-12:]
     for line in lines:
-        stripped = line.lstrip()
-        if re.match(r'(?:[\u23bf\u2502\u2514|>+\-]|\d+\s)', stripped):
-            continue
-        status = re.sub(r'^[^\w\r\n]+', '', stripped)
+        agent = re.match(r' {0,2}(?:[\u25a0\u26a0\u2022\u25e6\u273b\u2722\u00b7*\u23fa] +)?(\S.*)', line)
+        claude = re.match(r' {0,4}(?:\u23bf +)?(\S.*)', line)
+        status = agent.group(1) if agent else ''
+        error = claude.group(1) if claude else ''
         usage = (r"(?:you(?:'ve| have) hit your usage limit\b|"
-                 r'stream error\b.*(?:\b429\b|too many requests)|'
-                 r'api error\s*:\s*429\b|api error\b.*(?:rate_limit|overloaded)|'
-                 r'(?:claude )?usage limit reached\b.*\b(?:reset|resets|try again)\b|'
-                 r'error\s*:\s*429\s+too many requests\b)')
-        if re.match(usage, status, re.IGNORECASE):
+                 r'stream error\b.*(?:\b429\b|too many requests))')
+        claude_usage = (r'(?:api error\s*:\s*429\b|api error\b.*(?:rate_limit|overloaded)|'
+                        r'claude usage limit reached\b|'
+                        r'(?:usage|5-hour) limit reached\b.*\b(?:reset|resets|try again)\b)')
+        if re.match(usage, status, re.IGNORECASE) or re.match(claude_usage, error, re.IGNORECASE):
+            status = status if re.match(usage, status, re.IGNORECASE) else error
             detail = 'usage limit' + (' (429)' if re.search(r'\b429\b', status) else '')
-        elif re.match(r'reconnecting(?:\.\.\.|\u2026|\s+\d+/\d+)', status, re.IGNORECASE):
+        elif re.match(r'(?:reconnecting(?:\.\.\.|\u2026|\s+\d+/\d+)|stream disconnected before completion\b)', status, re.IGNORECASE):
             detail = 'reconnecting'
         else:
             continue
