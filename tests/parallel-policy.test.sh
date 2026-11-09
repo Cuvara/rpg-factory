@@ -395,7 +395,7 @@ else:
         "Re-QA after a FAIL": ("failed suites", "task check suites", "--affected", "previous FAIL candidate"),
         "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
         "Reviewer": ("no suites",),
-        "Integration QA, once per batch before the PR": ("--reuse -j 4", "one full run", "lock"),
+        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green is the full gate", "ci+workspace"),
         "Release": ("--release", "dogfood.sh --installed"),
     }
     for label, phrases in required.items():
@@ -441,6 +441,12 @@ q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier
 q_mutate "QA tiers tier S row counts docs/ as prose again" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/a .md file, under changelog.d\/ or a skills\/ directory/docs, skills, changelog or .md/" "$F"'
 q_mutate "QA tiers task row requires a full run" "qa-tiers task row permits a full run" \
   'sed -i "/^| Task QA,/s/never a full run/run a full run/" "$F"'
+q_mutate "QA tiers integration row back to a full local run" "qa-tiers row changed: Integration QA, once per batch before the PR" \
+  'sed -i "/^| Integration QA,/s/tests\/run-all.sh --workspace-only/tests\/run-all.sh --reuse -j 4/" "$F"'
+q_mutate "QA tiers integration row drops the CI watch" "qa-tiers row changed: Integration QA, once per batch before the PR" \
+  'sed -i "/^| Integration QA,/s/gh pr checks/gh pr view/" "$F"'
+q_mutate "QA tiers integration row drops the CI gate statement" "qa-tiers row changed: Integration QA, once per batch before the PR" \
+  'sed -i "/^| Integration QA,/s/CI green is the full gate/a green CI helps/" "$F"'
 q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \

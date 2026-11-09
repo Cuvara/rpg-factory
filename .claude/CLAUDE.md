@@ -28,10 +28,12 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Every behaviour change gets a test in `tests/` and a changelog fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`
   sections; `changelog.d/README.md`). Never edit `CHANGELOG.md` `[Unreleased]` directly: it stays empty (run-all checks it).
 - While iterating and in task QA: the tier command (`tests/run-all.sh --affected --base <base> -j 2`, or the task's
-  suites with `--only-suites`); a task never runs the full suite. Before opening a PR: integration QA's full run
-  (`tests/run-all.sh --reuse -j 4`, or a reused PASS record of the same tree) must report 0 failed; releases run
-  `--release`. Report the pass count. Tiers: `parallel-work.md` section 10 "QA tiers". CI
-  (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
+  suites with `--only-suites`); a task never runs the full suite. CI is the full-suite gate: before opening a PR,
+  integration QA runs `tests/run-all.sh --workspace-only` (what CI cannot run) and must report 0 failed, and CI
+  (`gh pr checks <pr> --watch`) must be green; while CI runs, start the next task. The full `tests/run-all.sh --release`
+  and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers: `parallel-work.md`
+  section 10 "QA tiers". CI (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`, so
+  `--workspace-only` covers the rest.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`. New skills start
@@ -103,7 +105,10 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
 ## Commands
 
 ```bash
-tests/run-all.sh                    # every local suite (integration QA only, under the lock); must end with 0 failed
+tests/run-all.sh                    # every local suite (releases and manual full runs, under the lock); must end with 0 failed
+tests/run-all.sh --workspace-only   # only what CI cannot run (live-workspace suites and checks, claude plugin validate),
+                                    # with the suite reuse; integration QA before a PR, next to `gh pr checks <pr> --watch`
+tests/run-all.sh -h | --help        # print the usage header, exit 0; an unknown argument exits 2 and never starts a run
 tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace on disk
 tests/run-all.sh --no-claude        # skip `claude plugin validate`
 tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh

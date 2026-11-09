@@ -117,10 +117,16 @@ noticed.
   the lead assigns each to one task at a time. A task without the resource reports the dependent check as
   `NOT_RUN` with the exact command and reason; other work continues. There is no prompt.
 - **Full test runs are a shared resource too.** One full run per machine (the run-all lock): a full
-  `tests/run-all.sh` takes a per-machine lock, and a second one waits. Only integration QA runs the full suite;
-  every other session runs its tier command (section 10 "QA tiers"). Four parallel full runs made every suite 2-4x
+  `tests/run-all.sh` takes a per-machine lock, and a second one waits. CI is the full-suite gate: no session runs the
+  full suite before a PR (only a release does). Integration QA runs `tests/run-all.sh --workspace-only` and every
+  other session runs its tier command (section 10 "QA tiers"). Four parallel full runs made every suite 2-4x
   slower and timed some out. Never create a worktree or branch while a full run is in flight: the shared
   `.git/config` check fails (`.claude/CLAUDE.md` "Operating lessons").
+- **Lesson: `orca worktree create` writes `branch.<name>.base` into the shared `.git/config`**, which breaks the
+  shared-config check of other sessions' full runs. `git worktree add --no-track -b <branch> <path> <base>` writes
+  nothing to `.git/config` (verified: the config hash is unchanged). So `dispatch --phase lead` prefers it for a new
+  task worktree and then starts the lead with `orca agent launch --worktree path:<path>`; `orca worktree create` stays
+  the fallback when git cannot create the worktree.
 
 ### Child worktrees
 
@@ -445,9 +451,9 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    fingerprint (objective, owned paths, exclusions, acceptance, checks, agents): a plan edit that only changes deps
    keeps it, while changing a task's paths or acceptance makes it stale. Re-run `status` after any plan edit.
 6. **QA.** Once per repo on the integration HEAD, in the integration branch's existing checkout (section 6):
-   `dispatch ... --task integration:<repo> --phase qa --sha <head>`, whose spec names the batch's one full run
-   (`tests/run-all.sh --reuse -j 4`, "QA tiers" below); in a no-worktree repo also per task, before the
-   next task starts (`--task <id>`). The QA worker fills `templates/pipeline/qa-report.md`; the lead records
+   `dispatch ... --task integration:<repo> --phase qa --sha <head>`, whose spec names what CI cannot run
+   (`tests/run-all.sh --workspace-only`) and the CI watch (`gh pr checks <pr> --watch`; CI green is the full gate,
+   "QA tiers" below); in a no-worktree repo also per task, before the next task starts (`--task <id>`). The QA worker fills `templates/pipeline/qa-report.md`; the lead records
    `verdict ... --phase qa` (a FAIL with `--failed-suites`, which the re-QA spec reruns).
 7. **READY_FOR_PR.** `factory-pipeline.py gate plan.json` is a read-only report: every task integrated, reviewed PASS
    by its paired model on a commit whose owned paths have not changed since, QA PASS on each integration HEAD,
@@ -471,9 +477,13 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
 | Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
 | Reviewer | no suites; only a repro test when a finding needs one | the review session |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --reuse -j 4`: the batch's one full run, under the run-all lock, reusing suites whose inputs already passed | the run lead's integration QA session |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse) plus `gh pr checks <pr> --watch`: CI green is the full gate (registry `pipeline.qa_tiers` integration `ci+workspace`) | the run lead's integration QA session |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session (`.claude/CLAUDE.md` "Releases") |
 
+- **CI is the full gate.** No full local run before a PR: CI (`.github/workflows/tests.yml`, `--no-workspace
+  --no-claude`) runs the full suite, and `--workspace-only` covers the rest. While CI runs, start the next task; come
+  back for `gh pr checks <pr> --watch` and fix a red check before merging. Only a release runs
+  `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
 - **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
   prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/` directory
   path (no dot in its last segment). A non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are machine
