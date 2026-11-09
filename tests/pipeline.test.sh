@@ -368,6 +368,10 @@ if case == 'kinds-single-list':
     assert '--argjson pipeline_kinds "$pipeline_kinds"' in text
 if case in ('enum-copy-original', 'enum-copy-subplan', 'enum-copy-registry'):
     import shutil
+    sys.path.insert(0, root + '/scripts/lib')
+    from shells import find_bash
+    bash = find_bash()
+    assert bash, 'Git Bash is required for enum-copy registry checks'
     copied = pathlib.Path(tmp) / case
     for name in ('registry.json', 'docs/registry.schema.json', 'docs/schemas/pipeline-plan.schema.json',
                  'docs/schemas/pipeline-subplan.schema.json', 'scripts/check-registry.sh', 'scripts/lib/compat.sh'):
@@ -389,7 +393,7 @@ if case in ('enum-copy-original', 'enum-copy-subplan', 'enum-copy-registry'):
             value = value[key]
         value.append('drift')
         (copied / changed).write_text(json.dumps(doc))
-    result = subprocess.run(['bash', str(copied / 'scripts/check-registry.sh'), '--structure-only'],
+    result = subprocess.run([bash, str(copied / 'scripts/check-registry.sh'), '--structure-only'],
                             capture_output=True, text=True, env=dict(os.environ, CLAUDE_PLUGIN_ROOT=str(copied)))
     if changed:
         assert result.returncode != 0, result.stdout
