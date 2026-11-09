@@ -80,7 +80,11 @@ positive = ['\u25a0 Reconnecting... 2/5', '\u26a0 stream error: exceeded retry l
             "\u25a0 You've hit your usage limit. Try again in 2 hours.", 'You have hit your usage limit',
             'API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}',
             'Claude usage limit reached. Your limit will resets at 3pm',
-            'Reconnecting\u2026', 'Reconnecting 2/5', '  \u23bf  API Error: 429 {"type":"error"}',
+            'Reconnecting\u2026', 'Reconnecting 2/5', '  \u23bf \u00a0API Error: 429 {"type":"error"}',
+            '  \u23bf \u00a0Claude usage limit reached. resets 3pm',
+            '  \u23bf  API Error: 429 {"type":"error"}',
+            '\u00a0 \u23bf \u00a0API Error: 429 {"type":"error"}',
+            '\u00a0 \u25a0 Reconnecting... 2/5',
             '\u2022 Reconnecting... 2/5 (12s \u2022 esc to interrupt)',
             '\u25a0 stream disconnected before completion: error sending request']
 negative = ["positive = ['HTTP 429', ...", '   140  if quota exceeded then',
@@ -91,6 +95,7 @@ negative = ["positive = ['HTTP 429', ...", '   140  if quota exceeded then',
             '+ Reconnecting...', '- Reconnecting...', 'Error: 429 Too Many Requests',
             "    '  \u25a0 Reconnecting... 2/5' MODEL_UNAVAILABLE: reconnecting - ...",
             "  \u2514 '| Reconnecting...' MODEL_UNAVAILABLE", '    Reconnecting... 2/5',
+            '\u00a0    \u23bf \u00a0API Error: 429', '\u00a0  \u25a0 Reconnecting... 2/5',
             'Reconnecting...\n' + '\n'.join(['working'] * 12)]
 assert all(stall_reason(s) and stall_reason([s]) for s in positive)
 assert all(stall_reason(s) is None and stall_reason([s]) is None for s in negative)
@@ -161,7 +166,7 @@ for tail in 'API Error: 429 Too Many Requests' '■ Reconnecting... 2/5'; do
   printf '{"ok":true,"result":{"terminal":{"tail":"%s"}}}\n' "$tail" > "$TMP/worker-read"
   PYTHONIOENCODING=cp1252 bash "$ROOT/scripts/orca-wait.sh" --run "limit-${tail%% *}" --timeout-ms 100 --stall-poll-ms 10 > "$TMP/poll.out" 2> "$TMP/poll.err"
   status=$?
-  if [ "$status" -eq 5 ] && grep -q $'STALL\tctx-test\tcodex\tMODEL_UNAVAILABLE:' "$TMP/poll.out" && grep -q 'NEXT.*--down codex --reason' "$TMP/poll.out"; then
+  if [ "$status" -eq 5 ] && grep -q $'STALL\tctx-test\tcodex\tMODEL_UNAVAILABLE:' "$TMP/poll.out" && grep -q 'NEXT.*python3 -B scripts/factory-pipeline.py agents <plan> --down codex --reason' "$TMP/poll.out"; then
     ok "$tail reports model unavailable and exits 5"
   else no "$tail stall report"; fi
 done

@@ -212,7 +212,7 @@ try:
     for dispatch, agent, reason in stalls:
         print('STALL\t{}\t{}\t{}'.format(dispatch, agent, reason))
         if reason.startswith('MODEL_UNAVAILABLE: '):
-            print('NEXT\tfactory-pipeline.py agents <plan> --down {} --reason {}'.format(
+            print('NEXT\tpython3 -B scripts/factory-pipeline.py agents <plan> --down {} --reason {}'.format(
                 shlex.quote(agent), shlex.quote(reason[len('MODEL_UNAVAILABLE: '):])))
     if stalls:
         sys.exit(5)

@@ -21,8 +21,8 @@ def stall_reason(text):
     lines = text.splitlines() if isinstance(text, str) else [line for item in text for line in item.splitlines()]
     lines = [line for line in lines if line.strip()][-12:]
     for line in lines:
-        agent = re.match(r' {0,2}(?:[\u25a0\u26a0\u2022\u25e6\u273b\u2722\u00b7*\u23fa] +)?(\S.*)', line)
-        claude = re.match(r' {0,4}(?:\u23bf +)?(\S.*)', line)
+        agent = re.match(r'[ \u00a0]{0,2}(?:[\u25a0\u26a0\u2022\u25e6\u273b\u2722\u00b7*\u23fa] +)?(\S.*)', line)
+        claude = re.match(r'[ \u00a0]{0,4}(?:\u23bf[ \u00a0]+)?(\S.*)', line)
         status = agent.group(1) if agent else ''
         error = claude.group(1) if claude else ''
         usage = (r"(?:you(?:'ve| have) hit your usage limit\b|"
