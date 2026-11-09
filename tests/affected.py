@@ -19,8 +19,9 @@ A suite runs when one of these holds (anything unsure runs):
   - a changed file lies in the tree of a code file that would select the suite: code reads data next to it
     without naming the path (scripts/ui/ui_plan.py reads scripts/ui/data/*.json) and runs helpers by a computed
     path. Every non-ignored file in the tree counts (README.md and other docs a tool may read included), and so
-    does a code file (.py/.sh/.jq) that no other code file names (no import, no file name in code); a code file
-    that code names follows only the import and name edges, so a library change still selects only its importers.
+    does a code file (.py/.sh/.jq) without a caller edge (no import, load or run by name); a code file with one
+    follows its edges to every caller (a helper .sh a script names reaches that script and its suites), so a
+    library change still selects only its importers.
     The tree of a code file is its tool directory. Under scripts/ and tests/ (many independent tools) it is the
     first two path components (scripts/ui/** for scripts/ui/ui_plan.py and for scripts/ui/x/y.py); for a file
     directly in scripts/ or tests/ it is only the files directly in that directory (not scripts/ui/**).
@@ -137,18 +138,18 @@ NOT_IMPORTERS = {"tests/affected.py", "tests/run-all.sh"}
 # repository-wide indexes in the scripts/ and tests/ trees: named-only (see the module docstring)
 INDEX_DOCS = {"scripts/README.md", "tests/README.md"}
 PY_FILE = re.compile(r"[\w-]+\.py\b")
-CODE_FILE = re.compile(r"[\w-][\w.-]*\.(?:py|sh|jq)\b")
+HELPER_FILE = re.compile(r"[\w-][\w.-]*\.(?:sh|jq)\b")
 LOADER = re.compile(r"spec_from_file_location|run_path|exec_module")
 LOAD_LINE = re.compile(r"join\(|/\s*['\"]|['\"]/|__file__|\b(HERE|ROOT|SCRIPTS)\b|subprocess|sys\.executable|\bexec")
 
 
-def load_refs(path, text):
-    """Python file names that code loads or runs: every name in a shell/jq file or in a Python module that loads
-    files (spec_from_file_location), else only names on a line that builds a path or runs a process (a bare
-    name in a message or an allow-list is not a dependency)."""
+def load_refs(path, text, pattern=PY_FILE):
+    """File names (pattern) that code loads or runs: every name in a shell/jq file or in a Python module that
+    loads files (spec_from_file_location), else only names on a line that builds a path or runs a process (a
+    bare name in a message or an allow-list is not a dependency)."""
     if not path.endswith(".py") or LOADER.search(text):
-        return set(PY_FILE.findall(text))
-    return {base for line in text.splitlines() if LOAD_LINE.search(line) for base in PY_FILE.findall(line)}
+        return set(pattern.findall(text))
+    return {base for line in text.splitlines() if LOAD_LINE.search(line) for base in pattern.findall(line)}
 
 
 FROM_RE = re.compile(r"\bfrom\s+(\.*)([\w.]*)\s+import\s+(?:\(([^)]*)\)|([\w., ]+))")
@@ -183,24 +184,27 @@ def ast_imports(raw):
 
 @lru_cache(None)
 def library_graph():
-    """Reverse static edges over scripts/lib/* and every tracked Python module; scan each file once.
+    """Reverse static edges over scripts/lib/* and every tracked code file (.py/.sh/.jq); scan each file once.
 
-    An edge A -> B means A imports B by name, names B's file (spec_from_file_location, exec, a shell call) or,
-    for scripts/lib, references lib/<B>. Also returns the file names any tracked text file mentions, the code
-    file names other code mentions (comments stripped; this file's tables do not count) and the unparsable files."""
+    An edge A -> B means A imports B by name, names B's .py, .sh or .jq file where it loads or runs files
+    (spec_from_file_location, exec, a shell call: load_refs) or, for scripts/lib, references lib/<B>. Every code file
+    (.py/.sh/.jq) is a node, so a helper a script runs by name is followed to the script. Also returns the file
+    names any tracked text file mentions and the unparsable files."""
     files = inventory()
-    nodes = [p for p in files if p.startswith("scripts/lib/") or p.endswith(".py")]
-    aliases, by_name = {}, {}
+    nodes = [p for p in files if p.startswith("scripts/lib/") or p.endswith(SCANNED)]
+    aliases, by_name, helpers = {}, {}, {}
     for p in nodes:
+        base = p.rsplit("/", 1)[-1]
         if p.endswith(".py"):
             for name in module_names(p):
                 aliases.setdefault(name, set()).add(p)
-            base = p.rsplit("/", 1)[-1]
             if base != "__init__.py":
                 by_name.setdefault(base, set()).add(p)
+        elif p.endswith(SCANNED):
+            helpers.setdefault(base, set()).add(p)
     libs = [p for p in nodes if p.startswith("scripts/lib/")]
     reverse = {p: set() for p in nodes}
-    mentioned, code_named, broken = {}, {}, set()
+    mentioned, broken = {}, set()
     for path in files:
         if not path.endswith(MENTIONS):
             continue
@@ -210,11 +214,8 @@ def library_graph():
         text = raw.decode("utf-8", errors="replace")
         if path.endswith(SCANNED):
             text = code_only(path, text)
-        for base in set(PY_FILE.findall(text)) - {"__init__.py"}:  # a package loaded by path is unsure
+        for base in (set(PY_FILE.findall(text)) | set(HELPER_FILE.findall(text))) - {"__init__.py"}:  # a package loaded by path is unsure
             mentioned.setdefault(base, set()).add(path)
-        if path.endswith(SCANNED) and path != "tests/affected.py":
-            for base in set(CODE_FILE.findall(text)):
-                code_named.setdefault(base, set()).add(path)
         if not path.endswith(SCANNED) or path in NOT_IMPORTERS:
             continue
         imports = text_imports(text)
@@ -237,12 +238,14 @@ def library_graph():
             refs.update(p for p in candidates if p in reverse)
         for base in load_refs(path, text):
             refs.update(by_name.get(base, ()))
+        for base in load_refs(path, text, HELPER_FILE):
+            refs.update(helpers.get(base, ()))
         for ref in re.findall(r"\blib/([\w./-]+)", text):
             refs.update(p for p in libs if p == "scripts/lib/" + ref or p.startswith("scripts/lib/" + ref.rstrip("/") + "/"))
         for target in refs:
             if path != target:
                 reverse[target].add(path)
-    return reverse, mentioned, code_named, frozenset(broken)
+    return reverse, mentioned, frozenset(broken)
 
 
 def dynamic(path):
@@ -253,13 +256,13 @@ def dynamic(path):
 
 @lru_cache(None)
 def reaches(path):
-    """Every file a change to path can reach through static imports, path included; None when unsure.
+    """Every file a change to path can reach through static edges, path included; None when unsure.
 
-    Library modules and the Python modules they reach are followed to their importers. A dynamic library, a
-    library nobody imports, and a reached module that has no importer and that no other file names (loaded by a
-    computed path) are unsure."""
+    Library modules and the code files they reach are followed to their importers and callers. A dynamic
+    library, a library nobody imports, and a reached code file that has no importer and that no other file
+    names (loaded or run by a computed path) are unsure; a suite directly in tests/ has no caller (run-all runs it)."""
     graph, mentioned = library_graph()[:2]
-    if path not in graph or not (path.startswith("scripts/lib/") or path.endswith(".py")):
+    if path not in graph:
         return frozenset([path])
     todo, seen = [path], set()
     while todo:
@@ -270,7 +273,7 @@ def reaches(path):
         if current.startswith("scripts/lib/") and dynamic(current):
             return None
         importers = graph.get(current, ())
-        if (current != path and current.endswith(".py") and not importers
+        if (current != path and current.endswith(SCANNED) and not importers and tree(current) != ("tests/", False)
                 and not mentioned.get(current.rsplit("/", 1)[-1], set()) - {current}):
             return None
         todo.extend(importers)
@@ -314,14 +317,15 @@ def code_trees():
 
 @lru_cache(None)
 def named(path):
-    """Other code imports the file or names it: its edges are known, it is not tree data."""
-    graph, _, code_named, _ = library_graph()
-    return bool(graph.get(path)) or bool(code_named.get(path.rsplit("/", 1)[-1], set()) - {path})
+    """Other code imports, loads or runs the file: reaches() follows those edges, it is not tree data. A code file
+    only prose names (a message, a doc) has no edge and stays in its tree."""
+    return bool(library_graph()[0].get(path))
 
 
 @lru_cache(None)
 def owners(path):
-    """Code files whose tree holds a file (deleted ones too): every file but a named code file or an index doc."""
+    """Code files whose tree holds a file (deleted ones too): every file but a code file with a caller edge or an
+    index doc."""
     if "/" not in path or path in INDEX_DOCS or (path.endswith(SCANNED) and named(path)):
         return ()
     return tuple(p for root, code in code_trees().items() if in_tree(path, root) for p in code if p != path)
@@ -352,7 +356,7 @@ def always(path):
 def needed(files, suite):
     if any(always(f) for f in files) or suite in files:
         return True
-    if suite_patterns(suite) is None or library_graph()[3]:
+    if suite_patterns(suite) is None or library_graph()[2]:
         return True
     for f in files:
         reached = closure(f)
@@ -380,7 +384,7 @@ def hashes(suites):
         for p in reached:
             reached_by.setdefault(p, set()).add(f)
     for suite in suites:
-        if suite_patterns(suite) is None or "*" in EXTRA.get(suite, []) or library_graph()[3]:
+        if suite_patterns(suite) is None or "*" in EXTRA.get(suite, []) or library_graph()[2]:
             print(suite, "-")
             continue
         digest = hashlib.sha256(repr(versions).encode())

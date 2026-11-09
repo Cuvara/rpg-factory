@@ -96,12 +96,16 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          # relative multiline package-member import
          "scripts/lib/leaf2.py": "X = 1\n", "scripts/rpkg2/__init__.py": "from . import (\n    sub,\n)\n",
          "scripts/rpkg2/sub.py": "import leaf2\n", "scripts/rel2.py": "import rpkg2\n", "tests/rel2.test.sh": "python scripts/rel2.py\n",
-         "tests/sub.test.sh": "python scripts/rpkg2/sub.py\n"}
+         "tests/sub.test.sh": "python scripts/rpkg2/sub.py\n",
+         # a script runs helpers it names by subprocess (review r9): the helpers are named, their call edges are followed
+         "scripts/uix/plan.py": "import os, subprocess\nsubprocess.run(['bash', os.path.join(HERE, 'run-helper.sh')])\n"
+                                "subprocess.run(['jq', '-f', os.path.join(HERE, 'shape.jq')])\nALLOWED = {'listed.sh'}\n",
+         "scripts/uix/run-helper.sh": "true\n", "scripts/uix/listed.sh": "true\n", "scripts/uix/shape.jq": ".\n", "tests/uix.test.sh": "python scripts/uix/plan.py\n"}
 for path, text in files.items():
     p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
 m.ROOT = str(root)
 def reset():
-    for name in ("contents", "inventory", "library_graph", "reaches", "suite_patterns", "code_trees", "owners", "closure", "selects"):
+    for name in ("contents", "inventory", "library_graph", "reaches", "suite_patterns", "code_trees", "named", "owners", "closure", "selects"):
         getattr(m, name).cache_clear()
 def h(suite="tests/example.test.sh"):
     reset(); output = io.StringIO()
@@ -146,6 +150,10 @@ check("a README.md next to a reached script selects its suite", m.needed(["scrip
 check("a README.md next to a script skips an unrelated suite", not m.needed(["scripts/ui/README.md"], "tests/other.test.sh"))
 check("an unnamed helper .sh next to a reached script selects its suite", m.needed(["scripts/ui/helper.sh"], "tests/ui.test.sh"))
 check("an unnamed helper .sh next to a script skips an unrelated suite", not m.needed(["scripts/ui/helper.sh"], "tests/other.test.sh"))
+check("a named helper .sh a reached script runs selects its suite", m.needed(["scripts/uix/run-helper.sh"], "tests/uix.test.sh"))
+check("a named helper .jq a reached script runs selects its suite", m.needed(["scripts/uix/shape.jq"], "tests/uix.test.sh"))
+check("a helper only an allow-list names stays tree data and selects its suite", m.needed(["scripts/uix/listed.sh"], "tests/uix.test.sh"))
+check("a named helper .sh skips an unrelated suite", not m.needed(["scripts/uix/run-helper.sh"], "tests/other.test.sh"))
 check("the scripts/ index doc is named-only (does not select every suite)", not m.needed(["scripts/README.md"], "tests/example.test.sh"))
 check("a deleted data file next to a reached script selects its suite", m.needed(["scripts/ui/data/gone.json"], "tests/ui.test.sh"))
 check("data anywhere in a non-scripts project selects its suite", m.needed(["testlab/scenarios/a.json"], "tests/lab.test.sh"))
@@ -167,6 +175,13 @@ ui_before = h("tests/ui.test.sh")
 (root / "scripts/ui/helper.sh").write_text("false\n")
 check("hash changes on an unnamed helper .sh next to a reached script", ui_before != h("tests/ui.test.sh"))
 check("hash of an unrelated suite ignores that helper", other_before == h("tests/other.test.sh"))
+uix_before, other_before = h("tests/uix.test.sh"), h("tests/other.test.sh")
+(root / "scripts/uix/run-helper.sh").write_text("false\n")
+check("hash changes on a named helper .sh a reached script runs", uix_before != h("tests/uix.test.sh"))
+uix_before = h("tests/uix.test.sh")
+(root / "scripts/uix/shape.jq").write_text(".a\n")
+check("hash changes on a named helper .jq a reached script runs", uix_before != h("tests/uix.test.sh"))
+check("hash of an unrelated suite ignores those helpers", other_before == h("tests/other.test.sh"))
 (root / "scripts/README.md").write_text("# scripts 2\n")
 check("hash ignores the scripts/ index doc", example_before == h())
 (root / "scripts/lib/leaf.py").write_text("X = 2\n")
