@@ -248,6 +248,72 @@ else
   bad "parallel-work: $pw missing"
 fi
 
+# plugin agents (agents/*.md): read-only by construction. Frontmatter `tools` must list no write-capable tool
+# (a missing `tools` grants all of them) and `model` must be a value of registry pipeline.models.agent_tool_alias.
+agent_lint() { # <agents dir> <registry.json>: one line per finding
+  python3 -B - "$1" "$2" <<'PYAGENT'
+import glob, json, os, re, sys
+adir, regf = sys.argv[1], sys.argv[2]
+aliases = set(json.load(open(regf, encoding="utf-8"))["pipeline"]["models"]["agent_tool_alias"].values())
+WRITE = {"Write", "Edit", "MultiEdit", "NotebookEdit", "Agent", "Task"}
+for f in sorted(glob.glob(os.path.join(adir, "*.md"))):
+    name = os.path.basename(f)
+    lines = open(f, encoding="utf-8").read().splitlines()
+    end = lines.index("---", 1) if lines[:1] == ["---"] and "---" in lines[1:] else 0
+    fmt = lines[1:end]
+    if not end:
+        print(f"{name}: no frontmatter"); continue
+    def field(key):  # inline value, or the `- item` lines under a bare key
+        for i, l in enumerate(fmt):
+            if l.startswith(key + ":"):
+                v = l[len(key) + 1:].strip()
+                if v:
+                    return v
+                items = []
+                for n in fmt[i + 1:]:
+                    if not n.lstrip().startswith("- "):
+                        break
+                    items.append(n.strip()[2:].strip())
+                return ",".join(items)
+        return None
+    tools, model = field("tools"), field("model")
+    if tools is None:
+        print(f"{name}: tools missing (missing means every tool, Write and Agent included)")
+    else:
+        listed = {re.sub(r"\(.*", "", t).strip().strip("\"'[]") for t in re.split(r",", tools)}
+        for t in sorted(listed & WRITE):
+            print(f"{name}: tools lists write-capable tool {t}")
+    if model is None:
+        print(f"{name}: model missing")
+    elif model.strip("\"'") not in aliases:
+        print(f"{name}: model {model} is not a pipeline.models.agent_tool_alias value ({', '.join(sorted(aliases))})")
+PYAGENT
+}
+agents_out=$(agent_lint "$ROOT/agents" "$ROOT/registry.json"); agents_rc=$?
+if [ $agents_rc -ne 0 ]; then bad "plugin agents: lint crashed (rc=$agents_rc)"
+elif [ -z "$agents_out" ]; then ok; else bad "plugin agents:"; echo "$agents_out" | sed 's/^/      /' | head -20; fi
+# mutation: a valid agent passes, each broken one is reported (throwaway fixtures, the shipped tree is untouched)
+agent_tmp=$(mktemp -d); mkdir -p "$agent_tmp/good" "$agent_tmp/bad"
+good_alias=$(jq -r '.pipeline.models.agent_tool_alias | to_entries[0].value' "$ROOT/registry.json")
+mk_agent() { printf -- '---\nname: x\ndescription: d\n%s\n---\nbody\n' "$2" > "$1"; }
+mk_agent "$agent_tmp/good/a.md" "tools: Read, Grep, Glob, Bash
+model: $good_alias"
+[ -z "$(agent_lint "$agent_tmp/good" "$ROOT/registry.json")" ] && ok || bad "agent lint: flags a read-only agent with a valid model"
+n=0
+for broken in "tools: Read, Write
+model: $good_alias" "tools: Read, Edit
+model: $good_alias" "tools: Read, Agent
+model: $good_alias" "tools: Read, Agent(general-purpose)
+model: $good_alias" "tools:
+  - Read
+  - NotebookEdit
+model: $good_alias" "model: $good_alias" "tools: Read, Grep
+model: not-a-model" "tools: Read, Grep"; do
+  n=$((n + 1)); mk_agent "$agent_tmp/bad/m$n.md" "$broken"
+  [ -n "$(agent_lint "$agent_tmp/bad" "$ROOT/registry.json" | grep "^m$n.md:")" ] && ok || bad "agent lint: mutation $n ($(head -1 <<<"$broken")) not reported"
+done
+rm -rf "$agent_tmp"
+
 # the budget warning itself: silent at the budget, a WARN line (never a failure) above it
 [ -z "$(core_budget "$CORE_BUDGET")" ] && [[ "$(core_budget $((CORE_BUDGET + 1)))" == "WARN  factory-core: SKILL.md has $((CORE_BUDGET + 1)) lines"* ]]   && ok || bad "factory-core line budget: WARN line missing or wrong above $CORE_BUDGET lines"
 
