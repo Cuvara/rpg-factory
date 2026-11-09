@@ -7,12 +7,42 @@
 #    (`git show --name-only` -> --paths). They prove Factory would have routed work that
 #    actually happened. Skipped (not failed) when a repo or commit is absent.
 #
-# Usage: tests/routing.test.sh [--no-history]
+# Usage: tests/routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]
+# Cases: tasks (task scenarios), task-scope (fixture workspace), history (replayed commits), cli-selftest.
+# case-map: tasks registry/engineering/*
+# case-map: task-scope registry/domains/*
+# Routing code (scripts/factory-context.sh, scripts/lib/context.py, resolve.jq) and registry.json have no map: ALL is the safe fallback.
 set -uo pipefail
+CASES='tasks task-scope history cli-selftest'
+usage() {
+  printf '%s
+' 'Usage: routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'     '--no-history skips the replay of real commits (history scenarios print SKIP).'
+}
+history=true; SELECTED=; list_cases=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --no-history) history=false; shift ;;
+    --list-cases) list_cases=1; shift ;;
+    --case|--only) [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }; SELECTED+=" $2"; shift 2 ;;
+    --case=*|--only=*) [ -n "${1#*=}" ] || { usage >&2; exit 2; }; SELECTED+=" ${1#*=}"; shift ;;
+    *) printf 'Unknown argument: %s
+' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before any fixture or temp dir exists.
+SELECTED="${SELECTED//,/ }"
+for selected in $SELECTED; do
+  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s
+' "$selected" >&2; exit 2; }
+done
+if [ "$list_cases" = 1 ]; then printf '%s
+' $CASES; exit 0; fi
+all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
+has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
 CTX="$ROOT/scripts/factory-context.sh"
-history=true; [ "${1:-}" = "--no-history" ] && history=false
 pass=0; fail=0; skip=0
 replay_cached=0; replay_ran=0; replay_cache=""
 
@@ -91,6 +121,7 @@ for old in sorted(others, key=os.path.getmtime, reverse=True)[3:]:
   fi
 }
 
+if has_case tasks; then
 echo "== task scenarios"
 assert "tick-rate knob -> server-realtime leads, server-ops leg, server-knobs contract" server \
   "$(lead server-realtime) and $(leg server-ops) and $(contract server-knobs)" \
@@ -212,6 +243,8 @@ if grep -q '^- dotnet-gameserver: tech (supporting) - .*(server-realtime)' <<<"$
   pass=$((pass + 1)); echo "PASS  --explain marks tech skills as supporting / unused"
 else fail=$((fail + 1)); echo "FAIL  --explain tech rows: $(grep -E '^- (dotnet-gameserver|go-backend):' <<<"$out")"; fi
 
+fi
+if has_case task-scope; then
 echo "== task scope (throwaway fixture workspace)"
 . "$ROOT/scripts/lib/compat.sh"
 FX="$(mktemp_win)" && [ -d "$FX" ] && trap 'rm -rf "$FX"' EXIT
@@ -284,6 +317,8 @@ out=$(fctx "$FW" --repo server --json --paths backend/gateway/server/server.go -
 fexpect "--paths a --lead=x: --flag=value ends the path list and applies" \
   'jq -e "([.repos[0].files[].path] == [\"backend/gateway/server/server.go\"]) and .repos[0].routing.override" <<<"$out" >/dev/null'
 
+fi
+if has_case history; then
 echo "== history (real commits, replayed read-only)"
 if $history; then
   # Conservative dependency closure: context imports other lib modules and may
@@ -329,6 +364,22 @@ history "verify pinned the wrong cluster cert"   server rpg-mmo-server       437
 history "toolkit submodule auto-bump (#137)"  client IndieRPGMMOAdventure  285a5a2 "(.routing.lead == \"pin-bump\")"
 history "toolkit v5.7.0 gitlink + CHANGELOG"  client IndieRPGMMOAdventure  525cf5b "(.routing.lead == \"pin-bump\") and $(nolead client-integration)"
 echo "history replay: $replay_cached cached / $replay_ran replayed"
+fi
+
+# The case selection itself: --help exits 0, an unknown argument or case exits 2 before any run, and a subset runs
+# fewer assertions than the full run.
+if has_case cli-selftest; then
+  self="${BASH_SOURCE[0]}"
+  bash "$self" --help >/dev/null 2>&1 && { pass=$((pass + 1)); echo "PASS  --help exits 0"; } || { fail=$((fail + 1)); echo "FAIL  --help did not exit 0"; }
+  bash "$self" --no-such-option >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown argument exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown argument exited $rc, want 2"; }
+  bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown case exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown case exited $rc, want 2"; }
+  n_one=$(bash "$self" --no-history --case task-scope 2>&1 | sed -n 's/^routing tests: \([0-9]*\) run.*/\1/p')
+  # in a full run the parent has run more assertions than the one case
+  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail + skip)) ]; }; then pass=$((pass + 1)); echo "PASS  --case task-scope runs ${n_one} assertions, fewer than a full run"
+  else fail=$((fail + 1)); echo "FAIL  --case task-scope ran ${n_one:-?} assertions; the full run has $((pass + fail + skip))"; fi
+fi
 
 total=$((pass + fail + skip))
 echo "routing tests: $total run, $pass passed, $fail failed, $skip skipped"

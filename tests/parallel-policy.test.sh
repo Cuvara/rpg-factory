@@ -6,7 +6,44 @@
 # One minimal copy (the tracked and untracked files minus what neither the lint nor its tools read), one cheap copy
 # of only the lint inputs per mutation, and the relevant lint sections run concurrently (PARALLEL_POLICY_JOBS, default 4); results print in
 # the order below. A mutation command that itself fails is a FAIL (the copy is writable even for read-only sources).
+# Cases are the groups below; --case NAMES runs only those (tests/affected.py maps changed files to cases). The plugin copy
+# is built only for the cases that mutate one (lint-mutations, which-model, qa-tiers).
+# case-map: orca-wait tests/orca-wait.test.sh scripts/orca-wait.sh
+# case-map: lint-mutations tests/skills-lint.sh scripts/* skills/* docs/*
+# case-map: policy-markers skills/factory-core/references/parallel-work.md
+# case-map: which-model skills/* docs/* *.md
+# case-map: qa-tiers skills/* docs/* *.md
+# case-map: orca-first skills/factory-core/references/parallel-work.md
+# case-map: agents-roles AGENTS.md
+# case-map: plan-paths scripts/lib/plan_paths.py
+# case-map: portable-plans docs/plans/*
+# parallel-work.md is read by every policy case; the shared libs, registry.json and this file's other inputs have no map: ALL.
 set -uo pipefail
+CASES='orca-wait lint-mutations policy-markers which-model qa-tiers orca-first agents-roles plan-paths portable-plans cli-selftest'
+usage() {
+  printf '%s\n' 'Usage: parallel-policy.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
+    'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
+}
+SELECTED=; list_cases=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --list-cases) list_cases=1; shift ;;
+    --case|--only) [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }; SELECTED+=" $2"; shift 2 ;;
+    --case=*|--only=*) [ -n "${1#*=}" ] || { usage >&2; exit 2; }; SELECTED+=" ${1#*=}"; shift ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before the plugin copy or any temp dir exists.
+SELECTED="${SELECTED//,/ }"
+for selected in $SELECTED; do
+  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+done
+if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
+all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
+has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
+needs_plugin_copy() { has_case lint-mutations || has_case which-model || has_case qa-tiers; }
+PW=skills/factory-core/references/parallel-work.md
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
@@ -18,19 +55,24 @@ copy_files() {
   (cd "$1" && while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done | tar -cf - -T - | tar -xf - -C "$2") \
     && chmod -R u+w "$2"
 }
+if needs_plugin_copy; then
 # not read by tests/skills-lint.sh or the scripts it runs (touchpoints, citations --offline, english-only, check-registry)
 (cd "$ROOT" && git ls-files -co --exclude-standard) | grep -vE '^(testlab|templates|\.github|changelog\.d)/|^CHANGELOG\.md$' \
   | copy_files "$ROOT" "$P"
+fi
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "PASS  $1"; }
 no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -15 | sed 's/^/      /'; }
 
+if has_case orca-wait; then
 # Keep the waiter standalone while including it in run-all and CI through this suite.
 wait_out=$(bash "$ROOT/tests/orca-wait.test.sh" 2>&1); wait_rc=$?
 if [ "$wait_rc" -eq 0 ]; then
   ok "$(tail -n 1 <<<"$wait_out")"
 else no "orca-wait suite (rc=$wait_rc)" "$(tail -n 15 <<<"$wait_out")"; fi
 
+fi
+if has_case lint-mutations; then
 # regression: a read-only file in the source tree still mutates in the copy (a temp source, never the real worktree)
 RO_SRC="$TMP/ro-src"; RO_DST="$TMP/ro-dst"; RO_F=skills/client-integration/SKILL.md
 mkdir -p "$RO_SRC/${RO_F%/*}" "$RO_DST"; cp "$P/$RO_F" "$RO_SRC/$RO_F"; chmod a-w "$RO_SRC/$RO_F"
@@ -39,7 +81,7 @@ ro_err=$( (cd "$RO_DST" && echo 'zz-ro-mutation' >> "$RO_F") 2>&1 ); ro_rc=$?
 if [ $ro_rc -eq 0 ] && tail -n 1 "$RO_DST/$RO_F" | grep -qx 'zz-ro-mutation'; then ok "read-only source file still mutates in the copy"
 else no "read-only source file did not mutate in the copy (rc=$ro_rc)" "$ro_err"; fi
 chmod -R u+w "$RO_SRC"
-PW=skills/factory-core/references/parallel-work.md
+# (PW is defined with the helpers above)
 
 # Extract the production checks, rather than duplicate their implementation. Fail closed if
 # their section boundaries move: a missing section must never make a mutation pass.
@@ -149,6 +191,8 @@ mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops:
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 grade
 
+fi
+if has_case policy-markers; then
 # Two-level rules (parallel-work.md is their only copy) are machine-checkable, not matched in free prose: each rule
 # is a marker comment `<!-- policy:<id> -->` on its own line, present exactly once, whose next non-empty line is the
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
@@ -278,6 +322,8 @@ s_mutate "step 4 child exception dropped" "section 10 step 4 lacks the child exc
 s_mutate "step 4 says implement never commits" "retired shortcut phrasing 'always starts a sub-session that does not commit'" \
   'sed -i "s/^   \`--phase implement\` in the shared placement starts a sub-session that does not commit/   \`--phase implement\` always starts a sub-session that does not commit/" "$F"'
 
+fi
+if has_case which-model; then
 # The "Which model" table (section 10) is the only copy of the routing rule: under policy:which-model it keeps one row
 # per role or kind, at most 8 table lines, the code kinds on codex (never claude), next to the token rule and the
 # availability fallback; no other Markdown file in the tree carries its header.
@@ -370,6 +416,8 @@ w_mutate "which-model table copied into docs" "which-model table copied outside 
 w_mutate "which-model table copied into a skill" "which-model table copied outside $PW: skills/client-integration/SKILL.md" \
   'printf "\n| Role or kind | Model | Registry |\n|---|---|---|\n| code | codex | x |\n" >> skills/client-integration/SKILL.md'
 
+fi
+if has_case qa-tiers; then
 # QA tiers stay under their marker in section 10, with one canonical table.
 # Inspect the whole tree for copies, including untracked Markdown.
 qa_tiers() {
@@ -452,6 +500,8 @@ q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
   'sed -n "/^<!-- policy:qa-tiers -->$/,/^$/p" "$F" > skills/client-integration/SKILL.md'
 
+fi
+if has_case orca-first; then
 # Section 5 keeps the Orca-first runner rule: inside Orca, planner/dispatch refuse --runner agent without
 # --orca-unavailable, and the reason (Agent-tool task leads are invisible in Orca) stays with it. Phrases are
 # matched in section 5 only, with its lines joined. Prints each problem; rc 1.
@@ -486,6 +536,8 @@ o_mutate "refusal softened to a preference" "lacks the Orca-first rule: 'refuse 
 o_mutate "rule moved out of section 5" "lacks the Orca-first rule: 'ORCA_WORKTREE_ID'" \
   'sed -i "/^- \*\*Orca first inside Orca\.\*\*/,/^  Agent-tool task leads/d" "$F"'
 
+fi
+if has_case agents-roles; then
 # AGENTS.md (the Codex entry) never makes Codex the run lead, and a task lead only when Claude is unavailable
 # (policy:task-lead-claude); Codex is the default implementer of the code kinds. Prints each problem; rc 1.
 AGENTS_REQUIRED=('Codex leads a task only when Claude is unavailable' 'as a session a task lead starts'
@@ -523,6 +575,8 @@ a_mutate "Claude task-lead rule dropped" "AGENTS.md lacks: 'Codex leads a task o
 a_mutate "Codex default implementer dropped" "AGENTS.md lacks: 'default implementer for the code, test, fix, refactor and generated kinds'" \
   'sed -i "s/Codex is the default implementer for the code, test, fix, refactor and generated kinds/Codex implements when asked/" "$F"'
 
+fi
+if has_case plan-paths; then
 # Portable plan paths: no subprocesses or changes to the real workspace.
 paths_out=$(python3 -B - "$ROOT" "$TMP" <<'PY'
 import os
@@ -573,6 +627,8 @@ if [ "$paths_rc" -eq 0 ]; then
   while IFS= read -r label; do ok "plan_paths: $label"; done <<<"$paths_out"
 else no "plan_paths unit cases (rc=$paths_rc)" "$paths_out"; fi
 
+fi
+if has_case portable-plans; then
 # Check every file, including untracked plans; use the same checker on injected copies.
 portable_plans() {
   python3 -B - "$1" <<'PY'
@@ -606,5 +662,20 @@ for machine_path in 'C:/workspace/repo' 'C:\workspace\repo' '/mnt/c/workspace/re
   else no "docs/plans mutation was not rejected: $machine_path (rc=$portable_rc)" "$portable_out"; fi
 done
 
+fi
+# The case selection itself: --help exits 0, an unknown argument or case exits 2 before any run, and a subset runs
+# fewer checks than the full run.
+if has_case cli-selftest; then
+  self="${BASH_SOURCE[0]}"
+  bash "$self" --help >/dev/null 2>&1 && ok "--help exits 0" || no "--help did not exit 0"
+  bash "$self" --no-such-option >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && ok "unknown argument exits 2" || no "unknown argument exited $rc, want 2"
+  bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && ok "unknown case exits 2" || no "unknown case exited $rc, want 2"
+  n_one=$(bash "$self" --case agents-roles 2>&1 | sed -n 's/^parallel-policy: \([0-9]*\) checks.*/\1/p')
+  # in a full run the parent has run more checks than the one case
+  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then ok "--case agents-roles runs $n_one checks, fewer than a full run"
+  else no "--case agents-roles ran ${n_one:-?} checks; the full run has $((pass + fail))"; fi
+fi
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
