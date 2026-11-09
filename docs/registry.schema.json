@@ -469,6 +469,55 @@
             }
           },
           "additionalProperties": false
+        },
+        "subagents": {
+          "type": "object",
+          "description": "In-session subagent rules (scripts/lib/subagent_policy.py; policy: skills/delivery/references/delivery.md section 8 'In-session subagents'). scripts/check-registry.sh checks the models against pipeline.models.scope and agent_tool_alias.",
+          "required": ["description", "forbidden", "roles", "models"],
+          "properties": {
+            "description": {"type": "string"},
+            "forbidden": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "roles": {
+              "type": "object",
+              "required": ["run_lead", "planner", "lead", "implement", "review", "qa"],
+              "properties": {
+                "run_lead": {"$ref": "#/$defs/subagent_role"},
+                "planner": {"$ref": "#/$defs/subagent_role"},
+                "lead": {"$ref": "#/$defs/subagent_role"},
+                "implement": {"$ref": "#/$defs/subagent_role"},
+                "review": {"$ref": "#/$defs/subagent_role"},
+                "qa": {"$ref": "#/$defs/subagent_role"}
+              },
+              "additionalProperties": false
+            },
+            "models": {
+              "type": "object",
+              "required": ["claude", "codex"],
+              "properties": {
+                "claude": {
+                  "type": "object",
+                  "required": ["model", "alias", "agent"],
+                  "properties": {
+                    "model": {"type": "string", "minLength": 1},
+                    "alias": {"enum": ["opus", "sonnet", "haiku"]},
+                    "agent": {"type": "string", "minLength": 1}
+                  },
+                  "additionalProperties": false
+                },
+                "codex": {
+                  "type": "object",
+                  "required": ["model", "effort"],
+                  "properties": {
+                    "model": {"type": "string", "minLength": 1},
+                    "effort": {"type": "string", "minLength": 1}
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -808,6 +857,17 @@
     }
   },
   "$defs": {
+    "subagent_role": {
+      "type": "object",
+      "required": ["access", "max_parallel", "when"],
+      "properties": {
+        "access": {"enum": ["none", "read"]},
+        "max_parallel": {"type": "integer", "minimum": 0},
+        "when": {"type": "string", "minLength": 1},
+        "own_model": {"type": "boolean", "description": "true: the subagent runs on the reviewer's own model"}
+      },
+      "additionalProperties": false
+    },
     "agent_profiles": {
       "type": "object",
       "required": [
