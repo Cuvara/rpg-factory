@@ -101,6 +101,24 @@ done
 grep -q '^\[ "\${BASH_SOURCE\[0\]}" != "\$0" \] && return 0' "$ROOT/tests/run-all.sh" \
   && good "sourcing run-all.sh stops after the scheduler" || no "run-all.sh has no source guard after the scheduler"
 
+# a case subset keeps its SLOW slot at -j > 1: of two queued suites the SLOW one starts first although it was queued last
+cat > "$TMP/subset-slow.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 2
+SLOW="tests/zz-subset.sh"
+CASE_SUITES=("tests/zz-subset.sh"); CASE_LISTS=("alpha")
+export X
+run first bash -c 'echo first >> "$X/start"; sleep 3' tests/zz-first.sh
+run mid bash -c 'echo mid >> "$X/start"; sleep 0.5' tests/zz-mid.sh
+run tail bash -c 'echo tail >> "$X/start"' tests/zz-tail.sh
+run subset bash -c 'echo subset >> "$X/start"; echo "args $*" >> "$X/start"' tests/zz-subset.sh
+drain
+PLAN
+X="$TMP/subset-slow"; rm -rf "$X"; mkdir -p "$X"
+out=$(X="$X" ROOT_UNDER_TEST="$ROOT" timeout 90 bash "$TMP/subset-slow.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(grep -vc '^args' "$X/start" | tr -d ' ')" = 4 ] && [ "$(grep -v '^args' "$X/start" | tr '\n' ' ')" = 'first mid subset tail ' ] \
+  && grep -q '^PASS  subset (cases alpha)' <<<"$out" && grep -qx 'args --case alpha' "$X/start" \
+  && good "a case subset keeps its SLOW start slot at -j 2" || no "subset SLOW slot (rc=$rc): $(tr '\n' ' ' < "$X/start")" "$out"
+
 cat > "$TMP/dead.sh" <<'PLAN'
 . "$ROOT_UNDER_TEST/tests/run-all.sh" -j 3
 die() { echo 'buffered before death'; kill -9 "$BASHPID"; }
@@ -165,6 +183,8 @@ echo "${PARTIAL_LINE:-SKIP  tool not on PATH}"
 for s in blockrun ws orphan; do printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$RUN_LOG"\n' "$s" > "$TMP/repo/tests/$s.sh"; done
 cat > "$TMP/hashes.py" <<'PY'
 import os, sys
+if os.environ.get('AFF_CALLS') and sys.argv[1] in ('select', 'select-many', 'cases'):
+    with open(os.environ['AFF_CALLS'], 'ab') as fh: fh.write((sys.argv[1] + '\n').encode())   # LF on Windows too
 if sys.argv[1] == 'hashes':
     for suite in sys.argv[2:]:
         print(suite, '-' if suite.endswith('never.sh') else os.environ.get('INPUT_HASH', 'a'*64))
@@ -175,10 +195,10 @@ elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] in os.environ.get('SELEC
 elif sys.argv[1] == 'select-many':
     print('\n'.join(s for s in sys.argv[3:] if s in os.environ.get('SELECT', 'tests/b.sh').split(',')))
 elif sys.argv[1] == 'cases':
-    for suite in sys.argv[3:]:
-        print(suite, os.environ.get('CASE_SELECT', 'ALL') if suite == 'tests/b.sh' else 'ALL')
-if os.environ.get('AFF_CALLS') and sys.argv[1] in ('select', 'select-many', 'cases'):
-    with open(os.environ['AFF_CALLS'], 'ab') as fh: fh.write((sys.argv[1] + '\n').encode())   # LF on Windows too
+    if os.environ.get('CASES_FAIL'): sys.exit(1)
+    for suite in sys.argv[3:]:   # like affected.py: one line per selected suite only
+        if suite in os.environ.get('SELECT', 'tests/b.sh').split(','):
+            print(suite, os.environ.get('CASE_SELECT', 'ALL') if suite == 'tests/b.sh' else 'ALL')
 PY
 cat > "$TMP/cache-plan.sh" <<'PLAN'
 fixture=$1; shift
@@ -188,7 +208,7 @@ runall_prepare; rc=$?
 [ "$rc" = 10 ] && exit 0
 [ "$rc" = 0 ] || exit "$rc"
 [ -z "${HOLD_MARK:-}" ] || {
-  touch "$HOLD_MARK"; hold_until=$((SECONDS + 90))
+  touch "$HOLD_MARK"; hold_until=$((SECONDS + 240))
   while [ ! -f "$HOLD_MARK.release" ]; do
     [ "$SECONDS" -lt "$hold_until" ] || { echo 'fixture hold timed out'; exit 1; }
     sleep 0.1
@@ -606,14 +626,20 @@ live_case '--only-suites listing them runs them' 'a block inline live ' '5 0 1' 
 SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh live_case '--affected selecting them runs them' 'b block inline live ' '5 0 1' --affected
 live_case '--affected not selecting them skips them' 'b ' '2 0 4' --affected
 live_case 'a full run runs them' 'a b block inline live ' '6 0 0'
-# --affected asks affected.py once for suites and once for their cases, at -j 1 and -j 3 alike
+# --affected asks affected.py once (`cases`: the selected suites and their cases), at -j 1 and -j 3 alike
 for j in 1 3; do
   reset_cache; : > "$TMP/aff-calls"
   out=$(AFF_CALLS="$TMP/aff-calls" SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh WITH_LIVE=1 cache_plan --no-reuse -j "$j" --affected); rc=$?
   calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
-  [ "$rc" = 0 ] && [ "$calls" = 'select-many cases ' ] && [ "$log" = 'b block inline live ' ] && grep -qx 'counts 5 0 1' <<<"$out" \
-    && good "--affected calls affected.py select-many and cases once each (-j $j)" || no "--affected affected.py calls (-j $j): '$calls' log '$log'" "$out"
+  [ "$rc" = 0 ] && [ "$calls" = 'cases ' ] && [ "$log" = 'b block inline live ' ] && grep -qx 'counts 5 0 1' <<<"$out" \
+    && good "--affected calls affected.py once, with cases (-j $j)" || no "--affected affected.py calls (-j $j): '$calls' log '$log'" "$out"
 done
+# a failed `cases` call falls back to asking affected.py per suite (select), and the selection stays the same
+reset_cache; : > "$TMP/aff-calls"
+out=$(AFF_CALLS="$TMP/aff-calls" CASES_FAIL=1 cache_plan --no-reuse --affected); rc=$?
+calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
+[ "$rc" = 0 ] && [[ "$calls" == 'cases select '* ]] && [ "$log" = 'b ' ] \
+  && good "--affected falls back to per-suite select when the cases call fails" || no "--affected cases fallback: '$calls' log '$log'" "$out"
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh

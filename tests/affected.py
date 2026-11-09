@@ -7,7 +7,8 @@
   affected.py select-many FILE SUITE...
                                     print each SUITE that must run (same rule as select), one per line; the
                                     import graph is built once (run-all --affected calls it once per run)
-  affected.py cases FILE SUITE...   print selected suites and their affected cases, or ALL when uncertain
+  affected.py cases FILE SUITE...   print each selected suite and its affected cases, or ALL when uncertain: the case map
+                                    must name every file the suite selects in the import closure of a changed file
   affected.py hashes SUITE...       print suite and input hash (or '-' when reuse is unsafe)
 
 A suite runs when one of these holds (anything unsure runs):
@@ -429,13 +430,17 @@ def affected_cases(files, suite):
     for path in files:
         if not needed([path], suite):
             continue
-        if closure(path) is None:
+        reached = closure(path)
+        if reached is None:
             return "ALL"
-        matched = {name for name, patterns in mapping.items() for pattern in patterns
-                   if fnmatch.fnmatchcase(path, pattern + "*" if pattern.endswith("/") else pattern)}
-        if not matched:
-            return "ALL"
-        selected.update(matched)
+        # a shared module reaches every file that imports it: each reached file the suite selects must be mapped
+        # (the suite itself is reached through its own named scripts and says nothing about a case)
+        for hit_path in sorted(p for p in reached if p != suite and selects(p, suite)):
+            matched = {name for name, patterns in mapping.items() for pattern in patterns
+                       if fnmatch.fnmatchcase(hit_path, pattern + "*" if pattern.endswith("/") else pattern)}
+            if not matched:
+                return "ALL"
+            selected.update(matched)
     return ",".join(sorted(selected)) if selected else "ALL"
 
 

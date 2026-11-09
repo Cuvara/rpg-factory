@@ -83,7 +83,7 @@ _note() { echo "$1"; }
 # queued and started in the background (at most N at a time: live-lane suites first, one at a time, one slot for the
 # earliest queued suite, then the SLOW ones, then the rest in order; output buffered in $QD). Every line - suite results and inline checks alike - waits
 # in the queue until the lines before it are out, so the output order, the count and the exit code are those of -j 1.
-QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QL=(); QA=(); QP=(); PEND=()
+QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QN=(); QL=(); QA=(); QP=(); PEND=()
 # the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
 SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
@@ -136,10 +136,10 @@ flush() { # print the queue up to the first suite still running
       read -r st secs < "$QD/$i.res"
       if [ "$st" = 137 ] && grep -q 'suite worker died without a result' "$QD/$i.out"; then _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"
       elif [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
-      elif [ "$st" = 0 ]; then suite_cache_pass "${QS[i]}" "$(cat "$QD/$i.out")"; _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
+      elif [ "$st" = 0 ]; then suite_cache_pass "${QN[i]}" "$(cat "$QD/$i.out")"; _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
       rm -f "$QD/$i.res" "$QD/$i.out"
     else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
-    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
+    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QN[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
   done
 }
 running() { # sets nrun (started, not ended), nlive (of them in the live lane), nord (started as the in-order one)
@@ -215,14 +215,16 @@ _run() {
   case " $* " in *" --no-history "*|*" RPG_FACTORY_WORKSPACE="*) cache_suite="" ;; esac
   [ -z "$case_list" ] || name="$name (cases $case_list)"
   if [ -z "$post" ] && suite_cache_hit "$cache_suite"; then ok "$name (reused $s inputs $suite_hash)"; return; fi
-  if [ -n "$case_list" ]; then set -- "$@" --case "$case_list"; cache_suite=""; fi
+  # a case subset keeps its suite name (SLOW-first scheduling) but publishes no PASS record: it proved only some cases
+  local publish=$cache_suite
+  if [ -n "$case_list" ]; then set -- "$@" --case "$case_list"; publish=""; fi
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
     if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
     t0=$(date +%s)
-    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$cache_suite" "$out"; ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
     return
   fi
-  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
+  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QN[n]=$publish; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
   pump; flush
 }
 # Classify conservatively: existing bytes must stay intact, and insertions must be whole new sections.
@@ -344,17 +346,18 @@ list_runnable() { # file: list_suites without the release-only suites unless --r
     printf '%s\n' "$s"
   done <<<"$listed"
 }
-# affected_select <suite...>: one affected.py call answers suite_selected for every candidate (the import graph is
-# built once per run, before any job forks); a name outside the candidates, or a failed call, asks per suite.
+# affected_select <suite...>: one affected.py `cases` call (the import graph is built once per run, before any job
+# forks) answers suite_selected for every candidate - its lines are exactly the selected suites - and gives each
+# one's cases; a name outside the candidates, or a failed call, asks per suite.
 affected_select() {
   local picked suite cases
-  if picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" select-many "$AFF" "$@"); then
-    AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'"${picked//$'\r'/}"$'\n'
-  fi
   picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" cases "$AFF" "$@") || return 0
+  AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'
   while read -r suite cases; do
     suite=${suite%$'\r'}; cases=${cases%$'\r'}
-    [ -n "$suite" ] && [ -n "$cases" ] && [ "$cases" != ALL ] || continue
+    [ -n "$suite" ] || continue
+    AFF_PICKED+="$suite"$'\n'
+    [ -n "$cases" ] && [ "$cases" != ALL ] || continue
     CASE_SUITES+=("$suite"); CASE_LISTS+=("$cases")
   done <<<"$picked"
 }
@@ -513,7 +516,9 @@ test_slot() {
         [ -f "$LOCK/pid" ] || age=$(dir_age "$LOCK") || age=0
         if [ -f "$LOCK/pid" ] || [ "$age" -ge 10 ]; then
           reclaim_stale "test slot $i"
-          stale_pid=$(cat "$LOCK/pid" 2>/dev/null); stale_ident=$(dir_ident "$LOCK")
+          # dir_ident starts a python process: only for a holder that looks dead, not on every poll of a live one
+          stale_pid=$(cat "$LOCK/pid" 2>/dev/null); stale_ident=""
+          lock_alive || stale_ident=$(dir_ident "$LOCK")
           if [ -n "$stale_ident" ] && ! lock_alive && mkdir "$LOCK/reclaim" 2>/dev/null; then
             printf '%s\n' "$$" > "$LOCK/reclaim/pid"
             if lock_still_stale "$stale_pid" "$stale_ident"; then
@@ -534,7 +539,7 @@ test_slot() {
     done
     if ! $waited; then echo "run-all: waiting for a test slot ($count in use: $holders)"; waited=true; fi
     $no_wait && return 3
-    sleep 0.2
+    sleep 1
   done
 }
 full_reuse() {

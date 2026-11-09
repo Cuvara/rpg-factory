@@ -235,6 +235,10 @@ files = {
     "tests/bad.sh": "# case-map: INVALID scripts/tool/a.py\npython scripts/tool/a.py\n",
     "scripts/tool/a.py": "pass\n", "scripts/tool/b.py": "pass\n", "scripts/tool/c.py": "pass\n",
     "scripts/other/x.py": "pass\n",
+    # a shared module imported by the scripts of two cases (and one only a second suite maps in part)
+    "scripts/lib/shared.py": "VALUE = 1\n", "scripts/shx/x.py": "import shared\n", "scripts/shx/y.py": "import shared\n",
+    "tests/shared.sh": "# case-map: one scripts/shx/x.py\n# case-map: two scripts/shx/y.py\n# case-map: one scripts/lib/shared.py\npython scripts/shx/x.py scripts/shx/y.py\n",
+    "tests/shared-part.sh": "# case-map: one scripts/shx/x.py\npython scripts/shx/x.py scripts/shx/y.py\n",
 }
 for path, content in files.items():
     p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(content)
@@ -246,6 +250,9 @@ check("suite change runs all cases", m.affected_cases(["tests/mapped.sh"], "test
 check("no map runs all cases", m.affected_cases(["scripts/tool/a.py"], "tests/plain.sh") == "ALL")
 check("invalid map runs all cases", m.affected_cases(["scripts/tool/a.py"], "tests/bad.sh") == "ALL")
 check("global input runs all cases", m.affected_cases(["registry.json"], "tests/mapped.sh") == "ALL")
+check("a shared module selects the cases of every importer the suite names", m.affected_cases(["scripts/lib/shared.py"], "tests/shared.sh") == "one,two")
+check("a shared module imported by an unmapped script runs all cases", m.affected_cases(["scripts/lib/shared.py"], "tests/shared-part.sh") == "ALL")
+check("a mapped script still selects only its case", m.affected_cases(["scripts/shx/x.py"], "tests/shared.sh") == "one")
 (root / "tests/mapped.sh").write_text("# case-map: alpha scripts/tool/a.py\npython scripts/tool/a.py scripts/tool/c.py\n")
 m.contents.cache_clear(); m.suite_patterns.cache_clear()
 check("unmapped selecting input runs all cases", m.affected_cases(["scripts/tool/c.py"], "tests/mapped.sh") == "ALL")
