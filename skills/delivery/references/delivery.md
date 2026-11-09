@@ -342,6 +342,44 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
   stands (a pending task's next command is its `--phase lead` dispatch). Nothing else carries over. A handoff
   adds no gate and no confirmation step.
 
+### In-session subagents
+
+<!-- policy:subagents-read-only -->
+In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.
+
+A **pipeline session** is dispatched and recorded: a lead, an implementation sub-session, a review or a QA run
+(sections 5 and 10). An **in-session subagent** is started by a session for itself (the Agent tool on Claude,
+`multi_agent` on Codex) and is not recorded. Reasons it only reads:
+
+- The gate pairs each review with the recorded implementer; a subagent's edits are unrecorded, so no review could
+  be paired with them.
+- Every session in a worktree shares one index; an unrecorded writer races the task lead's commits.
+- Parallel writes already exist as subtasks with disjoint owned paths (section 10).
+- The token gain is reading many files in the subagent's context and returning a short conclusion.
+
+The table is the policy; the data lives in registry `pipeline.subagents`, which holds it.
+
+| Role | Access | When | Max parallel | Limits |
+|---|---|---|---|---|
+| run lead | read | scout the repository before the plan | 3 | no dispatch, no verdict |
+| planner | read | map paths and dependencies for the plan | 3 | no dispatch, no verdict |
+| task lead | read | scout before the subplan | 2 | never implements, never commits through a subagent |
+| implement | read | find call sites and examples | 2 | owned paths only, no edits by the subagent |
+| review | read | read files for the reviewer | 3 | the reviewer's own model only |
+| QA | none | - | 0 | QA reads and runs the checks itself |
+
+The default subagent model is Claude Sonnet 5.5 (`claude-sonnet-5-5`), through the `rpg-factory:factory-explorer`
+agent. Codex subagents use the `pipeline.subagents` codex model.
+
+- Use a subagent only when the answer needs many files or an open search and only the conclusion matters; otherwise
+  Read or Grep directly.
+- Give a short brief: objective, paths and the return format `path:line`, at most 200 words.
+- A subagent never edits, writes to git, uses Orca, dispatches or records a verdict, and never starts a subagent.
+- Its model stays inside `pipeline.models.scope`.
+- A subagent result is never a review or QA verdict.
+- A reviewer never uses a subagent of the other model (for example `codex:codex-rescue` in a Claude review).
+- The session report names the subagents used, in one line.
+
 ## 9. Not authorized by this policy
 
 - Tags and releases: only with explicit release authorization from the user in the current task.

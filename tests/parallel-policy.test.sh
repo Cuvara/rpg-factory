@@ -40,6 +40,7 @@ if [ $ro_rc -eq 0 ] && tail -n 1 "$RO_DST/$RO_F" | grep -qx 'zz-ro-mutation'; th
 else no "read-only source file did not mutate in the copy (rc=$ro_rc)" "$ro_err"; fi
 chmod -R u+w "$RO_SRC"
 PW=skills/factory-core/references/parallel-work.md
+DW=skills/delivery/references/delivery.md
 
 # Extract the production checks, rather than duplicate their implementation. Fail closed if
 # their section boundaries move: a missing section must never make a mutation pass.
@@ -149,12 +150,12 @@ mutate "UTF-8 reference text still linted (no locale decode crash)" "server-ops:
 mutate "policy file deleted" "parallel-work: $PW missing" "rm $PW"
 grade
 
-# Two-level rules (parallel-work.md is their only copy) are machine-checkable, not matched in free prose: each rule
+# Two-level rules (delivery.md is their only copy) are machine-checkable, not matched in free prose: each rule
 # is a marker comment `<!-- policy:<id> -->` on its own line, present exactly once, whose next non-empty line is the
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
-  child-merge-remove child-no-run-all which-model)
+  child-merge-remove child-no-run-all which-model subagents-read-only)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
@@ -165,6 +166,7 @@ declare -A POLICY_SENTENCE=(
   [child-merge-remove]='The owner merges a child'"'"'s branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).'
   [child-no-run-all]='Never create or remove a child worktree while a full tests/run-all.sh runs: every checkout shares one .git/config.'
   [which-model]='| Role or kind | Model | Registry |'
+  [subagents-read-only]='In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.'
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
 PLACEMENT_ROWS=('| shared (default) |' '| child |')
@@ -223,15 +225,15 @@ sys.exit(bool(errors))
 PY_MARKERS
 }
 
-s_out=$(policy_markers "$ROOT/$PW" 2>&1); s_rc=$?
-[ $s_rc -eq 0 ] && ok "two-level policy markers intact in $PW" || no "two-level policy markers broken in $PW (rc=$s_rc)" "$s_out"
+s_out=$(policy_markers "$ROOT/$DW" 2>&1); s_rc=$?
+[ $s_rc -eq 0 ] && ok "two-level policy markers intact in $DW" || no "two-level policy markers broken in $DW (rc=$s_rc)" "$s_out"
 # s_mutate <name> <expected text|PASS> <commands in a copy of the policy file $F>: the checker must FAIL with that
 # text (PASS: must still pass). A mutation command that fails or changes nothing is a FAIL.
 s_mutate() {
   local F="$TMP/pw-mut.md" merr out rc
-  cp "$ROOT/$PW" "$F" && chmod u+w "$F"
+  cp "$ROOT/$DW" "$F" && chmod u+w "$F"
   if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$ROOT/$DW" "$F"; then no "$1: mutation changed nothing"; return; fi
   out=$(policy_markers "$F" 2>&1); rc=$?
   if [ "$2" = PASS ]; then
     [ $rc -eq 0 ] && ok "$1 -> policy markers still PASS" || no "$1: policy markers did not pass (rc=$rc)" "$out"
@@ -250,6 +252,8 @@ s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence change
   'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
 s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \
   'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
+s_mutate "canonical sentence changed (subagents may write)" "sentence changed under policy:subagents-read-only" \
+  'sed -i "s/^In-session subagents are read-only scouts;/In-session subagents are scouts;/" "$F"'
 s_mutate "placement table removed" "marker missing: policy:placement-table" \
   'sed -i "/^<!-- policy:placement-table -->\$/,/^\$/d" "$F"'
 s_mutate "placement table child row removed" "placement table row missing: '| child |'" \
@@ -289,7 +293,7 @@ WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'QA runs 
   'RPG_FACTORY_AGENTS'
   '--down <agent>' 'SAME_MODEL (fallback: <model> unavailable)' 'no command fails because a model is missing')
 which_model() {
-  python3 -B - "$1" "${2:-}" "$PW" "${#WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_REQUIRED[@]}" <<'PY_MODEL'
+  python3 -B - "$1" "${2:-}" "$DW" "${#WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_REQUIRED[@]}" <<'PY_MODEL'
 import re, sys
 from pathlib import Path
 file, root, relative, count = sys.argv[1:5]
@@ -329,21 +333,21 @@ sys.exit(bool(errors))
 PY_MODEL
 }
 
-w_out=$(which_model "$ROOT/$PW" "$P" 2>&1); w_rc=$?
+w_out=$(which_model "$ROOT/$DW" "$P" 2>&1); w_rc=$?
 [ $w_rc -eq 0 ] && ok "which-model table intact, single copy" || no "which-model table (rc=$w_rc)" "$w_out"
 w_mutate() { # <name> <expected text> <commands run in a fresh copy $T of the tree; $F is its policy file>
   local T="$TMP/wm" merr out rc
   # Reuse one overlay: these mutations touch only the policy and two known
   # duplicate destinations. Restore all three before each case.
-  mkdir -p "$T/${PW%/*}" "$T/docs" "$T/skills/client-integration"
-  cp "$P/$PW" "$T/$PW"
+  mkdir -p "$T/${DW%/*}" "$T/docs" "$T/skills/client-integration"
+  cp "$P/$DW" "$T/$DW"
   cp "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md"
   rm -f "$T/docs/zz-models.md"
-  if ! merr=$(cd "$T" && F="$T/$PW" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$P/$PW" "$T/$PW" && cmp -s "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md" && [ ! -f "$T/docs/zz-models.md" ]; then
+  if ! merr=$(cd "$T" && F="$T/$DW" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if cmp -s "$P/$DW" "$T/$DW" && cmp -s "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md" && [ ! -f "$T/docs/zz-models.md" ]; then
     no "$1: mutation changed nothing"; return
   fi
-  out=$(which_model "$T/$PW" "$T" 2>&1); rc=$?
+  out=$(which_model "$T/$DW" "$T" 2>&1); rc=$?
   if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> which-model check FAIL: $2"
   else no "$1: which-model check did not fail with '$2' (rc=$rc)" "$out"; fi
 }
@@ -365,15 +369,15 @@ w_mutate "fallback marker dropped" "section 10 lacks the routing rule: 'SAME_MOD
   'sed -i "s/SAME_MODEL (fallback: <model> unavailable)/SAME_MODEL/g" "$F"'
 w_mutate "which-model section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
-w_mutate "which-model table copied into docs" "which-model table copied outside $PW: docs/zz-models.md" \
+w_mutate "which-model table copied into docs" "which-model table copied outside $DW: docs/zz-models.md" \
   'mkdir -p docs && sed -n "/^| Role or kind |/,/^| QA |/p" "$F" > docs/zz-models.md'
-w_mutate "which-model table copied into a skill" "which-model table copied outside $PW: skills/client-integration/SKILL.md" \
+w_mutate "which-model table copied into a skill" "which-model table copied outside $DW: skills/client-integration/SKILL.md" \
   'printf "\n| Role or kind | Model | Registry |\n|---|---|---|\n| code | codex | x |\n" >> skills/client-integration/SKILL.md'
 
 # QA tiers stay under their marker in section 10, with one canonical table.
 # Inspect the whole tree for copies, including untracked Markdown.
 qa_tiers() {
-  python3 -B - "$1" "$2" "$PW" <<'PY_QA'
+  python3 -B - "$1" "$2" "$DW" <<'PY_QA'
 import re, sys
 from pathlib import Path
 policy, root, relative = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
@@ -418,16 +422,16 @@ print("\n".join(errors), end="\n" if errors else "")
 sys.exit(bool(errors))
 PY_QA
 }
-q_out=$(qa_tiers "$ROOT/$PW" "$P" 2>&1); q_rc=$?
+q_out=$(qa_tiers "$ROOT/$DW" "$P" 2>&1); q_rc=$?
 [ "$q_rc" -eq 0 ] && ok "QA tiers table intact, single copy" || no "QA tiers table (rc=$q_rc)" "$q_out"
 q_mutate() {
   local T="$TMP/qa-tiers" F merr out rc
-  F="$T/$PW"
+  F="$T/$DW"
   mkdir -p "${F%/*}" "$T/skills/client-integration"
-  cp "$P/$PW" "$F"
+  cp "$P/$DW" "$F"
   rm -f "$T/skills/client-integration/SKILL.md"
   if ! merr=$(cd "$T" && F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$P/$PW" "$F" && [ ! -f "$T/skills/client-integration/SKILL.md" ]; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$P/$DW" "$F" && [ ! -f "$T/skills/client-integration/SKILL.md" ]; then no "$1: mutation changed nothing"; return; fi
   out=$(qa_tiers "$F" "$T" 2>&1); rc=$?
   if [ "$rc" -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> QA tiers check FAIL: $2"
   else no "$1: QA tiers check did not fail with '$2' (rc=$rc)" "$out"; fi
@@ -466,13 +470,13 @@ orca_first() {
   [ ${#errs[@]} -eq 0 ] && return 0
   printf '%s\n' "${errs[@]}"; return 1
 }
-o_out=$(orca_first "$ROOT/$PW" 2>&1); o_rc=$?
+o_out=$(orca_first "$ROOT/$DW" 2>&1); o_rc=$?
 [ $o_rc -eq 0 ] && ok "section 5 keeps the Orca-first runner rule" || no "section 5 Orca-first rule (rc=$o_rc)" "$o_out"
 o_mutate() { # <name> <expected text> <commands in a copy of the policy file $F>
   local F="$TMP/pw-orca-mut.md" merr out rc
-  cp "$ROOT/$PW" "$F" && chmod u+w "$F"
+  cp "$ROOT/$DW" "$F" && chmod u+w "$F"
   if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$ROOT/$DW" "$F"; then no "$1: mutation changed nothing"; return; fi
   out=$(orca_first "$F" 2>&1); rc=$?
   if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> Orca-first check FAIL: $2"
   else no "$1: Orca-first check did not fail with '$2' (rc=$rc)" "$out"; fi
