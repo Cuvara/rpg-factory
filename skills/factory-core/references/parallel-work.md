@@ -492,7 +492,10 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
   a `--no-workspace` or `--no-claude` record does not satisfy a run without that flag). Each suite's PASS is also
   recorded under a hash of its inputs (`tests/affected.py hashes`, the conservative rule: the suite file, the paths
   it names, every file in the tree of each code file the suite reaches, helpers with a caller edge included, the
-  global inputs and the tool versions; only `scripts/lib` stays narrowed to its importers); a later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
+  global inputs and the tool versions, and the imports of every included code file in turn until nothing new is
+  added). Three exceptions: a `scripts/lib` module that is imported stays narrowed to its importers, suites
+  directly in `tests/` are not tree data, and the index docs `scripts/README.md` and `tests/README.md` count only
+  where a suite names them. A later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
   graded by a postprocessor and checks that read the live workspace are never reused, and no record is published when the inputs
   changed during the run. `--no-reuse` runs every suite, `--release` never reuses, and an input mapping that is
   unsure runs the suite.
