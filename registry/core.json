@@ -412,8 +412,8 @@
     "qa_prefer": "codex",
     "qa_tiers": {
       "task": "affected",
-      "integration": "full",
-      "description": "Task QA runs affected and explicit check suites once; integration runs one full suite per batch with reuse under the machine lock."
+      "integration": "ci+workspace",
+      "description": "Task QA runs affected and explicit check suites once; integration runs tests/run-all.sh --workspace-only locally and CI green is the full-suite gate."
     },
     "available_agents": [
       "claude",

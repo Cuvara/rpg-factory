@@ -323,7 +323,7 @@
           "required": ["task", "integration", "description"],
           "properties": {
             "task": {"const": "affected"},
-            "integration": {"const": "full"},
+            "integration": {"enum": ["full", "ci+workspace"]},
             "description": {"type": "string"}
           },
           "additionalProperties": false
