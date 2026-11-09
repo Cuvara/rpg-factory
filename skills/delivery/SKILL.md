@@ -25,7 +25,8 @@ dispatched session follows its spec and never merges or pushes. Policy: [referen
 
 Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; add `--registry none` outside an RPG workspace.
 
-1. **Tier.** `tier -- --repo <key> --paths <files>` prints S, M or L and the flow. Every tier gets a `plan.json` and
+1. **Tier.** `tier --plan plan.json --repo <key> --paths <files>` (a plan naming the repo by path; a registry repo:
+   `tier -- --repo <key> --paths <files>`) prints S, M or L and the flow. Every tier gets a `plan.json` and
    a task lead; S is a one-task plan. The run lead never implements.
 2. **Plan.** Write `plan.json` (`docs/schemas/pipeline-plan.schema.json`): `repos.<key>.path` names the checkout,
    each task has owned paths, deps, a `kind` and a branch. Small tasks with disjoint owned paths. A repo marked
