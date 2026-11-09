@@ -103,7 +103,8 @@ docs/schemas/pipeline-plan.schema.json.
         subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
         --fallback 'AGENT unavailable' (review only) records a retrospective SAME_MODEL fallback with a required
         --note explaining the outage. Legacy --fallback AGENT also requires that agent to be unavailable now.
-        --failed-suites (qa FAIL only): comma-separated tests/<suite> paths, the next QA dispatch reruns them.
+        --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
+        scripts)/ .sh or .py paths), the next QA dispatch reruns them.
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
@@ -1704,8 +1705,18 @@ def cmd_verdict(a, reg):
         if a.phase != "qa" or a.state != "FAIL":
             die("--failed-suites goes with --phase qa --state FAIL")
         failed = sorted({s.strip() for s in a.failed_suites.split(',') if s.strip()})
-        if not failed or any(not re.fullmatch(r'tests/[\w.-]+\.(?:sh|py)', s) for s in failed):
-            die("--failed-suites needs comma-separated tests/<suite>.sh or .py paths")
+        listed = None  # run-all's --list-suites, read only when a name is outside the (tests|testlab|scripts)/ form
+
+        def suite_ok(s):
+            nonlocal listed
+            if re.fullmatch(r'(?:tests|testlab|scripts)/(?:[\w.-]+/)*[\w.-]+\.(?:sh|py)', s) and ".." not in s.split("/"):
+                return True
+            if listed is None:
+                listed = runall_suites(repo_info(plan, reg, key)["path"]) or set()
+            return s in listed
+        if not failed or not all(suite_ok(s) for s in failed):
+            die("--failed-suites needs comma-separated suites: names `tests/run-all.sh --list-suites` prints, "
+                "or (tests|testlab|scripts)/ paths ending .sh or .py")
         rec["failed_suites"] = failed
     if a.subtask:
         rec["subtask"] = a.subtask

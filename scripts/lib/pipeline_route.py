@@ -210,8 +210,8 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
     (run-all rejects any other suite name), except release-only suites; None (no such flag) folds nothing.
     failed_suites: the suites a previous QA recorded as failed; those run-all does not run become extra commands.
     Extras are `[task ids] command`, each command once and each recognised suite once (by suite path; the
-    `env -u TMPDIR` form wins: several suites need TMPDIR unset). A compound check with a full run inside is marked
-    DO_NOT_RUN: task QA never starts a full run (validate warns on it)."""
+    `env -u TMPDIR` form wins: several suites need TMPDIR unset). Any other check full_run() flags (compound or
+    wrapped) is marked DO_NOT_RUN: task QA never starts a full run (validate warns on it)."""
     known = set(runall_suites or ()) - RELEASE_ONLY
     suites, extra, by_suite, dropped = set(), {}, {}, False
 
@@ -247,7 +247,7 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
             suite = match and (match[1] or match[2])
             if suite and suite in known:
                 suites.add(suite)
-            elif COMPOUND.search(check) and full_run(check):
+            elif full_run(check):  # compound or wrapped (`bash -c "tests/run-all.sh"`, `sh tests/run-all.sh`)
                 add_extra(tid, DO_NOT_RUN + check)
             else:
                 add_extra(tid, check, suite or None)

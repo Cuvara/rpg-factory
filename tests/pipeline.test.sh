@@ -722,7 +722,9 @@ for compound in ('tests/run-all.sh --only-suites tests/pipeline.test.sh && pytho
 assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR bash tests/run-all.sh --only-suites tests/routing.test.sh'])],
                       listed) == (['tests/routing.test.sh'], [], False)
 assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR X=1 tests/run-all.sh -j 4'])], listed) == ([], [], True)
-assert m.pr.qa_checks([dict(task, checks=['echo tests/run-all.sh'])], listed) == ([], ['[a] echo tests/run-all.sh'], False)
+# a check full_run() flags is never runnable, even when run-all is only an argument (conservative: no full run)
+assert m.pr.qa_checks([dict(task, checks=['echo tests/run-all.sh'])], listed) == (
+    [], ['[a] ' + m.pr.DO_NOT_RUN + 'echo tests/run-all.sh'], False)
 # validate still warns on a full run inside a compound check; a scoped one is fine
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
@@ -731,11 +733,17 @@ for wrapped in ("bash -c 'tests/run-all.sh -j 4'", 'bash -c "tests/run-all.sh"',
                 'tests/run-all.sh --affected\ntests/run-all.sh -j 4'):
     assert m.pr.full_run(wrapped), wrapped
 assert not m.pr.full_run("bash -c 'tests/run-all.sh --affected -j 2'")
-# a compound check with a full run inside stays one extra, marked not to run (task QA never starts a full run)
+# a compound or wrapped check with a full run inside stays one extra, marked not to run (task QA never starts a full run)
 for compound in ('tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check',
-                 "bash -c 'tests/run-all.sh -j 4' > out.txt", 'tests/run-all.sh --affected\ntests/run-all.sh'):
+                 "bash -c 'tests/run-all.sh -j 4' > out.txt", 'tests/run-all.sh --affected\ntests/run-all.sh',
+                 # wrapped, not compound: still a full run
+                 'bash -c "tests/run-all.sh -j 4"', "bash -c 'tests/run-all.sh'", 'sh tests/run-all.sh',
+                 'sh ./tests/run-all.sh -j 4', 'env -u TMPDIR sh tests/run-all.sh --reuse'):
     assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + compound], False), compound
 assert m.pr.DO_NOT_RUN.startswith('DO NOT RUN') and 'NOT_RUN' in m.pr.DO_NOT_RUN
+# a wrapped scoped run-all is no full run: a plain extra, neither dropped nor marked
+assert m.pr.qa_checks([dict(task, checks=["bash -c 'tests/run-all.sh --affected -j 2'"])], listed) == (
+    [], ["[a] bash -c 'tests/run-all.sh --affected -j 2'"], False)
 # re-QA: a failed suite already among the extra checks (any invocation form) runs once, under its first form
 for form in ('tests/dogfood.sh', 'bash tests/dogfood.sh', 'env -u TMPDIR tests/dogfood.sh'):
     assert m.pr.qa_checks([dict(task, checks=[form])], listed, ['tests/dogfood.sh']) == ([], ['[a] ' + form], False), form
@@ -807,13 +815,26 @@ for tid in ('s', 'integration:srv'):
 lean = m.qa_body(first,[dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
                  runall={'tests/pipeline.test.sh'})
 assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
-# --failed-suites refusals: a PASS, a review verdict, a path outside tests/
+# --failed-suites refusals: a PASS, a review verdict, a name neither run-all lists nor a (tests|testlab|scripts)/ suite
 cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'PASS',
          '--failed-suites', 'tests/routing.test.sh')
 cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'review', '--sha', first, '--by', 'claude', '--state', 'FAIL',
          '--failed-suites', 'tests/routing.test.sh')
-cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
-         '--failed-suites', 'scripts/check-registry.sh')
+for bad in ('docs/x.md', 'tests/../x.sh', 'tests/x.txt', 'tools/lab.sh,tests/routing.test.sh', 'tests/routing.test.sh,../x.sh'):
+    cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+             '--failed-suites', bad)
+# suites run-all lists outside tests/ (testlab/tests/test_lab.py, scripts/check-registry.sh) are accepted
+for good in ('scripts/check-registry.sh', 'testlab/tests/test_lab.py'):
+    cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+        '--failed-suites', good)
+# any other name the checkout's `run-all --list-suites` prints is accepted too
+runall_src = (repo / 'tests' / 'run-all.sh').read_text()
+(repo / 'tests' / 'run-all.sh').write_text(runall_src.replace('routing.test.sh\\n', 'routing.test.sh\\ntools/lab.sh\\n'),
+                                          newline='\n')
+assert 'tools/lab.sh' in (repo / 'tests' / 'run-all.sh').read_text()
+cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+    '--failed-suites', 'tools/lab.sh')
+(repo / 'tests' / 'run-all.sh').write_text(runall_src, newline='\n')
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
     '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh,tests/orca-wait.test.sh')
 (repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
