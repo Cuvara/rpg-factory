@@ -84,6 +84,9 @@ files = {"scripts/lib/inner.py": "VALUE = 1\n", "scripts/lib/outer.py": "from in
          # data a script reads next to it without naming the path; an unrelated data file in another tool's tree
          "scripts/ui/plan.py": "import json\n", "scripts/ui/data/intents.json": "{}\n", "tests/ui.test.sh": "python scripts/ui/plan.py\n",
          "scripts/other/tool2.py": "x = 1\n", "scripts/other/data/x.json": "{}\n",
+         # in the same tree: a README.md the script may read and a helper it may run by a computed path (no code names
+         # either); the scripts/ index doc lies in the tree of every script directly in scripts/ and stays named-only
+         "scripts/ui/README.md": "# ui\n", "scripts/ui/helper.sh": "true\n", "scripts/README.md": "# scripts\n",
          # a non-scripts top-level directory is one project: testlab/lab code reads testlab/scenarios
          "testlab/lab/run.py": "x = 1\n", "testlab/scenarios/a.json": "{}\n", "tests/lab.test.sh": "python testlab/lab/run.py\n",
          # parenthesized multiline import of a package member module (the member has its own suite)
@@ -139,7 +142,11 @@ reset()
 check("data next to a reached script selects its suite", m.needed(["scripts/ui/data/intents.json"], "tests/ui.test.sh"))
 check("data next to a script skips an unrelated suite", not m.needed(["scripts/ui/data/intents.json"], "tests/other.test.sh"))
 check("data in another tool's tree skips the suite", not m.needed(["scripts/other/data/x.json"], "tests/ui.test.sh"))
-check("a README.md next to a reached script is not data", not m.needed(["scripts/ui/README.md"], "tests/ui.test.sh"))
+check("a README.md next to a reached script selects its suite", m.needed(["scripts/ui/README.md"], "tests/ui.test.sh"))
+check("a README.md next to a script skips an unrelated suite", not m.needed(["scripts/ui/README.md"], "tests/other.test.sh"))
+check("an unnamed helper .sh next to a reached script selects its suite", m.needed(["scripts/ui/helper.sh"], "tests/ui.test.sh"))
+check("an unnamed helper .sh next to a script skips an unrelated suite", not m.needed(["scripts/ui/helper.sh"], "tests/other.test.sh"))
+check("the scripts/ index doc is named-only (does not select every suite)", not m.needed(["scripts/README.md"], "tests/example.test.sh"))
 check("a deleted data file next to a reached script selects its suite", m.needed(["scripts/ui/data/gone.json"], "tests/ui.test.sh"))
 check("data anywhere in a non-scripts project selects its suite", m.needed(["testlab/scenarios/a.json"], "tests/lab.test.sh"))
 check("parenthesized package-member import is an edge", m.needed(["scripts/lib/leaf.py"], "tests/paren.test.sh"))
@@ -152,6 +159,16 @@ check("hash ignores a data file in another tool's tree", ui_before == h("tests/u
 (root / "scripts/ui/data/intents.json").write_text("[2]\n")
 check("hash changes on data next to a reached script", ui_before != h("tests/ui.test.sh"))
 check("hash of an unrelated suite ignores that data", other_before == h("tests/other.test.sh"))
+ui_before, example_before = h("tests/ui.test.sh"), h()
+(root / "scripts/ui/README.md").write_text("# ui 2\n")
+check("hash changes on a README.md next to a reached script", ui_before != h("tests/ui.test.sh"))
+check("hash of an unrelated suite ignores that README.md", other_before == h("tests/other.test.sh"))
+ui_before = h("tests/ui.test.sh")
+(root / "scripts/ui/helper.sh").write_text("false\n")
+check("hash changes on an unnamed helper .sh next to a reached script", ui_before != h("tests/ui.test.sh"))
+check("hash of an unrelated suite ignores that helper", other_before == h("tests/other.test.sh"))
+(root / "scripts/README.md").write_text("# scripts 2\n")
+check("hash ignores the scripts/ index doc", example_before == h())
 (root / "scripts/lib/leaf.py").write_text("X = 2\n")
 check("hash changes through a parenthesized package-member import", paren_before != h("tests/paren.test.sh"))
 (root / "scripts/lib/leaf2.py").write_text("X = 2\n")
