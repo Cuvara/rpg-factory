@@ -226,5 +226,5 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 
 ## Layout
 
-- `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
+- `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `agents/` (read-only plugin agent `factory-explorer`, auto-discovered) - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
   scripts, `ui/` read-only UI plan engine, catalog, selection and Figma environment check) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`
