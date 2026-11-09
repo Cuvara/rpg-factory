@@ -741,6 +741,20 @@ for compound in ('tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py 
                  'sh ./tests/run-all.sh -j 4', 'env -u TMPDIR sh tests/run-all.sh --reuse'):
     assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + compound], False), compound
 assert m.pr.DO_NOT_RUN.startswith('DO NOT RUN') and 'NOT_RUN' in m.pr.DO_NOT_RUN
+# shell operators and redirections without spaces still split words: a full run next to one is marked, not runnable
+for adjacent in ('tests/run-all.sh>qa.log', 'tests/run-all.sh>>qa.log', 'tests/run-all.sh 2>&1', 'tests/run-all.sh&>qa.log',
+                 'tests/run-all.sh|tee qa.log', 'tests/run-all.sh 2>&1|tee qa.log', 'true;tests/run-all.sh',
+                 'true&&tests/run-all.sh -j 4', 'tests/run-all.sh --affected;tests/run-all.sh', '(tests/run-all.sh)',
+                 'tests/run-all.sh>--affected', 'bash -c "tests/run-all.sh">qa.log', 'echo $(tests/run-all.sh)',
+                 'X="tests/run-all.sh -j 4" true', 'tests/run-all.sh "unbalanced'):
+    assert m.pr.full_run(adjacent), adjacent
+    assert m.pr.qa_checks([dict(task, checks=[adjacent])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + adjacent], False), adjacent
+# a scoped run-all next to an operator or redirection stays scoped (a plain extra command)
+for scoped in ('tests/run-all.sh --affected>qa.log', 'tests/run-all.sh --affected 2>&1|tee qa.log',
+               'tests/run-all.sh --only-suites=tests/x.sh;true', 'tests/run-all.sh --affected&>qa.log',
+               'bash -c "tests/run-all.sh --affected">qa.log'):
+    assert not m.pr.full_run(scoped), scoped
+    assert m.pr.qa_checks([dict(task, checks=[scoped])], listed) == ([], ['[a] ' + scoped], False), scoped
 # a wrapped scoped run-all is no full run: a plain extra, neither dropped nor marked
 assert m.pr.qa_checks([dict(task, checks=["bash -c 'tests/run-all.sh --affected -j 2'"])], listed) == (
     [], ["[a] bash -c 'tests/run-all.sh --affected -j 2'"], False)

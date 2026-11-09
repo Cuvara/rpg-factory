@@ -169,6 +169,9 @@ SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\
 RELEASE_ONLY = frozenset({'tests/installed-safety.sh'})
 # any command separator, grouping, redirection or substitution the shell accepts, newlines included
 COMPOUND = re.compile(r'[;&|<>()`\n\r]|\$\(')
+# what full_run() splits words on (shlex punctuation_chars), newlines included
+SHELL_PUNCT = '();<>|&`\n\r'
+RUNALL_WORD = re.compile(r'(?:\./)?tests/run-all\.sh')
 DO_NOT_RUN = 'DO NOT RUN (a full run-all inside; full runs belong to integration QA; report it NOT_RUN): '
 
 
@@ -263,13 +266,34 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
 
 def full_run(check):
     """A check that starts a full run-all: one command of it (standalone or a part of a compound command) runs
-    tests/run-all.sh without --affected or --only-suites."""
-    for part in re.split(r'&&|\|\||[;|&()`\n\r]', check):
-        words = [w.strip('\'"') for w in part.split()]  # quotes of `bash -c '...'` stay on the words
-        if (any(re.fullmatch(r'(?:\./)?tests/run-all\.sh', w) for w in words)
-                and not any(w == '--affected' or w.startswith('--only-suites') for w in words)):
-            return True
-    return False
+    tests/run-all.sh without --affected or --only-suites. Shell operators and redirections split words even without
+    spaces (`tests/run-all.sh>qa.log`, `2>&1`, `|tee`); a redirection target is no argument; a quoted word (`bash -c
+    '...'`) or an assignment value is checked as a command of its own. Unbalanced quotes: any run-all inside is full."""
+    lexer = shlex.shlex(check, posix=True, punctuation_chars=SHELL_PUNCT)
+    lexer.whitespace, lexer.whitespace_split = ' \t', True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return bool(re.search(r'tests/run-all\.sh', check))
+    commands, words, skip = [], [], False
+    for token in tokens:
+        if token and all(c in SHELL_PUNCT for c in token):
+            skip = '<' in token or '>' in token  # `>`, `>>`, `>&`, `&>`, `<`: the redirection target follows
+            if re.sub(r'[<>]&?|&>', '', token):
+                commands.append(words)  # a separator, a pipe or a grouping ends the command
+                words = []
+            continue
+        if skip:  # a redirection target (or the descriptor of `2>&1`) is no argument
+            skip = False
+            continue
+        words.append(token)
+        inner = token.split('=', 1)[1] if re.match(r'[A-Za-z_]\w*=', token) else token
+        if inner != token or any(c.isspace() or c in SHELL_PUNCT for c in token):
+            if inner and full_run(inner):
+                return True
+    commands.append(words)
+    return any(any(RUNALL_WORD.fullmatch(w) for w in ws)
+               and not any(w == '--affected' or w.startswith('--only-suites') for w in ws) for ws in commands)
 
 
 def qa_warnings(task):
