@@ -76,14 +76,14 @@ mkfake_codex() { # bin-dir
   mkdir -p "$1"
   cat > "$1/codex" <<'FAKE'
 #!/bin/sh
-if [ "$1" = features ] && [ "$2" = list ]; then
+if [ "$1" = features ] && [ "$2" = list ] && [ "$FAKE_MULTI_AGENT" != fail ]; then
   printf 'apps  stable  false\nmulti_agent  stable  %s\n' "${FAKE_MULTI_AGENT:-true}"
   exit 0
 fi
 exit 1
 FAKE
   chmod +x "$1/codex"
-  printf '%s\r\n' '@echo off' 'if "%1"=="features" if "%2"=="list" (' '  echo apps  stable  false' \
+  printf '%s\r\n' '@echo off' 'if "%FAKE_MULTI_AGENT%"=="fail" exit /b 1' 'if "%1"=="features" if "%2"=="list" (' '  echo apps  stable  false' \
     '  echo multi_agent  stable  %FAKE_MULTI_AGENT%' '  exit /b 0' ')' 'exit /b 1' > "$1/codex.cmd"
 }
 REGMODEL=$(jq -r '.pipeline.subagents.models.codex.model' "$ROOT/registry.json")
@@ -192,6 +192,7 @@ mkcfg "$CX/h-sub" '[agents]' "default_subagent_model = \"$REGMODEL\"" '[agents.s
 mkdir -p "$CX/h-none"
 mkcfg "$CX/h-bad" '[agents' "default_subagent_model = \"$SECRET1\"" "api_key = \"$SECRET2\""
 FIX="fix: \[agents\] default_subagent_model = \"$REGMODEL\""
+SUBFIX="fix: \[agents.subagent\] model = \"$REGMODEL\" (or remove it)"
 r=$(cx "$CX/h-ok" true "$CX/bin")
 grep -q "^OK|codex; codex subagents: multi_agent on, agents.default_subagent_model = $REGMODEL$" <<<"$r" \
   && ok "codex:subagents: multi_agent on and the registry model in scope = OK" || no "codex subagents in scope: $r"
@@ -199,8 +200,9 @@ r=$(cx "$CX/h-out" true "$CX/bin")
 grep -q "^WARN|.*agents.default_subagent_model = gpt-4o-mini is outside pipeline.models.scope.codex; $FIX" <<<"$r" \
   && ok "codex:subagents: an out-of-scope default_subagent_model = WARN naming the key, the value and the fix" || no "codex subagents out of scope: $r"
 r=$(cx "$CX/h-sub" true "$CX/bin")
-grep -q "^WARN|.*agents.subagent.model = gpt-4o-mini is outside pipeline.models.scope.codex" <<<"$r" && ! grep -q "default_subagent_model = gpt" <<<"$r" \
-  && ok "codex:subagents: [agents.subagent] model out of scope (default in scope) = WARN naming agents.subagent.model" || no "codex subagents sub model: $r"
+grep -q "^WARN|.*agents.subagent.model = gpt-4o-mini is outside pipeline.models.scope.codex; $SUBFIX" <<<"$r" && ! grep -q "default_subagent_model = gpt" <<<"$r" \
+  && ! grep -qF 'fix: [agents] default_subagent_model' <<<"$r" && [ "$(grep -o 'config: ' <<<"$r" | wc -l)" -eq 1 ] \
+  && ok "codex:subagents: [agents.subagent] model out of scope (default in scope) = WARN naming agents.subagent.model and its own fix, config path once" || no "codex subagents sub model: $r"
 r=$(cx "$CX/h-none" true "$CX/bin")
 grep -q "^WARN|.*no Codex subagent model set (subagents inherit the session model); $FIX" <<<"$r" \
   && ok "codex:subagents: no config.toml = WARN 'no Codex subagent model set' with the fix" || no "codex subagents missing config: $r"
@@ -210,6 +212,9 @@ grep -q "^WARN|.*no Codex subagent model set" <<<"$r" && ! grep -qE "$SECRET1|$S
 r=$(cx "$CX/h-ok" false "$CX/bin")
 grep -q "^WARN|.*multi_agent off; fix: codex features enable multi_agent" <<<"$r" \
   && ok "codex:subagents: multi_agent off = WARN naming multi_agent and the fix" || no "codex subagents multi_agent off: $r"
+r=$(cx "$CX/h-ok" fail "$CX/bin")
+grep -q "^WARN|.*multi_agent unknown (codex features list failed)" <<<"$r" \
+  && ok "codex:subagents: codex features list failing = WARN multi_agent unknown" || no "codex subagents features list failure: $r"
 r=$(cx "$CX/h-ok" true "$CX/empty")
 grep -q "^MISSING|codex not on PATH" <<<"$r" && ok "codex:subagents: no codex on PATH = MISSING" || no "codex subagents without codex: $r"
 
@@ -254,6 +259,7 @@ reject() { # name expected-message jq-mutation
 reject "dev tool used by an unknown skill" "used_by unknown skill nosuch" '.dev_tools[0].used_by += ["nosuch"]'
 reject "dev tool probe of an unknown kind" "bad probe file:x" '.dev_tools[0].probes += ["file:x"]'
 reject "dev tool probe naming an unknown registry tool" "names an unknown tool" '.dev_tools[0].probes += ["tool:nosuch"]'
+reject "codex probe with an unknown name" "probe codex:foo names an unknown codex probe (only codex:subagents)" '(.dev_tools[] | select(.id == "codex-subagents") | .probes) += ["codex:foo"]'
 reject "dev tool probe naming an unknown service" "names an unknown service" '.dev_tools[0].probes += ["service:nosuch"]'
 reject "optional dev tool without fallback" "every tool needs a fallback" '(.dev_tools[] | select(.required == false)) |= del(.fallback)'
 reject "required dev tool without fallback" "dev_tools dotnet: every tool needs a fallback" '(.dev_tools[] | select(.id == "dotnet")) |= del(.fallback)'

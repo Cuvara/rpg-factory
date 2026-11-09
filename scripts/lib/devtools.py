@@ -160,7 +160,10 @@ def _codex_subagent_models():
 
 
 def codex_subagents(reg):
-    """(ok, detail, warn) of the codex:subagents probe. Read-only; only the two model keys of the config are read."""
+    """(ok, detail, warn) of the codex:subagents probe. Read-only; only the two model keys of the config are read.
+
+    Only CODEX_HOME/config.toml is read: a project .codex/config.toml or an active profile can still override
+    the effective model."""
     if not shutil.which("codex"):
         return False, "codex not on PATH", False
     pipe = (reg or {}).get("pipeline") or {}
@@ -169,7 +172,10 @@ def codex_subagents(reg):
     if not isinstance(wanted, str):
         wanted = "<the pipeline.subagents codex model>"
     cfg_path = ("CODEX_HOME" if os.environ.get("CODEX_HOME") else "~/.codex") + "/config.toml"
-    fix = f'; fix: [agents] default_subagent_model = "{wanted}" in {cfg_path}'
+    fixes = {
+        "agents.default_subagent_model": f'[agents] default_subagent_model = "{wanted}"',
+        "agents.subagent.model": f'[agents.subagent] model = "{wanted}" (or remove it)',
+    }
     warns, good = [], []
     multi = _codex_multi_agent()
     if multi is None:
@@ -177,14 +183,18 @@ def codex_subagents(reg):
     elif multi == "off":
         warns.append("multi_agent off; fix: codex features enable multi_agent (or [features] multi_agent = true in the Codex config)")
     models = _codex_subagent_models()
+    model_warn = not models
     for key, value in models:
         shown = value if isinstance(value, str) and MODEL_ID.fullmatch(value) else NOT_A_MODEL_ID
         if shown in scope:
             good.append(f"{key} = {shown}")
         else:
-            warns.append(f"{key} = {shown} is outside pipeline.models.scope.codex{fix}")
+            model_warn = True
+            warns.append(f"{key} = {shown} is outside pipeline.models.scope.codex; fix: {fixes[key]}")
     if not models:
-        warns.append(f"no Codex subagent model set (subagents inherit the session model){fix}")
+        warns.append(f"no Codex subagent model set (subagents inherit the session model); fix: {fixes['agents.default_subagent_model']}")
+    if model_warn:
+        warns.append(f"config: {cfg_path}")
     if warns:
         return True, " / ".join(warns), True
     return True, f"codex subagents: multi_agent on, {', '.join(good)}", False
