@@ -176,7 +176,31 @@ PY
 # never on this script's wall clock: python start-up and git under machine load are not the property.
 TIMEOUT_OK='.timeout | if type == "object" and .verified == true and ([.limit_s, .timed_out_after_s, .killed_after_s, .cleanup_grace_s] | all(type == "number"))
   then .timed_out_after_s >= .limit_s and .killed_after_s >= .timed_out_after_s and (.killed_after_s - .timed_out_after_s) <= .cleanup_grace_s else false end'
-out=$(python3 -B "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json)
+# Linux containers may have a PID 1 that never reaps orphans. Adopt and reap the
+# fixture's killed descendants before the runner probes the group, so zombies
+# cannot turn a successful kill into a false cleanup failure.
+out=$(python3 -B - "$P/scripts/run-checks.py" --repo server --paths backend/gateway/x.go --only t-timeout-tree --approve t-timeout-tree --timeout 1 --json <<'PY'
+import os, runpy, subprocess, sys, time
+if sys.platform == "linux":
+    import ctypes
+    assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0  # PR_SET_CHILD_SUBREAPER
+    original_wait = subprocess.Popen.wait
+    def reap_wait(self, *args, **kwargs):
+        result = original_wait(self, *args, **kwargs)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            try:
+                pid, _ = os.waitpid(-self.pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if not pid:
+                time.sleep(.01)
+        return result
+    subprocess.Popen.wait = reap_wait
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+PY
+)
 trec=$(jq -c '.results[] | select(.check == "t-timeout-tree") | .timeout' <<<"$out")
 # every t-timeout-tree failure prints what the runner returned: the graded result, else the raw output head
 tdiag=$(jq -c '.results[] | select(.check == "t-timeout-tree") | {state, reason, exit, duration_s, timeout, output_tail}' <<<"$out" 2>/dev/null)
@@ -205,7 +229,7 @@ timing = {}
 with patch.object(mod.procrun, "time", Clock()), patch.object(mod.os, "name", "posix"), \
      patch.object(mod.subprocess, "Popen", return_value=Hung()), \
      patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
-     patch.object(mod.signal, "SIGKILL", 9, create=True), \
+     patch.object(mod.procrun.signal, "SIGKILL", 9, create=True), \
      patch.object(mod.os, "killpg", side_effect=lambda pgid, sig: None, create=True):
     code, out, timed_out, cleanup = mod.procrun.run_check("sleep 60", ".", {}, 1, ("bash", "gitbash"), timing)
 assert code == 124 and timed_out and cleanup.startswith("failed"), (code, timed_out, cleanup)
@@ -213,6 +237,40 @@ print(json.dumps({"timeout": mod.procrun.timeout_record(timing)}))
 PY
 )
 if [ -n "$neg" ] && ! jq -e "$TIMEOUT_OK" <<<"$neg" >/dev/null; then okk "never-killed hung child fails the timeout bound ($neg)"; else nok "never-killed hung child passed the timeout bound: ${neg:-no record}"; fi
+# Exercise the POSIX path on every host without starting real processes. The
+# signal and verified record must survive every diagnostic-listing failure.
+python3 -B - "$P/scripts/run-checks.py" <<'PY' && okk "POSIX timeout kill survives missing, slow, failing and malformed ps" || nok "POSIX timeout kill depended on ps"
+import importlib.util, subprocess, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+class Hung:
+    pid = 4242
+    def __init__(self): self.calls = 0
+    def communicate(self, timeout=None):
+        self.calls += 1
+        if self.calls == 1: raise subprocess.TimeoutExpired("bash", timeout)
+        return "", None
+    def wait(self, timeout=None): return 0
+cases = [FileNotFoundError("ps"), subprocess.TimeoutExpired("ps", 3),
+         subprocess.CompletedProcess([], 1, "", "failed"),
+         subprocess.CompletedProcess([], 0, "malformed", ""),
+         subprocess.CompletedProcess([], 0, "not-a-pid not-a-pgid", "")]
+for listing in cases:
+    for already_gone in (False, True):
+        timing = {}
+        effect = {"side_effect": listing} if isinstance(listing, Exception) else {"return_value": listing}
+        signals = [ProcessLookupError(), ProcessLookupError()] if already_gone else [None, ProcessLookupError()]
+        with patch.object(mod.os, "name", "posix"), \
+             patch.object(mod.subprocess, "Popen", return_value=Hung()), \
+             patch.object(mod.subprocess, "run", **effect), \
+             patch.object(mod.procrun.signal, "SIGKILL", 9, create=True), \
+             patch.object(mod.os, "killpg", side_effect=signals, create=True) as killpg:
+            code, out, timed_out, cleanup = mod.procrun.run_check("sleep 60", ".", {}, 1, ("bash", "gitbash"), timing)
+        assert code == 124 and timed_out and cleanup == "success" and timing["verified"], (listing, out)
+        assert killpg.call_args_list[0].args == (4242, 9), killpg.call_args_list
+        assert killpg.call_args_list[1].args == (4242, 0), killpg.call_args_list
+PY
 bad_records='{}
 {"timeout":null}
 {"timeout":{"limit_s":1,"timed_out_after_s":1.01,"killed_after_s":9.9,"cleanup_grace_s":3.5,"verified":true}}

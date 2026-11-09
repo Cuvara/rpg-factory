@@ -27,15 +27,98 @@ LINKED="$TMP/linked-guard-wt"
 git -C "$SERVER" worktree add -q -b feat/guard/linked-check "$LINKED" develop
 
 pass=0; fail=0
+guard_command() { CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; }
+# Keep the first twelve ordinary cases, every rcheck case (one or two per advisory
+# class) and all explicit environment overrides on the real hook process. The
+# standalone malformed-input, hook wiring, mode and crash-safety cases below also
+# keep their original process boundaries. Env cases never use the real_checks
+# budget; the end of the file asserts the exact real-hook count (12 + rchecks).
+real_checks=12
+real_hook_cases=0; rcheck_cases=0
+coproc GUARD_BATCH {
+  CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B "$GUARD" --batch |
+    command jq --unbuffered -r '
+      . as $result | (try (.out | if length == 0 then {} else fromjson end |
+        if .hookSpecificOutput.permissionDecision then "DECISION"
+        else ((.hookSpecificOutput.additionalContext // "") |
+          (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l:"allow"}) | .l) end)
+        catch "invalid-json") as $level |
+      [if $result.error then "invalid-json" else $level end, ($result | tojson)] | @tsv'
+}
+batch_pid=$GUARD_BATCH_PID
+exec {batch_in}>&"${GUARD_BATCH[1]}" {batch_out}<&"${GUARD_BATCH[0]}"
+# JSON quoting without launching jq for every case (commands include heredocs,
+# backslashes, tabs and non-ASCII paths). Hook command strings never contain NUL.
+json_quote() {
+  local value="$1"
+  value=${value//\\/\\\\}; value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}; value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}; value=${value//$'\b'/\\b}; value=${value//$'\f'/\\f}
+  REPLY="\"$value\""
+}
 check() { # expected cwd command [env] [tool]
-  local expected="$1" cwd="$2" cmd="$3" envset="${4:-}" tool="${5:-Bash}" payload out got
+  local expected="$1" cwd="$2" cmd="$3" envset="${4:-}" tool="${5:-Bash}" payload out got rc
+  if [ "$real_checks" -le 0 ] && [ -z "$envset" ]; then
+    local qc qd qt response
+    json_quote "$cmd"; qc=$REPLY
+    json_quote "$cwd"; qd=$REPLY
+    json_quote "$tool"; qt=$REPLY
+    printf '{"hook_event_name":"PreToolUse","tool_name":%s,"tool_input":{"command":%s},"cwd":%s,"session_id":"guardtest"}\n' "$qt" "$qc" "$qd" >&"$batch_in"
+    if IFS= read -r response <&"$batch_out"; then
+      response=${response%$'\r'}; got=${response%%$'\t'*}; out=${response#*$'\t'}
+    else got=invalid-json; out='batch process ended unexpectedly'; fi
+    if [ "$got" = "$expected" ]; then pass=$((pass + 1))
+    else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
+    return
+  fi
+  if [ -z "$envset" ]; then real_checks=$((real_checks - 1)); real_hook_cases=$((real_hook_cases + 1)); fi
   payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')
-  if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload")
-  else out=$(CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload"); fi
+  # The hook fails open: an internal error can mean empty output, even with rc=0.
+  # Retry only a missing expected advisory, never a wrong/nonempty decision.
+  if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload"); rc=$?
+  else out=$(guard_command <<<"$payload"); rc=$?; fi
+  if [ -z "$out" ] && [ "$expected" != allow ]; then
+    printf 'RETRY %s: empty guard output (first try rc=%s)\n' "$cmd" "$rc"
+    if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload")
+    else out=$(guard_command <<<"$payload"); fi
+  fi
   got=$(jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${out:-{\}}" 2>/dev/null || echo "invalid-json")
   if [ "$got" = "$expected" ]; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL expected=%s got=%s cwd=%s cmd=%q\n  out=%s\n' "$expected" "$got" "${cwd#$TMP/}" "$cmd" "$out"; fi
 }
+rcheck() { real_checks=$((real_checks + 1)); rcheck_cases=$((rcheck_cases + 1)); check "$@"; }   # this case on the real hook process
+
+# Exercise the real case runner with deterministic empty-output stand-ins. Run in
+# subshells so intentionally failing cases cannot alter the suite's counters.
+retry_selftest() (
+  local mode="$1" count_file="$TMP/retry-$1" calls=0
+  pass=0; fail=0
+  real_checks=1
+  guard_command() {
+    local n=0
+    [ ! -f "$count_file" ] || read -r n < "$count_file"
+    n=$((n + 1)); printf '%s\n' "$n" > "$count_file"
+    if [ "$mode" = recovered ] && [ "$n" -eq 2 ]; then
+      printf '%s\n' '{"hookSpecificOutput":{"additionalContext":"rpg-factory advisory (warn): stub"}}'
+    else return 7; fi
+  }
+  if [ "$mode" = allowed ]; then check allow "$SERVER" 'retry-selftest'
+  else check warn "$SERVER" 'retry-selftest'; fi
+  read -r calls < "$count_file"
+  printf 'RESULT calls=%s pass=%s fail=%s\n' "$calls" "$pass" "$fail"
+)
+for mode in recovered empty allowed; do
+  result=$(retry_selftest "$mode")
+  case "$mode" in
+    recovered) want='RESULT calls=2 pass=1 fail=0';;
+    empty) want='RESULT calls=2 pass=0 fail=1';;
+    allowed) want='RESULT calls=1 pass=1 fail=0';;
+  esac
+  if [[ "$result" == *"$want" ]] && {
+    [ "$mode" = allowed ] || [[ "$result" == *'RETRY retry-selftest: empty guard output (first try rc=7)'* ]]
+  }; then pass=$((pass + 1))
+  else fail=$((fail + 1)); printf 'FAIL retry self-test %s: %s\n' "$mode" "$result"; fi
+done
 
 # ---- a registered skill read as a file instead of loaded with the Skill tool: warn (dogfood found sessions doing it)
 check warn  "$SERVER" "cat $ROOT/skills/game-design/SKILL.md"
@@ -156,7 +239,7 @@ check high "$LINKED" 'taskkill //F //IM dotnet.exe'
 check allow "$LINKED" 'taskkill /T /PID 1234 /F'
 
 # read-only commands pass through
-check allow "$SERVER" "git status"
+rcheck allow "$SERVER" "git status"
 check allow "$SERVER" "git diff --stat"
 check allow "$SERVER" "git log --oneline -5"
 check allow "$SERVER" "git stash list"
@@ -169,14 +252,14 @@ check allow "$SERVER" "git add backend/gateway/main.go"
 check allow "$SERVER" "git restore --staged backend/gateway/main.go"
 check allow "$SERVER" 'echo "git reset --hard"'
 # destructive
-check warn "$SERVER" "git reset --hard HEAD~1"
+rcheck warn "$SERVER" "git reset --hard HEAD~1"
 check warn "$SERVER" "git clean -fd"
 check warn "$SERVER" "git checkout -- ."
 check warn "$SERVER" "git restore backend/gateway/main.go"
 check warn "$SERVER" "git stash"
 check warn "$SERVER" "git stash drop"
 check warn "$SERVER" "git branch -D feat/old"
-check warn "$SERVER" "git push --force origin feat/x"
+rcheck warn "$SERVER" "git push --force origin feat/x"
 check warn "$SERVER" "git push origin feat/x"
 check warn "$SERVER" "git rebase develop"
 # staging everything
@@ -185,16 +268,16 @@ check warn "$SERVER" "git add ."
 check warn "$SERVER" "git commit -am wip"
 # protected branches
 check warn "$SERVER" "git commit -m 'fix(gateway): x'"
-check warn "$WS" "git -C rpg-mmo-server commit -m x"
+rcheck warn "$WS" "git -C rpg-mmo-server commit -m x"
 check warn "$WS" "cd IndieRPGMMOAdventure && git commit -m x"
 check allow "$SERVER" "git checkout -b feat/gateway/y && git commit -m 'feat(gateway): y'"
 check allow "$FEATURE" "git commit -m 'feat(gateway): x'"
 check warn "$FEATURE" "git commit --amend --no-edit"
 # tags + submodules
-check high "$SERVER" "git tag sgl-v0.7.0"
+rcheck high "$SERVER" "git tag sgl-v0.7.0"
 check high "$SERVER" "git tag -a v1.2.3 -m release"
-check high "$SERVER" "git tag -d v0.1.0"
-check high "$SERVER" "git push origin --tags"
+rcheck high "$SERVER" "git tag -d v0.1.0"
+rcheck high "$SERVER" "git push origin --tags"
 check high "$SERVER" "git push origin v1.2.3"
 check high "$SERVER" "git push origin refs/tags/core-baseline-v2"
 check high "$SERVER" "git status && git tag v9.9.9"
@@ -306,7 +389,7 @@ check warn "$SERVER" '`which git` push'
 check warn "$SERVER" 'git -c alias.nuke="reset --hard" nuke'
 check warn "$SERVER" 'python3 -c "import os; os.system(\"git reset --hard\")"'
 check warn "$SERVER" 'node -e "require(\"child_process\").execSync(\"git push\")"'
-check high "$SERVER" 'bash -c "git tag v1.0.0"'
+rcheck high "$SERVER" 'bash -c "git tag v1.0.0"'
 check high "$SERVER" 'env GIT_DIR=.git git push origin --tags'
 check high "$SERVER" "sudo git tag sgl-v9.9.9"
 # ---- v2: commit-creating / ref-destroying operations
@@ -325,7 +408,7 @@ check high "$SERVER" "git update-ref refs/tags/v9 HEAD"
 check warn "$SERVER" "git gc --prune=now"
 check warn "$SERVER" "git reflog expire --expire=now --all"
 check warn "$SERVER" "git prune"
-check high "$SERVER" "git push origin HEAD:refs/tags/v2.0.0"
+rcheck high "$SERVER" "git push origin HEAD:refs/tags/v2.0.0"
 check high "$SERVER" "git push --mirror origin"
 check allow "$FEATURE" "git merge develop"
 check allow "$FEATURE" "git cherry-pick abc123"
@@ -342,9 +425,9 @@ check allow "$FEATURE" "git pull"
 check allow "$SERVER" "git merge --abort"
 check allow "$SERVER" "git fetch --prune"
 # ---- v2: gh API / releases
-check high "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/tags/v9 -f sha=abc"
-check high "$SERVER" "gh api repos/Cuvara/x/git/tags -f tag=v9"
-check high "$SERVER" "gh release create v1.0.0"
+rcheck high "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/tags/v9 -f sha=abc"
+rcheck high "$SERVER" "gh api repos/Cuvara/x/git/tags -f tag=v9"
+rcheck high "$SERVER" "gh release create v1.0.0"
 check high "$SERVER" "gh api -X POST repos/Cuvara/x/releases -f tag_name=v1"
 check warn "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/heads/x -f sha=abc"
 check allow "$SERVER" "gh api repos/Cuvara/x/git/refs/tags"
@@ -358,8 +441,8 @@ check allow "$SERVER" "sudo ls /root"
 check allow "$SERVER" 'python3 -c "print(1)"'
 check allow "$SERVER" 'echo $HOME && ls'
 # ---- v2: PowerShell tool
-check high "$SERVER" "git tag v1.2.3" "" PowerShell
-check warn "$SERVER" "git reset --hard; Get-ChildItem" "" PowerShell
+rcheck high "$SERVER" "git tag v1.2.3" "" PowerShell
+rcheck warn "$SERVER" "git reset --hard; Get-ChildItem" "" PowerShell
 check warn "$SERVER" "& 'git.exe' push --force" "" PowerShell
 check warn "$SERVER" "Set-Location ..\\IndieRPGMMOAdventure; git commit -m x" "" PowerShell
 check warn "$SERVER" "git merge feat/x" "" PowerShell
@@ -411,7 +494,7 @@ os.makedirs(os.path.join(sys.argv[1], "latch", key), exist_ok=True)
 for p in (os.path.join(sys.argv[1], "latch", key, "20261014T000000Z-abc123.json"), os.path.join(sys.argv[1], "latch", key + ".json")):
     json.dump({"workspace": sys.argv[2], "session": "other", "message": "[client] pre-existing user file changed"}, open(p, "w"))
 PY
-check allow "$SERVER" "git fetch --tags"
+rcheck allow "$SERVER" "git fetch --tags"
 check allow "$SERVER" "git fetch origin --tags --prune"
 check allow "$SERVER" "touch newfile"
 check allow "$FEATURE" "git commit -m 'feat(gateway): x'"
@@ -419,7 +502,7 @@ check allow "$SERVER" "git switch -c feat/server/after-latch"
 check allow "$SERVER" "python3 build.py"
 check allow "$SERVER" "git status"
 check warn   "$SERVER" "git stash drop"                       # the unrelated git safety rules still apply
-check high  "$SERVER" "git push origin --tags"
+rcheck high  "$SERVER" "git push origin --tags"
 rm -rf "$TMP/rpg-factory/guardtest/LATCH" "$TMP/state/latch"
 # non-Bash payloads are ignored
 out=$(jq -cn '{tool_name:"Read", tool_input:{file_path:"x"}, cwd:"/"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
@@ -550,7 +633,7 @@ check high "$SERVER" "gh api -XPOST repos/Cuvara/rpg-mmo-server/releases -f tag_
 check warn "$SERVER" "gh api -X PATCH repos/Cuvara/rpg-mmo-server -f default_branch=main"
 check warn "$SERVER" "gh api repos/Cuvara/rpg-mmo-server/issues -f title=x"
 check allow "$SERVER" "gh api repos/Cuvara/rpg-mmo-server/pulls --jq '.[].number'"
-check high "$SERVER" "gh repo delete Cuvara/rpg-mmo-server --yes"
+rcheck high "$SERVER" "gh repo delete Cuvara/rpg-mmo-server --yes"
 check high "$SERVER" "gh repo archive Cuvara/rpg-mmo-server"
 check warn "$SERVER" "gh repo edit --default-branch main"
 check warn "$SERVER" "gh repo rename x"
@@ -575,7 +658,7 @@ check high "$SERVER" "bash -c 'gh repo delete Cuvara/Netcode --yes'"
 check high "$OUT" "gh repo delete Cuvara/Netcode --yes"
 check high "$OUT" "gh api -X DELETE repos/Cuvara/UnityDots"
 check warn "$OUT" "gh api -X PUT repos/Cuvara/UIToolkit/branches/main/protection --input p.json"
-check allow "$OUT" "gh repo delete someone/scratch --yes"
+rcheck allow "$OUT" "gh repo delete someone/scratch --yes"
 
 # ---- v0.4: local ref / remote / config mutations on protected branches
 git -C "$SERVER" branch feat/x 2>/dev/null
@@ -755,9 +838,49 @@ check warn "$SERVER" 'python3 -c "import os; os.system(\"gh release create v1\")
 check warn "$SERVER" 'node -e "require(\"child_process\").execSync(\"gh release create v1\")"'
 check allow "$SERVER" 'python3 -c "print(\"github\")"'
 # (6) payloads that are not objects, and non-ASCII paths decoded as UTF-8
+# Pair the existing malformed-input assertions with batch protocol checks, so
+# coverage grows without changing the suite's original case names/count.
+batch_protocol_ok=$(CLAUDE_PLUGIN_ROOT="$ROOT" python3 -B - "$GUARD" "$SERVER" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+guard, cwd = sys.argv[1:]
+payload = {"tool_name": "Bash", "tool_input": {"command": "git tag v1"}, "cwd": cwd}
+cases = [
+    'not json',
+    json.dumps({"payload": payload, "env": {"RPG_FACTORY_GUARD": "off"}}),
+    json.dumps(payload),
+    json.dumps({"payload": payload, "env": {"RPG_FACTORY_STATE_DIR": 42}}),
+    json.dumps(payload),
+    json.dumps({"payload": payload, "env": {"CLAUDE_PLUGIN_ROOT": cwd + "/missing-plugin"}}),
+    json.dumps(payload),
+]
+run = subprocess.run([sys.executable, "-B", guard, "--batch"],
+                     input="\n".join(cases) + "\n", capture_output=True, encoding="utf-8")
+results = [json.loads(line) for line in run.stdout.splitlines()]
+assert run.returncode == 0 and len(results) == len(cases), (run, results)
+assert results[0]["rc"] == results[3]["rc"] == 1
+assert results[0].get("error") and results[3].get("error")
+assert results[1] == results[5] == {"rc": 0, "out": ""}
+single = subprocess.run([sys.executable, "-B", guard], input=json.dumps(payload),
+                        capture_output=True, encoding="utf-8")
+assert results[2] == results[4] == results[6] == {"rc": single.returncode, "out": single.stdout}
+assert "rpg-factory advisory (high)" in single.stdout
+print("ok")
+PY
+)
+# A protocol failure fails only the first payload case, with its own message.
+first_payload=1
 for p in '[]' 'null' '"s"' '42' '{"tool_name":"Bash","tool_input":"x"}' '{"tool_name":"Bash","tool_input":{"command":42}}'; do
   out=$(printf '%s' "$p" | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" 2>&1; echo "exit=$?")
-  [ "$out" = "exit=0" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL payload $p: $out"; }
+  if [ "$out" != "exit=0" ]; then fail=$((fail + 1)); echo "FAIL payload $p: $out"
+  elif [ -n "$first_payload" ] && [ "$batch_protocol_ok" != ok ]; then
+    fail=$((fail + 1)); printf 'FAIL batch protocol: %s
+' "${batch_protocol_ok:-no output (assertion failed)}"
+  else pass=$((pass + 1)); fi
+  first_payload=
 done
 NA="$SERVER/backend/d$(printf '\xc3\x84\xd0\x90')"; mkdir -p "$NA"
 check high "$NA" "git tag v1.2.3"
@@ -803,6 +926,14 @@ mx high  "$SERVER" "touch f.txt"
 mx allow "$SERVER" "bash $CTX --mode implement"
 
 
+exec {batch_in}>&- {batch_out}<&-
+# Close the coprocess's original descriptor too so it observes EOF.
+exec {GUARD_BATCH[1]}>&-
+wait "$batch_pid" || { fail=$((fail + 1)); echo 'FAIL batch process exit'; }
+if [ "$real_hook_cases" -ne $((12 + rcheck_cases)) ]; then
+  fail=$((fail + 1)); echo "FAIL real-hook cases: $real_hook_cases, want $((12 + rcheck_cases)) (12 + $rcheck_cases rchecks)"
+fi
+echo "git-guard real-hook cases: $real_hook_cases (12 + $rcheck_cases rchecks; env cases also on the real hook)"
 total=$((pass + fail))
 echo "git-guard tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

@@ -22,12 +22,15 @@ doc, top, orch = (open(p, encoding="utf-8", errors="replace").read() for p in sy
 spans = re.findall(r"`([^`]+)`", doc)
 cmds = []
 flags = {}  # command -> --flags cited after it in the same code span
+values = {}  # command -> (--flag, literal value) pairs cited after it in the same code span
 for s in spans:
     for m in re.finditer(r"\borca\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?", s):
         c = (m.group(1), m.group(2))
         if c not in cmds:
             cmds.append(c)
         flags.setdefault(c, set()).update(re.findall(r"(?<![\w-])(--[a-z][a-z-]*)", s[m.end():]))
+        # `--flag value` with a literal value (no selector prefix like path:) -> checked against the usage choices
+        values.setdefault(c, set()).update(re.findall(r"(?<![\w-])(--[a-z][a-z-]*)\s+([a-z][a-z-]*)(?![\w:-])", s[m.end():]))
 def listed(text, words):
     return re.search(r"^\s+" + r"\s+".join(map(re.escape, words)) + r"(\s|$)", text, re.M) is not None
 for cmd, sub in cmds:
@@ -47,6 +50,12 @@ for cmd, sub in cmds:
         for f in sorted(flags[(cmd, sub)]):
             ok = re.search(re.escape(f) + r"(?![a-z-])", usage) is not None
             print(("OK " if ok else "MISSING ") + f"{name} {f}")
+        # a value is checked only where the usage lists the flag's choices (`--worktree <current|new-child|...>`)
+        for f, v in sorted(values.get((cmd, sub), ())):
+            choices = re.search(re.escape(f) + r"\s+<([^<>]*\|[^<>]*)>", usage)
+            if choices:
+                ok = v in choices.group(1).split("|")
+                print(("OK " if ok else "MISSING ") + f"{name} {f} {v}")
 PY
 }
 
@@ -58,6 +67,11 @@ grep -q '^OK orca orchestration worker-start$' <<<"$out" && grep -q '^OK orca sk
   && ok "the checker saw worker-start, skills get and status" || no "expected commands not extracted" "$out"
 grep -q '^OK orca status --json$' <<<"$out" && grep -q '^OK orca orchestration worker-start --worktree$' <<<"$out" \
   && ok "the cited flags --json and --worktree exist in their commands' --help" || no "cited flags not checked" "$out"
+# the two child placements factory-pipeline dispatch prints (parallel-work.md section 1 placement table)
+grep -q '^OK orca orchestration worker-start --worktree new-child$' <<<"$out" \
+  && grep -q '^OK orca worktree create --parent-worktree$' <<<"$out" \
+  && ok "worker-start --worktree new-child and worktree create --parent-worktree are checked against orca" \
+  || no "child placement commands not extracted or not verified" "$out"
 
 # the policy's cleanup caveat matches Orca: `orca worktree rm` says it deletes the checked-out branch
 if orca worktree rm --help 2>&1 | grep -qi 'delete the checked-out local branch'; then
@@ -75,6 +89,12 @@ printf 'Detect with `orca status --made-up-flag` and dispatch with `orca orchest
 out=$(check "$TMP/badflag.md")
 grep -q '^MISSING orca status --made-up-flag$' <<<"$out" && grep -q '^MISSING orca orchestration worker-start --no-such-flag$' <<<"$out" \
   && ok "made-up flags are reported missing" || no "checker accepted a made-up flag" "$out"
+printf 'Child with `orca orchestration worker-start --worktree new-grandchild` or `orca worktree create --parent-workspace path:<x>`.\n' > "$TMP/badchild.md"
+out=$(check "$TMP/badchild.md")
+grep -q '^MISSING orca orchestration worker-start --worktree new-grandchild$' <<<"$out" \
+  && grep -q '^MISSING orca worktree create --parent-workspace$' <<<"$out" \
+  && ok "a made-up --worktree value and a made-up worktree create flag are reported missing" \
+  || no "checker accepted a made-up child placement" "$out"
 
 echo "orca-commands: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

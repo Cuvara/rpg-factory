@@ -147,6 +147,24 @@
             "minLength": 1,
             "description": "The task lead's own Orca Run id (from its report; run:<id> accepted). status and cleanup list that Run's settled workers that are not released (read-only worker-list). Not part of the verdict fingerprint."
           },
+          "kind": {
+            "enum": [
+              "lead",
+              "plan",
+              "docs",
+              "policy",
+              "design",
+              "code",
+              "test",
+              "fix",
+              "refactor",
+              "generated"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Explains an implementer override or placement choice."
+          },
           "grade": {
             "enum": [
               "light",

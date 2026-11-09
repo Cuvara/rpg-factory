@@ -306,10 +306,16 @@ def run_check(command, cwd, env, timeout, bash_selection, timing=None):
                 killer = subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
                 cleanup = "success" if killer.returncode == 0 else f"failed (taskkill exit {killer.returncode}: {killer.stderr.strip() or killer.stdout.strip()})"
             else:
-                listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=POSIX_LIST_S)
-                if listing.returncode == 0:
-                    pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
-                os.killpg(p.pid, signal.SIGKILL)
+                try:  # Diagnostic only: missing, slow or malformed ps must never skip the kill.
+                    listing = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=POSIX_LIST_S)
+                    if listing.returncode == 0:
+                        pids = sorted({int(pid) for pid, pgid in (line.split() for line in listing.stdout.splitlines()) if int(pgid) == p.pid})
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # Already gone; verification below still records the outcome.
                 try:
                     p.wait(timeout=POSIX_REAP_S)  # reap the direct child before probing group membership
                 except subprocess.TimeoutExpired:

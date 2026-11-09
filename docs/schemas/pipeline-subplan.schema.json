@@ -28,8 +28,7 @@
         "required": [
           "id",
           "objective",
-          "paths",
-          "implementer"
+          "paths"
         ],
         "properties": {
           "id": {
@@ -75,7 +74,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Why the placement; required (non-empty) when placement is child: parallel full suites, generated/build output, risky work, a frozen QA checkout."
+            "description": "Explains an implementer override or placement choice; required (non-empty) when placement is child."
           },
           "checks": {
             "type": "array",
@@ -88,6 +87,20 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "enum": [
+              "lead",
+              "plan",
+              "docs",
+              "policy",
+              "design",
+              "code",
+              "test",
+              "fix",
+              "refactor",
+              "generated"
+            ]
           },
           "grade": {
             "enum": [
@@ -102,6 +115,10 @@
             "description": "One line: why this grade (the rubric sentence it matches)."
           }
         },
+        "anyOf": [
+          {"required": ["implementer"]},
+          {"required": ["kind"]}
+        ],
         "if": {
           "properties": {
             "placement": {

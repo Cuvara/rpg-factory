@@ -140,6 +140,30 @@ report_run=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflo
 PY
 [ "$?" -eq 0 ] || exit 1
 echo 'PASS status, dispatch, report schemas and runner contracts'
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json,os,pathlib,shlex,subprocess,sys
+root=pathlib.Path(sys.argv[1]); tmp=pathlib.Path(sys.argv[2])
+reg=json.loads((tmp/'registry.json').read_text()); pipe=reg['pipeline']
+# An artifact kind entry must not override the pipeline default for workflow nodes.
+pipe['default_implementer']='claude'; pipe['agent_routing']={'default':'codex','feature-spec':'claude'}
+pipe['available_agents']=['claude','codex']
+for agent in ('claude','codex'):
+    pipe['agents'][agent]['orca_agent']=agent+'-routed'
+    pipe['agents'][agent]['agent_runner']=agent+'-runner'
+fixture=tmp/'routing-registry.json'; fixture.write_text(json.dumps(reg))
+for available,expected in [('claude,codex','codex'),('claude','claude')]:
+    for runner in ('orca','agent'):
+        p=subprocess.run([sys.executable,'-B',str(root/'scripts/factory-workflow.py'),'dispatch',str(tmp/'design.json'),'--registry',str(fixture),'--authoring',str(tmp/'authoring'),'--node','design','--runner',runner],capture_output=True,text=True,env=dict(os.environ,RPG_FACTORY_AGENTS=available))
+        assert p.returncode==0,(runner,p.stderr)
+        if runner=='orca':
+            argv=shlex.split(p.stdout)
+            assert argv[argv.index('--agent')+1]==expected+'-routed',p.stdout
+        else:
+            call=json.loads(p.stdout.split('\n',1)[1])
+            assert call['subagent_type']==expected+'-runner',call
+print('PASS workflow dispatch honors agent routing default and availability fallback for both runners')
+PY
+[ "$?" -eq 0 ] || exit 1
 python3 - "$ROOT" "$TMP" <<'PY'
 import hashlib,importlib.util,json,pathlib,subprocess,sys
 root=pathlib.Path(sys.argv[1]); t=pathlib.Path(sys.argv[2]); author=t/'authoring-stale'; (author/'design/features').mkdir(parents=True); (author/'ui/specs').mkdir(parents=True)
@@ -209,4 +233,4 @@ assert any(x['contract']=='ui-vfx-sync' and ui['id'] in x['changed'] and vfx['id
 print('PASS sync contract reports the opposite side for revalidation without an ordering edge')
 PY
 [ "$?" -eq 0 ] || exit 1
-echo 'workflow tests: 14 run, 14 passed, 0 failed'
+echo 'workflow tests: 15 run, 15 passed, 0 failed'

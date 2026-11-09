@@ -43,7 +43,7 @@ import json
 import os
 import posixpath
 import shutil
-import signal
+import signal  # not used here: tests/fixtures/run-checks-cleanup-failure.py patches runner.signal
 import subprocess
 import sys
 import time

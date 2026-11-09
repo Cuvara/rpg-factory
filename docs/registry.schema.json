@@ -294,6 +294,47 @@
           },
           "description": "A repo whose root holds one of these files is treated as worktrees: false even when unregistered."
         },
+        "agent_routing": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "lead",
+              "plan",
+              "docs",
+              "policy",
+              "design",
+              "code",
+              "test",
+              "fix",
+              "refactor",
+              "generated",
+              "default"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "qa_prefer": {
+          "type": "string"
+        },
+        "qa_tiers": {
+          "type": "object",
+          "required": ["task", "integration", "description"],
+          "properties": {
+            "task": {"const": "affected"},
+            "integration": {"const": "full"},
+            "description": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "available_agents": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
         "models": {
           "type": "object",
           "description": "Model policy (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice'). scope = what may run at all; profiles = the model and effort of each role and grade, every one inside scope (scripts/check-registry.sh enforces it). A personal override file may narrow scope and replace profiles.",

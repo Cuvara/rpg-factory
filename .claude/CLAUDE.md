@@ -12,7 +12,9 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
 - Keep `factory-context.sh`, `factory-status.py` and `scripts/checks/` read-only: no fetch (except
   opt-in `--remote` ls-remote), no writes into repos. State is derived from git; the only Factory
   files are per-session mode state and check evidence, resolved through `scripts/lib/fstate.py` (never `$TMPDIR`
-  directly, never relative). Tests set `RPG_FACTORY_STATE_DIR` and `TMPDIR` to a temp dir.
+  directly, never relative). Tests set `RPG_FACTORY_STATE_DIR` and `TMPDIR` to a temp dir. Exceptions, on
+  purpose in the persistent state dir: run-all's full-run lock, tree records and suite PASS records (`run-all/`,
+  `locks/`) and the routing history-replay cache (`routing-replay/`, pruned on write).
 - `run-checks.py` never runs a check in place when it would write into a product repo; pollution is FAIL.
 - Hooks must stay fast (one guard process per command, no repository scan) and must never crash a session.
   No hook snapshots repository state, latches a session or needs an acknowledgement (the tripwire was
@@ -25,8 +27,10 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   in `scripts/file-guard.py`; both guards raise mode advisories (never a block). Each human gate regex and the git evaluation must fail independently.
 - Every behaviour change gets a test in `tests/` and a changelog fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`
   sections; `changelog.d/README.md`). Never edit `CHANGELOG.md` `[Unreleased]` directly: it stays empty (run-all checks it).
-- While iterating: `tests/run-all.sh --affected` (only the suites the change touches). Before opening a PR (and
-  for releases): the full `tests/run-all.sh` must report 0 failed. Report the pass count. CI
+- While iterating and in task QA: the tier command (`tests/run-all.sh --affected --base <base> -j 2`, or the task's
+  suites with `--only-suites`); a task never runs the full suite. Before opening a PR: integration QA's full run
+  (`tests/run-all.sh --reuse -j 4`, or a reused PASS record of the same tree) must report 0 failed; releases run
+  `--release`. Report the pass count. Tiers: `parallel-work.md` section 10 "QA tiers". CI
   (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`; it does not replace the local run.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
@@ -84,9 +88,9 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
 - **Fix citation drift right before a release gate:** `python3 -B scripts/checks/skill-citations.py --fix`.
   Citations are checked against client and Netcode `develop`, which merge refactors every 30-60 minutes; in 1.3.0
   they drifted between the fix and the gate four times. Check their open PRs before starting the gate.
-- **At most 2 concurrent full `tests/run-all.sh` runs on this machine;** other sessions use `--affected`. Four
-  parallel full runs made every suite 2-4x slower and timed some out (`parallel-work.md` section 4 treats the
-  full run as an exclusive resource).
+- **One full run per machine: the run-all lock** (a second full `tests/run-all.sh` waits; `--no-wait` exits 3).
+  Four parallel full runs made every suite 2-4x slower and timed some out; other sessions use the tier command
+  (`parallel-work.md` section 10 "QA tiers").
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
   script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted
@@ -99,11 +103,18 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
 ## Commands
 
 ```bash
-tests/run-all.sh                    # every local suite; must end with 0 failed
+tests/run-all.sh                    # every local suite (integration QA only, under the lock); must end with 0 failed
 tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace on disk
 tests/run-all.sh --no-claude        # skip `claude plugin validate`
 tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh
 tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base (tests/affected.py); not the PR gate
+tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected; task QA: the task's checks);
+                                    # with --affected or --only-suites, live blocks and script checks (skill-citations,
+                                    # factory-context, pin-plan, package-ready, netcode-headless...) are gated like suites
+tests/run-all.sh --list-suites      # print the suite names --only-suites accepts (read-only, runs no checks)
+tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree and coverage (integration QA)
+tests/run-all.sh --no-wait          # exit 3 instead of waiting when another full run holds the per-machine lock
+tests/run-all.sh --no-reuse         # run every suite; by default a suite whose input hash already passed is reused
 tests/run-all.sh -j 4               # up to 4 suites at once; same lines, order, count and exit code as -j 1 (default);
                                     # live-workspace checks one at a time, run1 suites alone; CI uses -j 4
 tests/run-all-parallel.test.sh      # run-all -j scheduler on stand-in suites (order, counts, cap, live lane, run1)
@@ -132,7 +143,8 @@ python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   #
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 env -u TMPDIR tests/pipeline.test.sh       # delivery pipeline on a throwaway workspace (server + Unity client)
-python3 -B scripts/factory-pipeline.py tier|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (parallel-work.md section 10)
+python3 -B scripts/factory-pipeline.py tier|agents|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (parallel-work.md section 10)
+python3 -B scripts/factory-pipeline.py agents <plan> [--down A [--reason T] | --up A]  # per-run MODEL_UNAVAILABLE marks
 
 # routing / state, read-only against the workspace
 scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--domain <id>] [--explain] [--json]

@@ -102,6 +102,46 @@ cat_json --uitoolkit "$TMP/no-repo" > "$TMP/c2.json"; rc=$?
 mkdir -p "$TMP/empty-ws"   # explicit workspace without markers: no fallback to the cwd (inside the fixture) or the host default
 (cd "$U" && RPG_FACTORY_WORKSPACE="$TMP/empty-ws" python3 -B "$CAT" --json > "$TMP/c2.json" 2>/dev/null); rc=$?
 [ $rc -eq 1 ] && [ "$(jq -r .status "$TMP/c2.json")" = NOT_AVAILABLE ] && ok "explicit workspace without markers -> NOT_AVAILABLE, even from inside a workspace" || no "no workspace: rc=$rc $(jq -c '{status,reason}' "$TMP/c2.json")"
+# a failing or truncated git cat-file --batch (subprocess.run stubbed for cat-file only): NOT_AVAILABLE, never a partial catalog
+python3 -B - "$ROOT/scripts/ui" "$U" <<'PY' && ok "cat-file --batch failure or truncated output -> NOT_AVAILABLE with the reason, built-ins only" || no "cat-file --batch failure handling"
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import ui_catalog
+real = subprocess.run
+def stub(rc, cut):
+    def run(cmd, *a, **kw):
+        if "cat-file" not in cmd:
+            return real(cmd, *a, **kw)
+        p = real(cmd, *a, **kw)
+        return subprocess.CompletedProcess(cmd, rc, cut(p.stdout), b"fatal: stub failure\n" if rc else b"")
+    return run
+cases = [(128, lambda o: o[:len(o) // 2], "exit 128"), (128, lambda o: b"", "fatal: stub failure"),
+         (0, lambda o: o[:len(o) // 2], "truncated"), (0, lambda o: o[:o.index(b"\n")], "truncated")]
+for rc, cut, why in cases:
+    subprocess.run = stub(rc, cut)
+    c = ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")
+    subprocess.run = real
+    assert c["status"] == "NOT_AVAILABLE" and why in c["reason"] and "cat-file" in c["reason"], (why, c["status"], c["reason"])
+    assert c["uitoolkit"] is None and {e["kind"] for e in c["entries"]} == {"unity-builtin"}, why
+assert ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")["status"] == "PASS"
+PY
+# a failing git ls-tree (subprocess.run stubbed for ls-tree only): NOT_AVAILABLE, never a catalog from an empty listing
+python3 -B - "$ROOT/scripts/ui" "$U" <<'PY' && ok "ls-tree failure -> NOT_AVAILABLE with the reason, built-ins only" || no "ls-tree failure handling"
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import ui_catalog
+real = subprocess.run
+def run(cmd, *a, **kw):
+    if "ls-tree" not in cmd:
+        return real(cmd, *a, **kw)
+    return subprocess.CompletedProcess(cmd, 128, "", "fatal: stub failure\n")
+subprocess.run = run
+c = ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")
+subprocess.run = real
+assert c["status"] == "NOT_AVAILABLE" and "ls-tree" in c["reason"] and "exit 128" in c["reason"], (c["status"], c["reason"])
+assert c["uitoolkit"] is None and {e["kind"] for e in c["entries"]} == {"unity-builtin"}, c["entries"][:3]
+assert ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")["status"] == "PASS"
+PY
 python3 -B "$CAT" --ref >/dev/null 2>&1; [ $? -eq 2 ] && ok "catalog usage error -> exit 2" || no "catalog usage exit"
 out=$(python3 -B "$CAT" --ref v0.8.0); grep -q '^| `pkg:ConfirmDialog` | package-service | Runtime/Flow/ConfirmDialog.cs:' <<<"$out" && ok "Markdown table output" || no "markdown: $(head -c 300 <<<"$out")"
 

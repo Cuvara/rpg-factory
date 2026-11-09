@@ -396,6 +396,29 @@
     "no_worktree_markers": [
       "ProjectSettings/ProjectVersion.txt"
     ],
+    "agent_routing": {
+      "lead": "claude",
+      "plan": "claude",
+      "docs": "claude",
+      "policy": "claude",
+      "design": "claude",
+      "code": "codex",
+      "test": "codex",
+      "fix": "codex",
+      "refactor": "codex",
+      "generated": "codex",
+      "default": "claude"
+    },
+    "qa_prefer": "codex",
+    "qa_tiers": {
+      "task": "affected",
+      "integration": "full",
+      "description": "Task QA runs affected and explicit check suites once; integration runs one full suite per batch with reuse under the machine lock."
+    },
+    "available_agents": [
+      "claude",
+      "codex"
+    ],
     "models": {
       "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice').",
       "scope": {
