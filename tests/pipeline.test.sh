@@ -1813,6 +1813,8 @@ expect "--no-run-checks never delivers: UNVERIFIED" 1 "^Gate: UNVERIFIED" gate "
 refute "UNVERIFIED prints no gh pr create" "gh pr create" gate "$R" --no-run-checks
 
 echo "-- cleanup"
+expect "before merge the integration branch remains" 0 "^Cleanup: CLEAN" cleanup "$G"
+refute "before merge no integration branch deletion" "branch -d feat/core/demo($| )" cleanup "$G"
 expect "no worktree or task branch left: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
 git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
 expect "an integrated task worktree is LEFTOVER with its remove command" 1 "git -C .* worktree remove .*srv-gw" cleanup "$G"
@@ -2560,6 +2562,42 @@ check_reg "check-registry: unknown agent in agent_routing fails" '.pipeline.agen
 check_reg "check-registry: unknown kind in agent_routing fails" '.pipeline.agent_routing.bogus = "claude"' "pipeline.agent_routing: invalid kind or agent bogus"
 check_reg "check-registry: unknown agent in qa_prefer fails" '.pipeline.qa_prefer = "gpt"' "pipeline.qa_prefer: unknown agent"
 check_reg "check-registry: unknown agent in available_agents fails" '.pipeline.available_agents = ["gpt"]' "pipeline.available_agents: unknown agent gpt"
+
+echo "-- cleanup after merge to main"
+M="$TMP/merged-repo"; O="$TMP/merged-origin.git"; MW="$TMP/merged-topic"
+git init -q --bare "$O"
+git init -q -b main "$M"
+echo base > "$M/base"; gi "$M" add base; gi "$M" commit -qm base
+git -C "$M" remote add origin "$O"; git -C "$M" push -qu origin main
+git -C "$M" worktree add -q -b feat/merged "$MW" main
+echo merged > "$MW/change"; gi "$MW" add change; gi "$MW" commit -qm change
+git -C "$M" branch feat/merged-task feat/merged
+git -C "$M" branch feat/merged-other main
+git -C "$M" worktree add -q "$TMP/other-wt" feat/merged-other
+echo other > "$TMP/other-wt/other"; gi "$TMP/other-wt" add other; gi "$TMP/other-wt" commit -qm other
+git -C "$M" worktree remove "$TMP/other-wt"
+git -C "$M" push -q origin feat/merged feat/merged-task feat/merged-other
+MP=$(plan merged "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"merged\",\"title\":\"t\",\"topic\":\"feat/merged\",\"repos\":{\"srv\":{\"path\":\"$M\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"task\",\"repo\":\"srv\",\"objective\":\"o\",\"paths\":[\"change\"],\"acceptance\":[\"a\"]}]}")
+refute "unmerged integration worktree stays" "worktree remove .*merged-topic" cleanup "$MP"
+git -C "$M" merge -q --ff-only feat/merged; git -C "$M" push -q origin main
+expect "merged integration worktree is removable" 1 "worktree remove .*merged-topic" cleanup "$MP"
+expect "merged integration branch is removable" 1 "branch -d feat/merged$" cleanup "$MP"
+expect "merged task branch is removable" 1 "branch -d feat/merged-task$" cleanup "$MP"
+expect "merged remote branch is removable" 1 "push origin --delete feat/merged-task$" cleanup "$MP"
+expect "merged remote integration branch is removable" 1 "push origin --delete feat/merged$" cleanup "$MP"
+expect "unmerged remote branch is kept" 1 "remote branch feat/merged-other is not in main" cleanup "$MP"
+refute "unmerged remote branch is never deleted" "push origin --delete feat/merged-other$" cleanup "$MP"
+refute "primary checkout is never removed" "worktree remove .*merged-repo$" cleanup "$MP"
+echo dirty > "$MW/wip"
+expect "dirty integration worktree is kept" 1 "KEPT  srv: worktree .*merged-topic has uncommitted changes" cleanup "$MP"
+refute "dirty integration worktree is not removed" "worktree remove .*merged-topic" cleanup "$MP"
+rm "$MW/wip"
+git -C "$M" worktree remove "$MW"
+git -C "$M" branch -d feat/merged-task feat/merged >/dev/null
+git -C "$M" push -q origin --delete feat/merged-task feat/merged feat/merged-other
+git -C "$M" branch -D feat/merged-other >/dev/null
+expect "cleanup is clean after removal" 0 "^Cleanup: CLEAN" cleanup "$MP"
+expect "clean cleanup names the next plan" 0 "^Next: start the next plan from main$" cleanup "$MP"
 
 echo "-- model routing"
 for case in $ROUTING_CASES; do bg_report "routing $case" "routing-$case"; done

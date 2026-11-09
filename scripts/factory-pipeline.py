@@ -148,7 +148,8 @@ docs/schemas/pipeline-plan.schema.json.
 
   cleanup <plan.json> [--orca-run RUN_ID]... [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
-        (as in status) is unreleased; otherwise prints `git worktree remove`, `git branch -d` for integrated ones and
+        (as in status) is unreleased; after the topic is merged into main, also lists removal of its integration worktree and
+        lists local and origin branch deletion for plan branches contained in main. Otherwise prints removal commands and
         `orca orchestration worker-release --dispatch <id>` per unreleased worker, names each leftover child worktree
         as "child of <task>" (`orca worktree rm` once merged), names the rest, and reminds to
         release every worker session. Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
@@ -2450,7 +2451,15 @@ def cleanup(plan, reg, orca_run=None):
             continue
         topic = plan["topic"]
         integrated = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0]
+        remote_topic = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{topic}")[0]
+        main = (git(info["path"], "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main")[0]
+                or git(info["path"], "rev-parse", "--verify", "--quiet", "refs/heads/main")[0])
+        topic_head = integrated or remote_topic
+        merged = bool(main and topic_head and is_ancestor(info["path"], topic_head, main))
         _, trees = worktree_for(info["path"], topic)
+        tree_list, _ = git(info["path"], "worktree", "list", "--porcelain")
+        first = (tree_list or "").splitlines()
+        command_repo = first[0][9:] if first and first[0].startswith("worktree ") else info["path"]
         # an Orca child of a task worktree (or of the integration checkout): named after its parent branch, or
         # Orca's lineage names that worktree as its parent; only children of this run's worktrees
         parents = [(t["id"], task_branch(plan, info, t)) for t in plan["tasks"] if t.get("repo") == key]
@@ -2473,7 +2482,8 @@ def cleanup(plan, reg, orca_run=None):
                     if c["merged"]:
                         commands.append(orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{wt['path']}"]))
                 continue
-            if not str(wt.get("branch", "")).startswith(topic + "-"):
+            branch = str(wt.get("branch", ""))
+            if not branch.startswith(topic + "-") and not (merged and branch == topic):
                 continue
             dirty, rc = git(wt["path"], "status", "--porcelain")
             if rc != 0 or dirty:
@@ -2481,16 +2491,41 @@ def cleanup(plan, reg, orca_run=None):
                 left.append(wt["path"])
                 continue
             left.append(wt["path"])
-            commands.append(orca_cmd.quote(["git", "-C", info["path"], "worktree", "remove", wt["path"]]))
+            commands.append(orca_cmd.quote(["git", "-C", command_repo, "worktree", "remove", wt["path"]]))
         refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
+        if merged and integrated:
+            refs = (refs or "") + "\n" + topic
         for br in (refs or "").splitlines():
-            _, rc = git(info["path"], "merge-base", "--is-ancestor", br, integrated) if integrated else (None, 1)
+            target = main if merged else integrated
+            _, rc = git(info["path"], "merge-base", "--is-ancestor", br, target) if target else (None, 1)
             if rc == 0:
                 left.append(br)
-                commands.append(orca_cmd.quote(["git", "-C", info["path"], "branch", "-d", br]))
+                home, _ = worktree_for(info["path"], br)
+                if home and all(norm_wt(home) != norm_wt(t["path"]) for t in trees):
+                    kept.append(f"{key}: branch {br} is checked out in the main checkout {home} - not deleted")
+                else:
+                    commands.append(orca_cmd.quote(["git", "-C", command_repo, "branch", "-d", br]))
             else:
                 left.append(br)
-                kept.append(f"{key}: branch {br} is not in {topic} - not deleted (integrate it or name it in the report)")
+                kept.append(f"{key}: branch {br} is not in {'main' if merged else topic} - not deleted (integrate it or name it in the report)")
+        if merged:
+            remote_refs, _ = git(info["path"], "for-each-ref", "--format=%(refname)",
+                                 f"refs/remotes/origin/{topic}", f"refs/remotes/origin/{topic}-*")
+            for ref in sorted((remote_refs or "").splitlines(), key=lambda r: r == f"refs/remotes/origin/{topic}"):
+                br = ref.removeprefix("refs/remotes/origin/")
+                if br != topic and not br.startswith(topic + "-"):
+                    continue
+                left.append(ref)
+                if is_ancestor(info["path"], ref, main):
+                    commands.append(orca_cmd.quote(["git", "-C", command_repo, "push", "origin", "--delete", br]))
+                else:
+                    kept.append(f"{key}: remote branch {br} is not in main - not deleted")
+        elif not topic_head:
+            remote_refs, _ = git(info["path"], "for-each-ref", "--format=%(refname)",
+                                 f"refs/remotes/origin/{topic}-*")
+            for ref in (remote_refs or "").splitlines():
+                left.append(ref)
+                kept.append(f"{key}: {ref} remains but the integration branch is absent - verify the merge before deletion")
     specs_dir = os.path.join(verdict_dir(plan), "specs")
     n_specs = len([f for f in os.listdir(specs_dir) if f.endswith(".md")]) if os.path.isdir(specs_dir) else 0
     specs_kept = [f"{n_specs} spec file(s) in {specs_dir} (dispatch specs, kept as the run's record; delete by hand)"] if n_specs else []
@@ -2523,6 +2558,8 @@ def cmd_cleanup(a, reg):
         for line in session_lines(out["workers"]):
             print("  WORKERS " + line)
         print("Sessions: " + out["sessions"])
+        if out["state"] == "CLEAN":
+            print("Next: start the next plan from main")
     return 0 if out["state"] == "CLEAN" else 1
 
 
