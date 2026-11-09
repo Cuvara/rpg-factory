@@ -9,9 +9,8 @@
 #
 # Usage: tests/routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]
 # Cases: tasks (task scenarios), task-scope (fixture workspace), history (replayed commits), cli-selftest.
-# case-map: tasks registry/engineering/*
-# case-map: task-scope registry/domains/*
-# Routing code (scripts/factory-context.sh, scripts/lib/context.py, resolve.jq) and registry.json have no map: ALL is the safe fallback.
+# No case-map lines: ALL is the answer for every input. registry/* and root files are global inputs, and the routing code
+# (scripts/factory-context.sh, scripts/lib/context.py, resolve.jq) and registry.json feed every case.
 set -uo pipefail
 CASES='tasks task-scope history cli-selftest'
 usage() {

@@ -8,16 +8,19 @@
 # the order below. A mutation command that itself fails is a FAIL (the copy is writable even for read-only sources).
 # Cases are the groups below; --case NAMES runs only those (tests/affected.py maps changed files to cases). The plugin copy
 # is built only for the cases that mutate one (lint-mutations, which-model, qa-tiers).
-# case-map: orca-wait tests/orca-wait.test.sh scripts/orca-wait.sh
-# case-map: lint-mutations tests/skills-lint.sh scripts/* skills/* docs/*
-# case-map: policy-markers skills/factory-core/references/parallel-work.md
-# case-map: which-model skills/* docs/* *.md
-# case-map: qa-tiers skills/* docs/* *.md
-# case-map: orca-first skills/factory-core/references/parallel-work.md
-# case-map: agents-roles AGENTS.md
-# case-map: plan-paths scripts/lib/plan_paths.py
-# case-map: portable-plans docs/plans/*
-# parallel-work.md is read by every policy case; the shared libs, registry.json and this file's other inputs have no map: ALL.
+# case-map: orca-wait tests/orca-wait.test.sh scripts/orca-wait.sh scripts/lib/compat.sh
+# case-map: lint-mutations tests/skills-lint.sh scripts/* skills/* docs/* scripts/lib/compat.sh
+# case-map: policy-markers skills/factory-core/references/parallel-work.md scripts/lib/compat.sh
+# case-map: which-model skills/* docs/* scripts/lib/compat.sh
+# case-map: qa-tiers skills/* docs/* scripts/lib/compat.sh
+# case-map: orca-first skills/factory-core/references/parallel-work.md scripts/lib/compat.sh
+# case-map: agents-roles scripts/lib/compat.sh
+# case-map: plan-paths scripts/lib/plan_paths.py scripts/lib/compat.sh
+# case-map: portable-plans docs/plans/* scripts/lib/compat.sh
+# case-map: cli-selftest scripts/lib/compat.sh
+# scripts/lib/compat.sh is sourced by the suite itself (temp dirs, copies), so it maps to every case. Inputs with no line run ALL:
+# the suite's own file, root files (AGENTS.md, README.md: agents-roles reads AGENTS.md, so it only runs with ALL), registry.json,
+# registry/*, tests/affected.py and every other shared lib. parallel-work.md also selects the lint copy cases through skills/*.
 set -uo pipefail
 CASES='orca-wait lint-mutations policy-markers which-model qa-tiers orca-first agents-roles plan-paths portable-plans cli-selftest'
 usage() {
