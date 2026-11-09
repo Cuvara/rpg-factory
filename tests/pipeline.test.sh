@@ -710,68 +710,68 @@ for paths in (['docs/schemas/pipeline-plan.schema.json'], ['docs/registry.schema
               ['skills/foo/run.py'], ['docs/plans/']):
     assert not m.pr.small_task({'tier': 'M'}, dict(task, paths=paths)), paths
 assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['changelog.d/x.md', 'changelog.d/', 'skills/foo', 'x/y.md']))
-# a compound check is one complete extra command: never split, never dropped, run-all inside it is not folded
-for compound in ('tests/run-all.sh --only-suites tests/pipeline.test.sh && python3 -B scripts/build-registry.py --check',
-                 'tests/run-all.sh --affected || true', 'tests/run-all.sh --affected; echo done',
-                 'tests/run-all.sh --affected | tail -1', '(tests/run-all.sh --affected)', 'bash tests/pipeline.test.sh && true',
-                 'echo $(tests/run-all.sh --affected)', 'tests/run-all.sh --affected > out.txt',
-                 'tests/run-all.sh --affected\npython3 -B scripts/build-registry.py --check',
-                 'tests/run-all.sh --affected\r\npython3 -B scripts/build-registry.py --check'):
-    assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + compound], False), compound
-# a standalone run-all with an env or bash prefix is folded; a full one is flagged as dropped
+# task QA folds only a plain scoped run-all: an optional `env -u TMPDIR` / `bash` prefix, then plain flag tokens with
+# --affected or --only-suites among them; the suites it names join the one tier command
+for plain in ('tests/run-all.sh --affected', './tests/run-all.sh --affected --base plugin-flow-2 -j 2',
+              'bash tests/run-all.sh --only-suites=tests/routing.test.sh', '  env -u TMPDIR tests/run-all.sh --affected\t'):
+    assert m.pr.qa_checks([dict(task, checks=[plain])], listed) == (
+        ['tests/routing.test.sh'] if 'routing' in plain else [], [], False), repr(plain)
 assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR bash tests/run-all.sh --only-suites tests/routing.test.sh'])],
                       listed) == (['tests/routing.test.sh'], [], False)
-assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR X=1 tests/run-all.sh -j 4'])], listed) == ([], [], True)
-# a check full_run() flags is never runnable, even when run-all is only an argument (conservative: no full run)
-assert m.pr.qa_checks([dict(task, checks=['echo tests/run-all.sh'])], listed) == (
-    [], ['[a] ' + m.pr.DO_NOT_RUN + 'echo tests/run-all.sh'], False)
+# every other check that mentions run-all is DO NOT RUN: full, compound, wrapped, adjacent operators, redirections,
+# quotes, escapes, comments, other env prefixes and newlines (no shell parsing decides whether a full run hides)
+dnr = [
+    # full runs (no scoped flag)
+    'tests/run-all.sh', 'tests/run-all.sh -j 4', 'tests/run-all.sh --reuse -j 4', 'env -u TMPDIR X=1 tests/run-all.sh -j 4',
+    'tests/run-all.sh # --affected', 'echo tests/run-all.sh',
+    # compound, scoped or not
+    'tests/run-all.sh --only-suites tests/pipeline.test.sh && python3 -B scripts/build-registry.py --check',
+    'tests/run-all.sh --affected || true', 'tests/run-all.sh --affected; echo done', 'tests/run-all.sh --affected | tail -1',
+    '(tests/run-all.sh --affected)', 'echo $(tests/run-all.sh --affected)', 'tests/run-all.sh --affected > out.txt',
+    'tests/run-all.sh --affected\npython3 -B scripts/build-registry.py --check',
+    'tests/run-all.sh --affected\r\npython3 -B scripts/build-registry.py --check',
+    'tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check', 'tests/run-all.sh --affected\ntests/run-all.sh',
+    # wrapped
+    "bash -c 'tests/run-all.sh -j 4' > out.txt", 'bash -c "tests/run-all.sh -j 4"', "bash -c 'tests/run-all.sh'",
+    "bash -c 'tests/run-all.sh --affected -j 2'", 'sh tests/run-all.sh', 'sh ./tests/run-all.sh -j 4',
+    'env -u TMPDIR sh tests/run-all.sh --reuse', 'env tests/run-all.sh --affected', 'env -u HOME tests/run-all.sh --affected',
+    # operators and redirections without spaces
+    'tests/run-all.sh>qa.log', 'tests/run-all.sh>>qa.log', 'tests/run-all.sh 2>&1', 'tests/run-all.sh&>qa.log',
+    'tests/run-all.sh|tee qa.log', 'tests/run-all.sh 2>&1|tee qa.log', 'true;tests/run-all.sh', 'true&&tests/run-all.sh -j 4',
+    'tests/run-all.sh --affected;tests/run-all.sh', '(tests/run-all.sh)', 'tests/run-all.sh>--affected',
+    'bash -c "tests/run-all.sh">qa.log', 'echo $(tests/run-all.sh)', 'X="tests/run-all.sh -j 4" true',
+    'tests/run-all.sh "unbalanced', 'tests/run-all.sh --affected>qa.log', 'tests/run-all.sh --affected 2>&1|tee qa.log',
+    'tests/run-all.sh --only-suites=tests/x.sh;true', 'tests/run-all.sh --affected&>qa.log',
+    'bash -c "tests/run-all.sh --affected">qa.log', 'tests/run-all.sh --affected `true`', 'tests/run-all.sh --affected $X',
+    # comments
+    'tests/run-all.sh --affected # scoped', 'tests/run-all.sh --affected # scoped\ntests/run-all.sh',
+    'tests/run-all.sh --affected #c\r\ntests/run-all.sh -j 4', 'tests/run-all.sh --affected;#x\ntests/run-all.sh',
+    'true # c\n\ntests/run-all.sh', 'bash -c "true # c\ntests/run-all.sh"', 'echo "#"; tests/run-all.sh',
+    'echo \\# x; tests/run-all.sh', 'tests/run-all.sh \\', 'tests/run-all.sh --affected # tests/run-all.sh',
+    'echo a#b; tests/run-all.sh --affected',
+    # escaped spaces and operators (the r10 review repro first), quoted or escaped names
+    'echo x\\ #literal; tests/run-all.sh', 'echo x\\ #literal\ntests/run-all.sh', 'tests/run-all.sh --affected\\ ;tests/run-all.sh',
+    'tests/run-all.sh\\;true', 'tests/run-all.sh --affected \\&\\& tests/run-all.sh', 'tests/run-all.sh --affected \\| true',
+    'tests/run-all.sh --affected \\> qa.log', 'tests/run-all.sh "--affected"', "tests/run-all.sh '--only-suites=tests/x.sh'",
+    'tests/run-a"ll".sh -j 4', "tests/run-a'll'.sh", 'tests/run-all\\.sh', 'tests/run-al\\l.sh --affected',
+]
+for check in dnr:
+    assert m.pr.qa_checks([dict(task, checks=[check])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), repr(check)
+assert m.pr.DO_NOT_RUN.startswith('DO NOT RUN') and 'NOT_RUN' in m.pr.DO_NOT_RUN
+# a check without run-all stays a plain extra command (compound commands are never split)
+for other in ('bash tests/pipeline.test.sh && true', 'bash tests/run-all-parallel.test.sh', 'echo run-all'):
+    assert m.pr.qa_checks([dict(task, checks=[other])], listed) == ([], ['[a] ' + other], False), other
 # validate still warns on a full run inside a compound check; a scoped one is fine
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
 assert not m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
 for wrapped in ("bash -c 'tests/run-all.sh -j 4'", 'bash -c "tests/run-all.sh"', "bash -c 'true && tests/run-all.sh'",
-                'tests/run-all.sh --affected\ntests/run-all.sh -j 4'):
-    assert m.pr.full_run(wrapped), wrapped
-assert not m.pr.full_run("bash -c 'tests/run-all.sh --affected -j 2'")
-# a compound or wrapped check with a full run inside stays one extra, marked not to run (task QA never starts a full run)
-for compound in ('tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check',
-                 "bash -c 'tests/run-all.sh -j 4' > out.txt", 'tests/run-all.sh --affected\ntests/run-all.sh',
-                 # wrapped, not compound: still a full run
-                 'bash -c "tests/run-all.sh -j 4"', "bash -c 'tests/run-all.sh'", 'sh tests/run-all.sh',
-                 'sh ./tests/run-all.sh -j 4', 'env -u TMPDIR sh tests/run-all.sh --reuse'):
-    assert m.pr.qa_checks([dict(task, checks=[compound])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + compound], False), compound
-assert m.pr.DO_NOT_RUN.startswith('DO NOT RUN') and 'NOT_RUN' in m.pr.DO_NOT_RUN
-# shell operators and redirections without spaces still split words: a full run next to one is marked, not runnable
-for adjacent in ('tests/run-all.sh>qa.log', 'tests/run-all.sh>>qa.log', 'tests/run-all.sh 2>&1', 'tests/run-all.sh&>qa.log',
-                 'tests/run-all.sh|tee qa.log', 'tests/run-all.sh 2>&1|tee qa.log', 'true;tests/run-all.sh',
-                 'true&&tests/run-all.sh -j 4', 'tests/run-all.sh --affected;tests/run-all.sh', '(tests/run-all.sh)',
-                 'tests/run-all.sh>--affected', 'bash -c "tests/run-all.sh">qa.log', 'echo $(tests/run-all.sh)',
-                 'X="tests/run-all.sh -j 4" true', 'tests/run-all.sh "unbalanced'):
-    assert m.pr.full_run(adjacent), adjacent
-    assert m.pr.qa_checks([dict(task, checks=[adjacent])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + adjacent], False), adjacent
-# a scoped run-all next to an operator or redirection stays scoped (a plain extra command)
-for scoped in ('tests/run-all.sh --affected>qa.log', 'tests/run-all.sh --affected 2>&1|tee qa.log',
-               'tests/run-all.sh --only-suites=tests/x.sh;true', 'tests/run-all.sh --affected&>qa.log',
-               'bash -c "tests/run-all.sh --affected">qa.log'):
+                'tests/run-all.sh --affected\ntests/run-all.sh -j 4', 'echo x\\ #literal; tests/run-all.sh',
+                'echo x\\;#literal\ntests/run-all.sh', 'tests/run-all.sh # --affected'):
+    assert m.pr.full_run(wrapped), repr(wrapped)
+for scoped in ("bash -c 'tests/run-all.sh --affected -j 2'", 'tests/run-all.sh --affected # tests/run-all.sh',
+               'echo a#b; tests/run-all.sh --affected', 'tests/run-all.sh --affected 2>&1|tee qa.log'):
     assert not m.pr.full_run(scoped), scoped
-    assert m.pr.qa_checks([dict(task, checks=[scoped])], listed) == ([], ['[a] ' + scoped], False), scoped
-# a shell comment ends at its line end: the next line stays a command of its own (a full run there is marked)
-for commented in ('tests/run-all.sh --affected # scoped\ntests/run-all.sh', 'tests/run-all.sh --affected #c\r\ntests/run-all.sh -j 4',
-                  'tests/run-all.sh --affected;#x\ntests/run-all.sh', 'true # c\n\ntests/run-all.sh',
-                  'bash -c "true # c\ntests/run-all.sh"', 'echo "#"; tests/run-all.sh', 'echo \\# x; tests/run-all.sh',
-                  'tests/run-all.sh \\'):
-    assert m.pr.full_run(commented), repr(commented)
-    assert m.pr.qa_checks([dict(task, checks=[commented])], listed) == (
-        [], ['[a] ' + m.pr.DO_NOT_RUN + commented], False), repr(commented)
-# a flag or a run-all inside a comment is no argument; `#` inside a word starts no comment
-assert m.pr.full_run('tests/run-all.sh # --affected')
-assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh # --affected'])], listed) == ([], [], True)
-for scoped in ('tests/run-all.sh --affected # tests/run-all.sh', 'echo a#b; tests/run-all.sh --affected'):
-    assert not m.pr.full_run(scoped), scoped
-assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --affected # scoped'])], listed) == ([], [], False)
-# a wrapped scoped run-all is no full run: a plain extra, neither dropped nor marked
-assert m.pr.qa_checks([dict(task, checks=["bash -c 'tests/run-all.sh --affected -j 2'"])], listed) == (
-    [], ["[a] bash -c 'tests/run-all.sh --affected -j 2'"], False)
 # re-QA: a failed suite already among the extra checks (any invocation form) runs once, under its first form
 for form in ('tests/dogfood.sh', 'bash tests/dogfood.sh', 'env -u TMPDIR tests/dogfood.sh'):
     assert m.pr.qa_checks([dict(task, checks=[form])], listed, ['tests/dogfood.sh']) == ([], ['[a] ' + form], False), form
@@ -811,10 +811,12 @@ out = dispatch('qa', first)
 command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
 assert out.count(command) == 1, out
-assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' in out
-extras = ('Extra commands:\n[a] python3 -B scripts/build-registry.py --check\n[a] tests/dogfood.sh\n'
+assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' not in out
+# the full run-all check is marked DO NOT RUN, in its place among the extras, never folded or runnable
+extras = ('Extra commands:\n[a] ' + m.pr.DO_NOT_RUN + 'tests/run-all.sh -j 4\n'
+          '[a] python3 -B scripts/build-registry.py --check\n[a] tests/dogfood.sh\n'
           '[a] env -u TMPDIR bash tests/installed-safety.sh')
-assert 'tests/run-all.sh -j 4' not in out and extras in out, out
+assert out.count('tests/run-all.sh -j 4') == 1 and extras in out, out
 assert 'routing-properties.test.py' not in out.split('Extra commands:')[1], out
 assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exists()
 assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)

@@ -167,12 +167,15 @@ SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\
 # purpose: --list-suites already omits them without --release, so this second guard needs no extra run-all call;
 # tests/pipeline.test.sh fails when it differs from run-all's list.
 RELEASE_ONLY = frozenset({'tests/installed-safety.sh'})
-# any command separator, grouping, redirection or substitution the shell accepts, newlines included
-COMPOUND = re.compile(r'[;&|<>()`\n\r]|\$\(')
 # what full_run() splits words on (shlex punctuation_chars), newlines included
 SHELL_PUNCT = '();<>|&`\n\r'
 RUNALL_WORD = re.compile(r'(?:\./)?tests/run-all\.sh')
-DO_NOT_RUN = 'DO NOT RUN (a full run-all inside; full runs belong to integration QA; report it NOT_RUN): '
+# The only run-all check task QA folds into the tier command: a plain standalone command, an optional `env -u TMPDIR`
+# and `bash` prefix, then plain flag tokens. No quote, backslash, `#`, `$`, backtick, operator, redirection or newline:
+# anything else that mentions run-all is DO_NOT_RUN, so no shell-parsing edge case can hide a full run.
+RUNALL_PLAIN = re.compile(r'(?:env -u TMPDIR[ \t]+)?(?:bash[ \t]+)?(?:\./)?tests/run-all\.sh((?:[ \t]+[A-Za-z0-9=,./:-]+)*)')
+DO_NOT_RUN = ('DO NOT RUN (run-all inside a check that is not one plain scoped run-all; full runs belong to '
+              'integration QA; report it NOT_RUN): ')
 
 
 def suite_command(suite):
@@ -198,7 +201,8 @@ def strip_comments(check):
             quote = None if c == '"' else quote
         elif c in '\'"':
             quote = c
-        elif c == '#' and (not out or out[-1][-1:].isspace() or out[-1][-1:] in SHELL_PUNCT):
+        elif c == '#' and (not out or len(out[-1]) == 1 and (out[-1].isspace() or out[-1] in SHELL_PUNCT)):
+            # an escaped space or operator (`\ #`) is part of a word: the `#` after it starts no comment
             while i < n and check[i] not in '\n\r':
                 i += 1
             continue
@@ -208,31 +212,16 @@ def strip_comments(check):
 
 
 def runall_words(check):
-    """The arguments of a check that is exactly one standalone run-all invocation (an optional `env [-u VAR]... [VAR=x]...`
-    and `bash` prefix), else None. A compound command (&&, ||, ;, |, redirection, subshell, substitution) is None:
-    it stays one complete extra command, never split or dropped. Comments are dropped first (`# --affected` is no flag)."""
-    check = strip_comments(check)
-    if check is None or COMPOUND.search(check):
-        return None
-    try:
-        words = shlex.split(check)
-    except ValueError:
-        return None
-    i = 0
-    if words[:1] == ['env']:
-        i = 1
-        while i < len(words):
-            if words[i] == '-u' and i + 1 < len(words):
-                i += 2
-            elif re.fullmatch(r'[A-Za-z_]\w*=.*', words[i]):
-                i += 1
-            else:
-                break
-    if words[i:i + 1] == ['bash']:
-        i += 1
-    if i < len(words) and re.fullmatch(r'(?:\./)?tests/run-all\.sh', words[i]):
-        return words[i + 1:]
-    return None
+    """The flag words of a check that is exactly one plain, scoped run-all invocation (RUNALL_PLAIN with --affected or
+    --only-suites among the flags), else None."""
+    match = RUNALL_PLAIN.fullmatch(check.strip(' \t'))
+    words = match[1].split() if match else []
+    return words if any(w == '--affected' or w.startswith('--only-suites') for w in words) else None
+
+
+def mentions_runall(check):
+    """Any mention of run-all.sh, quotes and backslashes ignored (`run-a"ll".sh`, `run-all\\.sh`)."""
+    return bool(re.search(r'run-all\.sh', re.sub(r'[\'"\\]', '', check)))
 
 
 def qa_checks(tasks, runall_suites=None, failed_suites=None):
@@ -241,10 +230,12 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
     (run-all rejects any other suite name), except release-only suites; None (no such flag) folds nothing.
     failed_suites: the suites a previous QA recorded as failed; those run-all does not run become extra commands.
     Extras are `[task ids] command`, each command once and each recognised suite once (by suite path; the
-    `env -u TMPDIR` form wins: several suites need TMPDIR unset). Any other check full_run() flags (compound or
-    wrapped) is marked DO_NOT_RUN: task QA never starts a full run (validate warns on it)."""
+    `env -u TMPDIR` form wins: several suites need TMPDIR unset). Only a plain scoped run-all (runall_words) is folded;
+    any other check that mentions run-all (a full run, compound, wrapped, quoted, escaped or commented) is marked
+    DO_NOT_RUN: task QA never starts a full run and parses no shell. The third value (a full run-all check folded
+    away) is always False now: such a check is marked DO_NOT_RUN instead."""
     known = set(runall_suites or ()) - RELEASE_ONLY
-    suites, extra, by_suite, dropped = set(), {}, {}, False
+    suites, extra, by_suite = set(), {}, {}
 
     def add_extra(tid, command, suite=None):
         if suite:
@@ -263,7 +254,6 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
         for check in task.get('checks', []):
             words = runall_words(check)
             if words is not None:
-                dropped |= not any(w == '--affected' or w.startswith('--only-suites') for w in words)
                 for i, w in enumerate(words):  # suites a run-all check names join the one tier command
                     listed = w.split('=', 1)[1] if w.startswith('--only-suites=') else (
                         words[i + 1] if w == '--only-suites' and i + 1 < len(words) else '')
@@ -273,13 +263,14 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
                         elif x:
                             add_extra(tid, suite_command(x), x)
                 continue
+            if mentions_runall(check):  # not one plain scoped run-all: never runnable, whatever the shell makes of it
+                add_extra(tid, DO_NOT_RUN + check)
+                continue
             # Only plain suite commands count: compound commands remain explicit extra checks.
             match = SUITE_CHECK.fullmatch(check.strip())
             suite = match and (match[1] or match[2])
             if suite and suite in known:
                 suites.add(suite)
-            elif full_run(check):  # compound or wrapped (`bash -c "tests/run-all.sh"`, `sh tests/run-all.sh`)
-                add_extra(tid, DO_NOT_RUN + check)
             else:
                 add_extra(tid, check, suite or None)
     ids = [str(t.get('id', '?')) for t in tasks]
@@ -289,7 +280,7 @@ def qa_checks(tasks, runall_suites=None, failed_suites=None):
         elif x not in by_suite:
             for tid in ids:
                 add_extra(tid, suite_command(x), x)
-    return sorted(suites), [f"[{', '.join(t)}] {c}" for c, t in extra.items()], dropped
+    return sorted(suites), [f"[{', '.join(t)}] {c}" for c, t in extra.items()], False
 
 
 def full_run(check):
