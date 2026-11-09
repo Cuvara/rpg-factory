@@ -28,20 +28,26 @@ usage() {
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
 }
 SELECTED=; list_cases=0
+add_cases() {
+  local selected
+  local -a tokens
+  read -r -a tokens <<< "${1//,/ }"
+  [ "${#tokens[@]}" -gt 0 ] || { printf 'Empty case selector\n' >&2; exit 2; }
+  for selected in "${tokens[@]}"; do
+    [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+    [[ " $SELECTED " == *" $selected "* ]] || SELECTED+=" $selected"
+  done
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --list-cases) list_cases=1; shift ;;
-    --case|--only) [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }; SELECTED+=" $2"; shift 2 ;;
-    --case=*|--only=*) [ -n "${1#*=}" ] || { usage >&2; exit 2; }; SELECTED+=" ${1#*=}"; shift ;;
+    --case|--only) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; add_cases "$2"; shift 2 ;;
+    --case=*|--only=*) add_cases "${1#*=}"; shift ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 # Validate before the plugin copy or any temp dir exists.
-SELECTED="${SELECTED//,/ }"
-for selected in $SELECTED; do
-  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
-done
 if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
 all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
 has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
@@ -675,10 +681,18 @@ if has_case cli-selftest; then
   [ "$rc" -eq 2 ] && ok "unknown argument exits 2" || no "unknown argument exited $rc, want 2"
   bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] && ok "unknown case exits 2" || no "unknown case exited $rc, want 2"
-  n_one=$(bash "$self" --case plan-paths 2>&1 | sed -n 's/^parallel-policy: \([0-9]*\) checks.*/\1/p')
+  for selector in ',' ' '; do
+    for option in --case --only; do
+      bash "$self" "$option" "$selector" >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq 2 ] && ok "$option empty selector exits 2" || no "$option empty selector exited $rc, want 2"
+    done
+  done
+  child=$(bash "$self" --case plan-paths --only plan-paths 2>&1); rc=$?
+  n_one=$(sed -n 's/^parallel-policy: \([0-9]*\) checks.*/\1/p' <<<"$child")
+  n_failed=$(sed -n 's/^parallel-policy: [0-9]* checks, [0-9]* passed, \([0-9]*\) failed$/\1/p' <<<"$child")
   # plan-paths is the cheapest case (~2 s); in a full run the parent has run more checks than the one case
-  if [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then ok "--case plan-paths runs $n_one checks, fewer than a full run"
-  else no "--case plan-paths ran ${n_one:-?} checks; the full run has $((pass + fail))"; fi
+  if [ "$rc" -eq 0 ] && [ "${n_failed:-missing}" = 0 ] && [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then ok "--case plan-paths runs $n_one checks, fewer than a full run"
+  else no "--case plan-paths: exit $rc, ${n_failed:-?} failed, ${n_one:-?} checks; parent has $((pass + fail))"; fi
 fi
 echo "parallel-policy: $((pass + fail)) checks, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
