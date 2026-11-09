@@ -317,6 +317,16 @@
         "qa_prefer": {
           "type": "string"
         },
+        "qa_tiers": {
+          "type": "object",
+          "required": ["task", "integration", "description"],
+          "properties": {
+            "task": {"const": "affected"},
+            "integration": {"const": "full"},
+            "description": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
         "available_agents": {
           "type": "array",
           "items": {

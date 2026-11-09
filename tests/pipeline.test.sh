@@ -6,7 +6,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 P="$ROOT/scripts/factory-pipeline.py"
-TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
@@ -14,43 +14,75 @@ export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$
 for v in $(compgen -e | grep '^ORCA_'); do unset "$v"; done
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; T="$TMP/tool"
 pass=0; fail=0
+# Capture once: consecutive assertions on one command (same arguments, directory, PATH and env prefix, no other
+# top-level command in between) share one run of factory-pipeline.py. The DEBUG trap (top level only: functions and
+# subshells do not inherit it) drops the capture before every other command - git, a verdict, a file edit, a plan.
+# verdict, agents and a dispatch without --runner print always run (they write state). PIPELINE_TEST_REUSE=0 runs every assertion's command;
+# PIPELINE_TEST_REUSE=check also re-runs each reused command and fails the case when its output or exit code differs.
+REUSE="${PIPELINE_TEST_REUSE:-1}"; MEMO_KEY=; MEMO_ENV=(); MEMO_OUT=; MEMO_RC=0; MEMO_SPEC=; MEMO_SRC=; reused=0
+memo_trap() {
+  local c="$BASH_COMMAND" names=()
+  while [[ $c =~ ^([A-Za-z_][A-Za-z_0-9]*)=(\"[^\"]*\"|\'[^\']*\'|[^ ]*)\ +(.*)$ ]]; do
+    names+=("${BASH_REMATCH[1]}"); c="${BASH_REMATCH[3]}"
+  done
+  case "${c%% *}" in expect|refute|expect_spec|refute_spec|opath|oref|inorca|st_phase|agree|for) MEMO_ENV=("${names[@]}") ;; *) MEMO_KEY= ;; esac
+}
+[ "$REUSE" = 0 ] || trap memo_trap DEBUG
+# pp <args...>: OUT and RC of `factory-pipeline.py <args>` (stdout and stderr), reused per the capture-once rule
+pp() {
+  local IFS=$'\x1f' key n env=
+  for n in "${MEMO_ENV[@]}"; do env+="$n=${!n-}$IFS"; done
+  key="$PWD$IFS$PATH$IFS${ORCA_WORKTREE_ID-}$IFS$env$IFS$*"
+  if [ "$REUSE" != 0 ] && [ "$key" = "$MEMO_KEY" ] && [[ "$IFS$*$IFS" != *"${IFS}verdict$IFS"* && "$IFS$*$IFS" != *"${IFS}agents$IFS"* ]]      && { [[ "$IFS$*$IFS" != *"${IFS}dispatch$IFS"* ]] || [[ "$IFS$*$IFS" == *"${IFS}--runner${IFS}print$IFS"* ]]; }; then
+    OUT="$MEMO_OUT"; RC="$MEMO_RC"; reused=$((reused + 1))
+    if [ "$REUSE" = check ]; then
+      local fresh rc; fresh=$(python3 -B "$P" "$@" 2>&1); rc=$?
+      [ "$fresh" = "$OUT" ] && [ "$rc" = "$RC" ] || { fail=$((fail + 1)); echo "FAIL  capture once: a rerun of '$*' differs"; }
+    fi
+    return
+  fi
+  OUT=$(python3 -B "$P" "$@" 2>&1); RC=$?
+  MEMO_KEY="$key"; MEMO_OUT="$OUT"; MEMO_RC="$RC"; MEMO_SPEC=; MEMO_SRC=
+}
+# pp_spec <args...>: pp, then SPEC and SRC: the persisted Orca spec the one-line prompt names (and the read's exit code)
+pp_spec() {
+  pp "$@"
+  if [ -z "$MEMO_SRC" ] || [ "$REUSE" = check ]; then
+    MEMO_SPEC=$(python3 -c 'import pathlib,shlex,sys
+args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"
+prompt=args[args.index(flag)+1]
+assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
+print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$OUT" 2>&1); MEMO_SRC=$?
+  fi
+  SPEC="$MEMO_SPEC"; SRC="$MEMO_SRC"
+}
 # expect <name> <rc> <grep-regex|-> <args...>: exit code and (optionally) a line of the combined output
 expect() {
   local name="$1" want="$2" pat="$3"; shift 3
-  local out rc; out=$(python3 -B "$P" "$@" 2>&1); rc=$?
+  local out rc; pp "$@"; out="$OUT"; rc="$RC"
   if [ "$rc" = "$want" ] && { [ "$pat" = - ] || grep -qE -- "$pat" <<<"$out"; }; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, want $want, pattern '$pat')"; sed 's/^/      /' <<<"$out" | head -30; fi
 }
 # refute <name> <grep-regex> <args...>: the output must NOT contain the pattern (exit code ignored)
 refute() {
   local name="$1" pat="$2"; shift 2
-  local out; out=$(python3 -B "$P" "$@" 2>&1)
+  local out; pp "$@"; out="$OUT"
   if grep -qE -- "$pat" <<<"$out"; then fail=$((fail + 1)); echo "FAIL  $name (found '$pat')"; sed 's/^/      /' <<<"$out" | head -20
   else pass=$((pass + 1)); echo "PASS  $name"; fi
 }
 # Match a rule in the persisted Orca spec, rather than the one-line launch prompt.
 expect_spec() {
   local name="$1" pat="$2"; shift 2
-  local out rc spec
-  out=$(python3 -B "$P" "$@" 2>&1); rc=$?
-  spec=$(python3 -c 'import pathlib,shlex,sys
-args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"
-prompt=args[args.index(flag)+1]
-assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
-print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$out" 2>&1)
+  local rc spec
+  pp_spec "$@"; rc="$RC"; spec="$SPEC"
   if [ "$rc" = 0 ] && grep -qE -- "$pat" <<<"$spec"; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, pattern '$pat')"; head -20 <<<"$spec"; fi
 }
 # refute_spec <name> <grep-regex> <args...>: the persisted Orca spec must NOT contain the pattern (exit 0, spec read)
 refute_spec() {
   local name="$1" pat="$2"; shift 2
-  local out rc spec src
-  out=$(python3 -B "$P" "$@" 2>&1); rc=$?
-  spec=$(python3 -c 'import pathlib,shlex,sys
-args=shlex.split(sys.argv[1]); flag="--prompt" if "--prompt" in args else "--spec"
-prompt=args[args.index(flag)+1]
-assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
-print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$out" 2>&1); src=$?
+  local rc spec src
+  pp_spec "$@"; rc="$RC"; spec="$SPEC"; src="$SRC"
   if [ "$rc" = 0 ] && [ "$src" = 0 ] && [ -n "$spec" ] && ! grep -qE -- "$pat" <<<"$spec"; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, spec rc=$src, found or no spec '$pat')"; head -20 <<<"$spec"; fi
 }
@@ -62,6 +94,882 @@ mkdir -p "$C/ProjectSettings" "$T/ProjectSettings"; echo "m_EditorVersion: 6000.
 cp "$C/ProjectSettings/ProjectVersion.txt" "$T/ProjectSettings/"
 for d in "$S" "$C"; do echo base > "$d/README.md"; gi "$d" add -A; gi "$d" commit -qm base; done
 HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","topic":"feat/core/demo","deliver":"pr"'
+
+# Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
+# dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
+# section prints its results at its place, in the original order.
+ROUTING_CASES="kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path"
+cat > "$TMP/routing-cases.py" <<'ROUTING'
+import importlib.util, json, os, pathlib, sys
+from unittest.mock import patch
+root, tmp, case = sys.argv[1:]
+sys.path.insert(0, root + '/scripts/lib')
+import pipeline_route as r
+pipe = json.loads(pathlib.Path(root + '/registry.json').read_text())['pipeline']
+both = {a: {'available': True} for a in pipe['agents']}
+if case.startswith('kind-'):
+    kind = case[len('kind-'):]
+    assert kind in r.KINDS
+    assert r.route(pipe, {'kind': kind}, both)[0] == pipe['agent_routing'][kind]
+if case == 'overrides-and-qa':
+    assert r.route(pipe, {'kind': 'code', 'implementer': 'claude'}, both)[0] == 'claude'
+    assert r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude'}])
+    assert not r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude', 'reason': 'special expertise'}])
+    assert r.warnings(pipe, [{'kind': 'code'}] * 3)
+    assert r.roles(pipe, {'kind': 'code'}, both)['qa'][0] == 'claude'
+    assert r.roles(pipe, {'kind': 'docs'}, both)['qa'][0] == 'codex'
+plan = {'id': 'routing-unit'}
+for sole in ('claude', 'codex'):
+    if case != 'availability-' + sole:
+        continue
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': sole}):
+        avail = r.available(pipe, plan)
+        for kind in r.KINDS:
+            roles = r.roles(pipe, {'kind': kind}, avail)
+            assert all(agent == sole for agent, why in roles.values()), roles
+            assert 'SAME_MODEL (fallback:' in roles['review'][1]
+    bindir = pathlib.Path(tmp) / ('only-' + sole)
+    bindir.mkdir(exist_ok=True)
+    binary = bindir / (pipe['agents'][sole]['bin'] + ('.exe' if os.name == 'nt' else ''))
+    binary.write_text('fixture')
+    binary.chmod(0o755)
+    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD'}, clear=True):
+        avail = r.available(pipe, plan)
+        assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
+if case == 'marks-and-empty':
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
+        r.mark(plan, 'codex', '401 revoked token')
+        assert r.route(pipe, {'kind': 'code'}, r.available(pipe, plan)) == ('claude', 'fallback: codex unavailable')
+        r.mark(plan, 'codex')
+        assert r.available(pipe, plan)['codex']['available']
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': ''}):
+        assert 'WARNING' in r.route(pipe, {'kind': 'code'}, r.available(pipe, plan))[1]
+import subprocess
+for label, payload, down in (
+    ('no-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}}), True),
+    ('system-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': True}}}}), False),
+    ('account-auth', json.dumps({'result': {'codex': {'accounts': [{}], 'systemDefault': {'hasAuth': False}}}}), False),
+    ('malformed', '{"result":null}', False),
+):
+    if case != 'orca-' + label:
+        continue
+    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)):
+        avail = r.available(pipe, {'id': 'account-' + label})
+        assert avail['claude']['available']
+        assert avail['codex']['available'] != down
+if case == 'orca-offline':
+    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
+                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
+         patch('pipeline_route.shutil.which', return_value='/fake'), \
+         patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
+        assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
+spec = importlib.util.spec_from_file_location('routing_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+plan = {'schema': m.SCHEMA, 'id': 'route-validation', 'title': 'test', 'topic': 'test',
+        'repos': {'plugin': {'path': root}},
+        'tasks': [{'id': 't', 'repo': 'plugin', 'kind': 'code', 'implementer': 'claude',
+                   'objective': 'x', 'paths': ['scripts/'], 'acceptance': ['x']}]}
+if case == 'followup-validation':
+    plan['tasks'][0].pop('kind')
+    plan['tasks'][0]['implementer'] = 'claude' if r.route(pipe, {}, both)[0] == 'codex' else 'codex'
+    assert any('default routing without reason' in w for w in m.validate(plan, reg)['warnings'])
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': plan['tasks'][0]['implementer']}]}
+    assert any('default routing without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
+    custom = dict(pipe, agent_routing={})
+    other = next(agent for agent in pipe['agents'] if agent != pipe['default_implementer'])
+    assert r.warnings(custom, [{'implementer': other}])
+    assert r.warnings(custom, [{'kind': 'code', 'implementer': other}]) == [
+        '?: implementer overrides default routing without reason']
+    assert not r.warnings(custom, [{'implementer': other, 'reason': 'expertise'}])
+    plan['tasks'][0]['kind'] = 'outside-schema'
+    assert m.validate(plan, reg)['errors']
+if case == 'followup-legacy':
+    with patch.object(m, 'verdict_dir', return_value=tmp + '/legacy-followup'), \
+         patch.object(m, 'scope_fingerprint', return_value='current'), \
+         patch.object(m, 'repo_info', return_value={'path': root}):
+        directory = pathlib.Path(m.verdict_dir(plan))
+        directory.mkdir(exist_ok=True)
+        legacy = {'task': 't', 'subtask': 'a', 'phase': 'review', 'sha': 'abc',
+                  'state': 'FAIL', 'by': 'codex', 'fingerprint': 'current'}
+        (directory / 't__sub-a__review.json').write_text(json.dumps(legacy))
+        (directory / 't@a__review__b__review.json').write_text(json.dumps(dict(legacy, subtask='a__review__b', state='PASS')))
+        assert m.subtask_failures(plan, reg, 't', 'abc')
+        current = directory / 't@a__review.json'
+        current.write_text(json.dumps(dict(legacy, state='PASS', fingerprint='stale')))
+        assert m.subtask_failures(plan, reg, 't', 'abc')
+        current.write_text(json.dumps(dict(legacy, state='PASS')))
+        assert not m.subtask_failures(plan, reg, 't', 'abc')
+        current.rename(directory / 't@a__review__0123456789ab__codex.json')
+        assert not m.subtask_failures(plan, reg, 't', 'abc')
+if case == 'validation':
+    assert any('without reason' in w for w in m.validate(plan, reg)['warnings'])
+    plan['tasks'][0]['reason'] = 'expertise'
+    assert not m.validate(plan, reg)['warnings']
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': 'gpt'}]}
+    assert any('implementer `gpt` is not' in e for e in m.validate_subplan(sub, plan, reg)['errors'])
+    sub['subtasks'][0].update(implementer='claude', kind='code')
+    assert any('without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
+    sub['subtasks'][0]['reason'] = 'expertise'
+    assert not m.validate_subplan(sub, plan, reg)['warnings']
+import subprocess
+project = pathlib.Path(tmp) / ('routing-project-' + case)
+(project / 'ProjectSettings').mkdir(parents=True, exist_ok=True)
+(project / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
+plan['repos']['plugin']['path'] = str(project)
+plan['repos']['plugin']['base'] = 'main'
+planfile = pathlib.Path(tmp) / ('routing-command-plan-' + case + '.json')
+plan['tasks'][0].pop('implementer', None)
+planfile.write_text(json.dumps(plan))
+if case == 'followup-preview':
+    state = tmp + '/preview-state'
+    env = dict(os.environ, RPG_FACTORY_AGENTS='claude,codex', RPG_FACTORY_STATE_DIR=state)
+    for runner in ('print', 'orca', 'agent'):
+        for phase in ('implement', 'review'):
+            args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'dispatch', str(planfile),
+                    '--task', 't', '--phase', phase, '--runner', runner]
+            if phase == 'review':
+                args += ['--sha', 'abc1234']
+            if runner == 'agent':
+                args += ['--orca-unavailable', 'fixture']
+            result = subprocess.run(args, capture_output=True, text=True, env=env)
+            assert result.returncode == 0, result.stderr
+            records = list(pathlib.Path(state).rglob('*.model.json'))
+            assert bool(records) == (runner != 'print'), records
+            if runner != 'print':
+                role = 'implementer' if phase == 'implement' else 'reviewer'
+                assert any('__' + role in record.name for record in records), records
+                for record in records:
+                    record.unlink()
+    for reason in (None, 'revoked'):
+        args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'agents', str(planfile), '--down', 'codex']
+        if reason:
+            args += ['--reason', reason]
+        result = subprocess.run(args, capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.count('MODEL_UNAVAILABLE') == 1, result.stdout
+        assert ('MODEL_UNAVAILABLE: revoked' if reason else 'MODEL_UNAVAILABLE') in result.stdout
+for sole in ('claude', 'codex'):
+    if case != 'dispatch-' + sole and case != 'status-' + sole:
+        continue
+    # own state per case: an implement dispatch records its model, which later review/QA dispatches pair against
+    env = dict(os.environ, RPG_FACTORY_AGENTS=sole, RPG_FACTORY_STATE_DIR=tmp + '/state-' + case)
+    if case == 'status-' + sole:
+        result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'status', str(planfile), '--json'], capture_output=True, text=True, encoding='utf-8', env=env)
+        models = json.loads(result.stdout)['models']['t']
+        assert all(x['agent'] == sole and x['why'] for x in models.values()), models
+        assert 'SAME_MODEL (fallback:' in models['review']['why']
+        continue
+    for phase in ('lead', 'implement', 'review', 'qa'):
+        args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'dispatch', str(planfile),
+                '--task', 't', '--phase', phase, '--runner', 'print']
+        if phase == 'lead':
+            args += ['--agent', 'codex' if sole == 'claude' else 'claude']
+        if phase in ('review', 'qa'):
+            args += ['--sha', 'abc1234']
+        result = subprocess.run(args, capture_output=True, text=True, env=env)
+        assert result.returncode == 0, result.stderr
+        assert '# agent: ' + sole in result.stdout, result.stdout
+        assert 'model: ' + phase + ' -> ' + sole in result.stderr, result.stderr
+        if phase == 'lead':
+            assert 'the task lead is ' + sole in result.stderr and 'always' not in result.stderr
+            if sole == 'codex':
+                assert 'fallback: claude unavailable' in result.stderr
+if case == 'registry-defaults':
+    custom = dict(pipe, available_agents=['claude'], agent_routing=dict(pipe['agent_routing'], default='codex'))
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
+        avail = r.available(custom, {'id': 'candidate-set'})
+        assert not avail['codex']['available']
+        assert avail['codex']['why'] == 'not in pipeline.available_agents'
+    assert r.route(custom, {}, both) == ('codex', 'agent_routing.default')
+if case == 'planned-warning':
+    assert not r.warnings(pipe, [{'kind': k} for k in ('code', 'docs', 'test')])
+if case == 'subtask-kind':
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x']}]}
+    assert 'subtask s: missing implementer (or kind)' in m.validate_subplan(sub, plan, reg)['errors']
+    sub['subtasks'][0]['kind'] = 'code'
+    assert not m.validate_subplan(sub, plan, reg)['errors']
+if case == 'no-probe':
+    import shutil
+    orig_run, orig_which, started = subprocess.run, shutil.which, []
+    def spy(args, *k, **kw):
+        if isinstance(args, (list, tuple)) and list(args[:1]) == ['orca']:
+            started.append(args)
+            return subprocess.CompletedProcess(args, 0, '{}')
+        return orig_run(args, *k, **kw)
+    env = {k: v for k, v in os.environ.items() if k != 'RPG_FACTORY_AGENTS'}
+    env['ORCA_WORKTREE_ID'] = 'fixture'
+    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
+           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'kind': 'code'}]}
+    with patch.dict(os.environ, env, clear=True), patch('subprocess.run', spy), \
+         patch('shutil.which', lambda n, *a, **k: '/fake' if n == 'orca' else orig_which(n, *a, **k)):
+        m.validate(plan, reg)
+        m.validate_subplan(sub, plan, reg)
+        assert not started, started
+        r.available(pipe, {'id': 'probe-control'})
+        assert started, 'control: available() starts the orca account probe'
+    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}), \
+         patch('pipeline_route.fstate.read_json', side_effect=AssertionError('marks read')):
+        r.available(pipe, None)  # the planner: no per-run marks
+        try:
+            r.available(pipe, {'id': 'marks-control'})
+            raise RuntimeError('control: a plan reads its marks')
+        except AssertionError as e:
+            assert 'marks read' in str(e)
+if case == 'kinds-single-list':
+    import re
+    kinds = list(r.KINDS)
+    assert set(kinds) == set(pipe['agent_routing']) - {'default'}, pipe['agent_routing']
+    def find(node, key, out):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == key:
+                    out.append(v)
+                find(v, key, out)
+        elif isinstance(node, list):
+            for v in node:
+                find(v, key, out)
+        return out
+    for name in ('pipeline-plan', 'pipeline-subplan'):
+        schema = json.loads(pathlib.Path(root + '/docs/schemas/' + name + '.schema.json').read_text(encoding='utf-8'))
+        found = [v['enum'] for v in find(schema, 'kind', []) if isinstance(v, dict) and 'enum' in v]
+        assert found and all(e == kinds for e in found), (name, found)
+    schema = json.loads(pathlib.Path(root + '/docs/registry.schema.json').read_text(encoding='utf-8'))
+    found = [v['propertyNames']['enum'] for v in find(schema, 'agent_routing', []) if isinstance(v, dict) and 'propertyNames' in v]
+    assert found and all(e == kinds + ['default'] for e in found), found
+    text = pathlib.Path(root + '/scripts/check-registry.sh').read_text(encoding='utf-8')
+    assert '--argjson pipeline_kinds "$pipeline_kinds"' in text
+if case in ('enum-copy-original', 'enum-copy-subplan', 'enum-copy-registry'):
+    import shutil
+    copied = pathlib.Path(tmp) / case
+    for name in ('registry.json', 'docs/registry.schema.json', 'docs/schemas/pipeline-plan.schema.json',
+                 'docs/schemas/pipeline-subplan.schema.json', 'scripts/check-registry.sh', 'scripts/lib/compat.sh'):
+        dest = copied / name; dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pathlib.Path(root) / name, dest)
+    shutil.copytree(pathlib.Path(root) / 'docs/schemas/kinds', copied / 'docs/schemas/kinds')
+    shutil.copytree(pathlib.Path(root) / 'scripts/checks', copied / 'scripts/checks')
+    changed = None
+    if case == 'enum-copy-subplan':
+        changed = 'docs/schemas/pipeline-subplan.schema.json'
+        keys = ('properties', 'subtasks', 'items', 'properties', 'kind', 'enum')
+    elif case == 'enum-copy-registry':
+        changed = 'docs/registry.schema.json'
+        keys = ('properties', 'pipeline', 'properties', 'agent_routing', 'propertyNames', 'enum')
+    if changed:
+        doc = json.loads((copied / changed).read_text())
+        value = doc
+        for key in keys:
+            value = value[key]
+        value.append('drift')
+        (copied / changed).write_text(json.dumps(doc))
+    result = subprocess.run(['bash', str(copied / 'scripts/check-registry.sh'), '--structure-only'],
+                            capture_output=True, text=True, env=dict(os.environ, CLAUDE_PLUGIN_ROOT=str(copied)))
+    if changed:
+        assert result.returncode != 0, result.stdout
+        assert ('pipeline kind enum: ' + changed + ' differs from docs/schemas/pipeline-plan.schema.json') in result.stdout, (result.stdout, result.stderr)
+    else:
+        assert result.returncode == 0, (result.stdout, result.stderr)
+print('routing assertions passed')
+ROUTING
+cat > "$TMP/multiwave.py" <<'MULTIWAVE'
+import copy, importlib.util, json, os, pathlib, shutil, subprocess, sys
+root, tmp, case = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('multiwave_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
+repo = work / 'repo'; repo.mkdir()
+os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
+def git(*args):
+    r = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, (args, r.stderr)
+    return r.stdout.strip()
+git('init', '-q', '-b', 'main')
+def commit(text, filename='shared.txt'):
+    (repo / filename).write_text(text)
+    git('add', filename); git('commit', '-qm', text)
+    return git('rev-parse', 'HEAD')
+if case.startswith('serial-'):
+    (repo / 'ProjectSettings').mkdir()
+    (repo / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
+    git('add', 'ProjectSettings')
+base = commit('base')
+if case.startswith('subtask-'):
+    commit('outside base', 'outside.txt')
+    base = git('rev-parse', 'HEAD')
+git('switch', '--no-track', '-c', 'topic')
+plan = {'schema': m.SCHEMA, 'id': 'multiwave-' + case, 'title': 'test', 'topic': 'topic',
+        'repos': {'fixture': {'path': str(repo), 'base': 'main'}},
+        'tasks': [{'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'first',
+                   'paths': ['shared.txt'], 'acceptance': ['reviewed']},
+                  {'id': 'b', 'repo': 'fixture', 'kind': 'code', 'objective': 'second',
+                   'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['a']}]}
+pf = work / 'plan.json'; plan['_path'] = str(pf)
+if case.startswith('subtask-'):
+    plan['tasks'][0]['paths'] = ['.']  # task owns the directory, subtask owns only shared.txt
+    plan['tasks'][1]['paths'] = ['shared.txt', 'outside.txt']
+def save():
+    pf.write_text(json.dumps(plan))
+save()
+if case == 'repo-path':
+    workspace = work / 'workspace'; workspace.mkdir()
+    for marker in reg['workspace']['root_markers']:
+        (workspace / marker).mkdir(parents=True, exist_ok=True)
+    os.environ[reg['workspace']['root_env']] = str(workspace)
+    for value in ('$' + reg['workspace']['root_env'] + '/repo', '${' + reg['workspace']['root_env'] + '}/repo'):
+        plan['repos']['fixture']['path'] = value
+        assert m.repo_info(plan, reg, 'fixture')['path'] == str(workspace / 'repo')
+    plan['repos']['fixture']['path'] = str(repo)
+    assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
+    plan['repos']['fixture']['path'] = 'repo'
+    assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
+    print(case + ' assertions passed')
+    sys.exit(0)
+def cli(*args, rc=0):
+    r = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
+                       capture_output=True, text=True)
+    assert r.returncode == rc, (args, r.stdout, r.stderr)
+    return r
+def verdict(task, phase, sha, by='claude', extra=()):
+    return cli('verdict', str(pf), '--task', task, '--phase', phase, '--sha', sha,
+               '--by', by, '--state', 'PASS', *extra)
+def record(task, phase):
+    return m.verdict_of(plan, reg, task, phase)[0]
+def stale_a(expected):
+    g = m.gate(plan, reg)
+    blockers = [b for b in g['blockers'] if b.startswith('a: review is STALE')]
+    row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+    stale = [n for n in row['notes'] if n.startswith('review at') and 'STALE' in n]
+    assert bool(blockers) == expected, g
+    assert bool(stale) == expected, row
+    if expected:
+        assert 'shared.txt' in blockers[0] and 'shared.txt' in stale[0]
+    return g, row
+if case.startswith('serial-'):
+    a = commit('a')
+    verdict('a', 'review', a); verdict('a', 'qa', a)
+    b = commit('b')
+    verdict('b', 'review', b)
+    if case != 'serial-missing-qa':
+        verdict('b', 'qa', b)
+    verdict('integration:fixture', 'qa', b)
+    g, row = stale_a(case == 'serial-missing-qa')
+    if case == 'serial-covered':
+        assert g['state'] == 'READY_FOR_PR', g
+        assert row['phase'] == 'qa', row
+    else:
+        assert any(x.startswith('a: QA is STALE') for x in g['blockers']), g
+    print(case + ' assertions passed')
+    sys.exit(0)
+git('switch', '--no-track', '-c', 'topic-a')
+a = commit('a')
+if case.startswith('subtask-'):
+    m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
+    verdict('a', 'review', a, by='codex', extra=('--subtask', 's'))
+    if case == 'subtask-legacy':
+        folder = pathlib.Path(m.verdict_dir(plan)) / 'a'; folder.mkdir()
+        (folder / 'subplan-old.json').write_text(json.dumps({'task': 'a', 'subtasks': [{'id': 's', 'paths': ['shared.txt']}]}))
+        m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude'})
+        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@s__review*.json'):
+            doc = json.loads(filename.read_text()); doc.pop('paths', None); filename.write_text(json.dumps(doc))
+    verdict('a', 'review', a, extra=('--implementer', 'codex'))
+else:
+    verdict('a', 'review', a)
+verdict('a', 'qa', a)
+if case.startswith('subtask-sibling-'):
+    if case == 'subtask-sibling-pre-start':
+        commit('unreviewed edit before sibling starts')
+    start = git('rev-parse', 'HEAD')
+    sibling = commit('sibling edit')
+    sibling_paths = ['outside.txt'] if case == 'subtask-sibling-outside' else ['shared.txt']
+    m.pr.record(plan, 'a', 'later', 'implementer', {'agent': 'claude', 'paths': sibling_paths, **({} if case == 'subtask-sibling-unknown-start' else {'start': start})})
+    if case != 'subtask-sibling-missing':
+        by = 'claude' if case == 'subtask-sibling-unpaired' else 'codex'
+        verdict('a', 'review', sibling, by=by, extra=('--subtask', 'later'))
+    if case == 'subtask-sibling-fingerprint':
+        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@later__review*.json'):
+            doc = json.loads(filename.read_text()); doc['fingerprint'] = 'invalid'
+            filename.write_text(json.dumps(doc))
+    if case == 'subtask-sibling-post-review':
+        commit('unreviewed sibling edit')
+    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge sibling work', 'topic-a')
+    head = git('rev-parse', 'HEAD')
+    verdict('a', 'review', head, extra=('--implementer', 'codex'))
+    verdict('a', 'qa', head)
+    verdict('b', 'review', head); verdict('b', 'qa', head)
+    verdict('integration:fixture', 'qa', head)
+    g = m.gate(plan, reg)
+    stale = [x for x in g['blockers'] if 'subtask s recorded' in x and 'stale subtask review:' in x]
+    assert bool(stale) == (case != 'subtask-sibling-covered'), g
+    if stale:
+        assert 'shared.txt' in stale[0], stale
+        if case == 'subtask-sibling-unknown-start':
+            assert 'unknown legacy starts receive no credit' in stale[0], stale
+    else:
+        assert g['state'] == 'READY_FOR_PR', g
+    print(case + ' assertions passed')
+    sys.exit(0)
+if case == 'task-qa':
+    row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+    assert row['qa']['task'] == 'a' and row['qa']['sha'] == a, row
+    assert not any('STALE' in n for n in row['notes']), row
+elif case in ('report', 'implementer', 'override', 'legacy-implementer'):
+    if case == 'report':
+        r = cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', a, '--by', 'claude',
+                '--state', 'PASS', '--report', 'free text is not a file', rc=2)
+        assert '--report must name an existing file' in r.stderr and '--note' in r.stderr
+        verdict('a', 'qa', a, extra=('--note', 'free text'))
+        assert record('a', 'qa')['note'] == 'free text'
+        report = work / 'report.md'; report.write_text('evidence')
+        verdict('a', 'qa', a, extra=('--report', str(report)))
+        assert pathlib.Path(record('a', 'qa')['report']).is_file()
+    else:
+        m.pr.record(plan, 'a', 's1', 'implementer', {'agent': 'claude'})
+        m.pr.record(plan, 'a', 's2', 'implementer', {'agent': 'claude'})
+        extra = ('--implementer', 'codex') if case == 'override' else ()
+        if extra:
+            pathlib.Path(m.verdict_file(plan, 'a', 'review')).unlink()  # exercise a fresh explicit declaration, not review preservation
+        verdict('a', 'review', a, by='codex', extra=extra)
+        rv = record('a', 'review')
+        assert rv['implementer'] == ('codex' if extra else 'claude'), rv
+        assert rv['implementer_source'] == ('explicit' if extra else 'subtask implementers'), rv
+        assert rv['implementers'] == {'s1': 'claude', 's2': 'claude'}, rv
+        if case == 'legacy-implementer':
+            del rv['implementer']
+            m.fstate.write_json(m.verdict_file(plan, 'a', 'review'), rv)
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+        g = m.gate(plan, reg)
+        pair_errors = [b for b in g['blockers'] if b.startswith('a: reviewed by')]
+        assert bool(pair_errors) == bool(extra), g
+        if extra:
+            assert 'cross-model review needs claude' in pair_errors[0]
+else:
+    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+    verdict('integration:fixture', 'qa', git('rev-parse', 'HEAD'))
+    if case == 'integration-qa':
+        row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+        assert not any('STALE' in n for n in row['notes']), row
+        plan['tasks'][1]['objective'] = 'updated later wave'; save()
+        row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
+        assert row['qa']['task'] == 'a', row
+        s = m.status(plan, reg)
+        assert any('integration QA' in n and 'STALE' in n for r in s['tasks'] for n in r['notes']), s
+        assert all(sum('integration QA' in n and 'STALE' in n for n in r['notes']) == 1 for r in s['tasks']), s
+        assert not any(n.startswith('qa verdict is STALE') for r in s['tasks'] for n in r['notes']), s
+    else:
+        git('switch', '--no-track', '-c', 'topic-b')
+        b = commit('b')
+        if case.startswith('subtask-'):
+            b = commit('outside later wave', 'outside.txt')
+        verdict('b', 'review', b)
+        if case in ('post-review', 'subtask-post-review'):
+            commit('unreviewed b')
+        if case == 'outside-owner':
+            plan['tasks'][1]['paths'] = ['other.txt']; save()
+            verdict('b', 'review', b)
+        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge b', 'topic-b')
+        if case in ('direct', 'subtask-direct'):
+            commit('unreviewed topic')
+        if case == 'subtask-same-task':
+            commit('later first-task edit')
+            verdict('a', 'review', git('rev-parse', 'HEAD'), extra=('--implementer', 'codex'))
+        if case == 'invalid-review':
+            plan['tasks'][1]['objective'] = 'review fingerprint changed'; save()
+        if case in ('missing-review', 'subtask-missing-review'):
+            pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()
+        if case in ('evil-merge', 'subtask-evil-merge'):
+            # A merge commit can introduce content absent from either parent.
+            git('switch', '--no-track', '-c', 'evil-side')
+            commit('side', 'other.txt')
+            git('switch', 'topic')
+            git('merge', '--no-ff', '--no-commit', 'evil-side')
+            (repo / 'shared.txt').write_text('evil resolution')
+            git('add', 'shared.txt'); git('commit', '-qm', 'evil merge')
+        head = git('rev-parse', 'HEAD')
+        verdict('integration:fixture', 'qa', head)
+        if case.startswith('subtask-'):
+            g = m.gate(plan, reg)
+            stale = [x for x in g['blockers'] if 'stale subtask review:' in x]
+            assert bool(stale) == (case not in ('subtask-covered', 'subtask-legacy')), g
+            if stale:
+                assert 'shared.txt' in stale[0] and 'outside.txt' not in stale[0], stale
+            if case in ('subtask-covered', 'subtask-legacy'):
+                assert g['state'] == 'READY_FOR_PR', g
+            print(case + ' assertions passed')
+            sys.exit(0)
+        g, row = stale_a(case != 'covered')
+        if case == 'covered':
+            assert g['state'] == 'READY_FOR_PR', g
+            assert row['phase'] == 'qa', row
+            # Branch removal must not change currency.
+            git('branch', '-d', 'topic-a')
+            assert not stale_a(False)[0]['blockers']
+print(case + ' assertions passed')
+MULTIWAVE
+cat > "$TMP/qa-tiers.py" <<'QA_TIERS'
+import argparse, contextlib, importlib.util, io, json, os, pathlib, re, subprocess, sys
+root, tmp = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('qa_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+work = pathlib.Path(tmp) / 'qa-tiers'; work.mkdir()
+repo = work / 'repo'; repo.mkdir()
+os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+git('init', '-q', '-b', 'main')
+(repo / 'code.py').write_text('base')
+# stand-in run-all: --list-suites prints the suites it runs (tests/dogfood.sh, installed-safety.sh, orca-wait not among them)
+(repo / 'tests').mkdir()
+(repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/pipeline.test.sh\\ntests/routing-properties.test.py\\ntests/routing.test.sh\\n"; exit 0 ;; esac\n'
+                                          'echo full > "$(dirname "$0")/../full-run"; exit 1\n', newline='\n')
+git('add', '.'); git('commit', '-qm', 'base')
+base = git('rev-parse', 'HEAD'); git('switch', '--no-track', '-c', 'topic')
+(repo / 'code.py').write_text('change'); git('commit', '-qam', 'change'); first = git('rev-parse', 'HEAD')
+task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py'],
+        'checks': ['bash tests/pipeline.test.sh', 'env -u TMPDIR tests/pipeline.test.sh',
+                   'tests/run-all.sh -j 4', 'tests/run-all.sh --affected --only-suites tests/pipeline.test.sh',
+                   'python3 -B scripts/build-registry.py --check', 'tests/dogfood.sh',
+                   'python3 -B tests/routing-properties.test.py', 'env -u TMPDIR python3 -B tests/routing-properties.test.py',
+                   'tests/run-all.sh --affected --only-suites tests/installed-safety.sh'],
+        'acceptance': ['full run-all 0 failed']}
+plan = {'schema': m.SCHEMA, 'id': 'qa-tiers', 'title': 'QA', 'topic': 'topic', 'tier': 'M',
+        'repos': {'fixture': {'path': str(repo), 'base': 'main'}}, 'tasks': [task]}
+pf = work / 'plan.json'
+def save(): pf.write_text(json.dumps(plan))
+save()
+git('worktree', 'add', '-q', '-b', 'topic-a', str(work / 'task'), 'topic')
+warnings = m.validate(plan, reg)['warnings']
+assert len([w for w in warnings if 'full runs belong to integration QA' in w]) == 2, warnings
+safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed',
+                                                                      'tests/run-all.sh --only-suites tests/x.sh 0 failed'])
+assert not m.pr.qa_warnings(safe)
+for text in ['full suite 0 failed', 'the whole suite passes', 'all suites 0 failed', 'entire test suite green']:
+    assert m.pr.qa_warnings(dict(safe, acceptance=[text])), text
+assert not m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count']))
+# without run-all --list-suites nothing is folded: every check stays an extra command, no full run is started
+assert m.pr.qa_checks([task], None)[0] == [] and '[a] tests/dogfood.sh' in m.pr.qa_checks([task], None)[1]
+old = work / 'old'; (old / 'tests').mkdir(parents=True)
+(old / 'tests' / 'run-all.sh').write_text('echo full > "$(dirname "$0")/../full-run"\n', newline='\n')
+assert m.runall_suites(str(old)) is None and not (old / 'full-run').exists()
+(old / 'tests' / 'run-all.sh').write_text('[ "$1" = --list-suites ] && exit 2\n', newline='\n')
+assert m.runall_suites(str(old)) is None
+listed = {'tests/pipeline.test.sh', 'tests/routing-properties.test.py', 'tests/routing.test.sh'}
+assert m.runall_suites(str(repo)) == listed
+assert m.runall_suites(str(work / 'none')) is False  # no tests/run-all.sh: a product repo
+# --list-suites starts Git Bash through find_bash (never a bare "bash": the System32 WSL launcher on Windows)
+real_find_bash = m.find_bash
+m.find_bash = lambda: str(work / 'no-such-bash')
+assert m.runall_suites(str(repo)) is None
+m.find_bash = real_find_bash
+# registry pipeline.qa_tiers picks the tier command; a missing key falls back to task: affected, integration: full
+assert reg['pipeline']['qa_tiers']['task'] == 'affected' and reg['pipeline']['qa_tiers']['integration'] == 'full'
+assert m.tier_command('affected', 'main', []) == 'tests/run-all.sh --affected --base main -j 2'
+lone = [dict(task, checks=['bash tests/pipeline.test.sh'])]
+assert m.tier_command('full', 'main', ['tests/x.sh']) == 'tests/run-all.sh --reuse -j 4'
+# task QA never gets a full run: without a base only the check suites, with no suites the lead must give a base
+for level in ('affected', 'full'):
+    assert m.tier_command(level, '', ['tests/x.sh'], task=True) == 'tests/run-all.sh --only-suites tests/x.sh -j 2'
+    assert m.tier_command(level, None, [], task=True).startswith('NONE: the review base is missing')
+    assert '--reuse' not in m.tier_command(level, None, [], task=True)
+assert 'QA tier command:\ntests/run-all.sh --only-suites tests/pipeline.test.sh -j 2' in m.qa_body('x', lone, runall=listed)
+assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
+    m.qa_body('x', lone, base='main', runall=listed)
+assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites tests/pipeline.test.sh -j 2' in \
+    m.qa_body('x', lone, base='main', runall=listed, tiers={'task': 'full'})
+assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
+# without a known suite list, an --only-suites suite path runs as run-all runs it (TMPDIR unset), attributed to its task
+unknown = 'tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'
+assert m.pr.qa_checks([dict(task, checks=[unknown])], None)[1] == ['[a] env -u TMPDIR bash tests/session-state.test.sh',
+                                                                  '[a] env -u TMPDIR python3 -B tests/r.test.py']
+# with the list known, an entry run-all does not list makes the whole check DO NOT RUN (run-all would reject it)
+assert m.pr.qa_checks([dict(task, checks=[unknown])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + unknown], False)
+# r11 review: an --only-suites entry that is run-all itself never becomes a runnable command (a full run), known list
+# or not, and neither does a sibling entry of the same check; nor a non-suite path when the list is unknown
+for check in ('tests/run-all.sh --only-suites tests/run-all.sh', 'tests/run-all.sh --only-suites=./tests/run-all.sh',
+              'tests/run-all.sh --affected --only-suites tests/routing.test.sh,tests/run-all.sh',
+              'tests/run-all.sh --only-suites scripts/x.sh', 'tests/run-all.sh --only-suites tests/x'):
+    for known in (listed, None):
+        got = m.pr.qa_checks([dict(task, checks=[check])], known)
+        assert got == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), (check, known, got)
+# r11 review: only an exact --only-suites token with a list, or --only-suites=LIST, scopes a check; any other flag
+# word run-all ignores or misreads (a flag taken as a value) leaves a full run: DO NOT RUN, and validate warns
+for check in ('tests/run-all.sh --only-suitesXYZ', 'tests/run-all.sh --only-suitesXYZ tests/routing.test.sh',
+              'tests/run-all.sh --only-suites', 'tests/run-all.sh --only-suites=', 'tests/run-all.sh --only-suites=,',
+              'tests/run-all.sh --only-suites --affected', 'tests/run-all.sh --base --affected',
+              'tests/run-all.sh -j --affected', 'tests/run-all.sh --affected=1', 'tests/run-all.sh --affectedX',
+              'tests/run-all.sh --affected --bogus', 'tests/run-all.sh --affected --release',
+              'tests/run-all.sh --affected --list-suites'):
+    for known in (listed, None):
+        got = m.pr.qa_checks([dict(task, checks=[check])], known)
+        assert got == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), (check, known, got)
+for check in ('tests/run-all.sh --only-suitesXYZ', 'tests/run-all.sh --only-suites=', 'tests/run-all.sh --base --affected',
+              'tests/run-all.sh --affected=1', 'true && tests/run-all.sh --only-suitesXYZ tests/x.sh'):
+    assert m.pr.full_run(check), check
+for check in ('tests/run-all.sh --only-suites tests/x.sh', 'tests/run-all.sh --only-suites=tests/x.sh -j 2',
+              'tests/run-all.sh --base main --affected --jobs=2 --no-reuse'):
+    assert not m.pr.full_run(check), check
+assert m.pr.qa_checks([dict(task, checks=['tests/run-all.sh --no-wait --reuse --no-reuse -j2 --jobs 2 --no-workspace '
+                                          '--no-claude --base main --only-suites tests/routing.test.sh'])],
+                      listed) == (['tests/routing.test.sh'], [], False)
+# a repo without tests/run-all.sh keeps the previous body: the task checks and the run-checks.py fast tier
+old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.\n'
+            'Read-only unless a check writes its own build output. Check each acceptance criterion against the tree, '
+            'run the checks (run-checks.py fast tier for registry repos), regressions, edge and failure cases. A Unity '
+            'test run waits for the `unity-test` resource; never a second Editor.\n'
+            'Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n'
+            '- [s] tests pass\nChecks:\n- [s] dotnet test x\n- [s] tests/run-all.sh -j 4')
+srv = {'id': 's', 'checks': ['dotnet test x', 'tests/run-all.sh -j 4'], 'acceptance': ['tests pass']}
+for kw in ({'base': 'main'}, {'integration': True}, {'base': 'main', 'failed_suites': ['tests/x.sh']}):
+    assert m.qa_body('x', [srv], runall=False, **kw) == old_body, (kw, m.qa_body('x', [srv], runall=False, **kw))
+assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['docs/a.md', 'skills/foo/']))
+assert not m.pr.small_task({'tier': 'M'}, task)
+# tier S prose is .md anywhere, changelog.d/ and skills/ directories: a schema or JSON under docs/ is a machine input
+for paths in (['docs/schemas/pipeline-plan.schema.json'], ['docs/registry.schema.json'], ['docs/a.md', 'docs/x.json'],
+              ['skills/foo/run.py'], ['docs/plans/']):
+    assert not m.pr.small_task({'tier': 'M'}, dict(task, paths=paths)), paths
+assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['changelog.d/x.md', 'changelog.d/', 'skills/foo', 'x/y.md']))
+# task QA folds only a plain scoped run-all: an optional `env -u TMPDIR` / `bash` prefix, then plain flag tokens with
+# --affected or --only-suites among them; the suites it names join the one tier command
+for plain in ('tests/run-all.sh --affected', './tests/run-all.sh --affected --base plugin-flow-2 -j 2',
+              'bash tests/run-all.sh --only-suites=tests/routing.test.sh', '  env -u TMPDIR tests/run-all.sh --affected\t'):
+    assert m.pr.qa_checks([dict(task, checks=[plain])], listed) == (
+        ['tests/routing.test.sh'] if 'routing' in plain else [], [], False), repr(plain)
+assert m.pr.qa_checks([dict(task, checks=['env -u TMPDIR bash tests/run-all.sh --only-suites tests/routing.test.sh'])],
+                      listed) == (['tests/routing.test.sh'], [], False)
+# every other check that mentions run-all is DO NOT RUN: full, compound, wrapped, adjacent operators, redirections,
+# quotes, escapes, comments, other env prefixes and newlines (no shell parsing decides whether a full run hides)
+dnr = [
+    # full runs (no scoped flag)
+    'tests/run-all.sh', 'tests/run-all.sh -j 4', 'tests/run-all.sh --reuse -j 4', 'env -u TMPDIR X=1 tests/run-all.sh -j 4',
+    'tests/run-all.sh # --affected', 'echo tests/run-all.sh',
+    # compound, scoped or not
+    'tests/run-all.sh --only-suites tests/pipeline.test.sh && python3 -B scripts/build-registry.py --check',
+    'tests/run-all.sh --affected || true', 'tests/run-all.sh --affected; echo done', 'tests/run-all.sh --affected | tail -1',
+    '(tests/run-all.sh --affected)', 'echo $(tests/run-all.sh --affected)', 'tests/run-all.sh --affected > out.txt',
+    'tests/run-all.sh --affected\npython3 -B scripts/build-registry.py --check',
+    'tests/run-all.sh --affected\r\npython3 -B scripts/build-registry.py --check',
+    'tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check', 'tests/run-all.sh --affected\ntests/run-all.sh',
+    # wrapped
+    "bash -c 'tests/run-all.sh -j 4' > out.txt", 'bash -c "tests/run-all.sh -j 4"', "bash -c 'tests/run-all.sh'",
+    "bash -c 'tests/run-all.sh --affected -j 2'", 'sh tests/run-all.sh', 'sh ./tests/run-all.sh -j 4',
+    'env -u TMPDIR sh tests/run-all.sh --reuse', 'env tests/run-all.sh --affected', 'env -u HOME tests/run-all.sh --affected',
+    # operators and redirections without spaces
+    'tests/run-all.sh>qa.log', 'tests/run-all.sh>>qa.log', 'tests/run-all.sh 2>&1', 'tests/run-all.sh&>qa.log',
+    'tests/run-all.sh|tee qa.log', 'tests/run-all.sh 2>&1|tee qa.log', 'true;tests/run-all.sh', 'true&&tests/run-all.sh -j 4',
+    'tests/run-all.sh --affected;tests/run-all.sh', '(tests/run-all.sh)', 'tests/run-all.sh>--affected',
+    'bash -c "tests/run-all.sh">qa.log', 'echo $(tests/run-all.sh)', 'X="tests/run-all.sh -j 4" true',
+    'tests/run-all.sh "unbalanced', 'tests/run-all.sh --affected>qa.log', 'tests/run-all.sh --affected 2>&1|tee qa.log',
+    'tests/run-all.sh --only-suites=tests/x.sh;true', 'tests/run-all.sh --affected&>qa.log',
+    'bash -c "tests/run-all.sh --affected">qa.log', 'tests/run-all.sh --affected `true`', 'tests/run-all.sh --affected $X',
+    # comments
+    'tests/run-all.sh --affected # scoped', 'tests/run-all.sh --affected # scoped\ntests/run-all.sh',
+    'tests/run-all.sh --affected #c\r\ntests/run-all.sh -j 4', 'tests/run-all.sh --affected;#x\ntests/run-all.sh',
+    'true # c\n\ntests/run-all.sh', 'bash -c "true # c\ntests/run-all.sh"', 'echo "#"; tests/run-all.sh',
+    'echo \\# x; tests/run-all.sh', 'tests/run-all.sh \\', 'tests/run-all.sh --affected # tests/run-all.sh',
+    'echo a#b; tests/run-all.sh --affected',
+    # escaped spaces and operators (the r10 review repro first), quoted or escaped names
+    'echo x\\ #literal; tests/run-all.sh', 'echo x\\ #literal\ntests/run-all.sh', 'tests/run-all.sh --affected\\ ;tests/run-all.sh',
+    'tests/run-all.sh\\;true', 'tests/run-all.sh --affected \\&\\& tests/run-all.sh', 'tests/run-all.sh --affected \\| true',
+    'tests/run-all.sh --affected \\> qa.log', 'tests/run-all.sh "--affected"', "tests/run-all.sh '--only-suites=tests/x.sh'",
+    'tests/run-a"ll".sh -j 4', "tests/run-a'll'.sh", 'tests/run-all\\.sh', 'tests/run-al\\l.sh --affected',
+]
+for check in dnr:
+    assert m.pr.qa_checks([dict(task, checks=[check])], listed) == ([], ['[a] ' + m.pr.DO_NOT_RUN + check], False), repr(check)
+assert m.pr.DO_NOT_RUN.startswith('DO NOT RUN') and 'NOT_RUN' in m.pr.DO_NOT_RUN
+# a check without run-all stays a plain extra command (compound commands are never split)
+for other in ('bash tests/pipeline.test.sh && true', 'bash tests/run-all-parallel.test.sh', 'echo run-all'):
+    assert m.pr.qa_checks([dict(task, checks=[other])], listed) == ([], ['[a] ' + other], False), other
+# validate still warns on a full run inside a compound check; a scoped one is fine
+assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
+assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
+assert not m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
+for wrapped in ("bash -c 'tests/run-all.sh -j 4'", 'bash -c "tests/run-all.sh"', "bash -c 'true && tests/run-all.sh'",
+                'tests/run-all.sh --affected\ntests/run-all.sh -j 4', 'echo x\\ #literal; tests/run-all.sh',
+                'echo x\\;#literal\ntests/run-all.sh', 'tests/run-all.sh # --affected'):
+    assert m.pr.full_run(wrapped), repr(wrapped)
+for scoped in ("bash -c 'tests/run-all.sh --affected -j 2'", 'tests/run-all.sh --affected # tests/run-all.sh',
+               'echo a#b; tests/run-all.sh --affected', 'tests/run-all.sh --affected 2>&1|tee qa.log'):
+    assert not m.pr.full_run(scoped), scoped
+# re-QA: a failed suite already among the extra checks (any invocation form) runs once, under its first form
+for form in ('tests/dogfood.sh', 'bash tests/dogfood.sh', 'env -u TMPDIR tests/dogfood.sh'):
+    assert m.pr.qa_checks([dict(task, checks=[form])], listed, ['tests/dogfood.sh']) == ([], ['[a] ' + form], False), form
+assert m.pr.qa_checks([dict(task, checks=['tests/dogfood.sh', 'bash tests/dogfood.sh',
+                                          'tests/run-all.sh --only-suites tests/dogfood.sh'])], None,
+                      ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] env -u TMPDIR bash tests/dogfood.sh',
+                                                                   '[a] env -u TMPDIR bash tests/x.sh'], False)
+# the same with run-all's list known: the --only-suites check names a suite run-all does not list, so DO NOT RUN
+dog = 'tests/run-all.sh --only-suites tests/dogfood.sh'
+assert m.pr.qa_checks([dict(task, checks=['tests/dogfood.sh', 'bash tests/dogfood.sh', dog])], listed,
+                      ['tests/dogfood.sh', 'tests/x.sh']) == ([], ['[a] tests/dogfood.sh', '[a] ' + m.pr.DO_NOT_RUN + dog,
+                                                                   '[a] env -u TMPDIR bash tests/x.sh'], False)
+# the same suite with and without `env -u TMPDIR`: the env form wins, in the first form's place, task ids merged
+assert m.pr.qa_checks([dict(task, checks=['tests/x.sh', 'python3 -B scripts/y.py', 'env -u TMPDIR tests/x.sh'])],
+                      listed) == ([], ['[a] env -u TMPDIR tests/x.sh', '[a] python3 -B scripts/y.py'], False)
+envs = [dict(task, id='a', checks=['bash tests/x.sh']), dict(task, id='b', checks=['env -u TMPDIR bash tests/x.sh', 'tests/x.sh'])]
+assert m.pr.qa_checks(envs, listed)[1] == ['[a, b] env -u TMPDIR bash tests/x.sh']
+two = [dict(task, id='a', checks=['tests/dogfood.sh']), dict(task, id='b', checks=['bash tests/dogfood.sh'])]
+assert m.pr.qa_checks(two, listed, ['tests/dogfood.sh'])[1] == ['[a, b] tests/dogfood.sh']
+# release-only suites stay extras, also against the REAL `tests/run-all.sh --list-suites` of this checkout
+runall_text = pathlib.Path(root, 'tests', 'run-all.sh').read_text(encoding='utf-8')
+assert set(re.search(r'^RELEASE_ONLY="([^"]*)"', runall_text, re.M)[1].split()) == m.pr.RELEASE_ONLY
+real = m.runall_suites(root)
+assert real and 'tests/pipeline.test.sh' in real, real
+for check in ('tests/installed-safety.sh', 'env -u TMPDIR tests/installed-safety.sh', 'tests/dogfood.sh'):
+    got = m.pr.qa_checks([dict(task, checks=[check, 'bash tests/pipeline.test.sh'])], real, ['tests/installed-safety.sh'])
+    assert got[0] == ['tests/pipeline.test.sh'], (check, got)
+    assert any('installed-safety.sh' in x for x in got[1]) or 'installed-safety' not in check, (check, got)
+    assert any('dogfood.sh' in x for x in got[1]) or 'dogfood' not in check, (check, got)
+    assert len([x for x in got[1] if 'installed-safety.sh' in x]) == 1, (check, got)
+# run-all rejects a release-only or unlisted --only-suites entry without --release: that check is DO NOT RUN
+check = 'tests/run-all.sh --affected --only-suites tests/installed-safety.sh,tests/dogfood.sh'
+got = m.pr.qa_checks([dict(task, checks=[check, 'bash tests/pipeline.test.sh'])], real, ['tests/installed-safety.sh'])
+assert got == (['tests/pipeline.test.sh'], ['[a] ' + m.pr.DO_NOT_RUN + check,
+                                           '[a] env -u TMPDIR bash tests/installed-safety.sh'], False), got
+# a recorded failed suite that is run-all itself (any spelling) or no suite path is DO NOT RUN, never a runnable extra
+for bad in ('tests/run-all.sh', './tests/run-all.sh', 'tests/run-a"ll".sh', 'docs/x.md', 'tests/../x.sh'):
+    for runall in (real, None):
+        got = m.pr.qa_checks([dict(task, checks=['bash tests/pipeline.test.sh'])], runall, [bad])
+        assert got[1][-1] == '[a] ' + m.pr.DO_NOT_RUN_FAILED + bad, (bad, got)
+        assert not any(e.startswith('[a] env') and 'run-all' in e for e in got[1]), (bad, got)
+assert not m.pr.failed_suite_ok('tests/run-all.sh') and m.pr.failed_suite_ok('tests/orca-wait.test.sh')
+def cli(*args):
+    p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
+    assert p.returncode == 0, (args, p.stdout, p.stderr)
+    return p.stdout
+def cli_fail(*args):
+    p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
+    assert p.returncode != 0 and '--failed-suites' in p.stderr, (args, p.stdout, p.stderr)
+def dispatch(phase, sha, tid='a'):
+    return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
+out = dispatch('qa', first)
+command = ('tests/run-all.sh --affected --base main --only-suites '
+           'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
+assert out.count(command) == 1, out
+assert 'never a full tests/run-all.sh run' in out and 'A full run-all check was dropped' not in out
+# the full run-all check is marked DO NOT RUN, in its place among the extras, never folded or runnable
+extras = ('Extra commands:\n[a] ' + m.pr.DO_NOT_RUN + 'tests/run-all.sh -j 4\n'
+          '[a] python3 -B scripts/build-registry.py --check\n[a] tests/dogfood.sh\n'
+          '[a] ' + m.pr.DO_NOT_RUN + 'tests/run-all.sh --affected --only-suites tests/installed-safety.sh')
+assert out.count('tests/run-all.sh -j 4') == 1 and extras in out, out
+assert 'routing-properties.test.py' not in out.split('Extra commands:')[1], out
+assert not (work / 'task' / 'full-run').exists() and not (repo / 'full-run').exists()
+assert 'Run no suites; only a minimal repro when needed' in dispatch('review', first)
+out = dispatch('qa', first, 'integration:fixture')
+assert 'tests/run-all.sh --reuse -j 4' in out and 'was dropped' not in out and extras in out, out
+# a product repo without tests/run-all.sh: task and integration QA keep its checks and the run-checks.py fast tier
+srv_repo = work / 'srv'; srv_repo.mkdir()
+def sgit(*args):
+    p = subprocess.run(['git', '-C', str(srv_repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                       capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+sgit('init', '-q', '-b', 'main'); (srv_repo / 'srv.cs').write_text('base'); sgit('add', '.'); sgit('commit', '-qm', 'base')
+sgit('switch', '--no-track', '-c', 'topic'); (srv_repo / 'srv.cs').write_text('change'); sgit('commit', '-qam', 'change')
+srv_sha = sgit('rev-parse', 'HEAD')
+sgit('worktree', 'add', '-q', '-b', 'topic-s', str(work / 'srv-task'), 'topic')
+srv_plan = {'schema': m.SCHEMA, 'id': 'qa-srv', 'title': 'QA', 'topic': 'topic', 'tier': 'M',
+            'repos': {'srv': {'path': str(srv_repo), 'base': 'main'}},
+            'tasks': [{'id': 's', 'repo': 'srv', 'kind': 'code', 'objective': 'test', 'paths': ['srv.cs'],
+                       'checks': ['dotnet test x'], 'acceptance': ['tests pass']}]}
+srv_pf = work / 'srv-plan.json'; srv_pf.write_text(json.dumps(srv_plan))
+for tid in ('s', 'integration:srv'):
+    out = cli('dispatch', str(srv_pf), '--task', tid, '--phase', 'qa', '--sha', srv_sha, '--runner', 'print')
+    assert 'run the checks (run-checks.py fast tier for registry repos)' in out and 'Checks:\n- [s] dotnet test x' in out, out
+    assert 'QA tier command' not in out and 'tests/run-all.sh' not in out, out
+lean = m.qa_body(first,[dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
+                 runall={'tests/pipeline.test.sh'})
+assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
+# --failed-suites refusals: a PASS, a review verdict, a name neither run-all lists nor a (tests|testlab|scripts)/ suite
+cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'PASS',
+         '--failed-suites', 'tests/routing.test.sh')
+cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'review', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+         '--failed-suites', 'tests/routing.test.sh')
+for bad in ('docs/x.md', 'tests/../x.sh', 'tests/x.txt', 'tools/lab.sh,tests/routing.test.sh', 'tests/routing.test.sh,../x.sh',
+            'tests/run-all.sh', 'tests/routing.test.sh,tests/run-all.sh', './tests/run-all.sh'):
+    cli_fail('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+             '--failed-suites', bad)
+p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'verdict', str(pf), '--task', 'a',
+                    '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL', '--failed-suites',
+                    'tests/run-all.sh'], capture_output=True, text=True)
+assert p.returncode == 2 and 'never names tests/run-all.sh' in p.stderr, (p.returncode, p.stderr)
+# suites run-all lists outside tests/ (testlab/tests/test_lab.py, scripts/check-registry.sh) are accepted
+for good in ('scripts/check-registry.sh', 'testlab/tests/test_lab.py'):
+    cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+        '--failed-suites', good)
+# any other name the checkout's `run-all --list-suites` prints is accepted too
+runall_src = (repo / 'tests' / 'run-all.sh').read_text()
+(repo / 'tests' / 'run-all.sh').write_text(runall_src.replace('routing.test.sh\\n', 'routing.test.sh\\ntools/lab.sh\\n'),
+                                          newline='\n')
+assert 'tools/lab.sh' in (repo / 'tests' / 'run-all.sh').read_text()
+cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+    '--failed-suites', 'tools/lab.sh')
+(repo / 'tests' / 'run-all.sh').write_text(runall_src, newline='\n')
+cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
+    '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh,tests/orca-wait.test.sh')
+(repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
+out = dispatch('qa', second)
+assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
+        'tests/routing.test.sh -j 2') in out, out
+# a failed suite run-all does not run (exit 2 under --only-suites) is an extra command instead
+assert 'orca-wait' not in out.split('QA tier command:\n')[1].split('\n')[0], out
+assert '[a] env -u TMPDIR bash tests/orca-wait.test.sh' in out.split('Extra commands:')[1], out
+cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL')
+assert '--base main ' in dispatch('qa', second)
+def verdict(tid, phase, by, note=None):
+    args = ['verdict', str(pf), '--task', tid, '--phase', phase, '--sha', second, '--by', by, '--state', 'PASS']
+    if note: args += ['--note', note]
+    cli(*args)
+# implementer codex: a QA session by any model passes as before (codex = the one-model fallback); a QA verdict
+# recorded as the lead's own tier S run passes only for a tier S task
+task['implementer'] = 'codex'
+for tier, by, note, allowed in [('S', 'codex', 'tier S: lead ran task suites', True),
+                                ('S', 'claude', 'tier S: lead ran task suites', True),
+                                ('M', 'codex', 'tier S: lead ran task suites', False),
+                                ('M', 'claude', 'tier S: lead ran task suites', False),
+                                ('S', 'codex', None, True), ('M', 'codex', None, True), ('M', 'claude', None, True)]:
+    plan['tier'] = tier; save()
+    verdict('a', 'review', 'claude'); verdict('a', 'qa', by, note); verdict('integration:fixture', 'qa', 'claude')
+    result = m.gate(plan, reg, run_checks=False)
+    blocked = any('tier S lead QA, but the task is not tier S' in b for b in result['blockers'])
+    assert blocked != allowed, (tier, by, note, result)
+    if allowed: assert not result['blockers'], result
+plan['tier'] = 'S'; save()
+assert 'no separate QA session' in dispatch('qa', second)
+print('QA tier command, dedup, extras, warnings, review, integration, re-QA and S/M gate assertions passed')
+QA_TIERS
+BG="$TMP/bg"; mkdir -p "$BG"
+# bg_case <id> <command...>: run one case, output in $BG/<id>.out, exit code in $BG/<id>.rc
+bg_case() { local id="$1"; shift; "$@" > "$BG/$id.out" 2>&1; echo "$?" > "$BG/$id.rc"; }
+(
+  running=0
+  next() {
+    [ "$running" -lt "${PIPELINE_TEST_JOBS:-4}" ] || { wait -n; running=$((running - 1)); }
+    bg_case "$@" & running=$((running + 1))
+  }
+  for c in $ROUTING_CASES; do next "routing-$c" env RPG_FACTORY_STATE_DIR="$TMP/state-routing-$c" python3 -B "$TMP/routing-cases.py" "$ROOT" "$TMP" "$c"; done
+  for c in $MULTIWAVE_CASES; do next "multiwave-$c" python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$c"; done
+  next qa-tiers python3 -B "$TMP/qa-tiers.py" "$ROOT" "$TMP"
+  wait
+) &
+BG_PID=$!
+# bg_report <name> <id>: PASS when the background case exited 0, else FAIL with its output
+bg_report() {
+  [ -z "$BG_PID" ] || { wait "$BG_PID"; BG_PID=; }
+  if [ "$(cat "$BG/$2.rc" 2>/dev/null)" = 0 ]; then pass=$((pass + 1)); echo "PASS  $1"
+  else fail=$((fail + 1)); echo "FAIL  $1"; cat "$BG/$2.out" 2>/dev/null; fi
+}
 
 echo "-- validate"
 OK=$(plan ok "{$HEAD,\"tasks\":[
@@ -508,9 +1416,9 @@ else fail=$((fail + 1)); echo "FAIL  verdict records"; ls "$VD" | sed 's/^/     
 expect "--subtask goes with a plan task" 2 "--subtask is the id of a subtask" verdict "$G" --task integration:srv --phase qa --sha "$SG" --by codex --state PASS --subtask s2
 expect "Unity tasks need their own QA, one after another" 1 "BLOCKER c1: no qa verdict" gate "$G"
 v --task c1 --phase qa --sha "$C1" --by codex --state PASS
-v --task c2 --phase qa --sha "$C1" --by codex --state PASS
+v --task c2 --phase qa --sha "$C1" --by claude --state PASS
 expect "per-task QA on a commit without the reviewed one blocks" 1 "BLOCKER c2: QA ran on .* does not contain the reviewed commit" gate "$G"
-v --task c2 --phase qa --sha "$C2" --by codex --state PASS
+v --task c2 --phase qa --sha "$C2" --by claude --state PASS
 # every task and integration verdict PASS, but the current subtask s2 review FAIL still blocks gate and status
 expect "a current subtask review FAIL blocks the gate: NOT_READY" 1 "BLOCKER gw: subtask s2 review FAIL at .* by claude" gate "$G"
 expect "status names the subtask FAIL and starts the task lead" 0 "note: subtask s2 review FAIL" status "$G"
@@ -738,15 +1646,15 @@ if jq -e '.state == "LEFTOVER" and (.workers[0].unreleased | length) == 4 and an
 then pass=$((pass + 1)); echo "PASS  cleanup --json carries the workers"
 else fail=$((fail + 1)); echo "FAIL  cleanup --json workers"; head -c 1500 "$TMP/cleanup-orca.json"; fi
 opath "status lists unreleased workers" 0 "^Workers:   UNRELEASED ctx_ret" status "$GO"
-if PATH="$fpath" python3 -B "$P" status --json "$GO" 2>/dev/null | jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' >/dev/null
+# one status --json run (stdout and stderr apart) for the next three cases
+PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/so.json" 2> "$TMP/se.txt"; rc=$?
+if jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' "$TMP/so.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  status --json puts the release commands first in next"
 else fail=$((fail + 1)); echo "FAIL  status --json next"; fi
-PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/so.json" 2> "$TMP/se.txt"; rc=$?
 if [ $rc = 0 ] && jq -e '.next[0] | test("worker-release --dispatch ctx_ret$")' "$TMP/so.json" >/dev/null && grep -q "^Workers:   UNRELEASED ctx_ret" "$TMP/se.txt"
 then pass=$((pass + 1)); echo "PASS  status --json: unreleased workers on stderr, release command in next, exit 0"
 else fail=$((fail + 1)); echo "FAIL  status --json unreleased (rc $rc)"; head -5 "$TMP/se.txt"; fi
-PATH="$fpath" python3 -B "$P" status --json "$GO" > "$TMP/status-orca.json" 2>/dev/null
-if python3 - "$ROOT" "$TMP/status-orca.json" <<'PY'
+if python3 - "$ROOT" "$TMP/so.json" <<'PY'
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -1016,7 +1924,7 @@ print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")
 # st_phase <name> <task> <phase> [<next-regex>]: the task's phase in status --json (and its next command)
 st_phase() {
   local name="$1" id="$2" want="$3" nx="${4:-}" out
-  out=$(python3 -B "$P" status --json "$ST" 2>&1)
+  pp status --json "$ST"; out="$OUT"
   if python3 -c 'import json,re,sys; o=json.loads(sys.argv[1]); r={t["id"]:t for t in o["tasks"]}[sys.argv[2]]
 assert r["phase"]==sys.argv[3], r
 assert not sys.argv[4] or re.search(sys.argv[4], r["next"] or ""), r' "$out" "$id" "$want" "$nx"; then
@@ -1135,7 +2043,7 @@ sv --task c2 --phase qa --sha "$SD" --by claude --state PASS
 # agree <name>: status names the gate as next exactly when the gate (no registry checks here) is READY_FOR_PR
 agree() {
   local out g rc
-  out=$(python3 -B "$P" status --json "$ST" 2>&1); g=$(python3 -B "$P" gate "$ST" 2>&1); rc=$?
+  pp gate "$ST"; g="$OUT"; rc="$RC"; pp status --json "$ST"; out="$OUT"
   if python3 -c 'import json,sys; o=json.loads(sys.argv[1]); said=any(" gate " in c for c in o["next"])
 assert said == (sys.argv[2] == "0"), (o["next"], sys.argv[2])' "$out" "$rc"; then pass=$((pass + 1)); echo "PASS  $1"
   else fail=$((fail + 1)); echo "FAIL  $1 (gate rc=$rc)"; head -c 800 <<<"$out"; echo; sed 's/^/      /' <<<"$g" | head -10; fi
@@ -1371,569 +2279,13 @@ check_reg "check-registry: unknown agent in qa_prefer fails" '.pipeline.qa_prefe
 check_reg "check-registry: unknown agent in available_agents fails" '.pipeline.available_agents = ["gpt"]' "pipeline.available_agents: unknown agent gpt"
 
 echo "-- model routing"
-cat > "$TMP/routing-cases.py" <<'ROUTING'
-import importlib.util, json, os, pathlib, sys
-from unittest.mock import patch
-root, tmp, case = sys.argv[1:]
-sys.path.insert(0, root + '/scripts/lib')
-import pipeline_route as r
-pipe = json.loads(pathlib.Path(root + '/registry.json').read_text())['pipeline']
-both = {a: {'available': True} for a in pipe['agents']}
-if case.startswith('kind-'):
-    kind = case[len('kind-'):]
-    assert kind in r.KINDS
-    assert r.route(pipe, {'kind': kind}, both)[0] == pipe['agent_routing'][kind]
-if case == 'overrides-and-qa':
-    assert r.route(pipe, {'kind': 'code', 'implementer': 'claude'}, both)[0] == 'claude'
-    assert r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude'}])
-    assert not r.warnings(pipe, [{'kind': 'code', 'implementer': 'claude', 'reason': 'special expertise'}])
-    assert r.warnings(pipe, [{'kind': 'code'}] * 3)
-    assert r.roles(pipe, {'kind': 'code'}, both)['qa'][0] == 'claude'
-    assert r.roles(pipe, {'kind': 'docs'}, both)['qa'][0] == 'codex'
-plan = {'id': 'routing-unit'}
-for sole in ('claude', 'codex'):
-    if case != 'availability-' + sole:
-        continue
-    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': sole}):
-        avail = r.available(pipe, plan)
-        for kind in r.KINDS:
-            roles = r.roles(pipe, {'kind': kind}, avail)
-            assert all(agent == sole for agent, why in roles.values()), roles
-            assert 'SAME_MODEL (fallback:' in roles['review'][1]
-    bindir = pathlib.Path(tmp) / ('only-' + sole)
-    bindir.mkdir(exist_ok=True)
-    binary = bindir / (pipe['agents'][sole]['bin'] + ('.exe' if os.name == 'nt' else ''))
-    binary.write_text('fixture')
-    binary.chmod(0o755)
-    with patch.dict(os.environ, {'PATH': str(bindir), 'PATHEXT': '.EXE;.CMD'}, clear=True):
-        avail = r.available(pipe, plan)
-        assert all(a == sole for a, why in r.roles(pipe, {'kind': 'code'}, avail).values())
-if case == 'marks-and-empty':
-    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
-        r.mark(plan, 'codex', '401 revoked token')
-        assert r.route(pipe, {'kind': 'code'}, r.available(pipe, plan)) == ('claude', 'fallback: codex unavailable')
-        r.mark(plan, 'codex')
-        assert r.available(pipe, plan)['codex']['available']
-    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': ''}):
-        assert 'WARNING' in r.route(pipe, {'kind': 'code'}, r.available(pipe, plan))[1]
-import subprocess
-for label, payload, down in (
-    ('no-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': False}}}}), True),
-    ('system-auth', json.dumps({'result': {'codex': {'accounts': [], 'systemDefault': {'hasAuth': True}}}}), False),
-    ('account-auth', json.dumps({'result': {'codex': {'accounts': [{}], 'systemDefault': {'hasAuth': False}}}}), False),
-    ('malformed', '{"result":null}', False),
-):
-    if case != 'orca-' + label:
-        continue
-    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-' + label,
-                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
-         patch('pipeline_route.shutil.which', return_value='/fake'), \
-         patch('pipeline_route.subprocess.run', return_value=subprocess.CompletedProcess([], 0, payload)):
-        avail = r.available(pipe, {'id': 'account-' + label})
-        assert avail['claude']['available']
-        assert avail['codex']['available'] != down
-if case == 'orca-offline':
-    with patch.dict(os.environ, {'ORCA_WORKTREE_ID': 'fixture', 'PATH': 'orca-offline',
-                                'RPG_FACTORY_STATE_DIR': tmp + '/account-state'}, clear=True), \
-         patch('pipeline_route.shutil.which', return_value='/fake'), \
-         patch('pipeline_route.subprocess.run', side_effect=OSError('offline')):
-        assert all(a['available'] for a in r.available(pipe, {'id': 'account-offline'}).values())
-spec = importlib.util.spec_from_file_location('routing_pipeline', root + '/scripts/factory-pipeline.py')
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
-reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
-plan = {'schema': m.SCHEMA, 'id': 'route-validation', 'title': 'test', 'topic': 'test',
-        'repos': {'plugin': {'path': root}},
-        'tasks': [{'id': 't', 'repo': 'plugin', 'kind': 'code', 'implementer': 'claude',
-                   'objective': 'x', 'paths': ['scripts/'], 'acceptance': ['x']}]}
-if case == 'followup-validation':
-    plan['tasks'][0].pop('kind')
-    plan['tasks'][0]['implementer'] = 'claude' if r.route(pipe, {}, both)[0] == 'codex' else 'codex'
-    assert any('default routing without reason' in w for w in m.validate(plan, reg)['warnings'])
-    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
-           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': plan['tasks'][0]['implementer']}]}
-    assert any('default routing without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
-    custom = dict(pipe, agent_routing={})
-    other = next(agent for agent in pipe['agents'] if agent != pipe['default_implementer'])
-    assert r.warnings(custom, [{'implementer': other}])
-    assert r.warnings(custom, [{'kind': 'code', 'implementer': other}]) == [
-        '?: implementer overrides default routing without reason']
-    assert not r.warnings(custom, [{'implementer': other, 'reason': 'expertise'}])
-    plan['tasks'][0]['kind'] = 'outside-schema'
-    assert m.validate(plan, reg)['errors']
-if case == 'followup-legacy':
-    with patch.object(m, 'verdict_dir', return_value=tmp + '/legacy-followup'), \
-         patch.object(m, 'scope_fingerprint', return_value='current'), \
-         patch.object(m, 'repo_info', return_value={'path': root}):
-        directory = pathlib.Path(m.verdict_dir(plan))
-        directory.mkdir(exist_ok=True)
-        legacy = {'task': 't', 'subtask': 'a', 'phase': 'review', 'sha': 'abc',
-                  'state': 'FAIL', 'by': 'codex', 'fingerprint': 'current'}
-        (directory / 't__sub-a__review.json').write_text(json.dumps(legacy))
-        (directory / 't@a__review__b__review.json').write_text(json.dumps(dict(legacy, subtask='a__review__b', state='PASS')))
-        assert m.subtask_failures(plan, reg, 't', 'abc')
-        current = directory / 't@a__review.json'
-        current.write_text(json.dumps(dict(legacy, state='PASS', fingerprint='stale')))
-        assert m.subtask_failures(plan, reg, 't', 'abc')
-        current.write_text(json.dumps(dict(legacy, state='PASS')))
-        assert not m.subtask_failures(plan, reg, 't', 'abc')
-        current.rename(directory / 't@a__review__0123456789ab__codex.json')
-        assert not m.subtask_failures(plan, reg, 't', 'abc')
-if case == 'validation':
-    assert any('without reason' in w for w in m.validate(plan, reg)['warnings'])
-    plan['tasks'][0]['reason'] = 'expertise'
-    assert not m.validate(plan, reg)['warnings']
-    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
-           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'implementer': 'gpt'}]}
-    assert any('implementer `gpt` is not' in e for e in m.validate_subplan(sub, plan, reg)['errors'])
-    sub['subtasks'][0].update(implementer='claude', kind='code')
-    assert any('without reason' in w for w in m.validate_subplan(sub, plan, reg)['warnings'])
-    sub['subtasks'][0]['reason'] = 'expertise'
-    assert not m.validate_subplan(sub, plan, reg)['warnings']
-import subprocess
-project = pathlib.Path(tmp) / 'routing-project'
-(project / 'ProjectSettings').mkdir(parents=True, exist_ok=True)
-(project / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
-plan['repos']['plugin']['path'] = str(project)
-plan['repos']['plugin']['base'] = 'main'
-planfile = pathlib.Path(tmp) / 'routing-command-plan.json'
-plan['tasks'][0].pop('implementer', None)
-planfile.write_text(json.dumps(plan))
-if case == 'followup-preview':
-    state = tmp + '/preview-state'
-    env = dict(os.environ, RPG_FACTORY_AGENTS='claude,codex', RPG_FACTORY_STATE_DIR=state)
-    for runner in ('print', 'orca', 'agent'):
-        for phase in ('implement', 'review'):
-            args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'dispatch', str(planfile),
-                    '--task', 't', '--phase', phase, '--runner', runner]
-            if phase == 'review':
-                args += ['--sha', 'abc1234']
-            if runner == 'agent':
-                args += ['--orca-unavailable', 'fixture']
-            result = subprocess.run(args, capture_output=True, text=True, env=env)
-            assert result.returncode == 0, result.stderr
-            records = list(pathlib.Path(state).rglob('*.model.json'))
-            assert bool(records) == (runner != 'print'), records
-            if runner != 'print':
-                role = 'implementer' if phase == 'implement' else 'reviewer'
-                assert any('__' + role in record.name for record in records), records
-                for record in records:
-                    record.unlink()
-    for reason in (None, 'revoked'):
-        args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'agents', str(planfile), '--down', 'codex']
-        if reason:
-            args += ['--reason', reason]
-        result = subprocess.run(args, capture_output=True, text=True, env=env)
-        assert result.returncode == 0, result.stderr
-        assert result.stdout.count('MODEL_UNAVAILABLE') == 1, result.stdout
-        assert ('MODEL_UNAVAILABLE: revoked' if reason else 'MODEL_UNAVAILABLE') in result.stdout
-for sole in ('claude', 'codex'):
-    if case != 'dispatch-' + sole and case != 'status-' + sole:
-        continue
-    # own state per case: an implement dispatch records its model, which later review/QA dispatches pair against
-    env = dict(os.environ, RPG_FACTORY_AGENTS=sole, RPG_FACTORY_STATE_DIR=tmp + '/state-' + case)
-    if case == 'status-' + sole:
-        result = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'status', str(planfile), '--json'], capture_output=True, text=True, encoding='utf-8', env=env)
-        models = json.loads(result.stdout)['models']['t']
-        assert all(x['agent'] == sole and x['why'] for x in models.values()), models
-        assert 'SAME_MODEL (fallback:' in models['review']['why']
-        continue
-    for phase in ('lead', 'implement', 'review', 'qa'):
-        args = [sys.executable, '-B', root + '/scripts/factory-pipeline.py', 'dispatch', str(planfile),
-                '--task', 't', '--phase', phase, '--runner', 'print']
-        if phase == 'lead':
-            args += ['--agent', 'codex' if sole == 'claude' else 'claude']
-        if phase in ('review', 'qa'):
-            args += ['--sha', 'abc1234']
-        result = subprocess.run(args, capture_output=True, text=True, env=env)
-        assert result.returncode == 0, result.stderr
-        assert '# agent: ' + sole in result.stdout, result.stdout
-        assert 'model: ' + phase + ' -> ' + sole in result.stderr, result.stderr
-        if phase == 'lead':
-            assert 'the task lead is ' + sole in result.stderr and 'always' not in result.stderr
-            if sole == 'codex':
-                assert 'fallback: claude unavailable' in result.stderr
-if case == 'registry-defaults':
-    custom = dict(pipe, available_agents=['claude'], agent_routing=dict(pipe['agent_routing'], default='codex'))
-    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}):
-        avail = r.available(custom, {'id': 'candidate-set'})
-        assert not avail['codex']['available']
-        assert avail['codex']['why'] == 'not in pipeline.available_agents'
-    assert r.route(custom, {}, both) == ('codex', 'agent_routing.default')
-if case == 'planned-warning':
-    assert not r.warnings(pipe, [{'kind': k} for k in ('code', 'docs', 'test')])
-if case == 'subtask-kind':
-    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
-           {'id': 's', 'objective': 'x', 'paths': ['scripts/x']}]}
-    assert 'subtask s: missing implementer (or kind)' in m.validate_subplan(sub, plan, reg)['errors']
-    sub['subtasks'][0]['kind'] = 'code'
-    assert not m.validate_subplan(sub, plan, reg)['errors']
-if case == 'no-probe':
-    import shutil
-    orig_run, orig_which, started = subprocess.run, shutil.which, []
-    def spy(args, *k, **kw):
-        if isinstance(args, (list, tuple)) and list(args[:1]) == ['orca']:
-            started.append(args)
-            return subprocess.CompletedProcess(args, 0, '{}')
-        return orig_run(args, *k, **kw)
-    env = {k: v for k, v in os.environ.items() if k != 'RPG_FACTORY_AGENTS'}
-    env['ORCA_WORKTREE_ID'] = 'fixture'
-    sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
-           {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'kind': 'code'}]}
-    with patch.dict(os.environ, env, clear=True), patch('subprocess.run', spy), \
-         patch('shutil.which', lambda n, *a, **k: '/fake' if n == 'orca' else orig_which(n, *a, **k)):
-        m.validate(plan, reg)
-        m.validate_subplan(sub, plan, reg)
-        assert not started, started
-        r.available(pipe, {'id': 'probe-control'})
-        assert started, 'control: available() starts the orca account probe'
-    with patch.dict(os.environ, {'RPG_FACTORY_AGENTS': 'claude,codex'}), \
-         patch('pipeline_route.fstate.read_json', side_effect=AssertionError('marks read')):
-        r.available(pipe, None)  # the planner: no per-run marks
-        try:
-            r.available(pipe, {'id': 'marks-control'})
-            raise RuntimeError('control: a plan reads its marks')
-        except AssertionError as e:
-            assert 'marks read' in str(e)
-if case == 'kinds-single-list':
-    import re
-    kinds = list(r.KINDS)
-    assert set(kinds) == set(pipe['agent_routing']) - {'default'}, pipe['agent_routing']
-    def find(node, key, out):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                if k == key:
-                    out.append(v)
-                find(v, key, out)
-        elif isinstance(node, list):
-            for v in node:
-                find(v, key, out)
-        return out
-    for name in ('pipeline-plan', 'pipeline-subplan'):
-        schema = json.loads(pathlib.Path(root + '/docs/schemas/' + name + '.schema.json').read_text(encoding='utf-8'))
-        found = [v['enum'] for v in find(schema, 'kind', []) if isinstance(v, dict) and 'enum' in v]
-        assert found and all(e == kinds for e in found), (name, found)
-    schema = json.loads(pathlib.Path(root + '/docs/registry.schema.json').read_text(encoding='utf-8'))
-    found = [v['propertyNames']['enum'] for v in find(schema, 'agent_routing', []) if isinstance(v, dict) and 'propertyNames' in v]
-    assert found and all(e == kinds + ['default'] for e in found), found
-    text = pathlib.Path(root + '/scripts/check-registry.sh').read_text(encoding='utf-8')
-    assert '--argjson pipeline_kinds "$pipeline_kinds"' in text
-if case in ('enum-copy-original', 'enum-copy-subplan', 'enum-copy-registry'):
-    import shutil
-    copied = pathlib.Path(tmp) / case
-    for name in ('registry.json', 'docs/registry.schema.json', 'docs/schemas/pipeline-plan.schema.json',
-                 'docs/schemas/pipeline-subplan.schema.json', 'scripts/check-registry.sh', 'scripts/lib/compat.sh'):
-        dest = copied / name; dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(pathlib.Path(root) / name, dest)
-    shutil.copytree(pathlib.Path(root) / 'docs/schemas/kinds', copied / 'docs/schemas/kinds')
-    shutil.copytree(pathlib.Path(root) / 'scripts/checks', copied / 'scripts/checks')
-    changed = None
-    if case == 'enum-copy-subplan':
-        changed = 'docs/schemas/pipeline-subplan.schema.json'
-        keys = ('properties', 'subtasks', 'items', 'properties', 'kind', 'enum')
-    elif case == 'enum-copy-registry':
-        changed = 'docs/registry.schema.json'
-        keys = ('properties', 'pipeline', 'properties', 'agent_routing', 'propertyNames', 'enum')
-    if changed:
-        doc = json.loads((copied / changed).read_text())
-        value = doc
-        for key in keys:
-            value = value[key]
-        value.append('drift')
-        (copied / changed).write_text(json.dumps(doc))
-    result = subprocess.run(['bash', str(copied / 'scripts/check-registry.sh'), '--structure-only'],
-                            capture_output=True, text=True, env=dict(os.environ, CLAUDE_PLUGIN_ROOT=str(copied)))
-    if changed:
-        assert result.returncode != 0, result.stdout
-        assert ('pipeline kind enum: ' + changed + ' differs from docs/schemas/pipeline-plan.schema.json') in result.stdout, (result.stdout, result.stderr)
-    else:
-        assert result.returncode == 0, (result.stdout, result.stderr)
-print('routing assertions passed')
-ROUTING
-expect_route() {
-  local name="$1" out rc
-  out=$(python3 -B "$TMP/routing-cases.py" "$ROOT" "$TMP" "$name" 2>&1); rc=$?
-  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  routing $name"
-  else fail=$((fail + 1)); echo "FAIL  routing $name"; echo "$out"; fi
-}
-expect_route kind-lead
-expect_route kind-plan
-expect_route kind-docs
-expect_route kind-policy
-expect_route kind-design
-expect_route kind-code
-expect_route kind-test
-expect_route kind-fix
-expect_route kind-refactor
-expect_route kind-generated
-expect_route overrides-and-qa
-expect_route availability-claude
-expect_route availability-codex
-expect_route marks-and-empty
-expect_route orca-no-auth
-expect_route orca-system-auth
-expect_route orca-account-auth
-expect_route orca-malformed
-expect_route orca-offline
-expect_route validation
-expect_route followup-validation
-expect_route followup-legacy
-expect_route followup-preview
-expect_route dispatch-claude
-expect_route dispatch-codex
-expect_route status-claude
-expect_route status-codex
-expect_route registry-defaults
-expect_route planned-warning
-expect_route subtask-kind
-expect_route no-probe
-expect_route kinds-single-list
-expect_route enum-copy-original
-expect_route enum-copy-subplan
-expect_route enum-copy-registry
+for case in $ROUTING_CASES; do bg_report "routing $case" "routing-$case"; done
 
 echo "-- multi-wave currency and verdict provenance"
-cat > "$TMP/multiwave.py" <<'MULTIWAVE'
-import copy, importlib.util, json, os, pathlib, shutil, subprocess, sys
-root, tmp, case = sys.argv[1:]
-spec = importlib.util.spec_from_file_location('multiwave_pipeline', root + '/scripts/factory-pipeline.py')
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
-work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
-repo = work / 'repo'; repo.mkdir()
-os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
-def git(*args):
-    r = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
-                       capture_output=True, text=True)
-    assert r.returncode == 0, (args, r.stderr)
-    return r.stdout.strip()
-git('init', '-q', '-b', 'main')
-def commit(text, filename='shared.txt'):
-    (repo / filename).write_text(text)
-    git('add', filename); git('commit', '-qm', text)
-    return git('rev-parse', 'HEAD')
-if case.startswith('serial-'):
-    (repo / 'ProjectSettings').mkdir()
-    (repo / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
-    git('add', 'ProjectSettings')
-base = commit('base')
-if case.startswith('subtask-'):
-    commit('outside base', 'outside.txt')
-    base = git('rev-parse', 'HEAD')
-git('switch', '--no-track', '-c', 'topic')
-plan = {'schema': m.SCHEMA, 'id': 'multiwave-' + case, 'title': 'test', 'topic': 'topic',
-        'repos': {'fixture': {'path': str(repo), 'base': 'main'}},
-        'tasks': [{'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'first',
-                   'paths': ['shared.txt'], 'acceptance': ['reviewed']},
-                  {'id': 'b', 'repo': 'fixture', 'kind': 'code', 'objective': 'second',
-                   'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['a']}]}
-pf = work / 'plan.json'; plan['_path'] = str(pf)
-if case.startswith('subtask-'):
-    plan['tasks'][0]['paths'] = ['.']  # task owns the directory, subtask owns only shared.txt
-    plan['tasks'][1]['paths'] = ['shared.txt', 'outside.txt']
-def save():
-    pf.write_text(json.dumps(plan))
-save()
-if case == 'repo-path':
-    workspace = work / 'workspace'; workspace.mkdir()
-    for marker in reg['workspace']['root_markers']:
-        (workspace / marker).mkdir(parents=True, exist_ok=True)
-    os.environ[reg['workspace']['root_env']] = str(workspace)
-    for value in ('$' + reg['workspace']['root_env'] + '/repo', '${' + reg['workspace']['root_env'] + '}/repo'):
-        plan['repos']['fixture']['path'] = value
-        assert m.repo_info(plan, reg, 'fixture')['path'] == str(workspace / 'repo')
-    plan['repos']['fixture']['path'] = str(repo)
-    assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
-    plan['repos']['fixture']['path'] = 'repo'
-    assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
-    print(case + ' assertions passed')
-    sys.exit(0)
-def cli(*args, rc=0):
-    r = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
-                       capture_output=True, text=True)
-    assert r.returncode == rc, (args, r.stdout, r.stderr)
-    return r
-def verdict(task, phase, sha, by='claude', extra=()):
-    return cli('verdict', str(pf), '--task', task, '--phase', phase, '--sha', sha,
-               '--by', by, '--state', 'PASS', *extra)
-def record(task, phase):
-    return m.verdict_of(plan, reg, task, phase)[0]
-def stale_a(expected):
-    g = m.gate(plan, reg)
-    blockers = [b for b in g['blockers'] if b.startswith('a: review is STALE')]
-    row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
-    stale = [n for n in row['notes'] if n.startswith('review at') and 'STALE' in n]
-    assert bool(blockers) == expected, g
-    assert bool(stale) == expected, row
-    if expected:
-        assert 'shared.txt' in blockers[0] and 'shared.txt' in stale[0]
-    return g, row
-if case.startswith('serial-'):
-    a = commit('a')
-    verdict('a', 'review', a); verdict('a', 'qa', a)
-    b = commit('b')
-    verdict('b', 'review', b)
-    if case != 'serial-missing-qa':
-        verdict('b', 'qa', b)
-    verdict('integration:fixture', 'qa', b)
-    g, row = stale_a(case == 'serial-missing-qa')
-    if case == 'serial-covered':
-        assert g['state'] == 'READY_FOR_PR', g
-        assert row['phase'] == 'qa', row
-    else:
-        assert any(x.startswith('a: QA is STALE') for x in g['blockers']), g
-    print(case + ' assertions passed')
-    sys.exit(0)
-git('switch', '--no-track', '-c', 'topic-a')
-a = commit('a')
-if case.startswith('subtask-'):
-    m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
-    verdict('a', 'review', a, by='codex', extra=('--subtask', 's'))
-    if case == 'subtask-legacy':
-        folder = pathlib.Path(m.verdict_dir(plan)) / 'a'; folder.mkdir()
-        (folder / 'subplan-old.json').write_text(json.dumps({'task': 'a', 'subtasks': [{'id': 's', 'paths': ['shared.txt']}]}))
-        m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude'})
-        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@s__review*.json'):
-            doc = json.loads(filename.read_text()); doc.pop('paths', None); filename.write_text(json.dumps(doc))
-    verdict('a', 'review', a, extra=('--implementer', 'codex'))
-else:
-    verdict('a', 'review', a)
-verdict('a', 'qa', a)
-if case.startswith('subtask-sibling-'):
-    if case == 'subtask-sibling-pre-start':
-        commit('unreviewed edit before sibling starts')
-    start = git('rev-parse', 'HEAD')
-    sibling = commit('sibling edit')
-    sibling_paths = ['outside.txt'] if case == 'subtask-sibling-outside' else ['shared.txt']
-    m.pr.record(plan, 'a', 'later', 'implementer', {'agent': 'claude', 'paths': sibling_paths, **({} if case == 'subtask-sibling-unknown-start' else {'start': start})})
-    if case != 'subtask-sibling-missing':
-        by = 'claude' if case == 'subtask-sibling-unpaired' else 'codex'
-        verdict('a', 'review', sibling, by=by, extra=('--subtask', 'later'))
-    if case == 'subtask-sibling-fingerprint':
-        for filename in pathlib.Path(m.verdict_dir(plan)).glob('a@later__review*.json'):
-            doc = json.loads(filename.read_text()); doc['fingerprint'] = 'invalid'
-            filename.write_text(json.dumps(doc))
-    if case == 'subtask-sibling-post-review':
-        commit('unreviewed sibling edit')
-    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge sibling work', 'topic-a')
-    head = git('rev-parse', 'HEAD')
-    verdict('a', 'review', head, extra=('--implementer', 'codex'))
-    verdict('a', 'qa', head)
-    verdict('b', 'review', head); verdict('b', 'qa', head)
-    verdict('integration:fixture', 'qa', head)
-    g = m.gate(plan, reg)
-    stale = [x for x in g['blockers'] if 'subtask s recorded' in x and 'stale subtask review:' in x]
-    assert bool(stale) == (case != 'subtask-sibling-covered'), g
-    if stale:
-        assert 'shared.txt' in stale[0], stale
-        if case == 'subtask-sibling-unknown-start':
-            assert 'unknown legacy starts receive no credit' in stale[0], stale
-    else:
-        assert g['state'] == 'READY_FOR_PR', g
-    print(case + ' assertions passed')
-    sys.exit(0)
-if case == 'task-qa':
-    row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
-    assert row['qa']['task'] == 'a' and row['qa']['sha'] == a, row
-    assert not any('STALE' in n for n in row['notes']), row
-elif case in ('report', 'implementer', 'override', 'legacy-implementer'):
-    if case == 'report':
-        r = cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', a, '--by', 'claude',
-                '--state', 'PASS', '--report', 'free text is not a file', rc=2)
-        assert '--report must name an existing file' in r.stderr and '--note' in r.stderr
-        verdict('a', 'qa', a, extra=('--note', 'free text'))
-        assert record('a', 'qa')['note'] == 'free text'
-        report = work / 'report.md'; report.write_text('evidence')
-        verdict('a', 'qa', a, extra=('--report', str(report)))
-        assert pathlib.Path(record('a', 'qa')['report']).is_file()
-    else:
-        m.pr.record(plan, 'a', 's1', 'implementer', {'agent': 'claude'})
-        m.pr.record(plan, 'a', 's2', 'implementer', {'agent': 'claude'})
-        extra = ('--implementer', 'codex') if case == 'override' else ()
-        if extra:
-            pathlib.Path(m.verdict_file(plan, 'a', 'review')).unlink()  # exercise a fresh explicit declaration, not review preservation
-        verdict('a', 'review', a, by='codex', extra=extra)
-        rv = record('a', 'review')
-        assert rv['implementer'] == ('codex' if extra else 'claude'), rv
-        assert rv['implementer_source'] == ('explicit' if extra else 'subtask implementers'), rv
-        assert rv['implementers'] == {'s1': 'claude', 's2': 'claude'}, rv
-        if case == 'legacy-implementer':
-            del rv['implementer']
-            m.fstate.write_json(m.verdict_file(plan, 'a', 'review'), rv)
-        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
-        g = m.gate(plan, reg)
-        pair_errors = [b for b in g['blockers'] if b.startswith('a: reviewed by')]
-        assert bool(pair_errors) == bool(extra), g
-        if extra:
-            assert 'cross-model review needs claude' in pair_errors[0]
-else:
-    git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
-    verdict('integration:fixture', 'qa', git('rev-parse', 'HEAD'))
-    if case == 'integration-qa':
-        row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
-        assert not any('STALE' in n for n in row['notes']), row
-        plan['tasks'][1]['objective'] = 'updated later wave'; save()
-        row = m.task_status(plan, reg, plan['tasks'][0], 2)[0]
-        assert row['qa']['task'] == 'a', row
-        s = m.status(plan, reg)
-        assert any('integration QA' in n and 'STALE' in n for r in s['tasks'] for n in r['notes']), s
-        assert all(sum('integration QA' in n and 'STALE' in n for n in r['notes']) == 1 for r in s['tasks']), s
-        assert not any(n.startswith('qa verdict is STALE') for r in s['tasks'] for n in r['notes']), s
-    else:
-        git('switch', '--no-track', '-c', 'topic-b')
-        b = commit('b')
-        if case.startswith('subtask-'):
-            b = commit('outside later wave', 'outside.txt')
-        verdict('b', 'review', b)
-        if case in ('post-review', 'subtask-post-review'):
-            commit('unreviewed b')
-        if case == 'outside-owner':
-            plan['tasks'][1]['paths'] = ['other.txt']; save()
-            verdict('b', 'review', b)
-        git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge b', 'topic-b')
-        if case in ('direct', 'subtask-direct'):
-            commit('unreviewed topic')
-        if case == 'subtask-same-task':
-            commit('later first-task edit')
-            verdict('a', 'review', git('rev-parse', 'HEAD'), extra=('--implementer', 'codex'))
-        if case == 'invalid-review':
-            plan['tasks'][1]['objective'] = 'review fingerprint changed'; save()
-        if case in ('missing-review', 'subtask-missing-review'):
-            pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()
-        if case in ('evil-merge', 'subtask-evil-merge'):
-            # A merge commit can introduce content absent from either parent.
-            git('switch', '--no-track', '-c', 'evil-side')
-            commit('side', 'other.txt')
-            git('switch', 'topic')
-            git('merge', '--no-ff', '--no-commit', 'evil-side')
-            (repo / 'shared.txt').write_text('evil resolution')
-            git('add', 'shared.txt'); git('commit', '-qm', 'evil merge')
-        head = git('rev-parse', 'HEAD')
-        verdict('integration:fixture', 'qa', head)
-        if case.startswith('subtask-'):
-            g = m.gate(plan, reg)
-            stale = [x for x in g['blockers'] if 'stale subtask review:' in x]
-            assert bool(stale) == (case not in ('subtask-covered', 'subtask-legacy')), g
-            if stale:
-                assert 'shared.txt' in stale[0] and 'outside.txt' not in stale[0], stale
-            if case in ('subtask-covered', 'subtask-legacy'):
-                assert g['state'] == 'READY_FOR_PR', g
-            print(case + ' assertions passed')
-            sys.exit(0)
-        g, row = stale_a(case != 'covered')
-        if case == 'covered':
-            assert g['state'] == 'READY_FOR_PR', g
-            assert row['phase'] == 'qa', row
-            # Branch removal must not change currency.
-            git('branch', '-d', 'topic-a')
-            assert not stale_a(False)[0]['blockers']
-print(case + ' assertions passed')
-MULTIWAVE
-for case in covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path; do
-  out=$(python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$case" 2>&1); rc=$?
-  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  multiwave $case"
-  else fail=$((fail + 1)); echo "FAIL  multiwave $case"; echo "$out"; fi
-done
+for case in $MULTIWAVE_CASES; do bg_report "multiwave $case" "multiwave-$case"; done
 
+echo "-- QA tiers"
+bg_report "QA tiers regression matrix" qa-tiers
+[ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]

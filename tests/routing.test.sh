@@ -14,12 +14,17 @@ WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
 CTX="$ROOT/scripts/factory-context.sh"
 history=true; [ "${1:-}" = "--no-history" ] && history=false
 pass=0; fail=0; skip=0
+replay_cached=0; replay_ran=0; replay_cache=""
 
 # assert <name> <repo> <jq-predicate over .repos[0]> <paths...>
 assert() {
   local name="$1" repo="$2" pred="$3"; shift 3
   local out
-  out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1)
+  # history() supplies only previously successful output; still run every assertion
+  # (and golden recording) on a hit. Task scenarios never use the persistent cache.
+  if [ -n "${history_cached_out:-}" ]; then out="$history_cached_out"
+  else out=$(bash "$CTX" --repo "$repo" --json --paths "$@" 2>&1); fi
+  assert_out="$out"
   # ROUTING_GOLDEN_OUT=<file>: also record the routing contract of this scenario (tests/routing-golden.test.sh)
   if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
     jq -c --arg name "$name" --arg repo "$repo" '.repos[0] | {name: $name, repo: $repo,
@@ -45,13 +50,45 @@ notech()   { echo "(.routing.tech | index(\"$1\") | not)"; }
 
 # history <name> <repo-key> <repo-dir> <sha> <predicate>
 history() {
-  local name="$1" key="$2" dir="$WS/$3" sha="$4" pred="$5" files
+  local name="$1" key="$2" dir="$WS/$3" sha="$4" pred="$5" full_sha cache_file="" history_cached_out="" before_fail="$fail"
+  local -a files=()
   if ! $history; then skip=$((skip + 1)); echo "SKIP  $name (--no-history)"; return; fi
   if ! git -C "$dir" cat-file -e "$sha^{commit}" 2>/dev/null; then
     skip=$((skip + 1)); echo "SKIP  $name ($3@$sha not available)"; return
   fi
-  mapfile -t files < <(git -C "$dir" show --name-only --format= "$sha" | sed '/^$/d')
+  full_sha=$(git -C "$dir" rev-parse "$sha^{commit}")
+  if [ -n "$replay_cache" ]; then
+    cache_file="$replay_cache/$key-$full_sha"
+    if [ -f "$cache_file" ]; then
+      history_cached_out=$(cat "$cache_file")
+      # Corrupt entries and previously failing predicates must always be replayed.
+      jq -e ".repos[0] | $pred" <<<"$history_cached_out" >/dev/null 2>&1 || history_cached_out=""
+    fi
+  fi
+  if [ -n "$history_cached_out" ]; then replay_cached=$((replay_cached + 1))
+  else
+    replay_ran=$((replay_ran + 1))
+    mapfile -t files < <(git -C "$dir" show --name-only --format= "$sha" | sed '/^$/d')
+  fi
+  # Empty paths on a hit are intentional: assert uses the validated cached JSON.
   assert "history $3@$sha: $name" "$key" "$pred" "${files[@]}"
+  if [ "$fail" -eq "$before_fail" ] && [ -z "$history_cached_out" ] && [ -n "$cache_file" ]; then
+    # Atomic replace via the shared state helper; a cache I/O failure only loses reuse.
+    # Prune on write: keep the current key's directory and the 3 most recent sibling
+    # key directories (only 64-hex names, so nothing else under routing-replay/ is touched).
+    printf '%s' "$assert_out" | python3 -B -c '
+import os, re, shutil, sys
+sys.path.insert(0, sys.argv[1])
+from fstate import write_text
+write_text(sys.argv[2], sys.stdin.read())
+current = os.path.dirname(os.path.abspath(sys.argv[2])); parent = os.path.dirname(current)
+others = [os.path.join(parent, n) for n in os.listdir(parent)
+          if re.fullmatch(r"[0-9a-f]{64}", n) and os.path.join(parent, n) != current
+          and os.path.isdir(os.path.join(parent, n))]
+for old in sorted(others, key=os.path.getmtime, reverse=True)[3:]:
+    shutil.rmtree(old, ignore_errors=True)
+' "$ROOT/scripts/lib" "$cache_file" 2>/dev/null || :
+  fi
 }
 
 echo "== task scenarios"
@@ -248,6 +285,32 @@ fexpect "--paths a --lead=x: --flag=value ends the path list and applies" \
   'jq -e "([.repos[0].files[].path] == [\"backend/gateway/server/server.go\"]) and .repos[0].routing.override" <<<"$out" >/dev/null'
 
 echo "== history (real commits, replayed read-only)"
+if $history; then
+  # Conservative dependency closure: context imports other lib modules and may
+  # invoke helper scripts. Hash every script, the effective registry and this
+  # suite (predicates included); an unknown/new helper therefore invalidates reuse.
+  # Workspace/cwd/overrides and tool versions separate different routing contexts.
+  replay_cache=$(python3 -B -c '
+import hashlib, os, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+engine = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or root)
+sys.path.insert(0, str(root / "scripts/lib"))
+from fstate import persistent
+h = hashlib.sha256()
+paths = [root / "tests/routing.test.sh", pathlib.Path(os.environ.get("RPG_FACTORY_REGISTRY") or engine / "registry.json")]
+for base in sorted({root, engine}):
+    paths += sorted(p for p in (base / "scripts").rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+for p in paths:
+    h.update(str(p).encode()); h.update(b"\0"); h.update(p.read_bytes()); h.update(b"\0")
+for k, v in sorted(os.environ.items()):
+    if k.startswith(("RPG_FACTORY_", "CLAUDE_")) or k in ("PATH", "HOME"):
+        h.update(repr((k, v)).encode())
+h.update(repr((os.getcwd(), sys.version, sys.executable)).encode())
+for tool in ("git", "jq"):
+    h.update(subprocess.check_output([tool, "--version"]))
+print(os.path.join(persistent(), "routing-replay", h.hexdigest()))
+' "$ROOT" 2>/dev/null) || replay_cache=""
+fi
 history "action_seq wire change"              server rpg-mmo-server       2b1418c "$(lead wire-contract) and $(leg server-realtime)"
 history "Netcode Wire.cs resync (649f078)"    netcode Netcode              649f078 "$(lead wire-contract)"
 history "netcode v0.45.0 pin + DOTS recopy"   client IndieRPGMMOAdventure  17b7737 "$(lead pin-bump) and $(contract package-pins)"
@@ -265,6 +328,7 @@ history "meta-hop TLS broke dungeon entry"      server rpg-mmo-server       ed09
 history "verify pinned the wrong cluster cert"   server rpg-mmo-server       437a3db "(.routing.lead == \"server-ops\") and $(contract transport-security)"
 history "toolkit submodule auto-bump (#137)"  client IndieRPGMMOAdventure  285a5a2 "(.routing.lead == \"pin-bump\")"
 history "toolkit v5.7.0 gitlink + CHANGELOG"  client IndieRPGMMOAdventure  525cf5b "(.routing.lead == \"pin-bump\") and $(nolead client-integration)"
+echo "history replay: $replay_cached cached / $replay_ran replayed"
 
 total=$((pass + fail + skip))
 echo "routing tests: $total run, $pass passed, $fail failed, $skip skipped"

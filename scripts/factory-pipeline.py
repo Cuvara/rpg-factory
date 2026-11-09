@@ -15,7 +15,8 @@ docs/schemas/pipeline-plan.schema.json.
   validate <plan.json> [--json]
         disjoint path ownership, dependency cycles, waves, the no-worktree rule (Unity projects: tasks one
         after another in the main checkout, never two in one wave), cross-model review pairing, and shared
-        exclusive resources (one Unity test run at a time). Exit 1 on an error.
+        exclusive resources (one Unity test run at a time). Exit 1 on an error. WARN (no error) when a task's
+        checks hold a full tests/run-all.sh or its acceptance requires one: full runs belong to integration QA.
   subplan validate <subplan.json> [--plan PATH] [--json]
         a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
@@ -70,7 +71,15 @@ docs/schemas/pipeline-plan.schema.json.
         run `--phase lead` first). implement: a sub-session that edits only the owned paths, or the subtask's --paths
         (inside them; it may then name its model with --agent), and does not commit. review/qa need --sha, the frozen
         candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
-        model) unless --agent overrides it. Per-task qa runs in the task worktree (a no-worktree repo: main checkout).
+        model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
+        no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
+        run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
+        is folded into it only when it is one standalone suite or run-all command and its suite is one
+        `tests/run-all.sh --list-suites` prints in the task checkout (no such flag: none is; a release-only suite
+        never is); other checks, compound commands included, are extra commands, each suite once. Re-QA after a QA
+        FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
+        task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
+        run the command after the review PASS.
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
@@ -82,9 +91,10 @@ docs/schemas/pipeline-plan.schema.json.
         section 5): inside an Orca session (ORCA_WORKTREE_ID or ORCA_AGENT_HOOK_ENDPOINT set) whose runtime is
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
-        names it. --orca-unavailable goes with --runner agent only.
+        names it. --orca-unavailable goes with --runner agent only. The integration QA spec names
+        `tests/run-all.sh --reuse -j 4` (the only full run: once per batch, under the per-machine run-all lock).
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
-          [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT]
+          [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
         --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
@@ -93,13 +103,17 @@ docs/schemas/pipeline-plan.schema.json.
         subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
         --fallback 'AGENT unavailable' (review only) records a retrospective SAME_MODEL fallback with a required
         --note explaining the outage. Legacy --fallback AGENT also requires that agent to be unavailable now.
+        --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
+        scripts)/ .sh or .py paths; never tests/run-all.sh), the next QA dispatch reruns them.
+        Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
         fast checks are PASS and not STALE, every change sits in some task's owned paths, verdicts match the
         current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
-        model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. With
+        model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
+        QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push and `gh pr create` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -131,6 +145,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -461,6 +476,7 @@ def validate(plan, reg):
     agents = pipe["agents"]
     for t in tasks:
         tid = t.get("id", "?")
+        warnings.extend(pr.qa_warnings(t))
         if t.get("kind") is not None and t["kind"] not in pr.KINDS:
             errors.append(f"task {tid}: unknown kind {t['kind']}")
         if t.get("implementer") and t["implementer"] not in agents:
@@ -923,14 +939,70 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
                if not info["worktrees"] else ""))
 
 
-def qa_body(sha, tasks, at_head=None):
-    return ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
-            + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, "
-            "run the checks (run-checks.py fast tier for registry repos), regressions, edge and failure cases. A Unity "
-            "test run waits for the `unity-test` resource; never a second Editor.\n"
-            "Report: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
-            + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", []))
-            + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", [])))
+def runall_suites(path):
+    """The suites `tests/run-all.sh --list-suites` prints in the checkout; None when run-all lacks that flag (an
+    older run-all ignores unknown flags and would start a full run, so the flag must appear in the script first) or
+    fails; False when the checkout has no tests/run-all.sh at all (a product repo: QA keeps its own checks)."""
+    script = os.path.join(path or ".", "tests", "run-all.sh")
+    if not os.path.isfile(script):
+        return False
+    try:
+        with open(script, encoding="utf-8", errors="replace") as f:
+            if "--list-suites" not in f.read():
+                return None
+        # Git Bash, never the System32 WSL launcher a bare "bash" resolves to on Windows
+        r = subprocess.run([find_bash() or "bash", "tests/run-all.sh", "--list-suites"], cwd=path or ".",
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return {line.strip() for line in r.stdout.splitlines() if line.strip()}
+
+
+QA_TIERS = {"task": "affected", "integration": "full"}  # fallback when the registry has no pipeline.qa_tiers
+
+
+def tier_command(level, base, suites, task=False):
+    """The run-all command of a registry pipeline.qa_tiers level: affected (task QA) or full (integration QA).
+    Task QA never gets a full run, whatever the level: without a base it runs only the check suites."""
+    only = " --only-suites " + shlex.quote(','.join(suites)) if suites else ""
+    if task or level == "affected":
+        if base:
+            return "tests/run-all.sh --affected --base " + shlex.quote(base) + only + " -j 2"
+        return ("tests/run-all.sh" + only + " -j 2" if suites else
+                "NONE: the review base is missing; the task lead must give one "
+                "(tests/run-all.sh --affected --base <base> -j 2). Never a full run.")
+    return "tests/run-all.sh --reuse -j 4"
+
+
+def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None,
+            tiers=None):
+    head = ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
+            + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, ")
+    tail = ("regressions, edge and failure cases. A Unity test run waits for the `unity-test` resource; never a second "
+            "Editor.\nReport: templates/pipeline/qa-report.md, ending `VERDICT: PASS|FAIL|NOT_RUN|BLOCKED`.\nAcceptance:\n"
+            + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", [])))
+    if runall is False:  # no tests/run-all.sh (a product repo): the task checks and the registry fast tier
+        return (head + "run the checks (run-checks.py fast tier for registry repos), " + tail
+                + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", [])))
+    suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
+    key = "integration" if integration else "task"
+    command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
+                           task=not integration)
+    policy = ("Integration QA: one full run per batch and one per machine, under the run-all lock; "
+              "reuse a PASS record of the same clean tree." if integration else
+              "Task QA: never a full tests/run-all.sh run; integration QA runs it once per batch with suite reuse. "
+              "Run each selected suite once: affected suites and explicit check suites are deduplicated.")
+    if small:
+        policy += (" Tier S: no separate QA session is needed. The task lead may run this command after review PASS "
+                   "and record verdict --phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'.")
+    if dropped and not integration:
+        policy += " A full run-all check was dropped and folded into the tier command."
+    return (head + "run the tier command and extra commands below, " + tail
+            + "\n" + policy + "\nQA tier command:\n" + command
+            + ("\nExtra commands:\n" + "\n".join(extra) if extra else ""))
 
 
 def child_at_head(sha, parent):
@@ -992,7 +1064,7 @@ def cmd_dispatch(a, reg):
                       pr.roles(pipe, {}, avail, next(iter(impls)))["qa"] if len({i[0] for i in impls}) == 1 else
                       pr.choose(pipe.get("qa_prefer", "codex"), "integration qa_prefer", avail))
         print(f"model: qa -> {agent} ({why})", file=sys.stderr)
-        at_head = None
+        at_head, home = None, None
         if info["worktrees"]:
             # the integrated tree is the checkout of plan.topic (where the run lead merges): QA joins it or a child of it
             home = worktree_for(info["path"], plan["topic"])[0] if info["path"] else None
@@ -1018,7 +1090,8 @@ def cmd_dispatch(a, reg):
                 print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
                       "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
-                  + qa_body(a.sha, tasks, at_head)
+                  + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
+                            tiers=pipe.get("qa_tiers"))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan)
         child_note(place)
@@ -1159,9 +1232,17 @@ def cmd_dispatch(a, reg):
     place = joined or {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
+        base, _ = review_base(info, plan["topic"], spec["base"], a.sha)
+        previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
+        stale = previous and previous.get("fingerprint") != scope_fingerprint(plan, reg, task["id"])
+        failed = []
+        if (previous and not stale and previous.get("state") == "FAIL" and previous.get("failed_suites")
+                and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
+            base, failed = previous["sha"], previous["failed_suites"]
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
-                  + qa_body(a.sha, [task], at_head)
+                  + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
+                            runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"))
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan)
@@ -1172,7 +1253,7 @@ def cmd_dispatch(a, reg):
     base, base_note = review_base(info, plan["topic"], spec["base"], a.sha)
     prompt = (f"Review worker ({agent}) for code written by {sub_impl}"
               + (f" (subtask {sub['id']}; record with `verdict --subtask {sub['id']}`)" if sub else "")
-              + ". Read-only: edit nothing, commit nothing.\n"
+              + ". Read-only: edit nothing, commit nothing. Run no suites; only a minimal repro when needed.\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
               + (f" ({base_note})" if base_note else "")
@@ -1620,6 +1701,25 @@ def cmd_verdict(a, reg):
            "timestamp": now_utc()}
     if a.note is not None:
         rec["note"] = a.note
+    if a.failed_suites is not None:
+        if a.phase != "qa" or a.state != "FAIL":
+            die("--failed-suites goes with --phase qa --state FAIL")
+        failed = sorted({s.strip() for s in a.failed_suites.split(',') if s.strip()})
+        listed = None  # run-all's --list-suites, read only when a name is outside the (tests|testlab|scripts)/ form
+        if any(pr.mentions_runall(s) for s in failed):
+            die("--failed-suites never names tests/run-all.sh: a re-QA reruns failed suites, never a full run")
+
+        def suite_ok(s):
+            nonlocal listed
+            if pr.failed_suite_ok(s):
+                return True
+            if listed is None:
+                listed = runall_suites(repo_info(plan, reg, key)["path"]) or set()
+            return s in listed
+        if not failed or not all(suite_ok(s) for s in failed):
+            die("--failed-suites needs comma-separated suites: names `tests/run-all.sh --list-suites` prints, "
+                "or (tests|testlab|scripts)/ paths ending .sh or .py")
+        rec["failed_suites"] = failed
     if a.subtask:
         rec["subtask"] = a.subtask
     if a.fallback is not None:
@@ -1807,6 +1907,14 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
         sub_blockers, sub_notes = subtask_coverage(plan, reg, pipe, t, rv, impl, heads[key], allow_same_model, coverage_cache)
         blockers += sub_blockers
         notes += sub_notes
+        tq, tq_stale = verdict_of(plan, reg, t["id"], "qa")
+        # QA eligibility is unchanged; only a tier S lead QA (no QA session) is limited to tier S tasks
+        if tq and not tq_stale and tq.get("state") == "PASS" and (tq.get("note") or "").startswith("tier S"):
+            if pr.small_task(plan, t):
+                notes.append(f"{t['id']}: tier S lead ran task suites")
+            else:
+                blockers.append(f"{t['id']}: QA recorded as tier S lead QA, but the task is not tier S; "
+                                "an M/L task needs a QA session (dispatch --phase qa)")
         if not info["worktrees"] and serial_count(plan, reg, key) > 1:
             tq = read_verdict(plan, reg, t["id"], "qa", blockers)  # missing: "<id>: no qa verdict"
             if tq and tq.get("state") != "PASS":
@@ -2528,6 +2636,7 @@ def main():
     v.add_argument("--state", required=True)
     v.add_argument("--report")
     v.add_argument("--note")
+    v.add_argument("--failed-suites")
     v.add_argument("--implementer")
     v.add_argument("--subtask")
     v.add_argument("--subplan")

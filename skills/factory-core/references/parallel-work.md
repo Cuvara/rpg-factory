@@ -40,7 +40,8 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
 3. reviews each sub-session's diff and commits that subtask itself with explicit paths (a child subtask: merges
    the child branch into the task branch and removes the child, section 4);
 4. with every subtask committed, starts a fresh cross-model review session and a QA session on that HEAD in the
-   same worktree; a FAIL goes to a fresh fix session;
+   same worktree (a tier S or prose-only task: no QA session, the task lead runs the task QA command itself after the
+   review PASS, section 10 "QA tiers"); a FAIL goes to a fresh fix session;
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
 6. reports to the run lead (section 3) and records the review and QA verdicts.
 It never pushes, merges, tags or removes its worktree.
@@ -58,7 +59,8 @@ Sub-sessions in the shared task worktree never commit, stage or stash; only the 
 
 **QA worker** - checks acceptance criteria, test coverage, regressions, edge and failure cases on a recorded
 candidate SHA. Read-only unless its spec says otherwise.
-**Review worker** - checks architecture, scope isolation, safety rules and conventions. Read-only.
+**Review worker** - checks architecture, scope isolation, safety rules and conventions. Read-only; it runs no
+suites, only a repro test when a finding needs one (section 10 "QA tiers").
 
 Task leads and their sessions never redefine the plan's scope, never merge, and never declare the overall run
 done. A session that finds out-of-scope work reports it to its task lead, and the task lead to the run lead.
@@ -114,11 +116,11 @@ noticed.
   package test project, registry `pipeline.exclusive_resources` -, a local or scratch Docker stack, the test lab, fixed ports):
   the lead assigns each to one task at a time. A task without the resource reports the dependent check as
   `NOT_RUN` with the exact command and reason; other work continues. There is no prompt.
-- **Full test runs are a shared resource too.** At most two full `tests/run-all.sh` runs (or other whole-repo
-  suites) at once on one machine; every other session runs `--affected` or its targeted suites and leaves the full
-  run to the run lead. Four parallel full runs made every suite 2-4x slower and timed some out. Never create a
-  worktree or branch while a full run is in flight: the shared `.git/config` check fails (`.claude/CLAUDE.md`
-  "Operating lessons").
+- **Full test runs are a shared resource too.** One full run per machine (the run-all lock): a full
+  `tests/run-all.sh` takes a per-machine lock, and a second one waits. Only integration QA runs the full suite;
+  every other session runs its tier command (section 10 "QA tiers"). Four parallel full runs made every suite 2-4x
+  slower and timed some out. Never create a worktree or branch while a full run is in flight: the shared
+  `.git/config` check fails (`.claude/CLAUDE.md` "Operating lessons").
 
 ### Child worktrees
 
@@ -308,8 +310,8 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 - **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in an
   implementation session, never in a lead's session, and never reused across tasks or candidate SHAs.
 - **Few sessions at once.** Under memory pressure Claude Code reaps background shells, which kills long test runs
-  and waits mid-way. Keep open sessions and parallel full test runs few (section 4), and release each one as soon
-  as it reports.
+  and waits mid-way. Keep open sessions few, run only the tier command of each role (section 10 "QA tiers"; one
+  full run per machine, section 4), and release each one as soon as it reports.
 - **Each lead keeps only its state:** the run lead `plan.json`, the integration branch, the recorded SHAs and the
   verdicts in the pipeline state dir; the task lead its subplan, its commits and verdicts. Neither carries
   session transcripts forward.
@@ -352,9 +354,11 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
 | review | the other model | `review_pairing` |
 | QA | the model that did not implement (`qa_prefer` codex when codex did not implement) | `qa_prefer` |
 
-- **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; full QA runs go
+- **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; QA runs go
   to Codex when Claude implemented (QA never runs on the implementer's model, except as a fallback: with one model
-  available, that model runs QA). An explicit `implementer` against
+  available, that model runs QA in a fresh QA session, which the gate accepts for every tier). Only a QA verdict the
+  task lead records itself (no QA session, note starting `tier S`) is limited to tier S tasks ("QA tiers" in section
+  10). An explicit `implementer` against
   the table needs a `reason`: `validate` and `subplan validate` warn without one, and warn when 3 or more tasks or
   subtasks all use one model (warnings, never errors).
 - **Availability never stops a task.** Available agents are detected: each `pipeline.agents.<a>.bin` on PATH,
@@ -429,7 +433,9 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    fallback with its reason and note, never silently; it needs `--allow-same-model` only for an unrecorded
    SAME_MODEL review. `--runner agent` (Claude only) marks a session planned for Codex SAME_MODEL in its prompt.
    The task lead also runs the per-task QA
-   (`dispatch ... --phase qa --sha <sha>`, in the task worktree), then reports to the run lead (section 3).
+   (`dispatch ... --phase qa --sha <sha>`, in the task worktree; its spec names the task tier command and forbids a
+   full run; a tier S task: the lead runs that command itself, "QA tiers" below), then reports to the run lead
+   (section 3).
 5. **Integrate** (section 7), in wave order, into the integration branch named by the plan's `topic`. The run lead
    follows the tasks with `factory-pipeline.py status plan.json`. Every task, and every later wave, is integrated
    with `git merge --no-ff <task branch>`: the gate credits a later wave's changes under an earlier task's or
@@ -439,9 +445,10 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    fingerprint (objective, owned paths, exclusions, acceptance, checks, agents): a plan edit that only changes deps
    keeps it, while changing a task's paths or acceptance makes it stale. Re-run `status` after any plan edit.
 6. **QA.** Once per repo on the integration HEAD, in the integration branch's existing checkout (section 6):
-   `dispatch ... --task integration:<repo> --phase qa --sha <head>`; in a no-worktree repo also per task, before the
+   `dispatch ... --task integration:<repo> --phase qa --sha <head>`, whose spec names the batch's one full run
+   (`tests/run-all.sh --reuse -j 4`, "QA tiers" below); in a no-worktree repo also per task, before the
    next task starts (`--task <id>`). The QA worker fills `templates/pipeline/qa-report.md`; the lead records
-   `verdict ... --phase qa`.
+   `verdict ... --phase qa` (a FAIL with `--failed-suites`, which the re-QA spec reruns).
 7. **READY_FOR_PR.** `factory-pipeline.py gate plan.json` is a read-only report: every task integrated, reviewed PASS
    by its paired model on a commit whose owned paths have not changed since, QA PASS on each integration HEAD,
    clean integration trees, fast checks PASS and not STALE (`run-checks.py --status`), and no pipeline worktree in
@@ -453,5 +460,59 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
 9. **Cleanup.** Section 8, every time: remove the run's worktrees and merged task branches, end every Claude
    and Codex session (each was released when it reported), and run `factory-pipeline.py cleanup plan.json` until it
    reports CLEAN.
+
+**QA tiers.** No identical tree is tested twice and a task never runs the whole suite: each role runs one command,
+which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
+
+<!-- policy:qa-tiers -->
+| When | Runs | Who |
+|---|---|---|
+| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once; other checks are extra commands; never a full run | a fresh QA session in the task worktree |
+| Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
+| Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
+| Reviewer | no suites; only a repro test when a finding needs one | the review session |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --reuse -j 4`: the batch's one full run, under the run-all lock, reusing suites whose inputs already passed | the run lead's integration QA session |
+| Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session (`.claude/CLAUDE.md` "Releases") |
+
+- **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
+  prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/` directory
+  path (no dot in its last segment). A non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are machine
+  inputs, not prose: `docs/` alone does not make a task tier S. The gate accepts a QA verdict the task lead ran
+  itself (no QA session, note starting `tier S`) only for such a task. A QA PASS from a fresh QA session is accepted
+  as before for every tier: by the other model, or by the implementer's model as the one-model fallback of the Token
+  rule.
+- **Re-QA.** A QA FAIL is recorded with `verdict --phase qa --state FAIL --failed-suites <tests/a.sh,...>`. The next
+  `dispatch --phase qa` on a new candidate prints `--affected --base <that FAIL's candidate>` with those suites
+  and the task check suites in `--only-suites`.
+- **The lock.** A full run (no `--affected` or `--only-suites`, or any `--release` run) takes a per-machine lock in
+  the persistent state dir; a second full run waits (`waiting for full run <pid> in <checkout>`), `--no-wait` exits 3
+  instead, and a lock whose holder is dead is taken over (`run-all: taking over stale full-run lock (<pid>)`).
+- **Reuse.** A full run on a clean tree writes a result record for that tree; `--reuse` exits 0 at once on a PASS
+  record of the same clean tree with at least the same coverage (`reused full run at <HEAD> (tree <tree>, <date>)`;
+  a `--no-workspace` or `--no-claude` record does not satisfy a run without that flag). Each suite's PASS is also
+  recorded under a hash of its inputs (`tests/affected.py hashes`, the conservative rule: the suite file, the paths
+  it names, every file in the tree of each code file the suite reaches, helpers with a caller edge included, the
+  global inputs and the tool versions, and the imports of every included code file in turn until nothing new is
+  added). Three exceptions: a `scripts/lib` module that is imported stays narrowed to its importers, suites
+  directly in `tests/` are not tree data, and the index docs `scripts/README.md` and `tests/README.md` count only
+  where a suite names them. A later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
+  graded by a postprocessor and checks that read the live workspace are never reused, and no record is published when the inputs
+  changed during the run. `--no-reuse` runs every suite, `--release` never reuses, and an input mapping that is
+  unsure runs the suite.
+- **Selection.** `--affected` follows the narrow static graph of `tests/affected.py` (Python imports and the shell
+  and jq helpers a script loads or runs by name): a library module or a helper selects only the suites of the
+  scripts that reach it, and anything unsure runs. A miss there is caught by integration QA, whose suite reuse uses
+  the conservative rule above. `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the
+  checks that run a script outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan,
+  package ready, Netcode headless) are selected like suites by that script path, else they count as not affected;
+  `--only-suites` may name such a script (`tests/run-all.sh` usage header). `--only-suites` exits 2 on a name
+  run-all does not run; `tests/run-all.sh --list-suites` (read-only) prints the names it accepts, and
+  `dispatch --phase qa` folds into `--only-suites` only the checks that list names (other checks stay extra
+  commands). A check that mentions `tests/run-all.sh` is folded only when it is one plain standalone scoped
+  invocation (an optional `env -u TMPDIR` and `bash` prefix, plain flag tokens, `--affected` or `--only-suites`
+  among them); every other check that mentions run-all, a plain full run included, is printed `DO NOT RUN` and the
+  QA session reports it NOT_RUN. No check is dropped.
+- **Plans.** A task's `checks` name its own suites or the `--affected` command, never a full `tests/run-all.sh`, and
+  its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
 
 This policy introduces no tripwire, no latch and no new confirmation step.

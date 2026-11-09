@@ -410,6 +410,11 @@
       "default": "claude"
     },
     "qa_prefer": "codex",
+    "qa_tiers": {
+      "task": "affected",
+      "integration": "full",
+      "description": "Task QA runs affected and explicit check suites once; integration runs one full suite per batch with reuse under the machine lock."
+    },
     "available_agents": [
       "claude",
       "codex"

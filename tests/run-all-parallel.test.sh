@@ -144,5 +144,385 @@ config_case 'whole section inserted in middle' WARN
 { head -2 "$TMP/before"; printf '\tbare = false\n[branch "middle"]\n\tremote = origin\n'; tail -2 "$TMP/before"; } > "$TMP/after"
 config_case 'core key inserted before new section' FAIL
 
+# Persistence is tested in a disposable git repo with tiny suites; never run the real full suite.
+mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/scripts/checks" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
+cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
+printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
+printf '#!/usr/bin/env bash\nprintf "b\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/b.sh"
+printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
+printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
+# partial: passes with a SKIP line (a tool missing), like orca-commands without orca
+printf '#!/usr/bin/env bash
+printf "partial\n" >> "$RUN_LOG"
+echo "${PARTIAL_LINE:-SKIP  tool not on PATH}"
+' > "$TMP/repo/tests/partial.sh"
+for s in blockrun ws orphan; do printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$RUN_LOG"\n' "$s" > "$TMP/repo/tests/$s.sh"; done
+cat > "$TMP/hashes.py" <<'PY'
+import os, sys
+if sys.argv[1] == 'hashes':
+    for suite in sys.argv[2:]:
+        print(suite, '-' if suite.endswith('never.sh') else os.environ.get('INPUT_HASH', 'a'*64))
+elif sys.argv[1] == 'changed':
+    if os.environ.get('NO_BASE'): sys.exit(1)
+    print('tests/b.sh')
+elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] in os.environ.get('SELECT', 'tests/b.sh').split(',') else 1)
+elif sys.argv[1] == 'select-many':
+    print('\n'.join(s for s in sys.argv[3:] if s in os.environ.get('SELECT', 'tests/b.sh').split(',')))
+if os.environ.get('AFF_CALLS') and sys.argv[1] in ('select', 'select-many'):
+    with open(os.environ['AFF_CALLS'], 'ab') as fh: fh.write((sys.argv[1] + '\n').encode())   # LF on Windows too
+PY
+cat > "$TMP/cache-plan.sh" <<'PLAN'
+fixture=$1; shift
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+runall_prepare; rc=$?
+[ "$rc" = 10 ] && exit 0
+[ "$rc" = 0 ] || exit "$rc"
+[ -z "${HOLD_MARK:-}" ] || { touch "$HOLD_MARK"; while [ ! -f "$HOLD_MARK.release" ]; do sleep 0.1; done; }
+run a bash tests/a.sh
+run b bash tests/b.sh
+[ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
+[ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
+$release && run1 safety bash tests/installed-safety.sh   # release-only, like run-all.sh's installed-safety line
+# a live-lane suite, and a block and an inline check that run a script outside a run line (gated like a suite)
+gated_block() { gated scripts/checks/x.sh && { bash scripts/checks/x.sh block && ok "gated block x" || bad "gated block x"; }; ok "block cheap"; }
+if [ "${WITH_LIVE:-0}" != 0 ]; then
+  runl live bash tests/live.sh
+  block gated_block
+  gated scripts/checks/x.sh && { bash scripts/checks/x.sh inline && ok "gated inline x" || bad "gated inline x"; }
+fi
+# workspace readers: a run line inside a block (like sgl-determinism, wire-parity) and one given RPG_FACTORY_WORKSPACE
+blk_run() { run blockrun bash tests/blockrun.sh; }
+if [ "${WITH_WS:-0}" != 0 ]; then
+  block blk_run
+  run ws env RPG_FACTORY_WORKSPACE=/ws bash tests/ws.sh
+fi
+[ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
+[ -z "${CFG_CHANGE:-}" ] || git config rpgtest.during "$CFG_CHANGE"
+drain
+runall_finish
+if [ -n "${CHECK_CFG:-}" ]; then
+  if gitcfg_verify >/dev/null; then echo 'cfg unchanged'; else echo 'cfg changed'; rm -f "$GITCFG_COPY"; fi
+fi
+echo "counts $pass $fail $skip"
+[ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
+PLAN
+git -C "$TMP/repo" init -q
+git -C "$TMP/repo" add .
+git -C "$TMP/repo" -c user.name=test -c user.email=test@test commit -qm fixture
+export ROOT_UNDER_TEST="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state" RUNALL_AFFECTED_PY="$TMP/hashes.py" RUN_LOG="$TMP/log"
+export RUNALL_SUITES_FROM="$TMP/cache-plan.sh"   # --only-suites accepts the stand-in plan's run lines
+cache_plan() { bash "$TMP/cache-plan.sh" "$TMP/repo" "$@"; }
+reset_cache() { rm -rf "$TMP/state/run-all"; : > "$RUN_LOG"; }
+reset_cache
+out=$(cache_plan); rc=$?
+tree=$(git -C "$TMP/repo" rev-parse 'HEAD^{tree}')
+[ "$rc" = 0 ] && [ -f "$TMP/state/run-all/$tree.json" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good 'clean full PASS writes tree record and releases lock' || no 'full PASS record/lock' "$out"
+out=$(cache_plan --reuse); rc=$?
+[ "$rc" = 0 ] && grep -q '^reused full run at ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && good '--reuse hits clean PASS tree without running suites' || no '--reuse clean hit' "$out"
+# Restricted coverage cannot satisfy an unrestricted request.
+python3 - "$TMP/state/run-all/$tree.json" <<'PY'
+import json, sys
+p=sys.argv[1]; r=json.load(open(p)); r['flags']['no_workspace']=True
+with open(p,'w') as f: json.dump(r,f)
+PY
+out=$(cache_plan --reuse --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q '^reused full run' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 4 ] \
+  && good 'restricted full record cannot satisfy full workspace coverage' || no 'full coverage mismatch' "$out"
+echo dirty > "$TMP/repo/untracked"
+out=$(cache_plan --reuse --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q '^reused full run' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 6 ] \
+  && good '--reuse misses a dirty tree' || no '--reuse dirty miss' "$out"
+rm "$TMP/repo/untracked"
+python3 - "$TMP/state/run-all/$tree.json" <<'PY'
+import json, sys
+p=sys.argv[1]; r=json.load(open(p)); r['counts']['fail']=1
+with open(p,'w') as f: json.dump(r,f)
+PY
+out=$(cache_plan --reuse --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q '^reused full run' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 8 ] \
+  && good '--reuse misses a failed tree record' || no '--reuse failed record' "$out"
+reset_cache
+out=$(cache_plan --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$RUN_LOG")" = a ] && [ ! -f "$TMP/state/run-all/$tree.json" ] \
+  && good '--only-suites selects exactly the requested suite, no tree record' || no '--only-suites selection' "$out"
+out=$(cache_plan --only-suites tests/unknown.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/unknown.sh'" <<<"$out" \
+  && good '--only-suites rejects unknown name with exit 2' || no 'unknown suite' "$out"
+# an existing file no run line runs would be accepted and never run: exit 2 naming each such name, nothing runs
+: > "$RUN_LOG"
+out=$(cache_plan --only-suites tests/orphan.sh,tests/a.sh,scripts/lib/fstate.py 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/orphan.sh'" <<<"$out" && grep -q "unknown suite 'scripts/lib/fstate.py'" <<<"$out" \
+  && ! grep -q "'tests/a.sh'" <<<"$out" && [ ! -s "$RUN_LOG" ] \
+  && good '--only-suites rejects every existing file without a run line (exit 2, each named)' || no 'orphan suite' "$out"
+out=$(cache_plan --only-suites=tests/a.sh,tests/blockrun.sh,scripts/checks/x.sh,tests/live.sh); rc=$?
+[ "$rc" = 0 ] && good '--only-suites accepts run lines, block run lines and gated scripts (also --only-suites=L)' || no 'accepted names' "$out"
+# --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
+: > "$RUN_LOG"
+out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+  && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good '--list-suites prints the run lines and gated scripts, runs nothing, no lock' || no "--list-suites (stand-in) rc=$rc log=$(cat "$RUN_LOG") lock=$(ls "$TMP/state/locks" 2>&1)" "$out"
+out=$(bash "$ROOT/tests/run-all.sh" --list-suites --release); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '
+' ' ' <<<"$out")" = 'tests/a.sh tests/b.sh tests/never.sh tests/partial.sh tests/installed-safety.sh scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ]   && good '--list-suites --release also lists the release-only suite' || no "--list-suites --release (stand-in) rc=$rc" "$out"
+out=$(cache_plan --only-suites tests/a.sh,tests/installed-safety.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "release-only suite 'tests/installed-safety.sh' runs only with --release" <<<"$out"   && ! grep -q "'tests/a.sh'" <<<"$out" && ! grep -q 'unknown suite' <<<"$out"   && good '--only-suites rejects a release-only suite without --release (exit 2, named)' || no "release-only --only-suites (rc=$rc)" "$out"
+real=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?
+miss=""; for s in tests/git-guard.test.sh tests/run-all-parallel.test.sh scripts/checks/sgl-determinism.py scripts/checks/wire-parity.sh \
+    scripts/checks/netcode-headless.sh scripts/factory-context.sh tests/routing.test.sh testlab/tests/test_lab.py; do
+  grep -qx "$s" <<<"$real" || miss+=" $s"; done
+for s in tests/handoff-e2e.test.sh tests/orca-wait.test.sh scripts/lib/resolve.jq tests/run-all.sh tests/installed-safety.sh; do grep -qx "$s" <<<"$real" && miss+=" !$s"; done
+rel=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --list-suites --release)
+[ "$(grep -vx 'tests/installed-safety.sh' <<<"$rel")" = "$real" ] && grep -qx tests/installed-safety.sh <<<"$rel" || miss+=" release:installed-safety"
+[ "$rc" = 0 ] && [ -z "$miss" ] && [ "$(sort <<<"$real" | uniq -d)" = "" ] \
+  && good "--list-suites on run-all.sh: suites and gated scripts, no orphan or syntax-check path ($(wc -l <<<"$real") names)" \
+  || no "--list-suites (run-all.sh) wrong:$miss" "$real"
+out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/handoff-e2e.test.sh,tests/git-guard.test.sh,tests/orca-wait.test.sh 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q "unknown suite 'tests/handoff-e2e.test.sh'" <<<"$out" && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
+  && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
+  && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
+reset_cache
+out=$(cache_plan --affected --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$RUN_LOG")" = 'a b ' ] \
+  && good '--affected and --only-suites form a deduplicated union' || no 'affected union' "$out"
+reset_cache
+cache_plan --only-suites tests/a.sh >/dev/null
+out=$(cache_plan --only-suites tests/a.sh -j 3); rc=$?
+[ "$rc" = 0 ] && grep -q 'reused tests/a.sh inputs ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 1 ] \
+  && good 'suite PASS reused with parallel output and unchanged inputs' || no 'suite reuse hit' "$out"
+out=$(INPUT_HASH=$(printf 'b%.0s' {1..64}) cache_plan --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && good 'suite input hash change misses reuse' || no 'suite hash miss' "$out"
+out=$(cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+[ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 3 ] \
+  && good '--no-reuse forces suites to execute' || no '--no-reuse' "$out"
+reset_cache
+WITH_NEVER=1 cache_plan --only-suites tests/never.sh >/dev/null
+out=$(WITH_NEVER=1 cache_plan --only-suites tests/never.sh); rc=$?
+[ "$rc" = 0 ] && ! grep -q reused <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 2 ] \
+  && good 'hash - never reuses a suite' || no 'never reuse marker' "$out"
+# a suite that passed with SKIP lines (a missing tool) records no PASS: it runs again once the tool may be there
+for j in 1 3; do
+  reset_cache
+  WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh,tests/a.sh >/dev/null
+  out=$(WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh,tests/a.sh); rc=$?
+  [ "$rc" = 0 ] && [ "$(sort "$RUN_LOG" | tr '
+' ' ')" = 'a partial partial ' ] && grep -q 'reused tests/a.sh' <<<"$out"     && ! grep -q 'reused tests/partial.sh' <<<"$out"     && good "suite output with SKIP / not on PATH is never reused, a clean suite is (-j $j)" || no "partial suite reuse (-j $j): $(tr '
+' ' ' < "$RUN_LOG")" "$out"
+done
+# Only result lines mark a partial pass: a PASS case whose name says NOT_AVAILABLE (ui-catalog, assetgen, pipeline) is
+# reused like any clean suite; a NOT_AVAILABLE result line is not.
+partial_line_case() { # want(reused|run) line
+  local j
+  for j in 1 3; do
+    reset_cache
+    PARTIAL_LINE=$2 WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh >/dev/null
+    out=$(PARTIAL_LINE=$2 WITH_PARTIAL=1 cache_plan -j "$j" --only-suites tests/partial.sh); rc=$?
+    if [ "$1" = reused ]; then
+      [ "$rc" = 0 ] && grep -q 'reused tests/partial.sh' <<<"$out" && [ "$(cat "$RUN_LOG")" = partial ]         && good "suite output '$2' is a clean pass, reused (-j $j)" || no "clean pass not reused: '$2' (-j $j)" "$out"
+    else
+      [ "$rc" = 0 ] && ! grep -q 'reused tests/partial.sh' <<<"$out" && [ "$(tr '
+' ' ' < "$RUN_LOG")" = 'partial partial ' ]         && good "suite output '$2' is a partial pass, never reused (-j $j)" || no "partial pass reused: '$2' (-j $j)" "$out"
+    fi
+  done
+}
+partial_line_case reused 'PASS  orca missing: NOT_AVAILABLE, cleanup stays CLEAN'
+partial_line_case reused 'ok  probe prints tool not on PATH as NOT_AVAILABLE'
+partial_line_case run 'NOT_AVAILABLE  unity: not on PATH'
+partial_line_case run '  SKIP: Windows-form TMPDIR parser pass'
+# --affected without a base and --only-suites: the message names what runs, and only that runs
+reset_cache
+out=$(NO_BASE=1 cache_plan --affected --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && grep -q 'no base, running only --only-suites tests/a.sh' <<<"$out" && ! grep -q 'running everything' <<<"$out"   && [ "$(cat "$RUN_LOG")" = a ] && good '--affected without a base and --only-suites says it runs only the listed suites' || no 'no-base message' "$out"
+reset_cache
+out=$(BREAK_SUITE=1 cache_plan); rc=$?
+[ "$rc" = 1 ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l)" -eq 1 ] \
+  && good 'FAIL writes no suite PASS record and full-run lock is released' || no 'FAIL cache and lock' "$out"
+record=$(python3 - "$TMP/state/run-all/$tree.json" <<'PY'
+import json, sys
+r=json.load(open(sys.argv[1]))
+print(r['counts']['fail'], len(r['failed_checks']), r['failed_checks'][0].split()[0])
+PY
+)
+[ "$record" = '1 1 a' ] && good 'failed full-run record includes counts and failed check names' || no 'failed record details' "$record"
+reset_cache
+out=$(CHANGE_INPUT=1 cache_plan --only-suites tests/a.sh); rc=$?
+[ "$rc" = 0 ] && [ ! -d "$TMP/state/run-all/suites" ] \
+  && good 'changed inputs prevent suite PASS publication' || no 'input mutation' "$out"
+git -C "$TMP/repo" checkout -- tests/b.sh
+# Hold the first full run until the test explicitly releases it.
+reset_cache
+HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
+for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
+# the holder records its Windows PID where the runtime has one (MSYS/Cygwin /proc/<pid>/winpid), and no file elsewhere
+HL="$TMP/state/locks/run-all-full"; hpid=$(cat "$HL/pid" 2>/dev/null)
+if [ -r "/proc/$hpid/winpid" ]; then
+  [ -n "$hpid" ] && [ "$(cat "$HL/winpid" 2>/dev/null)" = "$(cat "/proc/$hpid/winpid")" ]     && good 'full-run lock records the holder Windows PID' || no 'winpid recorded' "pid=$hpid winpid=$(cat "$HL/winpid" 2>&1)"
+else
+  [ -n "$hpid" ] && [ ! -e "$HL/winpid" ] && good 'full-run lock records no Windows PID without /proc/<pid>/winpid'     || no 'no winpid file' "pid=$hpid $(ls "$HL" 2>&1)"
+fi
+out=$(cache_plan --no-wait --no-reuse); rc=$?
+[ "$rc" = 3 ] && grep -q 'waiting for full run ' <<<"$out" \
+  && good '--no-wait exits 3 while a full run holds the lock' || no '--no-wait contention' "$out"
+cache_plan --no-reuse > "$TMP/waiter.out" 2>&1 & waiter=$!
+for ((i=0; i<100; i++)); do grep -q 'waiting for full run ' "$TMP/waiter.out" && break; sleep 0.1; done
+kill -0 "$waiter" 2>/dev/null && grep -q 'waiting for full run ' "$TMP/waiter.out" \
+  && good 'second full run waits for the first' || no 'lock wait' "$(cat "$TMP/waiter.out")"
+touch "$TMP/held.release"; wait "$holder"; hrc=$?; wait "$waiter"; wrc=$?
+[ "$hrc" = 0 ] && [ "$wrc" = 0 ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good 'waiting full run continues and releases its own lock' || no 'lock handoff' "$(cat "$TMP/holder.out" "$TMP/waiter.out")"
+# The shared-config snapshot is taken once the lock is held: another session's config change while this run waits
+# for the lock is not this run's; a change during its own run still is.
+rm -f "$TMP/held" "$TMP/held.release"
+HOLD_MARK="$TMP/held" cache_plan --no-reuse > "$TMP/holder.out" 2>&1 & holder=$!
+for ((i=0; i<200; i++)); do [ ! -f "$TMP/held" ] || break; sleep 0.1; done
+CHECK_CFG=1 cache_plan --no-reuse > "$TMP/waiter.out" 2>&1 & waiter=$!
+for ((i=0; i<100; i++)); do grep -q 'waiting for full run ' "$TMP/waiter.out" && break; sleep 0.1; done
+git -C "$TMP/repo" config rpgtest.wait other-session
+touch "$TMP/held.release"; wait "$holder"; hrc=$?; wait "$waiter"; wrc=$?
+[ "$hrc" = 0 ] && [ "$wrc" = 0 ] && grep -q 'waiting for full run ' "$TMP/waiter.out" && grep -qx 'cfg unchanged' "$TMP/waiter.out"   && good 'config changed by another session while waiting for the lock is not attributed to the waiting run'   || no "snapshot after lock (holder $hrc, waiter $wrc)" "$(cat "$TMP/waiter.out")"
+out=$(CHECK_CFG=1 CFG_CHANGE=mine cache_plan --no-reuse); rc=$?
+[ "$rc" = 0 ] && grep -qx 'cfg changed' <<<"$out" && good 'config changed during the run itself is still detected' || no 'config change during run' "$out"
+git -C "$TMP/repo" config --remove-section rpgtest
+mkdir -p "$TMP/state/locks/run-all-full"
+printf '99999999\n' > "$TMP/state/locks/run-all-full/pid"
+printf 'old checkout\n' > "$TMP/state/locks/run-all-full/checkout"
+out=$(cache_plan --no-reuse); rc=$?
+[ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good 'dead PID lock is taken over and released' || no 'stale takeover' "$out"
+# A holder from another MSYS/Cygwin runtime: its MSYS pid is dead here but its Windows PID is alive (stand-in
+# tasklist.exe), so the lock is kept; once the Windows PID is gone as well, it is taken over.
+L0="$TMP/state/locks/run-all-full"; mkdir -p "$TMP/winbin" "$L0"
+cat > "$TMP/winbin/tasklist.exe" <<'STUB'
+#!/usr/bin/env bash
+[ "$*" = "//FI PID eq ${LIVE_WINPID:-none} //NH" ] && { echo "bash.exe   $LIVE_WINPID Console   1   11,184 K"; exit 0; }
+echo 'INFO: No tasks are running which match the specified criteria.'
+STUB
+chmod +x "$TMP/winbin/tasklist.exe"
+WINBIN="$TMP/winbin"; if command -v cygpath >/dev/null 2>&1; then WINBIN=$(cygpath -u "$WINBIN"); fi  # C:/ splits PATH
+printf '99999999
+' > "$L0/pid"; printf '4242
+' > "$L0/winpid"
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && ! grep -q 'taking over stale full-run lock' <<<"$out" && [ "$(cat "$L0/winpid" 2>/dev/null)" = 4242 ]   && good 'lock with a dead MSYS pid and a live Windows PID is not taken over' || no "live winpid (rc=$rc)" "$out"
+mkdir -p "$L0"; printf '99999999
+' > "$L0/pid"; printf '4242
+' > "$L0/winpid"
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=1 timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$L0" ]   && good 'lock whose MSYS pid and Windows PID are both dead is taken over' || no "dead winpid (rc=$rc)" "$out"
+# A takeover that died inside its reclaim guard: before it removed the pid files (dead holder in reclaim/pid), and after
+# (lock holds only an old reclaim dir without pid). Neither wedges the lock, and --no-wait does not exit 3 for ever.
+L="$TMP/state/locks/run-all-full"
+mkdir -p "$L/reclaim"; printf '99999999
+' > "$L/pid"; printf '99999998
+' > "$L/reclaim/pid"
+out=$(timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && grep -q 'removing stale reclaim guard' <<<"$out" && grep -q 'taking over stale full-run lock' <<<"$out" && [ ! -d "$L" ]   && good 'reclaim guard of a dead takeover is removed, lock taken over' || no "dead reclaim holder (rc=$rc)" "$out"
+mkdir -p "$L/reclaim"; touch -d '-1 minute' "$L/reclaim" "$L"
+out=$(timeout 60 bash "$TMP/cache-plan.sh" "$TMP/repo" --no-reuse); rc=$?
+[ "$rc" = 0 ] && grep -q 'removing stale reclaim guard of the full-run lock (no pid)' <<<"$out" && [ ! -d "$L" ]   && good 'old reclaim guard without a pid in a pid-less lock is removed, lock taken over' || no "old pid-less reclaim (rc=$rc)" "$out"
+# Three-way takeover race: this run judged the lock stale and takes the reclaim guard, but meanwhile another takeover
+# removed the stale lock and a new holder created a fresh one (pid not yet written) that the guard now sits in. The run
+# re-checks under the guard and leaves the new holder's lock alone (stale lock with a dead pid, and one without a pid).
+cat > "$TMP/race-plan.sh" <<'PLAN'
+fixture=$1; shift
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+eval "orig_lock_still_stale () $(declare -f lock_still_stale | tail -n +2)"
+lock_still_stale() { # the other takeover and the new holder act between this run's checks and its re-check
+  if [ ! -f "$LOCK.raced" ]; then
+    touch "$LOCK.raced"; mv "$LOCK" "$LOCK.old"; mkdir "$LOCK"; mv "$LOCK.old/reclaim" "$LOCK/"; rm -rf "$LOCK.old"
+  fi
+  orig_lock_still_stale "$@"
+}
+runall_prepare; rc=$?
+echo "prepare rc=$rc"
+PLAN
+for kind in pid nopid; do
+  rm -rf "$L" "$L.raced"; mkdir -p "$L"
+  if [ "$kind" = pid ]; then printf '99999999
+' > "$L/pid"; else touch -d '-1 minute' "$L"; fi
+  out=$(timeout 60 bash "$TMP/race-plan.sh" "$TMP/repo" --no-reuse --no-wait 2>&1); rc=$?
+  [ -f "$L.raced" ] && grep -q 'prepare rc=3' <<<"$out" && ! grep -q 'taking over stale full-run lock' <<<"$out"     && [ -d "$L" ] && [ ! -e "$L/reclaim" ]     && good "takeover race ($kind): the new holder's fresh lock is kept, this run waits" || no "takeover race ($kind)" "$out"
+done
+rm -rf "$L" "$L.raced"
+# With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
+# listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
+live_case() { # name want-log want-counts args...
+  local name=$1 wlog=$2 wcounts=$3 j log; shift 3
+  for j in 1 3; do
+    reset_cache
+    out=$(WITH_LIVE=1 cache_plan --no-reuse -j "$j" "$@"); rc=$?
+    log=$(sort "$RUN_LOG" | tr '\n' ' ')
+    [ "$rc" = 0 ] && [ "$log" = "$wlog" ] && grep -qx "counts $wcounts" <<<"$out" \
+      && good "live/gated: $name (-j $j)" || no "live/gated: $name (-j $j): log '$log'" "$out"
+  done
+}
+live_case '--only-suites without them skips them' 'a ' '2 0 4' --only-suites tests/a.sh
+live_case '--only-suites listing them runs them' 'a block inline live ' '5 0 1' --only-suites tests/a.sh,tests/live.sh,scripts/checks/x.sh
+SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh live_case '--affected selecting them runs them' 'b block inline live ' '5 0 1' --affected
+live_case '--affected not selecting them skips them' 'b ' '2 0 4' --affected
+live_case 'a full run runs them' 'a b block inline live ' '6 0 0'
+# --affected asks affected.py once per run (select-many builds the import graph once), at -j 1 and -j 3 alike
+for j in 1 3; do
+  reset_cache; : > "$TMP/aff-calls"
+  out=$(AFF_CALLS="$TMP/aff-calls" SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh WITH_LIVE=1 cache_plan --no-reuse -j "$j" --affected); rc=$?
+  calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$calls" = 'select-many ' ] && [ "$log" = 'b block inline live ' ] && grep -qx 'counts 5 0 1' <<<"$out" \
+    && good "--affected calls affected.py select-many once (-j $j)" || no "--affected affected.py calls (-j $j): '$calls' log '$log'" "$out"
+done
+# Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
+# RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
+ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh
+plant() { local s k; for s in tests/live.sh tests/blockrun.sh tests/ws.sh; do
+  k=$(printf '%s' "$s" | sha1sum); k=${k%% *}; mkdir -p "$TMP/state/run-all/suites/$k"; printf 'PASS\n' > "$TMP/state/run-all/suites/$k/$(printf 'a%.0s' {1..64})"; done; }
+for j in 1 3; do
+  reset_cache
+  out1=$(WITH_LIVE=1 WITH_WS=1 cache_plan -j "$j" --only-suites "$ws_suites"); rc1=$?
+  published=$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')
+  plant; : > "$RUN_LOG"
+  out=$(WITH_LIVE=1 WITH_WS=1 cache_plan -j "$j" --only-suites "$ws_suites"); rc=$?
+  log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc1" = 0 ] && [ "$published" = 1 ] && [ "$rc" = 0 ] && [ "$log" = 'blockrun live ws ' ] \
+    && grep -q '^PASS  a (reused tests/a.sh inputs ' <<<"$out" && [ "$(grep -c 'reused' <<<"$out")" = 1 ] \
+    && good "workspace readers (block run line, runl, RPG_FACTORY_WORKSPACE) never reused, fixture suite reused (-j $j)" \
+    || no "workspace reader reuse (-j $j): published=$published log '$log'" "$out1"$'\n----\n'"$out"
+done
+# Every exit removes the shared-config copy (gitcfg_snapshot's mktemp, in $TMPDIR): --list-suites, an unknown suite
+# (exit 2), a --reuse hit (exit 0 before any check) and --no-wait (exit 3)
+CT="$TMP/cfgtmp"; mkdir -p "$CT"; reset_cache
+TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" --list-suites >/dev/null; r1=$?
+TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" --only-suites tests/unknown.sh >/dev/null 2>&1; r2=$?
+args=""   # every argument-validation exit (exit 2), before the snapshot
+for a in '--only-suites' '--only-suites=' '-j 0' '--jobs x' '--only-suites tests/installed-safety.sh'; do
+  # shellcheck disable=SC2086
+  TMPDIR="$CT" bash "$ROOT/tests/run-all.sh" $a >/dev/null 2>&1; args+="$? "
+done
+cache_plan >/dev/null; TMPDIR="$CT" cache_plan --reuse >/dev/null; r3=$?
+mkdir -p "$TMP/state/locks/run-all-full"; printf '%s
+' "$$" > "$TMP/state/locks/run-all-full/pid"
+TMPDIR="$CT" cache_plan --no-reuse --no-wait >/dev/null; r4=$?; rm -rf "$TMP/state/locks/run-all-full"
+left=$(ls -A "$CT")
+[ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ "$args" = '2 2 2 2 2 ' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, bad arguments, release-only suite, --reuse hit, --no-wait) leave no git-config copy'   || no "early-exit temp files (rc $r1 $r2 $r3 $r4, arguments $args)" "$left"
+# Unit-level WindowsApps shim: only the sourced runner process changes PATH.
+mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$REAL_PY_DIR"\n' > "$TMP/WindowsApps/python3"
+chmod +x "$TMP/WindowsApps/python3"
+cat > "$TMP/python-path.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+PATH="$(path_entry "$FAKE_ALIAS"):$PATH"; before=$PATH
+python_path_fast
+[ "$PATH" = "$(path_entry "$REAL_PY_DIR"):$before" ] && echo 'path prepended'
+PLAN
+out=$(FAKE_ALIAS="$TMP/WindowsApps" REAL_PY_DIR="$TMP/real-python" bash "$TMP/python-path.sh"); rc=$?
+[ "$rc" = 0 ] && grep -q 'using real Python directory' <<<"$out" && grep -q 'path prepended' <<<"$out" \
+  && good 'WindowsApps shim prepends real interpreter directory in runner only' || no 'WindowsApps path' "$out"
+unset RPG_FACTORY_STATE_DIR RUNALL_AFFECTED_PY RUN_LOG ROOT_UNDER_TEST
+
 echo "run-all-parallel tests: $((pass + fail)) run, $pass passed, $fail failed"
 [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
