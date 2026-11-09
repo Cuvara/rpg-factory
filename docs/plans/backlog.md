@@ -5,7 +5,23 @@ below says where each earlier topic went. Conventions: `docs/plans/README.md`.
 
 When a topic becomes a plan task, its `checks` name the task's own suites or
 `tests/run-all.sh --affected --base <task base> -j 2`, never a full `tests/run-all.sh`, and its acceptance never
-requires a full run: the one full run of a batch is integration QA (`parallel-work.md` section 10, "QA tiers").
+requires a full run: the one full run of a batch is integration QA (`skills/delivery/references/delivery.md` section 10, "QA tiers").
+
+## In plan
+
+### generic-delivery
+
+Plan plugin-flow-4 task generic-delivery: agent rules usable in every project, not only UnityIndie. The new skill
+`rpg-factory:delivery` (`skills/delivery/SKILL.md`, policy `skills/delivery/references/delivery.md`, defaults
+`skills/delivery/pipeline-defaults.json`) holds the generic flow; `parallel-work.md` keeps the RPG specifics and
+`factory-pipeline.py` runs without the RPG registry (`--registry none`). Follow-ups for task qa-wire (the owner of
+the three suites below; the generic-delivery task does not edit them):
+
+- `tests/routing.test.sh`: a scenario where a non-RPG task routes to `delivery`.
+- `tests/run-all.sh` and `tests/affected.py`: wire `tests/delivery-generic.test.sh` (suite list, affected selection
+  for `skills/delivery/`, `scripts/factory-pipeline.py` and `scripts/lib/pipeline_route.py`).
+- `tests/parallel-policy.test.sh`: the policy mutations (single copy, section anchors, machine-path audit) also
+  target `skills/delivery/references/delivery.md`.
 
 ## Open
 
@@ -21,7 +37,7 @@ matched, and the macOS user-home alternative also matches the path part of a URL
 
 ### plan-edit-verb
 
-`parallel-work.md` section 8 documents the rule "plan edits are atomic: write a copy, validate it, then replace the
+`delivery.md` section 8 documents the rule "plan edits are atomic: write a copy, validate it, then replace the
 plan". Optional follow-up: a `factory-pipeline.py plan-edit` verb (or a `validate --replace <plan>` mode) that does
 the copy, validation and replace in one step, with a test that an invalid edit never replaces the plan.
 
@@ -110,5 +126,5 @@ unsubmitted in its terminal, and Codex under PowerShell resolves `bash` to WSL i
 - **wave-close** (subtask review staleness with multi-wave attribution and the subtask's own paths, `verdict
   --fallback` after the fact, `plan_paths.resolve_repo_path` in `repo_info`, CR-stripped skill names in
   `tests/routing.test.sh`, `tests/affected.py` selection for orca-wait, `scripts/orca-wait.sh` in
-  `scripts/README.md`, `merge --no-ff` for later waves and the `verdict` options in `parallel-work.md`): plan
+  `scripts/README.md`, `merge --no-ff` for later waves and the `verdict` options in `parallel-work.md`, now `delivery.md`): plan
   plugin-flow-2 task wave-close.

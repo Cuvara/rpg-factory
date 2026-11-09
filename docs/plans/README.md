@@ -2,7 +2,7 @@
 
 Everything a run of the plugin's own delivery pipeline needs to continue on another machine lives here, in the
 plugin repo. A fresh clone plus `python3 -B scripts/factory-pipeline.py status docs/plans/<topic>.json` is enough to
-resume a run (`skills/factory-core/references/parallel-work.md` sections 8 and 10).
+resume a run (`skills/delivery/references/delivery.md` sections 8 and 10).
 
 ## What lives here
 
@@ -11,7 +11,7 @@ resume a run (`skills/factory-core/references/parallel-work.md` sections 8 and 1
 - `docs/plans/backlog.md`: the backlog of topics not planned yet. A topic leaves the backlog when a plan task
   covers it.
 - `docs/plans/<plan>/report.md`: the run report, written by the run lead at integration and committed with it
-  (`parallel-work.md` section 8): sessions per task with model and Orca Run, verdicts with SHA and model, checks
+  (`delivery.md` section 8): sessions per task with model and Orca Run, verdicts with SHA and model, checks
   with exact counts, limitations.
 
 ## What does not live here
@@ -42,5 +42,5 @@ reads a repo path.
   any such path under `docs/plans/`.
 - **Plan edits are atomic.** Write the edit to a copy, run `python3 -B scripts/factory-pipeline.py validate <copy>`,
   then replace the plan with the copy. Never edit the live plan in place: a task lead may read it mid-dispatch
-  (`parallel-work.md` section 8).
+  (`delivery.md` section 8).
 - English only, like the rest of the repo.
