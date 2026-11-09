@@ -14,7 +14,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged model-routing multiwave qa-tiers'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged model-routing multiwave qa-tiers cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -35,6 +35,9 @@ while [ "$#" -gt 0 ]; do
 done
 # Validate before sourcing helpers or creating any fixture (also with --list-cases).
 SELECTED="${SELECTED//,/ }"
+# a selector that names no case (`--case ,`) is a usage error, never "run everything"
+[ -z "$SELECTED" ] || [ -n "${SELECTED//[[:space:]]/}" ] || { printf 'Empty case selector
+' >&2; usage >&2; exit 2; }
 for selected in $SELECTED; do
   [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
 done
@@ -79,7 +82,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged owned-case tier-plugin model-routing multiwave qa-tiers'
+UNITS='chain status recorded-implementer dogfood cleanup-merged owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -119,6 +122,37 @@ if [ -z "${PIPELINE_TEST_UNIT:-}" ]; then
     [ "$run" -gt 0 ] && [ "$failed" -eq 0 ] && [ "$bad" = 0 ]
     exit
   fi
+fi
+# The case selection itself (its own unit: it needs no fixture). --help exits 0, an unknown argument, an unknown case or
+# an empty selector exits 2 before any run, --list-cases lists every case, and a one-case child run (tier, the cheapest:
+# five assertions after its fixture build) runs only its own section, so fewer assertions than the full run.
+if [ "${SELECTED// /}" = cli-selftest ]; then
+  self="${BASH_SOURCE[0]}"; spass=0; sfail=0
+  sok() { spass=$((spass + 1)); echo "PASS  $1"; }
+  sno() { sfail=$((sfail + 1)); echo "FAIL  $1"; }
+  bash "$self" --help >/dev/null 2>&1 && sok "--help exits 0" || sno "--help did not exit 0"
+  bash "$self" --no-such-option >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && sok "unknown argument exits 2" || sno "unknown argument exited $rc, want 2"
+  bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && sok "unknown case exits 2" || sno "unknown case exited $rc, want 2"
+  for sel in ',' '' ' , '; do
+    bash "$self" --case "$sel" >/dev/null 2>&1; rc=$?
+    [ "$rc" -eq 2 ] && sok "empty selector '$sel' exits 2 and runs nothing" || sno "empty selector '$sel' exited $rc, want 2"
+  done
+  listed=$(bash "$self" --list-cases 2>&1); rc=$?
+  want=$(printf '%s
+' $CASES)
+  [ "$rc" -eq 0 ] && [ "$listed" = "$want" ] && sok "--list-cases exits 0 and lists the $(wc -w <<<"$CASES") cases" || sno "--list-cases rc=$rc, listed: $(head -c 200 <<<"$listed")"
+  start="$EPOCHREALTIME"
+  one=$(bash "$self" --case tier 2>&1); rc=$?
+  n_one=$(sed -n 's/^pipeline tests: \([0-9]*\) run.*/\1/p' <<<"$one"); sections=$(grep -c '^-- ' <<<"$one")
+  if [ "$rc" -eq 0 ] && [ "${n_one:-0}" -gt 0 ] && [ "${n_one:-0}" -lt 20 ] && [ "$sections" = 1 ]; then sok "--case tier exits 0 and runs $n_one assertions in $sections section, not the full run"
+  else sno "--case tier rc=$rc, ${n_one:-?} assertions, $sections sections (want exit 0, a few assertions, one section)"; fi
+  elapsed=$(( ${EPOCHREALTIME/./} - ${start/./} ))
+  [ "${PIPELINE_TEST_TIMES:-0}" != 1 ] || printf 'TIME  cli-selftest child run %d.%03ds
+' "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
+  total=$((spass + sfail)); echo "pipeline tests: $total run, $spass passed, $sfail failed"
+  [ "$sfail" -eq 0 ]; exit
 fi
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
@@ -2622,7 +2656,8 @@ st_phase "a changed task in the plan: its review is no longer counted; review th
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
 X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
-gi "$C" checkout -q feat/core/demo
+# the chain unit creates feat/core/demo; a standalone status unit has no such branch
+git -C "$C" rev-parse -q --verify refs/heads/feat/core/demo >/dev/null && gi "$C" checkout -q feat/core/demo
 git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
 
 case_end status
