@@ -131,9 +131,42 @@
           "items": {
             "$ref": "#/$defs/output"
           }
+        },
+        "style": {
+          "description": "Image review with the style lock: the style ref review-cmd bound (null when the verdict's value is not an object). Absent in verdicts without it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/style_ref"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "anchors": {
+          "description": "Image review with the style lock: [{anchor_id, sha256}] of the anchors review-cmd attached. Absent in verdicts without it.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "anchor_id",
+              "sha256"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "anchor_id": {
+                "type": "string"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
         }
       },
-      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs (runfiles.generation_inputs: the whole workflow.json graph and the sha256 of each references/<name>) for the image review; outputs only for the image review)."
+      "description": "Read from review-<phase>.json by runfiles.read_verdict; prompt_sha256, requirements_sha256 and outputs are the binding review-cmd handed the reviewer (null / [] when absent; requirements_sha256 is runfiles.requirements_sha256 of the purpose, style and template content hashes and the resolved params, plus the generation inputs (runfiles.generation_inputs: the whole workflow.json graph and the sha256 of each references/<name>) for the image review; outputs only for the image review). With the style lock the image binding also carries style and anchors."
     },
     "output": {
       "type": "object",
@@ -146,6 +179,37 @@
         "path": {
           "type": "string",
           "pattern": "^outputs/[^/]+[.][Pp][Nn][Gg]$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "style_ref": {
+      "description": "Style reference (scripts/assetgen/stylelock.py style_ref): the style id, its version (null for a style without one) and layers.content_hash of the merged style data.",
+      "type": "object",
+      "required": [
+        "style_id",
+        "version",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "style_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
@@ -280,6 +344,224 @@
     },
     "image_review": {
       "$ref": "#/$defs/review"
+    },
+    "claude_image_review": {
+      "description": "Claude's own visual review (review-image-claude.json, by claude). Recorded for the human approver; never replaces image_review.",
+      "$ref": "#/$defs/review"
+    },
+    "style_lock": {
+      "description": "Style lock of the run (assetgen.py resolve, copied by manifest): the project config it was resolved under, the asset family, the style reference, the override reason, the selected anchors (references/anchor-<id>.png, wired into reference_images) and the relevant rejections. Absent in runs resolved before the style lock.",
+      "type": "object",
+      "required": [
+        "project",
+        "family",
+        "family_source",
+        "style",
+        "override",
+        "max_references",
+        "references",
+        "rejections"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "anyOf": [
+            {
+              "enum": [
+                null
+              ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            }
+          ]
+        },
+        "family": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            {
+              "enum": [
+                null
+              ]
+            }
+          ]
+        },
+        "family_source": {
+          "enum": [
+            "flag",
+            "purpose",
+            null
+          ]
+        },
+        "style": {
+          "$ref": "#/$defs/style_ref"
+        },
+        "override": {
+          "$ref": "#/$defs/nullable_string"
+        },
+        "max_references": {
+          "type": "integer"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "anchor_id",
+              "family",
+              "strength",
+              "dimensions",
+              "image",
+              "sha256",
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "anchor_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "family": {
+                "type": "string",
+                "minLength": 1
+              },
+              "strength": {
+                "type": "string",
+                "enum": [
+                  "canonical",
+                  "strong",
+                  "supporting"
+                ]
+              },
+              "dimensions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "palette",
+                    "lighting",
+                    "shape",
+                    "texture",
+                    "composition",
+                    "line"
+                  ]
+                }
+              },
+              "image": {
+                "type": "string",
+                "pattern": "^references/anchor-[a-z0-9][a-z0-9-]*[.]png$"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "reason": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "rejections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type",
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "asset",
+                  "direction"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "style_drift",
+                  "palette_off",
+                  "too_detailed",
+                  "wrong_lighting",
+                  "wrong_perspective",
+                  "text_or_logo",
+                  "anatomy",
+                  "other"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "run": {
+                "type": "object",
+                "required": [
+                  "run_id",
+                  "output",
+                  "sha256"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "run_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "output": {
+                    "type": "string",
+                    "pattern": "^outputs/[^/]+$"
+                  },
+                  "sha256": {
+                    "$ref": "#/$defs/sha256"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "required": [
+        "failed_attempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "failed_attempts": {
+          "description": "Run ids of earlier attempts of the same series (<slug>-NNN, lower NNN) whose directory has no run.md.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*-[0-9]{3}$"
+          }
+        }
+      }
     }
   }
 }

@@ -17,6 +17,12 @@ docs/schemas/pipeline-plan.schema.json.
         after another in the main checkout, never two in one wave), cross-model review pairing, and shared
         exclusive resources (one Unity test run at a time). Exit 1 on an error. WARN (no error) when a task's
         checks hold a full tests/run-all.sh or its acceptance requires one: full runs belong to integration QA.
+        Model policy (registry
+        pipeline.models, lib/model_policy.py; references/parallel-work.md section 10 "Model choice"): a task `grade` other
+        than light|standard|heavy, a broken policy or override file and a role it cannot resolve are errors; prints the
+        model and effort of the task lead and, per task, its grade (the plan's, else derived from the tier of its owned
+        paths alone: S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy work:
+        the heavy profile) and QA sessions.
   subplan validate <subplan.json> [--plan PATH] [--json]
         a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
@@ -25,12 +31,24 @@ docs/schemas/pipeline-plan.schema.json.
         pipeline.review_pairing), a `placement` other than shared|child, child without a `reason` and child in a
         no-worktree repo are errors; so are absolute or `..` paths and malformed subtasks (not an object, a
         non-string id, paths or deps that are not lists of strings). Prints the waves: one subtask per wave in a
-        no-worktree repo (Unity project). Exit 0 OK, 1 errors, 2 usage.
+        no-worktree repo (Unity project). A subtask `grade` other than light|standard|heavy and a grade the policy cannot
+        resolve for its model are errors; prints each subtask's grade (its own, else the task's) and the model and effort
+        of its implement and review sessions. Exit 0 OK, 1 errors, 2 usage.
   planner --request TEXT [--runner orca|agent|print] [--orca-unavailable REASON] [--agent ID]
+          [--grade light|standard|heavy] [--model ID] [--effort LEVEL]
         the planner dispatch: read-only, in the lead's checkout (no worktree), writes plan.json.
         Every Orca dispatch stores the full spec under <state dir>/pipeline/<plan id>/specs/ (planner: _planner, a reserved plan id)
         and passes a one-line prompt pointing to that absolute file, so cmd.exe cannot truncate the spec; the
         planner's prompt also ends with "Request: TEXT", every whitespace run (newlines too) collapsed to one space.
+  dispatch ... [--grade light|standard|heavy] [--model ID] [--effort LEVEL]   (every phase, and planner)
+        every session runs with the model and effort of its role in the model policy: planner, lead, implement (the
+        subtask's grade, else the task's), review (heavy work: heavy, else review) and qa. Orca commands (worker-start,
+        worktree create, agent launch) end with `--model ID --effort LEVEL --json`; the print runner's header names them;
+        the Agent-tool runner passes the model alias (agent_tool_alias) and says on stderr and in one prompt line that
+        the Agent tool cannot set an effort. --grade runs the session with that grade's profile; --model / --effort
+        replace the profile's; outside the scope (registry plus the personal override file $RPG_FACTORY_MODEL_POLICY or
+        <persistent state dir>/model-policy.json) they are a usage error (exit 2) and nothing is dispatched. A broken
+        policy exits 1.
   dispatch <plan.json> --task ID --phase lead [--report-to RUN_ID|run:RUN_ID] [--runner orca|agent|print]
           [--orca-unavailable REASON] [--agent ID]
         the run lead starts ONE task-lead session per task, always a registry pipeline.lead_agent (Claude) session
@@ -96,6 +114,7 @@ docs/schemas/pipeline-plan.schema.json.
   verdict <plan.json> --task ID --phase review|qa --sha SHA --by AGENT --state PASS|FAIL|NOT_RUN|BLOCKED [--report FILE] [--note TEXT] [--implementer AGENT]
           [--subtask ID [--subplan FILE]] [--fallback 'AGENT unavailable' --note TEXT] [--failed-suites LIST]
         records a review or QA verdict (<state dir>/pipeline/<plan id>/, lib/fstate.py). A per-task
+        --model ID / --effort LEVEL record the session model and effort as run.
         qa verdict of a worktree repo is the task lead's record; the gate still needs QA on the integration HEAD.
         --subtask records to the subtask's own file, never the task review the gate reads. Every verdict is also kept
         per candidate (<task>__<phase>__<sha12>__<by>.json). A task review by a model other than the task's paired
@@ -156,6 +175,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.append(os.path.join(HERE, "lib"))
 import fstate  # noqa: E402
 import pipeline_route as pr  # noqa: E402
+import model_policy  # noqa: E402
 import orca_cmd  # noqa: E402
 import plan_paths  # noqa: E402
 from shells import find_bash  # noqa: E402
@@ -298,6 +318,214 @@ def print_tier(a, out):
     return 0
 
 
+# ---------------------------------------------------------------- model grades
+
+TIER_GRADE = {"S": "light", "M": "standard", "L": "heavy"}
+ICASE = os.name == "nt"  # the file system folds case: owned paths compare case-insensitively (tests force it on Linux)
+
+
+def route_path(p):
+    """A path as the routing engine sees it: forward slashes, no empty or `.` segments (a trailing slash stays, it marks
+    a directory), so ./a//b and a/b grade alike. The repo root (`.`, `./`) is the empty path."""
+    s = str(p).replace("\\", "/")
+    segs = [x for x in s.split("/") if x not in ("", ".")]
+    return ("/" if s.startswith("/") else "") + "/".join(segs) + ("/" if segs and s.endswith("/") else "")
+
+
+def registry_spellings(reg, key):
+    """Every path the registry names in repo `key` (module paths, plain generated paths, contract ends), globs left out."""
+    out = set()
+    for m in reg.get("modules") or []:
+        if m.get("repo") == key:
+            out.update(x for x in (m.get("paths") or []) + (m.get("generated") or []) if not x.startswith("**/"))
+    for c in reg.get("contracts") or []:
+        out.update(e["path"] for e in [c.get("source") or {}] + (c.get("copies") or [])
+                   if e.get("repo") == key and e.get("path") and not e["path"].startswith("**/"))
+    return out
+
+
+def registry_case(reg, key, p):
+    """`p` with its leading segments in the registry's spelling where the file system folds case (ICASE), so the
+    case-sensitive routing engine sees BACKEND/SHARED/PROTO/WIRE.PROTO as backend/shared/proto/wire.proto. The longest
+    registry path that `p` lies in, or that lies in `p`, supplies the spelling; the rest of `p` keeps its own case."""
+    if not ICASE or not p:
+        return p
+    segs = p.rstrip("/").split("/")
+    low = [x.lower() for x in segs]
+    best = []
+    for e in registry_spellings(reg, key):
+        es = e.rstrip("/").split("/")
+        k = 0
+        while k < min(len(es), len(segs)) and es[k].lower() == low[k]:
+            k += 1
+        if (k == len(es) or k == len(segs)) and k > len(best):
+            best = es[:k]
+    return "/".join(best + segs[len(best):]) + ("/" if p.endswith("/") else "")
+
+
+def is_dir_path(p, repo_path):
+    """An owned path names a directory: the repo root, a trailing slash, a directory on disk in the checkout (read only),
+    or, absent from disk, a last segment without an extension. So Editor/Codegen/Generated and
+    Editor/Codegen/Generated/ grade alike."""
+    if p == "" or p.endswith("/"):
+        return True
+    if repo_path:
+        full = os.path.join(repo_path, p)
+        if os.path.isdir(full):
+            return True
+        if os.path.exists(full):
+            return False
+    return "." not in p.rsplit("/", 1)[-1].lstrip(".")
+
+
+def grade_paths(reg, key, paths, repo_path):
+    """Owned paths in the one spelling grading compares: route_path, the registry's case where the file system folds
+    case, and a trailing slash on every directory. The root stays the empty path."""
+    out = []
+    for p in paths:
+        q = registry_case(reg, key, route_path(p)) if key else route_path(p)
+        out.append(q + "/" if q and not q.endswith("/") and is_dir_path(q, repo_path) else q)
+    return out
+
+
+def static_resolve(reg, key, paths):
+    """resolve.jq over the given paths alone (no git state, so the result never drifts with the branch), or None with
+    the reason when jq is missing or fails."""
+    files = [{"path": p, "status": "M", "source": "given"} for p in paths]
+    try:
+        r = subprocess.run(["jq", "-c", "--arg", "repo", key, "--argjson", "files", json.dumps(files), "--argjson", "subst",
+                            "{}", "--argjson", "tools", "{}", "-f", os.path.join(HERE, "lib", "resolve.jq")],
+                           input=json.dumps(reg), capture_output=True, text=True, timeout=60, encoding="utf-8",
+                           errors="replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"jq unavailable ({e.__class__.__name__})"
+    if r.returncode != 0:
+        return None, "routing engine failed: " + (r.stderr or "").strip()[:200]
+    try:
+        return json.loads(r.stdout), None
+    except ValueError:
+        return None, "routing engine printed no JSON"
+
+
+def fold(p):
+    return p.lower() if ICASE else p
+
+
+def covers(a, b):
+    """Path `a` (a file, or a directory with or without its trailing slash; the empty path is the repo root) is `b` or
+    contains it: resolve.jq's path_matches, used both ways for owned paths. Case-insensitive where the file system is."""
+    a, b = fold(a).rstrip("/"), fold(b).rstrip("/")
+    return a == "" or b == a or b.startswith(a + "/")
+
+
+def overlaps_entry(entry, p, roots=()):
+    """A registry contract end or generated path `entry` and an owned path `p` (grade_paths: a directory ends with `/`,
+    the root is empty) overlap when either contains the other. A `**/*<suffix>` glob matches a file with that suffix,
+    and any owned directory that contains a root (`roots`: the paths of the module the glob belongs to) or lies inside
+    one; with no roots (a contract glob) any owned directory may hold a match."""
+    if entry.startswith("**/*"):
+        if fold(p).endswith(fold(entry[4:])):
+            return True
+        if not (p == "" or p.endswith("/")):
+            return False
+        return not roots or any(covers(p, r) or covers(r, p) for r in roots)
+    return covers(entry, p) or covers(p, entry)
+
+
+def owned_overlap(reg, key, owned):
+    """Contracts and generated paths of registry repo `key` an owned path (grade_paths spelling) overlaps either way.
+    resolve.jq maps a file to what contains it; an owned directory must also count what it contains
+    (backend/shared/proto/ holds wire.proto). A handoff contract counts only with its source end, as in resolve.jq."""
+    contracts = []
+    for c in reg.get("contracts") or []:
+        ends = [(e, e is c.get("source")) for e in [c.get("source") or {}] + (c.get("copies") or [])
+                if e.get("repo") == key and e.get("path")]
+        hits = [src for e, src in ends if any(overlaps_entry(e["path"], p) for p in owned)]
+        if hits and (c.get("kind") != "handoff" or any(hits)):
+            contracts.append(c["id"])
+    generated = []
+    for m in reg.get("modules") or []:
+        if m.get("repo") != key:
+            continue
+        for g in m.get("generated") or []:
+            generated += [{"path": p or ".", "generated_by": g} for p in owned if overlaps_entry(g, p, m.get("paths") or [])]
+    return contracts, generated
+
+
+def task_context(plan, reg, task):
+    """(routing snapshot of the task's owned paths alone, or None, reason). Each task resolves on its own: a batch
+    would let one task's paths change another's result (a handoff copy counts only next to its source). A repo the
+    registry does not know is resolved from the paths (plain_context)."""
+    info = repo_info(plan, reg, task["repo"])
+    if not info["registry"]:
+        return plain_context(task["repo"], task["paths"]), None
+    key = info["registry"]
+    owned = sorted(set(grade_paths(reg, key, task["paths"], info["path"])))
+    res, why = static_resolve(reg, key, owned)
+    if res is None:
+        return None, why
+    contracts, generated = owned_overlap(reg, key, owned)
+    contracts = sorted({c["id"] for c in res.get("contracts", [])} | set(contracts))
+    files = res.get("files", [])
+    return {"repos": [{
+        "repo": key, "touched": sorted({f["module"] for f in files if f.get("module")}),
+        "files": [{"path": f["path"], "source": "given"} for f in files],
+        "contracts": [{"id": c} for c in contracts],
+        "generated_hits": res.get("generated_hits", []) + generated}]}, None
+
+
+def task_grades(plan, reg, policy, tasks):
+    """task id -> {grade, source}: the plan's `grade`, else derived from the tier of the task's owned paths (S light, M
+    standard, L or a contract or generated path heavy), else the policy's default_grade."""
+    out, todo = {}, []
+    for t in tasks:
+        if t.get("grade") in model_policy.GRADES:
+            out[t["id"]] = {"grade": t["grade"], "source": "plan"}
+        else:
+            todo.append(t)
+    for t in todo:
+        ctx, why = task_context(plan, reg, t)
+        if ctx is None:
+            out[t["id"]] = {"grade": policy["default_grade"], "source": f"default_grade (tier unknown: {why})"}
+            continue
+        tier = tier_of(ctx, settings(reg))
+        heavy = tier["facts"]["contracts"] or tier["facts"]["generated"]
+        grade = "heavy" if heavy else TIER_GRADE[tier["tier"]]
+        out[t["id"]] = {"grade": grade, "source": f"tier {tier['tier']} of the owned paths"
+                        + (", contract or generated path" if heavy else "")}
+    return out
+
+
+def load_policy(reg):
+    """The model policy (registry pipeline.models plus the personal override file); a broken one exits 1."""
+    try:
+        return model_policy.load(reg)
+    except model_policy.PolicyError as e:
+        die(str(e), 1)
+
+
+def review_role(grade):
+    """A heavy task's (or subtask's) review runs with the heavy profile, so a hard diff gets a strong reviewer."""
+    return "heavy" if grade == "heavy" else "review"
+
+
+def session_model(a, agent, role):
+    """{model, effort, role} of one dispatched session: the policy's profile for the role (or --grade's), with --model /
+    --effort as explicit overrides that must stay inside the scope (else usage error, exit 2: nothing dispatched)."""
+    policy = a.policy
+    role = getattr(a, "grade", None) or role
+    try:
+        prof = model_policy.resolve(policy, agent, role)
+    except model_policy.PolicyError as e:
+        die(f"model policy: {e}", 1)
+    model, effort = getattr(a, "model", None) or prof["model"], getattr(a, "effort", None) or prof["effort"]
+    if not model_policy.in_scope(policy, agent, model, effort):
+        allowed = "; ".join(f"{m}: {', '.join(e)}" for m, e in (policy["scope"].get(agent) or {}).items()) or "none"
+        die(f"--model/--effort: {agent} {model} / {effort} is outside the model scope (registry pipeline.models.scope "
+            f"plus override; {agent}: {allowed}). Nothing was dispatched.")
+    return {"model": model, "effort": effort, "role": role}
+
+
 # ---------------------------------------------------------------- plan
 
 def read_json_file(path, what):
@@ -357,13 +585,13 @@ def norm_path(p):
     p = "/".join(x for x in s.split("/") if x not in ("", "."))
     if p and s.endswith("/"):
         p += "/"
-    return p.lower() if os.name == "nt" else p  # not normcase: it turns / into \ on Windows
+    return p.lower() if ICASE else p  # not normcase: it turns / into \ on Windows
 
 
 def specs(paths):
     """Git pathspecs for owned paths, matched the way norm_path() compares them: case-insensitive where the file system
     is (Windows), so a plan path in another case finds the same changes the owned-path check accepts."""
-    return [f":(icase){p}" for p in paths] if os.name == "nt" else list(paths)
+    return [f":(icase){p}" for p in paths] if ICASE else list(paths)
 
 
 def path_problem(p):
@@ -498,6 +726,10 @@ def validate(plan, reg):
             errors.append(f"task {tid}: repo `{t.get('repo')}` takes no worktree ({info['reason']}); drop `worktree: true`")
         if "orca_run" in t and not (isinstance(t["orca_run"], str) and t["orca_run"].strip()):
             errors.append(f"task {tid}: `orca_run` must be the task lead's Orca Run id (a non-empty string)")
+        if "grade" in t and t["grade"] not in model_policy.GRADES:
+            errors.append(f"task {tid}: grade {json.dumps(t['grade'])} is not one of {', '.join(model_policy.GRADES)}")
+        if "grade_reason" in t and not isinstance(t["grade_reason"], str):
+            errors.append(f"task {tid}: `grade_reason` must be a string")
         for d in t.get("deps", []):
             if d not in ids:
                 errors.append(f"task {tid}: unknown dependency {d}")
@@ -532,11 +764,62 @@ def validate(plan, reg):
             "no_worktree_repos": no_wt}
 
 
+def gradable(task):
+    """A task the model preview can grade: validation's errors already name anything else (paths that are not
+    non-empty repo-relative strings, an unknown grade), so the preview skips it instead of crashing."""
+    return (isinstance(task, dict) and isinstance(task.get("repo"), str) and task["repo"]
+            and isinstance(task.get("paths"), list) and task["paths"]
+            and all(path_problem(p) is None for p in task["paths"])
+            and (task.get("grade") is None or task.get("grade") in model_policy.GRADES))
+
+
+def plan_models(plan, reg, errors):
+    """What every session of the plan runs with (lead, and per task its grade, implement, review and QA), so the run
+    lead sees the cost before any dispatch. A broken policy or a role it cannot resolve is an error."""
+    pipe = settings(reg)
+    try:
+        policy = model_policy.load(reg)
+    except model_policy.PolicyError as e:
+        errors.append(str(e))
+        return None
+    out = {"lead": None, "tasks": {}}
+
+    def pick(agent, role, who):
+        try:
+            return dict(model_policy.resolve(policy, agent, role), agent=agent, role=role)
+        except model_policy.PolicyError as e:
+            errors.append(f"{who}: model policy: {e}")
+            return None
+    avail = pr.available(pipe, plan)
+    out["lead"] = pick(pr.choose(pipe.get("lead_agent") or "claude", "lead_agent", avail)[0], "lead", "task lead")
+    tasks = [t for t in plan.get("tasks") or [] if gradable(t) and id_ok(t.get("id"))
+             and repo_info(plan, reg, t["repo"])["path"]]
+    grades = task_grades(plan, reg, policy, tasks)
+    for t in tasks:
+        if any(t.get(k) is not None and (not isinstance(t[k], str) or t[k] not in pipe["agents"])
+               for k in ("implementer", "reviewer")):
+            continue  # validation already reports malformed agent fields
+        roles = pr.roles(pipe, t, avail)
+        impl, reviewer = roles["implement"][0], roles["review"][0]
+        if not isinstance(impl, str) or not isinstance(reviewer, str) or impl not in pipe["agents"]                 or reviewer not in pipe["agents"]:
+            continue
+        g = grades[t["id"]]
+        who = f"task {t['id']} ({g['grade']})"
+        out["tasks"][t["id"]] = dict(g, implement=pick(impl, g["grade"], who),
+                                     review=pick(reviewer, review_role(g["grade"]), who), qa=pick(roles["qa"][0], "qa", who))
+    return out
+
+
+def model_text(m):
+    return f"{m['agent']} {m['model']} {m['effort']}" if m else "unresolved"
+
+
 def cmd_validate(a, reg):
     plan = read_plan(a.plan)
     plan["_path"] = a.plan
     out = validate(plan, reg)
     out.pop("order")
+    out["models"] = plan_models(plan, reg, out["errors"])
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -548,6 +831,11 @@ def cmd_validate(a, reg):
             print(f"Wave {n}: {', '.join(w)}")
         if out["no_worktree_repos"]:
             print("No worktree (main checkout, one task at a time): " + ", ".join(out["no_worktree_repos"]))
+        if out["models"]:
+            print(f"Model: task lead {model_text(out['models']['lead'])}")
+            for tid, m in out["models"]["tasks"].items():
+                print(f"Model: task {tid} grade {m['grade']} ({m['source']}): implement {model_text(m['implement'])}, "
+                      f"review {model_text(m['review'])}, qa {model_text(m['qa'])}")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
 
@@ -558,7 +846,7 @@ SUBPLAN_SCHEMA = "rpg-factory.pipeline-subplan/1"
 PLACEMENTS = ("shared", "child")  # a subtask's session: the shared task worktree (default) or an Orca child of it
 SUBPLAN_KEYS = ("schema", "plan", "task", "subtasks")  # the schema's additionalProperties: false, here and per subtask
 SUBTASK_KEYS = ("id", "task", "objective", "paths", "deps", "implementer", "reviewer", "placement", "reason", "checks",
-                "acceptance", "kind")
+                "acceptance", "kind", "grade", "grade_reason")
 
 
 def validate_subplan(sub, plan, reg):
@@ -598,7 +886,7 @@ def validate_subplan(sub, plan, reg):
             errors.append(f"subtask {sid}: unknown key `{k}` (a subtask has {', '.join(SUBTASK_KEYS)})")
         if isinstance(s.get("id"), str) and s["id"] and not id_ok(s["id"]):
             errors.append(f"subtask {json.dumps(s['id'])}: id is not an id ({ID_RULE})")
-        for k in ("id", "task", "objective", "implementer", "reviewer", "placement", "reason"):
+        for k in ("id", "task", "objective", "implementer", "reviewer", "placement", "reason", "grade", "grade_reason"):
             if k in s and not isinstance(s[k], str):
                 errors.append(f"subtask {sid}: `{k}` must be a string, got {json.dumps(s[k])}")
                 clean.pop(k)
@@ -627,6 +915,8 @@ def validate_subplan(sub, plan, reg):
                 errors.append(f"subtask {sid}: missing `{k}`")
         if s.get("task") not in (None, tid):
             errors.append(f"subtask {sid}: belongs to task {s['task']}, not {tid}: one subplan splits one task")
+        if "grade" in s and s["grade"] not in model_policy.GRADES:
+            errors.append(f"subtask {sid}: grade {s['grade']} is not one of {', '.join(model_policy.GRADES)}")
         bad = [p for p in s.get("paths") or [] if path_problem(p)]
         for p in bad:
             errors.append(f"subtask {sid}: path {p} {path_problem(p)}")
@@ -691,6 +981,7 @@ def cmd_subplan(a, reg):
     plan = read_plan(path)
     plan["_path"] = path
     out = validate_subplan(sub, plan, reg)
+    out["models"] = subplan_models(sub, plan, reg, out["errors"])
     if a.json:
         print(json.dumps(out, indent=2))
     else:
@@ -702,8 +993,56 @@ def cmd_subplan(a, reg):
             print(f"Wave {n}: {', '.join(w)}")
         if out["serial"]:
             print(f"One subtask at a time (no worktree: {out['serial']})")
+        if out["models"]:
+            for sid, m in out["models"]["subtasks"].items():
+                print(f"Model: subtask {sid} grade {m['grade']} ({m['source']}): implement {model_text(m['implement'])}, "
+                      f"review {model_text(m['review'])}")
         print("OK" if not out["errors"] else f"INVALID ({len(out['errors'])} error(s))")
     return 1 if out["errors"] else 0
+
+
+def subplan_models(sub, plan, reg, errors):
+    """Per subtask: its grade (its own, else the task's) and the model and effort of its implement and review sessions.
+    A broken policy or a grade it cannot resolve for the subtask's model is an error. None when the task is unknown."""
+    pipe = settings(reg)
+    task = next((t for t in plan.get("tasks") or [] if isinstance(t, dict) and t.get("id") == sub.get("task")), None)
+    if task is None or not isinstance(task.get("repo"), str) or not isinstance(task.get("paths"), list)             or not task["paths"] or any(path_problem(p) for p in task["paths"]):
+        return None  # validation names what is wrong with the parent task
+    try:
+        policy = model_policy.load(reg)
+    except model_policy.PolicyError as e:
+        errors.append(str(e))
+        return None
+    if task.get("grade", "standard") not in model_policy.GRADES:  # the subtasks' inherited grade would be a guess
+        errors.append(f"task {task['id']}: grade {json.dumps(task['grade'])} is not one of {', '.join(model_policy.GRADES)}")
+        return None
+    tg = task_grades(plan, reg, policy, [task])[task["id"]]
+    out = {"task": tg, "subtasks": {}}
+    raw = sub.get("subtasks")  # validate_subplan already rejected anything but a list of objects
+    for s in raw if isinstance(raw, list) else []:
+        if not isinstance(s, dict) or not id_ok(s.get("id")):
+            continue
+        if any(s.get(k) is not None and (not isinstance(s[k], str) or s[k] not in pipe["agents"])
+               for k in ("implementer", "reviewer")):
+            continue  # validation already reports malformed agent fields
+        roles = pr.roles(pipe, s, pr.available(pipe, plan))
+        impl, reviewer = roles["implement"][0], roles["review"][0]
+        own = s.get("grade") in model_policy.GRADES
+        if "grade" in s and not own:
+            continue  # validate_subplan already named the bad grade
+        grade = s["grade"] if own else tg["grade"]
+        row = {"grade": grade, "source": "subplan" if own else f"task grade: {tg['source']}"}
+        for phase, agent, role in (("implement", impl, grade), ("review", reviewer, review_role(grade))):
+            if not isinstance(agent, str) or agent not in pipe["agents"]:
+                row[phase] = None  # validate_subplan already named the unknown reviewer
+                continue
+            try:
+                row[phase] = dict(model_policy.resolve(policy, agent, role), agent=agent, role=role)
+            except model_policy.PolicyError as e:
+                errors.append(f"subtask {s['id']} ({grade}): model policy: {e}")
+                row[phase] = None
+        out["subtasks"][s["id"]] = row
+    return out
 
 
 # ---------------------------------------------------------------- dispatch
@@ -767,12 +1106,25 @@ def resolve_runner(a):
             "naming why Orca cannot run this session")
 
 
-def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
+def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
+    """Print the session's dispatch: Orca worker-start, Agent-tool call or the plain prompt. `role` (planner, lead,
+    review, qa or a grade) picks the model and effort (session_model) before anything is printed or written."""
     pipe = settings(reg)
+    m = session_model(a, AGENT_FALLBACK if a.runner == "agent" else agent, role)
     if a.runner == "orca":
-        argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place, title=title)
+        argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place,
+                                     title=title, model=m["model"], effort=m["effort"])
         print(orca_cmd.quote(argv))
     elif a.runner == "agent":
+        alias = model_policy.alias(a.policy, m["model"])
+        if not alias:
+            die(f"--runner agent: {m['model']} has no Agent-tool model alias (registry pipeline.models.agent_tool_alias: "
+                "opus, sonnet or haiku); the Agent tool would run its default model, possibly outside the model scope. "
+                "Nothing was dispatched. Use --runner orca or print, or add the alias.")
+        prompt = (f"Model: {m['model']} ({m['role']} profile), planned effort {m['effort']}. The Claude Code Agent tool "
+                  f"takes the model alias {alias} but cannot set an effort: this session runs at its default effort.\n" + prompt)
+        print(f"factory-pipeline: --runner agent: model {alias or 'not settable'} ({m['model']}); effort {m['effort']} "
+              "cannot be set through the Agent tool (the session runs at its default effort)", file=sys.stderr)
         # the Agent-tool fallback (no Orca) is Claude only: a fresh Claude session, whatever model the plan names;
         # a session planned for another model says so, and its review counts as SAME_MODEL
         if agent != AGENT_FALLBACK:
@@ -789,9 +1141,10 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None):
                       "--runner agent.\n" + prompt)
             print(f"factory-pipeline: --runner agent with Orca unavailable ({a.orca_unavailable}): the prompt names the "
                   "reason", file=sys.stderr)
-        print(json.dumps(orca_cmd.agent_task(reg, agent, prompt, place, title), indent=2))
+        print(json.dumps(orca_cmd.agent_task(reg, agent, prompt, place, title, model=alias), indent=2))
     else:
-        print(f"# agent: {agent}   worktree: {place['worktree']}" + (f"   base: {place.get('base')}" if place.get("base") else "")
+        print(f"# agent: {agent}   model: {m['model']}   effort: {m['effort']}   worktree: {place['worktree']}"
+              + (f"   base: {place.get('base')}" if place.get("base") else "")
               + (f"   ({place['reason']})" if place.get("reason") else ""))
         print(prompt)
     if not shutil.which(pipe["agents"][agent]["bin"]):
@@ -818,9 +1171,15 @@ def now_utc():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def rubric_lines(policy, indent):
+    """The registry rubric, one `- grade: sentence` line per grade."""
+    return "".join(f"\n{indent}- {g}: {t}" for g, t in model_policy.rubric(policy).items())
+
+
 def cmd_planner(a, reg):
     resolve_runner(a)
     pipe = settings(reg)
+    a.policy = load_policy(reg)
     agent, why = pr.route(pipe, {"kind": "plan", "implementer": a.agent}, pr.available(pipe, None))
     print(f"model: plan -> {agent} ({why})", file=sys.stderr)
     prompt = ("You are the planner of a Factory delivery pipeline. Read-only: change no file except the plan file.\n"
@@ -829,11 +1188,14 @@ def cmd_planner(a, reg):
               "2. Break the work into small tasks with disjoint owned paths; order dependent tasks with `deps`.\n"
               "   A repo with `worktrees: false` (Unity project) runs its tasks one after another: give each the full\n"
               "   implement -> review -> QA cycle before the next.\n"
+              "   Grade each task light|standard|heavy with the rubric (registry pipeline.models.rubric) and write `grade`\n"
+              "   and `grade_reason` (one line) per task; the grade picks the model and effort of its sessions:"
+              + rubric_lines(a.policy, "   ") + "\n"
               f"3. Write plan.json ({SCHEMA}, docs/schemas/pipeline-plan.schema.json) and run\n"
               "   `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py validate plan.json` until it prints OK.\n"
-              "4. Report the plan path, waves and any open question. Do not implement.")
+              "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.")
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
-    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}")
+    emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
     return 0
 
 
@@ -867,10 +1229,11 @@ def excluded_by(path, exclusions):
     return any(inside_owned(path, [x]) or inside_owned(x, [path]) for x in exclusions)
 
 
-def emit_lead_handoff(reg, agent, prompt, place, branch):
+def emit_lead_handoff(reg, agent, prompt, place, branch, m):
     """`orca agent launch` in an existing checkout, or `orca worktree create --agent` for the new task worktree: the task
-    lead is not an Orca worker of the run lead (Orca forbids nested workers, max depth 1)."""
+    lead is not an Orca worker of the run lead (Orca forbids nested workers, max depth 1). `m`: its model and effort."""
     entry = settings(reg)["agents"][agent]
+    flags = orca_cmd.model_flags(m["model"], m["effort"])
     if place.get("new"):
         argv = ["orca", "worktree", "create", "--name", branch]
         for flag, key in (("--repo", "repo"), ("--base-branch", "base")):
@@ -878,10 +1241,10 @@ def emit_lead_handoff(reg, agent, prompt, place, branch):
                 argv += [flag, place[key]]
         # an Orca child of the integration checkout (default); --no-parent without one or with --placement shared
         lineage = ["--parent-worktree", f"path:{place['parent']}"] if place.get("parent") else ["--no-parent"]
-        argv += ["--branch", branch, *lineage, "--agent", entry["orca_agent"], "--prompt", prompt, "--json"]
+        argv += ["--branch", branch, *lineage, "--agent", entry["orca_agent"], "--prompt", prompt, *flags, "--json"]
     else:
         argv = ["orca", "agent", "launch", "--agent", entry["orca_agent"], "--worktree", place["worktree"], "--prompt", prompt,
-                "--json"]
+                *flags, "--json"]
     print(orca_cmd.quote(argv))
     if not shutil.which(entry["bin"]):
         print(f"factory-pipeline: `{entry['bin']}` is not on PATH here: the {agent} task lead may be unavailable",
@@ -893,7 +1256,7 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/parallel-work.md)."""
     me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
@@ -910,7 +1273,11 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
         "the runtime unreachable: --runner agent --orca-unavailable REASON.",
         "2. Split into short subtasks with disjoint paths inside owned_paths (many short parallel sessions beat one long "
         f"one); write subplan.json (docs/schemas/pipeline-subplan.schema.json; `plan` is {os.path.abspath(plan['_path'])}, "
-        f"`task` is {task['id']}) and run `<pipeline> subplan validate <subplan.json>` until it prints OK.",
+        f"`task` is {task['id']}) and run `<pipeline> subplan validate <subplan.json>` until it prints OK. Grade each "
+        "subtask light|standard|heavy with the rubric below (registry pipeline.models.rubric) and write `grade` + "
+        f"`grade_reason` per subtask (none: the task's grade, {spec.get('grade', 'standard')}); validate prints the model and "
+        "effort each session runs with. Dispatch picks --model/--effort from the policy; never pass one outside its "
+        "scope (exit 2).",
         f"3. Per subtask ONE fresh session in {where}: `{d} --phase implement --subplan <subplan.json> --subtask <id> "
         "--runner orca`. placement shared (default): it edits only its paths and does NOT commit (one shared index); "
         f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}",
@@ -933,6 +1300,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None):
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/parallel-work.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(rules)
+            + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
                "worktree. Start after the previous task of this repo has its QA verdict. Subtasks, review and QA run "
                "one after another in this checkout; a Unity test run is an exclusive resource."
@@ -1037,6 +1405,7 @@ def load_subtask(a, plan, reg, task):
 def cmd_dispatch(a, reg):
     resolve_runner(a)
     pipe = settings(reg)
+    a.policy = load_policy(reg)
     plan = read_plan(a.plan)
     plan["_path"] = a.plan
     v = validate(plan, reg)
@@ -1093,7 +1462,7 @@ def cmd_dispatch(a, reg):
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
                             tiers=pipe.get("qa_tiers"))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
-        emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan)
+        emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
     task = find_task(plan, a.task)
@@ -1114,6 +1483,16 @@ def cmd_dispatch(a, reg):
             "owned_paths": task["paths"], "exclusions": task.get("exclusions", []), "deps": task.get("deps", []),
             "checks": task.get("checks", []), "acceptance": task["acceptance"], "branch": branch,
             "base": start_base(plan, info, task)}
+    # the task's grade (plan, else derived from its tier) and the grade of this session's work (a subtask's own grade
+    # wins): implement runs with that grade's profile, review with heavy for heavy work, else review
+    grade = None
+    if a.phase in ("lead", "implement", "review"):
+        grade = task_grades(plan, reg, a.policy, [task])[task["id"]]["grade"]
+        if a.phase != "lead" and (sub or {}).get("grade"):
+            grade = sub["grade"]
+        spec["grade"] = grade
+        if a.phase == "lead" and task.get("grade_reason"):
+            spec["grade_reason"] = task["grade_reason"]
     if a.phase in ("lead", "implement") and not info["worktrees"]:
         prev = serial_predecessor(plan, reg, task)
         if prev and (verdict_of(plan, reg, prev, "qa")[0] or {}).get("state") != "PASS":
@@ -1141,15 +1520,17 @@ def cmd_dispatch(a, reg):
                     print(f"factory-pipeline: no worktree of {info['path']} has the integration branch {plan['topic']} "
                           "checked out: the task worktree is created with --no-parent (no Orca parent)", file=sys.stderr)
             where = "this task worktree"
-        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to)
+        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy)
         lead = model_roles["lead"][0]
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
         if a.runner == "orca":  # Orca has no nested workers: the task lead is a handoff with its own Run, not a worker
-            emit_lead_handoff(reg, lead, orca_prompt(a, prompt, plan), place, branch)
+            # resolved before orca_prompt writes the spec: outside the scope, nothing is written
+            m = session_model(a, lead, "lead")
+            emit_lead_handoff(reg, lead, orca_prompt(a, prompt, plan), place, branch, m)
         else:
-            emit(a, reg, lead, prompt, place, f"lead {plan['id']}/{task['id']}")
+            emit(a, reg, lead, prompt, place, f"lead {plan['id']}/{task['id']}", role="lead")
         child_note(place)
         return 0
     if a.phase != "implement" and not a.sha:
@@ -1211,7 +1592,7 @@ def cmd_dispatch(a, reg):
                          if not info["worktrees"] else ""))
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
-        started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan)
+        started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
         # an ad hoc --paths session of its own model (no subtask id) is a slice: the task's record keeps its implementer
         if a.runner != "print" and (sub or not (a.paths and a.agent)):
             pr.record(plan, task["id"], sid, "implementer",
@@ -1245,7 +1626,7 @@ def cmd_dispatch(a, reg):
                             runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"))
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
-        emit(a, reg, agent, prompt, place, title, plan)
+        emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
     if agent == sub_impl:
@@ -1265,7 +1646,7 @@ def cmd_dispatch(a, reg):
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
-    started = emit(a, reg, agent, prompt, place, title, plan)
+    started = emit(a, reg, agent, prompt, place, title, plan, role=review_role(grade))
     full, rc = git(info["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     sha = full if rc == 0 and full else a.sha
     # what verdict reads: a fallback is stamped only for this reviewer on this candidate, never from availability later
@@ -1769,6 +2150,9 @@ def cmd_verdict(a, reg):
         if (a.fallback is None and disp and disp.get("fallback") and disp["agent"] == a.by == impl
                 and full.startswith(str(disp.get("sha")))):
             rec["fallback"] = disp["fallback"]
+    for k in ("model", "effort"):  # what the session ran with (optional), so reports show it
+        if getattr(a, k, None):
+            rec[k] = getattr(a, k)
     kept = candidate_file(plan, a.task, a.phase, full, a.by, a.subtask)
     fstate.write_json(kept, rec, indent=2)
     path = verdict_file(plan, a.task, a.phase, a.subtask)
@@ -1788,7 +2172,7 @@ def cmd_verdict(a, reg):
             return 0
     fstate.write_json(path, rec, indent=2)
     print(f"recorded {a.phase} {a.state} for {a.task}" + (f" subtask {a.subtask}" if a.subtask else "")
-          + f" at {a.sha[:10]} by {a.by}: {path}")
+          + f" at {a.sha[:10]} by {a.by}" + "".join(f" {rec[k]}" for k in ("model", "effort") if k in rec) + f": {path}")
     return 0
 
 
@@ -2627,6 +3011,9 @@ def main():
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)
         d.add_argument("--orca-unavailable", metavar="REASON")
         d.add_argument("--agent")
+        d.add_argument("--grade", choices=model_policy.GRADES)
+        d.add_argument("--model", metavar="ID")
+        d.add_argument("--effort", metavar="LEVEL")
     v = sub.add_parser("verdict")
     v.add_argument("plan")
     v.add_argument("--task", required=True)
@@ -2648,6 +3035,8 @@ def main():
     change.add_argument("--up")
     ag.add_argument("--reason", default="")
     ag.add_argument("--json", action="store_true")
+    v.add_argument("--model", metavar="ID")
+    v.add_argument("--effort", metavar="LEVEL")
     st = sub.add_parser("status")
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")

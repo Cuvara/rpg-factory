@@ -94,7 +94,13 @@ def child_placement(name, base, parent):
             "reason": f"Orca child of {parent}"}
 
 
-def worker_start(spec, agent, place, title=None):
+def model_flags(model=None, effort=None):
+    """`--model ID --effort LEVEL` for an Orca session (worker-start, worktree create, agent launch); the pipeline's model
+    policy (lib/model_policy.py) chose them inside its scope."""
+    return (["--model", model] if model else []) + (["--effort", effort] if effort else [])
+
+
+def worker_start(spec, agent, place, title=None, model=None, effort=None):
     """argv for `orca orchestration worker-start --spec ...` (the spec creates its own Orca task)."""
     argv = ["orca", "orchestration", "worker-start", "--spec", spec, "--agent", agent, "--worktree", place["worktree"]]
     if place.get("new"):
@@ -105,7 +111,7 @@ def worker_start(spec, agent, place, title=None):
                 argv += [flag, place[key]]
     if title:
         argv += ["--task-title", title]
-    return argv + ["--json"]
+    return argv + model_flags(model, effort) + ["--json"]
 
 
 def _toplevel(path):
@@ -117,15 +123,19 @@ def _toplevel(path):
     return os.path.normcase(os.path.realpath(r.stdout.strip())) if r.returncode == 0 and r.stdout.strip() else None
 
 
-def agent_task(registry, agent, prompt, place, description, cwd=None):
-    """Claude Code Agent tool call (fallback when Orca is unavailable). `isolation: worktree` copies the lead's own
-    repository at the lead's HEAD, so it is used only when the target is that repository and no other base is
-    needed; otherwise the prompt names the repo, base and branch and the worker creates its worktree with git. An Orca
-    child placement (new-child) always uses `isolation: worktree`: the session itself never creates a worktree."""
+def agent_task(registry, agent, prompt, place, description, cwd=None, model=None):
+    """Claude Code Agent tool call (fallback when Orca is unavailable). `model` is the Agent tool's model alias (opus,
+    sonnet, haiku: registry pipeline.models.agent_tool_alias); the Agent tool cannot set an effort.
+    `isolation: worktree` copies the lead's own repository at the lead's HEAD, so it is used only when the target is
+    that repository and no other base is needed; otherwise the prompt names the repo, base and branch and the worker
+    creates its worktree with git. An Orca child placement (new-child) always uses `isolation: worktree`: the session
+    itself never creates a worktree."""
     runner = registry.get("pipeline", {}).get("agents", {}).get(agent, {}).get("agent_runner", "general-purpose")
     target = place.get("repo", "")[5:] if str(place.get("repo", "")).startswith("path:") else None
     here = _toplevel(cwd or os.getcwd())
     call = {"subagent_type": runner, "description": description, "prompt": prompt}
+    if model:
+        call["model"] = model
     if place.get("worktree") == "new-child":
         # only the dispatching tool creates worktrees: the Agent tool's own isolation copy of the caller's checkout
         # stands in for the Orca child; the session never runs `git worktree add`

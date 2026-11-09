@@ -164,6 +164,18 @@
           "reason": {
             "type": "string",
             "description": "Explains an implementer override or placement choice."
+          },
+          "grade": {
+            "enum": [
+              "light",
+              "standard",
+              "heavy"
+            ],
+            "description": "Model grade of the task (registry pipeline.models.rubric). Default: derived from its tier (S light, M standard, L or contract/generated paths heavy). Its implement sessions run with the grade's profile; a heavy task's review runs with the heavy profile."
+          },
+          "grade_reason": {
+            "type": "string",
+            "description": "One line: why this grade (the rubric sentence it matches)."
           }
         },
         "additionalProperties": false

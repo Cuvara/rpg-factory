@@ -101,6 +101,18 @@
               "refactor",
               "generated"
             ]
+          },
+          "grade": {
+            "enum": [
+              "light",
+              "standard",
+              "heavy"
+            ],
+            "description": "Model grade of the subtask (registry pipeline.models.rubric). Default: the task's grade. Its implement session runs with the grade's profile."
+          },
+          "grade_reason": {
+            "type": "string",
+            "description": "One line: why this grade (the rubric sentence it matches)."
           }
         },
         "anyOf": [

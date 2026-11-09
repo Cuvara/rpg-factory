@@ -1,6 +1,8 @@
 {
  "schema": "rpg-factory.assetgen-style/1",
  "title": "Flat UI",
+ "version": 1,
+ "status": "active",
  "prefix": "Flat vector-style game UI element,",
  "suffix": "clean shapes, consistent corner radius, crisp edges.",
  "avoid": [

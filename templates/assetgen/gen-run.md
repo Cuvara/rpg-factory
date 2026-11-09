@@ -97,6 +97,17 @@
       "prompt_sha256": null,
       "requirements_sha256": null,
       "outputs": []
+    },
+    "claude_image_review": {
+      "by": null,
+      "state": "NOT_RUN",
+      "findings": 0,
+      "prompt_sha256": null,
+      "requirements_sha256": null,
+      "outputs": []
+    },
+    "trace": {
+      "failed_attempts": []
     }
   }
 }
@@ -114,6 +125,11 @@ hand-edit a generated record; fix the run and re-run `manifest`.
   for the image review also the generation inputs of `workflow.json`) or other images is stale. `by` names the reviewing model and must differ from
   `prompt_author`. When the independent reviewer is unavailable, a same-model review is
   recorded explicitly as `"by": "SAME_MODEL:<model>"` (quality WARN, never a silent PASS).
+- Claude's own visual review: `review-image-claude.json`, the same schema and binding with `"by": "claude"`, written
+  by the agent and summarised as `claude_image_review`. Quality WARNs when it is missing; it never replaces the
+  independent `review-image.json`.
+- Failed attempts: an attempt that failed for good keeps its run directory without `run.md`, and the next attempt
+  takes the next number. `trace.failed_attempts` lists those earlier run ids of the series.
 - Status: approval is human-only (gate `assetgen-approval`); only an approved run hands its images to 2D Art, 3D
   Art, UI/UX or VFX (`assetgen-to-<domain>`).
 

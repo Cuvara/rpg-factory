@@ -1,6 +1,8 @@
 {
  "schema": "rpg-factory.assetgen-style/1",
  "title": "Realistic PBR",
+ "version": 1,
+ "status": "active",
  "prefix": "Realistic physically based game asset,",
  "suffix": "accurate materials, natural roughness variation, neutral color balance.",
  "avoid": [

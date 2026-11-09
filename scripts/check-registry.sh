@@ -325,6 +325,20 @@ PY2
 )
 [ -n "$rx_err" ] && problems="${problems:+$problems$'\n'}$rx_err"
 
+# pipeline.models: every profile inside scope, every role and grade present per agent (lib/model_policy.py)
+mp_err=$(python3 -B - "$REGISTRY" "$PLUGIN_ROOT/scripts/lib" <<'PY4'
+import json, sys
+sys.path.insert(0, sys.argv[2])
+import model_policy
+try:
+    for e in model_policy.check(model_policy.policy_of(json.load(open(sys.argv[1], encoding="utf-8")))):
+        print("pipeline.models: " + e)
+except model_policy.PolicyError as exc:
+    print(str(exc))
+PY4
+)
+[ -n "$mp_err" ] && problems="${problems:+$problems$'\n'}$mp_err"
+
 all=$(printf '%s%s' "${problems:+$problems$'\n'}" "$missing" | sed '/^$/d')
 if [ -n "$all" ]; then
   echo "$all"

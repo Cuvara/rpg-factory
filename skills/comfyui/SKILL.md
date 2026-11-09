@@ -39,14 +39,28 @@ lead's workflow asks for in a run directory or the game layer.
   game: `assetgen/{purposes,styles,templates}/`. The id is the file name.
 - **Precedence:** a game file with a core id and no `extends` replaces it; `"extends": "<id>"` deep-merges onto it
   (objects key by key, the game wins; lists and scalars replace). Params, low to high: template default < style <
-  purpose < `render --param`. `resolve` prints the source file of every field and param.
+  purpose < `render --param`. `resolve --verbose` prints the source file of every field and param. A purpose's
+  `constraints` (`scripts/assetgen/data/precedence.json`) win over the style's hint of the same name (`spec.hints`).
 - **Template format** (`templates/assetgen/workflows/image-generate.json`): `params` (`type` string, int, number,
   bool or enum with `options`; `default`; `required`), `output_node` (a SaveImage node id), `workflow` (ComfyUI API
   format `{"<id>": {"class_type", "inputs"}}`, links `["<node id>", <output index>]`). `{{name}}` as the whole string
   takes the typed value; inside a longer string it is text. `render` fails on an undeclared or missing param.
+- **Two renders of one graph:** `render` writes `<run>/workflow.json` (API format, what `run_workflow` runs and the
+  review binds) and `<run>/workflow.ui.json` (ComfyUI frontend / LiteGraph format: node positions and sizes, titles,
+  links, `widgets_values` in input order, the run id in `extra`), which converts back to the same API graph. The prompt
+  is a `PrimitiveStringMultiline` node ("Text (Multiline)", input `value`) titled `Prompt (Claude, Codex review <state>)`, linked into `NineRouterImage.user_prompt` (`render --run` fills the state
+  of `review-prompt.json`: `STALE` when its prompt or requirements hash no longer matches, and a non-Codex reviewer
+  replaces `Codex review`, e.g. `review SAME_MODEL:claude WARN`).
 - **Image node:** the core templates use the 9router custom node `NineRouterImage` (`user_prompt`, `model`, `size`,
   `quality`, `background`, optional `reference_images`) into `SaveImage`; `NineRouterChat` is the text node. Their
   inputs are snapshotted in `scripts/assetgen/data/known-nodes.json` for offline lint.
+- **Anchor wiring** (style lock, `scripts/assetgen/assetgen.py` `wire_references`): for each anchor
+  `spec.style_lock.references` selected, `render --run` copies its image to `<run>/references/anchor-<id>.png` and adds
+  a `LoadImage` node (`image` `anchor-<id>.png`, title `Anchor <id> (<strength>)`) plus a chain of core `ImageBatch`
+  nodes (`image1`, `image2`) whose output feeds `NineRouterImage.reference_images`; an existing `reference_images`
+  link (image-edit) is `image1` of the first batch, so the edit's own image stays first. New node ids are the next free
+  integers, in both `workflow.json` and `workflow.ui.json`. Selection and its order are the engine's
+  (`scripts/assetgen/stylelock.py` docstring), never edited in the graph.
 - **comfy-mcp** is the official Comfy-Org MCP server (stdio), MCP name `comfy-mcp`, tool ids
   `mcp__comfy-mcp__<tool>`. It talks to the ComfyUI its `COMFY_LOCAL_URL` env names. Ports: registry services
   `comfyui` (headless `main.py`, default port) and `comfyui-desktop` (Comfy Desktop's own port):
@@ -55,24 +69,49 @@ lead's workflow asks for in a run directory or the game layer.
 ## Idioms
 
 - **Run sequence:** `server_info` (version, nodes present) -> `validate_workflow` (`<run>/workflow.json` against the
-  live node list) -> `upload_file` (image-edit reference; returns the input-folder name) -> `run_workflow`
-  (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`).
-  `nodes`, `list_workflow_slots` and `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
+  live node list) -> `upload_file` (every `<run>/references/*` file under its own name: the image-edit reference and
+  each `anchor-<id>.png`; returns the input-folder name) -> `run_workflow`
+  (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs` (`prompt_id`, `out_dir` `<run>/outputs`)
+  -> for a purpose with alpha `assetgen.py defringe --run <run>` -> `assetgen.py embed --run <run>` (mandatory, before
+  `qa`). `nodes`, `list_workflow_slots` and `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
+- **Node pack version:** read the `comfyui_9router` pack in `server_info`; when it is outdated, report it with its
+  version and let the user update it - never `update_comfyui`, `install_node` or any other update yourself.
+  The outdated flag compares the pack's hash with ComfyUI's own commit, so it is unreliable for a pack inside the
+  ComfyUI checkout: report it as unverified, and never prompt or perform an update on that signal alone.
+- **See the run in ComfyUI:** `assetgen.py publish --run <run> --comfy-url <URL>` (optional, only when ComfyUI is
+  reachable) uploads `workflow.ui.json` through ComfyUI's userdata API, so it shows under Workflows > assetgen.
+  Exit 0 PASS, 1 FAIL (an HTTP error), 2 usage (bad run id or URL), 3 `NOT_AVAILABLE` (connection refused); it
+  writes nothing locally. Dragging an embedded output PNG into ComfyUI restores the
+  laid-out graph too.
 - **Setup** (once, the user's machine): install the `comfy-mcp` package into a Python env, register it for Claude as
   `comfy-mcp` with `COMFY_LOCAL_URL` set to the running ComfyUI, start ComfyUI (Desktop or headless). A newly added
   MCP server loads only in a new session.
 - **Add a purpose:** copy the closest `templates/assetgen/purposes/*.json` (game layer for one game, core for all),
-  keep the schema id, write guidance, both rubrics, `qa` (size `mode` exact|min|aspect|any, `alpha`
-  required|forbidden|any, `transparent_corners`, `tileable`, `not_blank`) and `handoff_domain`. Add a style the
+  keep the schema id, write guidance, both rubrics, `constraints` (only the technical hints of
+  `data/precedence.json`; lint fails any other), `qa` (size `mode` exact|min|aspect|orientation|area|any;
+  aspect, orientation and area take the floors `min_side` and `min_pixels`, aspect `aspect_tolerance` and `min_area`
+  (the share of the expected pixel count), orientation `orientation`, `square_tolerance` and `allow_swap`; `alpha`
+  required|forbidden|any, `transparent_corners`, `tileable`, `not_blank`) and `handoff_domain`. `lint` reports a bad
+  game value on the game file that holds it, never on the core file it extends. Add a style the
   same way. **Add a template:** API-format graph with placeholders, every placeholder a declared param, `output_node`
   set; then `assetgen.py lint [--authoring <A>]` and a live `validate_workflow`.
 - **Game override:** prefer `extends` with only the changed fields, so core fixes still reach the game.
+- **Style data for the checks:** structured style fields (`palette` colours, `outline.edge_darkness`, `canvas` per
+  family, `tone`, `forbidden`) and purpose `default_family`, `dimensions`, `max_references`, `qa.outlines` are data;
+  a field may stay prose (its `text` is the hint). A changed style gets a new `version` (`docs/architecture/domains/assetgen.md` "Style lock").
 
 ## Pitfalls
 
-- **The returned size can differ from the requested one:** the gateway has answered a square request with a
-  landscape image. The purpose QA's size mode handles it; `exact` is opt-in (`scripts/assetgen/qa.py` docstring,
-  `size` param description in `templates/assetgen/workflows/image-generate.json`).
+- **The returned size can differ from the requested one, or ignore it entirely** (known issue): the gateway has
+  answered a square request with a landscape image, and a 1536x1024 turnaround request with a 2172x724 strip (same
+  pixel count); in the live style-lock e2e of 2026-11-08 it returned 1672x941 for both a 1536x1024 and a 1024x1024
+  request, 1322x1190 for a square sprite and 1024x1536 for a 1536x1024 request. So no core purpose's size QA grades
+  the exact size: it grades orientation, aspect or area, a minimum area and a minimum short side that real outputs
+  meet (square purposes `icon`, `sprite-2d`, `texture-tileable`: `square_tolerance` 0.15, so 1322x1190 is square;
+  `qa.size.allow_swap`, default false, accepts the swapped orientation, false in `ref-3d-turnaround`), per purpose in
+  data; `exact` is opt-in (`scripts/assetgen/qa.py` docstring, `size` param in `templates/assetgen/workflows/image-generate.json`). A size FAIL from the
+  service is not fixed by a new prompt: `asset-gen` stops regenerating. `review-cmd --phase image` states each
+  output's true size and QA's verdict; the reviewer does not grade size again.
 - **A model id the gateway does not serve passes `validate_workflow`** (the `model` input is a free STRING) and fails
   only at run time. Known bad ids are `warn_values` in `scripts/assetgen/data/known-nodes.json`; the working default
   is the template's `model` param - never hard-code an id in a prompt or skill.
@@ -84,20 +123,38 @@ lead's workflow asks for in a run directory or the game layer.
 - **LoadImage reads ComfyUI's input folder, not the run directory:** upload the reference with `upload_file` and pass
   the returned name as `reference_image` (`templates/assetgen/workflows/image-edit.json`); keep the original as
   `<run>/references/<that name>` too, or the gen-run quality plugin fails provenance and cannot bind it.
-- **SaveImage writes into ComfyUI's output folder** under `filename_prefix` (`render --run` sets
-  `assetgen/<run-id>`, `scripts/assetgen/assetgen.py` `render`); only `fetch_outputs` puts the PNGs into the run.
-- **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`):
-  `COMFY_LOCAL_URL` pointing at the one that is not running makes every tool fail while the snapshot shows the other
-  service up.
+- **`run_workflow` opens no canvas tab:** it posts the API graph to ComfyUI's `/prompt` queue, so a person who opens
+  ComfyUI sees no workflow until `publish` uploads `workflow.ui.json` (`scripts/assetgen/assetgen.py` `publish`).
+- **Fetched PNGs carry no workflow:** comfy-mcp sends no `extra_pnginfo`, so a PNG holds only the `prompt` text chunk;
+  `embed` adds the `workflow` chunk (keeps `prompt`; idempotent when equal, a stale chunk is replaced). Run it before
+  `qa`: QA and the reviews bind the hash of the embedded file (`scripts/assetgen/assetgen.py` `embed`).
+- **Transparent outputs carry an edge fringe:** the service leaves orange or red speckled colour in the RGB of pixels
+  with alpha 1-31 (and body alpha 251-254), invisible on a checkerboard and visible on a dark background. `defringe`
+  (after `fetch_outputs`, before `embed` and `qa`; originals in `outputs-raw/`, the step in `defringe.json`; once `qa.json`
+  or an image review binds the outputs, `defringe --run <run> --force`, then `embed`, `qa` and both image reviews again)
+  bleeds opaque neighbour colour into those pixels, QA's `png-edge-fringe` row (purposes with `qa.alpha` required) grades it
+  (`scripts/assetgen/qa.py`), and the image reviews see `review/composite-dark.png` and `-light.png`. Both take 8-bit PNGs only (IHDR bit depth): another depth is `skipped` untouched, no preview (`depth_refusal`).
+- **SaveImage writes into ComfyUI's output folder** under `filename_prefix`: `resolve --out <run>/spec.json` records
+  `assetgen/<run-id>` and `render --run` requires that value and refuses `--param filename_prefix`
+  (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`
+  again. Only `fetch_outputs` puts the PNGs into the run.
+- **Anchors need the same upload as an edit reference:** the anchor `LoadImage` nodes name `anchor-<id>.png` in
+  ComfyUI's input folder, so upload every `references/anchor-*.png` before `run_workflow`. `render --run` refuses an
+  anchor whose image changed since `resolve` (resolve again), and a template with other than exactly one
+  `NineRouterImage` node cannot take anchors (`scripts/assetgen/assetgen.py` `copy_anchors`, `wire_references`).
+- **Desktop and headless use different ports** (`registry/core.json` services `comfyui`, `comfyui-desktop`): a
+  `COMFY_LOCAL_URL` at the one not running fails every tool while the snapshot shows the other service up.
 
 ## Testing
 
-- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose, lint, review-cmd, PNG QA,
-  manifest and the quality plugin (temp authoring repo, no network, no ComfyUI).
+- `tests/assetgen.test.sh`: layers, override precedence, render goldens per purpose (API and UI format, the UI
+  graph converted back equals the API graph), hints and lint blame, review-cmd, embed, defringe, publish against a
+  fake HTTP server, PNG QA (real returned sizes, a fixture with a coloured low-alpha fringe), style lock (project config, anchors, selection, anchor wiring, consistency rows, drift), manifest
+  and the quality plugin (temp authoring repo, no network, no ComfyUI).
 - `assetgen.py lint --authoring <A>` for data; `validate_workflow` for the live node check. A real generation needs
   ComfyUI and comfy-mcp up; without them it is `NOT_RUN`, never PASS.
 
 ## Tools
 
 - `comfy-mcp`: the run sequence above (Idioms). Not OK: `assetgen.py render` only; generation `NOT_RUN` and a
-  person runs `workflow.json` in ComfyUI.
+  person loads `workflow.ui.json` in ComfyUI.

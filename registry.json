@@ -418,7 +418,104 @@
     "available_agents": [
       "claude",
       "codex"
-    ]
+    ],
+    "models": {
+      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice').",
+      "scope": {
+        "claude": {
+          "claude-opus-5-5": [
+            "medium",
+            "high"
+          ],
+          "claude-sonnet-5-5": [
+            "medium",
+            "high"
+          ]
+        },
+        "codex": {
+          "gpt-6.1-sol": [
+            "medium",
+            "high"
+          ],
+          "gpt-6.1-terra": [
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "agent_tool_alias": {
+        "claude-opus-5-5": "opus",
+        "claude-sonnet-5-5": "sonnet"
+      },
+      "profiles": {
+        "claude": {
+          "lead": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "planner": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "heavy": {
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "standard": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          },
+          "light": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          },
+          "review": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "qa": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        },
+        "codex": {
+          "lead": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "planner": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "heavy": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "standard": {
+            "model": "gpt-6.1-terra",
+            "effort": "high"
+          },
+          "light": {
+            "model": "gpt-6.1-terra",
+            "effort": "high"
+          },
+          "review": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "qa": {
+            "model": "gpt-6.1-terra",
+            "effort": "high"
+          }
+        }
+      },
+      "default_grade": "standard",
+      "rubric": {
+        "light": "Mechanical or well-bounded change: rename, typo, doc or text edit, config value, one small function, a test that copies an existing pattern; the answer is obvious from the surrounding code.",
+        "standard": "Ordinary feature or fix inside one module that follows existing patterns and needs some design, new tests and a few connected files.",
+        "heavy": "Hard or risky change: contract, wire or generated paths, concurrency, ECS or tick-loop internals, security or data migration, cross-module refactor, or anything where a wrong guess is costly to find."
+      }
+    }
   },
   "global_rules": [
     {
@@ -3915,7 +4012,7 @@
       "responsibility": "AI image generation: the game layer of asset-gen purposes, styles and ComfyUI workflow templates, and generation run records (gen-run) with prompt, reviews, QA and output hashes.",
       "depends_on": [],
       "rules": [
-        "Approval of a gen-run is human-only (gate assetgen-approval); agents never write approvals.",
+        "Approval of a gen-run is human-only (gate assetgen-approval): an agent runs assetgen.py approve-record only on the person's explicit word (quoted), never approves on its own, and the person commits run.md and the approval record in one signed commit.",
         "The prompt and image reviews come from a model other than the prompt author; a same-model review is an explicit SAME_MODEL fallback, never a silent pass.",
         "No credentials, endpoints or provider URLs in templates or run records; the ComfyUI node reads its own credentials."
       ],
@@ -3937,6 +4034,11 @@
             "id": "assetgen-quality",
             "run": "python3 -B {plugin_root}/scripts/checks/artifact-quality.py . --registry {plugin_root}/registry.json --domain assetgen",
             "evidence": "Generation runs: reviewer model differs from the prompt author, QA PASS recorded, output hashes match the files, provenance complete, purpose/style/template refs resolve."
+          },
+          {
+            "id": "assetgen-lint",
+            "run": "python3 -B {plugin_root}/scripts/assetgen/assetgen.py lint --authoring .",
+            "evidence": "Game-layer asset-gen data offline: purposes, styles, templates, assetgen/project.json, anchors (an active anchor needs a person's approval, its image hash and an approved source gen-run with a run.md) and rejections; no URL or credential."
           }
         ],
         "extended": [],
@@ -6368,7 +6470,8 @@
       "quality_gates": [
         "artifact-lint",
         "artifact-trace",
-        "assetgen-quality"
+        "assetgen-quality",
+        "assetgen-lint"
       ],
       "human_gates": [
         "assetgen-approval"
@@ -7955,6 +8058,7 @@
         ],
         "proposed": [
           "reviewed",
+          "approved",
           "rejected",
           "blocked"
         ],

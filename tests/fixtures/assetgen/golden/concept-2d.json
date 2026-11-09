@@ -9,7 +9,10 @@
    "model": "cx/gpt-5.6-sol-image",
    "quality": "high",
    "size": "1536x1024",
-   "user_prompt": "Test prompt for concept-2d: one subject, centered."
+   "user_prompt": [
+    "3",
+    0
+   ]
   }
  },
  "2": {
@@ -23,6 +26,15 @@
     "1",
     0
    ]
+  }
+ },
+ "3": {
+  "_meta": {
+   "title": "Prompt (Claude, Codex review NOT_RUN)"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "Test prompt for concept-2d: one subject, centered."
   }
  }
 }
