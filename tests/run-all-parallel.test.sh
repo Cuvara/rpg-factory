@@ -180,11 +180,14 @@ runall_prepare; rc=$?
 [ "$rc" = 10 ] && exit 0
 [ "$rc" = 0 ] || exit "$rc"
 [ -z "${HOLD_MARK:-}" ] || { touch "$HOLD_MARK"; while [ ! -f "$HOLD_MARK.release" ]; do sleep 0.1; done; }
+if ! $workspace_only; then
 run a bash tests/a.sh
 run b bash tests/b.sh
 [ "${WITH_NEVER:-0}" = 0 ] || run never bash tests/never.sh
 [ "${WITH_PARTIAL:-0}" = 0 ] || run partial bash tests/partial.sh
 $release && run1 safety bash tests/installed-safety.sh   # release-only, like run-all.sh's installed-safety line
+fi
+# workspace-list-begin
 # a live-lane suite, and a block and an inline check that run a script outside a run line (gated like a suite)
 gated_block() { gated scripts/checks/x.sh && { bash scripts/checks/x.sh block && ok "gated block x" || bad "gated block x"; }; ok "block cheap"; }
 if [ "${WITH_LIVE:-0}" != 0 ]; then
@@ -198,6 +201,7 @@ if [ "${WITH_WS:-0}" != 0 ]; then
   block blk_run
   run ws env RPG_FACTORY_WORKSPACE=/ws bash tests/ws.sh
 fi
+# workspace-list-end
 [ "${CHANGE_INPUT:-0}" = 0 ] || echo changed >> tests/b.sh
 [ -z "${CFG_CHANGE:-}" ] || git config rpgtest.during "$CFG_CHANGE"
 drain
@@ -260,6 +264,27 @@ out=$(cache_plan --only-suites tests/orphan.sh,tests/a.sh,scripts/lib/fstate.py 
   && good '--only-suites rejects every existing file without a run line (exit 2, each named)' || no 'orphan suite' "$out"
 out=$(cache_plan --only-suites=tests/a.sh,tests/blockrun.sh,scripts/checks/x.sh,tests/live.sh); rc=$?
 [ "$rc" = 0 ] && good '--only-suites accepts run lines, block run lines and gated scripts (also --only-suites=L)' || no 'accepted names' "$out"
+# Workspace-only selects the guarded checks without running fixtures or taking the full-run lock.
+reset_cache
+out=$(WITH_LIVE=1 WITH_WS=1 cache_plan --workspace-only --no-reuse); rc=$?
+log=$(sort "$RUN_LOG" | tr '\n' ' ')
+[ "$rc" = 0 ] && [ "$log" = 'block blockrun inline live ws ' ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+  && good '--workspace-only runs only workspace checks without the full-run lock' || no "workspace-only (rc=$rc, log=$log)" "$out"
+out=$(bash "$ROOT/tests/run-all.sh" --workspace-only --list-suites); rc=$?
+[ "$rc" = 0 ] && [ "$(tr '\n' ' ' <<<"$out")" = 'scripts/checks/x.sh tests/live.sh tests/blockrun.sh tests/ws.sh ' ] \
+  && good '--list-suites honours --workspace-only' || no "workspace-only list (rc=$rc)" "$out"
+for arg in -h --help unknown --unknown; do
+  reset_cache
+  out=$(cache_plan "$arg" 2>"$TMP/arg.err"); rc=$?
+  case "$arg" in -h|--help) expected=0; header=$out ;; *) expected=2; header=$(cat "$TMP/arg.err") ;; esac
+  [ "$rc" = "$expected" ] && grep -q '^# Usage: tests/run-all.sh' <<<"$header" && [ ! -s "$RUN_LOG" ] && [ ! -d "$TMP/state/locks/run-all-full" ] \
+    && good "$arg prints usage and runs nothing (exit $expected)" || no "$arg argument (rc=$rc)" "$out $header"
+done
+for arg in --no-workspace --release; do
+  out=$(cache_plan --workspace-only "$arg" 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q 'conflicts' <<<"$out" && [ ! -s "$RUN_LOG" ] \
+    && good "--workspace-only conflicts with $arg" || no "workspace-only conflict $arg (rc=$rc)" "$out"
+done
 # --list-suites: the plan's run lines and gated scripts in order, nothing else; runs no check and takes no lock
 : > "$RUN_LOG"
 out=$(bash "$ROOT/tests/run-all.sh" --list-suites); rc=$?

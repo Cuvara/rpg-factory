@@ -97,8 +97,8 @@ noticed.
   below). It is created for the task lead; the task
   lead's implementation sub-sessions, review, QA and fix sessions run in it (section 8, "Session lifecycle"),
   except a session placed in an Orca child worktree ("Child worktrees" below).
-- Only the dispatching tool creates worktrees: Orca (`orca worktree create`, the run lead's task-lead handoff, or
-  an Orca child worktree) or a Claude Code agent with `isolation: "worktree"`. Never a second clone, never a
+- Only the dispatching tool creates worktrees: `git worktree add --no-track -b <branch> <path> <base>` (the run
+  lead's task-lead handoff, section 4 "Run lead"), an Orca child worktree, or a Claude Code agent with `isolation: "worktree"`. Never a second clone, never a
   nested repository. A session the task lead starts joins the existing task worktree or a child of it; when there
   is no task worktree, dispatch is an error and no worktree is created.
 - Never edit another task's worktree. Read-only inspection of it is fine.
@@ -117,17 +117,23 @@ noticed.
   the lead assigns each to one task at a time. A task without the resource reports the dependent check as
   `NOT_RUN` with the exact command and reason; other work continues. There is no prompt.
 - **Full test runs are a shared resource too.** One full run per machine (the run-all lock): a full
-  `tests/run-all.sh` takes a per-machine lock, and a second one waits. Only integration QA runs the full suite;
-  every other session runs its tier command (section 10 "QA tiers"). Four parallel full runs made every suite 2-4x
+  `tests/run-all.sh` takes a per-machine lock, and a second one waits. CI is the full-suite gate: no session runs the
+  full suite before a PR (only a release does). Integration QA runs `tests/run-all.sh --workspace-only` and every
+  other session runs its tier command (section 10 "QA tiers"). Four parallel full runs made every suite 2-4x
   slower and timed some out. Never create a worktree or branch while a full run is in flight: the shared
   `.git/config` check fails (`.claude/CLAUDE.md` "Operating lessons").
+- **Lesson: `orca worktree create` writes `branch.<name>.base` into the shared `.git/config`**, which breaks the
+  shared-config check of other sessions' full runs. `git worktree add --no-track -b <branch> <path> <base>` writes
+  nothing to `.git/config` (verified: the config hash is unchanged). So `dispatch --phase lead` prefers it for a new
+  task worktree and then starts the lead with `orca agent launch --worktree path:<path>`. Never create a task
+  worktree with `orca worktree create`.
 
 ### Child worktrees
 
 Both levels may place a session in an Orca child worktree when that is faster or safer than sharing. The shared
 worktree is the default for every session a task lead starts (implement, review, QA) and for the run lead's helper
-sessions; only `dispatch --phase lead` defaults to `child` (a new task worktree under the integration checkout,
-"Run lead" below). Choose per session:
+sessions; the task worktree of `dispatch --phase lead` is a plain git worktree beside the integration checkout, not
+a child ("Run lead" below). Choose per session:
 
 <!-- policy:placement-table -->
 | Placement | When | How |
@@ -135,10 +141,12 @@ sessions; only `dispatch --phase lead` defaults to `child` (a new task worktree 
 | shared (default) | small subtasks with disjoint files and narrow tests; review or QA while nothing else edits | the task worktree (run lead: the integration checkout); `placement: "shared"` |
 | child | parallel subtasks that both run full suites or write generated or build output; risky or experimental work; QA that needs a clean frozen checkout while others still edit | `orca orchestration worker-start --worktree new-child` (a session) or `orca worktree create --parent-worktree <selector>` (a worktree); `placement: "child"` + `reason` |
 
-- **Run lead.** `dispatch --phase lead` creates a new task worktree as an Orca child of the checkout that has the
-  plan `topic` checked out (`--parent-worktree path:<checkout>`); only when no checkout has it, `--no-parent` (a
-  stderr note says so). `--placement shared` forces `--no-parent`; `--placement child` is the default. Orca lineage
-  only: the git layout is the same. Helper sessions -
+- **Run lead.** `dispatch --phase lead` creates a new task worktree with
+  `git worktree add --no-track -b <branch> <path> <base>` (the path is beside the checkout that has the plan `topic`
+  checked out, else beside the repo checkout) and then starts the lead with
+  `orca agent launch --worktree path:<path>`. It never runs `orca worktree create`: that writes
+  `branch.<name>.base` into the shared `.git/config` (section 4 lesson). `--placement shared|child` gives the same
+  result; an existing task worktree is only launched. Helper sessions -
   integration QA (`--task integration:<repo> --phase qa --placement child`) or a quick fix - may run in a child
   of the integration checkout instead of sharing it.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child`) and, for `child`, a `reason`.
@@ -164,10 +172,9 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
   the first dispatch, and follow it. This file does not restate it.
 - **No nested workers.** Orca allows one level of workers (`nested_worker_depth_exceeded`, maximum depth 1); never
   route around it. So the task lead is not a worker of the run lead: the run lead starts it as a handoff,
-  `orca worktree create --name <task branch> --branch <task branch> --parent-worktree path:<integration checkout>
-  --agent <id> --prompt <spec>` for a new task worktree (`--no-parent` only when no checkout has the topic, section
-  4) or `orca agent launch --agent <id> --worktree path:<dir> --prompt <spec>` for an existing one
-  (or a no-worktree repo). The task lead creates its own Run (`orca orchestration run-create --objective <text>`),
+  `git worktree add --no-track -b <task branch> <path> <base>` for a new task worktree (beside the integration
+  checkout, section 4), then `orca agent launch --agent <id> --worktree path:<path> --prompt <spec>`; an existing
+  worktree (or a no-worktree repo) needs only the launch. The task lead creates its own Run (`orca orchestration run-create --objective <text>`),
   starts its sessions as workers of that Run (`orca orchestration worker-start --worktree path:<task worktree>`,
   depth 1), and reports to the run lead with
   `orca orchestration send --to run:<run lead run id> --type status --subject <text> --body <report>`.
@@ -257,8 +264,8 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    removed: report it instead. Never remove the main checkout, the integration branch's checkout before its PR is
    open, or a worktree another coordinator owns (section 2).
 2. **Task branches.** The user asked for full cleanup, so a task branch whose commits are in the integration
-   branch is deleted with its worktree (`git branch -d`, never `-D`). The integration branch stays: it carries
-   the PR. `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see
+   branch is deleted with its worktree (`git branch -d`, never `-D`). The integration branch stays until its PR is
+   merged: it carries the PR (item 5). `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see
    its `--help`), and keeps branches it cannot prove merged - use it for Orca-created worktrees.
 3. **Agent sessions.** End every Claude and Codex session the run started: each task lead releases its own
    workers (`orca orchestration worker-release` for each settled Orca worker: it closes only that worker's
@@ -269,6 +276,19 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    read-only `worker-list`; no orca is NOT_AVAILABLE) and prints the commands; it must report CLEAN before the
    final report. The report's Cleanup column
    names what was removed and what was kept and why.
+5. **After the integration PR is merged into main** (user 2026-11-09). The run lead finishes the run's cleanup:
+   - removes the integration checkout or worktree (`git worktree remove <path>`, or `orca worktree rm`), never the
+     main checkout;
+   - deletes every merged task branch and the integration branch locally (`git branch -d`, never `-D`) and on
+     origin (`git push origin --delete <branch>`), only branches of this plan that main contains (check with
+     `git merge-base --is-ancestor <branch> origin/main` or `git branch --merged origin/main`); a branch main does
+     not contain stays and is reported;
+   - releases every worker of the run (item 3);
+   - starts the next plan from main: a new integration branch from the updated main, never from the deleted one.
+
+   The run lead passes the explicit flag once the PR is merged: `factory-pipeline.py cleanup plan.json --after-merge`
+   lists these commands (worktrees, local and origin branches, unreleased workers) and reports CLEAN only when none
+   is left. The plan's `repos` path must point at the main checkout; a missing path is LEFTOVER.
 
 ### Run report and plan edits
 
@@ -445,9 +465,9 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    fingerprint (objective, owned paths, exclusions, acceptance, checks, agents): a plan edit that only changes deps
    keeps it, while changing a task's paths or acceptance makes it stale. Re-run `status` after any plan edit.
 6. **QA.** Once per repo on the integration HEAD, in the integration branch's existing checkout (section 6):
-   `dispatch ... --task integration:<repo> --phase qa --sha <head>`, whose spec names the batch's one full run
-   (`tests/run-all.sh --reuse -j 4`, "QA tiers" below); in a no-worktree repo also per task, before the
-   next task starts (`--task <id>`). The QA worker fills `templates/pipeline/qa-report.md`; the lead records
+   `dispatch ... --task integration:<repo> --phase qa --sha <head>`, whose spec names what CI cannot run
+   (`tests/run-all.sh --workspace-only`, before the PR; "QA tiers" below); in a no-worktree repo also per task,
+   before the next task starts (`--task <id>`). The QA worker fills `templates/pipeline/qa-report.md`; the lead records
    `verdict ... --phase qa` (a FAIL with `--failed-suites`, which the re-QA spec reruns).
 7. **READY_FOR_PR.** `factory-pipeline.py gate plan.json` is a read-only report: every task integrated, reviewed PASS
    by its paired model on a commit whose owned paths have not changed since, QA PASS on each integration HEAD,
@@ -455,8 +475,9 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    a no-worktree repo. Anything else is a listed blocker: fix it and re-run the affected review or QA only.
 8. **PR.** When the user put `deliver: pr` in the task (plan `deliver: "pr"`) and the gate prints READY_FOR_PR, the
    run lead pushes the integration branch and opens the PR with the commands the gate prints, body = the final
-   report (`report.md`). This is the delivery exception of `git-safety.md` rule 5. Merging stays with the user;
-   without `deliver: pr` the task ends at READY_FOR_PR in the report.
+   report (`report.md`). This is the delivery exception of `git-safety.md` rule 5. After the PR opens, the merge
+   gate is CI green (`gh pr checks <pr> --watch`, which the gate prints too); while CI runs, start the next task.
+   Merging stays with the user; without `deliver: pr` the task ends at READY_FOR_PR in the report.
 9. **Cleanup.** Section 8, every time: remove the run's worktrees and merged task branches, end every Claude
    and Codex session (each was released when it reported), and run `factory-pipeline.py cleanup plan.json` until it
    reports CLEAN.
@@ -471,9 +492,14 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
 | Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
 | Reviewer | no suites; only a repro test when a finding needs one | the review session |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --reuse -j 4`: the batch's one full run, under the run-all lock, reusing suites whose inputs already passed | the run lead's integration QA session |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (registry `pipeline.qa_tiers` integration `ci+workspace`) | the run lead's integration QA session |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session (`.claude/CLAUDE.md` "Releases") |
 
+- **CI is the full gate.** No full local run before a PR: CI (`.github/workflows/tests.yml`, `--no-workspace
+  --no-claude`) runs the full suite, and `--workspace-only` covers the rest, before the PR. After the PR opens, CI
+  green (`gh pr checks <pr> --watch`) is the merge gate; while CI runs, start the next task, then come back and fix a
+  red check before merging. Only a release runs
+  `tests/run-all.sh --release` and `tests/dogfood.sh --installed`.
 - **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
   prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/` directory
   path (no dot in its last segment). A non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are machine
