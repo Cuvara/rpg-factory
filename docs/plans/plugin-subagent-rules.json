@@ -159,13 +159,14 @@
       "kind": "code",
       "grade": "standard",
       "grade_reason": "dispatch output change plus a config-hash test; same files as prompts",
-      "objective": "Task worktrees made by `dispatch --phase lead` show as top-level worktrees in Orca, without their lead/child lineage, because the dispatch creates them with `git worktree add --no-track` (on purpose: `orca worktree create` writes branch.<name>.base into the shared .git/config). Fix: after the `git worktree add` line, `dispatch --phase lead` prints `orca worktree set --worktree path:<task worktree> --parent-worktree path:<integration checkout of plan.topic>` (the checkout that has the plan topic, else the repo checkout); verified by hand on 2026-11-09 that `orca worktree set` writes only Orca metadata (the .git/config hash was unchanged). When the run lead creates the integration checkout itself, delivery.md names the same `orca worktree set --parent-worktree path:<main checkout>` step. A no-worktree repo prints nothing new. Record the lesson where it belongs: delivery.md section 4 next to the existing `orca worktree create` lesson (lineage through `orca worktree set`, never through `orca worktree create`), and a one-line Operating lessons entry in .claude/CLAUDE.md with its reason. Tests in tests/pipeline.test.sh: the lead handoff prints the set line with the right parent, nothing new for a no-worktree repo, and the printed commands never include `orca worktree create`. Changelog fragment changelog.d/orca-lineage.md (### Fixed).",
+      "objective": "Task worktrees made by `dispatch --phase lead` show as top-level worktrees in Orca, without their lead/child lineage, because the dispatch creates them with `git worktree add --no-track` (on purpose: `orca worktree create` writes branch.<name>.base into the shared .git/config). Fix: after the `git worktree add` line, `dispatch --phase lead` prints `orca worktree set --worktree path:<task worktree> --parent-worktree path:<integration checkout of plan.topic>` (the checkout that has the plan topic, else the repo checkout); verified by hand on 2026-11-09 that `orca worktree set` writes only Orca metadata (the .git/config hash was unchanged). When the run lead creates the integration checkout itself, delivery.md names the same `orca worktree set --parent-worktree path:<main checkout>` step. A no-worktree repo prints nothing new. Record the lesson where it belongs: delivery.md section 4 next to the existing `orca worktree create` lesson (lineage through `orca worktree set`, never through `orca worktree create`), and a one-line Operating lessons entry in .claude/CLAUDE.md with its reason. Tests in tests/pipeline.test.sh: the lead handoff prints the set line with the right parent, nothing new for a no-worktree repo, and the printed commands never include `orca worktree create`. Changelog fragment changelog.d/orca-lineage.md (### Fixed). Also (explorer-agent review finding): tests/affected.py does not map agents/* to tests/skills-lint.sh, so run-all --affected and suite reuse skip the agent lint when only an agent file changes; add agents/* to the skills-lint.sh extra inputs, with a case in the affected tests if one exists.",
       "paths": [
         "scripts/factory-pipeline.py",
         "tests/pipeline.test.sh",
         "skills/delivery/references/delivery.md",
         ".claude/CLAUDE.md",
-        "changelog.d/orca-lineage.md"
+        "changelog.d/orca-lineage.md",
+        "tests/affected.py"
       ],
       "deps": [
         "prompts",
@@ -181,7 +182,8 @@
         "dispatch --phase lead prints the orca worktree set --parent-worktree line after the worktree add, with the integration checkout as parent",
         "no orca worktree create in any printed command; no-worktree repo unchanged",
         "lesson recorded in delivery.md section 4 and .claude/CLAUDE.md Operating lessons",
-        "pipeline.test.sh 0 failed"
+        "pipeline.test.sh 0 failed",
+        "an agents/*.md change selects tests/skills-lint.sh under --affected"
       ]
     }
   ]
