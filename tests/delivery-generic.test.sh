@@ -32,6 +32,20 @@ def expect(name, args, pattern='', registry='none', rc=0):
 reg=json.loads((root/'registry.json').read_text(encoding='utf-8'))['pipeline']
 defaults=json.loads((root/'skills/delivery/pipeline-defaults.json').read_text(encoding='utf-8'))
 check('defaults drift', all(reg.get(k)==v for k,v in defaults['pipeline'].items()) and 'exclusive_resources' not in defaults['pipeline'])
+KEYS={'description','tiers','agents','review_pairing','default_implementer','lead_agent','verdict_states','no_worktree_markers','agent_routing','qa_prefer','qa_tiers','available_agents','models'}
+check('defaults key set', set(defaults['pipeline'])==KEYS, str(sorted(set(defaults['pipeline'])^KEYS)))
+import re
+def prompt_text(p):
+    # the printed prompt plus the spec file a dispatch names, when the prompt only points to it
+    out=p.stdout+p.stderr
+    for m in re.finditer(r'task spec at (\S+?\.md)', out):
+        f=pathlib.Path(m.group(1).replace('\\','/').rstrip("'"))
+        if f.is_file(): out+=f.read_text(encoding='utf-8')
+    return out
+def expect_dispatch(name, args, registry):
+    p=run(args,registry); out=prompt_text(p)
+    leaks=[k for k in ('rpg-mmo-server','IndieRPGMMOAdventure') if k in out]
+    check(name, p.returncode==0 and 'references/delivery.md' in out and not leaks, f'rc={p.returncode} leaks={leaks} '+out)
 for registry in ('none', tmp/'missing.json'):
     plan['id']='generic'+('missing' if registry != 'none' else 'none'); write()
     expect('tier '+str(registry), ['tier','--json','--plan',pf,'--repo','plain','--paths','src/file.txt'], '"tier": "S"', registry)
@@ -40,8 +54,9 @@ for registry in ('none', tmp/'missing.json'):
     for phase in ('lead','implement','review','qa'):
         args=['dispatch',pf,'--task','one','--phase',phase,'--runner','agent','--orca-unavailable','test']
         if phase in ('review','qa'): args += ['--sha',sha]
-        expect('dispatch '+phase+' '+str(registry), args, '', registry)
-    expect('dispatch orca lead '+str(registry), ['dispatch',pf,'--task','one','--phase','lead','--runner','orca'], 'orca', registry)
+        expect_dispatch('dispatch '+phase+' '+str(registry), args, registry)
+    p=run(['dispatch',pf,'--task','one','--phase','lead','--runner','orca'],registry); out=prompt_text(p)
+    check('dispatch orca lead '+str(registry), p.returncode==0 and ('orca orchestration' in out or 'worker-start' in out) and 'references/delivery.md' in out, out)
     expect('review verdict '+str(registry), ['verdict',pf,'--task','one','--phase','review','--sha',sha,'--by','codex','--state','PASS'], 'PASS', registry)
     expect('qa verdict '+str(registry), ['verdict',pf,'--task','integration:plain','--phase','qa','--sha',sha,'--by','claude','--state','PASS'], 'PASS', registry)
     git('switch', '-q', 'feat/core/generic')

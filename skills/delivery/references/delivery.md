@@ -162,7 +162,7 @@ a child ("Run lead" below). Choose per session:
 The owner merges a child's branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).
 
 <!-- policy:child-no-run-all -->
-Never create or remove a child worktree while a full tests/run-all.sh runs: every checkout shares one .git/config.
+Never create or remove a child worktree while a full tests/run-all.sh runs (the runner of a repo that has one): every checkout shares one .git/config.
 
 - `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged: remove a child
   only after its branch is merged into its parent.
@@ -360,7 +360,7 @@ workspace, otherwise skills/delivery/pipeline-defaults.json); the plan format is
 commands and grades state; the leads run them.
 
 <!-- policy:no-worktree-repo -->
-A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.
+A no-worktree repo (registry `worktrees: false` or a configured no-worktree marker, for example a Unity project) never gets a worktree; its task lead and all its sessions run in its main checkout.
 
 **Which model.** Each plan task may carry a `kind`, and each subtask names an `implementer` or a `kind` (`subplan
 validate` errors on neither); the implementer is the explicit `implementer`, else pipeline settings
@@ -485,10 +485,13 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    reports CLEAN.
 
 **QA tiers.** No identical tree is tested twice and a task never runs the whole suite: each role runs one command,
-which `dispatch --phase qa` prints (pipeline settings `qa_tiers`). The commands below are the defaults of this
-plugin repo's own suites; another project sets its own commands in its `qa_tiers`, and the policy is the shape: a
-task runs only the suites its changes reach, integration runs what CI cannot, CI is the full gate, a release runs
-everything.
+which `dispatch --phase qa` prints. Pipeline settings `qa_tiers` only name the level of each tier (task
+`affected`, integration `ci+workspace`); they hold no commands. A repo that has `tests/run-all.sh` gets the
+run-all commands of the table below. A repo without it gets its task checks as the QA commands (and, for a registry
+repo, the run-checks fast tier). The policy is the shape: a task runs only the suites its changes reach,
+integration runs what CI cannot, CI is the full gate, a release runs everything.
+
+The table lists the commands for a repo that has `tests/run-all.sh` (this plugin).
 
 <!-- policy:qa-tiers -->
 | When | Runs | Who |
