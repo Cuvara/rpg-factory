@@ -16,3 +16,9 @@
   `git worktree add --no-track -b <branch> <path> <base>` and starts the lead with
   `orca agent launch --worktree path:<path>`: `orca worktree create` writes `branch.<name>.base` into the shared
   `.git/config`, which breaks other sessions' full runs (`parallel-work.md` section 4).
+- **Cleanup after the PR merges.** `parallel-work.md` section 8 adds the after-merge step: once the integration PR
+  is merged into main, the run lead removes the integration checkout or worktree (not the main checkout), deletes
+  every merged task branch and the integration branch locally (`git branch -d`) and on origin
+  (`git push origin --delete <branch>`, only branches of this plan that main contains), releases every worker and
+  starts the next plan from main. `factory-pipeline.py cleanup` lists these commands and reports CLEAN only when
+  none is left.

@@ -263,8 +263,8 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    removed: report it instead. Never remove the main checkout, the integration branch's checkout before its PR is
    open, or a worktree another coordinator owns (section 2).
 2. **Task branches.** The user asked for full cleanup, so a task branch whose commits are in the integration
-   branch is deleted with its worktree (`git branch -d`, never `-D`). The integration branch stays: it carries
-   the PR. `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see
+   branch is deleted with its worktree (`git branch -d`, never `-D`). The integration branch stays until its PR is
+   merged: it carries the PR (item 5). `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see
    its `--help`), and keeps branches it cannot prove merged - use it for Orca-created worktrees.
 3. **Agent sessions.** End every Claude and Codex session the run started: each task lead releases its own
    workers (`orca orchestration worker-release` for each settled Orca worker: it closes only that worker's
@@ -275,6 +275,18 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
    read-only `worker-list`; no orca is NOT_AVAILABLE) and prints the commands; it must report CLEAN before the
    final report. The report's Cleanup column
    names what was removed and what was kept and why.
+5. **After the integration PR is merged into main** (user 2026-11-09). The run lead finishes the run's cleanup:
+   - removes the integration checkout or worktree (`git worktree remove <path>`, or `orca worktree rm`), never the
+     main checkout;
+   - deletes every merged task branch and the integration branch locally (`git branch -d`, never `-D`) and on
+     origin (`git push origin --delete <branch>`), only branches of this plan that main contains (check with
+     `git merge-base --is-ancestor <branch> origin/main` or `git branch --merged origin/main`); a branch main does
+     not contain stays and is reported;
+   - releases every worker of the run (item 3);
+   - starts the next plan from main: a new integration branch from the updated main, never from the deleted one.
+
+   `factory-pipeline.py cleanup plan.json` lists these commands (worktrees, local and origin branches, unreleased
+   workers) and reports CLEAN only when none is left.
 
 ### Run report and plan edits
 
