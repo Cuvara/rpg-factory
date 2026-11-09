@@ -490,18 +490,25 @@ which `dispatch --phase qa` prints (registry `pipeline.qa_tiers`).
 - **Reuse.** A full run on a clean tree writes a result record for that tree; `--reuse` exits 0 at once on a PASS
   record of the same clean tree with at least the same coverage (`reused full run at <HEAD> (tree <tree>, <date>)`;
   a `--no-workspace` or `--no-claude` record does not satisfy a run without that flag). Each suite's PASS is also
-  recorded under a hash of its inputs (the suite file, the files `tests/affected.py` maps to it, the global inputs
-  and the tool versions); a later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
+  recorded under a hash of its inputs (`tests/affected.py hashes`, the conservative rule: the suite file, the paths
+  it names, every file in the tree of each code file the suite reaches, helpers with a caller edge included, the
+  global inputs and the tool versions; only `scripts/lib` stays narrowed to its importers); a later run skips that suite (`PASS  <check> (reused <suite> inputs <hash>)`). Suites
   graded by a postprocessor and checks that read the live workspace are never reused, and no record is published when the inputs
   changed during the run. `--no-reuse` runs every suite, `--release` never reuses, and an input mapping that is
   unsure runs the suite.
-- **Selection.** `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the
+- **Selection.** `--affected` follows the narrow static graph of `tests/affected.py` (Python imports and the shell
+  and jq helpers a script loads or runs by name): a library module or a helper selects only the suites of the
+  scripts that reach it, and anything unsure runs. A miss there is caught by integration QA, whose suite reuse uses
+  the conservative rule above. `--only-suites` is unioned with `--affected`. In either mode the live-workspace blocks and the
   checks that run a script outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan,
   package ready, Netcode headless) are selected like suites by that script path, else they count as not affected;
   `--only-suites` may name such a script (`tests/run-all.sh` usage header). `--only-suites` exits 2 on a name
   run-all does not run; `tests/run-all.sh --list-suites` (read-only) prints the names it accepts, and
   `dispatch --phase qa` folds into `--only-suites` only the checks that list names (other checks stay extra
-  commands).
+  commands). A check that mentions `tests/run-all.sh` is folded only when it is one plain standalone scoped
+  invocation (an optional `env -u TMPDIR` and `bash` prefix, plain flag tokens, `--affected` or `--only-suites`
+  among them); every other check that mentions run-all, a plain full run included, is printed `DO NOT RUN` and the
+  QA session reports it NOT_RUN. No check is dropped.
 - **Plans.** A task's `checks` name its own suites or the `--affected` command, never a full `tests/run-all.sh`, and
   its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
 

@@ -11,9 +11,11 @@
   record of the same clean tree with at least the same coverage (a `--no-workspace` or `--no-claude` record does not
   satisfy a run without that flag) and prints `reused full run at <HEAD> (tree <tree>, <date>)`. `--release` never
   reuses the record.
-- **run-all.** Suite-level reuse: each suite's PASS is recorded under a hash of its inputs (the suite file, the files
-  `tests/affected.py` maps to it, the files under the directories of the scripts the suite reaches, such as
-  `scripts/ui/data/*.json`, the global inputs and the tool versions), and a later run skips that suite and
+- **run-all.** Suite-level reuse: each suite's PASS is recorded under a hash of its inputs (`tests/affected.py hashes`,
+  the conservative rule: the suite file, the paths it names, every file in the tree of each code file the suite
+  reaches, such as `scripts/ui/data/*.json`, helpers with a caller edge included, the global inputs and the tool
+  versions; only `scripts/lib` stays narrowed to its importers, suites directly in `tests/` are not tree data and the
+  index docs `scripts/README.md` and `tests/README.md` count only where a suite names them), and a later run skips that suite and
   prints `PASS  <check> (reused <suite> inputs <hash>)`. Suites graded by a postprocessor, checks that read the live
   workspace (a `run` inside a live block too) and `--no-history` runs are never reused, no record is published when the inputs changed during the run, and a suite that skipped a case for a missing tool
   publishes no PASS record (a later run with the tool runs it).
@@ -30,30 +32,35 @@
   call per suite.
 - **run-all.** When `python3` resolves to the Windows Store alias, run-all puts the real Python directory first on
   `PATH` for the suites (about 70 ms saved per call); the user's system is not changed.
-- **Tests.** `tests/affected.py` no longer treats `scripts/lib/*` as global: a lib module selects only the suites of
-  the scripts that import it (imports parsed with `ast`; a module it cannot map still selects every suite). It follows import chains through non-lib modules, so a lib
-  module imported only by another script module selects the suites of that module's importers.
-  `tests/affected.test.sh` covers it. `affected.py hashes SUITE...` prints each suite's input hash for suite reuse
-  (`-` when reuse is unsafe).
+- **Tests.** `tests/affected.py` no longer treats `scripts/lib/*` as global. Selection (`--affected`, `select`,
+  `select-many`) follows the narrow static graph: Python imports (parsed with `ast`, plus a text scan) and the shell
+  and jq helpers a script loads or runs by name, through every tracked code file on the way, so a lib module or a
+  helper selects only the suites of the scripts that reach it; a module it cannot map still selects every suite. A
+  miss there is caught by the integration full run. `affected.py hashes SUITE...` prints each suite's input hash for
+  suite reuse (`-` when reuse is unsafe) under the conservative tree rule above, because a false PASS is the risk
+  there. `tests/affected.test.sh` covers both rules.
 - **Guard.** `scripts/git-guard.py --batch` evaluates JSON-line cases in one process through the same evaluation as
   the hook. `tests/git-guard.test.sh` runs most cases through it and keeps a representative set on the real hook
   process (exit codes, `; exit 0` wiring, crash safety); the case count is unchanged. Suite wall time: 717 s before,
   about 96-128 s after.
 - **Pipeline.** QA tiers (registry `pipeline.qa_tiers`): `dispatch --phase qa` prints one tier command. Task QA runs
   `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2` (the suites the task's checks
-  name that `tests/run-all.sh --list-suites` lists, each once; only a standalone suite or `tests/run-all.sh`
-  invocation is folded into it, a full `tests/run-all.sh` check is dropped, compound checks and other checks stay
-  whole extra commands)
+  name that `tests/run-all.sh --list-suites` lists, each once; only a plain standalone suite command or a plain
+  scoped `tests/run-all.sh` invocation is folded into it, every other check that mentions run-all is printed
+  `DO NOT RUN`, other checks stay whole extra commands)
   and its spec forbids a full run. `verdict --phase qa --state FAIL --failed-suites LIST` records the failed suites;
   the next QA dispatch on a new candidate reruns those that `tests/run-all.sh --list-suites` lists, each once, with
   `--affected --base <that FAIL's candidate>`. The tier commands are read from registry `pipeline.qa_tiers`. A repo
   without `tests/run-all.sh` keeps the previous QA body: its checks and the `run-checks.py` fast tier. Integration
   QA runs `tests/run-all.sh --reuse -j 4` under the lock. `validate` warns when a task's checks contain a full
   `tests/run-all.sh` or its acceptance requires a full run (`full runs belong to integration QA`).
-- **Pipeline.** Task QA never prints a full run. A standalone `tests/run-all.sh` check (optionally behind `env` or
-  `bash`) is folded into the tier command, and a full one is dropped. A compound or wrapped check that contains a full
-  run (`tests/run-all.sh -j 4 && ...`, `bash -c "tests/run-all.sh -j 4"`, `sh tests/run-all.sh`) is printed in the QA
-  spec as an extra command `DO NOT RUN (...; report it NOT_RUN)`. Without a review base the task QA command is
+- **Pipeline.** Task QA never prints a runnable full run, and no check is dropped silently. A `tests/run-all.sh`
+  check is folded into the tier command only when it is one plain standalone scoped invocation: an optional
+  `env -u TMPDIR` and `bash` prefix, plain flag tokens (no quote, backslash, `#`, `$`, backtick, operator,
+  redirection or newline) and `--affected` or `--only-suites` among them. Every other check that mentions run-all,
+  a plain full run included (`tests/run-all.sh -j 4`, `tests/run-all.sh -j 4 && ...`, `bash -c "tests/run-all.sh -j 4"`,
+  `sh tests/run-all.sh`, a quoted, escaped or commented form), is printed in the QA spec as an extra command
+  `DO NOT RUN (...; report it NOT_RUN)`; the QA session reports it NOT_RUN. Without a review base the task QA command is
   `tests/run-all.sh --only-suites <check suites> -j 2`; with no check suites either, the spec prints `NONE` and asks
   the task lead for a base. When two extra commands run the same suite, the `env -u TMPDIR` form is kept.
   `verdict --failed-suites` accepts any suite `tests/run-all.sh --list-suites` lists (for example
