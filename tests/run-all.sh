@@ -311,11 +311,23 @@ list_runnable() { # file: list_suites without the release-only suites unless --r
     printf '%s\n' "$s"
   done <<<"$listed"
 }
+# affected_select <suite...>: one affected.py call answers suite_selected for every candidate (the import graph is
+# built once per run, before any job forks); a name outside the candidates, or a failed call, asks per suite.
+affected_select() {
+  local picked
+  picked=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" select-many "$AFF" "$@") || return 0
+  AFF_ASKED=$'\n'"$(printf '%s\n' "$@")"$'\n'; AFF_PICKED=$'\n'"${picked//$'\r'/}"$'\n'
+}
+AFF_ASKED=""; AFF_PICKED=""
 suite_selected() {
   local target=$1
   $release && return 0
   case ",$only_suites," in *",$target,"*) return 0 ;; esac
-  if [ -n "$AFF" ]; then python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" select "$AFF" "$target"; return; fi
+  if [ -n "$AFF" ]; then
+    case "$AFF_ASKED" in *$'\n'"$target"$'\n'*)
+      case "$AFF_PICKED" in *$'\n'"$target"$'\n'*) return 0 ;; esac; return 1 ;; esac
+    python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" select "$AFF" "$target"; return
+  fi
   [ -z "$only_suites" ]
 }
 suite_hash_for() {
@@ -484,6 +496,7 @@ runall_prepare() {
     done
     $bad && return 2
   fi
+  [ -z "$AFF" ] || affected_select "${suites[@]}"
   if $suite_reuse && ! $release; then
     hash_output=$(python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" hashes "${suites[@]}" 2>/dev/null) || hash_output=""
     while read -r suite hash; do

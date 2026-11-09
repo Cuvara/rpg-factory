@@ -167,6 +167,10 @@ elif sys.argv[1] == 'changed':
     if os.environ.get('NO_BASE'): sys.exit(1)
     print('tests/b.sh')
 elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] in os.environ.get('SELECT', 'tests/b.sh').split(',') else 1)
+elif sys.argv[1] == 'select-many':
+    print('\n'.join(s for s in sys.argv[3:] if s in os.environ.get('SELECT', 'tests/b.sh').split(',')))
+if os.environ.get('AFF_CALLS') and sys.argv[1] in ('select', 'select-many'):
+    with open(os.environ['AFF_CALLS'], 'ab') as fh: fh.write((sys.argv[1] + '\n').encode())   # LF on Windows too
 PY
 cat > "$TMP/cache-plan.sh" <<'PLAN'
 fixture=$1; shift
@@ -464,6 +468,14 @@ live_case '--only-suites listing them runs them' 'a block inline live ' '5 0 1' 
 SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh live_case '--affected selecting them runs them' 'b block inline live ' '5 0 1' --affected
 live_case '--affected not selecting them skips them' 'b ' '2 0 4' --affected
 live_case 'a full run runs them' 'a b block inline live ' '6 0 0'
+# --affected asks affected.py once per run (select-many builds the import graph once), at -j 1 and -j 3 alike
+for j in 1 3; do
+  reset_cache; : > "$TMP/aff-calls"
+  out=$(AFF_CALLS="$TMP/aff-calls" SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh WITH_LIVE=1 cache_plan --no-reuse -j "$j" --affected); rc=$?
+  calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
+  [ "$rc" = 0 ] && [ "$calls" = 'select-many ' ] && [ "$log" = 'b block inline live ' ] && grep -qx 'counts 5 0 1' <<<"$out" \
+    && good "--affected calls affected.py select-many once (-j $j)" || no "--affected affected.py calls (-j $j): '$calls' log '$log'" "$out"
+done
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh

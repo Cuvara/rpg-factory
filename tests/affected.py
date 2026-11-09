@@ -4,6 +4,9 @@
   affected.py changed [BASE]        the changed files: merge-base(BASE, HEAD)..work tree, plus untracked files
                                     (BASE default: origin/main, else main)
   affected.py select FILE SUITE     exit 0 when SUITE must run for the changed files listed in FILE, else 1
+  affected.py select-many FILE SUITE...
+                                    print each SUITE that must run (same rule as select), one per line; the
+                                    import graph is built once (run-all --affected calls it once per run)
   affected.py hashes SUITE...       print suite and input hash (or '-' when reuse is unsafe)
 
 A suite runs when one of these holds (anything unsure runs):
@@ -390,6 +393,12 @@ def main(argv):
         with open(argv[1], encoding="utf-8") as fh:
             files = [x.strip() for x in fh if x.strip()]
         return 0 if needed(files, argv[2]) else 1
+    if argv[:1] == ["select-many"] and len(argv) >= 2:
+        with open(argv[1], encoding="utf-8") as fh:
+            files = [x.strip() for x in fh if x.strip()]
+        picked = [suite for suite in dict.fromkeys(argv[2:]) if needed(files, suite)]
+        sys.stdout.buffer.write("".join(suite + "\n" for suite in picked).encode())   # LF on Windows too
+        return 0
     print(__doc__, file=sys.stderr)
     return 2
 

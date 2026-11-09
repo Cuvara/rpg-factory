@@ -32,6 +32,19 @@ sel 0 "UI data next to ui_plan.py selects ui-commands (tree rule)" tests/ui-comm
 sel 0 "UI data next to ui_plan.py selects ui-skill-routing (tree rule)" tests/ui-skill-routing.test.sh scripts/ui/data/intents.json
 sel 1 "UI data skips an unrelated suite" tests/changelog.test.sh scripts/ui/data/intents.json
 sel 0 "a testlab scenario selects the testlab unit tests (tree rule)" testlab/tests/test_lab.py testlab/scenarios/S01-bootstrap.json
+# select-many: the same answer as select for every suite, from one call (one import graph)
+printf '%s\n' scripts/lib/plan_paths.py scripts/ui/data/intents.json skills/vfx/SKILL.md > "$TMP/many"
+many=(tests/pipeline.test.sh tests/changelog.test.sh tests/skills-lint.sh tests/release-check.test.sh tests/ui-commands.test.sh
+      tests/assetgen.test.sh tests/no-such.test.sh testlab/tests/test_lab.py tests/pipeline.test.sh)
+want=$(for s in "${many[@]}"; do python3 -B "$A" select "$TMP/many" "$s" && echo "$s"; done | awk '!seen[$0]++')
+got=$(python3 -B "$A" select-many "$TMP/many" "${many[@]}"); rc=$?
+if [ "$rc" = 0 ] && [ -n "$want" ] && [ "$got" = "$want" ] && ! grep -qx tests/changelog.test.sh <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  select-many equals per-suite select (deduplicated, in order)"
+else fail=$((fail + 1)); echo "FAIL  select-many equals per-suite select (rc=$rc): want [$want] got [$got]"; fi
+printf '%s\n' registry/core.json > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" tests/changelog.test.sh tests/pipeline.test.sh)
+if [ "$got" = $'tests/changelog.test.sh\ntests/pipeline.test.sh' ]; then pass=$((pass + 1)); echo "PASS  select-many: a global change selects every suite"
+else fail=$((fail + 1)); echo "FAIL  select-many: a global change selects every suite: got [$got]"; fi
 R="$TMP/r"; git init -q -b main "$R"; echo a > "$R/a"; git -C "$R" add a; git -C "$R" -c user.email=t@t -c user.name=t commit -qm a
 git -C "$R" checkout -qb topic; echo b > "$R/b"; git -C "$R" add b; git -C "$R" -c user.email=t@t -c user.name=t commit -qm b; echo c > "$R/c"
 out=$(cd "$R" && python3 -B - "$A" <<'PY'
