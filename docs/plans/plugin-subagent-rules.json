@@ -1,0 +1,72 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "plugin-subagent-rules",
+  "title": "In-session subagent rules per role (Claude and Codex)",
+  "goal": "Every pipeline session gets a short, role-specific rule for in-session subagents (Claude Agent tool, Codex multi_agent): read-only scouts only, bounded fan-out, models inside pipeline.models.scope, reviewer subagents of the reviewer's own model, no subagents in QA; parallel writes stay subtasks dispatched with --phase implement. Data in the registry, one policy copy in delivery.md, rule lines in every dispatch prompt, a read-only factory-explorer plugin agent, and a doctor check of the Codex subagent model.",
+  "topic": "plugin-subagent-rules",
+  "repos": {
+    "plugin": {"path": "../..", "base": "ccca7fa62df7e3420e76c5d03c8b2539758556ea"}
+  },
+  "tasks": [
+    {
+      "id": "registry",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "new registry block, schema, scope check and a small lib with tests; follows model_policy patterns",
+      "objective": "Add registry pipeline.subagents (registry/core.json, and the generic defaults skills/delivery/pipeline-defaults.json if it mirrors the pipeline block): per role (run_lead, planner, lead, implement, review, qa) {access: none|read, max_parallel, when (one sentence)}; run_lead and planner read max 3, lead read max 2, implement read max 2, review read max 3 on the reviewer's own model, qa none. Plus models: {claude: {model: claude-sonnet-5-5, alias: sonnet, agent: rpg-factory:factory-explorer}, codex: {model: gpt-6.1-terra, effort: medium}}; the default subagent model is Claude Sonnet 5.5 (claude-sonnet-5-5, user decision 2026-11-09) and the rule sentence names it. Schema in docs/registry.schema.json; scripts/check-registry.sh fails when a subagent model or effort is outside pipeline.models.scope (reuse scripts/lib/model_policy.py in_scope; the Claude alias must be a value of pipeline.models.agent_tool_alias). New scripts/lib/subagent_policy.py: rule(reg, role, agent) returns one short English sentence for a dispatch prompt, read from the registry (no hard-coded values), stating access, max parallel, when to use one, the forbidden actions (no edits, git writes, Orca, dispatch or verdict, nested subagents), the model or agent type to use for that agent, and for review that subagents run on the reviewer's own model and the verdict stays the reviewer's. Rebuild registry.json with python3 -B scripts/build-registry.py. Tests: new tests/subagent-policy.test.py registered in tests/run-all.sh (rule text per role and agent, missing block, out-of-scope model rejected by check-registry). Changelog fragment changelog.d/subagent-registry.md.",
+      "paths": ["registry/core.json", "registry.json", "skills/delivery/pipeline-defaults.json", "docs/registry.schema.json", "scripts/check-registry.sh", "scripts/lib/subagent_policy.py", "tests/subagent-policy.test.py", "tests/run-all.sh", "tests/registry-fragments.test.sh", "changelog.d/subagent-registry.md"],
+      "deps": [],
+      "checks": ["python3 -B scripts/build-registry.py --check", "scripts/check-registry.sh", "python3 -B tests/subagent-policy.test.py", "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"],
+      "acceptance": ["registry.json is the build of the fragments", "check-registry fails on an out-of-scope subagent model and passes on the shipped registry", "subagent_policy.rule returns a role-specific sentence for every role and both agents, from registry data only", "new suite counted in run-all with 0 failed"]
+    },
+    {
+      "id": "policy",
+      "repo": "plugin",
+      "kind": "policy",
+      "grade": "standard",
+      "grade_reason": "policy prose with a canonical marker sentence and its mutation test",
+      "objective": "Write the single policy copy: a new subsection '### In-session subagents' in skills/delivery/references/delivery.md section 8 (after 'Session lifecycle'): pipeline session versus in-session subagent; subagents are read-only scouts (reasons: the gate pairs reviews against the recorded implementer and a subagent's edits are unrecorded; one shared index; parallel writes already exist as subtasks; the token gain is reading many files and returning a short conclusion); the per-role table (run lead, planner, task lead, implement, review, QA: access, when, max parallel, limits; the data lives in registry pipeline.subagents); the default subagent model is Claude Sonnet 5.5 (claude-sonnet-5-5) through the rpg-factory:factory-explorer agent, Codex subagents use the pipeline.subagents codex model; general rules (use one only when the answer needs many files or an open search and only the conclusion matters, otherwise Read/Grep directly; a short brief with objective, paths and return format path:line, at most 200 words; never edits, git writes, Orca, dispatch or verdict, nested subagents; model inside pipeline.models.scope; a subagent is never a review or QA verdict; a reviewer never uses a subagent of the other model, for example codex:codex-rescue in a Claude review; the session report names the subagents used in one line). Canonical marker line '<!-- policy:subagents-read-only -->' followed by 'In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.' and add it to the policy sentence list with a mutation case in tests/parallel-policy.test.sh (or wherever the base keeps that lint). One-line pointers: skills/factory-core/SKILL.md step 7, skills/delivery/SKILL.md if it lists rules, docs/codex.md and AGENTS.md (Codex: multi_agent feature, subagent model from pipeline.subagents, set [agents] default_subagent_model inside the scope, no nesting). Changelog fragment changelog.d/subagent-policy.md.",
+      "paths": ["skills/delivery/references/delivery.md", "skills/delivery/SKILL.md", "skills/factory-core/SKILL.md", "skills/factory-core/references/parallel-work.md", "docs/codex.md", "AGENTS.md", "tests/parallel-policy.test.sh", "changelog.d/subagent-policy.md"],
+      "deps": [],
+      "checks": ["env -u TMPDIR tests/parallel-policy.test.sh", "tests/skills-lint.sh", "python3 -B scripts/changelog.py check"],
+      "acceptance": ["one policy copy (delivery.md) with the marker sentence and the per-role table", "the mutation test bites on a deleted or changed marker", "skills-lint and changelog check pass"]
+    },
+    {
+      "id": "explorer-agent",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one plugin agent file plus a lint check following existing patterns",
+      "objective": "Ship a read-only Claude plugin agent agents/factory-explorer.md: frontmatter name factory-explorer, description (read-only code locator for Factory sessions: returns a path:line table and a short conclusion), tools limited to Read, Grep, Glob, Bash (no Write, Edit, NotebookEdit, Agent), model sonnet (Claude Sonnet 5.5, the default subagent model); body: the brief format it expects, return at most 200 words, never edit, never run git writes, Orca, factory-pipeline dispatch or verdict, never spawn agents. Register it if the plugin manifest needs it (.claude-plugin/plugin.json). Add a lint in tests/skills-lint.sh that every agents/*.md has no write-capable tool and a model alias that is a value of registry pipeline.models.agent_tool_alias, with a mutation case. Mention the agents/ dir in .claude/CLAUDE.md Layout. claude plugin validate must pass. Changelog fragment changelog.d/factory-explorer.md.",
+      "paths": ["agents/", ".claude-plugin/plugin.json", "tests/skills-lint.sh", ".claude/CLAUDE.md", "changelog.d/factory-explorer.md"],
+      "deps": [],
+      "checks": ["tests/skills-lint.sh", "claude plugin validate .", "python3 -B scripts/changelog.py check"],
+      "acceptance": ["agent file with read-only tools and model sonnet", "the lint fails on an agent with Write, Edit or Agent tools (mutation)", "claude plugin validate passes"]
+    },
+    {
+      "id": "prompts",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "touches every dispatch prompt and many golden expectations in pipeline.test.sh",
+      "objective": "Put the role's subagent rule into every session prompt scripts/factory-pipeline.py prints, through scripts/lib/subagent_policy.rule(reg, role, agent): the planner prompt (cmd_planner), the task-lead rules (lead_prompt: a new numbered rule), implementation prompts (shared and child), the review prompt (the reviewer's own model, the verdict stays the reviewer's) and QA prompts (qa_body, task and integration: no subagents). Use the agent that actually runs the session (after the --runner agent fallback). Keep each addition to one sentence. Update tests/pipeline.test.sh golden outputs and add assertions per phase. Changelog fragment changelog.d/subagent-prompts.md.",
+      "paths": ["scripts/factory-pipeline.py", "tests/pipeline.test.sh", "changelog.d/subagent-prompts.md"],
+      "deps": ["registry"],
+      "checks": ["env -u TMPDIR tests/pipeline.test.sh", "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"],
+      "acceptance": ["every phase prompt (planner, lead, implement shared and child, review, task QA, integration QA) carries its role rule", "the review rule names the reviewer's own model", "pipeline.test.sh 0 failed"]
+    },
+    {
+      "id": "doctor-codex",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "new probe reading one key of a config file that holds secrets; must prove no secret is printed",
+      "objective": "Doctor and the snapshot report the Codex subagent setup: a dev tool probe in scripts/lib/devtools.py (registry dev_tools[] entry in registry/core.json, rebuild registry.json) that reads `codex features list` for multi_agent on or off and reads ONLY the keys agents.default_subagent_model and agents.subagent.model from the Codex config (CODEX_HOME or ~/.codex/config.toml, tomllib, never prints any other value: the file holds secrets). A model outside pipeline.models.scope for codex, or multi_agent off, is a warn line naming the fix ([agents] default_subagent_model = the pipeline.subagents codex model). Never writes the config. Check whether orca agent launch and worker-start can pass Codex config overrides (-c agents.default_subagent_model=...); only if they can, add it to Codex dispatches in scripts/lib/orca_cmd.py, otherwise say so in the report. Tests in tests/devtools.test.sh with fixture CODEX_HOME configs (in scope, out of scope, missing, a secret value never printed). Changelog fragment changelog.d/doctor-codex-subagents.md.",
+      "paths": ["scripts/lib/devtools.py", "scripts/lib/orca_cmd.py", "registry/core.json", "registry.json", "tests/devtools.test.sh", "changelog.d/doctor-codex-subagents.md"],
+      "deps": ["registry"],
+      "checks": ["env -u TMPDIR tests/devtools.test.sh", "python3 -B scripts/build-registry.py --check", "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"],
+      "acceptance": ["doctor warns on an out-of-scope Codex subagent model and on multi_agent off", "no config value other than the two model keys is ever printed (secret fixture)", "devtools.test.sh 0 failed"]
+    }
+  ]
+}
