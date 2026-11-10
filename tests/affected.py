@@ -12,7 +12,8 @@
   affected.py hashes SUITE...       print suite and input hash (or '-' when reuse is unsafe)
 
 A suite runs when one of these holds (anything unsure runs):
-  - a global input changed (GLOBAL: registry, hooks, manifests, run-all itself) - every suite runs;
+  - a global input changed (GLOBAL: registry, hooks, manifests) - every suite runs;
+  - a runner or selector change runs its explicitly mapped suites;
   - a library or Python module change reaches a named script or suite through static imports, followed through
     every tracked Python module on the way (unresolved/dynamic libraries, unnamed leaves run all);
   - the suite file itself changed;
@@ -59,7 +60,12 @@ from functools import lru_cache
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 GLOBAL = ["registry.json", "registry/*", "hooks/*", ".claude-plugin/*", ".codex-plugin/*",
-          "tests/run-all.sh", "tests/affected.py", "scripts/factory-context.sh", "docs/registry.schema.json"]
+          "scripts/factory-context.sh", "docs/registry.schema.json"]
+
+DIRECT_SUITES = {
+    "tests/run-all.sh": {"tests/run-all-parallel.test.sh", "tests/affected.test.sh"},
+    "tests/affected.py": {"tests/affected.test.sh"},
+}
 
 SKILL_TEXT = ["skills/*", ".claude/skills/*"]
 # indirect inputs: what a suite reads without naming the file
@@ -144,7 +150,7 @@ def code_only(path, text):
     return re.sub(r"(?m)(^|\s)#.*$", r"\1", text)
 
 
-# this file's tables name scripts it never runs; run-all runs suites, a suite change selects itself (both GLOBAL)
+# This file's tables name scripts it never runs; run-all runs suites rather than importing them.
 NOT_IMPORTERS = {"tests/affected.py", "tests/run-all.sh"}
 # repository-wide indexes in the scripts/ and tests/ trees: named-only (see the module docstring)
 INDEX_DOCS = {"scripts/README.md", "tests/README.md"}
@@ -334,6 +340,15 @@ def named(path):
 
 
 @lru_cache(None)
+def run_all_suites():
+    """Paths named on run-all's run lines, without running the suite list command."""
+    raw = contents("tests/run-all.sh") or b""
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    return {p for line in lines if re.search(r"\brun(?:p|l|1)?\s+", line.split("#", 1)[0])
+            for p in PATH_RE.findall(line.split("#", 1)[0])}
+
+
+@lru_cache(None)
 def owners(path, conservative=False):
     """Code files whose tree holds a file (deleted ones too): every file but an index doc and a code file with a
     caller edge. conservative (reuse hashes): a code file with a caller edge is tree data too, except a library
@@ -344,7 +359,7 @@ def owners(path, conservative=False):
         if conservative:
             if path.startswith("scripts/lib/") and named(path) or tree(path) == ("tests/", False):
                 return ()
-        elif named(path):
+        elif named(path) or tree(path) == ("tests/", False) and path in run_all_suites():
             return ()
     return tuple(p for root, code in code_trees().items() if in_tree(path, root) for p in code if p != path)
 
@@ -394,6 +409,10 @@ def needed(files, suite):
     if suite_patterns(suite) is None or library_graph()[2]:
         return True
     for f in files:
+        if f in DIRECT_SUITES:
+            if suite in DIRECT_SUITES[f]:
+                return True
+            continue
         reached = closure(f)
         if reached is None or any(selects(p, suite) for p in reached):
             return True

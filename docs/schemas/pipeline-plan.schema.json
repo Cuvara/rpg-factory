@@ -48,6 +48,19 @@
       "items": {"type": "string"},
       "description": "Repo-relative marker files replacing the pipeline defaults for this plan."
     },
+    "known_failing": {
+      "type": "array",
+      "description": "Checks that already fail at the task base. `validate` warns; lead and QA specs carry them: a failure of a listed check that also fails at the base is FAIL_AT_BASE, not a task FAIL; a listed check that now passes is reported as fixed.",
+      "items": {
+        "type": "object",
+        "required": ["check", "reason"],
+        "properties": {
+          "check": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
     "repos": {
       "type": "object",
       "description": "Repos that are not in the registry (e.g. a tool or plugin repo), or overrides of the base.",

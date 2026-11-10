@@ -5,7 +5,8 @@ Policy: skills/delivery/references/delivery.md (generic), skills/factory-core/re
 cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Settings fall back to
 skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
 file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
-script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
+script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`
+and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE). Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
@@ -718,6 +719,16 @@ def serialize(waves, tasks, reg, plan):
     return out
 
 
+def task_qa_warnings(task):
+    """pr.qa_warnings without the verify tier command: a scoped run-all check is what the verify session runs, not a
+    suite an implementer would run; a suite named next to it still warns."""
+    def tier_only(c):
+        rest = re.sub(r"(?:\./)?tests/run-all\.sh", "", c)
+        rest = re.sub(r"--only-suites(?:=|\s+)\S+", "", rest)  # the suites a scoped run-all names are its scope
+        return pr.mentions_runall(c) and not pr.full_run(c) and not pr.SUITE_CHECK.search(rest)
+    return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]))
+
+
 def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
@@ -735,6 +746,18 @@ def validate(plan, reg):
     if "no_worktree_markers" in plan and (not isinstance(plan["no_worktree_markers"], list) or
             not all(isinstance(m, str) for m in plan["no_worktree_markers"])):
         errors.append("no_worktree_markers must be an array of strings")
+    if "known_failing" in plan:
+        kf = plan["known_failing"]
+        if not isinstance(kf, list):
+            errors.append("known_failing must be an array of {check, reason} objects")
+        else:
+            for i, e in enumerate(kf):
+                if not (isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k].strip() for k in ("check", "reason"))):
+                    errors.append(f"known_failing[{i}]: needs non-empty string check and reason")
+                    continue
+                for k in sorted(set(e) - {"check", "reason"}):
+                    errors.append(f"known_failing[{i}]: unknown key {k}")
+                warnings.append(f"known failing at base: {e['check']} - {e['reason']}")
     tasks = plan.get("tasks") or []
     ids = [t.get("id") for t in tasks]
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
@@ -752,7 +775,7 @@ def validate(plan, reg):
     agents = pipe["agents"]
     for t in tasks:
         tid = t.get("id", "?")
-        warnings.extend(pr.qa_warnings(t))
+        warnings.extend(task_qa_warnings(t))
         if t.get("kind") is not None and t["kind"] not in pr.KINDS:
             errors.append(f"task {tid}: unknown kind {t['kind']}")
         if t.get("implementer") and t["implementer"] not in agents:
@@ -1306,6 +1329,32 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
+def known_failing_text(plan):
+    """The plan's `known_failing` block for a lead or QA prompt; '' when the plan lists none."""
+    kf = [e for e in plan.get("known_failing") or [] if isinstance(e, dict)]
+    if not kf:
+        return ""
+    return ("Known failing at base (plan known_failing):\n"
+            + "\n".join(f"- {e.get('check')}: {e.get('reason')}" for e in kf)
+            + "\nA failure of a listed check that also fails at the task base is FAIL_AT_BASE: name it on the QA report's "
+              "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
+
+
+def base_health_hint(info, spec):
+    """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
+    git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
+    if not info.get("path"):
+        return None
+    out, rc = git(info["path"], "remote", "-v")
+    if rc or "github.com" not in (out or ""):
+        return None
+    sha = re.compile(r"^[0-9a-fA-F]{7,40}$")
+    branch = next((b for b in (spec.get("base"), info.get("base")) if b and not sha.match(b)), None)
+    if not branch:
+        return None
+    return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
+
+
 def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
@@ -1331,13 +1380,11 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"3. Per subtask ONE fresh session in {where}: `{d} --phase implement --subplan <subplan.json> --subtask <id> "
         "--runner orca`. placement shared (default): it edits only its paths and does NOT commit (one shared index); "
         f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}",
-        f"4. Candidate = HEAD with every subtask committed. Cross-model review `{d} --phase review --sha <HEAD> --runner "
-        f"orca` ({reviewer} for {impl}; a subtask by the other model: add `--subplan <subplan.json> --subtask <id>` and "
-        "record it with `verdict --subtask <id>`; SAME_MODEL fallback only when the pair is unavailable, named in the "
-        f"report) and QA `{d} --phase qa --sha <HEAD> --runner orca`. Keep HEAD at the candidate while they run. A FAIL "
-        "goes to a fresh fix session, then review and QA on the new HEAD. For tier S and docs-only tasks, after review "
-        "PASS the task lead runs the QA tier command itself and records `verdict --phase qa --state PASS --by <lead model> "
-        "--note 'tier S: lead ran task suites'` instead of a QA session.",
+        f"4. Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
+        f"--runner orca` ({reviewer} for {impl}). Keep HEAD at the candidate. Record both results with "
+        "`verdict --phase verify` (a FAIL names `--failed-at review`: no test ran, the next verify keeps the original "
+        "tests; or `--failed-at qa [--failed-suites ...]`). On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
+        "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA.",
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
@@ -1353,6 +1400,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
+            + ("\n" + known_failing_text(plan) if known_failing_text(plan) else "")
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
                "worktree. Start after the previous task of this repo has its QA verdict. Subtasks, review and QA run "
@@ -1442,6 +1490,7 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
     if runall is False:  # no tests/run-all.sh (a product repo): the task checks and the registry fast tier
         return (head + "run the checks (run-checks.py fast tier for registry repos), " + tail
                 + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", []))
+                + ("\nPreviously failed suites:\n" + "\n".join(f"- {s}" for s in failed_suites) if failed_suites else "")
                 + (f"\n{subagents}" if subagents else ""))
     suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
     key = "integration" if integration else "task"
@@ -1557,7 +1606,8 @@ def cmd_dispatch(a, reg):
                   + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
+                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1568,7 +1618,7 @@ def cmd_dispatch(a, reg):
     sid = sub["id"] if sub else None
     # review and QA pair against the recorded (else planned) implementer; implement and lead forecast from availability
     model_roles = pr.roles(pipe, sub or task, pr.available(pipe, plan),
-                           implementer_of(pipe, plan, task, sid, sub) if a.phase in ("review", "qa") else None)
+                           implementer_of(pipe, plan, task, sid, sub) if a.phase in ("review", "qa", "verify") else None)
     for role, (model, why) in model_roles.items():
         print(f"model: {role} -> {model} ({why})", file=sys.stderr)
     placement = a.placement or (sub or {}).get("placement") or "shared"
@@ -1582,7 +1632,7 @@ def cmd_dispatch(a, reg):
     # the task's grade (plan, else derived from its tier) and the grade of this session's work (a subtask's own grade
     # wins): implement runs with that grade's profile, review with heavy for heavy work, else review
     grade = None
-    if a.phase in ("lead", "implement", "review"):
+    if a.phase in ("lead", "implement", "review", "verify"):
         grade = task_grades(plan, reg, a.policy, [task])[task["id"]]["grade"]
         if a.phase != "lead" and (sub or {}).get("grade"):
             grade = sub["grade"]
@@ -1595,6 +1645,9 @@ def cmd_dispatch(a, reg):
             print(f"factory-pipeline: {task['repo']} takes one task at a time: task {prev} has no QA PASS yet; "
                   f"start {task['id']} after it", file=sys.stderr)
     if a.phase == "lead":
+        hint = base_health_hint(info, spec)
+        if hint:
+            print(hint, file=sys.stderr)
         reviewer = task.get("reviewer") or pipe["review_pairing"].get(impl)
         if not info["worktrees"]:
             place = orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
@@ -1661,15 +1714,16 @@ def cmd_dispatch(a, reg):
     else:
         joined = {"worktree": f"path:{home}", "new": False, "reason": "the task lead's worktree"} if home else None
     if a.phase == "implement":
+        spec.pop("checks", None)
+        spec.pop("subtask_checks", None)
         sub_impl = (sub or {}).get("implementer") if sub else None
         agent = pr.choose(a.agent, "explicit --agent", pr.available(pipe, plan))[0] if a.agent else model_roles["implement"][0]
         place = joined or orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
         edit = "the subtask_paths" if paths else "the owned paths"
         report = ("Report to the task lead: changed paths, each check with exact counts (or NOT_RUN with command and "
                   "reason), limitations, out-of-scope findings. Never merge or push.")
-        checks = ("Run only the targeted checks of your spec. For a slow suite with cases (--list-cases works), run only "
-                  "the cases your change touches via --case; list them with `python3 -B tests/affected.py cases "
-                  "<changed-file-list> <suite>`. Never run a whole slow suite or a full tests/run-all.sh.\n")
+        checks = ("Run no test suites; only a syntax check of the files you edited (bash -n, python3 -m py_compile, "
+                  "JSON parse). The task's verify session runs the tests once.\n")
         if placement == "child":
             # a child has its own index: the sub-session commits there and the task lead merges the child branch
             prompt = (f"Implementation sub-session of task {task['id']} in an Orca child "
@@ -1707,7 +1761,7 @@ def cmd_dispatch(a, reg):
                    "the candidate: first check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. "
                    "Never check out, stage, commit or stash." if home else None)
     sub_impl = model_roles["implement"][0]
-    agent = pr.choose(a.agent, "explicit --agent", pr.available(pipe, plan))[0] if a.agent else model_roles[a.phase][0]
+    agent = pr.choose(a.agent, "explicit --agent", pr.available(pipe, plan))[0] if a.agent else model_roles["review" if a.phase == "verify" else a.phase][0]
     place = joined or {"worktree": f"path:{info['path']}", "new": False, "reason": info["reason"]}
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
@@ -1728,7 +1782,8 @@ def cmd_dispatch(a, reg):
                   + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
                                       if cases.startswith("Affected cases (tests/affected.py cases):") else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
+                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
@@ -1739,9 +1794,17 @@ def cmd_dispatch(a, reg):
         os.path.join(info["path"], ".claude-plugin", "plugin.json")))
     checklist = ("skills/factory-core/references/plugin-review.md" if plugin_repo
                  else "the routed lead skill's review checklist")
+    failed, retry = [], False
+    if a.phase == "verify":
+        previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
+        if (previous and previous.get("fingerprint") == scope_fingerprint(plan, reg, task["id"])
+                and previous.get("state") == "FAIL"
+                and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
+            base, failed, retry, base_note = previous["sha"], previous.get("failed_suites", []), True, "fix delta since previous candidate"
     prompt = (f"Review worker ({agent}) for code written by {sub_impl}"
               + (f" (subtask {sub['id']}; record with `verdict --subtask {sub['id']}`)" if sub else "")
-              + ". Read-only: edit nothing, commit nothing. Run no suites; only a minimal repro when needed.\n"
+              + (". Read-only: edit nothing, commit nothing. Review before running tests.\n" if a.phase == "verify"
+                 else ". Read-only: edit nothing, commit nothing. Run no suites; only a minimal repro when needed.\n")
               + SPEC_COMPLETE + "\n" + subagent_rule(a, reg, "review", agent) + "\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
@@ -1751,6 +1814,17 @@ def cmd_dispatch(a, reg):
               + spec_json(spec)
               + "\nReport: `path:line severity problem fix` per finding, then `VERDICT: PASS|FAIL`."
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
+    if a.phase == "verify":
+        suites = runall_suites(home or info["path"])
+        selected_task = dict(task, checks=retry_checks(task, suites)) if retry else task
+        explicit, _, _ = pr.qa_checks([selected_task], suites, failed)
+        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        prompt += ("\nReview first. If any blocking finding exists, report FAIL and run no tests. "
+                   "Otherwise run the following QA once.\n"
+                   + qa_body(a.sha, [selected_task], at_head, base=base,
+                             failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
+                             tiers=pipe.get("qa_tiers")) + "\n" + cases
+                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
@@ -1766,6 +1840,15 @@ def cmd_dispatch(a, reg):
                    "timestamp": now_utc()}, sha)
     child_note(place)
     return 0
+
+
+def retry_checks(task, runall=None):
+    """The task checks a re-verify keeps. A repo with tests/run-all.sh: the run-all commands and the suites are
+    dropped, the failed suites plus `--affected --base <previous candidate>` replace them; any other command
+    (`python3 -B scripts/build-registry.py --check`) stays. A repo without it (a product repo): its check commands
+    (`dotnet test ...`) all stay, because a failed_suites list cannot name them."""
+    return [c for c in task.get("checks", [])
+            if not pr.mentions_runall(c) and not (runall and pr.SUITE_CHECK.search(c))]
 
 
 def child_branch(parent, sid, phase, sha=None):
@@ -2173,37 +2256,51 @@ def fallback_note(rec, agent):
 
 
 def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model, cache=None):
-    """(blockers, notes) for subtasks whose recorded implementer the task review (by rv["by"], paired against impl)
-    does not cover: a subtask by another model than impl, or by the task reviewer's own model, needs its own PASS review
-    by its pair or a dispatch-recorded SAME_MODEL fallback review; a subtask fallback is never laundered by the task
-    review."""
+    """Note code subtasks written by the verifier; one task review covers every subtask."""
     blockers, notes = [], []
     implementers = dict(rv.get("implementers", {}))
     implementers.update(subtask_implementers(plan, t["id"]))
     for sid, x in sorted(implementers.items()):
-        want = pr.paired(pipe, t, x)
-        if x == impl and (rv.get("by") == want or (rv.get("by") == x and (fallback_matches(rv, want) or allow_same_model))):
-            continue
-        stale = set()
-        recs = subtask_reviews(plan, reg, t["id"], sid, target, stale, cache)
-        if any(r.get("by") == want for r in recs):
-            continue
-        fallback = next((r for r in recs if r.get("by") == x and fallback_matches(r, want)), None)
-        if fallback:
-            notes.append(f"{t['id']}: subtask {sid} {fallback_note(fallback, want)}")
-        elif allow_same_model and any(r.get("by") == x for r in recs + [rv]):
-            notes.append(f"{t['id']}: subtask {sid} review SAME_MODEL ({x}) accepted by --allow-same-model")
-        else:
-            blockers.append(f"{t['id']}: subtask {sid} recorded implementer {x}, but the task review by {rv.get('by')} "
-                            f"pairs against {impl}: record `verdict --subtask {sid}` PASS by {want} (or a dispatch-"
-                            "recorded SAME_MODEL fallback review)"
-                            + (f"; stale subtask review: changed paths {', '.join(sorted(stale))}; needs {want} review; "
-                               "sibling coverage requires a recorded implementation start (unknown legacy starts receive no credit)"
-                               if stale else ""))
+        if x == rv.get("by"):
+            recorded = pr.recorded(plan, t["id"], sid, "implementer") or {}
+            paths = recorded.get("paths") or t.get("paths", [])
+            if not paths or not all(pr.prose_path(p) for p in paths):
+                notes.append(f"{t['id']}: subtask {sid} SAME_MODEL (single verify)")
     return blockers, notes
 
 
 def cmd_verdict(a, reg):
+    if a.phase == "verify":
+        if a.task.startswith("integration:"):
+            die("verify verdicts are per task: --task <id>")
+        from argparse import Namespace
+        if a.failed_at and a.state != "FAIL":
+            die("--failed-at goes with --phase verify --state FAIL")
+        if a.state == "FAIL" and not a.failed_at:
+            a.failed_at = "qa" if a.failed_suites is not None else None
+            if not a.failed_at:
+                die("verify --state FAIL needs --failed-at review (the review blocked, no test ran) or qa "
+                    "(a test failed; add --failed-suites for suites)")
+        if a.failed_at == "review" and a.failed_suites is not None:
+            die("--failed-at review ran no tests: --failed-suites goes with a QA failure")
+        if a.failed_suites is not None and a.state != "FAIL":
+            die("--failed-suites goes with --phase qa --state FAIL")
+        qa = Namespace(**vars(a))
+        qa.phase, qa.implementer, qa.fallback = "qa", None, None
+        review = Namespace(**vars(a))
+        review.phase, review.failed_suites = "review", None
+        if a.failed_at == "qa":
+            review.state = "PASS"  # QA only ran after the review passed
+        # review first: its arguments (--implementer, --fallback) are the ones that can still die
+        result = cmd_verdict(review, reg)
+        if result or a.failed_at == "review":
+            # a review that blocked the candidate ran no tests: write no QA record, so the previous QA FAIL (its failed
+            # suites and base) or the original base and checks still decide what the next verify runs
+            if a.failed_at == "review" and not result:
+                print("factory-pipeline: review FAIL ran no tests: QA stays NOT_RUN (no QA record written); the next "
+                      "verify keeps the previous QA base and the task checks", file=sys.stderr)
+            return result
+        return cmd_verdict(qa, reg)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
     if a.report and not os.path.isfile(a.report):
@@ -3153,7 +3250,7 @@ def status(plan, reg, orca_run=None):
             row["notes"].append(f"implementation worker on {row['branch']}"
                                 + (f" in {row['worktree']}" if row["worktree"] else "") + ": wait for its report")
         elif row["phase"] == "candidate":
-            row["next"] = f"{dispatch} --phase review --sha {row['sha']} --runner orca"
+            row["next"] = f"{dispatch} --phase verify --sha {row['sha']} --runner orca"
         elif row["phase"] == "reviewed" and row["review"]["state"] != "PASS":
             row["notes"].append(f"review {row['review']['state']} at {row['review']['sha'][:10]}: fix the findings on "
                                 f"{row['branch']}, then review the new HEAD")
@@ -3310,7 +3407,7 @@ def main():
         if name == "dispatch":
             d.add_argument("plan")
             d.add_argument("--task", required=True)
-            d.add_argument("--phase", required=True, choices=("lead", "implement", "review", "qa"))
+            d.add_argument("--phase", required=True, choices=("lead", "implement", "review", "qa", "verify"))
             d.add_argument("--sha")
             d.add_argument("--paths", nargs="+")
             d.add_argument("--report-to")
@@ -3328,13 +3425,15 @@ def main():
     v = sub.add_parser("verdict", parents=[common])
     v.add_argument("plan")
     v.add_argument("--task", required=True)
-    v.add_argument("--phase", required=True, choices=("review", "qa"))
+    v.add_argument("--phase", required=True, choices=("review", "qa", "verify"))
     v.add_argument("--sha", required=True)
     v.add_argument("--by", required=True)
     v.add_argument("--state", required=True)
     v.add_argument("--report")
     v.add_argument("--note")
     v.add_argument("--failed-suites")
+    v.add_argument("--failed-at", choices=("review", "qa"),
+                   help="--phase verify --state FAIL: `review` = the review blocked and no test ran (no QA record)")
     v.add_argument("--implementer")
     v.add_argument("--subtask")
     v.add_argument("--subplan")

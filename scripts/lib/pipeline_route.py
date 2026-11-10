@@ -407,6 +407,10 @@ def full_run(check):
 
 def qa_warnings(task):
     out = []
+    if any(SUITE_CHECK.search(c) or mentions_runall(c) or
+           re.search(r'\b(?:dotnet test|go test|pytest|npm test|cargo test)\b', c)
+           for c in task.get('checks', [])):
+        out.append(f"task {task.get('id')}: checks contain test suites; implementers run syntax checks only, verify runs suites")
     if any(full_run(c) for c in task.get('checks', [])):
         out.append(f"task {task.get('id')}: full run in checks; full runs belong to integration QA")
     for text in task.get('acceptance', []):
