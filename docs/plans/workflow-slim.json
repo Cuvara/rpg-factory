@@ -1,0 +1,205 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "workflow-slim",
+  "title": "Slim the plugin task workflow and close its gaps",
+  "goal": "Cut the fixed token cost of every plugin pipeline session (CLAUDE.md, delivery.md, prompts that invite reading the policy) without losing a rule, and add what the flow lacks: a plugin review checklist, a base-health check, a run cost ledger, a learning-loop step and a tier XS fast path for small prose changes.",
+  "topic": "workflow-slim",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7"
+    }
+  },
+  "tasks": [
+    {
+      "id": "slim-claude-md",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "standard",
+      "grade_reason": "large prose move with tests that read CLAUDE.md; no logic",
+      "objective": "Every session in this repo auto-loads .claude/CLAUDE.md (23 KB); most of it serves only the run lead or releases. Cut it to about 8 KB without losing a rule: keep the 'Rules for changing this repo' (each rule compressed, pointing to the file that holds the detail), the Operating lessons as one line each with their reason, and a short core command list (run-all tiers, the single suites a change most often needs, build-registry, changelog). Move 'How it fits together' and 'Layout' verbatim (edited only for links) to a new docs/architecture/overview.md; move the release procedure ('Releases' rule, authorized release order) to a new docs/releasing.md; move the full command list to scripts/README.md (a 'Commands' section; keep its existing index). 'Developing this plugin' becomes at most 3 lines pointing to factory-core SKILL.md step 6 and skills/delivery/references/delivery.md. Update every script and suite that reads or cites CLAUDE.md sections that moved (tests/new-skill.test.sh, tests/pipeline.test.sh, tests/routing.test.sh, tests/run-all.sh, scripts/new-skill.py, scripts/release-check.py, scripts/skill-touchpoints.py, scripts/lib/snapshot_render.py, scripts/checks/english-only.py: check each; change only what a moved section breaks). AGENTS.md pointers follow. Changelog fragment changelog.d/slim-claude-md.md. Report the byte size before and after.",
+      "paths": [
+        ".claude/CLAUDE.md",
+        "AGENTS.md",
+        "docs/architecture/overview.md",
+        "docs/releasing.md",
+        "scripts/README.md",
+        "scripts/new-skill.py",
+        "scripts/release-check.py",
+        "scripts/skill-touchpoints.py",
+        "scripts/lib/snapshot_render.py",
+        "scripts/checks/english-only.py",
+        "tests/new-skill.test.sh",
+        "tests/routing.test.sh",
+        "tests/release-check.test.sh",
+        "changelog.d/slim-claude-md.md"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check",
+        "tests/run-all.sh --affected --base 8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7 -j 2"
+      ],
+      "acceptance": [
+        ".claude/CLAUDE.md is at most 9 KB and every rule it had is still stated in CLAUDE.md or in the file it points to",
+        "docs/architecture/overview.md and docs/releasing.md exist and CLAUDE.md links them",
+        "no suite or script reads a CLAUDE.md section that no longer exists",
+        "affected suites 0 failed"
+      ]
+    },
+    {
+      "id": "dedupe-delivery",
+      "repo": "plugin",
+      "kind": "policy",
+      "grade": "heavy",
+      "grade_reason": "rewrite of the single policy copy with marker sentences and mutation tests; a lost rule is a regression",
+      "objective": "skills/delivery/references/delivery.md (56 KB) is read by every run lead and invited by every dispatch prompt. Make each rule live in one place and cut it to at most 32 KB without losing a rule: (1) the Orca lineage lesson (git worktree add --no-track, orca worktree set, never orca worktree create) only in section 4 'Orca visibility'; section 4 'Lesson', 'Child worktrees / Run lead' and section 5 'No nested workers' keep one pointer sentence; (2) 'sub-sessions never commit', 'release each session / CLI exited / test processes' and 'one full run per machine' each stated once, others point; (3) section 10 step 4's verdict CLI details (--fallback retrospective form, --implementer, --allow-same-model, --subtask rules) and the 'Model choice' flag/runner details move to a new docs/pipeline-cli.md, leaving the policy sentence in delivery.md; (4) skills/delivery/SKILL.md 'Flow' becomes a short pointer list to delivery.md section 10 steps; (5) skills/factory-core/SKILL.md steps 6, 7, 11, 12 keep only what the registry adds (commands, run-checks, human gates) and point to delivery.md for the flow; (6) skills/factory-core/references/parallel-work.md 'Tier commands of this plugin repo' details (lock, reuse hash rule, selection, slots, case maps) move to tests/README.md, leaving one paragraph. Keep every '<!-- policy:* -->' marker and its sentence byte-identical, keep every section number and named subsection that skills, docs or scripts cite (grep for 'section N' and quoted subsection names across skills/, docs/, scripts/, tests/ and keep them resolvable), and keep tests/orca-commands.test.sh green (the Orca command list it reads stays in delivery.md). Update tests/parallel-policy.test.sh, tests/skills-lint.sh, tests/delivery-generic.test.sh only where a moved text breaks them. Changelog fragment changelog.d/dedupe-delivery.md. Report the byte sizes before and after.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "skills/delivery/SKILL.md",
+        "skills/factory-core/SKILL.md",
+        "skills/factory-core/references/parallel-work.md",
+        "docs/pipeline-cli.md",
+        "tests/README.md",
+        "tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh",
+        "tests/delivery-generic.test.sh",
+        "changelog.d/dedupe-delivery.md"
+      ],
+      "deps": [],
+      "checks": [
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh",
+        "tests/orca-commands.test.sh",
+        "python3 -B scripts/checks/skill-citations.py",
+        "python3 -B scripts/changelog.py check",
+        "tests/run-all.sh --affected --base 8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7 -j 2"
+      ],
+      "acceptance": [
+        "delivery.md is at most 32 KB and every rule it had is stated once in delivery.md, docs/pipeline-cli.md or tests/README.md",
+        "every policy marker sentence unchanged; every cited section number and subsection name still resolves",
+        "factory-core SKILL.md and delivery SKILL.md no longer restate the flow steps",
+        "affected suites 0 failed"
+      ]
+    },
+    {
+      "id": "prompts",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "prompt text changes in one script plus a new prose checklist and prompt tests",
+      "objective": "(1) The implement, review and QA prompts of scripts/factory-pipeline.py cite '(references/delivery.md)', which invites a self-contained session to read the 56 KB policy. Replace that with one sentence: the spec is complete; read skills/delivery/references/delivery.md only when blocked by something the spec does not cover. The task-lead prompt keeps its delivery.md reference. (2) A plugin task has no routed lead, so the review prompt's 'the routed lead skill's review checklist' gives a reviewer nothing. Write skills/factory-core/references/plugin-review.md: the review checklist for this plugin repo, each item one line with the rule's source (CLAUDE.md rule or test): changelog fragment per behaviour change and CHANGELOG [Unreleased] empty; a test per behaviour change; registry.json is the build (build-registry --check); no bare 'bash' in a subprocess (scripts/lib/shells.py find_bash); executable bit via git update-index --chmod=+x; hooks never block, never crash, end with '; exit 0', advisories only; read-only scripts write nothing into product repos; state paths through scripts/lib/fstate.py; English only; skill path:line citations pass skill-citations; no machine-specific paths in docs/plans. When the task's repo is the plugin checkout (plan repo key 'plugin' or a repo whose root holds .claude-plugin/plugin.json), the review prompt names that checklist file. Tests in tests/pipeline.test.sh: the implement/review/QA prompts no longer cite delivery.md as reading, the lead prompt still does, a plugin repo review prompt names plugin-review.md and a non-plugin repo prompt does not. Add the new reference to skills/factory-core/SKILL.md 'References - read when' only if skills-lint requires it (dedupe-delivery owns SKILL.md: if required, report it as a follow-up instead). Changelog fragment changelog.d/prompt-trim.md.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "skills/factory-core/references/plugin-review.md",
+        "tests/pipeline.test.sh",
+        "changelog.d/prompt-trim.md"
+      ],
+      "deps": [],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh --case <cases the change touches>",
+        "tests/skills-lint.sh",
+        "tests/run-all.sh --affected --base 8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7 -j 2"
+      ],
+      "acceptance": [
+        "implement, review and QA prompts tell the session the spec is complete and delivery.md is for when blocked",
+        "plugin-repo review prompts name skills/factory-core/references/plugin-review.md; other repos do not",
+        "affected suites 0 failed"
+      ]
+    },
+    {
+      "id": "base-health",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "new optional plan field, schema, validate/dispatch output and QA spec change with tests",
+      "objective": "In plan plugin-subagent-rules, QA went BLOCKED/FAIL on suites already failing at the base. Add an optional plan field 'known_failing' (list of {check, reason}) to docs/schemas/pipeline-plan.schema.json. 'validate' prints the known-failing checks as a warning; 'dispatch --phase lead' and '--phase qa' put them in the spec with the instruction: a failure of a listed check that also fails at the task base is reported as FAIL_AT_BASE (named in the QA report, not a task FAIL); a listed check that now passes is reported as fixed. 'dispatch --phase lead' also prints a one-line base health hint for a repo with a GitHub remote: the command 'gh run list --branch <base branch> --limit 1' to check before starting (print only, never run network commands). templates/pipeline/qa-report.md gains a 'Failing at base' line. Tests in tests/pipeline.test.sh (validate warning, spec text in lead and QA prompts, schema accepts and rejects bad shapes). Changelog fragment changelog.d/base-health.md.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "docs/schemas/pipeline-plan.schema.json",
+        "templates/pipeline/qa-report.md",
+        "tests/pipeline.test.sh",
+        "changelog.d/base-health.md"
+      ],
+      "deps": [
+        "prompts"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh --case <cases the change touches>",
+        "tests/run-all.sh --affected --base 8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7 -j 2"
+      ],
+      "acceptance": [
+        "a plan with known_failing validates and warns; a malformed one is rejected",
+        "lead and QA specs carry the known-failing checks and the FAIL_AT_BASE rule",
+        "affected suites 0 failed"
+      ]
+    },
+    {
+      "id": "report-loop",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "light",
+      "grade_reason": "short prose additions to the run report rules and template",
+      "objective": "Two gaps in the run report. (1) Cost ledger: the run report has no per-session usage, so workflow changes cannot be measured. Add to delivery.md section 8 'Run report and plan edits' and to skills/factory-core/references/report.md (and the run report layout parallel-work.md cites) a 'Cost' table: per session role, model, effort and tokens or cost when the runtime shows them (Claude Code /cost or the session footer, Codex usage line, Orca if it reports it), else NOT_AVAILABLE; plus the run lead's own total. Never estimate a number and present it as measured. (2) Learning loop: follow-ups reach docs/plans/backlog.md by hand. Add to delivery.md section 8 and to factory-core SKILL.md step 12 one rule: the run report's limitations and follow-ups go to the backlog (in this plugin: docs/plans/backlog.md, as one topic each) and every new operating lesson to the file the learning-loop rule names, in the integration commit. Changelog fragment changelog.d/report-loop.md.",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/SKILL.md",
+        "skills/factory-core/references/report.md",
+        "skills/factory-core/references/parallel-work.md",
+        "changelog.d/report-loop.md"
+      ],
+      "deps": [
+        "dedupe-delivery"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "the run report rules ask for a Cost table with NOT_AVAILABLE when unmeasured",
+        "the backlog/lesson step is in delivery.md section 8 and factory-core step 12",
+        "checks 0 failed"
+      ]
+    },
+    {
+      "id": "tier-xs",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "heavy",
+      "grade_reason": "changes a deliberate policy marker, tier logic, validate and gate acceptance; gate regressions are costly",
+      "objective": "User decision 2026-11-10: add tier XS. A tiny change still costs ~4 sessions today (run lead, task lead, implementer, reviewer). XS: every owned path is prose (scripts/lib/pipeline_route.py prose_path) and the change is within a registry threshold (registry/core.json pipeline.tiers.XS: max_files 3, max_changed_lines 40, contracts false, generated false; mirror in skills/delivery/pipeline-defaults.json; registry.json rebuilt with python3 -B scripts/build-registry.py; docs/registry.schema.json). Flow: the run lead writes a one-task plan with tier XS, edits the files itself on the plan topic branch, commits with explicit paths, then dispatches one cross-model review (dispatch --phase review --sha <sha>; the implementer recorded as the run lead's model) and runs the task QA tier command itself, recording 'verdict --phase qa --state PASS --by <lead model> --note \"tier XS: lead ran task suites\"'. No task lead, no task worktree, no implement session. Code: 'tier' prints XS when it applies; 'validate' accepts a one-task XS plan and rejects XS when a path is not prose, more than one task, or a threshold is exceeded; 'dispatch --phase lead' on an XS task says the run lead edits it and prints the review command; 'dispatch --phase review' works without a task worktree for XS (reads the topic checkout); 'gate' accepts the XS review plus the lead-run QA and blocks when the committed diff exceeds the thresholds. Policy: the '<!-- policy:run-lead-never-implements -->' sentence gains the XS exception (update its mutation case in tests/parallel-policy.test.sh), delivery.md section 1 and section 10 step 1 and the QA tiers table name XS, factory-core SKILL.md step 6 names XS (one line each). Tests in tests/pipeline.test.sh: XS tier printed, XS plan validates, non-prose path never XS, oversize diff never XS (validate and gate), gate READY_FOR_PR for an XS task with review PASS and lead QA. Changelog fragment changelog.d/tier-xs.md.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "registry/core.json",
+        "registry.json",
+        "skills/delivery/pipeline-defaults.json",
+        "docs/registry.schema.json",
+        "docs/schemas/pipeline-plan.schema.json",
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/SKILL.md",
+        "tests/parallel-policy.test.sh",
+        "tests/pipeline.test.sh",
+        "changelog.d/tier-xs.md"
+      ],
+      "deps": [
+        "base-health",
+        "report-loop"
+      ],
+      "checks": [
+        "python3 -B scripts/build-registry.py --check",
+        "scripts/check-registry.sh",
+        "env -u TMPDIR tests/pipeline.test.sh --case <cases the change touches>",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/run-all.sh --affected --base 8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7 -j 2"
+      ],
+      "acceptance": [
+        "tier prints XS only for prose-only changes within the thresholds",
+        "an XS plan reaches READY_FOR_PR with the run lead's commit, one cross-model review and the lead-run QA",
+        "the run-lead-never-implements marker states the XS exception and its mutation test bites",
+        "affected suites 0 failed"
+      ]
+    }
+  ]
+}
