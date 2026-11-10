@@ -1,7 +1,41 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/git-guard.py. Builds a throwaway fake workspace in a temp
 # dir (never touches the real repos), feeds hook payloads, and checks the decision.
+# Cases follow the `# ---- ` groups below; --case NAMES runs only those (tests/affected.py maps changed files to cases).
+# case-map: skill-read skills/*/SKILL.md
+# Selection: only a skills/<name>/SKILL.md change selects a case (skill-read); every other input runs ALL cases - the suite's own
+# file, root files, registry.json, scripts/git-guard.py, scripts/lib/gitguard.py, scripts/lib/guard/*, scripts/factory_session.py,
+# scripts/factory-context.sh, scripts/lib/compat.sh and tests/affected.py. A guard module has no map line on purpose: every module
+# is imported by another, up to runtime.py, which every case runs through, so no module change is narrower than ALL.
 set -uo pipefail
+CASES='retry-selftest skill-read process-kill policy wrappers commit-ops gh-api v2-misc worktrees latch modes tech-skills remote-mutations local-refs classification mode-switch cli-selftest'
+usage() {
+  printf '%s\n' 'Usage: git-guard.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
+}
+SELECTED=; list_cases=0
+add_cases() {
+  local selected
+  local -a tokens
+  read -r -a tokens <<< "${1//,/ }"
+  [ "${#tokens[@]}" -gt 0 ] || { printf 'Empty case selector\n' >&2; exit 2; }
+  for selected in "${tokens[@]}"; do
+    [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+    [[ " $SELECTED " == *" $selected "* ]] || SELECTED+=" $selected"
+  done
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --list-cases) list_cases=1; shift ;;
+    --case|--only) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; add_cases "$2"; shift 2 ;;
+    --case=*|--only=*) add_cases "${1#*=}"; shift ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before the fixture workspace or any temp dir exists.
+if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
+all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
+has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -88,6 +122,7 @@ check() { # expected cwd command [env] [tool]
 }
 rcheck() { real_checks=$((real_checks + 1)); rcheck_cases=$((rcheck_cases + 1)); check "$@"; }   # this case on the real hook process
 
+CTX="$ROOT/scripts/factory-context.sh"; RC="$ROOT/scripts/run-checks.py"
 # Exercise the real case runner with deterministic empty-output stand-ins. Run in
 # subshells so intentionally failing cases cannot alter the suite's counters.
 retry_selftest() (
@@ -107,6 +142,7 @@ retry_selftest() (
   read -r calls < "$count_file"
   printf 'RESULT calls=%s pass=%s fail=%s\n' "$calls" "$pass" "$fail"
 )
+if has_case retry-selftest; then
 for mode in recovered empty allowed; do
   result=$(retry_selftest "$mode")
   case "$mode" in
@@ -119,7 +155,9 @@ for mode in recovered empty allowed; do
   }; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL retry self-test %s: %s\n' "$mode" "$result"; fi
 done
+fi
 
+if has_case skill-read; then
 # ---- a registered skill read as a file instead of loaded with the Skill tool: warn (dogfood found sessions doing it)
 check warn  "$SERVER" "cat $ROOT/skills/game-design/SKILL.md"
 check warn  "$SERVER" 'cd /tmp && sed -n 1,80p skills/ui-ux/SKILL.md; ls'
@@ -129,6 +167,8 @@ check allow "$SERVER" 'grep -n Tools skills/vfx/SKILL.md'      # searching is no
 check allow "$SERVER" 'cat skills/nosuch/SKILL.md'             # not a registered skill
 check allow "$SERVER" 'echo "see skills/art-2d/SKILL.md"'      # quoted text is data
 
+fi
+if has_case process-kill; then
 # ---- host-wide process termination advisories (regressions; never execute these commands)
 check high "$SERVER" 'taskkill //F //IM powershell.exe >/dev/null 2>&1'
 check high "$SERVER" 'taskkill //F //IM dotnet.exe'
@@ -238,6 +278,8 @@ MSG_EOF"
 check high "$LINKED" 'taskkill //F //IM dotnet.exe'
 check allow "$LINKED" 'taskkill /T /PID 1234 /F'
 
+fi
+if has_case policy; then
 # read-only commands pass through
 rcheck allow "$SERVER" "git status"
 check allow "$SERVER" "git diff --stat"
@@ -357,6 +399,8 @@ jq '.human_gates[1].match = "(("' "$ROOT/registry.json" > "$BROKEN/registry.json
 payload=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash", tool_input:{command:"git reset --hard"}, cwd:$d}')
 got=$(CLAUDE_PLUGIN_ROOT="$BROKEN" python3 "$GUARD" <<<"$payload" | jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end')
 if [ "$got" = "warn" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL broken regex disabled git protection (got $got)"; fi
+fi
+if has_case wrappers; then
 # ---- v2: wrappers and nested shells (were ALLOW in the v0.2 audit)
 check warn "$SERVER" 'bash -c "git reset --hard"'
 check warn "$SERVER" "sh -c 'git push --force'"
@@ -392,6 +436,8 @@ check warn "$SERVER" 'node -e "require(\"child_process\").execSync(\"git push\")
 rcheck high "$SERVER" 'bash -c "git tag v1.0.0"'
 check high "$SERVER" 'env GIT_DIR=.git git push origin --tags'
 check high "$SERVER" "sudo git tag sgl-v9.9.9"
+fi
+if has_case commit-ops; then
 # ---- v2: commit-creating / ref-destroying operations
 check warn "$SERVER" "git merge feat/x"
 check warn "$SERVER" "git merge --no-ff feat/x"
@@ -424,6 +470,8 @@ check warn "$SERVER" "git pull --rebase=merges"
 check allow "$FEATURE" "git pull"
 check allow "$SERVER" "git merge --abort"
 check allow "$SERVER" "git fetch --prune"
+fi
+if has_case gh-api; then
 # ---- v2: gh API / releases
 rcheck high "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/tags/v9 -f sha=abc"
 rcheck high "$SERVER" "gh api repos/Cuvara/x/git/tags -f tag=v9"
@@ -432,6 +480,8 @@ check high "$SERVER" "gh api -X POST repos/Cuvara/x/releases -f tag_name=v1"
 check warn "$SERVER" "gh api -X POST repos/Cuvara/x/git/refs -f ref=refs/heads/x -f sha=abc"
 check allow "$SERVER" "gh api repos/Cuvara/x/git/refs/tags"
 check allow "$SERVER" "gh release list"
+fi
+if has_case v2-misc; then
 # ---- v2: read-only wrapped commands stay allowed (no false positives)
 check allow "$SERVER" 'bash -c "git status"'
 check allow "$SERVER" "env git log --oneline -3"
@@ -453,6 +503,8 @@ git -C "$SERVER" config alias.wipe "reset --hard"
 git -C "$SERVER" config alias.shwipe '!git reset --hard'
 check warn "$SERVER" "git wipe"
 check warn "$SERVER" "git shwipe"
+fi
+if has_case worktrees; then
 # ---- v2: worktree of a protected repo keeps protected-branch rules via the main checkout
 git -C "$SERVER" worktree add -q "$TMP/ws/srv-wt" -b feat/server/wt 2>/dev/null
 check allow "$TMP/ws/srv-wt" "git commit -m 'feat(server): x'"
@@ -484,6 +536,8 @@ check allow "$OXW" "git tag -a v9.9.9 -m x"                       # main checkou
 check allow "$OXW" "git push --force origin main"
 check allow "$SERVER" "git -C $OXW tag v9.9.9"
 check allow "$TMP/orca/missing" "git tag v9.9.9"                  # not a repo / missing dir: no opinion
+fi
+if has_case latch; then
 # ---- 1.0.1: the tripwire latch is gone - state files left by older versions (a session LATCH, open workspace
 # events, a legacy single-file latch) never block anything
 mkdir -p "$TMP/rpg-factory/guardtest" && echo "test violation" > "$TMP/rpg-factory/guardtest/LATCH"
@@ -511,13 +565,15 @@ if [ -z "$out" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL n
 out=$(echo 'not json' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; echo "exit=$?")
 if [ "$out" = "exit=0" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL malformed stdin: $out"; fi
 
+fi
+if has_case modes; then
 # ---- v0.4: execution modes - declared with factory-context.sh --mode, enforced per session
 mcheck() { # expected command [tool]
   local out got; out=$(jq -cn --arg c "$2" --arg d "$SERVER" --arg t "${3:-Bash}" '{tool_name:$t,tool_input:{command:$c},cwd:$d,session_id:"modes"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
   got=$(jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${out:-{\}}")
   if [ "$got" = "$1" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); printf 'FAIL mode expected=%s got=%s cmd=%s\n  out=%s\n' "$1" "$got" "$2" "$out"; fi
 }
-CTX="$ROOT/scripts/factory-context.sh"; RC="$ROOT/scripts/run-checks.py"
+# (CTX and RC are defined with the helpers above)
 mcheck allow "touch before-any-mode.txt"                                  # no mode declared: normal rules
 mcheck allow "bash $CTX --mode plan --repo server --paths backend/x.go"    # declaring is read-only
 mcheck high  "touch plan.txt"
@@ -568,6 +624,8 @@ jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factory:fact
 o=$(jq -cn --arg d "$SERVER" '{tool_name:"Bash",tool_input:{command:"touch odd-id.txt"},cwd:$d,session_id:"odd/id:1"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
 case "$o" in *"Factory mode is \`plan\`"*) pass=$((pass + 1));; *) fail=$((fail + 1)); echo "FAIL mode for a non-UUID session id not seen by git-guard: ${o:-none}";; esac
 
+fi
+if has_case tech-skills; then
 # ---- 1.0.0: a tech skill (registry kind "tech") is denied until one of its used_by leads ran in the session
 sk() { local o; o=$(jq -cn --arg sk "$1" --arg s "$2" --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:$sk,args:"how do I run one test"},cwd:$d,session_id:$s}' \
   | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$ROOT/scripts/factory_session.py" --skill); jq -r 'if .hookSpecificOutput.permissionDecision then "DECISION" elif .hookSpecificOutput.updatedInput then "swap:" + .hookSpecificOutput.updatedInput.skill else ((.hookSpecificOutput.additionalContext // "") | (capture("^rpg-factory advisory [(](?<l>[a-z]+)[)]") // {l: "allow"}) | .l) end' <<<"${o:-{\}}"; }
@@ -615,6 +673,8 @@ out=$(jq -cn --arg d "$SERVER" '{tool_name:"Skill",tool_input:{skill:"rpg-factor
   | CLAUDE_PLUGIN_ROOT="$TMP/no-such-plugin" python3 "$ROOT/scripts/factory_session.py" --skill; echo "rc=$?")
 [ "$out" = "rc=0" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL skill hook without a registry must fail open: $out"; }
 
+fi
+if has_case remote-mutations; then
 # ---- v0.4: GitHub remote mutations (remote-only: the guard is the only defence)
 check high "$SERVER" "gh api graphql -f query='mutation{createRef(input:{repositoryId:\"R\",name:\"refs/tags/v9\",oid:\"abc\"}){ref{name}}}'"
 check high "$SERVER" "gh api graphql -f query='mutation(\$n:String!){createRef(input:{name:\$n}){ref{name}}}' -f n=refs/tags/v9"
@@ -660,6 +720,8 @@ check high "$OUT" "gh api -X DELETE repos/Cuvara/UnityDots"
 check warn "$OUT" "gh api -X PUT repos/Cuvara/UIToolkit/branches/main/protection --input p.json"
 rcheck allow "$OUT" "gh repo delete someone/scratch --yes"
 
+fi
+if has_case local-refs; then
 # ---- v0.4: local ref / remote / config mutations on protected branches
 git -C "$SERVER" branch feat/x 2>/dev/null
 check warn "$SERVER" "git branch -m develop old-develop"
@@ -724,6 +786,8 @@ check high "$OUT" "git -C $SERVER tag v1.2.3"
 check warn "$OUT" "git -C $SERVER reset --hard HEAD~1"
 check allow "$OUT" "git -C $OUT reset --hard"
 
+fi
+if has_case classification; then
 # ---- 1.0.5: guard classification gaps
 # (1) git-bash paths: on Windows `/c/ws` and `/mnt/c/ws` once resolved to C:\c\ws (no workspace: no advisory)
 nt=$(python3 -B - "$GUARD" <<'PY'
@@ -877,8 +941,7 @@ for p in '[]' 'null' '"s"' '42' '{"tool_name":"Bash","tool_input":"x"}' '{"tool_
   out=$(printf '%s' "$p" | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" 2>&1; echo "exit=$?")
   if [ "$out" != "exit=0" ]; then fail=$((fail + 1)); echo "FAIL payload $p: $out"
   elif [ -n "$first_payload" ] && [ "$batch_protocol_ok" != ok ]; then
-    fail=$((fail + 1)); printf 'FAIL batch protocol: %s
-' "${batch_protocol_ok:-no output (assertion failed)}"
+    fail=$((fail + 1)); printf 'FAIL batch protocol: %s\n' "${batch_protocol_ok:-no output (assertion failed)}"
   else pass=$((pass + 1)); fi
   first_payload=
 done
@@ -904,6 +967,8 @@ out=$(jq -cn --rawfile c "$TMP/big.txt" --arg d "$SERVER" '{tool_name:"Bash",too
   | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD"; echo "rc=$?")
 case "$out" in *'rpg-factory advisory (warn)'*'command too large to check'*rc=0) pass=$((pass + 1));;
   *) fail=$((fail + 1)); echo "FAIL oversized command: ${out:0:300}";; esac
+fi
+if has_case mode-switch; then
 # (10) a mode switch counts wherever it runs, and only when the script really runs
 mx() { # expected cwd command
   local out got; out=$(jq -cn --arg c "$3" --arg d "$2" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d,session_id:"modes-x"}' | CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD")
@@ -925,12 +990,36 @@ mx allow "$SERVER" "bash -x $CTX --mode analyze"
 mx high  "$SERVER" "touch f.txt"
 mx allow "$SERVER" "bash $CTX --mode implement"
 
+fi
 
+# The case selection itself: --help exits 0, an unknown argument or case exits 2 before any run, and a subset runs
+# fewer assertions than the full run.
+if has_case cli-selftest; then
+  self="${BASH_SOURCE[0]}"
+  bash "$self" --help >/dev/null 2>&1 && pass=$((pass + 1)) || { fail=$((fail + 1)); echo 'FAIL --help did not exit 0'; }
+  bash "$self" --no-such-option >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL unknown argument exited $rc, want 2"; }
+  bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL unknown case exited $rc, want 2"; }
+  for selector in ',' ' '; do
+    for option in --case --only; do
+      bash "$self" "$option" "$selector" >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq 2 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL $option empty selector exited $rc, want 2"; }
+    done
+  done
+  child=$(bash "$self" --case retry-selftest --only retry-selftest 2>&1); rc=$?
+  n_one=$(sed -n 's/^git-guard tests: \([0-9]*\) run.*/\1/p' <<<"$child")
+  n_failed=$(sed -n 's/^git-guard tests: [0-9]* run, [0-9]* passed, \([0-9]*\) failed$/\1/p' <<<"$child")
+  # the cheapest case (retry-selftest, ~12 s: fixture build + 3 assertions) keeps the child run short; one child run builds its own fixture; in a full run the parent has run more assertions than the one case
+  if [ "$rc" -eq 0 ] && [ "${n_failed:-missing}" = 0 ] && [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail)) ]; }; then pass=$((pass + 1))
+  else fail=$((fail + 1)); echo "FAIL --case retry-selftest: exit $rc, ${n_failed:-?} failed, ${n_one:-?} assertions; parent has $((pass + fail))"; fi
+fi
 exec {batch_in}>&- {batch_out}<&-
 # Close the coprocess's original descriptor too so it observes EOF.
 exec {GUARD_BATCH[1]}>&-
 wait "$batch_pid" || { fail=$((fail + 1)); echo 'FAIL batch process exit'; }
-if [ "$real_hook_cases" -ne $((12 + rcheck_cases)) ]; then
+# A subset can run fewer than the 12 ordinary cases; only a full run asserts the exact count.
+if { [ "$all_cases" = 1 ] && [ "$real_hook_cases" -ne $((12 + rcheck_cases)) ]; } || [ "$real_hook_cases" -gt $((12 + rcheck_cases)) ]; then
   fail=$((fail + 1)); echo "FAIL real-hook cases: $real_hook_cases, want $((12 + rcheck_cases)) (12 + $rcheck_cases rchecks)"
 fi
 echo "git-guard real-hook cases: $real_hook_cases (12 + $rcheck_cases rchecks; env cases also on the real hook)"

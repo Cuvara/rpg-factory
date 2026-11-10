@@ -31,9 +31,10 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   suites with `--only-suites`); a task never runs the full suite. CI is the full-suite gate: before opening a PR,
   integration QA runs `tests/run-all.sh --workspace-only` (what CI cannot run) and must report 0 failed; after the
   PR opens, CI (`gh pr checks <pr> --watch`) must be green before merging, and while CI runs, start the next task. The full `tests/run-all.sh --release`
-  and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers: `parallel-work.md`
-  section 10 "QA tiers". CI (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`, so
-  `--workspace-only` covers the rest.
+  and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers (with typical times):
+  `delivery.md` section 10 "QA tiers". An implementer runs only its spec's targeted checks and, in a slow suite,
+  only the cases its change touches (`--case`, `tests/affected.py cases`); tier S and docs-only tasks get lead QA.
+  CI (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`, so `--workspace-only` covers the rest.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`. New skills start
@@ -88,7 +89,7 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
   the shared `.git/config`, which races with other sessions' runs.
 - **Task worktree lineage goes through `orca worktree set --worktree path:<task> --parent-worktree path:<integration checkout>`,
   never `orca worktree create`.** `create` writes `branch.<name>.base` into the shared `.git/config`; `set` writes only
-  Orca metadata (config hash unchanged). `dispatch --phase lead` prints the line after `git worktree add --no-track`.
+  Orca metadata (config hash unchanged). `dispatch --phase lead` prints it after `git worktree add --no-track`, before the launch.
 - **Git Bash, never WSL, on Windows** (every agent runtime). A WSL git run once wrote `core.worktree=/mnt/c/...`
   into the shared config and broke every checkout of the repo.
 - **Fix citation drift right before a release gate:** `python3 -B scripts/checks/skill-citations.py --fix`.
@@ -96,7 +97,15 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
   they drifted between the fix and the gate four times. Check their open PRs before starting the gate.
 - **One full run per machine: the run-all lock** (a second full `tests/run-all.sh` waits; `--no-wait` exits 3).
   Four parallel full runs made every suite 2-4x slower and timed some out; other sessions use the tier command
-  (`parallel-work.md` section 10 "QA tiers").
+  (`delivery.md` section 10 "QA tiers").
+- **Targeted runs take a test slot** (`--affected` / `--only-suites`: `RPG_FACTORY_TEST_SLOTS` slots machine-wide,
+  default 2): a busy machine makes a run wait with a message instead of slowing every suite 2-4x. The slot belongs
+  to the run, not the session: stop a QA worker's background test run before abandoning the worker, or it keeps its
+  slot (an aborted QA once held one for 45 min). Frozen copies of a suite go under a temp dir, never into `tests/`.
+- **Task worktrees must be visible in Orca** (maintainer, 2026-11-09). A `git worktree add --no-track` worktree has
+  no Orca lineage and lands in Orca's hidden section: run `orca worktree set --worktree path:<dir>
+  --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress` before
+  `orca agent launch` (`delivery.md` section 4 "Orca visibility"; `dispatch --phase lead` prints it).
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
   script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted

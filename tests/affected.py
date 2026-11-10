@@ -7,6 +7,8 @@
   affected.py select-many FILE SUITE...
                                     print each SUITE that must run (same rule as select), one per line; the
                                     import graph is built once (run-all --affected calls it once per run)
+  affected.py cases FILE SUITE...   print each selected suite and its affected cases, or ALL when uncertain: the case map
+                                    must name every file the suite selects in the import closure of a changed file
   affected.py hashes SUITE...       print suite and input hash (or '-' when reuse is unsafe)
 
 A suite runs when one of these holds (anything unsure runs):
@@ -398,6 +400,50 @@ def needed(files, suite):
     return False
 
 
+def case_map(suite):
+    raw = contents(suite)
+    if raw is None:
+        return None
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return None
+    cases = {}
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            break
+        if re.match(r"#\s*case-map\b", stripped):
+            match = re.fullmatch(r"#\s*case-map:\s+([a-z0-9-]+)\s+(\S+(?:\s+\S+)*)\s*", stripped)
+            if not match:
+                return None
+            name, patterns = match.groups()
+            cases.setdefault(name, []).extend(patterns.split())
+    return cases or None
+
+
+def affected_cases(files, suite):
+    mapping = case_map(suite)
+    if mapping is None or suite in files or any(always(f) for f in files) or library_graph()[2]:
+        return "ALL"
+    selected = set()
+    for path in files:
+        if not needed([path], suite):
+            continue
+        reached = closure(path)
+        if reached is None:
+            return "ALL"
+        # a shared module reaches every file that imports it: each reached file the suite selects must be mapped
+        # (the suite itself is reached through its own named scripts and says nothing about a case)
+        for hit_path in sorted(p for p in reached if p != suite and selects(p, suite)):
+            matched = {name for name, patterns in mapping.items() for pattern in patterns
+                       if fnmatch.fnmatchcase(hit_path, pattern + "*" if pattern.endswith("/") else pattern)}
+            if not matched:
+                return "ALL"
+            selected.update(matched)
+    return ",".join(sorted(selected)) if selected else "ALL"
+
+
 def hashes(suites):
     versions = [sys.version]
     for cmd in (["git", "--version"], ["bash", "--version"], ["jq", "--version"]):
@@ -449,6 +495,13 @@ def main(argv):
         with open(argv[1], encoding="utf-8") as fh:
             files = [x.strip() for x in fh if x.strip()]
         return 0 if needed(files, argv[2]) else 1
+    if argv[:1] == ["cases"] and len(argv) >= 2:
+        with open(argv[1], encoding="utf-8") as fh:
+            files = [x.strip() for x in fh if x.strip()]
+        lines = [suite + "\t" + affected_cases(files, suite) + "\n"
+                 for suite in dict.fromkeys(argv[2:]) if needed(files, suite)]
+        sys.stdout.buffer.write("".join(lines).encode())
+        return 0
     if argv[:1] == ["select-many"] and len(argv) >= 2:
         with open(argv[1], encoding="utf-8") as fh:
             files = [x.strip() for x in fh if x.strip()]
