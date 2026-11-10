@@ -170,10 +170,11 @@ problems=$(jq -r --argjson pipeline_kinds "$pipeline_kinds" '
           (select((($d.kind // "") | IN("mcp","plugin","binary","service")) | not) | "dev_tools \($d.id): kind must be mcp|plugin|binary|service"),
           (($d.used_by // [])[] | select(($r.skills[.] // null) == null) | "dev_tools \($d.id): used_by unknown skill \(.)"),
           (($d.probes // [])[] | split("|")[] | . as $p | ($p | split(":")) as $pp
-             | if ($pp | length) != 2 or ($pp[1] | length) == 0 or ($pp[0] | IN("bin","tool","service","mcp","plugin","plugin-file") | not)
-                 then "dev_tools \($d.id): bad probe \($p) (bin|tool|service|mcp|plugin|plugin-file:<name>)"
+             | if ($pp | length) != 2 or ($pp[1] | length) == 0 or ($pp[0] | IN("bin","tool","service","mcp","plugin","plugin-file","codex") | not)
+                 then "dev_tools \($d.id): bad probe \($p) (bin|tool|service|mcp|plugin|plugin-file|codex:<name>)"
                elif $pp[0] == "tool" and ($r.tools[$pp[1]] // null) == null then "dev_tools \($d.id): probe \($p) names an unknown tool"
                elif $pp[0] == "service" and (($r.services // {})[$pp[1]] // null) == null then "dev_tools \($d.id): probe \($p) names an unknown service"
+               elif $pp[0] == "codex" and $pp[1] != "subagents" then "dev_tools \($d.id): probe \($p) names an unknown codex probe (only codex:subagents)"
                else empty end),
           (select(($d.fallback // "") | length == 0) | "dev_tools \($d.id): every tool needs a fallback (what a skill does when it is not OK)")),
       (($r.skills // {}) | to_entries[] | select((.value.order | type) != "number") | "skill \(.key): order (number) missing - lead precedence needs it"),
@@ -338,6 +339,17 @@ except model_policy.PolicyError as exc:
 PY4
 )
 [ -n "$mp_err" ] && problems="${problems:+$problems$'\n'}$mp_err"
+
+# pipeline.subagents: roles, access and parallel limits, models inside pipeline.models.scope (lib/subagent_policy.py)
+sa_err=$(python3 -B - "$REGISTRY" "$PLUGIN_ROOT/scripts/lib" <<'PY5'
+import json, sys
+sys.path.insert(0, sys.argv[2])
+import subagent_policy
+for e in subagent_policy.check(json.load(open(sys.argv[1], encoding="utf-8"))):
+    print("pipeline.subagents: " + e)
+PY5
+)
+[ -n "$sa_err" ] && problems="${problems:+$problems$'\n'}$sa_err"
 
 all=$(printf '%s%s' "${problems:+$problems$'\n'}" "$missing" | sed '/^$/d')
 if [ -n "$all" ]; then

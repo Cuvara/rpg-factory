@@ -216,6 +216,20 @@
       "fallback": "none needed; asset-gen: a Claude review recorded as SAME_MODEL:claude (grades WARN, never PASS)"
     },
     {
+      "id": "codex-subagents",
+      "kind": "binary",
+      "probes": [
+        "bin:codex",
+        "codex:subagents"
+      ],
+      "provides": "Codex in-session subagents for Codex task sessions: multi_agent on and the subagent model inside pipeline.models.scope, read from two config keys only (agents.default_subagent_model, agents.subagent.model).",
+      "used_by": [
+        "delivery"
+      ],
+      "required": false,
+      "fallback": "set [agents] default_subagent_model to the pipeline.subagents codex model in the Codex config and run codex features enable multi_agent; Claude-only runs need nothing"
+    },
+    {
       "id": "dotnet",
       "kind": "binary",
       "probes": [
@@ -514,6 +528,60 @@
         "light": "Mechanical or well-bounded change: rename, typo, doc or text edit, config value, one small function, a test that copies an existing pattern; the answer is obvious from the surrounding code.",
         "standard": "Ordinary feature or fix inside one module that follows existing patterns and needs some design, new tests and a few connected files.",
         "heavy": "Hard or risky change: contract, wire or generated paths, concurrency, ECS or tick-loop internals, security or data migration, cross-module refactor, or anything where a wrong guess is costly to find."
+      }
+    },
+    "subagents": {
+      "description": "In-session subagents are read-only scouts; per role: access, max parallel and when to use one (policy: skills/delivery/references/delivery.md section 8 'In-session subagents'; rule text: scripts/lib/subagent_policy.py).",
+      "forbidden": [
+        "edits",
+        "git writes",
+        "Orca",
+        "dispatch or verdict",
+        "nested subagents"
+      ],
+      "roles": {
+        "run_lead": {
+          "access": "read",
+          "max_parallel": 3,
+          "when": "the answer needs many files or an open search and only the conclusion matters"
+        },
+        "planner": {
+          "access": "read",
+          "max_parallel": 3,
+          "when": "the plan needs facts from many files or repos and only the conclusion matters"
+        },
+        "lead": {
+          "access": "read",
+          "max_parallel": 2,
+          "when": "the task needs a broad search across the worktree and only the conclusion matters"
+        },
+        "implement": {
+          "access": "read",
+          "max_parallel": 2,
+          "when": "the change needs a search across many files that would crowd the context and only the conclusion matters"
+        },
+        "review": {
+          "access": "read",
+          "max_parallel": 3,
+          "own_model": true,
+          "when": "a claim in the diff needs a check across many files and only the finding matters"
+        },
+        "qa": {
+          "access": "none",
+          "max_parallel": 0,
+          "when": "never: QA runs the checks itself and grades the evidence"
+        }
+      },
+      "models": {
+        "claude": {
+          "model": "claude-sonnet-5-5",
+          "alias": "sonnet",
+          "agent": "rpg-factory:factory-explorer"
+        },
+        "codex": {
+          "model": "gpt-6.1-terra",
+          "effort": "medium"
+        }
       }
     }
   },

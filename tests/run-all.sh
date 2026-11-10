@@ -776,6 +776,7 @@ run "run-all --affected suite selection" tests/affected.test.sh
 run "run-all -j scheduler (order, counts, concurrency cap, live lane, run1 alone)" tests/run-all-parallel.test.sh
 run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
 run "registry fragments (registry/ -> registry.json build, placement, merge)" tests/registry-fragments.test.sh
+run "subagent policy (rule text per role and agent, check-registry scope)" python3 -B tests/subagent-policy.test.py
 # Codex packaging (.codex-plugin, .agents/plugins, hooks/codex-hooks.json, scripts/codex_hook.py)
 codex_post() { # rc output
   local cxsum cxpass; cxsum=$(tail -1 <<<"$2"); cxpass=$(sed -n 's/.*, \([0-9]*\) passed,.*/\1/p' <<<"$cxsum")

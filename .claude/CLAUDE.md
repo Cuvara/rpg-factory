@@ -102,7 +102,8 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
 - **Task worktrees must be visible in Orca** (maintainer, 2026-11-09). A `git worktree add --no-track` worktree has
   no Orca lineage and lands in Orca's hidden section: run `orca worktree set --worktree path:<dir>
   --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress` before
-  `orca agent launch` (`delivery.md` section 4 "Orca visibility"; `dispatch --phase lead` prints it).
+  `orca agent launch` (`delivery.md` section 4 "Orca visibility"; `dispatch --phase lead` prints it). Never `orca worktree
+  create` for lineage: it writes `branch.<name>.base` into the shared `.git/config`; `set` writes only Orca metadata.
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
   script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted
@@ -235,5 +236,5 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
 
 ## Layout
 
-- `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
+- `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `agents/` (read-only plugin agent `factory-explorer`, auto-discovered) - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
   scripts, `ui/` read-only UI plan engine, catalog, selection and Figma environment check) - `hooks/hooks.json` - `tests/` (+ `fixtures/`) - `evals/` - `docs/registry.schema.json`

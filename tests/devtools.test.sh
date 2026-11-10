@@ -70,9 +70,29 @@ grep -qE "$SECRET1|$SECRET2" <<<"$out" && no "probe output leaks a planted secre
 # -- scenarios over the REAL registry in a controlled environment (fake PATH, config, Editor port)
 SC="$TMP/scen"; mkdir -p "$SC/bin" "$SC/cfg" "$SC/ws"
 for b in gopls csharp-ls dotnet dotnet-counters go protoc protoc-gen-go docker codex; do printf '#!/bin/sh\nexit 0\n' > "$SC/bin/$b"; chmod +x "$SC/bin/$b"; done
+# a fake Codex CLI (`codex features list` table; multi_agent from $FAKE_MULTI_AGENT): an sh script for Linux and a
+# .cmd for Windows, where shutil.which resolves codex.CMD through PATHEXT
+mkfake_codex() { # bin-dir
+  mkdir -p "$1"
+  cat > "$1/codex" <<'FAKE'
+#!/bin/sh
+if [ "$1" = features ] && [ "$2" = list ] && [ "$FAKE_MULTI_AGENT" != fail ]; then
+  printf 'apps  stable  false\nmulti_agent  stable  %s\n' "${FAKE_MULTI_AGENT:-true}"
+  exit 0
+fi
+exit 1
+FAKE
+  chmod +x "$1/codex"
+  printf '%s\r\n' '@echo off' 'if "%FAKE_MULTI_AGENT%"=="fail" exit /b 1' 'if "%1"=="features" if "%2"=="list" (' '  echo apps  stable  false' \
+    '  echo multi_agent  stable  %FAKE_MULTI_AGENT%' '  exit /b 0' ')' 'exit /b 1' > "$1/codex.cmd"
+}
+REGMODEL=$(jq -r '.pipeline.subagents.models.codex.model' "$ROOT/registry.json")
+mkcfg() { mkdir -p "$1"; printf '%s\n' "${@:2}" > "$1/config.toml"; }   # mkcfg DIR LINE...
+mkfake_codex "$SC/bin"
+mkcfg "$SC/codex-home" '[agents]' "default_subagent_model = \"$REGMODEL\""
 echo '{"mcpServers": {"ai-game-developer": {}, "lsp": {}, "pg-aiguide": {}, "figma": {}, "comfy-mcp": {}}}' > "$SC/ws/.mcp.json"
 echo '{"enabledPlugins": {"context-mode@context-mode": true, "codex@openai-codex": true}}' > "$SC/cfg/settings.json"
-scen=$(cd "$ROOT/scripts/lib" && CLAUDE_CONFIG_DIR="$SC/cfg" python3 -B - "$SC" "$ROOT/registry.json" <<'EOF'
+scen=$(cd "$ROOT/scripts/lib" && CLAUDE_CONFIG_DIR="$SC/cfg" CODEX_HOME="$SC/codex-home" FAKE_MULTI_AGENT=true python3 -B - "$SC" "$ROOT/registry.json" <<'EOF'
 import json, os, socket, sys
 import devtools
 sc, reg = sys.argv[1], json.load(open(sys.argv[2]))
@@ -134,7 +154,7 @@ grep -qE "$SECRET1|$SECRET2" <<<"$out$js" && no "snapshot leaks a planted secret
 out=$(cd "$WS" && python3 -B "$ROOT/scripts/factory-cmd.py" doctor 2>&1)
 sec=$(sed -n '/^## Dev tools/,$p' <<<"$out")
 n=$(jq '.dev_tools | length' "$ROOT/registry.json")
-[ "$(grep -cE '^- [a-z0-9-]+ \((mcp|plugin|binary|service), (required|optional)\): \*\*(OK|DOWN|MISSING)\*\*' <<<"$sec")" -eq "$n" ] \
+[ "$(grep -cE '^- [a-z0-9-]+ \((mcp|plugin|binary|service), (required|optional)\): \*\*(OK|WARN|DOWN|MISSING)\*\*' <<<"$sec")" -eq "$n" ] \
   && ok "doctor: one Dev tools line per registry entry ($n)" || no "doctor dev tools: $sec"
 grep -q '^- codex (plugin, optional): \*\*MISSING\*\*.*plugin codex not enabled' <<<"$sec" && ok "doctor: disabled plugin reported MISSING" || no "doctor codex: $sec"
 grep -qE "$SECRET1|$SECRET2|example.invalid|Bearer" <<<"$out" && no "doctor leaks config values" || ok "doctor carries no config values"
@@ -149,6 +169,86 @@ rm -f "$C/.mcp.json"
 grep -rqE "$SECRET1|$SECRET2" "$RPG_FACTORY_STATE_DIR" "$TMP/state" 2>/dev/null && no "Factory state files contain a planted secret" \
   || ok "Factory state/evidence files carry no planted secret"
 
+# -- codex:subagents probe (multi_agent + the two subagent model keys of the Codex config), through devtools.Prober and doctor
+CX="$TMP/cdx"; mkfake_codex "$CX/bin"; mkdir -p "$CX/empty"
+cx() { # CODEX_HOME MULTI_AGENT PATH-dir: "STATE|detail" of the codex-subagents dev tool (PATH is only that dir)
+  (cd "$ROOT/scripts/lib" && CX_HOME="$1" CX_MULTI="$2" CX_PATH="$3" python3 -B - "$WS" "$ROOT/registry.json" 2>&1 <<'EOF'
+import json, os, sys
+import devtools
+ws, reg = sys.argv[1], json.load(open(sys.argv[2]))
+if os.environ["CX_HOME"]: os.environ["CODEX_HOME"] = os.environ["CX_HOME"]
+else: os.environ.pop("CODEX_HOME", None)
+os.environ["FAKE_MULTI_AGENT"] = os.environ["CX_MULTI"]
+os.environ["PATH"] = os.environ["CX_PATH"]
+t = next(t for t in reg["dev_tools"] if t["id"] == "codex-subagents")
+r = devtools.Prober(ws, reg).tool(t)
+print(r["state"] + "|" + "; ".join(r["detail"]))
+EOF
+  ) | tr -d '\r'
+}
+mkcfg "$CX/h-ok" '[agents]' "default_subagent_model = \"$REGMODEL\""
+mkcfg "$CX/h-out" '[agents]' 'default_subagent_model = "gpt-4o-mini"'
+mkcfg "$CX/h-sub" '[agents]' "default_subagent_model = \"$REGMODEL\"" '[agents.subagent]' 'model = "gpt-4o-mini"'
+mkdir -p "$CX/h-none"
+mkcfg "$CX/h-bad" '[agents' "default_subagent_model = \"$SECRET1\"" "api_key = \"$SECRET2\""
+FIX="fix: \[agents\] default_subagent_model = \"$REGMODEL\""
+SUBFIX="fix: \[agents.subagent\] model = \"$REGMODEL\" (or remove it)"
+r=$(cx "$CX/h-ok" true "$CX/bin")
+grep -q "^OK|codex; codex subagents: multi_agent on, agents.default_subagent_model = $REGMODEL$" <<<"$r" \
+  && ok "codex:subagents: multi_agent on and the registry model in scope = OK" || no "codex subagents in scope: $r"
+r=$(cx "$CX/h-out" true "$CX/bin")
+grep -q "^WARN|.*agents.default_subagent_model = gpt-4o-mini is outside pipeline.models.scope.codex; $FIX" <<<"$r" \
+  && ok "codex:subagents: an out-of-scope default_subagent_model = WARN naming the key, the value and the fix" || no "codex subagents out of scope: $r"
+r=$(cx "$CX/h-sub" true "$CX/bin")
+grep -q "^WARN|.*agents.subagent.model = gpt-4o-mini is outside pipeline.models.scope.codex; $SUBFIX" <<<"$r" && ! grep -q "default_subagent_model = gpt" <<<"$r" \
+  && ! grep -qF 'fix: [agents] default_subagent_model' <<<"$r" && [ "$(grep -o 'config: ' <<<"$r" | wc -l)" -eq 1 ] \
+  && ok "codex:subagents: [agents.subagent] model out of scope (default in scope) = WARN naming agents.subagent.model and its own fix, config path once" || no "codex subagents sub model: $r"
+r=$(cx "$CX/h-none" true "$CX/bin")
+grep -q "^WARN|.*no Codex subagent model set (subagents inherit the session model); $FIX" <<<"$r" \
+  && ok "codex:subagents: no config.toml = WARN 'no Codex subagent model set' with the fix" || no "codex subagents missing config: $r"
+r=$(cx "$CX/h-bad" true "$CX/bin")
+grep -q "^WARN|.*no Codex subagent model set" <<<"$r" && ! grep -qE "$SECRET1|$SECRET2|Traceback|TOMLDecodeError" <<<"$r" \
+  && ok "codex:subagents: malformed TOML holding a secret = treated as absent, no traceback" || no "codex subagents malformed config: $r"
+r=$(cx "$CX/h-ok" false "$CX/bin")
+grep -q "^WARN|.*multi_agent off; fix: codex features enable multi_agent" <<<"$r" \
+  && ok "codex:subagents: multi_agent off = WARN naming multi_agent and the fix" || no "codex subagents multi_agent off: $r"
+r=$(cx "$CX/h-ok" fail "$CX/bin")
+grep -q "^WARN|.*multi_agent unknown (codex features list failed)" <<<"$r" \
+  && ok "codex:subagents: codex features list failing = WARN multi_agent unknown" || no "codex subagents features list failure: $r"
+r=$(cx "$CX/h-ok" true "$CX/empty")
+grep -q "^MISSING|codex not on PATH" <<<"$r" && ok "codex:subagents: no codex on PATH = MISSING" || no "codex subagents without codex: $r"
+
+# secret fixture: nothing of the Codex config but the two model keys (and a model id only) may surface
+mkcfg "$CX/h-secret" "top_secret = \"$SECRET1\"" '[agents]' 'default_subagent_model = "sk-PLANTED SECRET with spaces"' \
+  '[model_providers.x]' "api_key = \"$SECRET2\"" "env = { TOKEN = \"$SECRET1\" }" "http_headers = { Authorization = \"Bearer $SECRET2\" }" \
+  '[mcp_servers.y]' "env = { TOKEN = \"$SECRET1\" }"
+PLANTED=("$SECRET1" "$SECRET2" "sk-PLANTED SECRET" "with spaces" "Bearer")
+leaks() { for s in "${PLANTED[@]}"; do grep -qF -e "$s" <<<"$1" && return 0; done; return 1; }
+nocodex_path=""; IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do [ -e "$d/codex" ] || [ -e "$d/codex.cmd" ] || [ -e "$d/codex.exe" ] || nocodex_path="$nocodex_path:$d"; done
+doc() { (cd "$WS" && PATH="$(path_entry "$CX/bin"):$PATH" CODEX_HOME="$1" FAKE_MULTI_AGENT="$2" python3 -B "$ROOT/scripts/factory-cmd.py" doctor "${@:3}" 2>&1) | tr -d '\r'; }
+r=$(cx "$CX/h-secret" true "$CX/bin")
+grep -q "^WARN|.*agents.default_subagent_model = a value that is not a model id (not shown) is outside pipeline.models.scope.codex" <<<"$r" \
+  && ! leaks "$r" && ok "secret fixture: the probe shows a non-model-id value as 'not shown', none of the planted secrets" || no "secret fixture probe: $r"
+out=$(doc "$CX/h-secret" true); js=$(doc "$CX/h-secret" true --json)
+grep -q '^- codex-subagents (binary, optional): \*\*WARN\*\* - codex; .*not a model id (not shown)' <<<"$out" \
+  && jq -e '.dev_tools[] | select(.id == "codex-subagents") | .state == "WARN" and .ok == false' <<<"$js" >/dev/null \
+  && ok "doctor and doctor --json: codex-subagents WARN on the secret fixture" || no "doctor secret fixture: $(grep codex-subagents <<<"$out")"
+! leaks "$out$js" && ! grep -qE "Traceback|TOMLDecodeError" <<<"$out$js" \
+  && ok "secret fixture: doctor and doctor --json (stdout+stderr) carry none of the planted Codex config secrets" || no "doctor leaks a Codex config value"
+out=$(doc "$CX/h-ok" true)
+grep -q "^- codex-subagents (binary, optional): \*\*OK\*\* - codex; codex subagents: multi_agent on, agents.default_subagent_model = $REGMODEL" <<<"$out" \
+  && ok "doctor: codex-subagents OK with multi_agent on and the registry model" || no "doctor codex-subagents OK: $(grep codex-subagents <<<"$out")"
+out=$(doc "$CX/h-out" true)
+grep -q "^- codex-subagents (binary, optional): \*\*WARN\*\*.*gpt-4o-mini is outside pipeline.models.scope.codex; $FIX" <<<"$out" \
+  && ok "doctor: an out-of-scope Codex subagent model is a WARN line naming the fix" || no "doctor out of scope: $(grep codex-subagents <<<"$out")"
+out=$(doc "$CX/h-ok" false)
+grep -q '^- codex-subagents (binary, optional): \*\*WARN\*\*.*multi_agent off' <<<"$out" \
+  && ok "doctor: multi_agent off is a WARN line" || no "doctor multi_agent off: $(grep codex-subagents <<<"$out")"
+out=$(cd "$WS" && PATH="$nocodex_path" CODEX_HOME="$CX/h-ok" "$(command -v python3)" -B "$ROOT/scripts/factory-cmd.py" doctor 2>&1 | tr -d '\r')
+grep -q '^- codex-subagents (binary, optional): \*\*MISSING\*\* - codex not on PATH' <<<"$out" \
+  && ok "doctor: no codex on PATH = codex-subagents MISSING" || no "doctor without codex: $(grep codex-subagents <<<"$out")"
+
 # -- check-registry rejects malformed dev_tools and tech skills (mutated copies, --structure-only)
 PR="$TMP/pr"; mkdir -p "$PR/docs" "$PR/scripts/checks/domains"; ln -s "$ROOT/skills" "$PR/skills"; cp "$ROOT/docs/registry.schema.json" "$PR/docs/"; cp -r "$ROOT/docs/schemas" "$PR/docs/"; cp "$ROOT/scripts/checks/domains/"*.py "$PR/scripts/checks/domains/"
 reject() { # name expected-message jq-mutation
@@ -159,6 +259,7 @@ reject() { # name expected-message jq-mutation
 reject "dev tool used by an unknown skill" "used_by unknown skill nosuch" '.dev_tools[0].used_by += ["nosuch"]'
 reject "dev tool probe of an unknown kind" "bad probe file:x" '.dev_tools[0].probes += ["file:x"]'
 reject "dev tool probe naming an unknown registry tool" "names an unknown tool" '.dev_tools[0].probes += ["tool:nosuch"]'
+reject "codex probe with an unknown name" "probe codex:foo names an unknown codex probe (only codex:subagents)" '(.dev_tools[] | select(.id == "codex-subagents") | .probes) += ["codex:foo"]'
 reject "dev tool probe naming an unknown service" "names an unknown service" '.dev_tools[0].probes += ["service:nosuch"]'
 reject "optional dev tool without fallback" "every tool needs a fallback" '(.dev_tools[] | select(.required == false)) |= del(.fallback)'
 reject "required dev tool without fallback" "dev_tools dotnet: every tool needs a fallback" '(.dev_tools[] | select(.id == "dotnet")) |= del(.fallback)'

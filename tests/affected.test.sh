@@ -22,6 +22,7 @@ sel 1 "library skips unrelated suite" tests/changelog.test.sh scripts/lib/plan_p
 sel 0 "dynamic library stays global" tests/changelog.test.sh scripts/lib/gitguard.py
 sel 0 "unknown top-level path runs everything" tests/changelog.test.sh new-unknown-file
 sel 0 "skill text reaches skills-lint (EXTRA)" tests/skills-lint.sh skills/vfx/SKILL.md
+sel 0 "an agent file reaches skills-lint (EXTRA)" tests/skills-lint.sh agents/factory-explorer.md
 sel 1 "skill text does not run the release gate" tests/release-check.test.sh skills/vfx/SKILL.md
 sel 0 "an asset-gen engine module reaches the assetgen suite (EXTRA)" tests/assetgen.test.sh scripts/assetgen/png.py
 sel 0 "core asset-gen templates reach the assetgen suite (EXTRA)" tests/assetgen.test.sh templates/assetgen/styles/pixel-art.json

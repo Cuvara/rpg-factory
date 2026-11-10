@@ -1,0 +1,311 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "plugin-subagent-rules",
+  "title": "In-session subagent rules per role (Claude and Codex)",
+  "goal": "Every pipeline session gets a short, role-specific rule for in-session subagents (Claude Agent tool, Codex multi_agent): read-only scouts only, bounded fan-out, models inside pipeline.models.scope, reviewer subagents of the reviewer's own model, no subagents in QA; parallel writes stay subtasks dispatched with --phase implement. Data in the registry, one policy copy in delivery.md, rule lines in every dispatch prompt, a read-only factory-explorer plugin agent, and a doctor check of the Codex subagent model.",
+  "topic": "plugin-subagent-rules",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "ccca7fa62df7e3420e76c5d03c8b2539758556ea"
+    }
+  },
+  "tasks": [
+    {
+      "id": "registry",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "new registry block, schema, scope check and a small lib with tests; follows model_policy patterns",
+      "objective": "Add registry pipeline.subagents (registry/core.json, and the generic defaults skills/delivery/pipeline-defaults.json if it mirrors the pipeline block): per role (run_lead, planner, lead, implement, review, qa) {access: none|read, max_parallel, when (one sentence)}; run_lead and planner read max 3, lead read max 2, implement read max 2, review read max 3 on the reviewer's own model, qa none. Plus models: {claude: {model: claude-sonnet-5-5, alias: sonnet, agent: rpg-factory:factory-explorer}, codex: {model: gpt-6.1-terra, effort: medium}}; the default subagent model is Claude Sonnet 5.5 (claude-sonnet-5-5, user decision 2026-11-09) and the rule sentence names it. Schema in docs/registry.schema.json; scripts/check-registry.sh fails when a subagent model or effort is outside pipeline.models.scope (reuse scripts/lib/model_policy.py in_scope; the Claude alias must be a value of pipeline.models.agent_tool_alias). New scripts/lib/subagent_policy.py: rule(reg, role, agent) returns one short English sentence for a dispatch prompt, read from the registry (no hard-coded values), stating access, max parallel, when to use one, the forbidden actions (no edits, git writes, Orca, dispatch or verdict, nested subagents), the model or agent type to use for that agent, and for review that subagents run on the reviewer's own model and the verdict stays the reviewer's. Rebuild registry.json with python3 -B scripts/build-registry.py. Tests: new tests/subagent-policy.test.py registered in tests/run-all.sh (rule text per role and agent, missing block, out-of-scope model rejected by check-registry). Changelog fragment changelog.d/subagent-registry.md.",
+      "paths": [
+        "registry/core.json",
+        "registry.json",
+        "skills/delivery/pipeline-defaults.json",
+        "docs/registry.schema.json",
+        "scripts/check-registry.sh",
+        "scripts/lib/subagent_policy.py",
+        "tests/subagent-policy.test.py",
+        "tests/run-all.sh",
+        "tests/registry-fragments.test.sh",
+        "changelog.d/subagent-registry.md"
+      ],
+      "deps": [],
+      "checks": [
+        "python3 -B scripts/build-registry.py --check",
+        "scripts/check-registry.sh",
+        "python3 -B tests/subagent-policy.test.py",
+        "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"
+      ],
+      "acceptance": [
+        "registry.json is the build of the fragments",
+        "check-registry fails on an out-of-scope subagent model and passes on the shipped registry",
+        "subagent_policy.rule returns a role-specific sentence for every role and both agents, from registry data only",
+        "new suite counted in run-all with 0 failed"
+      ],
+      "orca_run": "run_149c4936db8f"
+    },
+    {
+      "id": "policy",
+      "repo": "plugin",
+      "kind": "policy",
+      "grade": "standard",
+      "grade_reason": "policy prose with a canonical marker sentence and its mutation test",
+      "objective": "Write the single policy copy: a new subsection '### In-session subagents' in skills/delivery/references/delivery.md section 8 (after 'Session lifecycle'): pipeline session versus in-session subagent; subagents are read-only scouts (reasons: the gate pairs reviews against the recorded implementer and a subagent's edits are unrecorded; one shared index; parallel writes already exist as subtasks; the token gain is reading many files and returning a short conclusion); the per-role table (run lead, planner, task lead, implement, review, QA: access, when, max parallel, limits; the data lives in registry pipeline.subagents); the default subagent model is Claude Sonnet 5.5 (claude-sonnet-5-5) through the rpg-factory:factory-explorer agent, Codex subagents use the pipeline.subagents codex model; general rules (use one only when the answer needs many files or an open search and only the conclusion matters, otherwise Read/Grep directly; a short brief with objective, paths and return format path:line, at most 200 words; never edits, git writes, Orca, dispatch or verdict, nested subagents; model inside pipeline.models.scope; a subagent is never a review or QA verdict; a reviewer never uses a subagent of the other model, for example codex:codex-rescue in a Claude review; the session report names the subagents used in one line). Canonical marker line '<!-- policy:subagents-read-only -->' followed by 'In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.' and add it to the policy sentence list with a mutation case in tests/parallel-policy.test.sh (or wherever the base keeps that lint). One-line pointers: skills/factory-core/SKILL.md step 7, skills/delivery/SKILL.md if it lists rules, docs/codex.md and AGENTS.md (Codex: multi_agent feature, subagent model from pipeline.subagents, set [agents] default_subagent_model inside the scope, no nesting). Changelog fragment changelog.d/subagent-policy.md. Also retarget tests/orca-commands.test.sh to read the Orca commands from skills/delivery/references/delivery.md (it still reads parallel-work.md after the flow-4 split 9d21098 and fails at the base).",
+      "paths": [
+        "skills/delivery/references/delivery.md",
+        "skills/delivery/SKILL.md",
+        "skills/factory-core/SKILL.md",
+        "skills/factory-core/references/parallel-work.md",
+        "docs/codex.md",
+        "AGENTS.md",
+        "tests/parallel-policy.test.sh",
+        "changelog.d/subagent-policy.md",
+        "tests/orca-commands.test.sh"
+      ],
+      "deps": [],
+      "checks": [
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check",
+        "tests/orca-commands.test.sh"
+      ],
+      "acceptance": [
+        "one policy copy (delivery.md) with the marker sentence and the per-role table",
+        "the mutation test bites on a deleted or changed marker",
+        "skills-lint and changelog check pass"
+      ],
+      "orca_run": "run_7f95b6fc6db8"
+    },
+    {
+      "id": "explorer-agent",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one plugin agent file plus a lint check following existing patterns",
+      "objective": "Ship a read-only Claude plugin agent agents/factory-explorer.md: frontmatter name factory-explorer, description (read-only code locator for Factory sessions: returns a path:line table and a short conclusion), tools limited to Read, Grep, Glob, Bash (no Write, Edit, NotebookEdit, Agent), model sonnet (Claude Sonnet 5.5, the default subagent model); body: the brief format it expects, return at most 200 words, never edit, never run git writes, Orca, factory-pipeline dispatch or verdict, never spawn agents. Register it if the plugin manifest needs it (.claude-plugin/plugin.json). Add a lint in tests/skills-lint.sh that every agents/*.md has no write-capable tool and a model alias that is a value of registry pipeline.models.agent_tool_alias, with a mutation case. Mention the agents/ dir in .claude/CLAUDE.md Layout. claude plugin validate must pass. Changelog fragment changelog.d/factory-explorer.md.",
+      "paths": [
+        "agents/",
+        ".claude-plugin/plugin.json",
+        "tests/skills-lint.sh",
+        ".claude/CLAUDE.md",
+        "changelog.d/factory-explorer.md"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/skills-lint.sh",
+        "claude plugin validate .",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "agent file with read-only tools and model sonnet",
+        "the lint fails on an agent with Write, Edit or Agent tools (mutation)",
+        "claude plugin validate passes"
+      ],
+      "orca_run": "run_d3d8b3ac7e34"
+    },
+    {
+      "id": "prompts",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "touches every dispatch prompt and many golden expectations in pipeline.test.sh",
+      "objective": "Put the role's subagent rule into every session prompt scripts/factory-pipeline.py prints, through scripts/lib/subagent_policy.rule(reg, role, agent): the planner prompt (cmd_planner), the task-lead rules (lead_prompt: a new numbered rule), implementation prompts (shared and child), the review prompt (the reviewer's own model, the verdict stays the reviewer's) and QA prompts (qa_body, task and integration: no subagents). Use the agent that actually runs the session (after the --runner agent fallback). Keep each addition to one sentence. Update tests/pipeline.test.sh golden outputs and add assertions per phase. Changelog fragment changelog.d/subagent-prompts.md.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/subagent-prompts.md"
+      ],
+      "deps": [
+        "registry"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"
+      ],
+      "acceptance": [
+        "every phase prompt (planner, lead, implement shared and child, review, task QA, integration QA) carries its role rule",
+        "the review rule names the reviewer's own model",
+        "pipeline.test.sh 0 failed"
+      ],
+      "orca_run": "run_826fe287963d"
+    },
+    {
+      "id": "doctor-codex",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "new probe reading one key of a config file that holds secrets; must prove no secret is printed",
+      "objective": "Doctor and the snapshot report the Codex subagent setup: a dev tool probe in scripts/lib/devtools.py (registry dev_tools[] entry in registry/core.json, rebuild registry.json) that reads `codex features list` for multi_agent on or off and reads ONLY the keys agents.default_subagent_model and agents.subagent.model from the Codex config (CODEX_HOME or ~/.codex/config.toml, tomllib, never prints any other value: the file holds secrets). A model outside pipeline.models.scope for codex, or multi_agent off, is a warn line naming the fix ([agents] default_subagent_model = the pipeline.subagents codex model). Never writes the config. Check whether orca agent launch and worker-start can pass Codex config overrides (-c agents.default_subagent_model=...); only if they can, add it to Codex dispatches in scripts/lib/orca_cmd.py, otherwise say so in the report. Tests in tests/devtools.test.sh with fixture CODEX_HOME configs (in scope, out of scope, missing, a secret value never printed). Changelog fragment changelog.d/doctor-codex-subagents.md.",
+      "paths": [
+        "scripts/lib/devtools.py",
+        "scripts/lib/orca_cmd.py",
+        "registry/core.json",
+        "registry.json",
+        "tests/devtools.test.sh",
+        "changelog.d/doctor-codex-subagents.md",
+        "scripts/check-registry.sh",
+        "docs/registry.schema.json",
+        "tests/domains.test.sh"
+      ],
+      "deps": [
+        "registry"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/devtools.test.sh",
+        "python3 -B scripts/build-registry.py --check",
+        "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"
+      ],
+      "acceptance": [
+        "doctor warns on an out-of-scope Codex subagent model and on multi_agent off",
+        "no config value other than the two model keys is ever printed (secret fixture)",
+        "devtools.test.sh 0 failed"
+      ],
+      "orca_run": "run_7b1c8f8cd69d"
+    },
+    {
+      "id": "main-sync",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "heavy",
+      "grade_reason": "merge of main (PR #89, plugin-flow-4) with three real conflicts in the dispatch code and two policy lints; a wrong side loses either feature",
+      "objective": "Bring main (origin/main 263c917, PR #89 plugin-flow-4 merged 2026-11-10) into this plan: in the task worktree merge origin/main with `git merge --no-ff origin/main` and resolve every conflict by keeping BOTH features, never one side blindly. Known conflicts: scripts/factory-pipeline.py (lead_prompt gets both main's `reg` argument for pipeline_argv and this plan's `subagents` rule; the lead dispatch builds the prompt once with both; the task QA prompt keeps main's `suites`, case list and this plan's `subagents=subagent_rule(...)`; implement keeps main's `checks` line and the subagent rule), tests/orca-commands.test.sh and tests/parallel-policy.test.sh (main and the policy task both retargeted them to delivery.md: keep one version that reads delivery.md and keeps this plan's policy:subagents-read-only marker and mutations). Keep the file mode of scripts/factory-pipeline.py 100755 (the trial merge showed 100755 -> 100644). Main already prints `orca worktree set` for new task worktrees (commit 464d2da); keep main's version. Then rerun the affected suites: tests/pipeline.test.sh, tests/parallel-policy.test.sh, tests/orca-commands.test.sh, tests/skills-lint.sh, tests/subagent-policy.test.py, tests/devtools.test.sh; report exact counts. No changelog fragment needed for the merge itself.",
+      "paths": [
+        ".claude/CLAUDE.md",
+        "README.md",
+        "changelog.d/generic-delivery.md",
+        "changelog.d/qa-fast.md",
+        "changelog.d/qa-wire.md",
+        "docs/codex.md",
+        "scripts/factory-pipeline.py",
+        "skills/delivery/SKILL.md",
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/references/parallel-work.md",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "tests/delivery-generic.test.sh",
+        "tests/fixtures/routing-golden.json",
+        "tests/git-guard.test.sh",
+        "tests/orca-commands.test.sh",
+        "tests/parallel-policy.test.sh",
+        "tests/pipeline.test.sh",
+        "tests/routing.test.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/run-all.sh"
+      ],
+      "deps": [
+        "registry",
+        "policy",
+        "explorer-agent",
+        "prompts",
+        "doctor-codex"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/orca-commands.test.sh",
+        "tests/skills-lint.sh",
+        "python3 -B tests/subagent-policy.test.py",
+        "env -u TMPDIR tests/devtools.test.sh",
+        "python3 -B scripts/build-registry.py --check"
+      ],
+      "acceptance": [
+        "origin/main 263c917 is an ancestor of the task HEAD",
+        "every prompt still carries its subagent rule and main's case and checks lines",
+        "parallel-policy and orca-commands read delivery.md and include the subagents-read-only marker",
+        "scripts/factory-pipeline.py stays mode 100755",
+        "the listed suites 0 failed"
+      ],
+      "orca_run": "run_6c67d97c294f"
+    },
+    {
+      "id": "orca-lineage",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "standard",
+      "grade_reason": "dispatch output change plus a config-hash test; same files as prompts",
+      "objective": "Task worktrees made by `dispatch --phase lead` show as top-level worktrees in Orca, without their lead/child lineage, because the dispatch creates them with `git worktree add --no-track` (on purpose: `orca worktree create` writes branch.<name>.base into the shared .git/config). Fix: after the `git worktree add` line, `dispatch --phase lead` prints `orca worktree set --worktree path:<task worktree> --parent-worktree path:<integration checkout of plan.topic>` (the checkout that has the plan topic, else the repo checkout); verified by hand on 2026-11-09 that `orca worktree set` writes only Orca metadata (the .git/config hash was unchanged). When the run lead creates the integration checkout itself, delivery.md names the same `orca worktree set --parent-worktree path:<main checkout>` step. A no-worktree repo prints nothing new. Record the lesson where it belongs: delivery.md section 4 next to the existing `orca worktree create` lesson (lineage through `orca worktree set`, never through `orca worktree create`), and a one-line Operating lessons entry in .claude/CLAUDE.md with its reason. Tests in tests/pipeline.test.sh: the lead handoff prints the set line with the right parent, nothing new for a no-worktree repo, and the printed commands never include `orca worktree create`. Changelog fragment changelog.d/orca-lineage.md (### Fixed). Also (explorer-agent review finding): tests/affected.py does not map agents/* to tests/skills-lint.sh, so run-all --affected and suite reuse skip the agent lint when only an agent file changes; add agents/* to the skills-lint.sh extra inputs, with a case in the affected tests if one exists. Also (seen 2026-11-10): `orca worktree rm` on a task worktree made by `git worktree add` deletes the directory but can leave a prunable git worktree record, so `git branch -d` of the task branch fails ('used by worktree'). The cleanup commands `cleanup` prints for a plain git task worktree use `git worktree remove <path>` (no --force), or follow `orca worktree rm` with `git worktree prune`; record that in delivery.md section 8 item 1 and test the printed cleanup commands. Also (doctor-codex finding): README.md doctor row lists the dev-tool states OK / DOWN / MISSING without the new WARN state; add it. Also (seen 2026-11-10, user asked to fix): after the registry task was integrated, `orca worktree rm` left an empty task directory that Windows reports busy ('being used by another process') and an Orca worktree record shown as 'Delete failed'; git had already pruned the worktree and the branch was deleted. A released session whose CLI never exited (a Codex CLI started for a session that was stopped when codex went down) is the likely holder. Fix: (1) before removing a task worktree, the run lead and `cleanup` check that no live session or process still uses it: the task lead's Orca Run has no unreleased worker, no Orca terminal is bound to the worktree, and the task lead confirms each released worker's CLI exited (a released Codex worker: its codex process is gone); (2) `cleanup` reports a leftover directory (empty or not) or an Orca record of a removed worktree as LEFTOVER with the exact commands (`git worktree prune`, then `orca worktree rm --worktree path:<dir>` once the directory is free), never CLEAN; (3) never kill a process the run did not start: name it (PID, command) and leave the decision to the user. Record this in delivery.md section 8 (items 1 and 3, and 'Releasing a session does not stop its test processes'), with tests for the cleanup output (leftover directory, stale Orca record, busy directory reported, no kill). Note (2026-11-10): main (PR #89, commit 464d2da) already prints `orca worktree set` for new task worktrees and records the Orca visibility lesson; after main-sync merge plugin-subagent-rules into this task branch, keep main's lineage code and drop any duplicate, and keep only what main lacks (cleanup leftover and prune rules, README WARN, agents/* in affected). Also two gate bugs seen 2026-11-10 after main-sync merged origin/main into the topic: (a) `gate` marks the reviews of registry, policy, explorer-agent and doctor-codex STALE ('owned paths changed after <sha>': AGENTS.md, skills/factory-core/SKILL.md, .claude-plugin/plugin.json, tests/skills-lint.sh, registry.json, ...) although `git diff <reviewed sha> HEAD -- <those paths>` is empty: uncovered_changes (scripts/factory-pipeline.py, used at the review STALE check near the end of cmd_gate) must ignore a path whose content at HEAD equals its content at the reviewed commit, and must not count commits that arrived through a merge of the repo's default branch (origin/main); (b) `gate` lists the plan file itself (docs/plans/<plan>.json) as 'changes outside every task's owned paths': the plan file and docs/plans/<plan>/report.md belong to the run lead and are never stray. Tests in tests/pipeline.test.sh for both (a merge of the default branch after reviews keeps them current; a real later change to an owned path still makes the review STALE).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "skills/delivery/references/delivery.md",
+        ".claude/CLAUDE.md",
+        "changelog.d/orca-lineage.md",
+        "tests/affected.py",
+        "README.md",
+        "tests/affected.test.sh"
+      ],
+      "deps": [
+        "prompts",
+        "policy",
+        "explorer-agent",
+        "main-sync"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "env -u TMPDIR tests/parallel-policy.test.sh",
+        "tests/run-all.sh --affected --base ccca7fa62df7e3420e76c5d03c8b2539758556ea -j 2"
+      ],
+      "acceptance": [
+        "dispatch --phase lead prints the orca worktree set --parent-worktree line after the worktree add, with the integration checkout as parent",
+        "no orca worktree create in any printed command; no-worktree repo unchanged",
+        "lesson recorded in delivery.md section 4 and .claude/CLAUDE.md Operating lessons",
+        "pipeline.test.sh 0 failed",
+        "an agents/*.md change selects tests/skills-lint.sh under --affected",
+        "cleanup of a plain git task worktree never leaves a prunable record that blocks git branch -d",
+        "cleanup reports a leftover task directory or stale Orca worktree record as LEFTOVER with the prune and orca worktree rm commands, never CLEAN, and never kills a process",
+        "gate keeps a review current when the owned paths' content is unchanged since the reviewed commit (default-branch merge) and never lists the plan file or its report as stray"
+      ],
+      "orca_run": "run_56bba00060b7"
+    },
+    {
+      "id": "gate-nested",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "heavy",
+      "grade_reason": "gate attribution logic over merge graphs; a wrong rule hides real post-review edits",
+      "objective": "Gate follow-up (seen on this plan after orca-lineage merged, gate at a8535b6): reviews of registry (tests/run-all.sh) and policy (docs/codex.md, skills/delivery/SKILL.md, skills/factory-core/references/parallel-work.md, tests/orca-commands.test.sh, tests/parallel-policy.test.sh) are still STALE. Those files changed only through task main-sync, which merged origin/main INSIDE its task branch (f2ddb21) and was then merged into the topic with --no-ff (fcbbe1c): the pipeline's own prescribed way. _uncovered_changes in scripts/factory-pipeline.py recognises a default-branch merge only on the topic's first-parent chain, so this nested one is not exempt, and main-sync's review does not cover the earlier tasks' paths either. Fix: (1) a default-branch merge reached through a task merge (any merge commit between the reviewed sha and target whose other parent is the default branch tip or contains it) is exempt the same way: its side commits are nobody's task work, only its conflict resolutions count; and (2) those conflict resolutions are covered by the merging task's current PASS review when that task depends on the earlier task (main-sync depends on registry and policy). A real post-review edit on the topic or in a task branch outside such a merge stays STALE. Tests in tests/pipeline.test.sh: nested default-branch merge keeps earlier reviews current; its conflict resolution is covered by the merging task's review and STALE without it; a direct post-review edit is still STALE. Verify on this plan: gate shows no STALE. Changelog fragment changelog.d/gate-nested-merge.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/gate-nested-merge.md"
+      ],
+      "deps": [
+        "orca-lineage"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "python3 -B scripts/factory-pipeline.py gate docs/plans/plugin-subagent-rules.json --no-run-checks"
+      ],
+      "acceptance": [
+        "gate on this plan shows no review STALE for registry and policy",
+        "nested default-branch merge tests and the still-STALE direct-edit test pass",
+        "pipeline.test.sh 0 failed"
+      ],
+      "orca_run": "run_e5207aa7fa74"
+    },
+    {
+      "id": "ci-windows-bash",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "light",
+      "grade_reason": "one subprocess call in one test uses a bare bash; the helper already exists",
+      "objective": "PR #91 CI fails on windows-2025 only: tests/subagent-policy.test.py (around line 162) runs check-registry.sh with a bare \"bash\", which on Windows resolves to the System32 WSL launcher ('Windows Subsystem for Linux has no installed distributions'), so the 5 check-registry scope cases fail. Use the Git Bash resolver scripts/lib/shells.py find_bash() (as scripts/factory-pipeline.py runall_suites does), falling back to \"bash\". Grep the other tests added by this plan (tests/subagent-policy.test.py only, unless another file of this plan does the same) for a bare bash subprocess. Changelog: add a line to changelog.d/subagent-registry.md (### Fixed is not needed for an unreleased fix; amend the Added entry only if wording needs it).",
+      "paths": [
+        "tests/subagent-policy.test.py",
+        "changelog.d/subagent-registry.md"
+      ],
+      "deps": [
+        "gate-nested"
+      ],
+      "checks": [
+        "python3 -B tests/subagent-policy.test.py"
+      ],
+      "acceptance": [
+        "no bare bash subprocess in tests/subagent-policy.test.py; it uses shells.find_bash()",
+        "subagent-policy.test.py 0 failed locally; PR #91 windows-2025 job green"
+      ]
+    }
+  ],
+  "deliver": "pr"
+}

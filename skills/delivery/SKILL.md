@@ -39,6 +39,7 @@ Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py 
    `dispatch ... --phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per `placement`.
    Code, tests, fixes and refactors go to Codex, prose to Claude: the model table in references/delivery.md section 10.
    The task lead does not implement. A missing model never stops the task: every role falls back to the available one.
+   A subagent inside a session is a read-only scout, never a writer or a verdict: references/delivery.md section 8 "In-session subagents".
 5. **Review and QA (task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: the other model
    reviews; no pair available means the same model with `SAME_MODEL (fallback: <model> unavailable)`. Then
    `--phase qa`. QA by tier: the task runs its affected checks once; integration runs the repository's full gate.

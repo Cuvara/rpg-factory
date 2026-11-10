@@ -44,6 +44,10 @@ workspace, factory-core calls it. To make Codex load it in any repository, put o
 (the line is in the README, "Delivery in any project"). The hook adapter and its advisories stay RPG-only: they
 never act on a repository outside the workspace.
 
+In-session subagents on Codex use the `multi_agent` feature. The subagent model comes from registry `pipeline.subagents`
+(codex); set `[agents] default_subagent_model` in the Codex config to a model inside `pipeline.models.scope`. Subagents
+never nest. Rules: `skills/delivery/references/delivery.md` section 8 "In-session subagents".
+
 ## Hook adapter contract
 
 The adapter follows the same rules as the Claude hooks (`.claude/CLAUDE.md`, "Rules for changing this repo"):
