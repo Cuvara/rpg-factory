@@ -5,7 +5,8 @@ Policy: skills/delivery/references/delivery.md (generic), skills/factory-core/re
 cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Settings fall back to
 skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
 file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
-script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
+script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`
+and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE). Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
@@ -735,6 +736,18 @@ def validate(plan, reg):
     if "no_worktree_markers" in plan and (not isinstance(plan["no_worktree_markers"], list) or
             not all(isinstance(m, str) for m in plan["no_worktree_markers"])):
         errors.append("no_worktree_markers must be an array of strings")
+    if "known_failing" in plan:
+        kf = plan["known_failing"]
+        if not isinstance(kf, list):
+            errors.append("known_failing must be an array of {check, reason} objects")
+        else:
+            for i, e in enumerate(kf):
+                if not (isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k].strip() for k in ("check", "reason"))):
+                    errors.append(f"known_failing[{i}]: needs non-empty string check and reason")
+                    continue
+                for k in sorted(set(e) - {"check", "reason"}):
+                    errors.append(f"known_failing[{i}]: unknown key {k}")
+                warnings.append(f"known failing at base: {e['check']} - {e['reason']}")
     tasks = plan.get("tasks") or []
     ids = [t.get("id") for t in tasks]
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
@@ -1306,6 +1319,32 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
+def known_failing_text(plan):
+    """The plan's `known_failing` block for a lead or QA prompt; '' when the plan lists none."""
+    kf = [e for e in plan.get("known_failing") or [] if isinstance(e, dict)]
+    if not kf:
+        return ""
+    return ("Known failing at base (plan known_failing):\n"
+            + "\n".join(f"- {e.get('check')}: {e.get('reason')}" for e in kf)
+            + "\nA failure of a listed check that also fails at the task base is FAIL_AT_BASE: name it on the QA report's "
+              "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
+
+
+def base_health_hint(info, spec):
+    """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
+    git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
+    if not info.get("path"):
+        return None
+    out, rc = git(info["path"], "remote", "-v")
+    if rc or "github.com" not in (out or ""):
+        return None
+    sha = re.compile(r"^[0-9a-fA-F]{7,40}$")
+    branch = next((b for b in (spec.get("base"), info.get("base")) if b and not sha.match(b)), None)
+    if not branch:
+        return None
+    return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
+
+
 def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
@@ -1353,6 +1392,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
+            + ("\n" + known_failing_text(plan) if known_failing_text(plan) else "")
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
                "worktree. Start after the previous task of this repo has its QA verdict. Subtasks, review and QA run "
@@ -1557,7 +1597,8 @@ def cmd_dispatch(a, reg):
                   + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
+                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1595,6 +1636,9 @@ def cmd_dispatch(a, reg):
             print(f"factory-pipeline: {task['repo']} takes one task at a time: task {prev} has no QA PASS yet; "
                   f"start {task['id']} after it", file=sys.stderr)
     if a.phase == "lead":
+        hint = base_health_hint(info, spec)
+        if hint:
+            print(hint, file=sys.stderr)
         reviewer = task.get("reviewer") or pipe["review_pairing"].get(impl)
         if not info["worktrees"]:
             place = orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
@@ -1728,7 +1772,8 @@ def cmd_dispatch(a, reg):
                   + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
                                       if cases.startswith("Affected cases (tests/affected.py cases):") else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
+                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
