@@ -3173,6 +3173,41 @@ git -C "$GX" worktree add -q "$TMP/gm-late-main" main; gi "$TMP/gm-late-main" me
 gi "$GX" merge -q --no-ff main -m "Merge main into feat/gl"; gxqa "$GXP" r
 expect "gate-merge: a post-review topic commit that also landed on the default branch is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
 git -C "$GX" worktree remove --force "$TMP/gm-late-main"
+# The plan plugin-subagent-rules shape: task ta owns own/a.txt, ts (main-sync) depends on ta (or not) and also owns it, tl depends
+# on ts and owns own/l.txt only. ta is reviewed on the topic; main edits own/a.txt; ts merges main inside its branch (a conflict
+# resolution) and the topic merges ts; tl is cut from the topic before that merge, syncs the topic into itself and the topic merges tl.
+# gn_build <name> <ts depends on ta: 1|0> <variant: ok|direct|evil|topic>; sets GX, GXP
+gn_set() { sed -i "$2s/.*/$3/" "$GX/own/$1"; }
+gn_build() {
+  GX="$TMP/$1"; git init -q -b main "$GX"; mkdir -p "$GX/own"; seq 1 10 > "$GX/own/a.txt"; echo l > "$GX/own/l.txt"; gi "$GX" add -A; gi "$GX" commit -qm base
+  local deps='"ta"'; [ "$2" = 0 ] && deps=''
+  GXP=$(plan "$1" "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"$1\",\"title\":\"X\",\"topic\":\"feat/$1\",\"deliver\":\"pr\",\"repos\":{\"r\":{\"path\":\"$GX\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"ta\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/a.txt\"],\"acceptance\":[\"a\"]},{\"id\":\"ts\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/a.txt\"],\"deps\":[$deps],\"acceptance\":[\"a\"]},{\"id\":\"tl\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/l.txt\"],\"deps\":[\"ts\"],\"acceptance\":[\"a\"]}]}")
+  gi "$GX" checkout -qb "feat/$1"; gn_set a.txt 5 a1; gi "$GX" commit -qam "feat: ta"
+  gxv "$GXP" --task ta --phase review --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS
+  gi "$GX" branch "feat/$1-ts"; gi "$GX" branch "feat/$1-tl"
+  git -C "$GX" worktree add -q "$TMP/$1-main" main; echo m > "$TMP/$1-main/own/a.txt"; seq 2 10 >> "$TMP/$1-main/own/a.txt"; gi "$TMP/$1-main" commit -qam "fix: main edits a"
+  gi "$GX" checkout -q "feat/$1-ts"; gn_set a.txt 1 s; gi "$GX" commit -qam "feat: ts"
+  gi "$GX" merge -q --no-ff main -m "Merge main into ts" >/dev/null 2>&1; gn_set a.txt 1 resolved; gi "$GX" add own/a.txt; gi "$GX" commit -qm "Merge main into ts"
+  gxv "$GXP" --task ts --phase review --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS
+  gi "$GX" checkout -q "feat/$1"; gi "$GX" merge -q --no-ff "feat/$1-ts" -m "Merge task ts"
+  gi "$GX" checkout -q "feat/$1-tl"; echo l2 >> "$GX/own/l.txt"; gi "$GX" commit -qam "feat: tl"
+  [ "$3" = direct ] && { gn_set a.txt 10 evil; gi "$GX" commit -qam "fix: tl edits a"; }
+  gi "$GX" merge -q --no-ff --no-commit "feat/$1" >/dev/null; [ "$3" = evil ] && gn_set a.txt 8 evil; gi "$GX" add -A; gi "$GX" commit -qm "Merge topic into tl"
+  gxv "$GXP" --task tl --phase review --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS
+  gi "$GX" checkout -q "feat/$1"; gi "$GX" merge -q --no-ff "feat/$1-tl" -m "Merge task tl"
+  [ "$3" = topic ] && { gn_set a.txt 10 evil; gi "$GX" commit -qam "fix: topic edits a"; }
+  gxqa "$GXP" r; git -C "$GX" worktree remove --force "$TMP/$1-main"
+}
+gn_build gn-ok 1 ok
+refute "gate-merge: a default-branch merge nested in a task merge keeps the earlier task's review current" "ta: review is STALE" gate "$GXP" --no-run-checks
+gn_build gn-nodep 0 ok
+expect "gate-merge: a nested merge's conflict resolution is STALE for the earlier task without a covering review" 1 "BLOCKER ta: review is STALE - owned paths changed after .*own/a.txt" gate "$GXP" --no-run-checks
+gn_build gn-direct 1 direct
+expect "gate-merge: a direct edit in a task branch outside the merge keeps the earlier review STALE" 1 "BLOCKER ta: review is STALE - owned paths changed after .*own/a.txt" gate "$GXP" --no-run-checks
+gn_build gn-evil 1 evil
+expect "gate-merge: an edit inside a task branch's sync merge commit keeps the earlier review STALE" 1 "BLOCKER ta: review is STALE - owned paths changed after .*own/a.txt" gate "$GXP" --no-run-checks
+gn_build gn-topic 1 topic
+expect "gate-merge: a direct post-review topic edit keeps the earlier review STALE" 1 "BLOCKER ta: review is STALE - owned paths changed after .*own/a.txt" gate "$GXP" --no-run-checks
 
 case_end gate-merge
 fi
