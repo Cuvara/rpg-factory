@@ -283,6 +283,28 @@
         "pipeline.test.sh 0 failed"
       ],
       "orca_run": "run_e5207aa7fa74"
+    },
+    {
+      "id": "ci-windows-bash",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "light",
+      "grade_reason": "one subprocess call in one test uses a bare bash; the helper already exists",
+      "objective": "PR #91 CI fails on windows-2025 only: tests/subagent-policy.test.py (around line 162) runs check-registry.sh with a bare \"bash\", which on Windows resolves to the System32 WSL launcher ('Windows Subsystem for Linux has no installed distributions'), so the 5 check-registry scope cases fail. Use the Git Bash resolver scripts/lib/shells.py find_bash() (as scripts/factory-pipeline.py runall_suites does), falling back to \"bash\". Grep the other tests added by this plan (tests/subagent-policy.test.py only, unless another file of this plan does the same) for a bare bash subprocess. Changelog: add a line to changelog.d/subagent-registry.md (### Fixed is not needed for an unreleased fix; amend the Added entry only if wording needs it).",
+      "paths": [
+        "tests/subagent-policy.test.py",
+        "changelog.d/subagent-registry.md"
+      ],
+      "deps": [
+        "gate-nested"
+      ],
+      "checks": [
+        "python3 -B tests/subagent-policy.test.py"
+      ],
+      "acceptance": [
+        "no bare bash subprocess in tests/subagent-policy.test.py; it uses shells.find_bash()",
+        "subagent-policy.test.py 0 failed locally; PR #91 windows-2025 job green"
+      ]
     }
   ],
   "deliver": "pr"
