@@ -26,30 +26,20 @@ dispatched session follows its spec and never merges or pushes. Policy: [referen
 Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; outside an RPG workspace run
 `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py --registry none <verb>` (the option also works after the verb).
 
-1. **Tier.** `tier --plan plan.json --repo <key> --paths <files>` (a plan naming the repo by path; a registry repo:
-   `tier -- --repo <key> --paths <files>`) prints S, M or L and the flow. Every tier gets a `plan.json` and
-   a task lead; S is a one-task plan. The run lead never implements.
-2. **Plan.** Write `plan.json` (`${CLAUDE_PLUGIN_ROOT}/docs/schemas/pipeline-plan.schema.json`): `repos.<key>.path` names the checkout,
-   each task has owned paths, deps, a `kind` and a branch. Small tasks with disjoint owned paths. A repo marked
-   `worktrees: false`, or one holding a configured no-worktree marker, runs its tasks in sequence in the main checkout.
-   `validate plan.json` must print OK.
-3. **Dispatch the task lead.** `dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca`
-   (`--runner agent` or `print` without Orca; `--orca-unavailable <reason>` records why). One task lead per task worktree.
-4. **Subplan and implement (task lead).** `subplan validate subplan.json`, then
-   `dispatch ... --phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per `placement`.
-   Code, tests, fixes and refactors go to Codex, prose to Claude: the model table in references/delivery.md section 10.
-   The task lead does not implement. A missing model never stops the task: every role falls back to the available one.
-   A subagent inside a session is a read-only scout, never a writer or a verdict: references/delivery.md section 8 "In-session subagents".
-5. **Review and QA (task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: the other model
-   reviews; no pair available means the same model with `SAME_MODEL (fallback: <model> unavailable)`. Then
-   `--phase qa`. QA by tier: the task runs its affected checks once; integration runs the repository's full gate.
-   Record each result with `verdict`.
-6. **Integrate (run lead).** Merge each task branch per section 7 of the reference, run integration QA on the
-   integration HEAD, then `gate plan.json`: READY_FOR_PR is the only green state. Push and open the PR only when
-   the user asked for a PR; never merge.
-7. **Resume.** `status plan.json` re-derives progress from git and the verdicts; continue at the first open step.
-8. **Cleanup and report.** Remove the run's worktrees (keep the branches), release every Claude and Codex session,
-   `cleanup plan.json` until CLEAN, then report what ran with exact counts and what did not run.
+Each step is stated once, in [references/delivery.md](references/delivery.md) section 10 (flags, models, review pairing,
+QA tiers and fallbacks are there, nowhere else):
+
+1. **Tier** - step 1: `tier` prints S, M or L; every tier gets a `plan.json` and a task lead.
+2. **Plan** - step 2: write `plan.json` (`${CLAUDE_PLUGIN_ROOT}/docs/schemas/pipeline-plan.schema.json`), `validate` it.
+3. **Task lead, subplan, implement** - step 3: `dispatch --phase lead`, then the task lead's `subplan` and `--phase implement`.
+4. **Cross-model review and task QA** - step 4: `dispatch --phase review`, `--phase qa`, `verdict`.
+5. **Integrate** - step 5 (checklist: section 7).
+6. **Integration QA** - step 6.
+7. **READY_FOR_PR** - step 7: `gate plan.json`.
+8. **PR** - step 8: only when the user asked for `deliver: pr`.
+9. **Cleanup and report** - step 9 (section 8): `cleanup plan.json` until CLEAN.
+
+Resume with `status plan.json` (it re-derives progress from git and the verdicts) and continue at the first open step.
 
 ## Orca
 
