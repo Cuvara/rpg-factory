@@ -14,8 +14,8 @@ def resolve_repo_path(path, plan_file, registry):
     if not path:
         return None, None
     plan_dir = os.path.dirname(os.path.abspath(plan_file))
-    variable = registry["workspace"]["root_env"]
-    for prefix in ("${" + variable + "}", "$" + variable):
+    variable = registry.get("workspace", {}).get("root_env")
+    for prefix in (("${" + variable + "}", "$" + variable) if variable else ()):
         if path == prefix or path.startswith(prefix + "/") or path.startswith(prefix + "\\"):
             root = find_workspace(plan_dir, registry, env_first=True, use_default=True)
             if not root:

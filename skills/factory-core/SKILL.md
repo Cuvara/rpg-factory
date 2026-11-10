@@ -28,7 +28,7 @@ review checklist + registry rules; change nothing. `resume`: `factory-status.py`
 Declare it in the skill arguments (`mode: <mode>`) and the Route call (`factory-context.sh --mode <mode> ...`); the
 snapshot then prints its contract. The hooks **flag** departures (advisory only, they never block); respect the mode
 yourself and switch only when the user asks (e.g. "now implement it").
-Two levels (`references/parallel-work.md` sections 1, 8, 10): the main session is the **run lead** (plans, dispatches,
+Two levels (load `rpg-factory:delivery` for the generic flow; RPG specifics: `references/parallel-work.md`): the main session is the **run lead** (plans, dispatches,
 integrates, reports; never edits task files); one **task lead** per task does the work. A dispatched session follows its spec.
 
 ## Workflow
@@ -53,16 +53,16 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    before committing; reuse the **same topic** in every repo of a cross-repo task (factory-status
    links them). Commit, push, PR, merge are **H** (only on request); tags and releases only with the user's
    explicit release authorization in this task (`references/git-safety.md` rule 5).
-6. **Plan (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`, then a
+6. **Plan (M).** Load `rpg-factory:delivery` (generic flow and policy); this step adds the registry. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`, then a
    `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task:
    `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one task lead per
    task worktree: Claude, Codex only when Claude is unavailable; Unity: main checkout, in sequence).
-   Resume: `status plan.json`. How: `references/parallel-work.md` section 10.
-   Give each task a `kind`; its model follows the "Which model" table there (parallel-work.md section 10).
+   Resume: `status plan.json`. How: delivery.md section 10, RPG specifics `references/parallel-work.md`.
+   Give each task a `kind`; its model follows the "Which model" table in delivery.md section 10.
 7. **Implement (M, task lead).** `subplan validate`, then one short, fresh sub-session per subtask
    (`--phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per its `placement`:
-   parallel-work.md section 4); the task lead commits or merges each. Requested scope only; module rules; generated paths via their generator.
-   Code goes to Codex, prose to Claude: the "Which model" table (parallel-work.md section 10); the task lead does not implement.
+   delivery.md section 4); the task lead commits or merges each. Requested scope only; module rules; generated paths via their generator.
+   Code goes to Codex, prose to Claude: the "Which model" table (delivery.md section 10); the task lead does not implement.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
    both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
 9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
@@ -73,9 +73,9 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 11. **Review + QA (M, task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: Codex reviews Claude's
     code and Claude reviews Codex's; pair unavailable: the same model, `SAME_MODEL (fallback: <model> unavailable)`, gate accepts a dispatch-recorded fallback.
     Use the lead's checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist); then `--phase qa`.
-    Record each `verdict`. The run lead integrates (section 7) and runs QA on the integration HEAD.
+    Record each `verdict`. The run lead integrates (delivery.md section 7) and runs QA on the integration HEAD.
 12. **Gate, PR, cleanup, report (M, run lead).** `gate` READY_FOR_PR + user's `deliver: pr`: push, open the PR (no merge).
-    Remove the run's worktrees, release every Claude/Codex session (section 8), `cleanup` until CLEAN; report
+    Remove the run's worktrees, release every Claude/Codex session (delivery.md section 8), `cleanup` until CLEAN; report
     (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
 
 ## Validation states (from run-checks.py)
@@ -102,7 +102,7 @@ this touch", "is it validated", "is Factory healthy", "where does this domain st
 
 ## Skills
 
-Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`.
+Generic: `delivery` (kind `core`, any repository: the two-level flow, agent routing, review, QA tiers, plan/verdict/gate pipeline; steps 6, 7, 11, 12 load it). Engineering leads (the registry remains authoritative); supporting Engineering skills: `dotnet-gameserver`, `go-backend`, `unity-client-tech`, `unity-dots`, `netcode-client`; UI (client, through `client-integration`, entry `ui-orchestrator`): `ui-orchestrator`, `ui-component-selection`, `ui-figma-import`, `ui-toolkit-screen`, `ui-validation`; asset generation (through `asset-gen` and the art, UI and VFX leads): `comfyui`.
 
 | Situation | Lead skill |
 |---|---|
@@ -133,6 +133,6 @@ one requested before its lead runs with an advisory - then route and invoke the 
 - `references/git-safety.md` - before any branch, stage, commit or cleanup.
 - `references/report.md` - before the final report (always).
 - `references/skill-contract.md` - routing precedence and how skills compose.
-- `references/parallel-work.md` - before delegating, dispatching workers or integrating their branches.
+- `references/parallel-work.md` - RPG specifics of delivery (Unity no-worktree repos, `unity-test`, registry repos); the generic policy is `rpg-factory:delivery` (delivery.md).
 
 All paths above are relative to `${CLAUDE_SKILL_DIR}`.

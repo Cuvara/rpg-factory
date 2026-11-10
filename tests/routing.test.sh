@@ -7,12 +7,43 @@
 #    (`git show --name-only` -> --paths). They prove Factory would have routed work that
 #    actually happened. Skipped (not failed) when a repo or commit is absent.
 #
-# Usage: tests/routing.test.sh [--no-history]
+# Usage: tests/routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]
+# Cases: tasks (task scenarios), task-scope (fixture workspace), history (replayed commits), selector-smoke, cli-selftest.
+# No case-map lines: ALL is the answer for every input. registry/* and root files are global inputs, and the routing code
+# (scripts/factory-context.sh, scripts/lib/context.py, resolve.jq) and registry.json feed every case.
 set -uo pipefail
+CASES='tasks task-scope history selector-smoke cli-selftest'
+usage() {
+  printf '%s\n' 'Usage: routing.test.sh [--no-history] [--case NAMES | --only NAMES] [--list-cases] [-h|--help]'     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'     '--no-history skips the replay of real commits (history scenarios print SKIP).'
+}
+history=true; SELECTED=; list_cases=0
+add_cases() {
+  local selected
+  local -a tokens
+  read -r -a tokens <<< "${1//,/ }"
+  [ "${#tokens[@]}" -gt 0 ] || { printf 'Empty case selector\n' >&2; exit 2; }
+  for selected in "${tokens[@]}"; do
+    [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+    [[ " $SELECTED " == *" $selected "* ]] || SELECTED+=" $selected"
+  done
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --no-history) history=false; shift ;;
+    --list-cases) list_cases=1; shift ;;
+    --case|--only) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; add_cases "$2"; shift 2 ;;
+    --case=*|--only=*) add_cases "${1#*=}"; shift ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before any fixture or temp dir exists.
+if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
+all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
+has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 WS="${RPG_FACTORY_WORKSPACE:-/mnt/c/Workspaces/UnityIndie}"
 CTX="$ROOT/scripts/factory-context.sh"
-history=true; [ "${1:-}" = "--no-history" ] && history=false
 pass=0; fail=0; skip=0
 replay_cached=0; replay_ran=0; replay_cache=""
 
@@ -29,8 +60,7 @@ assert() {
   if [ -n "${ROUTING_GOLDEN_OUT:-}" ]; then
     jq -c --arg name "$name" --arg repo "$repo" '.repos[0] | {name: $name, repo: $repo,
         routing: (.routing | {lead, co_leads, legs, follow_ups, tech, ambiguous}),
-        touched, checks: [.checks[].id]}' <<<"$out" >> "$ROUTING_GOLDEN_OUT" 2>/dev/null       || printf '{"name":%s,"error":true}
-' "$(jq -Rn --arg n "$name" '$n')" >> "$ROUTING_GOLDEN_OUT"
+        touched, checks: [.checks[].id]}' <<<"$out" >> "$ROUTING_GOLDEN_OUT" 2>/dev/null       || printf '{"name":%s,"error":true}\n' "$(jq -Rn --arg n "$name" '$n')" >> "$ROUTING_GOLDEN_OUT"
   fi
   if jq -e ".repos[0] | $pred" <<<"$out" >/dev/null 2>&1; then
     pass=$((pass + 1)); echo "PASS  $name"
@@ -91,7 +121,12 @@ for old in sorted(others, key=os.path.getmtime, reverse=True)[3:]:
   fi
 }
 
+if has_case tasks; then
 echo "== task scenarios"
+assert "generic delivery is never a lead for an unrelated path" server \
+  '(.routing.lead != "delivery") and ((.routing.co_leads | index("delivery")) == null)' docs/unrelated.md
+assert "generic delivery is never a lead for its policy path" server \
+  '(.routing.lead != "delivery") and ((.routing.co_leads | index("delivery")) == null)' skills/delivery/references/delivery.md
 assert "tick-rate knob -> server-realtime leads, server-ops leg, server-knobs contract" server \
   "$(lead server-realtime) and $(leg server-ops) and $(contract server-knobs)" \
   backend/gameserver-dotnet/GameServer/ServerEnv.cs backend/gameserver-dotnet/GameServer/Server/ServerDefaults.cs \
@@ -212,6 +247,8 @@ if grep -q '^- dotnet-gameserver: tech (supporting) - .*(server-realtime)' <<<"$
   pass=$((pass + 1)); echo "PASS  --explain marks tech skills as supporting / unused"
 else fail=$((fail + 1)); echo "FAIL  --explain tech rows: $(grep -E '^- (dotnet-gameserver|go-backend):' <<<"$out")"; fi
 
+fi
+if has_case task-scope; then
 echo "== task scope (throwaway fixture workspace)"
 . "$ROOT/scripts/lib/compat.sh"
 FX="$(mktemp_win)" && [ -d "$FX" ] && trap 'rm -rf "$FX"' EXIT
@@ -284,6 +321,8 @@ out=$(fctx "$FW" --repo server --json --paths backend/gateway/server/server.go -
 fexpect "--paths a --lead=x: --flag=value ends the path list and applies" \
   'jq -e "([.repos[0].files[].path] == [\"backend/gateway/server/server.go\"]) and .repos[0].routing.override" <<<"$out" >/dev/null'
 
+fi
+if has_case history; then
 echo "== history (real commits, replayed read-only)"
 if $history; then
   # Conservative dependency closure: context imports other lib modules and may
@@ -329,6 +368,36 @@ history "verify pinned the wrong cluster cert"   server rpg-mmo-server       437
 history "toolkit submodule auto-bump (#137)"  client IndieRPGMMOAdventure  285a5a2 "(.routing.lead == \"pin-bump\")"
 history "toolkit v5.7.0 gitlink + CHANGELOG"  client IndieRPGMMOAdventure  525cf5b "(.routing.lead == \"pin-bump\") and $(nolead client-integration)"
 echo "history replay: $replay_cached cached / $replay_ran replayed"
+fi
+
+# A cheap successful child case also verifies that repeated selectors are deduplicated.
+if has_case selector-smoke; then
+  count=0
+  for selected in $SELECTED; do [ "$selected" != selector-smoke ] || count=$((count + 1)); done
+  [ "$count" -eq 1 ] && { pass=$((pass + 1)); echo 'PASS  selector-smoke selected once'; } || { fail=$((fail + 1)); echo "FAIL  selector-smoke selected $count times"; }
+fi
+
+# The case selection itself: --help exits 0, an unknown argument or case exits 2 before any run, and a subset runs
+# fewer assertions than the full run.
+if has_case cli-selftest; then
+  self="${BASH_SOURCE[0]}"
+  bash "$self" --help >/dev/null 2>&1 && { pass=$((pass + 1)); echo "PASS  --help exits 0"; } || { fail=$((fail + 1)); echo "FAIL  --help did not exit 0"; }
+  bash "$self" --no-such-option >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown argument exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown argument exited $rc, want 2"; }
+  bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  unknown case exits 2"; } || { fail=$((fail + 1)); echo "FAIL  unknown case exited $rc, want 2"; }
+  for selector in ',' ' '; do
+    for option in --case --only; do
+      bash "$self" "$option" "$selector" >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq 2 ] && { pass=$((pass + 1)); echo "PASS  $option empty selector exits 2"; } || { fail=$((fail + 1)); echo "FAIL  $option empty selector exited $rc, want 2"; }
+    done
+  done
+  child=$(bash "$self" --no-history --case selector-smoke,selector-smoke --only selector-smoke 2>&1); rc=$?
+  n_one=$(sed -n 's/^routing tests: \([0-9]*\) run.*/\1/p' <<<"$child")
+  n_failed=$(sed -n 's/^routing tests: [0-9]* run, [0-9]* passed, \([0-9]*\) failed, [0-9]* skipped$/\1/p' <<<"$child")
+  if [ "$rc" -eq 0 ] && [ "${n_failed:-missing}" = 0 ] && [ "${n_one:-0}" -gt 0 ] && { [ "$all_cases" = 0 ] || [ "$n_one" -lt $((pass + fail + skip)) ]; }; then pass=$((pass + 1)); echo "PASS  --case selector-smoke runs ${n_one} assertions, fewer than a full run"
+  else fail=$((fail + 1)); echo "FAIL  --case selector-smoke: exit $rc, ${n_failed:-?} failed, ${n_one:-?} assertions; parent has $((pass + fail + skip))"; fi
+fi
 
 total=$((pass + fail + skip))
 echo "routing tests: $total run, $pass passed, $fail failed, $skip skipped"

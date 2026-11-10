@@ -1,7 +1,7 @@
 {
   "name": "rpg-factory",
   "version": "1.7.0",
-  "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 14 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
+  "description": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core and a generic delivery skill (two-level flow, cross-model review, QA tiers, plan/verdict/gate for any repository) plus 14 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
   "author": {
     "name": "Cuvara",
     "url": "https://github.com/Cuvara"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "RPG Factory",
     "shortDescription": "Route, validate, and review RPG workspace changes",
-    "longDescription": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core plus 14 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
+    "longDescription": "Development workflow orchestration for the UnityIndie RPG MMO workspace (server, client, Netcode, UnityDots, UIToolkit): Factory Core and a generic delivery skill (two-level flow, cross-model review, QA tiers, plan/verdict/gate for any repository) plus 14 specialised skills, deterministic routing with advisory execution modes, module registry with cross-repo contracts and pin watchers, a check runner with tree-bound evidence (STALE/NOT_RUN), derived cross-repo status, status/route/check/doctor commands, and advisory guards for git, GitHub and file tools (they never block). Tags and releases only with explicit user authorization.",
     "developerName": "Cuvara",
     "category": "Developer Tools",
     "capabilities": [

@@ -31,9 +31,10 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   suites with `--only-suites`); a task never runs the full suite. CI is the full-suite gate: before opening a PR,
   integration QA runs `tests/run-all.sh --workspace-only` (what CI cannot run) and must report 0 failed; after the
   PR opens, CI (`gh pr checks <pr> --watch`) must be green before merging, and while CI runs, start the next task. The full `tests/run-all.sh --release`
-  and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers: `parallel-work.md`
-  section 10 "QA tiers". CI (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`, so
-  `--workspace-only` covers the rest.
+  and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers (with typical times):
+  `delivery.md` section 10 "QA tiers". An implementer runs only its spec's targeted checks and, in a slow suite,
+  only the cases its change touches (`--case`, `tests/affected.py cases`); tier S and docs-only tasks get lead QA.
+  CI (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`, so `--workspace-only` covers the rest.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
   enforces the mechanical part. Routing changes need a scenario in `tests/routing.test.sh`. New skills start
@@ -42,14 +43,15 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   `scripts/checks/skill-citations.py` against the integration branches; cite docs by section, not line.
   A citation whose anchor moved to a unique line is MOVED (warning; FAIL under `--strict` / `run-all --release`):
   `--fix` rewrites its line spec in place.
-- Parallel plugin work follows `skills/factory-core/references/parallel-work.md`: one worktree and one task-lead
+- Parallel plugin work follows `skills/delivery/references/delivery.md` (the generic policy, one copy) and, for the RPG
+  specifics, `skills/factory-core/references/parallel-work.md`: one worktree and one task-lead
   session per task (Orca-managed or `isolation: worktree`), never a second clone; the main session (run lead)
-  integrates. That file is the only copy of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
+  integrates. Those two files are the only copies of the policy (`tests/skills-lint.sh`, `tests/parallel-policy.test.sh`).
 - **Developing this plugin:** every plugin task (new or split skill, core change) runs through `factory-pipeline.py`
   with a `plan.json` whose `repos` entry names this checkout (`"plugin": {"path": "<this checkout>"}`), small tasks
   with disjoint owned paths, and cross-model review. The run lead starts each task's lead with
   `dispatch --phase lead`; the task lead runs its subtasks, review and QA in that task's worktree. How:
-  `parallel-work.md` sections 1 and 10 and section 8 "Session lifecycle"; the session-level steps (tier, plan,
+  `delivery.md` sections 1 and 10 and section 8 "Session lifecycle" (RPG specifics: `parallel-work.md`); the session-level steps (tier, plan,
   `dispatch --phase lead`, `status` to resume, review pairing, gate, cleanup) are factory-core `SKILL.md` steps 6, 7, 11, 12.
 - **Releases:** bump `VERSION`, `.claude-plugin/plugin.json`, `marketplace.json`, `.codex-plugin/plugin.json` (and the
   Codex marketplace `.agents/plugins/marketplace.json` if it carries a version) and the README "Version" line, and gather the
@@ -92,7 +94,15 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
   they drifted between the fix and the gate four times. Check their open PRs before starting the gate.
 - **One full run per machine: the run-all lock** (a second full `tests/run-all.sh` waits; `--no-wait` exits 3).
   Four parallel full runs made every suite 2-4x slower and timed some out; other sessions use the tier command
-  (`parallel-work.md` section 10 "QA tiers").
+  (`delivery.md` section 10 "QA tiers").
+- **Targeted runs take a test slot** (`--affected` / `--only-suites`: `RPG_FACTORY_TEST_SLOTS` slots machine-wide,
+  default 2): a busy machine makes a run wait with a message instead of slowing every suite 2-4x. The slot belongs
+  to the run, not the session: stop a QA worker's background test run before abandoning the worker, or it keeps its
+  slot (an aborted QA once held one for 45 min). Frozen copies of a suite go under a temp dir, never into `tests/`.
+- **Task worktrees must be visible in Orca** (maintainer, 2026-11-09). A `git worktree add --no-track` worktree has
+  no Orca lineage and lands in Orca's hidden section: run `orca worktree set --worktree path:<dir>
+  --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress` before
+  `orca agent launch` (`delivery.md` section 4 "Orca visibility"; `dispatch --phase lead` prints it).
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
   script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted
@@ -210,7 +220,9 @@ scripts are run with `-B` (run-all deletes `__pycache__`).
   ui-toolkit-screen, ui-validation, and comfyui) own no module, are never routed, and appear as `routing.tech` for their `used_by`;
   a registry `paths` list narrows that to matching changed files (the UI skills: UXML/USS/TSS and UI folders; comfyui: `assetgen/`), and the
   snapshot's Next line loads the UI skills through `ui-orchestrator`, whose UI plan names the subset
-  (`docs/architecture/ui-skills.md`).
+  (`docs/architecture/ui-skills.md`). `delivery` (kind `core`, generic: the two-level delivery flow, agent routing, review,
+  QA tiers and the plan/verdict/gate pipeline for any repository, in any project; one reference, `delivery.md`) owns no module and is never
+  routed; factory-core steps 6, 7, 11 and 12 load it, and `factory-pipeline.py --registry none` reads its `pipeline-defaults.json`.
 - **Delivery pipeline:** `factory-pipeline.py` (settings: registry `pipeline`; plan schema
   `docs/schemas/pipeline-plan.schema.json`, a task lead's subplan `docs/schemas/pipeline-subplan.schema.json`; verdicts under the persistent state dir `pipeline/<plan id>/`) prints Orca
   or Agent dispatch commands and grades READY_FOR_PR; it never runs agents, pushes or creates worktrees. A repo with

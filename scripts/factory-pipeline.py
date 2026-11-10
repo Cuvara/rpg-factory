@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Delivery pipeline for one Factory task: tier, plan validation, dispatch commands, review/QA verdicts, PR gate.
 
-Policy: skills/factory-core/references/parallel-work.md. Settings: registry.json `pipeline` (tiers, agents,
-cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Plan format:
-docs/schemas/pipeline-plan.schema.json.
+Policy: skills/delivery/references/delivery.md (generic), skills/factory-core/references/parallel-work.md (RPG specifics). Settings: registry.json `pipeline` (tiers, agents,
+cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Settings fall back to
+skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
+file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
+script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
         S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
@@ -18,7 +20,7 @@ docs/schemas/pipeline-plan.schema.json.
         exclusive resources (one Unity test run at a time). Exit 1 on an error. WARN (no error) when a task's
         checks hold a full tests/run-all.sh or its acceptance requires one: full runs belong to integration QA.
         Model policy (registry
-        pipeline.models, lib/model_policy.py; references/parallel-work.md section 10 "Model choice"): a task `grade` other
+        pipeline.models, lib/model_policy.py; references/delivery.md section 10 "Model choice"): a task `grade` other
         than light|standard|heavy, a broken policy or override file and a role it cannot resolve are errors; prints the
         model and effort of the task lead and, per task, its grade (the plan's, else derived from the tier of its owned
         paths alone: S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy work:
@@ -102,7 +104,7 @@ docs/schemas/pipeline-plan.schema.json.
         worktree list`); none is an error (exit 1, no worktree created). A no-worktree repo: the main checkout.
         --placement child: an Orca child of that checkout (`worker-start --worktree new-child --base-branch <SHA>`).
         --runner agent is the Claude Code Agent-tool fallback (Claude only): a session planned for codex starts a
-        fresh Claude session whose prompt and report say SAME_MODEL. Orca first (references/parallel-work.md
+        fresh Claude session whose prompt and report say SAME_MODEL. Orca first (references/delivery.md
         section 5): inside an Orca session (ORCA_WORKTREE_ID or ORCA_AGENT_HOOK_ENDPOINT set) whose runtime is
         reachable (`orca status --json`), the default runner is orca (elsewhere print) and planner/dispatch --runner
         agent exit 2 unless --orca-unavailable REASON is given; the reason opens the session's prompt so its report
@@ -166,6 +168,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -195,8 +198,24 @@ def die(msg, code=2):
 
 
 def load_registry(path):
+    defaults = path == "none" or not os.path.isfile(path)
+    if defaults:
+        if path != "none":
+            print(f"factory-pipeline: registry {path} not found: using skills/delivery/pipeline-defaults.json",
+                  file=sys.stderr)
+        path = os.path.join(ROOT, "skills", "delivery", "pipeline-defaults.json")
     with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+        reg = json.load(fh)
+    if defaults:
+        reg["_defaults"] = True  # private mark: pipeline_argv adds `--registry none` to the commands printed for a next session
+    return reg
+
+
+def pipeline_argv(reg):
+    """The command prefix printed for a next session: python3 -B <this script>, plus `--registry none` when the defaults are
+    in effect (the next session would otherwise load the RPG registry); with a registry nothing is added."""
+    argv = ["python3", "-B", os.path.abspath(__file__)]
+    return argv + ["--registry", "none"] if reg.get("_defaults") else argv
 
 
 def settings(reg):
@@ -276,7 +295,7 @@ def cmd_tier(a, reg):
     if a.plan:
         if not a.repo or not a.paths:
             die("tier --plan needs --repo <plan repo key> and --paths <files>")
-        plan = read_plan(a.plan)
+        plan = read_plan(a.plan, reg)
         plan["_path"] = a.plan
         info = repo_info(plan, reg, a.repo)
         if not info["registry"]:
@@ -538,8 +557,12 @@ def read_json_file(path, what):
     return doc
 
 
-def read_plan(path):
-    return read_json_file(path, "plan")
+def read_plan(path, reg):
+    plan = read_json_file(path, "plan")
+    markers = plan.get("no_worktree_markers")
+    if isinstance(markers, list) and all(isinstance(m, str) for m in markers):
+        reg["pipeline"] = {**reg["pipeline"], "no_worktree_markers": list(markers)}
+    return plan
 
 
 def repo_info(plan, reg, key):
@@ -685,6 +708,9 @@ def validate(plan, reg):
         errors.append("tier must be S, M or L")
     if plan.get("deliver", "none") not in ("pr", "none"):
         errors.append("deliver must be pr or none")
+    if "no_worktree_markers" in plan and (not isinstance(plan["no_worktree_markers"], list) or
+            not all(isinstance(m, str) for m in plan["no_worktree_markers"])):
+        errors.append("no_worktree_markers must be an array of strings")
     tasks = plan.get("tasks") or []
     ids = [t.get("id") for t in tasks]
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
@@ -813,7 +839,7 @@ def model_text(m):
 
 
 def cmd_validate(a, reg):
-    plan = read_plan(a.plan)
+    plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     out = validate(plan, reg)
     out.pop("order")
@@ -976,7 +1002,7 @@ def subplan_plan_path(sub, sub_path, override=None):
 def cmd_subplan(a, reg):
     sub = read_json_file(a.subplan, "subplan")
     path = subplan_plan_path(sub, a.subplan, a.plan)
-    plan = read_plan(path)
+    plan = read_plan(path, reg)
     plan["_path"] = path
     out = validate_subplan(sub, plan, reg)
     out["models"] = subplan_models(sub, plan, reg, out["errors"])
@@ -1083,7 +1109,7 @@ def orca_prompt(a, prompt, plan=None, note=None):
 
 
 def resolve_runner(a):
-    """Orca first (references/parallel-work.md section 5): settle a.runner before any output. Orca is here when the
+    """Orca first (references/delivery.md section 5): settle a.runner before any output. Orca is here when the
     session runs inside Orca and its runtime is reachable; the default runner is then orca (elsewhere print), and
     --runner agent there needs --orca-unavailable REASON."""
     reason = " ".join((a.orca_unavailable or "").split())
@@ -1100,7 +1126,7 @@ def resolve_runner(a):
         a.runner = "orca" if here else "print"
     elif here and not a.orca_unavailable:
         die(f"this session runs inside Orca ({env} is set) and the Orca runtime is reachable: use --runner orca "
-            "(references/parallel-work.md section 5, Orca first). --runner agent here needs --orca-unavailable REASON, "
+            "(references/delivery.md section 5, Orca first). --runner agent here needs --orca-unavailable REASON, "
             "naming why Orca cannot run this session")
 
 
@@ -1134,7 +1160,7 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
             agent = AGENT_FALLBACK
         if a.orca_unavailable:
             prompt = (f"Orca unavailable: {a.orca_unavailable}. This session runs through the Claude Code Agent-tool "
-                      "fallback (references/parallel-work.md section 5): name this reason in your report, and pass "
+                      "fallback (references/delivery.md section 5): name this reason in your report, and pass "
                       "--orca-unavailable with it to every factory-pipeline.py planner or dispatch you run with "
                       "--runner agent.\n" + prompt)
             print(f"factory-pipeline: --runner agent with Orca unavailable ({a.orca_unavailable}): the prompt names the "
@@ -1147,7 +1173,7 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
         print(prompt)
     if not shutil.which(pipe["agents"][agent]["bin"]):
         print(f"factory-pipeline: `{pipe['agents'][agent]['bin']}` is not on PATH here: the {agent} worker may be "
-              f"unavailable (fallback: references/parallel-work.md, report the review as SAME_MODEL)", file=sys.stderr)
+              f"unavailable (fallback: references/delivery.md, report the review as SAME_MODEL)", file=sys.stderr)
     return agent
 
 
@@ -1190,7 +1216,7 @@ def cmd_planner(a, reg):
               "   and `grade_reason` (one line) per task; the grade picks the model and effort of its sessions:"
               + rubric_lines(a.policy, "   ") + "\n"
               f"3. Write plan.json ({SCHEMA}, docs/schemas/pipeline-plan.schema.json) and run\n"
-              "   `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py validate plan.json` until it prints OK.\n"
+              f"   `python3 -B ${{CLAUDE_PLUGIN_ROOT}}/scripts/factory-pipeline.py{' --registry none' if reg.get('_defaults') else ''} validate plan.json` until it prints OK.\n"
               "4. Report the plan path, waves, the models validate prints and any open question. Do not implement.")
     place = {"worktree": "current", "new": False, "reason": "planning is read-only: no worktree"}
     emit(a, reg, agent, prompt, place, "pipeline planner", note=f"Request: {a.request}", role="planner")
@@ -1235,7 +1261,12 @@ def emit_lead_handoff(reg, agent, prompt, place, branch, m):
     if place.get("new"):
         checkout = place["repo"][len("path:"):]
         path = os.path.join(os.path.dirname(place.get("parent") or checkout), branch.replace("/", "-"))
+        trees, rc = git(checkout, "worktree", "list", "--porcelain")
+        main = trees.splitlines()[0][len("worktree "):] if not rc and trees and trees.startswith("worktree ") else checkout
         print(orca_cmd.quote(["git", "-C", checkout, "worktree", "add", "--no-track", "-b", branch, path, place["base"]]))
+        print(orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
+                              f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
+                              "--workspace-status", "in-progress"]))
         place = {"worktree": f"path:{path}"}
     argv = ["orca", "agent", "launch", "--agent", entry["orca_agent"], "--worktree", place["worktree"], "--prompt", prompt,
             *flags, "--json"]
@@ -1250,9 +1281,9 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None):
-    """The task-lead spec: the task spec plus the short rules of the second level (references/parallel-work.md)."""
-    me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None):
+    """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
+    me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
@@ -1279,7 +1310,9 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"orca` ({reviewer} for {impl}; a subtask by the other model: add `--subplan <subplan.json> --subtask <id>` and "
         "record it with `verdict --subtask <id>`; SAME_MODEL fallback only when the pair is unavailable, named in the "
         f"report) and QA `{d} --phase qa --sha <HEAD> --runner orca`. Keep HEAD at the candidate while they run. A FAIL "
-        "goes to a fresh fix session, then review and QA on the new HEAD.",
+        "goes to a fresh fix session, then review and QA on the new HEAD. For tier S and docs-only tasks, after review "
+        "PASS the task lead runs the QA tier command itself and records `verdict --phase qa --state PASS --by <lead model> "
+        "--note 'tier S: lead ran task suites'` instead of a QA session.",
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
@@ -1291,7 +1324,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
          "and cleans up." if info["worktrees"] else
          "7. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
     ]
-    return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/parallel-work.md. You own "
+    return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(rules)
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
@@ -1324,6 +1357,34 @@ def runall_suites(path):
 
 
 QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when the registry has no pipeline.qa_tiers
+
+
+def affected_case_lines(path, base, sha, suites):
+    """Report the checkout's own case selection; failure is advisory, never a dispatch failure."""
+    script = os.path.join(path, "tests", "affected.py")
+    if not os.path.isfile(script):
+        return "Affected cases: not computed (tests/affected.py missing)"
+    changed, rc = git(path, "diff", "--name-only", f"{base}...{sha}")
+    if rc:
+        return "Affected cases: not computed (git diff failed)"
+    if suites is None or suites is False:
+        return "Affected cases: not computed (suite list unavailable)"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            names = os.path.join(tmp, "changed.txt")
+            with open(names, "w", encoding="utf-8", newline="\n") as f:
+                f.write(changed + "\n" if changed else "")
+            r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        if r.returncode:
+            return "Affected cases: not computed (tests/affected.py cases failed)"
+        lines = []
+        for line in r.stdout.splitlines():
+            suite, cases = line.split("\t", 1)
+            lines.append(f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}")
+        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return "Affected cases: not computed (tests/affected.py cases failed)"
 
 
 def tier_command(level, base, suites, task=False):
@@ -1402,9 +1463,9 @@ def load_subtask(a, plan, reg, task):
 
 def cmd_dispatch(a, reg):
     resolve_runner(a)
+    plan = read_plan(a.plan, reg)
     pipe = settings(reg)
     a.policy = load_policy(reg)
-    plan = read_plan(a.plan)
     plan["_path"] = a.plan
     v = validate(plan, reg)
     if v["errors"]:
@@ -1514,7 +1575,7 @@ def cmd_dispatch(a, reg):
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
             where = "this task worktree"
-        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy)
+        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg)
         lead = model_roles["lead"][0]
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
@@ -1568,9 +1629,12 @@ def cmd_dispatch(a, reg):
         edit = "the subtask_paths" if paths else "the owned paths"
         report = ("Report to the task lead: changed paths, each check with exact counts (or NOT_RUN with command and "
                   "reason), limitations, out-of-scope findings. Never merge or push.")
+        checks = ("Run only the targeted checks of your spec. For a slow suite with cases (--list-cases works), run only "
+                  "the cases your change touches via --case; list them with `python3 -B tests/affected.py cases "
+                  "<changed-file-list> <suite>`. Never run a whole slow suite or a full tests/run-all.sh.\n")
         if placement == "child":
             # a child has its own index: the sub-session commits there and the task lead merges the child branch
-            prompt = (f"Implementation sub-session of task {task['id']} (references/parallel-work.md) in an Orca child "
+            prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md) in an Orca child "
                       f"worktree of {home}, on its own branch {child_name} from {branch}. Edit only {edit}. Commit on "
                       "your child branch with explicit paths (`git add -- <paths>`, Conventional Commits); the task lead "
                       f"merges it into {branch} and removes the child at once. {orca_cmd.CHILD_RULE.split(';')[0]}.\n"
@@ -1578,12 +1642,13 @@ def cmd_dispatch(a, reg):
         else:
             # a non-committing sub-session of the task lead, also in a no-worktree repo without --paths: only the task
             # lead commits (one shared index); there is no committing implementation worker in a shared checkout
-            prompt = (f"Implementation sub-session of task {task['id']} (references/parallel-work.md). Work in "
+            prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md). Work in "
                       f"{home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit only "
                       f"{edit}. Do NOT commit, stage or stash: one shared index; the task lead commits.\n{report}\n"
                       + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
+        prompt += "\n" + checks
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -1608,16 +1673,21 @@ def cmd_dispatch(a, reg):
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
         base, _ = review_base(info, plan["topic"], spec["base"], a.sha)
+        case_base = base
         previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
         stale = previous and previous.get("fingerprint") != scope_fingerprint(plan, reg, task["id"])
         failed = []
         if (previous and not stale and previous.get("state") == "FAIL" and previous.get("failed_suites")
                 and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
             base, failed = previous["sha"], previous["failed_suites"]
+        suites = runall_suites(home or info["path"])
+        cases = affected_case_lines(home or info["path"], case_base, a.sha, suites)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
-                            runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"))
+                            runall=suites, tiers=pipe.get("qa_tiers"))
+                  + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives suites with a case map --case."
+                                      if suites is not False else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
@@ -2042,8 +2112,8 @@ def subtask_coverage(plan, reg, pipe, t, rv, impl, target, allow_same_model, cac
 
 
 def cmd_verdict(a, reg):
+    plan = read_plan(a.plan, reg)
     pipe = settings(reg)
-    plan = read_plan(a.plan)
     if a.report and not os.path.isfile(a.report):
         die("--report must name an existing file; use --note TEXT for free text")
     if a.implementer and (a.phase != "review" or a.implementer not in pipe["agents"]):
@@ -2329,7 +2399,7 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
 
 
 def cmd_gate(a, reg):
-    plan = read_plan(a.plan)
+    plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     out = gate(plan, reg, a.allow_same_model, not a.no_run_checks)
     if a.json:
@@ -2545,7 +2615,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
 
 
 def cmd_cleanup(a, reg):
-    plan = read_plan(a.plan)
+    plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     out = cleanup(plan, reg, a.orca_run, a.after_merge)
     if a.json:
@@ -2830,7 +2900,7 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
 
 def status(plan, reg, orca_run=None):
     v = validate(plan, reg)
-    me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
+    me = orca_cmd.quote(pipeline_argv(reg))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     tasks = plan.get("tasks", [])
     if v["errors"]:
@@ -2944,7 +3014,7 @@ def status(plan, reg, orca_run=None):
 
 
 def cmd_status(a, reg):
-    plan = read_plan(a.plan)
+    plan = read_plan(a.plan, reg)
     plan["_path"] = a.plan
     pipe = settings(reg)
     tasks = plan.get("tasks") if isinstance(plan.get("tasks"), list) else []
@@ -2992,8 +3062,8 @@ def cmd_status(a, reg):
 
 
 def cmd_agents(a, reg):
+    plan = read_plan(a.plan, reg)
     pipe = settings(reg)
-    plan = read_plan(a.plan)
     agent = a.down or a.up
     if agent and agent not in pipe["agents"]:
         die("unknown agent " + agent)
@@ -3010,25 +3080,28 @@ def cmd_agents(a, reg):
 
 def main():
     ap = argparse.ArgumentParser(prog="factory-pipeline.py", description=__doc__.split("\n")[0])
-    ap.add_argument("--registry", default=os.path.join(ROOT, "registry.json"))
+    ap.add_argument("--registry", default=os.environ.get("RPG_FACTORY_PIPELINE_REGISTRY", os.path.join(ROOT, "registry.json")))
+    # the same option after the verb; SUPPRESS keeps the top-level value unless it is given there (and then it wins)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--registry", default=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    t = sub.add_parser("tier")
+    t = sub.add_parser("tier", parents=[common])
     t.add_argument("--json", action="store_true")
     t.add_argument("--context-json")
     t.add_argument("--plan")
     t.add_argument("--repo")
     t.add_argument("--paths", nargs="+")
     t.add_argument("rest", nargs=argparse.REMAINDER)
-    p = sub.add_parser("validate")
+    p = sub.add_parser("validate", parents=[common])
     p.add_argument("plan")
     p.add_argument("--json", action="store_true")
-    sp = sub.add_parser("subplan")
+    sp = sub.add_parser("subplan", parents=[common])
     sp.add_argument("action", choices=("validate",))
     sp.add_argument("subplan")
     sp.add_argument("--plan")
     sp.add_argument("--json", action="store_true")
     for name in ("planner", "dispatch"):
-        d = sub.add_parser(name)
+        d = sub.add_parser(name, parents=[common])
         if name == "dispatch":
             d.add_argument("plan")
             d.add_argument("--task", required=True)
@@ -3047,7 +3120,7 @@ def main():
         d.add_argument("--grade", choices=model_policy.GRADES)
         d.add_argument("--model", metavar="ID")
         d.add_argument("--effort", metavar="LEVEL")
-    v = sub.add_parser("verdict")
+    v = sub.add_parser("verdict", parents=[common])
     v.add_argument("plan")
     v.add_argument("--task", required=True)
     v.add_argument("--phase", required=True, choices=("review", "qa"))
@@ -3061,7 +3134,7 @@ def main():
     v.add_argument("--subtask")
     v.add_argument("--subplan")
     v.add_argument("--fallback")
-    ag = sub.add_parser("agents")
+    ag = sub.add_parser("agents", parents=[common])
     ag.add_argument("plan")
     change = ag.add_mutually_exclusive_group()
     change.add_argument("--down")
@@ -3070,16 +3143,16 @@ def main():
     ag.add_argument("--json", action="store_true")
     v.add_argument("--model", metavar="ID")
     v.add_argument("--effort", metavar="LEVEL")
-    st = sub.add_parser("status")
+    st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
     st.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
-    c = sub.add_parser("cleanup")
+    c = sub.add_parser("cleanup", parents=[common])
     c.add_argument("plan")
     c.add_argument("--json", action="store_true")
     c.add_argument("--after-merge", action="store_true")
     c.add_argument("--orca-run", action="append", default=[], metavar="RUN_ID")
-    g = sub.add_parser("gate")
+    g = sub.add_parser("gate", parents=[common])
     g.add_argument("plan")
     g.add_argument("--allow-same-model", action="store_true")
     g.add_argument("--no-run-checks", action="store_true")

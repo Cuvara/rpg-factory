@@ -43,6 +43,11 @@
       ],
       "description": "pr: the user authorized push + gh pr create once the gate is READY_FOR_PR. Merge stays with the user."
     },
+    "no_worktree_markers": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Repo-relative marker files replacing the pipeline defaults for this plan."
+    },
     "repos": {
       "type": "object",
       "description": "Repos that are not in the registry (e.g. a tool or plugin repo), or overrides of the base.",

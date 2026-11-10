@@ -111,7 +111,7 @@ graph TD
     AS["Artifact schema + lifecycle"]
     TR["Trace + upstream-revision checks"]
     EV["run-checks / evidence / HUMAN_REQUIRED approvals"]
-    GS["human_gates, git safety, parallel-work"]
+    GS["human_gates, git safety, delivery flow"]
   end
   GD & UX & A2 & A3 & VX & EN --> SI
   AR[("Authoring repo<br/>design/ ui/ art2d/ art3d/ vfx/ + asset manifests")] --- GD & UX & A2 & A3 & VX
@@ -125,7 +125,7 @@ graph TD
   - scope and ownership resolution from registry data;
   - domain and skill routing mechanics;
   - multi-domain coordination (dependency graph from handoff contracts);
-  - parallel-work rules;
+  - the delivery flow (generic policy in the `delivery` skill; RPG specifics in `parallel-work.md`);
   - the shared artifact, validation and evidence contracts;
   - review and report templates;
   - safety, approval and release policies;
@@ -248,8 +248,10 @@ New `check-registry.sh` rules:
   upstream artifact path and `copies` are the downstream artifact or code paths.
   - Run `scripts/factory-context.sh --domain <id> --graph` for a stable topological ordering; cycles exit 3
     with the cycle path. Routing paths under a handoff source reports its downstream ends as follow-ups.
-- **Parallel work.** Follows `skills/factory-core/references/parallel-work.md`: one worktree per workstream,
-  QA and review on recorded candidate commits, and the lead integrates.
+- **Parallel work.** Follows `skills/delivery/references/delivery.md` (the generic policy, one copy):
+  one worktree per workstream, QA and review on recorded candidate commits, and the lead integrates. The RPG
+  specifics (Unity repos without worktrees, the `unity-test` resource, registry repos) stay in
+  `skills/factory-core/references/parallel-work.md`.
 - **Conflicts.** Cross-domain module path overlaps and artifact kinds shared by domains fail registry checks.
   Routing one path set to leads in multiple domains prints `AMBIGUOUS` and exits 3; `--lead` selects the lead.
   Ownership disputes are settled by registry ownership, never by an agent.
@@ -426,7 +428,7 @@ Feature-spec transition rules:
 
 Rules:
 - **One canonical copy per fact.** Other places link to it. The existing shingle check in `skills-lint.sh` and
-  the single-copy pattern used for `parallel-work.md` extend to `docs/architecture/`.
+  the single-copy pattern used for `delivery.md` and `parallel-work.md` extend to `docs/architecture/`.
 - **Diagrams.** Mermaid in `docs/architecture/` only.
 - **English-only enforcement.** A new `scripts/checks/english-only.py`, called from `skills-lint.sh`, covers
   skills, references, `docs/`, README, CHANGELOG, `.claude/CLAUDE.md`, commands and registry strings.

@@ -34,6 +34,16 @@ installed plugin root (the directory that holds `skills/`). `python3 -B <plugin 
 | assetgen | `/rpg-factory:assetgen ...` | `assetgen list\|show\|resolve\|lint\|review-cmd\|drift [args]` | yes (`render`, `qa`, `manifest`, `promote-anchor`, `reject` are refused: the asset-gen skill runs them) |
 | help | none | `help [--json]` | yes |
 
+## Delivery in any project
+
+The `delivery` skill (`skills/delivery/SKILL.md`) is the generic multi-step flow: two levels, agent routing, cross-model
+review, QA tiers and the plan, verdict and gate pipeline. Codex loads it like every other skill: it reads
+`skills/delivery/SKILL.md` from the installed plugin root (the directory that holds `skills/`) and runs
+`python3 -B <plugin root>/scripts/factory-pipeline.py --registry none <verb>` where no RPG registry applies. Inside the
+workspace, factory-core calls it. To make Codex load it in any repository, put one line in `~/.codex/AGENTS.md`
+(the line is in the README, "Delivery in any project"). The hook adapter and its advisories stay RPG-only: they
+never act on a repository outside the workspace.
+
 ## Hook adapter contract
 
 The adapter follows the same rules as the Claude hooks (`.claude/CLAUDE.md`, "Rules for changing this repo"):
