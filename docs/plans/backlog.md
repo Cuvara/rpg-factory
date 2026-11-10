@@ -9,19 +9,26 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-### generic-delivery
+### plugin-flow-5
 
-Plan plugin-flow-4 task generic-delivery: agent rules usable in every project, not only UnityIndie. The new skill
-`rpg-factory:delivery` (`skills/delivery/SKILL.md`, policy `skills/delivery/references/delivery.md`, defaults
-`skills/delivery/pipeline-defaults.json`) holds the generic flow; `parallel-work.md` keeps the RPG specifics and
-`factory-pipeline.py` runs without the RPG registry (`--registry none`). Follow-ups for task qa-wire (the owner of
-the three suites below; the generic-delivery task does not edit them):
+Plan `docs/plans/plugin-flow-5.json` (written 2026-11-10, not dispatched yet). It runs after the 1.8.0 release, with
+the installed 1.8.0 plugin (single verify per task, `dispatch --phase verify`). Three tasks in one wave, disjoint
+paths:
 
-- `tests/routing.test.sh`: a scenario where a non-RPG task routes to `delivery`.
-- `tests/run-all.sh` and `tests/affected.py`: wire `tests/delivery-generic.test.sh` (suite list, affected selection
-  for `skills/delivery/`, `scripts/factory-pipeline.py` and `scripts/lib/pipeline_route.py`).
-- `tests/parallel-policy.test.sh`: the policy mutations (single copy, section anchors, machine-path audit) also
-  target `skills/delivery/references/delivery.md`.
+- `ci-coverage`: wire `tests/delivery-generic.test.sh` into `tests/run-all.sh` and `tests/affected.py` (the
+  generic-delivery follow-up; the routing scenario and the `delivery.md` policy mutations are done),
+  bare-bash-probes, `routing-golden --update` keeping the WSL scenarios on Windows, run-all-robust-lows, and a
+  narrower selection for `scripts/factory-pipeline.py` changes.
+- `lead-report`: task-lead reports that never reach the run lead, completion visible in `status`, released workers
+  shown as UNRELEASED, test-slot holders and released-worker-wsl-leftovers named by `status`/`cleanup`,
+  tier-plan-arg, implementer-refusal-scope, `pipeline.test.sh --help`, orca-wait-lows (with the orphaned waiter
+  that keeps its lock), Orca `externalWorktreeVisibility`, `verdict --fallback` usage text and
+  model-unavailable-probe.
+- `checks-lows`: checks-hygiene-lows, plan-paths-native, guard-package-rename.
+
+Resume: `python3 -B scripts/factory-pipeline.py status docs/plans/plugin-flow-5.json`, then
+`dispatch docs/plans/plugin-flow-5.json --task <id> --phase lead --report-to <run id> --runner orca` per task
+(`delivery.md` section 10). The items stay under "Open" below until the plan merges.
 
 ## Open
 

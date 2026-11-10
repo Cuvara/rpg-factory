@@ -1,0 +1,107 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "plugin-flow-5",
+  "title": "Plugin batch 5: CI coverage, run-lead visibility, lows",
+  "topic": "plugin-flow-5",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "ci-coverage",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "CI coverage and run-all robustness. (1) tests/delivery-generic.test.sh is in no suite list: wire it into tests/run-all.sh and tests/affected.py (selected by skills/delivery/, scripts/factory-pipeline.py, scripts/lib/pipeline_route.py), with an affected.test.sh case (docs/plans/backlog.md 'In plan' generic-delivery). (2) tests/affected.py runs a bare ['bash','--version'] (WSL launcher on Windows): use scripts/lib/shells.py find_bash() (docs/plans/backlog.md bare-bash-probes). (3) tests/routing-golden.test.sh --update on Windows drops the WSL path scenarios (290 lines deleted on plugin-flow-4): keep scenarios the host cannot evaluate, test it. (4) docs/plans/backlog.md run-all-robust-lows: GITCFG_COPY temp kept on the WARN path, a config WARN counted in the summary with an end-to-end test, git-guard RETRY lines shown when the suite passes, and the empty git-guard output under load: prove the cause or record evidence (do not just raise retries). (5) A scripts/factory-pipeline.py change still selects ~19 suites through the import closure (plugin-qa-lean: the first verify took ~50 min): map factory-pipeline.py and scripts/lib/pipeline_route.py to tests/pipeline.test.sh (case map) and tests/delivery-generic.test.sh only, unless another suite names the script directly; test it. Backlog bookkeeping is done by the run lead after merge.",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        "tests/affected.py",
+        "tests/affected.test.sh",
+        "tests/routing-golden.test.sh",
+        "tests/fixtures/routing-golden.json",
+        "scripts/lib/gitcfg-guard.sh",
+        "tests/git-guard.test.sh",
+        "changelog.d/ci-coverage.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all.sh --affected --base main --only-suites tests/affected.test.sh,tests/run-all-parallel.test.sh,tests/routing-golden.test.sh,tests/git-guard.test.sh -j 2"
+      ],
+      "acceptance": [
+        "delivery-generic runs in run-all and is selected by affected (test)",
+        "no bare bash subprocess in affected.py",
+        "golden --update keeps WSL scenarios (test)",
+        "config WARN counted (test)"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "lead-report",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Run-lead visibility of task leads and workers. (1) plugin-flow-4: both task leads' 'task done' orchestration messages never reached the run lead, which sat idle ~7 h. Find why (orca orchestration send/--report-to target, delivery ids vs message ids, scripts/orca-wait.sh), fix it, and make `factory-pipeline.py status <plan>` show per task the last lead report and READY_FOR_PR so a run lead polling status sees completion without messages. (2) status --orca-run lists released workers as UNRELEASED: fix. (3) An abandoned QA worker's test run kept its test slot ~45 min: status/cleanup name the slot holders (PID, checkout, start) for the plan's worktrees; never kill a process the run cannot prove it started. (4) docs/plans/backlog.md released-worker-wsl-leftovers: cleanup names orphaned processes (wsl.exe sleep infinity etc.) that keep a task directory busy (PID, command, start time). (5) docs/plans/backlog.md tier-plan-arg. (6) docs/plans/backlog.md implementer-refusal-scope. (7) tests/pipeline.test.sh: --help prints usage and exits 0 without running, `--case ,` / empty case names exit 2, cli-selftest case (~61 s) made faster. (8) docs/plans/backlog.md orca-wait-lows. (9) Orca hides non-Orca worktrees when the repo's externalWorktreeVisibility is hide (the default here; maintainer 2026-11-10: task worktrees landed in 'Hidden worktrees' even with lineage set). dispatch --phase lead (and child placements) print `orca repo set --repo path:<repo> --external-worktree-visibility show` before the worktree add when `orca repo list --json` shows hide for that repo; delivery.md section 4 'Orca visibility' and the .claude/CLAUDE.md lesson name it. (10) verdict --fallback takes the unavailable agent, not the replacement, and its error 'claude is available now' is confusing (plugin-qa-lean): clearer usage text. (11) When Claude Code reaps a background waiter's shell (low memory, seen twice 2026-11-10), the orca-wait.sh process survives as an orphan and keeps its lock, so the next waiter exits 3 'already held': the lock holder exits when its parent dies, or the next waiter names the orphan PID. (12) docs/plans/backlog.md model-unavailable-probe: the Codex gateway wraps upstream errors in a 503 (body '[codex/<model>] [429]: The usage limit has been reached' or '[400] ... model_not_found'); the stall/route helpers map both to MODEL_UNAVAILABLE with the reason. Policy text (delivery.md section 8: the run lead polls status, never relies on messages alone) is written by a claude subtask. Backlog bookkeeping for these items is done by the run lead after merge.",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "scripts/orca-wait.sh",
+        "tests/orca-wait.test.sh",
+        "tests/pipeline.test.sh",
+        "skills/delivery/references/delivery.md",
+        "skills/factory-core/references/parallel-work.md",
+        "tests/parallel-policy.test.sh",
+        ".claude/CLAUDE.md",
+        "changelog.d/lead-report.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all.sh --affected --base main --only-suites tests/orca-wait.test.sh,tests/pipeline.test.sh,tests/parallel-policy.test.sh,tests/skills-lint.sh -j 2"
+      ],
+      "acceptance": [
+        "lead completion visible in status without messages (test)",
+        "released workers not UNRELEASED (test)",
+        "slot holders and busy-dir processes named, never killed (test)",
+        "pipeline.test.sh --help exits 0 (test)"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    },
+    {
+      "id": "checks-lows",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Low fixes. (1) docs/plans/backlog.md checks-hygiene-lows: patch runner.procrun.signal in tests/fixtures/run-checks-cleanup-failure.py and drop the unused import in scripts/run-checks.py; tests/facts.test.sh checks git read-tree's return code; scripts/ui/ui_catalog.py includes git stderr in the ls-tree failure reason; the git archive export handles or clearly reports submodules/LFS (report which). (2) docs/plans/backlog.md plan-paths-native (scripts/lib/plan_paths.py converts Git Bash/WSL drive spellings). (3) docs/plans/backlog.md guard-package-rename: scripts/lib/guard/ to scripts/lib/rpgf_guard/. Backlog bookkeeping for these items is done by the run lead after merge.",
+      "paths": [
+        "tests/fixtures/run-checks-cleanup-failure.py",
+        "scripts/run-checks.py",
+        "tests/facts.test.sh",
+        "scripts/ui/ui_catalog.py",
+        "tests/ui-catalog.test.sh",
+        "scripts/lib/plan_paths.py",
+        "scripts/lib/guard/",
+        "scripts/lib/rpgf_guard/",
+        "scripts/lib/gitguard.py",
+        "tests/plan-paths.test.sh",
+        "changelog.d/checks-lows.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all.sh --affected --base main --only-suites tests/facts.test.sh,tests/ui-catalog.test.sh,tests/git-guard.test.sh -j 2"
+      ],
+      "acceptance": [
+        "each fixed low has a test",
+        "git-guard behaviour unchanged"
+      ],
+      "implementer": "codex",
+      "reviewer": "claude"
+    }
+  ]
+}
