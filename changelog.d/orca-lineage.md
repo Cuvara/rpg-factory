@@ -1,0 +1,6 @@
+### Fixed
+
+- **Pipeline: task worktree lineage.** `dispatch --phase lead` prints `orca worktree set --worktree path:<task worktree> --parent-worktree path:<integration checkout>` after the `git worktree add --no-track` line, so a task worktree shows in Orca under its parent instead of as a top-level worktree. `orca worktree set` writes only Orca metadata; `orca worktree create` (which writes `branch.<name>.base` into the shared `.git/config`) is never printed. A no-worktree repo prints nothing new.
+- **Pipeline: cleanup.** `cleanup` reports a leftover task directory (empty or not), an Orca record of a removed worktree and a prunable git worktree record as LEFTOVER, never CLEAN, with `git worktree prune` and `orca worktree rm --worktree path:<dir>`; a plain git task worktree is removed with `git worktree remove` (no `--force`). A directory Windows reports busy is named (PID, command) and never killed. `delivery.md` sections 4 and 8 record the lineage and cleanup rules (no live session or process may use a task worktree when it is removed).
+- **Tests: affected.** `tests/affected.py` maps `agents/*` to `tests/skills-lint.sh`, so `run-all --affected` and suite reuse no longer skip the agent lint when only an agent file changes.
+- **Docs: README.** The doctor row lists the dev-tool state WARN next to OK / DOWN / MISSING.

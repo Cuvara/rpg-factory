@@ -86,6 +86,9 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
   run-all's shared-config check fails when it changes mid-run (a new worktree or tracking branch writes to it).
 - **Create branches with `git switch --no-track -c <branch>`.** A tracking branch writes `branch.<name>.*` into
   the shared `.git/config`, which races with other sessions' runs.
+- **Task worktree lineage goes through `orca worktree set --worktree path:<task> --parent-worktree path:<integration checkout>`,
+  never `orca worktree create`.** `create` writes `branch.<name>.base` into the shared `.git/config`; `set` writes only
+  Orca metadata (config hash unchanged). `dispatch --phase lead` prints the line after `git worktree add --no-track`.
 - **Git Bash, never WSL, on Windows** (every agent runtime). A WSL git run once wrote `core.worktree=/mnt/c/...`
   into the shared config and broke every checkout of the repo.
 - **Fix citation drift right before a release gate:** `python3 -B scripts/checks/skill-citations.py --fix`.
