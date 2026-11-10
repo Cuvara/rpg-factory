@@ -866,7 +866,12 @@ warnings = m.validate(plan, reg)['warnings']
 assert len([w for w in warnings if 'full runs belong to integration QA' in w]) == 2, warnings
 safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed',
                                                                       'tests/run-all.sh --only-suites tests/x.sh 0 failed'])
-assert any('implementers run syntax checks only' in w for w in m.pr.qa_warnings(safe))
+# a suite or test command in checks warns (implementers run syntax checks only); the scoped run-all tier command does not
+assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['bash tests/pipeline.test.sh'])))
+assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['dotnet test Game.Tests.csproj'])))
+assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && bash tests/pipeline.test.sh'])))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --only-suites tests/x.sh -j 2']))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a']))
 for text in ['full suite 0 failed', 'the whole suite passes', 'all suites 0 failed', 'entire test suite green']:
     assert m.pr.qa_warnings(dict(safe, acceptance=[text])), text
 assert not any('acceptance' in w for w in m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count'])))
@@ -1019,7 +1024,7 @@ for other in ('bash tests/pipeline.test.sh && true', 'bash tests/run-all-paralle
 # validate still warns on a full run inside a compound check; a scoped one is fine
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
-assert not m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
+assert not m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
 for wrapped in ("bash -c 'tests/run-all.sh -j 4'", 'bash -c "tests/run-all.sh"', "bash -c 'true && tests/run-all.sh'",
                 'tests/run-all.sh --affected\ntests/run-all.sh -j 4', 'echo x\\ #literal; tests/run-all.sh',
                 'echo x\\;#literal\ntests/run-all.sh', 'tests/run-all.sh # --affected'):
@@ -1152,6 +1157,25 @@ for tid in ('s', 'integration:srv'):
     out = cli('dispatch', str(srv_pf), '--task', tid, '--phase', 'qa', '--sha', srv_sha, '--runner', 'print')
     assert 'run the checks (run-checks.py fast tier for registry repos)' in out and 'Checks:\n- [s] dotnet test x' in out, out
     assert 'QA tier command' not in out and 'tests/run-all.sh' not in out, out
+# a verify whose review FAILs ran no tests: no QA record, so the next verify keeps the original base and checks
+(srv_repo / 'srv.cs').write_text('fix1'); sgit('commit', '-qam', 'fix1'); srv_fix1 = sgit('rev-parse', 'HEAD')
+cli('verdict', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_sha, '--by', 'codex', '--state', 'FAIL',
+    '--failed-at', 'review')
+assert not os.path.exists(m.verdict_file(srv_plan, 's', 'qa')), 'a review-only FAIL wrote a QA record'
+assert json.loads(open(m.verdict_file(srv_plan, 's', 'review')).read())['state'] == 'FAIL'
+out = cli('dispatch', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_fix1, '--runner', 'print')
+assert 'git diff main...' + srv_fix1 in out and 'fix delta' not in out, out
+assert 'Checks:\n- [s] dotnet test x' in out, out
+# a QA FAIL without --failed-suites (a product test failed): the re-verify keeps the task's check commands
+cli('verdict', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_fix1, '--by', 'codex', '--state', 'FAIL',
+    '--failed-at', 'qa')
+qa_rec = json.loads(open(m.verdict_file(srv_plan, 's', 'qa')).read())
+assert qa_rec['state'] == 'FAIL' and qa_rec['sha'] == srv_fix1, qa_rec
+assert json.loads(open(m.verdict_file(srv_plan, 's', 'review')).read())['state'] == 'PASS'  # QA ran after a review PASS
+(srv_repo / 'srv.cs').write_text('fix2'); sgit('commit', '-qam', 'fix2'); srv_fix2 = sgit('rev-parse', 'HEAD')
+out = cli('dispatch', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_fix2, '--runner', 'print')
+assert 'git diff ' + srv_fix1 + '...' + srv_fix2 in out and 'fix delta since previous candidate' in out, out
+assert 'Checks:\n- [s] dotnet test x' in out, out
 lean = m.qa_body(first,[dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
                  runall={'tests/pipeline.test.sh'})
 assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
@@ -1485,7 +1509,7 @@ expect "the codex task's implement session keeps its implementer" 0 "^orca orche
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("lead_agent",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nolead.json"
 expect "registry without pipeline.lead_agent: the task lead defaults to claude" 0 "^orca agent launch --agent claude " --registry "$TMP/reg-nolead.json" dispatch "$OK" --task c2 --phase lead --runner orca
 expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
-expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, after review PASS the task lead runs the QA tier command itself" dispatch "$OK" --task gw --phase lead
+expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
@@ -1551,7 +1575,7 @@ WT="--worktree '?path:[^' ]*demo-gw'?"
 expect "implement joins the task worktree" 0 "--agent claude $WT" dispatch "$OK" --task gw --phase implement --runner orca
 refute "implement never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase implement --runner orca
 expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash: one shared index" dispatch "$OK" --task gw --phase implement
-expect "implement runs targeted cases only" 0 "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement
+expect "implement runs no suites, only a syntax check" 0 "Run no test suites; only a syntax check of the files you edited" dispatch "$OK" --task gw --phase implement
 expect "implement sub-session reports changed paths and check counts to the task lead" 0 "Report to the task lead: changed paths" dispatch "$OK" --task gw --phase implement
 expect "subtask paths narrow the sub-session" 0 '"subtask_paths": \[' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go
 expect "a subtask session may name its own model" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner orca
@@ -1920,7 +1944,7 @@ expect "subplan placement child: worker-start --worktree new-child from the task
 expect "the child subtask runs its implementer (codex)" 0 "worker-start .*--agent codex --worktree new-child" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect "a child command says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs \(shared .git/config\)" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec commits on the child branch" "Commit on your child branch with explicit paths" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
-expect_spec "the child implement spec runs targeted cases only" "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec runs no suites, only a syntax check" "Run no test suites; only a syntax check of the files you edited" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec: the task lead merges and removes the child at once" "the task lead merges it into feat/core/demo-gw and removes the child at once" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec says the run-all rule" "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the subtask's paths are in the spec" '"subtask_paths": \["backend/gateway/b.go"\]' dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
@@ -2128,7 +2152,16 @@ RPG_FACTORY_AGENTS=codex expect "single codex fallback gate accepted" 0 "SAME_MO
 v --task c1 --phase review --sha "$C1" --by codex --state PASS
 v --task c2 --phase review --sha "$C2" --by claude --state PASS
 expect "restore paired review" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by codex --state PASS
+# start from no gw review and no gw QA: only `verdict --phase verify` may satisfy the gate, and it must record both
+rm -f "$VD/gw__review.json" "$VD/gw__qa.json"
+expect "without a gw review and QA the gate blocks" 1 "BLOCKER gw:" gate "$G"
+expect "verify FAIL names where it failed" 2 "needs --failed-at review" verdict "$G" --task gw --phase verify --sha "$SG" --by codex --state FAIL
+expect "verify --failed-at review records the review FAIL" 0 "recorded review FAIL" verdict "$G" --task gw --phase verify --sha "$SG" --by codex --state FAIL --failed-at review
+if jq -e '.state == "FAIL"' "$VD/gw__review.json" >/dev/null && [ ! -e "$VD/gw__qa.json" ]; then pass=$((pass + 1)); echo "PASS  a review-only verify FAIL writes no QA record (QA stays NOT_RUN)"
+else fail=$((fail + 1)); echo "FAIL  a review-only verify FAIL writes no QA record (QA stays NOT_RUN)"; fi
 expect "verify records review and QA" 0 "recorded review PASS" verdict "$G" --task gw --phase verify --sha "$SG" --by codex --state PASS
+if jq -e '.state == "PASS" and .by == "codex"' "$VD/gw__review.json" >/dev/null && jq -e '.state == "PASS" and .by == "codex"' "$VD/gw__qa.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verify wrote both the review and the QA record"
+else fail=$((fail + 1)); echo "FAIL  verify wrote both the review and the QA record"; fi
 expect "verify satisfies the gate" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "mark model down" 0 "MODEL_UNAVAILABLE: revoked" agents "$G" --down codex --reason revoked
 expect "restore model availability" 0 "codex: available" agents "$G" --up codex

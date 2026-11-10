@@ -571,7 +571,7 @@ The table lists the commands for a repo that has `tests/run-all.sh` (this plugin
 |---|---|---|---|
 | Implementer | no test suites; only a syntax check of the files it edited (`bash -n`, `python -m py_compile`, a JSON parse) | the implementation session | seconds |
 | Verify, once per candidate | the diff review first (a blocking finding is a FAIL and no test runs); then `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once. Explicit suites run all cases; affected-only suites with a case map run only affected cases. Other checks are extra commands; never a full run | one fresh verify session in the task worktree, started by the task lead | 2-5 min for a narrow change (one-file schema change 119 s, one-file skill change 288 s); a change to a global input of `tests/affected.py` selects every suite and takes about an hour with a slot wait |
-| Re-verify after a FAIL | review of the fix delta only; then the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | one fresh verify session on the fix candidate | as verify |
+| Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>`; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task tier command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only | as verify, no session of its own |
 | Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the full suite in the background while the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session | the slowest tier, release only |
@@ -599,9 +599,14 @@ The table lists the commands for a repo that has `tests/run-all.sh` (this plugin
   itself (no QA session, note starting `tier S`) only for such a task. A QA PASS from a fresh QA session is accepted
   as before for every tier: by the other model, or by the implementer's model as the one-model fallback of the Token
   rule.
-- **Re-verify.** A verify FAIL is recorded with `verdict --phase verify --state FAIL --failed-suites <tests/a.sh,...>`
-  (a QA-only FAIL the same way with `--phase qa`). The next `dispatch --phase verify` on a new candidate prints
-  `--affected --base <that FAIL's candidate>` with those suites and the task check suites in `--only-suites`.
+- **Re-verify.** A verify FAIL names where it failed. A review that blocked the candidate ran no test: record
+  `verdict --phase verify --state FAIL --failed-at review`; it writes the review FAIL and no QA record, so the next
+  verify keeps the original base and the task's checks. A test failure is
+  `verdict --phase verify --state FAIL --failed-at qa [--failed-suites <tests/a.sh,...>]` (review PASS, QA FAIL; a
+  QA-only FAIL the same way with `--phase qa`). The next `dispatch --phase verify` on a new candidate prints
+  `--affected --base <that FAIL's candidate>` with only those failed suites in `--only-suites`; the task's own check
+  suites are not run again. A repo without `tests/run-all.sh` (a product repo) keeps its task check commands on a
+  re-verify, because a failed-suites list cannot name them.
 - **Plans.** A task's `checks` name its own suites or the affected-suites command, never a full run, and
   its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
   `checks` run in the verify session, not in the implementers: `validate` warns when a check would make an

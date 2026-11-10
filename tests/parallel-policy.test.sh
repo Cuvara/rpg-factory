@@ -458,7 +458,7 @@ else:
     required = {
         "Implementer": ("no test suites", "syntax check"),
         "Verify, once per candidate": ("diff review first", "--affected", "never a full run"),
-        "Re-verify after a FAIL": ("failed suites", "task check suites", "--affected", "previous FAIL candidate"),
+        "Re-verify after a FAIL": ("only the failed suites", "--failed-at qa", "plus `--affected", "previous FAIL candidate", "--failed-at review"),
         "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
         "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green is the full gate", "ci+workspace"),
         "Release": ("--release", "dogfood.sh --installed"),
@@ -469,6 +469,8 @@ else:
             errors.append("qa-tiers row missing: " + label)
         elif any(phrase not in row for phrase in phrases):
             errors.append("qa-tiers row changed: " + label)
+    if "task check suites" in rows.get("Re-verify after a FAIL", ""):
+        errors.append("qa-tiers row changed: Re-verify after a FAIL reruns the task check suites")
     task = rows.get("Verify, once per candidate", "")
     if re.search(r"(?<!never a )full run", task, re.I):
         errors.append("qa-tiers verify row permits a full run")
@@ -509,7 +511,10 @@ q_mutate "QA tiers implementer row runs suites again" "qa-tiers row changed: Imp
   'sed -i "/^| Implementer |/s/no test suites/the targeted suites/" "$F"'
 q_mutate "QA tiers verify row drops the review-first step" "qa-tiers row changed: Verify, once per candidate" \
   'sed -i "/^| Verify, once per candidate |/s/the diff review first/the tests/" "$F"'
-q_mutate "QA tiers re-verify row drops the task check suites" "qa-tiers row changed: Re-verify after a FAIL"   'sed -i "/^| Re-verify after a FAIL |/s/, with the task check suites//" "$F"'
+q_mutate "QA tiers re-verify row drops the affected-from-previous run" "qa-tiers row changed: Re-verify after a FAIL" \
+  'sed -i "/^| Re-verify after a FAIL |/s/, plus .--affected --base <previous FAIL candidate>.//" "$F"'
+q_mutate "QA tiers re-verify row reruns the task check suites again" "qa-tiers row changed: Re-verify after a FAIL reruns the task check suites" \
+  'sed -i "/^| Re-verify after a FAIL |/s/only the failed suites/the failed suites with the task check suites/" "$F"'
 q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/every owned path/every changed path/" "$F"'
 q_mutate "QA tiers tier S row counts docs/ as prose again" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/a .md file, under changelog.d\/ or a skills\/ directory/docs, skills, changelog or .md/" "$F"'
 q_mutate "QA tiers verify row requires a full run" "qa-tiers verify row permits a full run" \

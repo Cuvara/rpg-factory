@@ -718,6 +718,15 @@ def serialize(waves, tasks, reg, plan):
     return out
 
 
+def task_qa_warnings(task):
+    """pr.qa_warnings without the verify tier command: a scoped run-all check is what the verify session runs, not a
+    suite an implementer would run; a suite named next to it still warns."""
+    def tier_only(c):
+        return (pr.mentions_runall(c) and not pr.full_run(c)
+                and not pr.SUITE_CHECK.search(re.sub(r"(?:\./)?tests/run-all\.sh", "", c)))
+    return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]))
+
+
 def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
@@ -752,7 +761,7 @@ def validate(plan, reg):
     agents = pipe["agents"]
     for t in tasks:
         tid = t.get("id", "?")
-        warnings.extend(pr.qa_warnings(t))
+        warnings.extend(task_qa_warnings(t))
         if t.get("kind") is not None and t["kind"] not in pr.KINDS:
             errors.append(f"task {tid}: unknown kind {t['kind']}")
         if t.get("implementer") and t["implementer"] not in agents:
@@ -1333,7 +1342,8 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}",
         f"4. Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
         f"--runner orca` ({reviewer} for {impl}). Keep HEAD at the candidate. Record both results with "
-        "`verdict --phase verify`. On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
+        "`verdict --phase verify` (a FAIL names `--failed-at review`: no test ran, the next verify keeps the original "
+        "tests; or `--failed-at qa [--failed-suites ...]`). On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
         "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA.",
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
@@ -1751,7 +1761,7 @@ def cmd_dispatch(a, reg):
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
     if a.phase == "verify":
         suites = runall_suites(home or info["path"])
-        selected_task = dict(task, checks=[]) if retry else task
+        selected_task = dict(task, checks=retry_checks(task, suites)) if retry else task
         explicit, _, _ = pr.qa_checks([selected_task], suites, failed)
         cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
         prompt += ("\nReview first. If any blocking finding exists, report FAIL and run no tests. "
@@ -1774,6 +1784,15 @@ def cmd_dispatch(a, reg):
                    "timestamp": now_utc()}, sha)
     child_note(place)
     return 0
+
+
+def retry_checks(task, runall=None):
+    """The task checks a re-verify keeps. A repo with tests/run-all.sh: none, the failed suites plus
+    `--affected --base <previous candidate>` replace them. A repo without it (a product repo): its check commands
+    (`dotnet test ...`) all stay, because a failed_suites list cannot name them."""
+    if runall:
+        return []
+    return [c for c in task.get("checks", []) if not pr.mentions_runall(c)]
 
 
 def child_branch(parent, sid, phase, sha=None):
@@ -2199,13 +2218,33 @@ def cmd_verdict(a, reg):
         if a.task.startswith("integration:"):
             die("verify verdicts are per task: --task <id>")
         from argparse import Namespace
+        if a.failed_at and a.state != "FAIL":
+            die("--failed-at goes with --phase verify --state FAIL")
+        if a.state == "FAIL" and not a.failed_at:
+            a.failed_at = "qa" if a.failed_suites is not None else None
+            if not a.failed_at:
+                die("verify --state FAIL needs --failed-at review (the review blocked, no test ran) or qa "
+                    "(a test failed; add --failed-suites for suites)")
+        if a.failed_at == "review" and a.failed_suites is not None:
+            die("--failed-at review ran no tests: --failed-suites goes with a QA failure")
+        if a.failed_suites is not None and a.state != "FAIL":
+            die("--failed-suites goes with --phase qa --state FAIL")
         qa = Namespace(**vars(a))
         qa.phase, qa.implementer, qa.fallback = "qa", None, None
         review = Namespace(**vars(a))
         review.phase, review.failed_suites = "review", None
-        result = cmd_verdict(qa, reg)
-        review._verify_failed = a.failed_suites
-        return result or cmd_verdict(review, reg)
+        if a.failed_at == "qa":
+            review.state = "PASS"  # QA only ran after the review passed
+        # review first: its arguments (--implementer, --fallback) are the ones that can still die
+        result = cmd_verdict(review, reg)
+        if result or a.failed_at == "review":
+            # a review that blocked the candidate ran no tests: write no QA record, so the previous QA FAIL (its failed
+            # suites and base) or the original base and checks still decide what the next verify runs
+            if a.failed_at == "review" and not result:
+                print("factory-pipeline: review FAIL ran no tests: QA stays NOT_RUN (no QA record written); the next "
+                      "verify keeps the previous QA base and the task checks", file=sys.stderr)
+            return result
+        return cmd_verdict(qa, reg)
     plan = read_plan(a.plan, reg)
     pipe = settings(reg)
     if a.report and not os.path.isfile(a.report):
@@ -2240,8 +2279,6 @@ def cmd_verdict(a, reg):
            "timestamp": now_utc()}
     if a.note is not None:
         rec["note"] = a.note
-    if getattr(a, "_verify_failed", None):
-        rec["failed_suites"] = sorted({s.strip() for s in a._verify_failed.split(',') if s.strip()})
     if a.failed_suites is not None:
         if a.phase != "qa" or a.state != "FAIL":
             die("--failed-suites goes with --phase qa --state FAIL")
@@ -3339,6 +3376,8 @@ def main():
     v.add_argument("--report")
     v.add_argument("--note")
     v.add_argument("--failed-suites")
+    v.add_argument("--failed-at", choices=("review", "qa"),
+                   help="--phase verify --state FAIL: `review` = the review blocked and no test ran (no QA record)")
     v.add_argument("--implementer")
     v.add_argument("--subtask")
     v.add_argument("--subplan")
