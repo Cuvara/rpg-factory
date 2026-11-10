@@ -275,7 +275,7 @@
       "kind": "docs",
       "grade": "light",
       "grade_reason": "pointer and wording fixes across files plus one test-map entry",
-      "objective": "Follow-ups found by tasks tier-xs, dedupe-delivery and slim-followups. (1) Medium: skills/delivery/SKILL.md (Roles around line 20, Flow step 1 around line 32) still says every tier gets a task lead and the run lead never edits task files; state the tier XS exception in one clause each (delivery.md section 1 holds the rule). skills/factory-core/SKILL.md around line 32 (two levels paragraph): same one-clause XS exception. (2) Stale pointers that name parallel-work.md for delivery policy now in skills/delivery/references/delivery.md: registry/core.json (pipeline.models description), skills/delivery/pipeline-defaults.json, docs/registry.schema.json, scripts/lib/model_policy.py docstring, commands/pipeline.md, scripts/README.md (pipeline line), scripts/lib/orca_cmd.py docstring: point to delivery.md section 10 \"Model choice\" / section 5 (or docs/pipeline-cli.md where the detail moved); rebuild registry.json with python3 -B scripts/build-registry.py. (3) tests/README.md and docs/architecture/multi-discipline-factory.md point the full command list to scripts/README.md \"Commands\"; skills/factory-core/references/parallel-work.md release pointer adds docs/releasing.md. (4) tests/orca-commands.test.sh also reads docs/pipeline-cli.md for the Orca commands it cites. (5) tests/affected.py: a change to skills/delivery/references/delivery.md selects tests/delivery-generic.test.sh (its size cap was missed by a task QA in this plan). Changelog fragment changelog.d/final-pointers.md.",
+      "objective": "Follow-ups found by tasks tier-xs, dedupe-delivery and slim-followups. (1) Medium: skills/delivery/SKILL.md (Roles around line 20, Flow step 1 around line 32) still says every tier gets a task lead and the run lead never edits task files; state the tier XS exception in one clause each (delivery.md section 1 holds the rule). skills/factory-core/SKILL.md around line 32 (two levels paragraph): same one-clause XS exception. (2) Stale pointers that name parallel-work.md for delivery policy now in skills/delivery/references/delivery.md: registry/core.json (pipeline.models description), skills/delivery/pipeline-defaults.json, docs/registry.schema.json, scripts/lib/model_policy.py docstring, commands/pipeline.md, scripts/README.md (pipeline line), scripts/lib/orca_cmd.py docstring: point to delivery.md section 10 \"Model choice\" / section 5 (or docs/pipeline-cli.md where the detail moved); rebuild registry.json with python3 -B scripts/build-registry.py. (3) tests/README.md and docs/architecture/multi-discipline-factory.md point the full command list to scripts/README.md \"Commands\"; skills/factory-core/references/parallel-work.md release pointer adds docs/releasing.md. (4) tests/orca-commands.test.sh also reads docs/pipeline-cli.md for the Orca commands it cites. (5) tests/affected.py: a change to skills/delivery/references/delivery.md selects tests/delivery-generic.test.sh (its size cap was missed by a task QA in this plan). Changelog fragment changelog.d/final-pointers.md. (6) docs/architecture/overview.md names parallel-work.md for the two-level flow and \"Model choice\": point to delivery.md section 1 / section 10.",
       "paths": [
         "skills/delivery/SKILL.md",
         "skills/factory-core/SKILL.md",
@@ -292,7 +292,8 @@
         "skills/factory-core/references/parallel-work.md",
         "tests/orca-commands.test.sh",
         "tests/affected.py",
-        "changelog.d/final-pointers.md"
+        "changelog.d/final-pointers.md",
+        "docs/architecture/overview.md"
       ],
       "deps": [
         "tier-xs",
