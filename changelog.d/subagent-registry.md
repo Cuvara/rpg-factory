@@ -7,4 +7,5 @@
   `rule(reg, role, agent)` turns one entry into the sentence a dispatch prompt carries.
 - **Checks.** `scripts/check-registry.sh` fails when a subagent model or effort is outside `pipeline.models.scope`, or a
   Claude alias is not the `pipeline.models.agent_tool_alias` of its model. New suite `tests/subagent-policy.test.py`
-  covers the rule text per role and agent, the missing block and the scope failures.
+  covers the rule text per role and agent, the missing block and the scope failures. The suite runs `check-registry.sh`
+  through the Git Bash resolver (`scripts/lib/shells.py`), so it also runs on Windows.
