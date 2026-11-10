@@ -209,7 +209,7 @@ if has_case policy-markers; then
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
-  child-merge-remove child-no-run-all which-model subagents-read-only)
+  child-merge-remove child-no-run-all which-model subagents-read-only single-verify)
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
@@ -221,6 +221,7 @@ declare -A POLICY_SENTENCE=(
   [child-no-run-all]='Never create or remove a child worktree while a full tests/run-all.sh runs (the runner of a repo that has one): every checkout shares one .git/config.'
   [which-model]='| Role or kind | Model | Registry |'
   [subagents-read-only]='In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.'
+  [single-verify]='One verify session reviews the whole task diff: a prose subtask written by the verifier'"'"'s model is covered, and a code subtask written by the verifier'"'"'s model is listed by the gate as `SAME_MODEL (single verify)`, never blocking.'
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
 PLACEMENT_ROWS=('| shared (default) |' '| child |')
@@ -266,9 +267,9 @@ for phrase in rest[split+1:]:
     hit = next((f"{i}:{line}" for i, line in enumerate(lines, 1) if phrase.lower() in line.lower()), None)
     if hit:
         errors.append(f"retired shortcut phrasing '{phrase}': {hit}")
-match = re.search(r"^4\. \*\*Cross-model review\.\*\*.*?(?=^5\. |\Z)", text, re.M | re.S)
+match = re.search(r"^4\. \*\*Verify \(.*?(?=^5\. |\Z)", text, re.M | re.S)
 if not match:
-    errors.append("section 10 step 4 (Cross-model review) missing")
+    errors.append("section 10 step 4 (Verify) missing")
 else:
     step = " ".join(match.group().split())
     for phrase in ("in the shared placement starts a sub-session that does not commit", "commits on its own child branch"):
@@ -306,6 +307,8 @@ s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence change
   'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
 s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \
   'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
+s_mutate "canonical sentence changed (single verify blocks on a code subtask)" "sentence changed under policy:single-verify" \
+  'sed -i "s/, never blocking\.\$/, blocking until its own review passes./" "$F"'
 s_mutate "canonical sentence changed (subagents may write)" "sentence changed under policy:subagents-read-only" \
   'sed -i "s/^In-session subagents are read-only scouts;/In-session subagents are scouts;/" "$F"'
 s_mutate "placement table removed" "marker missing: policy:placement-table" \
@@ -453,10 +456,10 @@ else:
     table = match.group(1)
     rows = {line.split("|", 2)[1].strip(): line for line in table.splitlines()}
     required = {
-        "Task QA, each candidate": ("--affected", "never a full run"),
-        "Re-QA after a FAIL": ("failed suites", "task check suites", "--affected", "previous FAIL candidate"),
+        "Implementer": ("no test suites", "syntax check"),
+        "Verify, once per candidate": ("diff review first", "--affected", "never a full run"),
+        "Re-verify after a FAIL": ("failed suites", "task check suites", "--affected", "previous FAIL candidate"),
         "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
-        "Reviewer": ("no suites",),
         "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green is the full gate", "ci+workspace"),
         "Release": ("--release", "dogfood.sh --installed"),
     }
@@ -466,16 +469,20 @@ else:
             errors.append("qa-tiers row missing: " + label)
         elif any(phrase not in row for phrase in phrases):
             errors.append("qa-tiers row changed: " + label)
-    task = rows.get("Task QA, each candidate", "")
+    task = rows.get("Verify, once per candidate", "")
     if re.search(r"(?<!never a )full run", task, re.I):
-        errors.append("qa-tiers task row permits a full run")
+        errors.append("qa-tiers verify row permits a full run")
 header = "| When | Runs | Who |"
+# The single-verify rule has one copy too: its marker or the start of its sentence in another file is a copy.
+single = ("<!-- policy:single-verify -->", "One verify session reviews the whole task diff")
 for path in sorted(root.rglob("*.md")):
     if path.relative_to(root).as_posix() == relative:
         continue
     contents = path.read_text(encoding="utf-8")
     if header in contents or marker in contents:
         errors.append("qa-tiers table copied outside " + relative + ": " + path.relative_to(root).as_posix())
+    if any(phrase in contents for phrase in single):
+        errors.append("single-verify rule copied outside " + relative + ": " + path.relative_to(root).as_posix())
 print("\n".join(errors), end="\n" if errors else "")
 sys.exit(bool(errors))
 PY_QA
@@ -496,13 +503,17 @@ q_mutate() {
 }
 q_mutate "QA tiers table removed" "qa-tiers table missing" \
   'sed -i "/^<!-- policy:qa-tiers -->$/,/^$/d" "$F"'
-q_mutate "QA tiers reviewer row removed" "qa-tiers row missing: Reviewer" \
-  'sed -i "/^| Reviewer |/d" "$F"'
-q_mutate "QA tiers re-QA row drops the task check suites" "qa-tiers row changed: Re-QA after a FAIL"   'sed -i "/^| Re-QA after a FAIL |/s/, with the task check suites//" "$F"'
+q_mutate "QA tiers implementer row removed" "qa-tiers row missing: Implementer" \
+  'sed -i "/^| Implementer |/d" "$F"'
+q_mutate "QA tiers implementer row runs suites again" "qa-tiers row changed: Implementer" \
+  'sed -i "/^| Implementer |/s/no test suites/the targeted suites/" "$F"'
+q_mutate "QA tiers verify row drops the review-first step" "qa-tiers row changed: Verify, once per candidate" \
+  'sed -i "/^| Verify, once per candidate |/s/the diff review first/the tests/" "$F"'
+q_mutate "QA tiers re-verify row drops the task check suites" "qa-tiers row changed: Re-verify after a FAIL"   'sed -i "/^| Re-verify after a FAIL |/s/, with the task check suites//" "$F"'
 q_mutate "QA tiers tier S row back to changed paths" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/every owned path/every changed path/" "$F"'
 q_mutate "QA tiers tier S row counts docs/ as prose again" "qa-tiers row missing: Tier S"   'sed -i "/^| Tier S or prose-only task/s/a .md file, under changelog.d\/ or a skills\/ directory/docs, skills, changelog or .md/" "$F"'
-q_mutate "QA tiers task row requires a full run" "qa-tiers task row permits a full run" \
-  'sed -i "/^| Task QA,/s/never a full run/run a full run/" "$F"'
+q_mutate "QA tiers verify row requires a full run" "qa-tiers verify row permits a full run" \
+  'sed -i "/^| Verify, once per candidate |/s/never a full run/run a full run/" "$F"'
 q_mutate "QA tiers integration row back to a full local run" "qa-tiers row changed: Integration QA, once per batch before the PR" \
   'sed -i "/^| Integration QA,/s/tests\/run-all.sh --workspace-only/tests\/run-all.sh --reuse -j 4/" "$F"'
 q_mutate "QA tiers integration row drops the CI watch" "qa-tiers row changed: Integration QA, once per batch before the PR" \
@@ -513,6 +524,8 @@ q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \
   'sed -n "/^<!-- policy:qa-tiers -->$/,/^$/p" "$F" > skills/client-integration/SKILL.md'
+q_mutate "single-verify rule copied into a skill" "single-verify rule copied outside" \
+  'sed -n "/^<!-- policy:single-verify -->$/,+1p" "$F" > skills/client-integration/SKILL.md'
 
 fi
 if has_case orca-first; then

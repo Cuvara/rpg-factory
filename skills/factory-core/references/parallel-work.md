@@ -46,7 +46,8 @@ exclusive resources, QA tiers and model policy. `plan.json` `repos.<key>` names 
 
 ## Tier commands of this plugin repo (delivery.md section 10, "QA tiers")
 
-The QA tiers table of delivery.md carries this repo's commands (registry `pipeline.qa_tiers`). The rules behind them:
+The QA tiers table of delivery.md carries this repo's commands (registry `pipeline.qa_tiers`); the single-verify rule
+(`policy:single-verify`) is there too. The rules behind them:
 
 - **One full run per machine: the run-all lock.** A full `tests/run-all.sh` takes a per-machine lock and a second one
   waits. CI (`.github/workflows/tests.yml`, `--no-workspace --no-claude`) is the full-suite gate and
