@@ -18,7 +18,7 @@ Usage: release-check.py [--repo DIR] [--no-remote] [--notes] [--verify-tag]
   --notes   print the CHANGELOG section of X.Y.Z (the release notes body) to stdout; check lines go to stderr
             e.g. release-check.py --notes > notes.md && gh release create vX.Y.Z --verify-tag -F notes.md
 Exit: 0 every check passed, 1 otherwise.
-Order (see .claude/CLAUDE.md "Releases"): merge the release PR -> check out the merge commit -> release-check ->
+Order (see docs/releasing.md): merge the release PR -> check out the merge commit -> release-check ->
 run-all --release + dogfood --installed -> annotated tag -> release-check --verify-tag -> gh release create.
 """
 import json
