@@ -266,5 +266,6 @@
         "affected suites 0 failed"
       ]
     }
-  ]
+  ],
+  "deliver": "pr"
 }
