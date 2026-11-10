@@ -57,7 +57,7 @@ Without Orca, dispatch prints Agent-tool commands for the same flow.
 ## References - read when
 
 - [references/delivery.md](references/delivery.md) - before delegating, dispatching workers or integrating their branches (the only copy of the policy).
-- `${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md` - command forms and flags of `factory-pipeline.py`: dispatch, verdict, fallback reviews, gate, Orca message traps.
+- `${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md` - command forms and flags of `factory-pipeline.py`: dispatch, verdict, fallback reviews, gate, cleanup, model flags.
 - `${CLAUDE_SKILL_DIR}/pipeline-defaults.json` - the agents, review pairing, routing and QA tiers used without a registry.
 
 All paths above are relative to `${CLAUDE_SKILL_DIR}`.

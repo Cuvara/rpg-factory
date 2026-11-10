@@ -9,6 +9,8 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 
 - `tier -- --repo <key> --paths <files>` prints S, M or L and the flow. An S task is still a one-task `plan.json`
   with its own task lead (the task worktree, or the main checkout of a no-worktree repo).
+- `tier --plan plan.json --repo <key> --paths <files>` is the form for `--registry none` and for repos the plan names
+  by path: the repo is read from the plan's `repos` entry, not from the registry.
 - `planner --request <text> --runner orca` starts the L-tier planner worker. Planning is read-only and runs in the
   run lead's checkout, never in a new worktree.
 
@@ -113,20 +115,6 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase revi
   is the task reviewer's model) needs its own review, PASS by its pair or a dispatch-recorded fallback review;
   without it the gate blocks, naming the subtask, its recorded implementer and the reviewer it needs. The task
   review never covers it.
-
-## Orca message traps
-
-- Only a dispatched Orca worker can send `--type escalation` or `worker_done`; from any other session Orca refuses
-  with "No active Dispatch belongs to this message sender". A task lead is not a worker of the run lead, so it
-  reports with `--type status` (or asks with `--type question`).
-- `orca orchestration check --wait --types <types>` still returns heartbeats: a wait loop acks each batch and keeps
-  waiting until a message of the wanted type arrives. The run lead's single waiter is `orca-wait.sh` (delivery.md
-  section 5; one instance per Run, by a lock file in the state dir).
-- A multi-line `--prompt` passed through `cmd.exe` (Windows) is cut at the first newline. Write the spec to a file
-  and send a one-line prompt that names it (`dispatch` does this).
-- After every worker start or launch with `--agent codex`, read the session's terminal
-  (`orca orchestration worker-read` for a worker) until it shows the prompt being worked on. `input_accepted` alone
-  is no proof: a Codex CLI (v0.166) once sat idle at an empty prompt.
 
 ## agents
 

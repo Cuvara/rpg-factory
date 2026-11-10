@@ -1,6 +1,6 @@
 ### Changed
 
-- **Delivery.** `skills/delivery/references/delivery.md` states each rule once and shrinks from 56018 to 32544 bytes (the
+- **Delivery.** `skills/delivery/references/delivery.md` states each rule once and shrinks from 56018 to 32729 bytes (the
   Orca lineage lesson lives only in section 4 "Orca visibility"; session release, "sub-sessions never commit" and the
   one-full-run-per-machine rule are stated once). The verdict and model CLI details moved to `docs/pipeline-cli.md`, the tier
   command details of this repo to `tests/README.md`. `skills/delivery/SKILL.md` and `skills/factory-core/SKILL.md` point to
