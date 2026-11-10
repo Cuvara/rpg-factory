@@ -1,8 +1,9 @@
 # AGENTS.md - rpg-factory
 
 Read `.claude/CLAUDE.md` before changing anything: it is the authoritative guide for this repo (rules,
-commands, layout, release order) for every agent runtime, Codex included. This file adds only the
-Codex-specific notes and does not restate those rules.
+operating lessons, core commands) for every agent runtime, Codex included. Architecture and layout are in
+`docs/architecture/overview.md`, the release order in `docs/releasing.md`, the full command list in
+`scripts/README.md` "Commands". This file adds only the Codex-specific notes and does not restate those rules.
 
 ## Codex-only notes
 
