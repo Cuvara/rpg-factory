@@ -32,8 +32,14 @@ def expect(name, args, pattern='', registry='none', rc=0):
 reg=json.loads((root/'registry.json').read_text(encoding='utf-8'))['pipeline']
 defaults=json.loads((root/'skills/delivery/pipeline-defaults.json').read_text(encoding='utf-8'))
 check('defaults drift', all(reg.get(k)==v for k,v in defaults['pipeline'].items()) and 'exclusive_resources' not in defaults['pipeline'])
-KEYS={'description','tiers','agents','review_pairing','default_implementer','lead_agent','verdict_states','no_worktree_markers','agent_routing','qa_prefer','qa_tiers','available_agents','models'}
+KEYS={'description','tiers','agents','review_pairing','default_implementer','lead_agent','verdict_states','no_worktree_markers','agent_routing','qa_prefer','qa_tiers','available_agents','models','subagents'}
 check('defaults key set', set(defaults['pipeline'])==KEYS, str(sorted(set(defaults['pipeline'])^KEYS)))
+dm=(root/'skills/delivery/references/delivery.md').read_text(encoding='utf-8')
+check('delivery.md size cap', len(dm.encode('utf-8'))<=32768, str(len(dm.encode('utf-8'))))
+LINEAGE='orca worktree set --worktree path:<dir> --parent-worktree'
+s4=dm.split('## 4. Worktrees',1)[1].split('\n## 5.',1)[0]
+vis=s4.split('- **Orca visibility',1)[1].split('\n### ',1)[0] if '- **Orca visibility' in s4 else ''
+check('orca lineage command only in section 4 Orca visibility', dm.count(LINEAGE)==1 and LINEAGE in vis, f'count={dm.count(LINEAGE)}')
 import re
 def prompt_text(p):
     # the printed prompt plus the spec file a dispatch names, when the prompt only points to it
