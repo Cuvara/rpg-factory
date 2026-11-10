@@ -242,13 +242,12 @@
       "kind": "fix",
       "grade": "heavy",
       "grade_reason": "conflict resolution between two policy changes in the pipeline script and CLAUDE.md; a lost rule from either side is a regression",
-      "objective": "PR #93 (plan plugin-qa-lean) merged into main at 5e2c5da: one verify session per task (dispatch --phase verify, marker policy:single-verify), implementers run no suites, changes in .claude/CLAUDE.md, scripts/factory-pipeline.py, tests/affected.py, tests/pipeline.test.sh, tests/parallel-policy.test.sh, delivery.md, parallel-work.md. Merge origin/main (5e2c5da) into this task branch (it starts from workflow-slim, which already holds tasks prompts, slim-claude-md and base-health) with `git merge --no-ff 5e2c5da`, and resolve the conflicts in .claude/CLAUDE.md and scripts/factory-pipeline.py keeping both sides: every qa-lean rule and code path, and every workflow-slim change (CLAUDE.md stays at most 9216 bytes in the slim layout: fold qa-lean's new CLAUDE.md text in compressed form, moving detail to the file it belongs to only if that file is in owned paths, else keep one line; factory-pipeline.py keeps SPEC_COMPLETE in every worker prompt including the new verify prompt, the plugin-review checklist in review/verify prompts, and the known_failing text in lead, QA and verify specs). Fix any auto-merged test in tests/pipeline.test.sh that now fails because of the combination. Do not touch delivery.md, parallel-work.md or delivery SKILL.md (task dedupe-delivery merges main into its own branch). Changelog fragment changelog.d/main-sync.md only if the resolution changes behaviour beyond both sides.",
+      "objective": "PR #93 (plan plugin-qa-lean) merged into main at 5e2c5da: one verify session per task (dispatch --phase verify, marker policy:single-verify), implementers run no suites, changes in .claude/CLAUDE.md, scripts/factory-pipeline.py, tests/affected.py, tests/pipeline.test.sh, tests/parallel-policy.test.sh, delivery.md, parallel-work.md. Merge origin/main (5e2c5da) into this task branch (it starts from workflow-slim, which already holds tasks prompts, slim-claude-md and base-health) with `git merge --no-ff 5e2c5da`, and resolve the conflicts in .claude/CLAUDE.md and scripts/factory-pipeline.py keeping both sides: every qa-lean rule and code path, and every workflow-slim change (CLAUDE.md stays at most 9216 bytes in the slim layout: fold qa-lean's new CLAUDE.md text in compressed form, moving detail to the file it belongs to only if that file is in owned paths, else keep one line; factory-pipeline.py keeps SPEC_COMPLETE in every worker prompt including the new verify prompt, the plugin-review checklist in review/verify prompts, and the known_failing text in lead, QA and verify specs). Fix any auto-merged test in tests/pipeline.test.sh that now fails because of the combination. Do not touch delivery.md, parallel-work.md, delivery SKILL.md or tests/parallel-policy.test.sh (task dedupe-delivery merges main into its own branch). Changelog fragment changelog.d/main-sync.md only if the resolution changes behaviour beyond both sides.",
       "paths": [
         ".claude/CLAUDE.md",
         "scripts/factory-pipeline.py",
         "tests/pipeline.test.sh",
         "tests/affected.py",
-        "tests/parallel-policy.test.sh",
         "changelog.d/main-sync.md"
       ],
       "deps": [
@@ -258,7 +257,6 @@
       ],
       "checks": [
         "env -u TMPDIR tests/pipeline.test.sh --case <cases the merge touches>",
-        "env -u TMPDIR tests/parallel-policy.test.sh",
         "tests/run-all.sh --affected --base 5e2c5da -j 2"
       ],
       "acceptance": [
