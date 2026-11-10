@@ -566,7 +566,7 @@ o_mutate "invisible-in-Orca reason dropped" "lacks the Orca-first rule: 'Agent-t
 o_mutate "refusal softened to a preference" "lacks the Orca-first rule: 'refuse \`--runner agent\`'" \
   'sed -i "s/and refuse\$/and prefer over/" "$F"'
 o_mutate "rule moved out of section 5" "lacks the Orca-first rule: 'ORCA_WORKTREE_ID'" \
-  'sed -i "/^- \*\*Orca first inside Orca\.\*\*/,/^  Agent-tool task leads/d" "$F"'
+  'sed -i "/^- \*\*Orca first inside Orca\.\*\*/,/are invisible in Orca/d" "$F"'
 
 fi
 if has_case orca-lineage; then
