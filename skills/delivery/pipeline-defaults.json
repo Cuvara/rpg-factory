@@ -1,0 +1,172 @@
+{
+  "schema": "rpg-factory.pipeline-defaults/1",
+  "pipeline": {
+    "description": "Delivery pipeline (scripts/factory-pipeline.py, policy skills/delivery/references/delivery.md, RPG specifics in skills/factory-core/references/parallel-work.md): task tiers, the agents that implement and review, cross-model review pairing and shared exclusive resources.",
+    "tiers": {
+      "S": {
+        "max_repos": 1,
+        "max_modules": 1,
+        "max_files": 6,
+        "contracts": false,
+        "generated": false,
+        "flow": "run lead writes a one-task plan.json; validate; dispatch --phase lead starts the task lead (task worktree; no-worktree repo: main checkout); task lead runs sub-sessions, cross-model review and QA; run lead integrates (never implements); gate; PR"
+      },
+      "M": {
+        "max_repos": 1,
+        "contracts": false,
+        "generated": false,
+        "flow": "run lead writes plan.json; validate; dispatch --phase lead per task (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA; gate; PR"
+      },
+      "L": {
+        "flow": "planner worker writes plan.json; validate; dispatch --phase lead per task in waves (one task lead each; no-worktree repo: main checkout, in sequence); task leads run sub-sessions, cross-model review and QA; run lead integrates; integration QA per repo; gate; one PR per repo"
+      }
+    },
+    "agents": {
+      "claude": {
+        "orca_agent": "claude",
+        "bin": "claude",
+        "agent_runner": "general-purpose"
+      },
+      "codex": {
+        "orca_agent": "codex",
+        "bin": "codex",
+        "agent_runner": "codex:codex-rescue"
+      }
+    },
+    "review_pairing": {
+      "claude": "codex",
+      "codex": "claude"
+    },
+    "default_implementer": "claude",
+    "lead_agent": "claude",
+    "verdict_states": [
+      "PASS",
+      "FAIL",
+      "NOT_RUN",
+      "BLOCKED"
+    ],
+    "no_worktree_markers": [
+      "ProjectSettings/ProjectVersion.txt"
+    ],
+    "agent_routing": {
+      "lead": "claude",
+      "plan": "claude",
+      "docs": "claude",
+      "policy": "claude",
+      "design": "claude",
+      "code": "codex",
+      "test": "codex",
+      "fix": "codex",
+      "refactor": "codex",
+      "generated": "codex",
+      "default": "claude"
+    },
+    "qa_prefer": "codex",
+    "qa_tiers": {
+      "task": "affected",
+      "integration": "ci+workspace",
+      "description": "Task QA runs affected and explicit check suites once; integration runs tests/run-all.sh --workspace-only locally and CI green is the full-suite gate."
+    },
+    "available_agents": [
+      "claude",
+      "codex"
+    ],
+    "models": {
+      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice').",
+      "scope": {
+        "claude": {
+          "claude-opus-5-5": [
+            "medium",
+            "high"
+          ],
+          "claude-sonnet-5-5": [
+            "medium",
+            "high"
+          ]
+        },
+        "codex": {
+          "gpt-6.1-sol": [
+            "medium",
+            "high"
+          ],
+          "gpt-6.1-terra": [
+            "medium",
+            "high"
+          ]
+        }
+      },
+      "agent_tool_alias": {
+        "claude-opus-5-5": "opus",
+        "claude-sonnet-5-5": "sonnet"
+      },
+      "profiles": {
+        "claude": {
+          "lead": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "planner": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "heavy": {
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "standard": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          },
+          "light": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          },
+          "review": {
+            "model": "claude-opus-5-5",
+            "effort": "medium"
+          },
+          "qa": {
+            "model": "claude-sonnet-5-5",
+            "effort": "high"
+          }
+        },
+        "codex": {
+          "lead": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "planner": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "heavy": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "standard": {
+            "model": "gpt-6.1-terra",
+            "effort": "high"
+          },
+          "light": {
+            "model": "gpt-6.1-terra",
+            "effort": "high"
+          },
+          "review": {
+            "model": "gpt-6.1-sol",
+            "effort": "high"
+          },
+          "qa": {
+            "model": "gpt-6.1-terra",
+            "effort": "high"
+          }
+        }
+      },
+      "default_grade": "standard",
+      "rubric": {
+        "light": "Mechanical or well-bounded change: rename, typo, doc or text edit, config value, one small function, a test that copies an existing pattern; the answer is obvious from the surrounding code.",
+        "standard": "Ordinary feature or fix inside one module that follows existing patterns and needs some design, new tests and a few connected files.",
+        "heavy": "Hard or risky change: contract, wire or generated paths, concurrency, ECS or tick-loop internals, security or data migration, cross-module refactor, or anything where a wrong guess is costly to find."
+      }
+    }
+  }
+}

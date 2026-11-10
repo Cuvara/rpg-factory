@@ -8,6 +8,8 @@ page is the contract that skill authors and skill runners follow.
 ```
 factory-core  - scope, baseline, branch, plan, implement, obligations, validate, verify, review, report
      │          (snapshot: modules, dependents, cross-repo dependents, contracts, suggested skills, gates)
+     ├── delivery  - generic multi-step flow for any repository (run lead, task leads, review, QA tiers, gate);
+     │          core kind, owns no module, never routed; factory-core steps 6, 7, 11, 12 call it
      ├── cross-repo drivers  - wire-contract, pin-bump, measure
      │        own: ordering, contract evidence, hand-offs, human gates between legs, per-repo report
      domain + Engineering leads - game-design; ui-ux -> art-2d -> engineering; art-3d -> vfx -> engineering;
@@ -31,6 +33,8 @@ factory-core  - scope, baseline, branch, plan, implement, obligations, validate,
 | registry schema | registry *content* for its modules (`skills`, `rules`, `checks`) |
 
 ## What every skill must do
+
+(The `core` kind - `factory-core` and `delivery` - is exempt: `delivery` is repo-agnostic, has no Core prerequisite line, owns no module and is never routed.)
 
 1. **Core first.** The first line of the body is:
    > **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first.
@@ -104,7 +108,7 @@ registry lines; `tests/facts.test.sh` and the citation lint keep them honest aft
 ## Dev tools
 
 Registry `dev_tools[]` lists the MCP servers, plugins and binaries a skill relies on, with probes,
-`used_by`, `required` and a `fallback`. Every skill except `factory-core` (repo, cross-repo and tech) has
+`used_by`, `required` and a `fallback`. Every skill except the `core` kind (`factory-core`, `delivery`; repo, cross-repo and tech have one) has
 a `## Tools` section that names
 the ids in whose `used_by` it appears and says for which step it uses each one; lint checks both
 directions. The snapshot prints "Tools for this change" with each tool's state; when a tool is not OK,

@@ -39,7 +39,7 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <
 - Lead: <skill> (basis: <lead_basis> | override `--lead`) · co-leads: <skills | none> · legs run: <skills>
 - Follow-ups left: <skill in repo> | none · AMBIGUOUS resolved by: <user | --lead | n/a>
 
-<!-- Only when work was delegated to workers (references/parallel-work.md); otherwise omit this section. -->
+<!-- Only when work was delegated to workers (references/parallel-work.md and skills/delivery/references/delivery.md); otherwise omit this section. -->
 ## Parallel work (when delegated)
 | Task | Implementer | Reviewer (model) | Worktree | Branch | Base | Candidate SHA | Review verdict | QA verdict / report | Integrated | Cleanup |
 |---|---|---|---|---|---|---|---|---|---|---|

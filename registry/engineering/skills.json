@@ -8,6 +8,14 @@
       "summary": "Workflow contract, snapshot, validation, git safety, report. Always first.",
       "order": 0
     },
+    "delivery": {
+      "kind": "core",
+      "repos": [
+        "*"
+      ],
+      "summary": "Generic multi-step delivery for any repository: run lead / task lead flow, agent routing and fallback, cross-model review, worktrees, QA tiers, plan/verdict/gate pipeline. No module owner; factory-core calls it.",
+      "order": 1
+    },
     "pin-bump": {
       "kind": "cross-repo",
       "repos": [

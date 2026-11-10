@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+TMP="$(mktemp_win)" || exit 1
+trap 'rm -rf "$TMP"' EXIT
+export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_AGENTS=claude,codex
+unset RPG_FACTORY_WORKSPACE RPG_FACTORY_REGISTRY RPG_FACTORY_PIPELINE_REGISTRY
+for v in $(compgen -e | grep '^ORCA_'); do unset "$v"; done
+python3 -B - "$ROOT" "$TMP" <<'PY'
+import json, os, pathlib, subprocess, sys
+root, tmp = map(pathlib.Path, sys.argv[1:])
+pipeline = root / 'scripts/factory-pipeline.py'
+repo = tmp / 'plain'; repo.mkdir(); (repo / 'src').mkdir(); (repo / 'src/file.txt').write_text('base\n')
+def git(*args):
+    return subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+git('init', '-q', '-b', 'main'); git('add', '.'); git('-c', 'user.name=Test', '-c', 'user.email=t@t', 'commit', '-qm', 'base'); git('branch', 'feat/core/generic'); git('branch', 'feat/core/generic-one')
+sha = git('rev-parse', 'HEAD')
+plan = {'schema':'rpg-factory.pipeline-plan/1', 'id':'generic', 'title':'Generic', 'topic':'feat/core/generic', 'tier':'S', 'repos':{'plain':{'path':'plain','base':'main'}}, 'tasks':[{'id':'one','repo':'plain','objective':'Change file','paths':['src/file.txt'],'acceptance':['Works'], 'kind':'code'}]}
+pf = tmp / 'plan.json'
+def write(): pf.write_text(json.dumps(plan), encoding='utf-8')
+write()
+passed = failed = 0
+def run(args, registry='none', env=None):
+    return subprocess.run([sys.executable, '-B', str(pipeline), '--registry', str(registry), *map(str,args)], capture_output=True, text=True, env=env)
+def check(name, ok, detail=''):
+    global passed, failed
+    if ok: passed += 1; print('PASS ', name)
+    else: failed += 1; print('FAIL ', name, detail[:1200])
+def expect(name, args, pattern='', registry='none', rc=0):
+    p=run(args,registry); check(name, p.returncode == rc and pattern in p.stdout+p.stderr, p.stdout+p.stderr); return p
+reg=json.loads((root/'registry.json').read_text(encoding='utf-8'))['pipeline']
+defaults=json.loads((root/'skills/delivery/pipeline-defaults.json').read_text(encoding='utf-8'))
+check('defaults drift', all(reg.get(k)==v for k,v in defaults['pipeline'].items()) and 'exclusive_resources' not in defaults['pipeline'])
+KEYS={'description','tiers','agents','review_pairing','default_implementer','lead_agent','verdict_states','no_worktree_markers','agent_routing','qa_prefer','qa_tiers','available_agents','models'}
+check('defaults key set', set(defaults['pipeline'])==KEYS, str(sorted(set(defaults['pipeline'])^KEYS)))
+import re
+def prompt_text(p):
+    # the printed prompt plus the spec file a dispatch names, when the prompt only points to it
+    out=p.stdout+p.stderr
+    for m in re.finditer(r'task spec at (\S+?\.md)', out):
+        f=pathlib.Path(m.group(1).replace('\\','/').rstrip("'"))
+        if f.is_file(): out+=f.read_text(encoding='utf-8')
+    return out
+def expect_dispatch(name, args, registry):
+    p=run(args,registry); out=prompt_text(p)
+    leaks=[k for k in ('rpg-mmo-server','IndieRPGMMOAdventure') if k in out]
+    check(name, p.returncode==0 and 'references/delivery.md' in out and not leaks, f'rc={p.returncode} leaks={leaks} '+out)
+for registry in ('none', tmp/'missing.json'):
+    plan['id']='generic'+('missing' if registry != 'none' else 'none'); write()
+    expect('tier '+str(registry), ['tier','--json','--plan',pf,'--repo','plain','--paths','src/file.txt'], '"tier": "S"', registry)
+    expect('validate '+str(registry), ['validate',pf], 'OK', registry)
+    git('switch', '-q', 'feat/core/generic-one')
+    for phase in ('lead','implement','review','qa'):
+        args=['dispatch',pf,'--task','one','--phase',phase,'--runner','agent','--orca-unavailable','test']
+        if phase in ('review','qa'): args += ['--sha',sha]
+        expect_dispatch('dispatch '+phase+' '+str(registry), args, registry)
+    p=run(['dispatch',pf,'--task','one','--phase','lead','--runner','orca'],registry); out=prompt_text(p)
+    check('dispatch orca lead '+str(registry), p.returncode==0 and ('orca orchestration' in out or 'worker-start' in out) and 'references/delivery.md' in out, out)
+    expect('review verdict '+str(registry), ['verdict',pf,'--task','one','--phase','review','--sha',sha,'--by','codex','--state','PASS'], 'PASS', registry)
+    expect('qa verdict '+str(registry), ['verdict',pf,'--task','integration:plain','--phase','qa','--sha',sha,'--by','claude','--state','PASS'], 'PASS', registry)
+    git('switch', '-q', 'feat/core/generic')
+    expect('gate '+str(registry), ['gate',pf,'--no-run-checks'], 'READY_FOR_PR', registry)
+# next-session commands carry --registry none under the defaults (a task lead or status run would otherwise load the RPG registry)
+plan['id']='genericcarry'; plan['topic']='feat/core/carry'; plan['no_worktree_markers']=[]; write()
+git('branch', 'feat/core/carry'); git('switch', '-q', 'feat/core/carry')
+CARRY=re.compile(r"factory-pipeline[.]py'? --registry none")
+def pipeline_prefix(text):
+    m=re.search(r"<pipeline> = `([^`]*)`", text); return m.group(1) if m else ''
+def status_next(registry):
+    p=run(['status',pf,'--json'],registry)
+    try: out=json.loads(p.stdout)
+    except ValueError: return p, []
+    return p, list(out.get('next') or [])+[r['next'] for r in out.get('tasks',[]) if r.get('next')]
+for label,registry,want in (('defaults','none',True),('RPG registry',root/'registry.json',False)):
+    p=run(['dispatch',pf,'--task','one','--phase','lead','--runner','orca'],registry); pre=pipeline_prefix(prompt_text(p))
+    check('lead spec <pipeline> '+label, p.returncode==0 and bool(pre) and bool(CARRY.search(pre))==want and ('--registry' in pre)==want, p.stdout+p.stderr)
+    p,nxt=status_next(registry)
+    check('status next '+label, p.returncode==0 and bool(nxt) and all(bool(CARRY.search(n))==want for n in nxt), p.stdout+p.stderr+str(nxt))
+    p=run(['planner','--request','add a file','--runner','agent','--orca-unavailable','test'],registry)
+    check('planner validate command '+label, p.returncode==0 and ('factory-pipeline.py --registry none validate plan.json' in p.stdout)==want, p.stdout+p.stderr)
+p=run(['status',pf],'none'); check('status text next carries flag', p.returncode==0 and 'factory-pipeline.py' in p.stdout and all('--registry none' in l for l in p.stdout.splitlines() if 'factory-pipeline.py' in l), p.stdout+p.stderr)
+(repo/'marker').write_text('marker')
+plan['no_worktree_markers']=['marker']; write()
+p=run(['validate',pf,'--json']); check('marker disables worktrees', p.returncode==0 and json.loads(p.stdout).get('no_worktree_repos')==['plain'], p.stdout+p.stderr)
+p=run(['tier','--json','--plan',pf,'--repo','plain','--paths','src/file.txt'], tmp/'missing.json'); check('missing registry note on stderr', p.returncode==0 and 'not found: using skills/delivery/pipeline-defaults.json' in p.stderr and 'not found' not in p.stdout, p.stdout+p.stderr)
+p=run(['tier','--json','--plan',pf,'--repo','plain','--paths','src/file.txt']); check('registry none is silent', p.returncode==0 and 'not found' not in p.stderr, p.stderr)
+p=run(['dispatch',pf,'--task','one','--phase','lead','--runner','orca']); check('marker placement', p.returncode==0 and 'worktree add' not in p.stdout, p.stdout+p.stderr)
+plan['no_worktree_markers']=[]; write()
+p=run(['dispatch',pf,'--task','one','--phase','lead','--runner','orca']); check('empty marker override', p.returncode==0 and 'worktree add' in p.stdout, p.stdout+p.stderr)
+plan['no_worktree_markers']='marker'; write()
+expect('invalid marker type', ['validate',pf], 'no_worktree_markers must be an array of strings', rc=1)
+for arg in ('-h','--help'):
+    p=subprocess.run([sys.executable,'-B',str(pipeline),arg], capture_output=True,text=True); check(arg, p.returncode==0 and 'usage:' in p.stdout)
+p=subprocess.run([sys.executable,'-B',str(pipeline),'--unknown'], capture_output=True,text=True); check('unknown argument',p.returncode==2 and 'usage:' in p.stderr)
+env=os.environ.copy(); env['RPG_FACTORY_PIPELINE_REGISTRY']='none'
+p=subprocess.run([sys.executable,'-B',str(pipeline),'tier','--json','--plan',str(pf),'--repo','plain','--paths','src/file.txt'],capture_output=True,text=True,env=env); check('environment fallback',p.returncode==0 and 'not found' not in p.stderr,p.stderr)
+# RPG_FACTORY_REGISTRY belongs to factory-context.sh/run-checks.py: the pipeline ignores it
+env=os.environ.copy(); env['RPG_FACTORY_REGISTRY']='none'
+p=subprocess.run([sys.executable,'-B',str(pipeline),'tier','--json','--plan',str(pf),'--repo','plain','--paths','src/file.txt'],capture_output=True,text=True,env=env); check('shared variable ignored',p.returncode==0 and 'none' not in p.stderr,p.stderr)
+# --registry before and after the verb, as SKILL.md documents it; the value after the verb wins
+plan['no_worktree_markers']=[]; write()
+base=[sys.executable,'-B',str(pipeline)]
+for name,argv in (('before verb',['--registry','none','validate',str(pf)]),('after verb',['validate',str(pf),'--registry','none']),('documented form',['--registry','none','tier','--json','--plan',str(pf),'--repo','plain','--paths','src/file.txt'])):
+    p=subprocess.run(base+argv,capture_output=True,text=True); check('registry flag '+name, p.returncode==0 and 'not found' not in p.stderr, p.stdout+p.stderr)
+p=subprocess.run(base+['--registry',str(tmp/'missing.json'),'validate',str(pf),'--registry','none'],capture_output=True,text=True); check('registry flag after verb wins', p.returncode==0 and 'not found' not in p.stderr, p.stdout+p.stderr)
+p=subprocess.run(base+['validate',str(pf),'--registry',str(tmp/'missing.json')],capture_output=True,text=True); check('registry flag after verb applies', p.returncode==0 and 'not found: using' in p.stderr, p.stdout+p.stderr)
+print(f'delivery-generic: {passed+failed} checks, {passed} passed, {failed} failed')
+sys.exit(bool(failed))
+PY

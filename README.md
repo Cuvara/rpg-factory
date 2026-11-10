@@ -106,7 +106,36 @@ example and both forms. `--json` output is for agents: `domain` emits `rpg-facto
 
 Engineering work itself starts with the `factory-core` skill (the model invokes it; `/rpg-factory:factory-core`
 works too). The `ui*` commands only plan; the plan names the route and the UI skills to load
-(`docs/architecture/ui-skills.md`).
+(`docs/architecture/ui-skills.md`). Multi-step delivery in any other repository starts with the `delivery` skill
+(next section); `factory-core` calls it for the same flow inside the workspace.
+
+## Delivery in any project
+
+The `delivery` skill (`skills/delivery/SKILL.md`, kind core like `factory-core`, never a lead) holds the generic
+multi-step delivery policy: the two-level flow (run lead, task leads), agent routing and fallback, cross-model
+review, child worktrees, session release, QA tiers and the plan / verdict / gate pipeline
+(`skills/delivery/references/delivery.md`). Its description names no RPG repo, so it applies to any repository.
+`scripts/factory-pipeline.py` runs without the RPG registry: it reads `skills/delivery/pipeline-defaults.json`. The installed
+plugin always ships `registry.json`, so there `--registry none` (or `RPG_FACTORY_PIPELINE_REGISTRY=none`) selects the defaults;
+the commands the script prints for a next session then carry `--registry none`.
+`factory-core` calls `delivery` and keeps only the RPG specifics (`skills/factory-core/references/parallel-work.md`).
+
+To use it outside the UnityIndie workspace, add one line to the global agent instructions:
+
+- Claude Code, `~/.claude/CLAUDE.md`:
+
+  ```
+  For multi-step work in any repository, load the rpg-factory:delivery skill (two-level flow, cross-model review, QA tiers, plan/verdict/gate).
+  ```
+
+- Codex, `~/.codex/AGENTS.md` (name the file; the installed plugin root is the directory that holds `skills/`):
+
+  ```
+  For multi-step work in any repository, read <rpg-factory plugin root>/skills/delivery/SKILL.md (two-level flow, cross-model review, QA tiers, plan/verdict/gate).
+  ```
+
+Only the delivery policy is generic. The git and file guards, the registry routing and the human gates stay
+RPG-only: they apply to the UnityIndie workspace repos and never to another project.
 
 ## Execution modes
 
@@ -165,6 +194,9 @@ Game Design may draft and propose gameplay values; binding them requires verifie
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
                          → verify-a-result → /code-review → report
+
+ delivery (skill, kind core): the generic two-level flow, cross-model review, QA tiers and plan/verdict/gate;
+          factory-core calls it, and any other repository can load it alone (no registry needed)
 
  hooks: SessionStart  install-status.py (stale install warning)
         PreToolUse    git-guard.py (Bash, PowerShell) · file-guard.py (Write/Edit/MultiEdit/NotebookEdit/Read)
@@ -470,7 +502,7 @@ codex plugin marketplace upgrade rpg-factory        # Git marketplaces only; a l
 codex plugin add rpg-factory@rpg-factory            # after a new version or edits in the checkout; then restart the session
 ```
 
-What works the same: the skills (factory-core and every specialised and tech skill, namespaced
+What works the same: the skills (factory-core, delivery and every specialised and tech skill, namespaced
 `rpg-factory:<skill>`), `registry.json`, the routing, status, check and release scripts, and the advisory guards.
 Codex hooks (`hooks/codex-hooks.json`) run `scripts/codex_hook.py` on SessionStart and on PreToolUse for `Bash`
 (every shell, PowerShell included) and `apply_patch` (file edits, both sides of a move): it feeds the same git guard

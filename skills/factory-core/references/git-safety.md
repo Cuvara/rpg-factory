@@ -17,13 +17,13 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
 4. **Stage explicit paths.** `git add <path>...` only. Never `add -A`, `add .`, `add :/`,
    `commit -a`.
 5. **Commit, push, PR, merge only on request - except worker commits and task-branch integration inside a
-   task the user asked for (`parallel-work.md`); tags and releases only when authorized.** Commit messages
+   task the user asked for (`parallel-work.md`, [delivery.md](../../delivery/references/delivery.md)); tags and releases only when authorized.** Commit messages
    follow Conventional Commits with a lowercase scope (`fix(gateway): ...`). PRs target the repo's default branch (`registry.json` `repos.<key>`), and the
    repos squash-merge. Inside a delegated task, worker commits on their task branches and merging worker
    branches into the task's integration branch are the lead's decision (`parallel-work.md`); merging into
    protected branches and pushing stay on request. Delivery exception: when the user put `deliver: pr` in the
    task and `factory-pipeline.py gate` prints READY_FOR_PR, the lead pushes the task's integration branch and opens
-   its PR (`parallel-work.md` section 10); merging it stays on request. Without explicit release authorization
+   its PR (`delivery.md` section 10; RPG additions in `parallel-work.md`); merging it stays on request. Without explicit release authorization
    from the user in the current task, an agent creates no tag (`v*`, `sgl-v*`, `core-baseline-*`) and publishes no release in
    any repo: skills stop at "ready to tag" with evidence and the lead tags. When the user explicitly
    authorizes a release in the current task, the agent performs exactly the authorized merge, version,
@@ -35,7 +35,7 @@ the guard is **advisory only**: it never asks the user and never blocks; the com
 8. **Submodules and embedded clones.** Follow the owning domain reference; Engineering `com.gdk.*` and `com.cuvara.*` rules are in [engineering.md](engineering.md).
 9. **Never commit `file:` package paths.** `toggle-packages.sh dev` writes them and leaves
    `packages-lock.json` untouched.
-10. **Worktrees and parallel agents:** `parallel-work.md` (one worktree per task; one Unity
+10. **Worktrees and parallel agents:** `delivery.md` (one worktree per task) and `parallel-work.md` (one Unity
     writer per client project).
 11. **Leave the tree as you found it plus your change.** Before reporting, `git status` in
     each touched repo must show exactly the baseline plus your files.
