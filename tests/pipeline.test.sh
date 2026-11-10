@@ -1558,7 +1558,7 @@ expect "per-task qa in a worktree repo runs in the task worktree" 0 "--agent cod
 refute "per-task qa never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
 expect "per-task qa names the task" 0 "QA worker .*branch feat/core/demo-gw, task gw" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "a second task lead resumes in the existing task worktree" 0 "^orca agent launch --agent claude $WT" dispatch "$OK" --task gw --phase lead --runner orca
-refute "resuming a task worktree does not set its parent" "orca worktree set" dispatch "$OK" --task gw --phase lead --runner orca
+refute "a resumed task lead prints no worktree add and no orca worktree set" "worktree add|worktree set|worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 expect "agent fallback for a codex reviewer starts a fresh Claude session" 0 '"subagent_type": "general-purpose"' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL in the prompt" 0 'SAME_MODEL: this session was planned for codex; the Agent-tool fallback runs Claude only' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL on stderr" 0 "starts a fresh Claude session for this codex session: SAME_MODEL" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
@@ -1968,6 +1968,8 @@ expect "new task worktree beside integration checkout" 0 "^git -C .* worktree ad
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+refute "lead prints no orca worktree create beside the integration checkout (any placement)" "orca worktree create" dispatch "$OK" --task gw --phase lead --placement child --runner orca
+refute "no-worktree repo (Unity project): no worktree add and no orca worktree set" "worktree add|worktree set" dispatch "$OK" --task c1 --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement child" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "lead --placement child has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 expect "new task worktree launches lead by path" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$OK" --task gw --phase lead --runner orca
@@ -2229,6 +2231,8 @@ if sys.argv[1:3] == ["status", "--json"]:
     print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
 if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
     print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
+if sys.argv[1:3] == ["terminal", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_TERMS"):
+    print(open(os.environ["FAKE_ORCA_TERMS"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] != ["orchestration", "worker-list"] or mode == "error":
     print("error: run not found", file=sys.stderr); sys.exit(1)
 if mode == "garbage":
@@ -2271,8 +2275,8 @@ opath "the run line counts unreleased, released and running" 1 "WORKERS UNRELEAS
 oref "a released worker is no finding" "dispatch ctx_rel( |$)" cleanup "$GO"
 oref "a running worker is no finding" "dispatch ctx_run( |$)" cleanup "$GO"
 opath "--orca-run names a Run for a plan without orca_run" 1 "worker-release --dispatch ctx_ret" cleanup "$G" --orca-run run_T
-if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^orchestration worker-list --run run_T --limit 100 --json( --cursor c2)?$" "$FAKE_ORCA_LOG"
-then pass=$((pass + 1)); echo "PASS  only read-only worker-list calls, run:<id> normalised"
+if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^(orchestration worker-list --run run_T --limit 100 --json( --cursor c2)?|worktree list --limit 10000 --json)$" "$FAKE_ORCA_LOG"
+then pass=$((pass + 1)); echo "PASS  only read-only worker-list and worktree list calls, run:<id> normalised"
 else fail=$((fail + 1)); echo "FAIL  orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 PATH="$fpath" python3 -B "$P" cleanup --json "$GO" > "$TMP/cleanup-orca.json" 2>&1
 if jq -e '.state == "LEFTOVER" and (.workers[0].unreleased | length) == 4 and any(.left[]; . == "orca:ctx_ret")' "$TMP/cleanup-orca.json" >/dev/null
@@ -2331,7 +2335,7 @@ opath "Orca lineage: the merged child gets its orca worktree rm command" 1 "^  o
 if PATH="$fpath" python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.tasks[] | select(.id == "gw") | (.children | length) == 1 and .children[0].branch == "isolated-qa"' >/dev/null
 then pass=$((pass + 1)); echo "PASS  Orca lineage: status lists the isolated-qa child"
 else fail=$((fail + 1)); echo "FAIL  Orca lineage: status children"; fi
-if grep -q "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && ! grep -qvE "^(worktree list --limit 10000 --json|orchestration worker-list .*)$" "$FAKE_ORCA_LOG"
+if grep -q "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && ! grep -qvE "^(worktree list --limit 10000 --json|terminal list --worktree path:[^ ]+ --limit 100 --json|orchestration worker-list .*)$" "$FAKE_ORCA_LOG"
 then pass=$((pass + 1)); echo "PASS  Orca lineage is read with the read-only worktree list only"
 else fail=$((fail + 1)); echo "FAIL  Orca lineage calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 jq '.result.worktrees |= map(if .id == "r::qa" then .parentWorktreeId = null elif .id == "r::gw" then .childWorktreeIds = ["r::qa"] else . end)' "$FAKE_ORCA_WT" > "$FAKE_ORCA_WT.2"; mv "$FAKE_ORCA_WT.2" "$FAKE_ORCA_WT"
@@ -2344,10 +2348,82 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
 git -C "$S" branch -q -D isolated-qa feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
+NOKILL="kill|taskkill|Stop-Process|--force"
+# a plain git task worktree: removed with `git worktree remove` (no --force)
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+opath "plain task worktree: git worktree remove without --force" 1 "^  git -C .* worktree remove [^ ]*srv-gw'?$" cleanup "$G"
+oref "plain task worktree: no --force, no process kill anywhere in the output" "$NOKILL" cleanup "$G"
+# terminals bound to it (read-only orca terminal list) and the CLI-exit reminder
+export FAKE_ORCA_TERMS="$TMP/orca-terms.json"
+jq -n '{ok:true,result:{terminals:[{handle:"term_codex1",title:"codex implementer"}]}}' > "$FAKE_ORCA_TERMS"
+opath "a bound Orca terminal is named before the removal" 1 "KEPT  srv: worktree .*srv-gw is still bound to Orca terminal term_codex1 \(codex implementer\)" cleanup "$G"
+opath "the removal still prints git worktree remove" 1 "worktree remove .*srv-gw" cleanup "$G"
+opath "the task lead confirms each released worker's CLI exited (codex process gone)" 1 "confirms that each released worker's CLI exited \(a released Codex worker: its codex process is gone\)" cleanup "$G"
+opath "a process the run did not start is named to the user, never stopped" 1 "named to the user \(PID, command\) and left to the user's decision, never stopped by the run" cleanup "$G"
+FAKE_ORCA_MODE=error opath "terminal list failing: no opinion, no traceback, still LEFTOVER" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+FAKE_ORCA_MODE=error oref "terminal list failing: no terminal line, no traceback" "bound to Orca terminal|Traceback" cleanup "$G"
+unset FAKE_ORCA_TERMS
+git -C "$S" worktree remove "$TMP/srv-gw"; git -C "$S" branch -q -d feat/core/demo-gw
+# a prunable record (directory gone, git still lists the worktree): `git branch -d` fails until git worktree prune
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+rm -rf "$TMP/srv-gw"
+if ! git -C "$S" branch -d feat/core/demo-gw >/dev/null 2>&1; then pass=$((pass + 1)); echo "PASS  precondition: a prunable record blocks git branch -d"
+else fail=$((fail + 1)); echo "FAIL  precondition: git branch -d succeeded on a prunable record"; fi
+opath "a prunable task worktree record is LEFTOVER, never CLEAN" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+opath "the prunable record is named" 1 "KEPT  srv: LEFTOVER worktree record .*srv-gw .*feat/core/demo-gw.* is prunable" cleanup "$G"
+opath "git worktree prune is printed" 1 "^  git -C .* worktree prune$" cleanup "$G"
+PATH="$fpath" python3 -B "$P" cleanup "$G" > "$TMP/cleanup-prune.txt" 2>&1
+if [ "$(grep -n 'worktree prune$' "$TMP/cleanup-prune.txt" | head -1 | cut -d: -f1)" -lt "$(grep -n 'branch -d feat/core/demo-gw' "$TMP/cleanup-prune.txt" | head -1 | cut -d: -f1)" ] 2>/dev/null
+then pass=$((pass + 1)); echo "PASS  git worktree prune comes before git branch -d"
+else fail=$((fail + 1)); echo "FAIL  prune order"; sed 's/^/      /' "$TMP/cleanup-prune.txt" | head -12; fi
+git -C "$S" worktree prune
+if git -C "$S" branch -q -d feat/core/demo-gw 2>/dev/null; then pass=$((pass + 1)); echo "PASS  after git worktree prune the task branch deletes with -d"
+else fail=$((fail + 1)); echo "FAIL  git branch -d after prune"; fi
+expect "after prune and branch delete: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+# a leftover task directory (empty, then with a file), no git worktree any more: LEFTOVER with prune then orca worktree rm
+LD="$WS/feat-core-demo-gw"; mkdir -p "$LD"
+opath "an empty leftover task directory is LEFTOVER, never CLEAN" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+opath "the leftover directory is named" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw \(no git worktree any more\)" cleanup "$G"
+opath "the leftover directory gets git worktree prune" 1 "^  git -C .* worktree prune$" cleanup "$G"
+opath "then orca worktree rm of the directory" 1 "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw'?$" cleanup "$G"
+opath "a busy directory: a process holds it, the user decides" 1 "reports the directory busy .*name its PID and command to the user and leave the decision to them" cleanup "$G"
+refute "an empty leftover directory is never CLEAN" "^Cleanup: CLEAN" cleanup "$G"
+PATH="$fpath" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-left.json" 2>&1
+if jq -e '.state == "LEFTOVER" and any(.leftovers[]; .kind == "directory" and (.path | test("feat-core-demo-gw$")) and (.commands | length) == 2 and (.commands[0] | test("worktree prune$")) and (.commands[1] | test("orca worktree rm")))' "$TMP/cleanup-left.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json carries the leftover directory with its commands"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json leftovers"; head -c 1500 "$TMP/cleanup-left.json"; fi
+echo x > "$LD/file.txt"
+opath "a non-empty leftover task directory is LEFTOVER too" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw" cleanup "$G"
+oref "cleanup output never kills a process" "$NOKILL" cleanup "$G"
+# a stale Orca record of a removed task worktree (directory gone): LEFTOVER with the same commands
+rm -rf "$LD"
+export FAKE_ORCA_WT="$TMP/orca-wt-stale.json"
+jq -n --arg p "$LD" '{ok:true,result:{worktrees:[{id:"r::gw",path:$p,parentWorktreeId:null}]}}' > "$FAKE_ORCA_WT"
+opath "a stale Orca record of a removed task worktree is LEFTOVER" 1 "KEPT  srv: LEFTOVER Orca record of the removed task worktree .*feat-core-demo-gw: .git worktree prune., then .orca worktree rm." cleanup "$G"
+opath "the stale record gets prune then orca worktree rm" 1 "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw'?$" cleanup "$G"
+oref "a stale Orca record is never CLEAN" "^Cleanup: CLEAN" cleanup "$G"
+oref "the stale record output never kills a process" "$NOKILL" cleanup "$G"
+FAKE_ORCA_MODE=error opath "orca failing: no opinion on records, CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+PATH="$noorca" expect "orca missing: no opinion on records, CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+unset FAKE_ORCA_WT
+opath "no leftover directory and no record: CLEAN again" 0 "^Cleanup: CLEAN" cleanup "$G"
+# no printed dispatch or cleanup command is an orca worktree create (it writes branch.<name>.base into the shared .git/config)
+: > "$FAKE_ORCA_LOG"
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+for c in "dispatch $G --task gw --phase lead --runner orca" "dispatch $G --task gw --phase lead --placement child --runner orca" "cleanup $G" "cleanup $G --after-merge"; do
+  out=$(PATH="$fpath" python3 -B "$P" $c 2>&1)
+  if ! grep -q "worktree create" <<<"$out"; then pass=$((pass + 1)); echo "PASS  no orca worktree create printed: $c" | sed "s#$TMP/##g"
+  else fail=$((fail + 1)); echo "FAIL  orca worktree create printed: $c"; fi
+done
+git -C "$S" worktree remove "$TMP/srv-gw"; git -C "$S" branch -q -d feat/core/demo-gw
+if ! grep -qE "worktree (create|set|rm)|terminal (close|send)" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  dispatch and cleanup only read Orca: no worktree create, set or rm, no terminal close"
+else fail=$((fail + 1)); echo "FAIL  orca write call"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 # a new task worktree is an Orca child of the integration checkout ($S on feat/core/demo); dispatch only prints it
 : > "$FAKE_ORCA_LOG"
 opath "fake orca: git creates the task worktree" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw" dispatch "$G" --task gw --phase lead --runner orca
 oref "fake orca: a new task worktree under the integration checkout has no --no-parent" "--no-parent" dispatch "$G" --task gw --phase lead --runner orca
+opath "fake orca: orca worktree set names the integration checkout as parent, printed (not run)" 0 "^orca worktree set --worktree '?path:[^' ]*feat-core-demo-gw'? --parent-worktree '?path:[^' ]*rpg-mmo-server'? --display-name " dispatch "$G" --task gw --phase lead --runner orca
 opath "fake orca: shared placement launches the lead" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$G" --task gw --phase lead --placement shared --runner orca
 if ! grep -q "worktree create" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  fake orca: dispatch --phase lead only prints the worktree create"
 else fail=$((fail + 1)); echo "FAIL  fake orca: dispatch ran orca worktree create"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi

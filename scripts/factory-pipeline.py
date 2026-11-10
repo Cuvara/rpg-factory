@@ -156,6 +156,12 @@ script prints for a next session then carries `--registry none`. A plan may set 
         `orca orchestration worker-release --dispatch <id>` per unreleased worker, names each leftover child worktree
         as "child of <task>" (`orca worktree rm` once merged), names the rest, and reminds to
         release every worker session. Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
+        A task worktree git lists as prunable (its directory is gone), a leftover task directory (empty or not, named
+        <topic>-<id> with / as -, no longer a git worktree) and an Orca record of such a removed worktree are
+        LEFTOVER, never CLEAN: `git -C <repo> worktree prune`, then `orca worktree rm --worktree path:<dir>` once the
+        directory is free (a process holds a directory Windows reports busy: the user decides, cleanup names no PID it
+        cannot see and never stops a process). Before a task worktree is removed it names the Orca terminals bound to it
+        (read-only `orca terminal list`) and tells the task lead to confirm each released worker's CLI exited.
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
@@ -2269,10 +2275,12 @@ def cmd_verdict(a, reg):
 
 # ---------------------------------------------------------------- gate
 
-def worktree_for(path, branch):
+def worktree_records(path):
+    """Every `git worktree list --porcelain` record of the repo (main checkout first): path, branch, prunable (the
+    directory is gone but git still keeps the record)."""
     out, rc = git(path, "worktree", "list", "--porcelain")
     if rc != 0 or out is None:
-        return None, []
+        return []
     trees, cur = [], {}
     for line in out.splitlines() + [""]:
         if not line:
@@ -2283,6 +2291,15 @@ def worktree_for(path, branch):
             cur["path"] = line[9:]
         elif line.startswith("branch "):
             cur["branch"] = line[7:].replace("refs/heads/", "", 1)
+        elif line == "prunable" or line.startswith("prunable "):
+            cur["prunable"] = True
+    return trees
+
+
+def worktree_for(path, branch):
+    trees = worktree_records(path)
+    if not trees:
+        return None, []
     home = next((t["path"] for t in trees if t.get("branch") == branch), None)
     return home, trees[1:]
 
@@ -2539,10 +2556,54 @@ def session_lines(sessions):
     return lines
 
 
+def orca_worktree_paths():
+    """Normalised paths of every record in the read-only `orca worktree list --json`; None when orca cannot say
+    (not on PATH, failing: no opinion, never an error)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True,
+                           timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["worktrees"] if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {norm_wt(w["path"]) for w in rows if isinstance(w, dict) and w.get("path")}
+
+
+def orca_terminals(path):
+    """(handle, title) of the live Orca terminals bound to the worktree at `path` (read-only `orca terminal list`);
+    [] when orca cannot say (no opinion)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return []
+    try:
+        r = subprocess.run([exe, "terminal", "list", "--worktree", f"path:{path}", "--limit", "100", "--json"],
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["terminals"] if r.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [(str(t.get("handle") or "?"), str(t.get("title") or "")) for t in rows if isinstance(t, dict)]
+
+
+BEFORE_REMOVAL = ("before a task worktree is removed no session may still use it: the task lead confirms that each "
+                  "released worker's CLI exited (a released Codex worker: its codex process is gone); a process the "
+                  "run did not start is named to the user (PID, command) and left to the user's decision, never "
+                  "stopped by the run")
+BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being used by another process'), a process "
+             "holds it: name its PID and command to the user and leave the decision to them")
+
+
 def cleanup(plan, reg, orca_run=None, after_merge=False):
     """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
     Orca workers of the task leads' Runs that are not released."""
-    left, commands, kept = [], [], []
+    left, commands, kept, leftovers, users = [], [], [], [], []
+    orca_paths = []  # the Orca records, read once and only when a task worktree path is no git worktree any more
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
         info = repo_info(plan, reg, key)
         if not info["path"] or not os.path.isdir(info["path"]):
@@ -2566,7 +2627,17 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         parents.append((f"integration:{key}", topic))
         parents = [(tid, pb, worktree_for(info["path"], pb)[0]) for tid, pb in parents]
         lineage = Lineage(pb for _, pb, _ in parents)
+        prune = orca_cmd.quote(["git", "-C", command_repo, "worktree", "prune"])
         for wt in trees:
+            if wt.get("prunable") and str(wt.get("branch", "")).startswith(topic + "-"):
+                # the directory is gone but git keeps the record: `git branch -d` of its branch fails ('used by worktree')
+                left.append(wt["path"])
+                leftovers.append({"kind": "prunable", "path": wt["path"], "commands": [prune]})
+                kept.append(f"{key}: LEFTOVER worktree record {wt['path']} ({wt['branch']}) is prunable (its directory "
+                            "is gone): prune it before deleting the branch")
+                if prune not in commands:
+                    commands.append(prune)
+                continue
             owner = next(((tid, pb, pp) for tid, pb, pp in parents
                           if info["worktrees"] and norm_wt(wt["path"]) != norm_wt(pp) and is_child(wt, pb, pp, lineage)), None)
             if owner:
@@ -2592,6 +2663,37 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                 continue
             left.append(wt["path"])
             commands.append(orca_cmd.quote(["git", "-C", command_repo, "worktree", "remove", wt["path"]]))
+            for handle, title in orca_terminals(wt["path"]):
+                users.append({"path": wt["path"], "terminal": handle, "title": title})
+                kept.append(f"{key}: worktree {wt['path']} is still bound to Orca terminal {handle}"
+                            + (f" ({title})" if title else "") + ": release or close it before the removal")
+            if f"{key}: {BEFORE_REMOVAL}" not in kept:
+                kept.append(f"{key}: {BEFORE_REMOVAL}")
+        if info["worktrees"]:
+            # a task worktree directory (<topic>-<id>, beside the integration or repo checkout) that is no git worktree
+            # any more, and an Orca record of it: git prunes it, Orca removes it once no process holds the directory
+            registered = {norm_wt(t["path"]) for t in worktree_records(info["path"])}
+            parent = worktree_for(info["path"], topic)[0]
+            beside = list(dict.fromkeys(os.path.dirname(p.rstrip("/\\")) for p in (parent, info["path"], command_repo) if p))
+            for t in (t for t in plan["tasks"] if t.get("repo") == key):
+                name = task_branch(plan, info, t).replace("/", "-")
+                for d in dict.fromkeys(os.path.join(b, name) for b in beside):
+                    if norm_wt(d) in registered:
+                        continue
+                    if not orca_paths:
+                        orca_paths.append(orca_worktree_paths() or set())
+                    on_disk, record = os.path.exists(d), norm_wt(d) in orca_paths[0]
+                    if not on_disk and not record:
+                        continue
+                    left.append(d)
+                    rm = orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{d}"])
+                    leftovers.append({"kind": "directory" if on_disk else "orca_record", "path": d,
+                                      "orca_record": record, "commands": [prune, rm]})
+                    what = (f"directory {d} (no git worktree any more" + (", with an Orca record" if record else "") + ")"
+                            if on_disk else f"Orca record of the removed task worktree {d}")
+                    kept.append(f"{key}: LEFTOVER {what}: `git worktree prune`, then `orca worktree rm` once the "
+                                f"directory is free; {BUSY_NOTE}")
+                    commands.extend(c for c in (prune, rm) if c not in commands)
         refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
         if after_merge and integrated:
             refs = (refs or "") + "\n" + topic
@@ -2635,7 +2737,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
             left.append(f"orca:{u['dispatch']}")
             commands.append(u["command"])
     return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
-            "workers": workers,
+            "leftovers": leftovers, "terminals": users, "workers": workers,
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
                         + ("" if workers else "; name the task leads' Runs (task `orca_run` or --orca-run) to check them")}
