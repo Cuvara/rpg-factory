@@ -250,6 +250,31 @@
         "cleanup reports a leftover task directory or stale Orca worktree record as LEFTOVER with the prune and orca worktree rm commands, never CLEAN, and never kills a process",
         "gate keeps a review current when the owned paths' content is unchanged since the reviewed commit (default-branch merge) and never lists the plan file or its report as stray"
       ]
+    },
+    {
+      "id": "gate-nested",
+      "repo": "plugin",
+      "kind": "fix",
+      "grade": "heavy",
+      "grade_reason": "gate attribution logic over merge graphs; a wrong rule hides real post-review edits",
+      "objective": "Gate follow-up (seen on this plan after orca-lineage merged, gate at a8535b6): reviews of registry (tests/run-all.sh) and policy (docs/codex.md, skills/delivery/SKILL.md, skills/factory-core/references/parallel-work.md, tests/orca-commands.test.sh, tests/parallel-policy.test.sh) are still STALE. Those files changed only through task main-sync, which merged origin/main INSIDE its task branch (f2ddb21) and was then merged into the topic with --no-ff (fcbbe1c): the pipeline's own prescribed way. _uncovered_changes in scripts/factory-pipeline.py recognises a default-branch merge only on the topic's first-parent chain, so this nested one is not exempt, and main-sync's review does not cover the earlier tasks' paths either. Fix: (1) a default-branch merge reached through a task merge (any merge commit between the reviewed sha and target whose other parent is the default branch tip or contains it) is exempt the same way: its side commits are nobody's task work, only its conflict resolutions count; and (2) those conflict resolutions are covered by the merging task's current PASS review when that task depends on the earlier task (main-sync depends on registry and policy). A real post-review edit on the topic or in a task branch outside such a merge stays STALE. Tests in tests/pipeline.test.sh: nested default-branch merge keeps earlier reviews current; its conflict resolution is covered by the merging task's review and STALE without it; a direct post-review edit is still STALE. Verify on this plan: gate shows no STALE. Changelog fragment changelog.d/gate-nested-merge.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/gate-nested-merge.md"
+      ],
+      "deps": [
+        "orca-lineage"
+      ],
+      "checks": [
+        "env -u TMPDIR tests/pipeline.test.sh",
+        "python3 -B scripts/factory-pipeline.py gate docs/plans/plugin-subagent-rules.json --no-run-checks"
+      ],
+      "acceptance": [
+        "gate on this plan shows no review STALE for registry and policy",
+        "nested default-branch merge tests and the still-STALE direct-edit test pass",
+        "pipeline.test.sh 0 failed"
+      ]
     }
   ]
 }
