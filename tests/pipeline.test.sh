@@ -849,7 +849,7 @@ git('init', '-q', '-b', 'main')
 git('add', '.'); git('commit', '-qm', 'base')
 base = git('rev-parse', 'HEAD'); git('switch', '--no-track', '-c', 'topic')
 (repo / 'code.py').write_text('change'); git('commit', '-qam', 'change'); first = git('rev-parse', 'HEAD')
-task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py'],
+task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py', 'fix.py'],
         'checks': ['bash tests/pipeline.test.sh', 'env -u TMPDIR tests/pipeline.test.sh',
                    'tests/run-all.sh -j 4', 'tests/run-all.sh --affected --only-suites tests/pipeline.test.sh',
                    'python3 -B scripts/build-registry.py --check', 'tests/dogfood.sh',
@@ -1100,15 +1100,18 @@ def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
 out = dispatch('qa', first)
 assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
+assert 'tier command already passes these cases' not in out, out
 affected = work / 'task' / 'tests' / 'affected.py'
 affected.write_text('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
                     'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
                     'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
-                    'print("tests/routing.test.sh\\tALL")\n', encoding='utf-8')
+                    'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
 case_out = dispatch('qa', first)
-assert 'Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh --case dispatch,qa-tiers\ntests/routing.test.sh ALL' in case_out, case_out
+assert ('Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh ALL\n'
+        'tests/routing-properties.test.py ALL\ntests/routing.test.sh --case selection') in case_out, case_out
 assert 'tier command already passes these cases' in case_out, case_out
-assert 'Affected cases: not computed (git diff failed)' in dispatch('qa', 'bad-sha'), 'bad diff must not fail dispatch'
+bad_out = dispatch('qa', 'bad-sha')
+assert 'Affected cases: not computed (git diff failed)' in bad_out and 'tier command already passes these cases' not in bad_out, bad_out
 affected.unlink()
 command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
@@ -1174,10 +1177,14 @@ cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 
 (repo / 'tests' / 'run-all.sh').write_text(runall_src, newline='\n')
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
     '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh,tests/orca-wait.test.sh')
-(repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
+(repo / 'fix.py').write_text('fix'); git('add', 'fix.py'); git('commit', '-qm', 'fix'); second = git('rev-parse', 'HEAD')
+affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["fix.py"]\n'
+                    'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
 out = dispatch('qa', second)
 assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
         'tests/routing.test.sh -j 2') in out, out
+assert 'tests/routing.test.sh ALL' in out and 'not computed' not in out, out
+affected.unlink()
 # a failed suite run-all does not run (exit 2 under --only-suites) is an extra command instead
 assert 'orca-wait' not in out.split('QA tier command:\n')[1].split('\n')[0], out
 assert '[a] env -u TMPDIR bash tests/orca-wait.test.sh' in out.split('Extra commands:')[1], out

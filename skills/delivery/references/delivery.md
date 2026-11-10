@@ -185,7 +185,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - **No nested workers.** Orca allows one level of workers (`nested_worker_depth_exceeded`, maximum depth 1); never
   route around it. So the task lead is not a worker of the run lead: the run lead starts it as a handoff,
   `git worktree add --no-track -b <task branch> <path> <base>` for a new task worktree (beside the integration
-  checkout, section 4), then `orca agent launch --agent <id> --worktree path:<path> --prompt <spec>`; an existing
+  checkout, section 4), then `orca worktree set --worktree path:<path> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`,
+  then `orca agent launch --agent <id> --worktree path:<path> --prompt <spec>`; an existing
   worktree (or a no-worktree repo) needs only the launch. The task lead creates its own Run (`orca orchestration run-create --objective <text>`),
   starts its sessions as workers of that Run (`orca orchestration worker-start --worktree path:<task worktree>`,
   depth 1), and reports to the run lead with
@@ -504,7 +505,7 @@ The table lists the commands for a repo that has `tests/run-all.sh` (this plugin
 <!-- policy:qa-tiers -->
 | When | Runs | Who | Typical time |
 |---|---|---|---|
-| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once, and of a suite with a case map only the affected cases; other checks are extra commands; never a full run | a fresh QA session in the task worktree | 2-5 min for a narrow change (one-file schema change 119 s, one-file skill change 288 s); a change to a global input (the runner, `tests/affected.py`) selects every suite and takes about an hour with a slot wait |
+| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once. Explicit suites run all cases; affected-only suites with a case map run only affected cases. Other checks are extra commands; never a full run | a fresh QA session in the task worktree | 2-5 min for a narrow change (one-file schema change 119 s, one-file skill change 288 s); a change to a global input (the runner, `tests/affected.py`) selects every suite and takes about an hour with a slot wait |
 | Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate | as task QA |
 | Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only | as task QA, no session of its own |
 | Implementer | only the targeted checks the spec names, and of a slow suite only the cases its change touches (`--case <names>`, `tests/affected.py cases <file> <suite>`); never a whole slow suite | the implementation session | seconds to 2 min (a full `pipeline.test.sh` is about 150 s on a quiet machine) |
@@ -521,7 +522,7 @@ The table lists the commands for a repo that has `tests/run-all.sh` (this plugin
 - **Implementers run less than QA.** An implementation session runs only the targeted checks of its spec, and of a
   suite with cases (`--list-cases`) only the cases its change touches; the task QA runs the affected suites, the
   integration QA what CI cannot. `dispatch --phase implement` says so in its spec and `dispatch --phase qa` prints
-  the exact case list `tests/affected.py` selects. Frozen copies of a suite go under a temp dir, never into the
+  the case list for the tier command's base and suite selection, including `ALL` for explicit suites. Frozen copies of a suite go under a temp dir, never into the
   suite folder.
 - **CI is the full gate.** No full local run before a PR: CI runs the full suite, and the integration QA command
   covers what CI cannot, before the PR. After the PR opens, CI green (`gh pr checks <pr> --watch`) is the merge

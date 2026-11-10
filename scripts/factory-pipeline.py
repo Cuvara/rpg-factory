@@ -64,7 +64,8 @@ script prints for a next session then carries `--registry none`. A plan may set 
         which the task lead has not) with branch and HEAD; never push, merge or remove the worktree. Orca forbids
         nested workers, so --runner orca prints a handoff, not a worker-start:
         `git worktree add --no-track -b <branch> <path> <base>` for a new task worktree, followed by
-        `orca agent launch --worktree path:<dir> --prompt ...`; existing worktrees use only the launch command.
+        `orca worktree set` with its parent, then `orca agent launch --worktree path:<dir> --prompt ...`;
+        existing worktrees use only the launch command.
   dispatch <plan.json> --task ID --phase lead --placement shared|child ...
         Both placements create a task worktree beside the integration checkout (or the repo checkout if absent).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
@@ -1359,7 +1360,7 @@ def runall_suites(path):
 QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when the registry has no pipeline.qa_tiers
 
 
-def affected_case_lines(path, base, sha, suites):
+def affected_case_lines(path, base, sha, suites, explicit):
     """Report the checkout's own case selection; failure is advisory, never a dispatch failure."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
@@ -1378,10 +1379,14 @@ def affected_case_lines(path, base, sha, suites):
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode:
             return "Affected cases: not computed (tests/affected.py cases failed)"
-        lines = []
+        selected = {}
         for line in r.stdout.splitlines():
             suite, cases = line.split("\t", 1)
-            lines.append(f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}")
+            selected[suite] = cases
+        # run-all selects explicit suites even when unaffected, and never passes --case to them.
+        selected.update({suite: "ALL" for suite in explicit})
+        lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
+                 for suite, cases in sorted(selected.items())]
         return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
     except (OSError, subprocess.SubprocessError, ValueError):
         return "Affected cases: not computed (tests/affected.py cases failed)"
@@ -1673,7 +1678,6 @@ def cmd_dispatch(a, reg):
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
         base, _ = review_base(info, plan["topic"], spec["base"], a.sha)
-        case_base = base
         previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
         stale = previous and previous.get("fingerprint") != scope_fingerprint(plan, reg, task["id"])
         failed = []
@@ -1681,13 +1685,14 @@ def cmd_dispatch(a, reg):
                 and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
             base, failed = previous["sha"], previous["failed_suites"]
         suites = runall_suites(home or info["path"])
-        cases = affected_case_lines(home or info["path"], case_base, a.sha, suites)
+        explicit, _, _ = pr.qa_checks([task], suites, failed)
+        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
                             runall=suites, tiers=pipe.get("qa_tiers"))
-                  + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives suites with a case map --case."
-                                      if suites is not False else "")
+                  + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
+                                      if cases.startswith("Affected cases (tests/affected.py cases):") else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
