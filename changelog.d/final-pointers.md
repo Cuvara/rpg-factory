@@ -1,0 +1,3 @@
+### Fixed
+
+- **Delivery pointers.** The delivery and factory-core skills now state the tier XS exception (no task lead, the run lead edits the files) next to the "every tier gets a task lead" rule. Stale pointers that named `parallel-work.md` for delivery policy now point to `delivery.md` (section 5, section 10 "Model choice") or `docs/pipeline-cli.md`, and the full command list is pointed to `scripts/README.md` "Commands". `tests/orca-commands.test.sh` also checks the Orca commands cited in `docs/pipeline-cli.md`. `tests/affected.py` runs `tests/delivery-generic.test.sh` for a change to `skills/delivery/references/delivery.md`, so its size cap is no longer missed by task QA.
