@@ -21,6 +21,7 @@ os.environ["RPG_FACTORY_STATE_DIR"] = os.path.join(TMP, "state")
 sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
 sys.dont_write_bytecode = True
 import subagent_policy as sp  # noqa: E402
+from shells import find_bash  # noqa: E402
 
 with open(os.path.join(ROOT, "registry.json"), encoding="utf-8") as fh:
     REG = json.load(fh)
@@ -159,7 +160,7 @@ def check_registry(reg):
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(reg, fh)
     # run the real script in a bash subprocess on the temp copy, passed unchanged through --registry
-    proc = subprocess.run(["bash", os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only",
+    proc = subprocess.run([find_bash() or "bash", os.path.join(ROOT, "scripts", "check-registry.sh"), "--structure-only",
                            "--registry", path], capture_output=True, text=True, env=dict(os.environ))
     return proc.returncode, proc.stdout + proc.stderr
 
