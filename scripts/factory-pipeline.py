@@ -175,6 +175,7 @@ sys.path.append(os.path.join(HERE, "lib"))
 import fstate  # noqa: E402
 import pipeline_route as pr  # noqa: E402
 import model_policy  # noqa: E402
+import subagent_policy  # noqa: E402
 import orca_cmd  # noqa: E402
 import plan_paths  # noqa: E402
 from shells import find_bash  # noqa: E402
@@ -511,6 +512,20 @@ def load_policy(reg):
 def review_role(grade):
     """A heavy task's (or subtask's) review runs with the heavy profile, so a hard diff gets a strong reviewer."""
     return "heavy" if grade == "heavy" else "review"
+
+
+def session_agent(a, agent):
+    """The agent that actually runs a session: --runner agent starts Claude only (AGENT_FALLBACK), else the planned one."""
+    return AGENT_FALLBACK if a.runner == "agent" else agent
+
+
+def subagent_rule(a, reg, role, agent):
+    """The one-sentence subagent rule (registry pipeline.subagents) of `role` for the agent that runs the session;
+    a missing or malformed policy exits 1 with nothing dispatched."""
+    try:
+        return subagent_policy.rule(reg, role, session_agent(a, agent))
+    except subagent_policy.SubagentPolicyError as e:
+        die(f"subagent policy: {e}. Nothing was dispatched.", 1)
 
 
 def session_model(a, agent, role):
@@ -1121,7 +1136,7 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
     """Print the session's dispatch: Orca worker-start, Agent-tool call or the plain prompt. `role` (planner, lead,
     review, qa or a grade) picks the model and effort (session_model) before anything is printed or written."""
     pipe = settings(reg)
-    m = session_model(a, AGENT_FALLBACK if a.runner == "agent" else agent, role)
+    m = session_model(a, session_agent(a, agent), role)
     if a.runner == "orca":
         argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place,
                                      title=title, model=m["model"], effort=m["effort"])
@@ -1194,6 +1209,7 @@ def cmd_planner(a, reg):
     agent, why = pr.route(pipe, {"kind": "plan", "implementer": a.agent}, pr.available(pipe, None))
     print(f"model: plan -> {agent} ({why})", file=sys.stderr)
     prompt = ("You are the planner of a Factory delivery pipeline. Read-only: change no file except the plan file.\n"
+              f"{subagent_rule(a, reg, 'planner', agent)}\n"
               f"Request: {a.request}\n"
               "1. Run the Factory route for the files the request will write and read the routed lead skill.\n"
               "2. Break the work into small tasks with disjoint owned paths; order dependent tasks with `deps`.\n"
@@ -1263,7 +1279,7 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
-def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None):
+def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, subagents=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(["python3", "-B", os.path.abspath(__file__)])
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
@@ -1300,13 +1316,14 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <report>`): branch "
         f"{spec['branch']}, HEAD SHA, your Orca Run id, subtasks with commits, review and QA verdicts (state, SHA, model), "
         "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings.",
-        ("7. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
+        f"7. {subagents}" if subagents else None,
+        ("8. Never push, tag, merge into the integration branch or remove the task worktree: the run lead integrates "
          "and cleans up." if info["worktrees"] else
-         "7. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
+         "8. Never push, merge or tag: the run lead integrates; the main checkout is never removed."),
     ]
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
-            + spec_json(spec) + "\nRules:\n" + "\n".join(rules)
+            + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
                "worktree. Start after the previous task of this repo has its QA verdict. Subtasks, review and QA run "
@@ -1355,7 +1372,7 @@ def tier_command(level, base, suites, task=False):
 
 
 def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suites=None, small=False, runall=None,
-            tiers=None):
+            tiers=None, subagents=None):
     head = ((at_head or f"Candidate SHA: {sha}. First check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT.")
             + "\nRead-only unless a check writes its own build output. Check each acceptance criterion against the tree, ")
     tail = ("regressions, edge and failure cases. A Unity test run waits for the `unity-test` resource; never a second "
@@ -1363,7 +1380,8 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
             + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("acceptance", [])))
     if runall is False:  # no tests/run-all.sh (a product repo): the task checks and the registry fast tier
         return (head + "run the checks (run-checks.py fast tier for registry repos), " + tail
-                + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", [])))
+                + "\nChecks:\n" + "\n".join(f"- [{t['id']}] {c}" for t in tasks for c in t.get("checks", []))
+                + (f"\n{subagents}" if subagents else ""))
     suites, extra, dropped = pr.qa_checks(tasks, runall, failed_suites)
     key = "integration" if integration else "task"
     command = tier_command((tiers or {}).get(key) or QA_TIERS[key], None if integration else base, suites,
@@ -1381,7 +1399,8 @@ def qa_body(sha, tasks, at_head=None, base=None, integration=False, failed_suite
         policy += " A full run-all check was dropped and folded into the tier command."
     return (head + "run the tier command and extra commands below, " + tail
             + "\n" + policy + "\nQA tier command:\n" + command
-            + ("\nExtra commands:\n" + "\n".join(extra) if extra else ""))
+            + ("\nExtra commands:\n" + "\n".join(extra) if extra else "")
+            + (f"\n{subagents}" if subagents else ""))
 
 
 def child_at_head(sha, parent):
@@ -1471,7 +1490,7 @@ def cmd_dispatch(a, reg):
                       "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
-                            tiers=pipe.get("qa_tiers"))
+                            tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
@@ -1527,8 +1546,9 @@ def cmd_dispatch(a, reg):
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
             where = "this task worktree"
-        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy)
         lead = model_roles["lead"][0]
+        prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy,
+                             subagent_rule(a, reg, "lead", lead))
         if a.agent and a.agent != lead:
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
@@ -1587,14 +1607,15 @@ def cmd_dispatch(a, reg):
                       f"worktree of {home}, on its own branch {child_name} from {branch}. Edit only {edit}. Commit on "
                       "your child branch with explicit paths (`git add -- <paths>`, Conventional Commits); the task lead "
                       f"merges it into {branch} and removes the child at once. {orca_cmd.CHILD_RULE.split(';')[0]}.\n"
-                      f"{report} Name your child branch and HEAD SHA.\n" + spec_json(spec))
+                      f"{report} Name your child branch and HEAD SHA.\n{subagent_rule(a, reg, 'implement', agent)}\n"
+                      + spec_json(spec))
         else:
             # a non-committing sub-session of the task lead, also in a no-worktree repo without --paths: only the task
             # lead commits (one shared index); there is no committing implementation worker in a shared checkout
             prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md). Work in "
                       f"{home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit only "
                       f"{edit}. Do NOT commit, stage or stash: one shared index; the task lead commits.\n{report}\n"
-                      + spec_json(spec)
+                      f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
@@ -1630,7 +1651,8 @@ def cmd_dispatch(a, reg):
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
-                            runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"))
+                            runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"),
+                            subagents=subagent_rule(a, reg, "qa", agent))
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
@@ -1642,6 +1664,7 @@ def cmd_dispatch(a, reg):
     prompt = (f"Review worker ({agent}) for code written by {sub_impl}"
               + (f" (subtask {sub['id']}; record with `verdict --subtask {sub['id']}`)" if sub else "")
               + ". Read-only: edit nothing, commit nothing. Run no suites; only a minimal repro when needed.\n"
+              + subagent_rule(a, reg, "review", agent) + "\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
               + (f" ({base_note})" if base_note else "")

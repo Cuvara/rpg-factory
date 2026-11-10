@@ -1223,8 +1223,14 @@ expect "Unity task lead runs subtasks one after another" 0 "Subtasks, review and
 refute "Unity review never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c2 --phase review --sha abc1234 --runner orca
 refute "Unity per-task qa never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task c1 --phase qa --sha abc1234 --runner orca
 expect "Unity task lead works on the integration branch in the main checkout" 0 "No worktree: .*on branch feat/core/demo;" dispatch "$OK" --task c1 --phase lead
-refute "Unity task lead rule 7 never mentions removing a worktree" "^7\..*remove(s)? the (task )?worktree" dispatch "$OK" --task c1 --phase lead
-expect "Unity task lead rule 7: the main checkout is never removed" 0 "^7\. Never push, merge or tag: .*the main checkout is never removed" dispatch "$OK" --task c1 --phase lead
+refute "Unity task lead rules 7 and 8 never mention removing a worktree" "^[78]\..*remove(s)? the (task )?worktree" dispatch "$OK" --task c1 --phase lead
+expect "Unity task lead rule 8: the main checkout is never removed" 0 "^8\. Never push, merge or tag: .*the main checkout is never removed" dispatch "$OK" --task c1 --phase lead
+# the subagent rule of each session prompt comes from registry pipeline.subagents (scripts/lib/subagent_policy.py rule)
+expect "task lead: rule 7 is the lead's subagent rule" 0 "^7\. Subagents: read-only scouts only, at most 2 in parallel, only when the task needs a broad search across the worktree.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\.$" dispatch "$OK" --task gw --phase lead
+expect "task lead: the push rule is now rule 8, after the subagent rule" 0 "^8\. Never push, tag, merge into the integration branch" dispatch "$OK" --task gw --phase lead
+expect_spec "task lead (orca handoff spec): rule 7 is the subagent rule" "^7\. Subagents: read-only scouts only, at most 2 in parallel" dispatch "$OK" --task gw --phase lead --runner orca
+expect "task lead --runner agent runs claude: the claude subagent clause" 0 "7\. Subagents: read-only scouts only, at most 2 in parallel.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)" dispatch "$OK" --task gw --phase lead --runner agent
+expect "Unity task lead: rule 7 is the subagent rule" 0 "^7\. Subagents: read-only scouts only, at most 2 in parallel" dispatch "$OK" --task c1 --phase lead
 refute "Unity task lead prompt has no double period after the reason" "\.\. " dispatch "$OK" --task c1 --phase lead
 # no_new_worktree <name> <args...>: exit 1, names the branch and `--phase lead`, and `git worktree list` is unchanged
 no_new_worktree() {
@@ -1283,6 +1289,27 @@ refute "agent fallback never uses the codex subagent" "codex:codex-rescue" dispa
 refute "agent fallback for a claude session is not SAME_MODEL" "SAME_MODEL: this session" dispatch "$OK" --task gw --phase implement --runner agent
 expect "agent fallback for a codex subtask session: Claude, SAME_MODEL" 0 'SAME_MODEL: this session was planned for codex' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner agent
 expect "agent fallback names the existing task worktree" 0 "Placement: work in the existing checkout .*demo-gw" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
+expect "implement (shared, claude): the implement subagent rule" 0 "^Subagents: read-only scouts only, at most 2 in parallel, only when the change needs a search across many files.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\.$" dispatch "$OK" --task gw --phase implement
+expect "implement (shared, codex implementer): the codex subagent clause" 0 "^Subagents: read-only scouts only, at most 2 in parallel, only when the change needs a search across many files.*run them on gpt-6.1-terra with effort medium\.$" dispatch "$OK" --task c2 --phase implement
+expect_spec "implement (shared, orca spec): the subagent rule" "^Subagents: read-only scouts only, at most 2 in parallel, only when the change needs a search" dispatch "$OK" --task gw --phase implement --runner orca
+expect "implement (child): the implement subagent rule" 0 "^Subagents: read-only scouts only, at most 2 in parallel, only when the change needs a search across many files.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\.$" dispatch "$OK" --task gw --phase implement --placement child
+expect "implement of a codex subtask session --runner agent: the claude clause (the session runs claude)" 0 "Subagents: read-only scouts only, at most 2 in parallel, only when the change needs a search.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner agent
+refute "implement of a codex subtask session --runner agent: no codex clause" "run them on gpt-6.1-terra with effort medium" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner agent
+expect "review by codex names the reviewer's own model (gpt-6.1-terra), the verdict stays the reviewer's" 0 "^Subagents: read-only scouts only, at most 3 in parallel, only when a claim in the diff needs a check across many files.*they stay on your own agent, codex \(run them on gpt-6.1-terra with effort medium\), never the other agent, and the verdict stays yours\.$" dispatch "$OK" --task gw --phase review --sha abc1234
+expect "review by claude names claude's Sonnet alias" 0 "^Subagents: read-only scouts only, at most 3 in parallel, only when a claim in the diff.*they stay on your own agent, claude \(use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\), never the other agent, and the verdict stays yours\.$" dispatch "$OK" --task c2 --phase review --sha abc1234
+expect "review --runner agent turns a codex review into claude SAME_MODEL: the rule names claude's Sonnet alias" 0 "Subagents: read-only scouts only, at most 3 in parallel, only when a claim in the diff.*they stay on your own agent, claude \(use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\), never the other agent, and the verdict stays yours\." dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
+refute "review --runner agent: the rule never names the codex model" "your own agent, codex" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
+expect_spec "review (orca spec): the review rule" "^Subagents: read-only scouts only, at most 3 in parallel, only when a claim in the diff" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
+expect "task QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself and grades the evidence\)\.$" dispatch "$OK" --task gw --phase qa --sha abc1234
+expect "task QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner agent
+expect_spec "task QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
+expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
+refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
+python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
+for ph in "--task gw --phase lead" "--task gw --phase implement" "--task gw --phase review --sha abc1234" "--task gw --phase qa --sha abc1234"; do
+  expect "registry without pipeline.subagents: dispatch $ph exits 1 and names the policy" 1 "subagent policy: registry pipeline.subagents is missing. Nothing was dispatched" --registry "$TMP/reg-nosub.json" dispatch "$OK" $ph --runner orca
+done
+expect "registry without pipeline.subagents: the planner exits 1 and names the policy" 1 "subagent policy: registry pipeline.subagents is missing" --registry "$TMP/reg-nosub.json" planner --request "add a thing"
 # Every Orca launch emits one physical command line, with the exact full spec in persistent state. Include
 # both new and resumed leads, narrowed subtasks, integration QA and planner requests containing newlines.
 if python3 -B - "$P" "$OK" "$TMP" <<'PY'
@@ -1352,6 +1379,8 @@ expect "lead (print): the header names model and effort" 0 "^# agent: claude   m
 expect "planner (orca): the planner profile" 0 "^orca orchestration worker-start .*--worktree current .*$MOD" planner --request "add a thing" --runner orca
 expect "planner prompt: grade each task with the rubric" 0 "Grade each task light\|standard\|heavy with the rubric \(registry pipeline.models.rubric\)" planner --request "add a thing"
 expect "planner prompt carries the rubric" 0 "^   - heavy: " planner --request "add a thing"
+expect "planner prompt carries the planner's subagent rule" 0 "^Subagents: read-only scouts only, at most 3 in parallel, only when the plan needs facts from many files or repos.*never edits, git writes, Orca, dispatch or verdict, or nested subagents" planner --request "add a thing"
+expect "planner --runner agent: the claude subagent clause" 0 "Subagents: read-only scouts only, at most 3 in parallel, only when the plan needs facts.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)" planner --request "add a thing" --runner agent
 expect "lead spec: grade each subtask, write grade + grade_reason" 0 "Grade each subtask light\|standard\|heavy .*write .grade. \+ .grade_reason. per subtask \(none: the task's grade, light\)" dispatch "$LT" --task gw --phase lead
 expect "lead spec: never a model outside the scope" 0 "never pass one outside its scope \(exit 2\)" dispatch "$LT" --task gw --phase lead
 expect "lead spec carries the registry rubric" 0 "^- standard: Ordinary feature" dispatch "$LT" --task gw --phase lead
@@ -1642,6 +1671,10 @@ git -C "$S" worktree add -q "$TMP/demo-int" -b feat/core/demo develop 2>/dev/nul
 expect "integration QA joins the integration checkout of plan.topic" 0 "--agent codex --worktree '?path:[^' ]*demo-int'?" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 refute "integration QA never creates a worktree" "new-top-level|--base-branch|worktree create" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "You share the integration checkout .*demo-int with the run lead" dispatch "$OK" --task integration:server --phase qa --sha abc1234
+expect "integration QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself" dispatch "$OK" --task integration:server --phase qa --sha abc1234
+expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner agent
+expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
+expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task integration:client --phase qa --sha abc1234
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
