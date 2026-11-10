@@ -72,13 +72,13 @@ delivery_out=$(check "$ROOT/skills/delivery/references/delivery.md")
 grep -q '^OK orca orchestration worker-start --worktree new-child$' <<<"$delivery_out" \
   && grep -q '^OK orca worktree create --parent-worktree$' <<<"$delivery_out" \
   && ok "worker-start --worktree new-child and worktree create --parent-worktree are checked against orca" \
-  || no "child placement commands not extracted or not verified" "$out"
+  || no "child placement commands not extracted or not verified" "$delivery_out"
 
 # the policy's cleanup caveat matches Orca: `orca worktree rm` says it deletes the checked-out branch
 if orca worktree rm --help 2>&1 | grep -qi 'delete the checked-out local branch'; then
   grep -qF 'also deletes the checked-out local branch' "$ROOT/skills/delivery/references/delivery.md"     && ok "orca worktree rm deletes merged branches and delivery.md says so"     || no "orca worktree rm deletes merged branches but delivery.md does not warn about it"
 else
-  ok "orca worktree rm --help no longer mentions branch deletion (caveat in parallel-work.md is conservative)"
+  ok "orca worktree rm --help no longer mentions branch deletion (caveat in delivery.md is conservative)"
 fi
 
 printf '%s\n' 'Register `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`.' > "$TMP/lineage.md"
