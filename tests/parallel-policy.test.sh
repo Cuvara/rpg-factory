@@ -10,10 +10,11 @@
 # is built only for the cases that mutate one (lint-mutations, which-model, qa-tiers).
 # case-map: orca-wait tests/orca-wait.test.sh scripts/orca-wait.sh scripts/lib/compat.sh
 # case-map: lint-mutations tests/skills-lint.sh scripts/* skills/* docs/* scripts/lib/compat.sh
-# case-map: policy-markers skills/factory-core/references/parallel-work.md scripts/lib/compat.sh
+# case-map: policy-markers skills/delivery/references/delivery.md scripts/lib/compat.sh
 # case-map: which-model skills/* docs/* scripts/lib/compat.sh
 # case-map: qa-tiers skills/* docs/* scripts/lib/compat.sh
-# case-map: orca-first skills/factory-core/references/parallel-work.md scripts/lib/compat.sh
+# case-map: orca-first skills/delivery/references/delivery.md scripts/lib/compat.sh
+# case-map: orca-lineage skills/delivery/references/delivery.md scripts/lib/compat.sh
 # case-map: agents-roles scripts/lib/compat.sh
 # case-map: plan-paths scripts/lib/plan_paths.py scripts/lib/compat.sh
 # case-map: portable-plans docs/plans/* scripts/lib/compat.sh
@@ -22,7 +23,7 @@
 # the suite's own file, root files (AGENTS.md, README.md: agents-roles reads AGENTS.md, so it only runs with ALL), registry.json,
 # registry/*, tests/affected.py and every other shared lib. parallel-work.md also selects the lint copy cases through skills/*.
 set -uo pipefail
-CASES='orca-wait lint-mutations policy-markers which-model qa-tiers orca-first agents-roles plan-paths portable-plans cli-selftest'
+CASES='orca-wait lint-mutations policy-markers which-model qa-tiers orca-first orca-lineage agents-roles plan-paths portable-plans cli-selftest'
 usage() {
   printf '%s\n' 'Usage: parallel-policy.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.'
@@ -53,6 +54,7 @@ all_cases=0; [ -n "$SELECTED" ] || { SELECTED="$CASES"; all_cases=1; }
 has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
 needs_plugin_copy() { has_case lint-mutations || has_case which-model || has_case qa-tiers; }
 PW=skills/factory-core/references/parallel-work.md
+DW=skills/delivery/references/delivery.md
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'rm -rf "$TMP"' EXIT
@@ -188,7 +190,7 @@ mutate "human_gates dropped" "safety rule missing from $PW: 'human_gates'" \
   "sed -i 's/human_gates/gates/g' $PW"
 mutate "rule 5 dropped" "safety rule missing from $PW: 'rule 5'" \
   "sed -i 's/rule 5/the rules/g' $PW"
-mutate "orca worktree rm caveat dropped" "cites orca worktree rm without its branch-deletion caveat"   "sed -i 's/also deletes the checked-out local branch/may tidy branches/' $PW"
+mutate "orca worktree rm caveat dropped" "cites orca worktree rm without its branch-deletion caveat"   "sed -i 's/also deletes the checked-out local branch/may tidy branches/' $DW"
 mutate "allowed-tools entry dropped" "runs bash scripts/checks/netcode-headless.sh, not covered by allowed-tools" \
   "sed -i '5s|, Bash(bash [^)]*/netcode-headless.sh:[*])||' skills/netcode-client/SKILL.md"
 mutate "bare script name not granted" "server-ops: skills/server-ops/SKILL.md:" \
@@ -202,7 +204,7 @@ grade
 
 fi
 if has_case policy-markers; then
-# Two-level rules (parallel-work.md is their only copy) are machine-checkable, not matched in free prose: each rule
+# Two-level rules (delivery.md is their only copy) are machine-checkable, not matched in free prose: each rule
 # is a marker comment `<!-- policy:<id> -->` on its own line, present exactly once, whose next non-empty line is the
 # canonical sentence below, byte for byte. No line may carry a retired shortcut phrasing (fixed strings, any case).
 # Prints each problem; rc 1.
@@ -211,12 +213,12 @@ POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo ta
 declare -A POLICY_SENTENCE=(
   [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
-  [no-worktree-repo]='A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.'
+  [no-worktree-repo]='A no-worktree repo (registry `worktrees: false` or a configured no-worktree marker, for example a Unity project) never gets a worktree; its task lead and all its sessions run in its main checkout.'
   [task-lead-claude]="The task lead is a Claude session (registry pipeline.lead_agent), whatever the task's implementer, and Codex only when Claude is unavailable; implementation, review and QA sessions keep the cross-model pairing."
   [speed-rule]='Prefer many short, focused parallel sessions over one long session; every spec stays short: objective, owned paths, checks, report format.'
   [placement-table]='| Placement | When | How |'
   [child-merge-remove]='The owner merges a child'"'"'s branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).'
-  [child-no-run-all]='Never create or remove a child worktree while a full tests/run-all.sh runs: every checkout shares one .git/config.'
+  [child-no-run-all]='Never create or remove a child worktree while a full tests/run-all.sh runs (the runner of a repo that has one): every checkout shares one .git/config.'
   [which-model]='| Role or kind | Model | Registry |'
 )
 # The placement table under its marker keeps both rows: shared (the default) and child.
@@ -276,15 +278,15 @@ sys.exit(bool(errors))
 PY_MARKERS
 }
 
-s_out=$(policy_markers "$ROOT/$PW" 2>&1); s_rc=$?
-[ $s_rc -eq 0 ] && ok "two-level policy markers intact in $PW" || no "two-level policy markers broken in $PW (rc=$s_rc)" "$s_out"
+s_out=$(policy_markers "$ROOT/$DW" 2>&1); s_rc=$?
+[ $s_rc -eq 0 ] && ok "two-level policy markers intact in $DW" || no "two-level policy markers broken in $DW (rc=$s_rc)" "$s_out"
 # s_mutate <name> <expected text|PASS> <commands in a copy of the policy file $F>: the checker must FAIL with that
 # text (PASS: must still pass). A mutation command that fails or changes nothing is a FAIL.
 s_mutate() {
   local F="$TMP/pw-mut.md" merr out rc
-  cp "$ROOT/$PW" "$F" && chmod u+w "$F"
+  cp "$ROOT/$DW" "$F" && chmod u+w "$F"
   if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$ROOT/$DW" "$F"; then no "$1: mutation changed nothing"; return; fi
   out=$(policy_markers "$F" 2>&1); rc=$?
   if [ "$2" = PASS ]; then
     [ $rc -eq 0 ] && ok "$1 -> policy markers still PASS" || no "$1: policy markers did not pass (rc=$rc)" "$out"
@@ -310,7 +312,7 @@ s_mutate "placement table child row removed" "placement table row missing: '| ch
 s_mutate "run-all/child rule removed" "marker missing: policy:child-no-run-all" \
   'sed -i "/^<!-- policy:child-no-run-all -->\$/,+1d" "$F"'
 s_mutate "run-all/child rule weakened" "sentence changed under policy:child-no-run-all" \
-  'sed -i "s/^Never create or remove a child worktree while a full tests\/run-all.sh runs:/Avoid creating a child worktree during a full run:/" "$F"'
+  'sed -i "s/^Never create or remove a child worktree while a full tests\/run-all.sh runs (the runner of a repo that has one):/Avoid creating a child worktree during a full run:/" "$F"'
 s_mutate "child merge-and-remove rule removed" "marker missing: policy:child-merge-remove" \
   'sed -i "/^<!-- policy:child-merge-remove -->\$/d" "$F"'
 s_mutate "canonical sentence moved off its marker" "sentence changed under policy:no-worktree-repo" \
@@ -344,7 +346,7 @@ WHICH_MODEL_REQUIRED=('delegates code to Codex and does not implement' 'QA runs 
   'RPG_FACTORY_AGENTS'
   '--down <agent>' 'SAME_MODEL (fallback: <model> unavailable)' 'no command fails because a model is missing')
 which_model() {
-  python3 -B - "$1" "${2:-}" "$PW" "${#WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_REQUIRED[@]}" <<'PY_MODEL'
+  python3 -B - "$1" "${2:-}" "$DW" "${#WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_ROWS[@]}" "${WHICH_MODEL_REQUIRED[@]}" <<'PY_MODEL'
 import re, sys
 from pathlib import Path
 file, root, relative, count = sys.argv[1:5]
@@ -384,21 +386,21 @@ sys.exit(bool(errors))
 PY_MODEL
 }
 
-w_out=$(which_model "$ROOT/$PW" "$P" 2>&1); w_rc=$?
+w_out=$(which_model "$ROOT/$DW" "$P" 2>&1); w_rc=$?
 [ $w_rc -eq 0 ] && ok "which-model table intact, single copy" || no "which-model table (rc=$w_rc)" "$w_out"
 w_mutate() { # <name> <expected text> <commands run in a fresh copy $T of the tree; $F is its policy file>
   local T="$TMP/wm" merr out rc
   # Reuse one overlay: these mutations touch only the policy and two known
   # duplicate destinations. Restore all three before each case.
-  mkdir -p "$T/${PW%/*}" "$T/docs" "$T/skills/client-integration"
-  cp "$P/$PW" "$T/$PW"
+  mkdir -p "$T/${DW%/*}" "$T/docs" "$T/skills/client-integration"
+  cp "$P/$DW" "$T/$DW"
   cp "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md"
   rm -f "$T/docs/zz-models.md"
-  if ! merr=$(cd "$T" && F="$T/$PW" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$P/$PW" "$T/$PW" && cmp -s "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md" && [ ! -f "$T/docs/zz-models.md" ]; then
+  if ! merr=$(cd "$T" && F="$T/$DW" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
+  if cmp -s "$P/$DW" "$T/$DW" && cmp -s "$P/skills/client-integration/SKILL.md" "$T/skills/client-integration/SKILL.md" && [ ! -f "$T/docs/zz-models.md" ]; then
     no "$1: mutation changed nothing"; return
   fi
-  out=$(which_model "$T/$PW" "$T" 2>&1); rc=$?
+  out=$(which_model "$T/$DW" "$T" 2>&1); rc=$?
   if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> which-model check FAIL: $2"
   else no "$1: which-model check did not fail with '$2' (rc=$rc)" "$out"; fi
 }
@@ -420,9 +422,9 @@ w_mutate "fallback marker dropped" "section 10 lacks the routing rule: 'SAME_MOD
   'sed -i "s/SAME_MODEL (fallback: <model> unavailable)/SAME_MODEL/g" "$F"'
 w_mutate "which-model section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
-w_mutate "which-model table copied into docs" "which-model table copied outside $PW: docs/zz-models.md" \
+w_mutate "which-model table copied into docs" "which-model table copied outside $DW: docs/zz-models.md" \
   'mkdir -p docs && sed -n "/^| Role or kind |/,/^| QA |/p" "$F" > docs/zz-models.md'
-w_mutate "which-model table copied into a skill" "which-model table copied outside $PW: skills/client-integration/SKILL.md" \
+w_mutate "which-model table copied into a skill" "which-model table copied outside $DW: skills/client-integration/SKILL.md" \
   'printf "\n| Role or kind | Model | Registry |\n|---|---|---|\n| code | codex | x |\n" >> skills/client-integration/SKILL.md'
 
 fi
@@ -430,7 +432,7 @@ if has_case qa-tiers; then
 # QA tiers stay under their marker in section 10, with one canonical table.
 # Inspect the whole tree for copies, including untracked Markdown.
 qa_tiers() {
-  python3 -B - "$1" "$2" "$PW" <<'PY_QA'
+  python3 -B - "$1" "$2" "$DW" <<'PY_QA'
 import re, sys
 from pathlib import Path
 policy, root, relative = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
@@ -475,16 +477,16 @@ print("\n".join(errors), end="\n" if errors else "")
 sys.exit(bool(errors))
 PY_QA
 }
-q_out=$(qa_tiers "$ROOT/$PW" "$P" 2>&1); q_rc=$?
+q_out=$(qa_tiers "$ROOT/$DW" "$P" 2>&1); q_rc=$?
 [ "$q_rc" -eq 0 ] && ok "QA tiers table intact, single copy" || no "QA tiers table (rc=$q_rc)" "$q_out"
 q_mutate() {
   local T="$TMP/qa-tiers" F merr out rc
-  F="$T/$PW"
+  F="$T/$DW"
   mkdir -p "${F%/*}" "$T/skills/client-integration"
-  cp "$P/$PW" "$F"
+  cp "$P/$DW" "$F"
   rm -f "$T/skills/client-integration/SKILL.md"
   if ! merr=$(cd "$T" && F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$P/$PW" "$F" && [ ! -f "$T/skills/client-integration/SKILL.md" ]; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$P/$DW" "$F" && [ ! -f "$T/skills/client-integration/SKILL.md" ]; then no "$1: mutation changed nothing"; return; fi
   out=$(qa_tiers "$F" "$T" 2>&1); rc=$?
   if [ "$rc" -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> QA tiers check FAIL: $2"
   else no "$1: QA tiers check did not fail with '$2' (rc=$rc)" "$out"; fi
@@ -525,13 +527,13 @@ orca_first() {
   [ ${#errs[@]} -eq 0 ] && return 0
   printf '%s\n' "${errs[@]}"; return 1
 }
-o_out=$(orca_first "$ROOT/$PW" 2>&1); o_rc=$?
+o_out=$(orca_first "$ROOT/$DW" 2>&1); o_rc=$?
 [ $o_rc -eq 0 ] && ok "section 5 keeps the Orca-first runner rule" || no "section 5 Orca-first rule (rc=$o_rc)" "$o_out"
 o_mutate() { # <name> <expected text> <commands in a copy of the policy file $F>
   local F="$TMP/pw-orca-mut.md" merr out rc
-  cp "$ROOT/$PW" "$F" && chmod u+w "$F"
+  cp "$ROOT/$DW" "$F" && chmod u+w "$F"
   if ! merr=$(F="$F" bash -c "$3" 2>&1); then no "$1: mutation command failed" "$merr"; return; fi
-  if cmp -s "$ROOT/$PW" "$F"; then no "$1: mutation changed nothing"; return; fi
+  if cmp -s "$ROOT/$DW" "$F"; then no "$1: mutation changed nothing"; return; fi
   out=$(orca_first "$F" 2>&1); rc=$?
   if [ $rc -ne 0 ] && grep -qF -- "$2" <<<"$out"; then ok "$1 -> Orca-first check FAIL: $2"
   else no "$1: Orca-first check did not fail with '$2' (rc=$rc)" "$out"; fi
@@ -545,6 +547,17 @@ o_mutate "refusal softened to a preference" "lacks the Orca-first rule: 'refuse 
 o_mutate "rule moved out of section 5" "lacks the Orca-first rule: 'ORCA_WORKTREE_ID'" \
   'sed -i "/^- \*\*Orca first inside Orca\.\*\*/,/^  Agent-tool task leads/d" "$F"'
 
+fi
+if has_case orca-lineage; then
+# The set command must carry its parent on the same line; deleting it must break the check.
+lineage() { grep -E 'orca worktree set [^`]*--parent-worktree([ =]|$)' "$1" >/dev/null; }
+if lineage "$ROOT/$DW"; then ok "delivery policy registers Orca worktree lineage"
+else no "delivery policy lacks Orca worktree set with --parent-worktree"; fi
+F="$TMP/lineage.md"
+sed '/orca worktree set .*--parent-worktree/d' "$ROOT/$DW" > "$F"
+if cmp -s "$ROOT/$DW" "$F"; then no "lineage mutation changed nothing"
+elif lineage "$F"; then no "lineage check accepted a deleted set command"
+else ok "deleting the set command fails the lineage check"; fi
 fi
 if has_case agents-roles; then
 # AGENTS.md (the Codex entry) never makes Codex the run lead, and a task lead only when Claude is unavailable
