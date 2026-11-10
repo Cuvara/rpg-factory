@@ -39,7 +39,7 @@ exclusive resources, QA tiers and model policy. `plan.json` `repos.<key>` names 
   user asked for and the `deliver: pr` delivery exception (`git-safety.md` rule 5). Merging into develop, main,
   staging or release-* and pushing stay on the user's request.
 - Tags and releases only with explicit release authorization from the user in the current task (`git-safety.md`
-  rule 5, `.claude/CLAUDE.md` "Releases"): without it a task stops at READY_TO_TAG.
+  rule 5, `.claude/CLAUDE.md` "Releases", `docs/releasing.md`): without it a task stops at READY_TO_TAG.
 - One mutating command per worktree at a time is `git-safety.md` rule 14.
 - Worktrees an Orca run created are removed with `orca worktree rm`, which also deletes the checked-out local branch
   when Orca can prove it is merged: merge a child into its parent first (delivery.md section 4, "Child worktrees").

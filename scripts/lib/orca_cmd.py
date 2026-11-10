@@ -1,7 +1,8 @@
 """Orca and Claude Code agent dispatch commands, shared by factory-workflow.py and factory-pipeline.py.
 
 Nothing here runs Orca: it builds the exact argv the lead runs (or prints). Placement follows the worktree rule in
-references/parallel-work.md: a repo with registry `worktrees: false`, or whose root holds a
+skills/delivery/references/delivery.md section 4 (RPG specifics: skills/factory-core/references/parallel-work.md):
+a repo with registry `worktrees: false`, or whose root holds a
 `pipeline.no_worktree_markers` file (a Unity project), never gets a new worktree - the worker runs in the existing
 main checkout (`--worktree path:<checkout>`); every other repo gets `--worktree new-top-level` from a base ref, or an
 Orca child of the caller's worktree (`--worktree new-child`, child_placement) when the owner picks isolation.
@@ -9,7 +10,7 @@ Flags match `orca orchestration worker-start --help` (Orca 1.4): (--task <id> | 
 (--agent <id> | --terminal <handle>); creation flags (--repo, --base-branch, --name) only with new worktrees.
 Printed commands use POSIX quoting (Claude Code's Bash tool, Git Bash); PowerShell needs its own quoting.
 in_orca_session() and orca_reachable() tell whether the caller runs inside a reachable Orca (Orca first,
-references/parallel-work.md section 5); orca_reachable() is the only call here that runs `orca` (read-only status).
+skills/delivery/references/delivery.md section 5); orca_reachable() is the only call here that runs `orca` (read-only status).
 """
 import json
 import os

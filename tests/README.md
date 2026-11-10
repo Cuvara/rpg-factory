@@ -2,7 +2,7 @@
 
 Suites of the rpg-factory plugin. Each `*.test.sh` (or `*.test.py`) runs standalone and sets its own temp `TMPDIR` and
 `RPG_FACTORY_STATE_DIR`; `tests/run-all.sh` runs them all and prints the usage header with `-h`. Fixtures live in
-`tests/fixtures/`. Command list and flags: `.claude/CLAUDE.md` "Commands".
+`tests/fixtures/`. Full command list and flags: `scripts/README.md` "Commands".
 
 ## QA tiers and run-all flags
 

@@ -29,7 +29,8 @@ Declare it in the skill arguments (`mode: <mode>`) and the Route call (`factory-
 snapshot then prints its contract. The hooks **flag** departures (advisory only, they never block); respect the mode
 yourself and switch only when the user asks (e.g. "now implement it").
 Two levels (load `rpg-factory:delivery` for the generic flow; RPG specifics: `references/parallel-work.md`): the main session is the **run lead** (plans, dispatches,
-integrates, reports; never edits task files); one **task lead** per task does the work. A dispatched session follows its spec.
+integrates, reports; never edits task files, except in a tier XS task); one **task lead** per task (none in tier XS)
+does the work. A dispatched session follows its spec.
 
 ## Workflow
 Steps are **M** mandatory, **O** optional, **H** need the user.

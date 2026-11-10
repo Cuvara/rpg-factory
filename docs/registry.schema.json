@@ -168,7 +168,7 @@
     },
     "pipeline": {
       "type": "object",
-      "description": "Delivery pipeline settings read by scripts/factory-pipeline.py (policy: skills/factory-core/references/parallel-work.md).",
+      "description": "Delivery pipeline settings read by scripts/factory-pipeline.py (policy: skills/delivery/references/delivery.md section 10; RPG specifics: skills/factory-core/references/parallel-work.md).",
       "required": [
         "tiers",
         "agents",
@@ -345,7 +345,7 @@
         },
         "models": {
           "type": "object",
-          "description": "Model policy (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice'). scope = what may run at all; profiles = the model and effort of each role and grade, every one inside scope (scripts/check-registry.sh enforces it). A personal override file may narrow scope and replace profiles.",
+          "description": "Model policy (scripts/lib/model_policy.py; policy: skills/delivery/references/delivery.md section 10 'Model choice'). scope = what may run at all; profiles = the model and effort of each role and grade, every one inside scope (scripts/check-registry.sh enforces it). A personal override file may narrow scope and replace profiles.",
           "required": [
             "scope",
             "agent_tool_alias",

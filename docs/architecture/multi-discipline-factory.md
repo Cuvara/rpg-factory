@@ -424,7 +424,7 @@ Feature-spec transition rules:
 | Skill instructions | `skills/<name>/SKILL.md` (≤160 lines) + at most 3 references (factory-core is exempt) |
 | Shared policy (git, validation, report, parallel work, skill contract) | `skills/factory-core/references/` (neutral parts only after P3) |
 | Engineering reference (tool evidence, WSL, CI facts, generators, branch defaults) | one engineering reference split out of core in P3 |
-| Testing and maintenance | `.claude/CLAUDE.md` "Commands" and the `tests/` file headers |
+| Testing and maintenance | `scripts/README.md` "Commands" and the `tests/` file headers |
 
 Rules:
 - **One canonical copy per fact.** Other places link to it. The existing shingle check in `skills-lint.sh` and

@@ -1,7 +1,7 @@
 """Model policy of the delivery pipeline: which model and effort each agent role and task grade runs with.
 
 Source of truth: registry `pipeline.models` (scope, agent_tool_alias, profiles, default_grade, rubric). Policy text:
-references/parallel-work.md section 10 "Model choice". Nothing here runs an agent or writes a file.
+skills/delivery/references/delivery.md section 10 "Model choice". Nothing here runs an agent or writes a file.
 
   scope     agent -> model id -> allowed efforts: what may run at all.
   profiles  agent -> role or grade -> {model, effort}: what each role (planner, lead, review, qa) and each grade

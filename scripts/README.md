@@ -58,8 +58,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
   pollution fingerprints), `runchecks_grade.py` (check parser choice and result grading for `run-checks.py`),
   `artifacts.py` (artifact discovery and quality), `orca_cmd.py` (Orca and Agent dispatch
-  argv, with `--model`/`--effort`), `model_policy.py` (model scope, role and grade profiles, personal override; `parallel-work.md`
-  "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
+  argv, with `--model`/`--effort`), `model_policy.py` (model scope, role and grade profiles, personal override; `delivery.md`
+  section 10 "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
   `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
   `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
   `tests/hook-perf.test.sh`
@@ -109,7 +109,7 @@ python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dr
 python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
 env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
 env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a throwaway plugin copy
-tests/orca-commands.test.sh                # orca commands cited in parallel-work.md exist (SKIP without orca)
+tests/orca-commands.test.sh                # orca commands cited in delivery.md, parallel-work.md and pipeline-cli.md exist (SKIP without orca)
 env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
 tests/changelog.test.sh                    # changelog fragments: validation, preview, release assembly
 tests/registry-fragments.test.sh           # registry/ fragments: build, placement, scaffolder, parallel merge
@@ -118,7 +118,7 @@ python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   #
 tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
 python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
 env -u TMPDIR tests/pipeline.test.sh       # delivery pipeline on a throwaway workspace (server + Unity client)
-python3 -B scripts/factory-pipeline.py tier|agents|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (parallel-work.md section 10)
+python3 -B scripts/factory-pipeline.py tier|agents|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (`delivery.md` section 10; flags `docs/pipeline-cli.md`)
 python3 -B scripts/factory-pipeline.py agents <plan> [--down A [--reason T] | --up A]  # per-run MODEL_UNAVAILABLE marks
 
 # routing / state, read-only against the workspace
