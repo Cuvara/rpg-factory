@@ -48,8 +48,8 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <
 ### Cost
 | Task | Session role | Model | Effort | Tokens / cost | Source |
 |---|---|---|---|---|---|
-| <task> | <implementer / reviewer / qa / task lead> | <model> | <effort> | <tokens or cost | NOT_AVAILABLE> | <`/cost` / session footer / Codex usage line / Orca | n/a> |
-| run lead (total) | run lead | <model> | <effort> | <tokens or cost | NOT_AVAILABLE> | <source | n/a> |
+| <task> | <implementer / reviewer / qa / task lead> | <model> | <effort> | <tokens or cost, or NOT_AVAILABLE> | <`/cost`, session footer, Codex usage line or Orca; n/a> |
+| run lead (total) | run lead | <model> | <effort> | <tokens or cost, or NOT_AVAILABLE> | <source; n/a> |
 <!-- Values come from the runtime (Claude Code `/cost` or the session footer, the Codex usage line, Orca if it reports it), else NOT_AVAILABLE. Never an estimate shown as measured. -->
 <!-- Limitations and follow-ups of this report go to the backlog (in this plugin `docs/plans/backlog.md`, one topic each); every new operating lesson goes to the file the learning-loop rule names (`.claude/CLAUDE.md` "Learning loop"), both in the integration commit. -->
 
