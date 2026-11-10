@@ -722,8 +722,9 @@ def task_qa_warnings(task):
     """pr.qa_warnings without the verify tier command: a scoped run-all check is what the verify session runs, not a
     suite an implementer would run; a suite named next to it still warns."""
     def tier_only(c):
-        return (pr.mentions_runall(c) and not pr.full_run(c)
-                and not pr.SUITE_CHECK.search(re.sub(r"(?:\./)?tests/run-all\.sh", "", c)))
+        rest = re.sub(r"(?:\./)?tests/run-all\.sh", "", c)
+        rest = re.sub(r"--only-suites(?:=|\s+)\S+", "", rest)  # the suites a scoped run-all names are its scope
+        return pr.mentions_runall(c) and not pr.full_run(c) and not pr.SUITE_CHECK.search(rest)
     return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]))
 
 
@@ -1787,12 +1788,12 @@ def cmd_dispatch(a, reg):
 
 
 def retry_checks(task, runall=None):
-    """The task checks a re-verify keeps. A repo with tests/run-all.sh: none, the failed suites plus
-    `--affected --base <previous candidate>` replace them. A repo without it (a product repo): its check commands
+    """The task checks a re-verify keeps. A repo with tests/run-all.sh: the run-all commands and the suites are
+    dropped, the failed suites plus `--affected --base <previous candidate>` replace them; any other command
+    (`python3 -B scripts/build-registry.py --check`) stays. A repo without it (a product repo): its check commands
     (`dotnet test ...`) all stay, because a failed_suites list cannot name them."""
-    if runall:
-        return []
-    return [c for c in task.get("checks", []) if not pr.mentions_runall(c)]
+    return [c for c in task.get("checks", [])
+            if not pr.mentions_runall(c) and not (runall and pr.SUITE_CHECK.search(c))]
 
 
 def child_branch(parent, sid, phase, sha=None):

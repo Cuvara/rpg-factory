@@ -871,7 +871,15 @@ assert any('implementers run syntax checks only' in w for w in m.task_qa_warning
 assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['dotnet test Game.Tests.csproj'])))
 assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && bash tests/pipeline.test.sh'])))
 assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --only-suites tests/x.sh -j 2']))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --only-suites=tests/x.sh,tests/y.sh -j 2']))
+assert any('implementers run syntax checks only' in w for w in
+           m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected --only-suites tests/x.sh && bash tests/y.sh'])))
 assert not m.task_qa_warnings(dict(safe, acceptance=['a']))
+# a run-all re-verify drops the run-all commands and suites (failed suites plus --affected replace them), keeps any other command
+retry_task = dict(task, checks=['tests/run-all.sh --affected --only-suites tests/x.sh', 'env -u TMPDIR bash tests/x.sh --case a',
+                                'python3 -B scripts/build-registry.py --check'])
+assert m.retry_checks(retry_task, {'tests/x.sh'}) == ['python3 -B scripts/build-registry.py --check'], m.retry_checks(retry_task, {'tests/x.sh'})
+assert m.retry_checks(retry_task) == ['env -u TMPDIR bash tests/x.sh --case a', 'python3 -B scripts/build-registry.py --check']
 for text in ['full suite 0 failed', 'the whole suite passes', 'all suites 0 failed', 'entire test suite green']:
     assert m.pr.qa_warnings(dict(safe, acceptance=[text])), text
 assert not any('acceptance' in w for w in m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count'])))
