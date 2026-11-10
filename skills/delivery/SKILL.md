@@ -18,7 +18,7 @@ repos, the `unity-test` resource, registry repos) and calls this skill for the g
 
 Two levels. The main session is the **run lead**: it plans, dispatches, integrates, runs integration QA, gates and
 reports, and never edits task files. One **task lead** per task works in that task's worktree: it writes the subplan,
-starts one short, fresh sub-session per subtask, has the result reviewed and QA-checked, and commits or merges. A
+starts one short, fresh sub-session per subtask, has the result verified once (review, then tests), and commits or merges. A
 dispatched session follows its spec and never merges or pushes. Policy: [references/delivery.md](references/delivery.md) section 1.
 
 ## Flow
@@ -40,10 +40,11 @@ Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py 
    Code, tests, fixes and refactors go to Codex, prose to Claude: the model table in references/delivery.md section 10.
    The task lead does not implement. A missing model never stops the task: every role falls back to the available one.
    A subagent inside a session is a read-only scout, never a writer or a verdict: references/delivery.md section 8 "In-session subagents".
-5. **Review and QA (task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: the other model
-   reviews; no pair available means the same model with `SAME_MODEL (fallback: <model> unavailable)`. Then
-   `--phase qa`. QA by tier: the task runs its affected checks once; integration runs the repository's full gate.
-   Record each result with `verdict`.
+5. **Verify (task lead).** Implementers run no suites. With every subtask committed, on a frozen SHA,
+   `dispatch ... --phase verify --sha <sha>` starts ONE session: the other model reviews the diff first, then runs the
+   task's affected checks once; no pair available means the same model with `SAME_MODEL (fallback: <model> unavailable)`.
+   Never review and QA in parallel; do not re-run the checks. Integration runs the repository's full gate. Record the
+   result with `verdict --phase verify`; a FAIL goes to a fix worker, then one fresh verify.
 6. **Integrate (run lead).** Merge each task branch per section 7 of the reference, run integration QA on the
    integration HEAD, then `gate plan.json`: READY_FOR_PR is the only green state. Push and open the PR only when
    the user asked for a PR; never merge.

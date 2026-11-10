@@ -721,7 +721,7 @@ if case.startswith('subtask-sibling-'):
     verdict('integration:fixture', 'qa', head)
     g = m.gate(plan, reg)
     stale = [x for x in g['blockers'] if 'subtask s recorded' in x and 'stale subtask review:' in x]
-    assert bool(stale) == (case != 'subtask-sibling-covered'), g
+    assert not stale, g
     if stale:
         assert 'shared.txt' in stale[0], stale
         if case == 'subtask-sibling-unknown-start':
@@ -811,7 +811,7 @@ else:
         if case.startswith('subtask-'):
             g = m.gate(plan, reg)
             stale = [x for x in g['blockers'] if 'stale subtask review:' in x]
-            assert bool(stale) == (case not in ('subtask-covered', 'subtask-legacy')), g
+            assert not stale, g
             if stale:
                 assert 'shared.txt' in stale[0] and 'outside.txt' not in stale[0], stale
             if case in ('subtask-covered', 'subtask-legacy'):
@@ -866,10 +866,23 @@ warnings = m.validate(plan, reg)['warnings']
 assert len([w for w in warnings if 'full runs belong to integration QA' in w]) == 2, warnings
 safe = dict(task, checks=['tests/run-all.sh --affected'], acceptance=['run-all.sh --affected 0 failed',
                                                                       'tests/run-all.sh --only-suites tests/x.sh 0 failed'])
-assert not m.pr.qa_warnings(safe)
+# a suite or test command in checks warns (implementers run syntax checks only); the scoped run-all tier command does not
+assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['bash tests/pipeline.test.sh'])))
+assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['dotnet test Game.Tests.csproj'])))
+assert any('implementers run syntax checks only' in w for w in m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && bash tests/pipeline.test.sh'])))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --affected --only-suites tests/x.sh -j 2']))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a'], checks=['tests/run-all.sh --only-suites=tests/x.sh,tests/y.sh -j 2']))
+assert any('implementers run syntax checks only' in w for w in
+           m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected --only-suites tests/x.sh && bash tests/y.sh'])))
+assert not m.task_qa_warnings(dict(safe, acceptance=['a']))
+# a run-all re-verify drops the run-all commands and suites (failed suites plus --affected replace them), keeps any other command
+retry_task = dict(task, checks=['tests/run-all.sh --affected --only-suites tests/x.sh', 'env -u TMPDIR bash tests/x.sh --case a',
+                                'python3 -B scripts/build-registry.py --check'])
+assert m.retry_checks(retry_task, {'tests/x.sh'}) == ['python3 -B scripts/build-registry.py --check'], m.retry_checks(retry_task, {'tests/x.sh'})
+assert m.retry_checks(retry_task) == ['env -u TMPDIR bash tests/x.sh --case a', 'python3 -B scripts/build-registry.py --check']
 for text in ['full suite 0 failed', 'the whole suite passes', 'all suites 0 failed', 'entire test suite green']:
     assert m.pr.qa_warnings(dict(safe, acceptance=[text])), text
-assert not m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count']))
+assert not any('acceptance' in w for w in m.pr.qa_warnings(dict(safe, acceptance=['git-guard suite same case count'])))
 # without run-all --list-suites nothing is folded: every check stays an extra command, no full run is started
 assert m.pr.qa_checks([task], None)[0] == [] and '[a] tests/dogfood.sh' in m.pr.qa_checks([task], None)[1]
 old = work / 'old'; (old / 'tests').mkdir(parents=True)
@@ -957,7 +970,7 @@ old_body = ('Candidate SHA: x. First check `git rev-parse HEAD` equals it; other
             '- [s] tests pass\nChecks:\n- [s] dotnet test x\n- [s] tests/run-all.sh -j 4')
 srv = {'id': 's', 'checks': ['dotnet test x', 'tests/run-all.sh -j 4'], 'acceptance': ['tests pass']}
 for kw in ({'base': 'main'}, {'integration': True}, {'base': 'main', 'failed_suites': ['tests/x.sh']}):
-    assert m.qa_body('x', [srv], runall=False, **kw) == old_body, (kw, m.qa_body('x', [srv], runall=False, **kw))
+    assert m.qa_body('x', [srv], runall=False, **kw) == old_body + ('\nPreviously failed suites:\n- tests/x.sh' if kw.get('failed_suites') else ''), kw
 assert m.pr.small_task({'tier': 'M'}, dict(task, paths=['docs/a.md', 'skills/foo/']))
 assert not m.pr.small_task({'tier': 'M'}, task)
 # tier S prose is .md anywhere, changelog.d/ and skills/ directories: a schema or JSON under docs/ is a machine input
@@ -1019,7 +1032,7 @@ for other in ('bash tests/pipeline.test.sh && true', 'bash tests/run-all-paralle
 # validate still warns on a full run inside a compound check; a scoped one is fine
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh -j 4 && python3 -B scripts/build-registry.py --check']))
 assert m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && tests/run-all.sh -j 4']))
-assert not m.pr.qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
+assert not m.task_qa_warnings(dict(safe, checks=['tests/run-all.sh --affected && python3 -B scripts/build-registry.py --check']))
 for wrapped in ("bash -c 'tests/run-all.sh -j 4'", 'bash -c "tests/run-all.sh"', "bash -c 'true && tests/run-all.sh'",
                 'tests/run-all.sh --affected\ntests/run-all.sh -j 4', 'echo x\\ #literal; tests/run-all.sh',
                 'echo x\\;#literal\ntests/run-all.sh', 'tests/run-all.sh # --affected'):
@@ -1098,6 +1111,11 @@ def cli_fail(*args):
     assert p.returncode != 0 and '--failed-suites' in p.stderr, (args, p.stdout, p.stderr)
 def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
+verify = dispatch('verify', first)
+assert '# agent: claude' in verify and verify.index('Review the whole diff') < verify.index('QA tier command:')
+assert 'blocking finding' in verify and 'run no tests' in verify
+implementation = cli('dispatch', str(pf), '--task', 'a', '--phase', 'implement', '--runner', 'print')
+assert 'Run no test suites; only a syntax check' in implementation and 'bash tests/pipeline.test.sh' not in implementation
 out = dispatch('qa', first)
 assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
 assert 'tier command already passes these cases' not in out, out
@@ -1147,6 +1165,25 @@ for tid in ('s', 'integration:srv'):
     out = cli('dispatch', str(srv_pf), '--task', tid, '--phase', 'qa', '--sha', srv_sha, '--runner', 'print')
     assert 'run the checks (run-checks.py fast tier for registry repos)' in out and 'Checks:\n- [s] dotnet test x' in out, out
     assert 'QA tier command' not in out and 'tests/run-all.sh' not in out, out
+# a verify whose review FAILs ran no tests: no QA record, so the next verify keeps the original base and checks
+(srv_repo / 'srv.cs').write_text('fix1'); sgit('commit', '-qam', 'fix1'); srv_fix1 = sgit('rev-parse', 'HEAD')
+cli('verdict', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_sha, '--by', 'codex', '--state', 'FAIL',
+    '--failed-at', 'review')
+assert not os.path.exists(m.verdict_file(srv_plan, 's', 'qa')), 'a review-only FAIL wrote a QA record'
+assert json.loads(open(m.verdict_file(srv_plan, 's', 'review')).read())['state'] == 'FAIL'
+out = cli('dispatch', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_fix1, '--runner', 'print')
+assert 'git diff main...' + srv_fix1 in out and 'fix delta' not in out, out
+assert 'Checks:\n- [s] dotnet test x' in out, out
+# a QA FAIL without --failed-suites (a product test failed): the re-verify keeps the task's check commands
+cli('verdict', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_fix1, '--by', 'codex', '--state', 'FAIL',
+    '--failed-at', 'qa')
+qa_rec = json.loads(open(m.verdict_file(srv_plan, 's', 'qa')).read())
+assert qa_rec['state'] == 'FAIL' and qa_rec['sha'] == srv_fix1, qa_rec
+assert json.loads(open(m.verdict_file(srv_plan, 's', 'review')).read())['state'] == 'PASS'  # QA ran after a review PASS
+(srv_repo / 'srv.cs').write_text('fix2'); sgit('commit', '-qam', 'fix2'); srv_fix2 = sgit('rev-parse', 'HEAD')
+out = cli('dispatch', str(srv_pf), '--task', 's', '--phase', 'verify', '--sha', srv_fix2, '--runner', 'print')
+assert 'git diff ' + srv_fix1 + '...' + srv_fix2 in out and 'fix delta since previous candidate' in out, out
+assert 'Checks:\n- [s] dotnet test x' in out, out
 lean = m.qa_body(first,[dict(task, checks=['bash tests/pipeline.test.sh'])], base='main',
                  runall={'tests/pipeline.test.sh'})
 assert 'Extra commands' not in lean and '--only-suites tests/pipeline.test.sh -j 2' in lean, lean
@@ -1180,6 +1217,10 @@ cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 
 (repo / 'fix.py').write_text('fix'); git('add', 'fix.py'); git('commit', '-qm', 'fix'); second = git('rev-parse', 'HEAD')
 affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["fix.py"]\n'
                     'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
+verify_again = dispatch('verify', second)
+assert 'git diff ' + first + '...' + second in verify_again
+assert '--base ' + first + ' --only-suites tests/routing.test.sh' in verify_again
+assert 'tests/orca-wait.test.sh' in verify_again and 'tests/pipeline.test.sh' not in verify_again.split('QA tier command:')[1]
 out = dispatch('qa', second)
 assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
         'tests/routing.test.sh -j 2') in out, out
@@ -1500,17 +1541,17 @@ expect "the codex task's implement session keeps its implementer" 0 "^orca orche
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("lead_agent",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nolead.json"
 expect "registry without pipeline.lead_agent: the task lead defaults to claude" 0 "^orca agent launch --agent claude " --registry "$TMP/reg-nolead.json" dispatch "$OK" --task c2 --phase lead --runner orca
 expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
-expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, after review PASS the task lead runs the QA tier command itself" dispatch "$OK" --task gw --phase lead
+expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
 expect "--report-to goes only with the lead" 2 "--report-to .* goes with --phase lead" dispatch "$OK" --task gw --phase implement --report-to R42
 for pat in '"owned_paths": \[' '"backend/gateway/"' '"branch": "feat/core/demo-gw"' '"acceptance": \[' "subplan validate <subplan.json>" \
   "ONE fresh session in this task worktree" "--phase implement --subplan <subplan.json> --subtask <id>" "does NOT commit \(one shared index\)" \
-  "you commit it with explicit paths" "Cross-model review .<dispatch> --phase review" "\(codex for claude" \
-  "SAME_MODEL fallback" "--phase qa --sha <HEAD>" "FAIL goes to a fresh fix session" "worker-release" \
+  "you commit it with explicit paths" "one verify session .<dispatch> --phase verify" "\(codex for claude" \
+  "verdict --phase verify" "On FAIL start a fresh fix session" "worker-release" \
   "<dispatch> = .<pipeline> dispatch <plan> --task gw." "placement child .*merge that branch into feat/core/demo-gw and remove the child at once" \
-  "never create or remove a child worktree while a full tests/run-all.sh runs" "verdict --subtask <id>" \
+  "never create or remove a child worktree while a full tests/run-all.sh runs" \
   "branch feat/core/demo-gw, HEAD SHA, your Orca Run id" "the moment it reports, its candidate is superseded or it stops - not at task end" "status <plan> --orca-run <your run id>" \
   "Never push, tag, merge into the integration branch or remove the task worktree"; do
   expect "task-lead spec: $pat" 0 "$pat" dispatch "$OK" --task gw --phase lead
@@ -1567,7 +1608,7 @@ WT="--worktree '?path:[^' ]*demo-gw'?"
 expect "implement joins the task worktree" 0 "--agent claude $WT" dispatch "$OK" --task gw --phase implement --runner orca
 refute "implement never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase implement --runner orca
 expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash: one shared index" dispatch "$OK" --task gw --phase implement
-expect "implement runs targeted cases only" 0 "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement
+expect "implement runs no suites, only a syntax check" 0 "Run no test suites; only a syntax check of the files you edited" dispatch "$OK" --task gw --phase implement
 expect "implement sub-session reports changed paths and check counts to the task lead" 0 "Report to the task lead: changed paths" dispatch "$OK" --task gw --phase implement
 expect "subtask paths narrow the sub-session" 0 '"subtask_paths": \[' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go
 expect "a subtask session may name its own model" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner orca
@@ -1606,7 +1647,7 @@ expect "task QA: no subagents" 0 "^Subagents: none in this session \(never: QA r
 expect "task QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner agent
 expect_spec "task QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
 SPEC_RULE='Your spec is complete: read skills/delivery/references/delivery\.md only when blocked by something the spec does not cover\.'
-for phase in 'implement' 'implement --placement child' 'review --sha abc1234' 'qa --sha abc1234'; do
+for phase in 'implement' 'implement --placement child' 'review --sha abc1234' 'verify --sha abc1234' 'qa --sha abc1234'; do
   expect_spec "$phase: spec is complete" "$SPEC_RULE" dispatch "$OK" --task gw --phase $phase --runner orca
   pp_spec dispatch "$OK" --task gw --phase $phase --runner orca
   if [ "$RC" = 0 ] && [ "$SRC" = 0 ] && ! grep -vF 'Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something the spec does not cover.' <<<"$SPEC" | grep -q 'delivery\.md'; then
@@ -1617,14 +1658,16 @@ refute_spec "non-plugin review does not name plugin checklist" 'plugin-review\.m
 expect_spec "non-plugin review retains routed checklist" "the routed lead skill's review checklist" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
 PLUGIN=$(plan plugin-prompt "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect_spec "plugin key review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$PLUGIN" --task t --phase review --sha abc1234 --runner orca
+expect_spec "plugin key verify names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$PLUGIN" --task t --phase verify --sha abc1234 --runner orca
+refute_spec "non-plugin verify does not name plugin checklist" 'plugin-review\.md' dispatch "$OK" --task gw --phase verify --sha abc1234 --runner orca
 mkdir -p "$T/.claude-plugin"; printf '{}\n' > "$T/.claude-plugin/plugin.json"
 expect_spec "plugin manifest review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$TOOL" --task t --phase review --sha abc1234 --runner orca
 rm "$T/.claude-plugin/plugin.json"; rmdir "$T/.claude-plugin"
 expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
 refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
-# known_failing: the lead and QA specs name the checks and the FAIL_AT_BASE rule; a plan without it adds nothing
+# known_failing: the lead, QA and verify specs name the checks and the FAIL_AT_BASE rule; a plan without it adds nothing
 KFP=$(plan kf-spec "{$(sed 's/"id":"demo"/"id":"demokf"/' <<<"$HEAD"),\"known_failing\":[{\"check\":\"tests/foo.test.sh\",\"reason\":\"fails on base\"}],\"tasks\":[{\"id\":\"gw\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]}]}")
-for ph in "--phase lead" "--phase qa --sha abc1234"; do
+for ph in "--phase lead" "--phase qa --sha abc1234" "--phase verify --sha abc1234"; do
   expect_spec "known_failing: the $ph spec lists the checks" "^Known failing at base \(plan known_failing\):$" dispatch "$KFP" --task gw $ph --runner orca
   expect_spec "known_failing: the $ph spec names the check and reason" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task gw $ph --runner orca
   expect_spec "known_failing: the $ph spec carries FAIL_AT_BASE" "FAIL_AT_BASE" dispatch "$KFP" --task gw $ph --runner orca
@@ -1966,7 +2009,7 @@ expect "subplan placement child: worker-start --worktree new-child from the task
 expect "the child subtask runs its implementer (codex)" 0 "worker-start .*--agent codex --worktree new-child" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect "a child command says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs \(shared .git/config\)" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec commits on the child branch" "Commit on your child branch with explicit paths" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
-expect_spec "the child implement spec runs targeted cases only" "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec runs no suites, only a syntax check" "Run no test suites; only a syntax check of the files you edited" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec: the task lead merges and removes the child at once" "the task lead merges it into feat/core/demo-gw and removes the child at once" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec says the run-all rule" "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the subtask's paths are in the spec" '"subtask_paths": \["backend/gateway/b.go"\]' dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
@@ -2176,6 +2219,17 @@ RPG_FACTORY_AGENTS=codex expect "single codex fallback gate accepted" 0 "SAME_MO
 v --task c1 --phase review --sha "$C1" --by codex --state PASS
 v --task c2 --phase review --sha "$C2" --by claude --state PASS
 expect "restore paired review" 0 "recorded review PASS" verdict "$G" --task gw --phase review --sha "$SG" --by codex --state PASS
+# start from no gw review and no gw QA: only `verdict --phase verify` may satisfy the gate, and it must record both
+rm -f "$VD/gw__review.json" "$VD/gw__qa.json"
+expect "without a gw review and QA the gate blocks" 1 "BLOCKER gw:" gate "$G"
+expect "verify FAIL names where it failed" 2 "needs --failed-at review" verdict "$G" --task gw --phase verify --sha "$SG" --by codex --state FAIL
+expect "verify --failed-at review records the review FAIL" 0 "recorded review FAIL" verdict "$G" --task gw --phase verify --sha "$SG" --by codex --state FAIL --failed-at review
+if jq -e '.state == "FAIL"' "$VD/gw__review.json" >/dev/null && [ ! -e "$VD/gw__qa.json" ]; then pass=$((pass + 1)); echo "PASS  a review-only verify FAIL writes no QA record (QA stays NOT_RUN)"
+else fail=$((fail + 1)); echo "FAIL  a review-only verify FAIL writes no QA record (QA stays NOT_RUN)"; fi
+expect "verify records review and QA" 0 "recorded review PASS" verdict "$G" --task gw --phase verify --sha "$SG" --by codex --state PASS
+if jq -e '.state == "PASS" and .by == "codex"' "$VD/gw__review.json" >/dev/null && jq -e '.state == "PASS" and .by == "codex"' "$VD/gw__qa.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  verify wrote both the review and the QA record"
+else fail=$((fail + 1)); echo "FAIL  verify wrote both the review and the QA record"; fi
+expect "verify satisfies the gate" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "mark model down" 0 "MODEL_UNAVAILABLE: revoked" agents "$G" --down codex --reason revoked
 expect "restore model availability" 0 "codex: available" agents "$G" --up codex
 
@@ -2618,7 +2672,7 @@ gi "$C" checkout -qb feat/core/uov develop; mkdir -p "$C/Assets/U"
 echo a > "$C/Assets/U/u.cs"; gi "$C" add Assets/U; gi "$C" commit -qm "feat: uov a"; VA=$(git -C "$C" rev-parse HEAD)
 echo wip > "$C/Assets/U/wip.cs"  # the predecessor's uncommitted work in the shared path is not b's
 if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
-assert r["a"]["phase"]=="candidate" and "--task a --phase review --sha "+sys.argv[1] in r["a"]["next"], r["a"]
+assert r["a"]["phase"]=="candidate" and "--task a --phase verify --sha "+sys.argv[1] in r["a"]["next"], r["a"]
 assert r["b"]["phase"]=="pending" and r["b"]["next"] is None and any(n=="waits for a" for n in r["b"]["notes"]), r["b"]
 assert "--task b --phase review" not in json.dumps(o), o' "$VA"
 then pass=$((pass + 1)); echo "PASS  status: a dependent no-worktree task with the same path is pending before its predecessor's QA (no review at a's commit)"
@@ -2630,7 +2684,7 @@ for failed_phase in review qa; do
   echo "fix after $failed_phase FAIL" >> "$C/Assets/U/u.cs"
   gi "$C" add Assets/U; gi "$C" commit -qm "fix: uov a after $failed_phase FAIL"; VA=$(git -C "$C" rev-parse HEAD)
   if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
-assert r["a"]["phase"]=="candidate" and "--task a --phase review --sha "+sys.argv[1] in r["a"]["next"], r["a"]
+assert r["a"]["phase"]=="candidate" and "--task a --phase verify --sha "+sys.argv[1] in r["a"]["next"], r["a"]
 assert r["b"]["phase"]=="pending" and r["b"]["next"] is None and "waits for a" in r["b"]["notes"], r["b"]
 assert "--task b --phase review" not in json.dumps(o), o' "$VA"
   then pass=$((pass + 1)); echo "PASS  status: predecessor fixes after $failed_phase FAIL keep the dependent pending without a review command"
@@ -2640,7 +2694,7 @@ python3 -B "$P" verdict "$X" --task a --phase review --sha "$VA" --by codex --st
 python3 -B "$P" verdict "$X" --task a --phase qa --sha "$VA" --by codex --state PASS >/dev/null
 echo b >> "$C/Assets/U/u.cs"; gi "$C" add Assets/U; gi "$C" commit -qm "feat: uov b"; VB=$(git -C "$C" rev-parse HEAD)
 if python3 -B "$P" status --json "$X" 2>/dev/null | python3 -c 'import json,sys; o=json.load(sys.stdin); r={t["id"]:t for t in o["tasks"]}
-assert r["b"]["phase"]=="candidate" and r["b"]["sha"]==sys.argv[1] and "--task b --phase review --sha "+sys.argv[1] in r["b"]["next"], r["b"]' "$VB"
+assert r["b"]["phase"]=="candidate" and r["b"]["sha"]==sys.argv[1] and "--task b --phase verify --sha "+sys.argv[1] in r["b"]["next"], r["b"]' "$VB"
 then pass=$((pass + 1)); echo "PASS  status: after the predecessor's QA PASS, the dependent task's own commit makes it a candidate at that SHA"
 else fail=$((fail + 1)); echo "FAIL  status no-worktree dependent after QA"; python3 -B "$P" status "$X" 2>&1 | head -20; fi
 gi "$C" checkout -q feat/core/demo
@@ -2727,12 +2781,12 @@ git -C "$S" worktree add -q "$TMP/st-a" -b feat/core/st-a develop 2>/dev/null
 st_phase "task branch and worktree without commits: implementing" a implementing '^$'
 expect "implementing names the worker's worktree" 0 "implementation worker on feat/core/st-a in .*st-a" status "$ST"
 mkdir -p "$TMP/st-a/sa"; echo a > "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" add sa; gi "$TMP/st-a" commit -qm "feat: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
-st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase review --sha $SA --runner orca"
+st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase verify --sha $SA --runner orca"
 sv --task a --phase review --sha "$SA" --by codex --state FAIL
 st_phase "review FAIL: reviewed, next resumes the task lead (only it commits the fix)" a reviewed "--task a --phase lead --runner orca"
 expect "review FAIL is named with its SHA" 0 "review FAIL@${SA:0:10}" status "$ST"
 echo a2 >> "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" commit -qam "fix: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
-st_phase "a fix after the FAIL is a new candidate" a candidate "--phase review --sha $SA"
+st_phase "a fix after the FAIL is a new candidate" a candidate "--phase verify --sha $SA"
 expect "and the old review is named STALE" 0 "review at .* is STALE: owned paths changed since" status "$ST"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
@@ -2767,7 +2821,7 @@ ov_phase() {  # ov_phase <name> <phase> [<sha>]
   local out; out=$(python3 -B "$P" status --json "$TMP/st-ov.json" 2>&1)
   if python3 -c 'import json,sys; r={t["id"]:t for t in json.loads(sys.argv[1])["tasks"]}["ov"]
 assert r["phase"]==sys.argv[2], r
-assert not sys.argv[3] or (r["next"] or "").find("--phase review --sha "+sys.argv[3])>=0, r' "$out" "$2" "${3:-}"
+assert not sys.argv[3] or (r["next"] or "").find("--phase verify --sha "+sys.argv[3])>=0, r' "$out" "$2" "${3:-}"
   then pass=$((pass + 1)); echo "PASS  $1"; else fail=$((fail + 1)); echo "FAIL  $1"; head -c 1200 <<<"$out"; echo; fi
 }
 ov_phase "dependent task with a's paths, cut after a's merge, no own commits: implementing (not a candidate)" implementing
@@ -2788,7 +2842,7 @@ st_phase "a task branch cut from the integration branch, no own commits yet: imp
 mkdir -p "$TMP/st-b/sb"; echo b > "$TMP/st-b/sb/b.go"; gi "$TMP/st-b" add sb; gi "$TMP/st-b" commit -qm "feat: b"; SB=$(git -C "$S" rev-parse feat/core/st-b)
 expect_spec "wave-2 review diffs against the integration branch, not the base" "git diff feat/core/st\.\.\.$SB" dispatch "$ST" --task b --phase review --sha "$SB" --runner orca
 review_diff_lists "wave-2 review before the merge: the printed diff lists only b's files" sb/b.go
-st_phase "status still compares b against the base: candidate at its SHA" b candidate "--task b --phase review --sha $SB"
+st_phase "status still compares b against the base: candidate at its SHA" b candidate "--task b --phase verify --sha $SB"
 sv --task b --phase review --sha "$SB" --by codex --state PASS
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-b -m "merge b"; SI=$(git -C "$S" rev-parse feat/core/st)
 review_diff_lists "wave-2 re-review after the merge: the printed diff still lists only b's files (its fork point)" sb/b.go
@@ -2803,7 +2857,7 @@ gi "$C" checkout -qb feat/core/st develop
 mkdir -p "$C/Assets/C"; echo c > "$C/Assets/C/c.cs"
 st_phase "uncommitted work in the Unity task's paths: implementing" c1 implementing
 gi "$C" add Assets/C; gi "$C" commit -qm "feat: c1"; SC=$(git -C "$C" rev-parse HEAD)
-st_phase "a commit on the integration branch touching the task: candidate" c1 candidate "--task c1 --phase review --sha $SC"
+st_phase "a commit on the integration branch touching the task: candidate" c1 candidate "--task c1 --phase verify --sha $SC"
 st_phase "the next Unity task still waits" c2 pending '^$'
 sv --task c1 --phase review --sha "$SC" --by codex --state FAIL
 st_phase "Unity review FAIL: next resumes the task lead in the main checkout, not an implement worker" c1 reviewed "--task c1 --phase lead --runner orca$"
@@ -2861,7 +2915,7 @@ PY
 then pass=$((pass + 1)); echo "PASS  status --json matches docs/schemas/pipeline-status.schema.json"
 else fail=$((fail + 1)); echo "FAIL  status --json schema"; head -c 800 "$TMP/status.json"; fi
 sed -i 's/"objective":"o","paths":\["sa\/"\]/"objective":"changed","paths":["sa\/"]/' "$ST"
-st_phase "a changed task in the plan: its review is no longer counted; review the integration HEAD" a candidate "--task a --phase review --sha $SI"
+st_phase "a changed task in the plan: its review is no longer counted; review the integration HEAD" a candidate "--task a --phase verify --sha $SI"
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
 X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
@@ -3010,20 +3064,20 @@ if jq -e '.by == "claude" and .state == "PASS" and .implementer == "codex"' "$RS
 else fail=$((fail + 1)); echo "FAIL  explicit implementer keeps paired PASS intact"; fi
 rv --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
 rv --task integration:rec --phase qa --sha "$RS2" --by codex --state PASS
-expect "a claude fallback subtask is not laundered by the claude task review once codex is back" 1 "BLOCKER k: subtask s recorded implementer claude, but the task review by claude pairs against codex: record .verdict --subtask s. PASS by codex" gate "$RSP" --no-run-checks
+expect "code subtask by the verifier is accepted with a note" 0 "NOTE    k: subtask s SAME_MODEL \(single verify\)" gate "$RSP" --no-run-checks
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s
 refute "a subtask review by its implementer's pair covers that subtask" "BLOCKER k: subtask s recorded" gate "$RSP" --no-run-checks
 RPG_FACTORY_AGENTS=claude rs dispatch "$RSP" --task k --phase review --sha "$RS2" --subplan "$RSS" --subtask s2
 rv --task k --phase review --sha "$RS2" --by claude --state PASS --subtask s2
 expect "a dispatch-recorded SAME_MODEL fallback subtask review passes the gate" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
-expect "and the gate notes the subtask fallback" 0 "NOTE    k: subtask s2 SAME_MODEL \(fallback: codex unavailable\)" gate "$RSP" --no-run-checks
+refute "prose subtask by the verifier is silent" "subtask s2 SAME_MODEL" gate "$RSP" --no-run-checks
 # An ancestral PASS covers only unchanged reviewed paths; old records conservatively cover the whole task.
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s --subplan "$RSS"
 rv --task k --phase review --sha "$RS2" --by codex --state PASS --subtask s2 --subplan "$RSS"
 echo c > "$R/code/a.cs"; gi "$R" commit -qam "fix: later subtask edit"; RS3=$(git -C "$R" rev-parse HEAD)
 rv --task k --phase review --sha "$RS3" --by claude --state PASS --implementer codex
 rv --task integration:rec --phase qa --sha "$RS3" --by codex --state PASS
-expect "a stale subtask PASS cannot cover the task reviewer's later edit: NOT_READY" 1 "BLOCKER k: subtask s .*changed paths code/a.cs; needs codex review" gate "$RSP" --no-run-checks
+expect "single verify covers the later subtask edit" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
 rv --task k --phase review --sha "$RS3" --by codex --state PASS --subtask s --subplan "$RSS"
 expect "a fresh paired subtask review covers the later edit" 0 "^Gate: READY_FOR_PR" gate "$RSP" --no-run-checks
 echo c > "$R/docs/a.md"; gi "$R" commit -qam "docs: outside code subtask"; RS4=$(git -C "$R" rev-parse HEAD)
@@ -3055,7 +3109,7 @@ rm -f "$RSVD/k@s__review__"*"__codex.json"
 jq '.subtasks[0] += {implementer: "claude", reviewer: "codex"}' "$RSS" > "$TMP/sub-own-reviewer.json"
 expect "retrospective subtask fallback accepts a subplan with its own reviewer" 0 "recorded review PASS" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --fallback 'codex unavailable' --note '401 outage' --subplan "$TMP/sub-own-reviewer.json"
 expect "verdict rejects undocumented reviewer alias" 2 "unrecognized arguments: --reviewer" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --reviewer claude --state PASS
-expect "gate displays accepted retrospective subtask fallback and note" 0 "NOTE    k: subtask s SAME_MODEL .fallback: codex unavailable.; note: 401 outage" gate "$RSP" --no-run-checks
+expect "gate displays single verify note for code" 0 "NOTE    k: subtask s SAME_MODEL \(single verify\)" gate "$RSP" --no-run-checks
 if jq -e '.fallback == "codex unavailable" and .note == "401 outage"' "$RSVD/k@s__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  retrospective fallback stores reason and note"
 else fail=$((fail + 1)); echo "FAIL  retrospective fallback stores reason and note"; fi
 expect "retrospective task fallback requires --subtask" 2 "requires --subtask" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer claude --fallback 'codex unavailable' --note 'past outage'

@@ -27,11 +27,12 @@ Architecture and layout: `docs/architecture/overview.md`. Release procedure: `do
 - Every behaviour change gets a test in `tests/` and a fragment `changelog.d/<topic>.md` (`### Added|Changed|Fixed|...`;
   `changelog.d/README.md`). Never edit `CHANGELOG.md` `[Unreleased]`: it stays empty (run-all checks it).
 - QA: while iterating and in task QA run the tier command (`tests/run-all.sh --affected --base <base> -j 2`, or
-  `--only-suites`); a task never runs the full suite, and in a slow suite an implementer runs only the touched cases
-  (`--case`, `tests/affected.py cases`). CI is the full-suite gate (`--no-workspace --no-claude` only): before a PR,
-  integration QA runs `tests/run-all.sh --workspace-only` with 0 failed; CI (`gh pr checks <pr> --watch`) must be green
-  before merging, and while it runs start the next task. Full `--release` and `tests/dogfood.sh --installed` run only
-  for releases. Report the pass count. Tiers: `delivery.md` section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
+  `--only-suites`); a task never runs the full suite. Implementers run no suites (syntax check only); one verify
+  session per task runs review, then the tier command once (`--case` in a slow suite, `tests/affected.py cases`).
+  CI is the full-suite gate (`--no-workspace --no-claude` only): before a PR, integration QA runs
+  `tests/run-all.sh --workspace-only` with 0 failed; CI (`gh pr checks <pr> --watch`) must be green before merging,
+  and while it runs start the next task. Full `--release` and `tests/dogfood.sh --installed` run only for releases.
+  Report the pass count. Tiers: `delivery.md` section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - Skills follow `skills/factory-core/references/skill-contract.md` (`tests/skills-lint.sh` enforces the mechanical
   part). Routing changes need a scenario in `tests/routing.test.sh`. New skills start from `scripts/new-skill.py` and
