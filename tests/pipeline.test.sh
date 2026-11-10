@@ -1504,6 +1504,7 @@ expect "Unity task lead rule 8: the main checkout is never removed" 0 "^8\. Neve
 expect "task lead: rule 7 is the lead's subagent rule" 0 "^7\. Subagents: read-only scouts only, at most 2 in parallel, only when the task needs a broad search across the worktree.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\.$" dispatch "$OK" --task gw --phase lead
 expect "task lead: the push rule is now rule 8, after the subagent rule" 0 "^8\. Never push, tag, merge into the integration branch" dispatch "$OK" --task gw --phase lead
 expect_spec "task lead (orca handoff spec): rule 7 is the subagent rule" "^7\. Subagents: read-only scouts only, at most 2 in parallel" dispatch "$OK" --task gw --phase lead --runner orca
+expect_spec "task lead retains delivery reference" "Task lead for task .*references/delivery\.md" dispatch "$OK" --task gw --phase lead --runner orca
 expect "task lead --runner agent runs claude: the claude subagent clause" 0 "7\. Subagents: read-only scouts only, at most 2 in parallel.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)" dispatch "$OK" --task gw --phase lead --runner agent
 expect "Unity task lead: rule 7 is the subagent rule" 0 "^7\. Subagents: read-only scouts only, at most 2 in parallel" dispatch "$OK" --task c1 --phase lead
 refute "Unity task lead prompt has no double period after the reason" "\.\. " dispatch "$OK" --task c1 --phase lead
@@ -1580,6 +1581,21 @@ expect_spec "review (orca spec): the review rule" "^Subagents: read-only scouts 
 expect "task QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself and grades the evidence\)\.$" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "task QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner agent
 expect_spec "task QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
+SPEC_RULE='Your spec is complete: read skills/delivery/references/delivery\.md only when blocked by something the spec does not cover\.'
+for phase in 'implement' 'implement --placement child' 'review --sha abc1234' 'qa --sha abc1234'; do
+  expect_spec "$phase: spec is complete" "$SPEC_RULE" dispatch "$OK" --task gw --phase $phase --runner orca
+  pp_spec dispatch "$OK" --task gw --phase $phase --runner orca
+  if [ "$RC" = 0 ] && [ "$SRC" = 0 ] && ! grep -vF 'Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something the spec does not cover.' <<<"$SPEC" | grep -q 'delivery\.md'; then
+    pass=$((pass + 1)); echo "PASS  $phase: no other delivery reference"
+  else fail=$((fail + 1)); echo "FAIL  $phase: another delivery reference or missing spec"; fi
+done
+refute_spec "non-plugin review does not name plugin checklist" 'plugin-review\.md' dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
+expect_spec "non-plugin review retains routed checklist" "the routed lead skill's review checklist" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
+PLUGIN=$(plan plugin-prompt "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
+expect_spec "plugin key review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$PLUGIN" --task t --phase review --sha abc1234 --runner orca
+mkdir -p "$T/.claude-plugin"; printf '{}\n' > "$T/.claude-plugin/plugin.json"
+expect_spec "plugin manifest review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$TOOL" --task t --phase review --sha abc1234 --runner orca
+rm "$T/.claude-plugin/plugin.json"; rmdir "$T/.claude-plugin"
 expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
 refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
@@ -1963,6 +1979,7 @@ expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "Y
 expect "integration QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner agent
 expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA: spec is complete" "$SPEC_RULE" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task integration:client --phase qa --sha abc1234
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
