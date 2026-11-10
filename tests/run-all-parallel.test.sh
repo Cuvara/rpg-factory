@@ -101,6 +101,24 @@ done
 grep -q '^\[ "\${BASH_SOURCE\[0\]}" != "\$0" \] && return 0' "$ROOT/tests/run-all.sh" \
   && good "sourcing run-all.sh stops after the scheduler" || no "run-all.sh has no source guard after the scheduler"
 
+# a case subset keeps its SLOW slot at -j > 1: of two queued suites the SLOW one starts first although it was queued last
+cat > "$TMP/subset-slow.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 2
+SLOW="tests/zz-subset.sh"
+CASE_SUITES=("tests/zz-subset.sh"); CASE_LISTS=("alpha")
+export X
+run first bash -c 'echo first >> "$X/start"; sleep 3' tests/zz-first.sh
+run mid bash -c 'echo mid >> "$X/start"; sleep 0.5' tests/zz-mid.sh
+run tail bash -c 'echo tail >> "$X/start"' tests/zz-tail.sh
+run subset bash -c 'echo subset >> "$X/start"; echo "args $*" >> "$X/start"' tests/zz-subset.sh
+drain
+PLAN
+X="$TMP/subset-slow"; rm -rf "$X"; mkdir -p "$X"
+out=$(X="$X" ROOT_UNDER_TEST="$ROOT" timeout 90 bash "$TMP/subset-slow.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(grep -vc '^args' "$X/start" | tr -d ' ')" = 4 ] && [ "$(grep -v '^args' "$X/start" | tr '\n' ' ')" = 'first mid subset tail ' ] \
+  && grep -q '^PASS  subset (cases alpha)' <<<"$out" && grep -qx 'args --case alpha' "$X/start" \
+  && good "a case subset keeps its SLOW start slot at -j 2" || no "subset SLOW slot (rc=$rc): $(tr '\n' ' ' < "$X/start")" "$out"
+
 cat > "$TMP/dead.sh" <<'PLAN'
 . "$ROOT_UNDER_TEST/tests/run-all.sh" -j 3
 die() { echo 'buffered before death'; kill -9 "$BASHPID"; }
@@ -148,7 +166,12 @@ config_case 'core key inserted before new section' FAIL
 mkdir -p "$TMP/repo/scripts/lib" "$TMP/repo/scripts/checks" "$TMP/repo/tests" "$TMP/repo/testlab" "$TMP/state"
 cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
 printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
-printf '#!/usr/bin/env bash\nprintf "b\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/b.sh"
+cat > "$TMP/repo/tests/b.sh" <<'SUITE'
+#!/usr/bin/env bash
+printf 'b\n' >> "$RUN_LOG"
+[ -z "${CASE_LOG:-}" ] || printf '%s\n' "$*" >> "$CASE_LOG"
+[ "${BREAK_CASE:-0}" = 0 ]
+SUITE
 printf '#!/usr/bin/env bash\nprintf "never\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/never.sh"
 printf '#!/usr/bin/env bash\nprintf "live\\n" >> "$RUN_LOG"\n' > "$TMP/repo/tests/live.sh"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$RUN_LOG"\n' > "$TMP/repo/scripts/checks/x.sh"
@@ -160,6 +183,8 @@ echo "${PARTIAL_LINE:-SKIP  tool not on PATH}"
 for s in blockrun ws orphan; do printf '#!/usr/bin/env bash\nprintf "%s\\n" >> "$RUN_LOG"\n' "$s" > "$TMP/repo/tests/$s.sh"; done
 cat > "$TMP/hashes.py" <<'PY'
 import os, sys
+if os.environ.get('AFF_CALLS') and sys.argv[1] in ('select', 'select-many', 'cases'):
+    with open(os.environ['AFF_CALLS'], 'ab') as fh: fh.write((sys.argv[1] + '\n').encode())   # LF on Windows too
 if sys.argv[1] == 'hashes':
     for suite in sys.argv[2:]:
         print(suite, '-' if suite.endswith('never.sh') else os.environ.get('INPUT_HASH', 'a'*64))
@@ -169,8 +194,11 @@ elif sys.argv[1] == 'changed':
 elif sys.argv[1] == 'select': sys.exit(0 if sys.argv[3] in os.environ.get('SELECT', 'tests/b.sh').split(',') else 1)
 elif sys.argv[1] == 'select-many':
     print('\n'.join(s for s in sys.argv[3:] if s in os.environ.get('SELECT', 'tests/b.sh').split(',')))
-if os.environ.get('AFF_CALLS') and sys.argv[1] in ('select', 'select-many'):
-    with open(os.environ['AFF_CALLS'], 'ab') as fh: fh.write((sys.argv[1] + '\n').encode())   # LF on Windows too
+elif sys.argv[1] == 'cases':
+    if os.environ.get('CASES_FAIL'): sys.exit(1)
+    for suite in sys.argv[3:]:   # like affected.py: one line per selected suite only
+        if suite in os.environ.get('SELECT', 'tests/b.sh').split(','):
+            print(suite, os.environ.get('CASE_SELECT', 'ALL') if suite == 'tests/b.sh' else 'ALL')
 PY
 cat > "$TMP/cache-plan.sh" <<'PLAN'
 fixture=$1; shift
@@ -179,7 +207,13 @@ ROOT=$fixture; cd "$ROOT" || exit 1
 runall_prepare; rc=$?
 [ "$rc" = 10 ] && exit 0
 [ "$rc" = 0 ] || exit "$rc"
-[ -z "${HOLD_MARK:-}" ] || { touch "$HOLD_MARK"; while [ ! -f "$HOLD_MARK.release" ]; do sleep 0.1; done; }
+[ -z "${HOLD_MARK:-}" ] || {
+  touch "$HOLD_MARK"; hold_until=$((SECONDS + 240))
+  while [ ! -f "$HOLD_MARK.release" ]; do
+    [ "$SECONDS" -lt "$hold_until" ] || { echo 'fixture hold timed out'; exit 1; }
+    sleep 0.1
+  done
+}
 if ! $workspace_only; then
 run a bash tests/a.sh
 run b bash tests/b.sh
@@ -216,6 +250,7 @@ git -C "$TMP/repo" init -q
 git -C "$TMP/repo" add .
 git -C "$TMP/repo" -c user.name=test -c user.email=test@test commit -qm fixture
 export ROOT_UNDER_TEST="$ROOT" RPG_FACTORY_STATE_DIR="$TMP/state" RUNALL_AFFECTED_PY="$TMP/hashes.py" RUN_LOG="$TMP/log"
+export RPG_FACTORY_TEST_SLOTS=2   # fixtures have their own persistent state and deterministic cap
 export RUNALL_SUITES_FROM="$TMP/cache-plan.sh"   # --only-suites accepts the stand-in plan's run lines
 cache_plan() { bash "$TMP/cache-plan.sh" "$TMP/repo" "$@"; }
 reset_cache() { rm -rf "$TMP/state/run-all"; : > "$RUN_LOG"; }
@@ -314,6 +349,32 @@ reset_cache
 out=$(cache_plan --affected --only-suites tests/a.sh); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$RUN_LOG")" = 'a b ' ] \
   && good '--affected and --only-suites form a deduplicated union' || no 'affected union' "$out"
+# A subset is shown in results and passed as one comma-separated argument, in serial and parallel runs. It must
+# never poison full-suite reuse, but a previously verified full suite can satisfy the same subset request.
+for j in 1 3; do
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" CASE_SELECT=alpha,beta cache_plan --affected -j "$j"); rc=$?
+  published=$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')
+  [ "$rc" = 0 ] && [ "$(cat "$TMP/case-args")" = '--case alpha,beta' ] \
+    && grep -q '^PASS  b (cases alpha,beta)' <<<"$out" && [ "$published" = 0 ] \
+    && good "case subset is passed and named, never published as full suite PASS (-j $j)" || no "case subset (-j $j)" "$out"
+  out=$(CASE_SELECT=alpha,beta BREAK_CASE=1 cache_plan --affected -j "$j"); rc=$?
+  [ "$rc" = 1 ] && grep -q '^FAIL  b (cases alpha,beta)' <<<"$out" \
+    && good "failed subset names its cases (-j $j)" || no "failed case subset (-j $j)" "$out"
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" CASE_SELECT=alpha,beta cache_plan --affected --only-suites tests/b.sh -j "$j"); rc=$?
+  [ "$rc" = 0 ] && [ "$(wc -l < "$TMP/case-args")" -eq 1 ] && [ -z "$(cat "$TMP/case-args")" ] \
+    && ! grep -q '(cases ' <<<"$out" && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l)" -eq 1 ] \
+    && good "explicit --only-suites overrides subset, publishes full suite PASS (-j $j)" || no "explicit case override (-j $j)" "$out"
+  out=$(CASE_SELECT=alpha,beta cache_plan --affected -j "$j"); rc=$?
+  [ "$rc" = 0 ] && grep -q 'reused tests/b.sh inputs ' <<<"$out" && [ "$(wc -l < "$RUN_LOG")" -eq 1 ] \
+    && good "full-suite PASS can satisfy a case subset (-j $j)" || no "subset reuses full suite (-j $j)" "$out"
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" CASE_SELECT=ALL cache_plan --affected -j "$j"); rc=$?
+  [ "$rc" = 0 ] && [ -z "$(cat "$TMP/case-args")" ] && ! grep -q '(cases ' <<<"$out" \
+    && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l)" -eq 1 ] \
+    && good "case map ALL runs and records the full suite (-j $j)" || no "case map ALL (-j $j)" "$out"
+done
 reset_cache
 cache_plan --only-suites tests/a.sh >/dev/null
 out=$(cache_plan --only-suites tests/a.sh -j 3); rc=$?
@@ -476,6 +537,78 @@ for kind in pid nopid; do
   [ -f "$L.raced" ] && grep -q 'prepare rc=3' <<<"$out" && ! grep -q 'taking over stale full-run lock' <<<"$out"     && [ -d "$L" ] && [ ! -e "$L/reclaim" ]     && good "takeover race ($kind): the new holder's fresh lock is kept, this run waits" || no "takeover race ($kind)" "$out"
 done
 rm -rf "$L" "$L.raced"
+# Targeted runs share two machine-wide slots by default. Two held runs can start together; the third queues
+# exactly once and cannot run a suite until a holder releases its slot. All holds are bounded by the fixture.
+slot_wait_for() { # file [pattern]: wait for an observable checkpoint, not a fixed timing assumption
+  local i
+  for ((i=0; i<300; i++)); do
+    if [ -n "${2:-}" ]; then grep -q "$2" "$1" 2>/dev/null && return 0
+    else [ -f "$1" ] && return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+SL="$TMP/state/locks/run-all-slots"
+reset_cache
+HOLD_MARK="$TMP/slot-held-1" cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/slot-holder-1.out" 2>&1 & sh1=$!
+slot_wait_for "$SL/1/checkout" repo
+HOLD_MARK="$TMP/slot-held-2" cache_plan --affected --no-reuse > "$TMP/slot-holder-2.out" 2>&1 & sh2=$!
+slot_wait_for "$SL/2/checkout" repo
+slot_wait_for "$TMP/slot-held-1"; slot_wait_for "$TMP/slot-held-2"
+[ -d "$SL/1" ] && [ -d "$SL/2" ] && [ -f "$TMP/slot-held-1" ] && [ -f "$TMP/slot-held-2" ] \
+  && good 'default cap admits two targeted runs concurrently' || no 'default test slot cap' "$(cat "$TMP/slot-holder-1.out" "$TMP/slot-holder-2.out")"
+spid=$(cat "$SL/1/pid" 2>/dev/null)
+if [ -r "/proc/$spid/winpid" ]; then
+  [ "$(cat "$SL/1/winpid" 2>/dev/null)" = "$(cat "/proc/$spid/winpid")" ] \
+    && good 'targeted slot records the holder Windows PID' || no 'slot winpid metadata'
+else
+  [ -n "$spid" ] && [ ! -e "$SL/1/winpid" ] && good 'targeted slot records shell PID without a Windows runtime' || no 'slot pid metadata'
+fi
+out=$(cache_plan --only-suites tests/a.sh --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && grep -q 'run-all: waiting for a test slot (2 in use:' <<<"$out" && [ ! -s "$RUN_LOG" ] \
+  && good '--no-wait exits 3 when all targeted test slots are busy, before checks' || no 'targeted no-wait' "$out"
+cache_plan --only-suites tests/a.sh --no-reuse > "$TMP/slot-waiter.out" 2>&1 & sw=$!
+slot_wait_for "$TMP/slot-waiter.out" 'waiting for a test slot'
+kill -0 "$sw" 2>/dev/null && [ ! -s "$RUN_LOG" ] && grep -q "$spid in " "$TMP/slot-waiter.out" \
+  && good 'third targeted run queues and names its holders and checkouts' || no 'targeted wait message' "$(cat "$TMP/slot-waiter.out")"
+touch "$TMP/slot-held-1.release"; wait "$sh1"; sr1=$?; wait "$sw"; srw=$?
+touch "$TMP/slot-held-2.release"; wait "$sh2"; sr2=$?
+[ "$sr1 $sr2 $srw" = '0 0 0' ] && [ "$(grep -c 'waiting for a test slot' "$TMP/slot-waiter.out")" -eq 1 ] \
+  && [ "$(sort "$RUN_LOG" | tr '\n' ' ')" = 'a a b ' ] && [ -z "$(ls -A "$SL")" ] \
+  && good 'waiting targeted run continues after release, announces once, all slots released' || no 'targeted slot handoff' "$(cat "$TMP/slot-waiter.out")"
+# An environment cap of one blocks even with the default second slot free; zero disables slot admission entirely.
+mkdir -p "$SL/1"; printf '%s\n' "$$" > "$SL/1/pid"; printf 'another checkout\n' > "$SL/1/checkout"
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && grep -q '(1 in use:' <<<"$out" && [ ! -d "$SL/2" ] \
+  && good 'RPG_FACTORY_TEST_SLOTS=1 enforces a single machine-wide slot' || no 'environment slot cap' "$out"
+out=$(RPG_FACTORY_TEST_SLOTS=0 cache_plan --affected --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && ! grep -q 'waiting for a test slot' <<<"$out" && [ "$(cat "$SL/1/pid")" = "$$" ] \
+  && good 'RPG_FACTORY_TEST_SLOTS=0 disables admission without touching other holders' || no 'disabled slots' "$out"
+rm -rf "$SL/1"
+out=$(RPG_FACTORY_TEST_SLOTS=bad cache_plan --affected --no-reuse 2>&1); rc=$?
+[ "$rc" = 2 ] && grep -q 'RPG_FACTORY_TEST_SLOTS needs a non-negative integer' <<<"$out" \
+  && good 'invalid slot cap exits 2 before checks' || no 'invalid slot cap' "$out"
+mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && grep -q 'taking over stale test slot 1 (99999999)' <<<"$out" && [ ! -d "$SL/1" ] \
+  && good 'dead targeted slot is reclaimed under guard and released' || no 'stale test slot' "$out"
+mkdir -p "$SL/1/reclaim"; printf '99999999\n' > "$SL/1/pid"; printf '99999998\n' > "$SL/1/reclaim/pid"
+out=$(RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
+[ "$rc" = 0 ] && grep -q 'removing stale reclaim guard of test slot 1' <<<"$out" && [ ! -d "$SL/1" ] \
+  && good 'dead reclaim guard cannot wedge targeted slots' || no 'stale slot reclaim guard' "$out"
+mkdir -p "$SL/1"; printf '99999999\n' > "$SL/1/pid"; printf '4242\n' > "$SL/1/winpid"
+out=$(PATH="$WINBIN:$PATH" LIVE_WINPID=4242 RPG_FACTORY_TEST_SLOTS=1 cache_plan --affected --no-reuse --no-wait); rc=$?
+[ "$rc" = 3 ] && ! grep -q 'taking over stale test slot' <<<"$out" && [ -d "$SL/1" ] \
+  && good 'live Windows PID prevents targeted slot takeover across runtimes' || no 'live slot winpid' "$out"
+rm -rf "$SL/1"
+out=$(BREAK_SUITE=1 cache_plan --only-suites tests/a.sh --no-reuse); rc=$?
+[ "$rc" = 1 ] && [ -z "$(ls -A "$SL")" ] && good 'targeted slot released after a failing suite' || no 'slot release on failure' "$out"
+# Signals must release the acquired slot too. Start bash directly to capture the sourced-runner process PID.
+HOLD_MARK="$TMP/slot-signal" bash "$TMP/cache-plan.sh" "$TMP/repo" --only-suites tests/a.sh --no-reuse > "$TMP/slot-signal.out" 2>&1 & ss=$!
+slot_wait_for "$TMP/slot-signal"
+kill -TERM "$ss"; wait "$ss"; rc=$?
+[ "$rc" = 143 ] && [ -z "$(ls -A "$SL")" ] \
+  && good 'targeted slot released on TERM' || no "slot release on TERM ($rc)" "$(cat "$TMP/slot-signal.out")"
 # With --affected / --only-suites, a live-lane suite and gated script checks (in a block or inline) run only when
 # listed or affected and count as not affected otherwise, with the same counts at -j 1 and -j 3; a full run runs them.
 live_case() { # name want-log want-counts args...
@@ -493,14 +626,20 @@ live_case '--only-suites listing them runs them' 'a block inline live ' '5 0 1' 
 SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh live_case '--affected selecting them runs them' 'b block inline live ' '5 0 1' --affected
 live_case '--affected not selecting them skips them' 'b ' '2 0 4' --affected
 live_case 'a full run runs them' 'a b block inline live ' '6 0 0'
-# --affected asks affected.py once per run (select-many builds the import graph once), at -j 1 and -j 3 alike
+# --affected asks affected.py once (`cases`: the selected suites and their cases), at -j 1 and -j 3 alike
 for j in 1 3; do
   reset_cache; : > "$TMP/aff-calls"
   out=$(AFF_CALLS="$TMP/aff-calls" SELECT=tests/b.sh,tests/live.sh,scripts/checks/x.sh WITH_LIVE=1 cache_plan --no-reuse -j "$j" --affected); rc=$?
   calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
-  [ "$rc" = 0 ] && [ "$calls" = 'select-many ' ] && [ "$log" = 'b block inline live ' ] && grep -qx 'counts 5 0 1' <<<"$out" \
-    && good "--affected calls affected.py select-many once (-j $j)" || no "--affected affected.py calls (-j $j): '$calls' log '$log'" "$out"
+  [ "$rc" = 0 ] && [ "$calls" = 'cases ' ] && [ "$log" = 'b block inline live ' ] && grep -qx 'counts 5 0 1' <<<"$out" \
+    && good "--affected calls affected.py once, with cases (-j $j)" || no "--affected affected.py calls (-j $j): '$calls' log '$log'" "$out"
 done
+# a failed `cases` call falls back to asking affected.py per suite (select), and the selection stays the same
+reset_cache; : > "$TMP/aff-calls"
+out=$(AFF_CALLS="$TMP/aff-calls" CASES_FAIL=1 cache_plan --no-reuse --affected); rc=$?
+calls=$(tr '\n' ' ' < "$TMP/aff-calls"); log=$(sort "$RUN_LOG" | tr '\n' ' ')
+[ "$rc" = 0 ] && [[ "$calls" == 'cases select '* ]] && [ "$log" = 'b ' ] \
+  && good "--affected falls back to per-suite select when the cases call fails" || no "--affected cases fallback: '$calls' log '$log'" "$out"
 # Workspace readers are never reused or published: a run line inside a block, a runl suite and a run line given
 # RPG_FACTORY_WORKSPACE run again on the second run (even over a planted PASS record), while the fixture suite a is reused.
 ws_suites=tests/a.sh,tests/live.sh,tests/blockrun.sh,tests/ws.sh
