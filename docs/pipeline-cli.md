@@ -36,13 +36,12 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   handoff. A new task worktree: `git worktree add --no-track -b <branch> <path> <base>` (beside the checkout that has
   the plan `topic` checked out, else beside the repo checkout), the `orca worktree set` lineage line of delivery.md
   section 4 "Orca visibility", then `orca agent launch --worktree path:<path>`. An existing task worktree, or the main
-  checkout of a no-worktree repo, gets only the launch (never a worktree create or a new top-level worker there).
-  Orca allows one worker level (maximum depth 1), so the task lead then creates its own Run
-  (`orca orchestration run-create --objective <text>`), starts its sessions as workers of that Run
+  checkout of a no-worktree repo, gets only the launch (never a worktree create or a new top-level worker there);
+  `--placement shared|child` gives the same result. Orca allows one worker level (maximum depth 1), so the task lead
+  then creates its own Run (`orca orchestration run-create --objective <text>`), starts its sessions as workers of that Run
   (`orca orchestration worker-start --worktree path:<task worktree>`, depth 1) and reports to the run lead with
   `orca orchestration send --to run:<run lead run id> --type status --subject <text> --body <report>`.
-  `--placement shared|child` gives the same result. A
-  first-wave task branches from `repos.<key>.base`; a later-wave task (one with deps) from the plan's `topic`
+  A first-wave task branches from `repos.<key>.base`; a later-wave task (one with deps) from the plan's `topic`
   integration branch when it exists, because that branch carries the earlier waves. `repos.<key>.base` stays the
   comparison base of `status` and the gate: never point it at the topic (then `base..head` counts nothing and
   integrated tasks show as pending).
@@ -121,8 +120,8 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase revi
   with "No active Dispatch belongs to this message sender". A task lead is not a worker of the run lead, so it
   reports with `--type status` (or asks with `--type question`).
 - `orca orchestration check --wait --types <types>` still returns heartbeats: a wait loop acks each batch and keeps
-  waiting until a message of the wanted type arrives. The run lead's single waiter is
-  `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (one instance per Run, by a lock file in the state dir).
+  waiting until a message of the wanted type arrives. The run lead's single waiter is `orca-wait.sh` (delivery.md
+  section 5; one instance per Run, by a lock file in the state dir).
 - A multi-line `--prompt` passed through `cmd.exe` (Windows) is cut at the first newline. Write the spec to a file
   and send a one-line prompt that names it (`dispatch` does this).
 - After every worker start or launch with `--agent codex`, read the session's terminal

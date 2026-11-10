@@ -26,8 +26,8 @@ dispatched session follows its spec and never merges or pushes. Policy: [referen
 Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; outside an RPG workspace run
 `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py --registry none <verb>` (the option also works after the verb).
 
-Each step is stated once, in [references/delivery.md](references/delivery.md) section 10 (flags, models, review pairing,
-QA tiers and fallbacks are there, nowhere else):
+Each step is stated once, in [references/delivery.md](references/delivery.md) section 10 (policy there; command forms
+and flags: `${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`):
 
 1. **Tier** - step 1: `tier` prints S, M or L; every tier gets a `plan.json` and a task lead.
 2. **Plan** - step 2: write `plan.json` (`${CLAUDE_PLUGIN_ROOT}/docs/schemas/pipeline-plan.schema.json`), `validate` it.
@@ -57,6 +57,7 @@ Without Orca, dispatch prints Agent-tool commands for the same flow.
 ## References - read when
 
 - [references/delivery.md](references/delivery.md) - before delegating, dispatching workers or integrating their branches (the only copy of the policy).
+- `${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md` - command forms and flags of `factory-pipeline.py`: dispatch, verdict, fallback reviews, gate, Orca message traps.
 - `${CLAUDE_SKILL_DIR}/pipeline-defaults.json` - the agents, review pairing, routing and QA tiers used without a registry.
 
 All paths above are relative to `${CLAUDE_SKILL_DIR}`.

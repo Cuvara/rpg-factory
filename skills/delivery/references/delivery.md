@@ -21,7 +21,7 @@ Prefer many short, focused parallel sessions over one long session; every spec s
 7. reviews every task's result and re-verifies the key checks itself;
 8. decides when a contribution is ready and integrates it (section 7), then runs integration QA (section 6);
 9. writes the final report with the parallel-work ledger and cleans up (section 8).
-It does not start a task's sub-sessions; task files: the policy below.
+It does not start a task's sub-sessions or edit task files (policy below).
 
 <!-- policy:run-lead-never-implements -->
 The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.
@@ -87,7 +87,7 @@ HEAD SHA, each subtask with its commit, and the review and QA verdicts (state, S
   worktree a task lead's dispatch is an error.
 - Never edit another task's worktree. One mutating command per worktree at a time: parallel sub-sessions edit
   disjoint files and run no git write.
-- **No-worktree repos** (section 10; a root file in `no_worktree_markers` also marks one): the task lead runs on the
+- **No-worktree repos** (section 10; a root file in `no_worktree_markers`, of the pipeline settings or the plan's own, also marks one): the task lead runs on the
   plan `topic` branch; subtasks, review and QA run there one at a time, tasks in turn after each QA verdict.
 - **Shared exclusive resources** (pipeline settings `exclusive_resources`: an editor or test runner, a container
   stack, a test lab, fixed ports) go to one task at a time; a task without one reports the check `NOT_RUN` with the
@@ -119,7 +119,7 @@ not a child):
 - **Run lead.** `dispatch --phase lead` creates, registers and launches the task worktree as in "Orca visibility".
   Integration QA (`--placement child`) or a quick fix may run in a child of the integration checkout.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child` + `reason`); `dispatch --subtask`
-  prints the matching `--worktree` (`docs/pipeline-cli.md`, "dispatch").
+  prints the matching `--worktree` (`${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`, "dispatch"; later mentions mean this file).
 - A child session commits on its own child branch (`<task branch>--<subtask or phase>`) with explicit paths. Review
   and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`, so they never collide.
 
@@ -389,8 +389,7 @@ The table lists the commands for a repo that has `tests/run-all.sh` (this plugin
   and the task check suites in `--only-suites`.
 - **Plans.** A task's `checks` name its own suites or the affected-suites command, never a full run, and
   its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
-- The run-all lock, suite reuse and selection rules of this plugin repo's runner are in factory-core
-  `references/parallel-work.md` ("QA tiers of this repo").
+- The run-all lock, suite reuse and selection rules of this plugin repo's runner are in `tests/README.md`.
 
 This policy introduces no tripwire, no latch and no new confirmation step.
 
