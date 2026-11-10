@@ -443,7 +443,7 @@
       "codex"
     ],
     "models": {
-      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice').",
+      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: skills/delivery/references/delivery.md section 10 'Model choice').",
       "scope": {
         "claude": {
           "claude-opus-5-5": [
