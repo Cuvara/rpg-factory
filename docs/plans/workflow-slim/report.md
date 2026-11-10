@@ -79,3 +79,12 @@ Task leads: Claude Opus 5.5 medium.
 Task worktrees and branches of eight tasks removed after integration; final-pointers removed at merge. Every task
 lead's workers released. Follow-ups: `docs/plans/backlog.md` topics workflow-slim-followups,
 run-lead-waiter-reaped and plan-edit-commit-guard.
+
+## Gate
+
+`factory-pipeline.py gate` at e6153ea: NOT_READY, two blockers, merged on the user's explicit request with CI as the gate:
+
+- "changes outside every task's owned paths": `changelog.d/qa-lean.md` and `tests/affected.test.sh` came in with
+  main (PR #93) through main-sync; `docs/plans/backlog.md` is the run lead's learning-loop edit. The gate does not
+  credit files of a merged default branch or the backlog (backlog topic workflow-slim-followups).
+- "integration:plugin: no qa verdict": no separate integration QA session ran (see Checks).

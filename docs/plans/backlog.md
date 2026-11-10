@@ -160,6 +160,9 @@ Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md
 - `orca terminal close --terminal <handle>` of a finished task lead returned `runtime_error`; `orca worktree rm`
   then deleted the branch a few seconds later (asynchronously), so `git branch -d` right after it failed with
   "used by worktree". Cleanup should wait for the worktree record to go before deleting the branch.
+- `gate` reports files that came in with a merge of the default branch (`changelog.d/qa-lean.md`,
+  `tests/affected.test.sh` through main-sync) and the run lead's `docs/plans/backlog.md` edit as "changes outside
+  every task's owned paths"; credit both, like the plan file and the run report.
 
 ### run-lead-waiter-reaped
 
