@@ -17,9 +17,9 @@ repos, the `unity-test` resource, registry repos) and calls this skill for the g
 ## Roles
 
 Two levels. The main session is the **run lead**: it plans, dispatches, integrates, runs integration QA, gates and
-reports, and never edits task files. One **task lead** per task works in that task's worktree: it writes the subplan,
-starts one short, fresh sub-session per subtask, has the result verified once (review, then tests), and commits or merges. A
-dispatched session follows its spec and never merges or pushes. Policy: [references/delivery.md](references/delivery.md) section 1.
+reports, and never edits task files (except in a tier XS task). One **task lead** per task (none in tier XS) works in
+that task's worktree: it writes the subplan, starts one short, fresh sub-session per subtask, has the result verified
+once (review, then tests), and commits or merges. A dispatched session follows its spec and never merges or pushes. Policy: [references/delivery.md](references/delivery.md) section 1.
 
 ## Flow
 
@@ -29,7 +29,7 @@ Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py 
 Each step is stated once, in [references/delivery.md](references/delivery.md) section 10 (policy there; command forms
 and flags: `${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`):
 
-1. **Tier** - step 1: `tier` prints S, M or L; every tier gets a `plan.json` and a task lead.
+1. **Tier** - step 1: `tier` prints XS, S, M or L; every tier gets a `plan.json`, and a task lead except tier XS (the run lead does it).
 2. **Plan** - step 2: write `plan.json` (`${CLAUDE_PLUGIN_ROOT}/docs/schemas/pipeline-plan.schema.json`), `validate` it.
 3. **Task lead, subplan, implement** - step 3: `dispatch --phase lead`, then the task lead's `subplan` and `--phase implement`.
 4. **Verify** - step 4: one `dispatch --phase verify` session per candidate, then `verdict --phase verify`.
