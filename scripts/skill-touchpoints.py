@@ -7,7 +7,7 @@ Checks what a new or renamed skill must update besides its own SKILL.md and regi
 side is check-registry.sh, the SKILL.md side skills-lint.sh):
   - factory-core SKILL.md "Skills" section (a table row for a lead, the tech list for a tech skill)
   - skill-contract.md layering diagram; README architecture diagram and the skill map / tech table
-  - .claude/CLAUDE.md "Skills:" paragraph and its counts; plugin.json / marketplace.json lead count
+  - docs/architecture/overview.md "Skills:" paragraph and its counts; plugin.json / marketplace.json lead count
   - a routing scenario in tests/routing.test.sh (`$(lead <s>)` or `$(tech <s>)`)
   - a dogfood scenario expecting it (tests/dogfood.sh EXPECT) and an eval grader evals/*/graders/<s>-fired.md
   - tech skills: every used_by skill names `rpg-factory:<s>`
@@ -103,9 +103,9 @@ def check(reg, s):
     t = table(readme, "| Typical task | Lead skill |") if lead else table(readme, "| Tech skill | Used by |")
     if not has(t, s):
         miss.append("README " + ("skill map table" if lead else "tech skill table") + " has no row for it")
-    para = next((p for p in read(".claude/CLAUDE.md").split("\n- ") if p.startswith("**Skills:**")), "")
+    para = next((p for p in read("docs/architecture/overview.md").split("\n- ") if p.startswith("**Skills:**")), "")
     if not has(para, s):
-        miss.append(".claude/CLAUDE.md 'Skills:' paragraph does not name it")
+        miss.append("docs/architecture/overview.md 'Skills:' paragraph does not name it")
     routing = read("tests/routing.test.sh")
     if not re.search(r"\$\((?:lead|tech) " + re.escape(s) + r"\)", routing):
         miss.append(f"tests/routing.test.sh has no scenario asserting $({'lead' if lead else 'tech'} {s})")
@@ -125,11 +125,11 @@ def global_counts(reg):
     leads = sum(1 for v in reg["skills"].values() if v["kind"] in ("repo", "cross-repo"))
     techs = sum(1 for v in reg["skills"].values() if v["kind"] == "tech")
     out = []
-    para = next((p for p in read(".claude/CLAUDE.md").split("\n- ") if p.startswith("**Skills:**")), "")
+    para = next((p for p in read("docs/architecture/overview.md").split("\n- ") if p.startswith("**Skills:**")), "")
     for noun, want in (("specialised skills", leads), ("tech skills", techs)):
         got = count_said(para, noun)
         if got != want:
-            out.append(f".claude/CLAUDE.md 'Skills:' says {got} {noun}, the registry has {want}")
+            out.append(f"docs/architecture/overview.md 'Skills:' says {got} {noun}, the registry has {want}")
     for f in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json"):
         got = count_said(read(f), "specialised skills")
         if got != leads:

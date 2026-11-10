@@ -13,7 +13,7 @@ Usage:
 
 A lead must own a module or drive a contract. The SKILL.md has every section skills-lint.sh requires,
 with `SCAFFOLD:` markers where content must be written; skills-lint fails while any marker is left, and
-`scripts/skill-touchpoints.py NAME` lists the other places to update (factory-core, README, CLAUDE.md,
+`scripts/skill-touchpoints.py NAME` lists the other places to update (factory-core, README, docs/architecture/overview.md,
 routing/dogfood/eval scenarios, the leads that load a tech skill). The registry is only rewritten when
 a JSON round trip reproduces the current file byte for byte, so the diff is exactly the new entry.
 Exit 0 = written (or --dry-run printed); 2 = refused (nothing written).
