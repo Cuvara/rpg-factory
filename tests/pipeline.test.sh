@@ -910,8 +910,9 @@ with contextlib.redirect_stdout(handoff):
                         'parent': str(work / 'integration'), 'base': 'main'}, 'topic-task',
                         {'model': 'model', 'effort': 'high'})
 commands = handoff.getvalue().splitlines()
-assert len(commands) == 2 and 'worktree add --no-track -b topic-task' in commands[0]
-assert commands[1].startswith('orca agent launch ') and 'path:' in commands[1]
+assert len(commands) == 3 and 'worktree add --no-track -b topic-task' in commands[0]
+assert commands[1].startswith('orca worktree set ') and '--parent-worktree' in commands[1]
+assert commands[2].startswith('orca agent launch ') and 'path:' in commands[2]
 assert 'worktree create' not in handoff.getvalue()
 # without a known suite list, an --only-suites suite path runs as run-all runs it (TMPDIR unset), attributed to its task
 unknown = 'tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'
@@ -1098,6 +1099,17 @@ def cli_fail(*args):
 def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
 out = dispatch('qa', first)
+assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
+affected = work / 'task' / 'tests' / 'affected.py'
+affected.write_text('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
+                    'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
+                    'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
+                    'print("tests/routing.test.sh\\tALL")\n', encoding='utf-8')
+case_out = dispatch('qa', first)
+assert 'Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh --case dispatch,qa-tiers\ntests/routing.test.sh ALL' in case_out, case_out
+assert 'tier command already passes these cases' in case_out, case_out
+assert 'Affected cases: not computed (git diff failed)' in dispatch('qa', 'bad-sha'), 'bad diff must not fail dispatch'
+affected.unlink()
 command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
 assert out.count(command) == 1, out
@@ -1453,6 +1465,7 @@ expect "the codex task's implement session keeps its implementer" 0 "^orca orche
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("lead_agent",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nolead.json"
 expect "registry without pipeline.lead_agent: the task lead defaults to claude" 0 "^orca agent launch --agent claude " --registry "$TMP/reg-nolead.json" dispatch "$OK" --task c2 --phase lead --runner orca
 expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
+expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, after review PASS the task lead runs the QA tier command itself" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
@@ -1512,6 +1525,7 @@ WT="--worktree '?path:[^' ]*demo-gw'?"
 expect "implement joins the task worktree" 0 "--agent claude $WT" dispatch "$OK" --task gw --phase implement --runner orca
 refute "implement never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase implement --runner orca
 expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash: one shared index" dispatch "$OK" --task gw --phase implement
+expect "implement runs targeted cases only" 0 "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement
 expect "implement sub-session reports changed paths and check counts to the task lead" 0 "Report to the task lead: changed paths" dispatch "$OK" --task gw --phase implement
 expect "subtask paths narrow the sub-session" 0 '"subtask_paths": \[' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go
 expect "a subtask session may name its own model" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner orca
@@ -1527,6 +1541,7 @@ expect "per-task qa in a worktree repo runs in the task worktree" 0 "--agent cod
 refute "per-task qa never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
 expect "per-task qa names the task" 0 "QA worker .*branch feat/core/demo-gw, task gw" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "a second task lead resumes in the existing task worktree" 0 "^orca agent launch --agent claude $WT" dispatch "$OK" --task gw --phase lead --runner orca
+refute "resuming a task worktree does not set its parent" "orca worktree set" dispatch "$OK" --task gw --phase lead --runner orca
 expect "agent fallback for a codex reviewer starts a fresh Claude session" 0 '"subagent_type": "general-purpose"' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL in the prompt" 0 'SAME_MODEL: this session was planned for codex; the Agent-tool fallback runs Claude only' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL on stderr" 0 "starts a fresh Claude session for this codex session: SAME_MODEL" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
@@ -1550,9 +1565,10 @@ def check(args, key="demo", note=""):
         return r.stdout
     command = run("orca")
     lines = command.splitlines()
-    if len(lines) == 2:
+    if len(lines) == 3:
         assert 'worktree add --no-track -b' in lines[0], command
-        assert lines[1].startswith('orca agent launch '), command
+        assert lines[1].startswith('orca worktree set ') and '--parent-worktree' in lines[1], command
+        assert lines[2].startswith('orca agent launch '), command
     else:
         assert len(lines) == 1, repr(command)
     argv = shlex.split(lines[-1])
@@ -1855,6 +1871,7 @@ expect "subplan placement child: worker-start --worktree new-child from the task
 expect "the child subtask runs its implementer (codex)" 0 "worker-start .*--agent codex --worktree new-child" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect "a child command says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs \(shared .git/config\)" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec commits on the child branch" "Commit on your child branch with explicit paths" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec runs targeted cases only" "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec: the task lead merges and removes the child at once" "the task lead merges it into feat/core/demo-gw and removes the child at once" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec says the run-all rule" "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the subtask's paths are in the spec" '"subtask_paths": \["backend/gateway/b.go"\]' dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
@@ -1891,7 +1908,7 @@ for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "
 done
 git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/demo-gw
 expect "new task worktree without an integration checkout: git no-track" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
-refute "new task worktree without an integration checkout: no --parent-worktree" "--parent-worktree" dispatch "$OK" --task gw --phase lead --runner orca
+expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 expect "lead --placement child without integration checkout uses git" 0 "worktree add --no-track -b feat/core/demo-gw" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 # integration QA joins the checkout of plan.topic; without one it is an error and no worktree is created
@@ -1906,7 +1923,7 @@ expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "Y
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
-refute "lead --placement shared has no --parent-worktree" "--parent-worktree" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "new task worktree beside integration checkout --placement child" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "lead --placement child has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 expect "new task worktree launches lead by path" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$OK" --task gw --phase lead --runner orca
