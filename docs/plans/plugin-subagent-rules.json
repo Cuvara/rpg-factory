@@ -42,7 +42,8 @@
         "check-registry fails on an out-of-scope subagent model and passes on the shipped registry",
         "subagent_policy.rule returns a role-specific sentence for every role and both agents, from registry data only",
         "new suite counted in run-all with 0 failed"
-      ]
+      ],
+      "orca_run": "run_149c4936db8f"
     },
     {
       "id": "policy",
@@ -73,7 +74,8 @@
         "one policy copy (delivery.md) with the marker sentence and the per-role table",
         "the mutation test bites on a deleted or changed marker",
         "skills-lint and changelog check pass"
-      ]
+      ],
+      "orca_run": "run_7f95b6fc6db8"
     },
     {
       "id": "explorer-agent",
@@ -99,7 +101,8 @@
         "agent file with read-only tools and model sonnet",
         "the lint fails on an agent with Write, Edit or Agent tools (mutation)",
         "claude plugin validate passes"
-      ]
+      ],
+      "orca_run": "run_d3d8b3ac7e34"
     },
     {
       "id": "prompts",
@@ -124,7 +127,8 @@
         "every phase prompt (planner, lead, implement shared and child, review, task QA, integration QA) carries its role rule",
         "the review rule names the reviewer's own model",
         "pipeline.test.sh 0 failed"
-      ]
+      ],
+      "orca_run": "run_826fe287963d"
     },
     {
       "id": "doctor-codex",
@@ -156,7 +160,8 @@
         "doctor warns on an out-of-scope Codex subagent model and on multi_agent off",
         "no config value other than the two model keys is ever printed (secret fixture)",
         "devtools.test.sh 0 failed"
-      ]
+      ],
+      "orca_run": "run_7b1c8f8cd69d"
     },
     {
       "id": "main-sync",
@@ -210,7 +215,8 @@
         "parallel-policy and orca-commands read delivery.md and include the subagents-read-only marker",
         "scripts/factory-pipeline.py stays mode 100755",
         "the listed suites 0 failed"
-      ]
+      ],
+      "orca_run": "run_6c67d97c294f"
     },
     {
       "id": "orca-lineage",
@@ -249,7 +255,8 @@
         "cleanup of a plain git task worktree never leaves a prunable record that blocks git branch -d",
         "cleanup reports a leftover task directory or stale Orca worktree record as LEFTOVER with the prune and orca worktree rm commands, never CLEAN, and never kills a process",
         "gate keeps a review current when the owned paths' content is unchanged since the reviewed commit (default-branch merge) and never lists the plan file or its report as stray"
-      ]
+      ],
+      "orca_run": "run_56bba00060b7"
     },
     {
       "id": "gate-nested",
@@ -274,7 +281,9 @@
         "gate on this plan shows no review STALE for registry and policy",
         "nested default-branch merge tests and the still-STALE direct-edit test pass",
         "pipeline.test.sh 0 failed"
-      ]
+      ],
+      "orca_run": "run_e5207aa7fa74"
     }
-  ]
+  ],
+  "deliver": "pr"
 }
