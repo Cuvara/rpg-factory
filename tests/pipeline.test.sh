@@ -1343,7 +1343,18 @@ if section == 'validate':
     assert m.TIER_GRADE['XS'] == 'light'
     p = dict(plan, _path=str(pf))
     assert m.implementer_of(reg['pipeline'], p, task)[0] == reg['pipeline']['lead_agent']
-    print('validate: XS one-task prose plan only')
+    # contracts: false and generated: false hold for validate as for tier: a prose path the routing snapshot names as a
+    # contract end or a generated path is above XS (the fixture repo has none, so its snapshot is stubbed)
+    real = m.task_context
+    try:
+        m.task_context = lambda pl, rg, t: ({'repos': [{'repo': 'fixture', 'touched': ['docs'], 'files': [],
+                                              'contracts': [{'id': 'wire'}], 'generated_hits': ['docs/guide.md']}]}, None)
+        why = errors()
+        assert any('contract wire' in e and 'generated path docs/guide.md' in e for e in why), why
+        assert errors(tier='M') == [], 'contracts and generated paths only bar tier XS'
+    finally:
+        m.task_context = real
+    print('validate: XS one-task prose plan only, no contract or generated path')
 
 if section in ('dispatch', 'gate'):
     out = cli('dispatch', pf, '--task', 'doc', '--phase', 'lead', '--runner', 'print')
@@ -1358,6 +1369,7 @@ if section in ('dispatch', 'gate'):
     lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
     assert f'Review worker ({pair}) for code written by {lead}' in out, out
     assert f'Tier XS: the run lead committed it on {topic}' in out and 'no worktree of' not in out, out
+    assert f"(tier XS: the run lead's checkout of {topic})" in out and "task lead's worktree" not in out, out
     if section == 'dispatch':
         print('dispatch: lead prints the run lead steps, review reads the topic checkout')
     else:
@@ -1368,6 +1380,15 @@ if section in ('dispatch', 'gate'):
         verdicts(sha)
         out = cli('gate', pf, '--no-run-checks')
         assert out.startswith('Gate: READY_FOR_PR') and 'tier XS lead ran task suites' in out, out
+        # a committed path the routing snapshot names as a contract end or generated path blocks it (stubbed snapshot)
+        real = m.task_context
+        try:
+            m.task_context = lambda pl, rg, t: ({'repos': [{'repo': 'fixture', 'touched': ['docs'], 'files': [],
+                                                  'contracts': [], 'generated_hits': ['docs/guide.md']}]}, None)
+            out = cli('gate', pf, '--no-run-checks', rc=1)
+            assert 'BLOCKER doc: tier XS, but the committed diff is above XS: generated path docs/guide.md' in out, out
+        finally:
+            m.task_context = real
         # an oversize committed diff blocks the gate, so does a path that is not prose
         write('docs/guide.md', 60); git('commit', '-qam', 'docs: more'); big = git('rev-parse', 'HEAD')
         verdicts(big)
@@ -1385,6 +1406,49 @@ if section in ('dispatch', 'gate'):
         out = cli('gate', pf, '--no-run-checks', rc=1)
         assert 'QA recorded as tier XS lead QA, but the task is not tier XS' in out, out
         print('gate: READY_FOR_PR for XS with review PASS and lead QA; oversize or non-prose diff blocks')
+
+if section == 'status':
+    # status follows the XS flow like the gate: the run lead's edit and commit on plan.topic, its review dispatch, its
+    # own QA after the review PASS, and that QA at the topic HEAD as the integration QA
+    lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
+    def st():
+        o = json.loads(cli('status', '--json', pf))
+        return o, o['tasks'][0]
+    o, r = st()
+    assert r['phase'] == 'pending' and '--task doc --phase lead' in r['next'] and r['branch'] == topic, r
+    write('docs/guide.md', 13)
+    o, r = st()
+    assert r['phase'] == 'implementing' and any('tier XS: the run lead edits the owned paths' in n for n in r['notes']), r
+    assert not any('implementation worker' in n for n in r['notes']), r
+    git('add', '--', 'docs/guide.md'); git('commit', '-qm', 'docs: guide'); sha = git('rev-parse', 'HEAD')
+    o, r = st()
+    assert r['phase'] == 'candidate' and f'--task doc --phase review --sha {sha}' in r['next'], r
+    assert '--phase verify' not in r['next'], r
+    cli('verdict', pf, '--task', 'doc', '--phase', 'review', '--sha', sha, '--by', pair, '--state', 'PASS')
+    o, r = st()
+    # after the review PASS: the run lead's own QA record, never an integration QA session, and no gate yet
+    assert r['phase'] == 'integrated', r
+    assert (f'--task doc --phase qa --sha {sha} --state PASS --by {lead}' in r['next']
+            and 'tier XS: lead ran task suites' in r['next'] and 'integration:' not in r['next']), r
+    assert any('tier XS: the run lead runs the task tier command' in n and 'the task checks' in n for n in r['notes']), r
+    assert not any(' gate ' in c for c in o['next']), o['next']
+    cli('verdict', pf, '--task', 'doc', '--phase', 'qa', '--sha', sha, '--by', lead, '--state', 'PASS',
+        '--note', 'tier XS: lead ran task suites')
+    o, r = st()
+    # the lead QA at the topic HEAD counts as the integration QA: status says the gate is ready, as the gate does
+    assert r['phase'] == 'qa' and r['next'] is None, r
+    assert not any('the gate needs it' in n for n in r['notes']), r
+    assert any(' gate ' in c for c in o['next']), o['next']
+    assert cli('gate', pf, '--no-run-checks').startswith('Gate: READY_FOR_PR')
+    # a reviewed fix after the QA: the lead QA is not at the new HEAD, so status asks for it again at that HEAD
+    write('docs/guide.md', 14); git('commit', '-qam', 'docs: fix'); fix = git('rev-parse', 'HEAD')
+    o, r = st()
+    assert r['phase'] == 'candidate' and f'--phase review --sha {fix}' in r['next'], r
+    cli('verdict', pf, '--task', 'doc', '--phase', 'review', '--sha', fix, '--by', pair, '--state', 'PASS')
+    o, r = st()
+    assert r['phase'] == 'integrated' and f'--phase qa --sha {fix} ' in r['next'], r
+    assert not any(' gate ' in c for c in o['next']), o['next']
+    print('status: XS steps match the gate: review dispatch, lead QA record, gate ready at the topic HEAD')
 TIER_XS
 if has_case multiwave; then
 python3 -B - "$TMP" <<'TEMPLATES'
@@ -1432,7 +1496,7 @@ bg_case() {
   fi
   if has_case qa-tiers; then next qa-tiers python3 -B "$TMP/qa-tiers.py" "$ROOT" "$TMP"; fi
   if has_case tier-xs; then
-  for c in tier validate dispatch gate; do next "tier-xs-$c" python3 -B "$TMP/tier-xs.py" "$ROOT" "$TMP" "$c"; done
+  for c in tier validate dispatch gate status; do next "tier-xs-$c" python3 -B "$TMP/tier-xs.py" "$ROOT" "$TMP" "$c"; done
   fi
   wait
 ) &
@@ -3470,9 +3534,10 @@ if has_case tier-xs; then
 case_start
 echo "-- tier XS"
 bg_report "tier XS: tier prints XS only for prose-only changes within the thresholds" tier-xs-tier
-bg_report "tier XS: validate accepts a one-task prose plan; non-prose, multi-task and oversize are errors" tier-xs-validate
+bg_report "tier XS: validate accepts a one-task prose plan; non-prose, multi-task, oversize, contract and generated are errors" tier-xs-validate
 bg_report "tier XS: dispatch lead prints the run lead's steps, no implement session, review reads the topic checkout" tier-xs-dispatch
-bg_report "tier XS: gate READY_FOR_PR with review PASS and lead QA; an oversize or non-prose diff blocks" tier-xs-gate
+bg_report "tier XS: gate READY_FOR_PR with review PASS and lead QA; an oversize, non-prose, contract or generated diff blocks" tier-xs-gate
+bg_report "tier XS: status shows the run lead's review dispatch and QA record, then the gate, as the gate sees it" tier-xs-status
 case_end tier-xs
 fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"

@@ -10,8 +10,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 - `tier -- --repo <key> --paths <files>` prints XS, S, M or L and the flow. An S task is still a one-task `plan.json`
   with its own task lead (the task worktree, or the main checkout of a no-worktree repo).
 - XS applies only when every path is prose (`pipeline_route.prose_path`, see "dispatch" below), no path is a contract
-  or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). An XS task
-  has no task lead, task worktree or implement session: the run lead itself edits and commits it on the plan `topic`
+  or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). This plain
+  form counts files, not changed lines: `tier --plan` counts the changed lines of the checkout, and the gate those of
+  the committed diff. An XS task has no task lead, task worktree or implement session: the run lead itself edits and commits it on the plan `topic`
   branch, dispatches one cross-model review and runs the task tier command (delivery.md section 10 step 1).
 - `tier --plan plan.json --repo <key> --paths <files>` is the form for `--registry none` and for repos the plan names
   by path: the repo is read from the plan's `repos` entry, not from the registry.
@@ -33,8 +34,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   reviewer is of the other model. It prints the waves (one subtask per wave in a no-worktree repo) and refuses
   `placement: child` in a no-worktree repo. It warns like `validate` on a missing `reason` or one model for 3 or more
   subtasks.
-- `validate` accepts tier XS only for a one-task plan whose owned paths are all prose and within the XS thresholds;
-  a non-prose path, a second task or a threshold exceeded is an error.
+- `validate` accepts tier XS (plan or task `tier`) only for a one-task plan whose owned paths are all prose, within
+  `max_files` and, where the XS rule sets `contracts: false` / `generated: false`, no contract end or generated path;
+  a non-prose path, a second task, a threshold exceeded, a contract or a generated path is an error.
 - Both reject an unknown grade or one the model policy cannot resolve, and print the resolved model and effort per
   task or subtask.
 
@@ -65,7 +67,8 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   that SHA. `status` names `--phase verify` after the last subtask; after a FAIL it names `--phase lead`, which
   resumes the task lead in its worktree (or the main checkout of a no-worktree repo) for the fix.
 - XS task: `--phase lead` starts no session; it says the run lead edits the task on the `topic` branch and prints the
-  review command. `--phase review --sha <sha>` then needs no task worktree: the reviewer reads the topic checkout, and
+  run lead's steps: commit with explicit paths, the review command, the task tier command, the QA `verdict` record
+  (note `tier XS: lead ran task suites`) and the gate. `--phase implement` exits 2. `--phase review --sha <sha>` then needs no task worktree: the reviewer reads the topic checkout, and
   the implementer is recorded as the run lead's model, so the review goes to the other model.
 - `dispatch ... --phase review --sha <sha>` and `--phase qa --sha <sha>` start one of the two alone, for a lead that
   needs only one of them. `--phase qa` (like `--phase verify`) prints the tier command (never a full run) and the case
@@ -137,8 +140,12 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase veri
   fallback does not change who reviews. No subtask needs a review of its own: the task's verify review covers every
   subtask, and the gate lists a code subtask written by the reviewer's model as an accepted
   `SAME_MODEL (single verify)` note (delivery.md section 10, `policy:single-verify`).
-- An XS task needs its review PASS on the run lead's commit and the lead-run QA verdict (note starting `tier XS`); the
-  gate blocks it when the committed diff exceeds the XS thresholds (files, changed lines).
+- An XS task needs its review PASS on the run lead's commit and the lead-run QA verdict (note starting `tier XS`) at
+  the `topic` HEAD, which stands in for the integration QA while none is recorded; the gate blocks it when the
+  committed diff exceeds the XS rule (a non-prose path, files, changed lines, a contract or generated path).
+- `status` follows the same XS flow: the task's branch is the `topic`; uncommitted edits in its paths are the run
+  lead's; a commit names `--phase review --sha <sha>`; after the review PASS the next step is the task tier command and
+  the lead QA record at the `topic` HEAD (never an integration QA session); with that QA PASS it names the gate.
 
 ## Orca commands
 
