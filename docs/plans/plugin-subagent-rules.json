@@ -226,7 +226,8 @@
         ".claude/CLAUDE.md",
         "changelog.d/orca-lineage.md",
         "tests/affected.py",
-        "README.md"
+        "README.md",
+        "tests/affected.test.sh"
       ],
       "deps": [
         "prompts",
