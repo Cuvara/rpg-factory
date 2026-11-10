@@ -5,8 +5,10 @@
   release, Orca waiting, QA tiers and the plan/verdict/gate pipeline. Its reference
   `skills/delivery/references/delivery.md` is the single copy of the generic policy; factory-core loads it for its
   delivery steps. README gives a one-line pointer for `~/.claude/CLAUDE.md` and Codex `AGENTS.md`.
-- **Pipeline.** `factory-pipeline.py` runs without the RPG registry: with `--registry none`, `RPG_FACTORY_REGISTRY=none`
-  or a missing registry file it reads `skills/delivery/pipeline-defaults.json`. A plan may set `no_worktree_markers`
+- **Pipeline.** `factory-pipeline.py` runs without the RPG registry: with `--registry none`, `RPG_FACTORY_PIPELINE_REGISTRY=none`
+  (a pipeline-only variable) or a missing registry file it reads `skills/delivery/pipeline-defaults.json`, and every command
+  it prints for a next session (task-lead spec, planner spec, `status` next lines) carries `--registry none`.
+  The installed plugin always ships `registry.json`, so there the flag or the variable selects the defaults. A plan may set `no_worktree_markers`
   to replace the default markers. `tests/delivery-generic.test.sh` covers tier, validate, dispatch, verdict and gate
   on a throwaway repo outside any workspace.
 

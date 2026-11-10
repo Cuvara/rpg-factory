@@ -8,7 +8,7 @@ allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py:*)
 # Delivery
 
 The generic delivery flow for any repository. It needs no registry and no workspace layout: the pipeline script
-reads `${CLAUDE_SKILL_DIR}/pipeline-defaults.json` when no RPG registry is present (`--registry none`). Task: $ARGUMENTS
+reads `${CLAUDE_SKILL_DIR}/pipeline-defaults.json` when you pass `--registry none` (or set `RPG_FACTORY_PIPELINE_REGISTRY=none`); the installed plugin always ships `registry.json`, so the flag selects the defaults. Task: $ARGUMENTS
 **Codex:** resolve `${CLAUDE_PLUGIN_ROOT}` as `PLUGIN_ROOT` in hooks, otherwise two directories above this skill's containing directory; use that absolute root for commands. Load other skills by reading their `SKILL.md`.
 **Layering:** in a workspace routed by `rpg-factory:factory-core`, run factory-core first: it adds the registry, routing,
 checks, human gates and the RPG specifics (`rpg-factory:factory-core`, its parallel-work.md: Unity no-worktree
@@ -23,12 +23,13 @@ dispatched session follows its spec and never merges or pushes. Policy: [referen
 
 ## Flow
 
-Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; add `--registry none` outside an RPG workspace.
+Run the script as `python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py <verb>`; outside an RPG workspace run
+`python3 -B ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py --registry none <verb>` (the option also works after the verb).
 
 1. **Tier.** `tier --plan plan.json --repo <key> --paths <files>` (a plan naming the repo by path; a registry repo:
    `tier -- --repo <key> --paths <files>`) prints S, M or L and the flow. Every tier gets a `plan.json` and
    a task lead; S is a one-task plan. The run lead never implements.
-2. **Plan.** Write `plan.json` (`docs/schemas/pipeline-plan.schema.json`): `repos.<key>.path` names the checkout,
+2. **Plan.** Write `plan.json` (`${CLAUDE_PLUGIN_ROOT}/docs/schemas/pipeline-plan.schema.json`): `repos.<key>.path` names the checkout,
    each task has owned paths, deps, a `kind` and a branch. Small tasks with disjoint owned paths. A repo marked
    `worktrees: false`, or one holding a configured no-worktree marker, runs its tasks in sequence in the main checkout.
    `validate plan.json` must print OK.

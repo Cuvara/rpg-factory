@@ -129,6 +129,14 @@ noticed.
   writes nothing to `.git/config` (verified: the config hash is unchanged). So `dispatch --phase lead` prefers it for
   a new task worktree and then starts the lead with `orca agent launch --worktree path:<path>`. Never create a task
   worktree with `orca worktree create`.
+- **Orca visibility: a plain git worktree has no Orca lineage.** A worktree made with `git worktree add --no-track`
+  is unknown to Orca's worktree list: unregistered, it lands in Orca's hidden section and the maintainer cannot see
+  the task (maintainer rule, 2026-11-09: task worktrees must never land in the hidden section). Whoever creates the
+  worktree therefore runs, before `orca agent launch`, exactly
+  `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`
+  with the integration checkout (else the main checkout) as `<parent>`. A child worktree a task lead makes gets the
+  task worktree as its parent. `dispatch --phase lead` prints this line before the launch, and so does every other
+  place that prints a worktree creation.
 
 ### Child worktrees
 
@@ -145,8 +153,8 @@ a child ("Run lead" below). Choose per session:
 
 - **Run lead.** `dispatch --phase lead` creates a new task worktree with
   `git worktree add --no-track -b <branch> <path> <base>` (the path is beside the checkout that has the plan `topic`
-  checked out, else beside the repo checkout) and then starts the lead with
-  `orca agent launch --worktree path:<path>`. It never runs `orca worktree create`: that writes
+  checked out, else beside the repo checkout), registers it with the `orca worktree set` line of section 4
+  ("Orca visibility") and then starts the lead with `orca agent launch --worktree path:<path>`. It never runs `orca worktree create`: that writes
   `branch.<name>.base` into the shared `.git/config` (section 4 lesson). `--placement shared|child` gives the same
   result; an existing task worktree is only launched. Helper sessions -
   integration QA (`--task integration:<repo> --phase qa --placement child`) or a quick fix - may run in a child
@@ -162,7 +170,7 @@ a child ("Run lead" below). Choose per session:
 The owner merges a child's branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).
 
 <!-- policy:child-no-run-all -->
-Never create or remove a child worktree while a full tests/run-all.sh runs: every checkout shares one .git/config.
+Never create or remove a child worktree while a full tests/run-all.sh runs (the runner of a repo that has one): every checkout shares one .git/config.
 
 - `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged: remove a child
   only after its branch is merged into its parent.
@@ -177,7 +185,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs: ever
 - **No nested workers.** Orca allows one level of workers (`nested_worker_depth_exceeded`, maximum depth 1); never
   route around it. So the task lead is not a worker of the run lead: the run lead starts it as a handoff,
   `git worktree add --no-track -b <task branch> <path> <base>` for a new task worktree (beside the integration
-  checkout, section 4), then `orca agent launch --agent <id> --worktree path:<path> --prompt <spec>`; an existing
+  checkout, section 4), then `orca worktree set --worktree path:<path> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`,
+  then `orca agent launch --agent <id> --worktree path:<path> --prompt <spec>`; an existing
   worktree (or a no-worktree repo) needs only the launch. The task lead creates its own Run (`orca orchestration run-create --objective <text>`),
   starts its sessions as workers of that Run (`orca orchestration worker-start --worktree path:<task worktree>`,
   depth 1), and reports to the run lead with
@@ -398,7 +407,7 @@ workspace, otherwise skills/delivery/pipeline-defaults.json); the plan format is
 commands and grades state; the leads run them.
 
 <!-- policy:no-worktree-repo -->
-A no-worktree (Unity) repo never gets a worktree; its task lead and all its sessions run in its main checkout.
+A no-worktree repo (registry `worktrees: false` or a configured no-worktree marker, for example a Unity project) never gets a worktree; its task lead and all its sessions run in its main checkout.
 
 **Which model.** Each plan task may carry a `kind`, and each subtask names an `implementer` or a `kind` (`subplan
 validate` errors on neither); the implementer is the explicit `implementer`, else pipeline settings
@@ -523,21 +532,36 @@ validate` errors on neither); the implementer is the explicit `implementer`, els
    reports CLEAN.
 
 **QA tiers.** No identical tree is tested twice and a task never runs the whole suite: each role runs one command,
-which `dispatch --phase qa` prints (pipeline settings `qa_tiers`). The commands below are the defaults of this
-plugin repo's own suites; another project sets its own commands in its `qa_tiers`, and the policy is the shape: a
-task runs only the suites its changes reach, integration runs what CI cannot, CI is the full gate, a release runs
-everything.
+which `dispatch --phase qa` prints. Pipeline settings `qa_tiers` only name the level of each tier (task
+`affected`, integration `ci+workspace`); they hold no commands. A repo that has `tests/run-all.sh` gets the
+run-all commands of the table below. A repo without it gets its task checks as the QA commands (and, for a registry
+repo, the run-checks fast tier). The policy is the shape: a task runs only the suites its changes reach,
+integration runs what CI cannot, CI is the full gate, a release runs everything.
+
+The table lists the commands for a repo that has `tests/run-all.sh` (this plugin).
 
 <!-- policy:qa-tiers -->
-| When | Runs | Who |
-|---|---|---|
-| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once; other checks are extra commands; never a full run | a fresh QA session in the task worktree |
-| Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate |
-| Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only |
-| Reviewer | no suites; only a repro test when a finding needs one | the review session |
-| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session |
-| Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session |
+| When | Runs | Who | Typical time |
+|---|---|---|---|
+| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once. Explicit suites run all cases; affected-only suites with a case map run only affected cases. Other checks are extra commands; never a full run | a fresh QA session in the task worktree | 2-5 min for a narrow change (one-file schema change 119 s, one-file skill change 288 s); a change to a global input (the runner, `tests/affected.py`) selects every suite and takes about an hour with a slot wait |
+| Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate | as task QA |
+| Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only | as task QA, no session of its own |
+| Implementer | only the targeted checks the spec names, and of a slow suite only the cases its change touches (`--case <names>`, `tests/affected.py cases <file> <suite>`); never a whole slow suite | the implementation session | seconds to 2 min (a full `pipeline.test.sh` is about 150 s on a quiet machine) |
+| Reviewer | no suites; only a repro test when a finding needs one | the review session | none |
+| Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the full suite in the background while the next task starts |
+| Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session | the slowest tier, release only |
 
+- **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide test slots
+  (default 2, kept in the state dir, `RPG_FACTORY_TEST_SLOTS`; `0` disables the cap) and, when every slot is busy,
+  waits with a message (`run-all: waiting for a test slot`) instead of running beside the others and slowing every
+  suite 2-4x; `--no-wait` exits 3. A slot whose holder died is taken over. A full run keeps its own per-machine lock
+  (section 4). The slot belongs to the run, not to the session that started it: stop a QA worker's background test
+  run before abandoning the worker, or it keeps its slot until the process tree is killed.
+- **Implementers run less than QA.** An implementation session runs only the targeted checks of its spec, and of a
+  suite with cases (`--list-cases`) only the cases its change touches; the task QA runs the affected suites, the
+  integration QA what CI cannot. `dispatch --phase implement` says so in its spec and `dispatch --phase qa` prints
+  the case list for the tier command's base and suite selection, including `ALL` for explicit suites. Frozen copies of a suite go under a temp dir, never into the
+  suite folder.
 - **CI is the full gate.** No full local run before a PR: CI runs the full suite, and the integration QA command
   covers what CI cannot, before the PR. After the PR opens, CI green (`gh pr checks <pr> --watch`) is the merge
   gate; while CI runs, start the next task, then come back and fix a red check before merging. Only a release runs

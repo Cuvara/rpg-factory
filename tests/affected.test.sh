@@ -223,5 +223,48 @@ while IFS= read -r line; do
   echo "$line"
   case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
 done <<< "$out"
+out=$(python3 -B - "$A" "$TMP" <<'PY'
+import importlib.util, pathlib, subprocess, sys
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+root = pathlib.Path(sys.argv[2]) / "case-fixture"; root.mkdir()
+subprocess.run(["git", "init", "-q", str(root)], check=True)
+files = {
+    "tests/mapped.sh": "#!/bin/bash\n# case-map: beta scripts/tool/b.py\n# case-map: alpha scripts/tool/\n# case-map: alpha scripts/tool/a.py\npython scripts/tool/a.py scripts/tool/b.py scripts/tool/c.py\n",
+    "tests/plain.sh": "python scripts/tool/a.py\n",
+    "tests/other.sh": "python scripts/other/x.py\n",
+    "tests/bad.sh": "# case-map: INVALID scripts/tool/a.py\npython scripts/tool/a.py\n",
+    "scripts/tool/a.py": "pass\n", "scripts/tool/b.py": "pass\n", "scripts/tool/c.py": "pass\n",
+    "scripts/other/x.py": "pass\n",
+    # a shared module imported by the scripts of two cases (and one only a second suite maps in part)
+    "scripts/lib/shared.py": "VALUE = 1\n", "scripts/shx/x.py": "import shared\n", "scripts/shx/y.py": "import shared\n",
+    "tests/shared.sh": "# case-map: one scripts/shx/x.py\n# case-map: two scripts/shx/y.py\n# case-map: one scripts/lib/shared.py\npython scripts/shx/x.py scripts/shx/y.py\n",
+    "tests/shared-part.sh": "# case-map: one scripts/shx/x.py\npython scripts/shx/x.py scripts/shx/y.py\n",
+}
+for path, content in files.items():
+    p = root / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(content)
+m.ROOT = str(root)
+def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
+check("case map selects one case", m.affected_cases(["scripts/tool/a.py"], "tests/mapped.sh") == "alpha")
+check("case map unions sorted unique cases", m.affected_cases(["scripts/tool/b.py", "scripts/tool/a.py"], "tests/mapped.sh") == "alpha,beta")
+check("suite change runs all cases", m.affected_cases(["tests/mapped.sh"], "tests/mapped.sh") == "ALL")
+check("no map runs all cases", m.affected_cases(["scripts/tool/a.py"], "tests/plain.sh") == "ALL")
+check("invalid map runs all cases", m.affected_cases(["scripts/tool/a.py"], "tests/bad.sh") == "ALL")
+check("global input runs all cases", m.affected_cases(["registry.json"], "tests/mapped.sh") == "ALL")
+check("a shared module selects the cases of every importer the suite names", m.affected_cases(["scripts/lib/shared.py"], "tests/shared.sh") == "one,two")
+check("a shared module imported by an unmapped script runs all cases", m.affected_cases(["scripts/lib/shared.py"], "tests/shared-part.sh") == "ALL")
+check("a mapped script still selects only its case", m.affected_cases(["scripts/shx/x.py"], "tests/shared.sh") == "one")
+(root / "tests/mapped.sh").write_text("# case-map: alpha scripts/tool/a.py\npython scripts/tool/a.py scripts/tool/c.py\n")
+m.contents.cache_clear(); m.suite_patterns.cache_clear()
+check("unmapped selecting input runs all cases", m.affected_cases(["scripts/tool/c.py"], "tests/mapped.sh") == "ALL")
+changed = root / "changed"; changed.write_text("scripts/tool/a.py\n")
+runner = "import importlib.util,sys; s=importlib.util.spec_from_file_location('a',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.ROOT=sys.argv[2]; sys.exit(m.main(sys.argv[3:]))"
+result = subprocess.run([sys.executable, "-B", "-c", runner, sys.argv[1], str(root), "cases", str(changed), "tests/mapped.sh", "tests/plain.sh", "tests/other.sh"], capture_output=True, text=True)
+check("cases command prints selected suites only", result.returncode == 0 and result.stdout == "tests/mapped.sh\talpha\ntests/plain.sh\tALL\n")
+PY
+)
+while IFS= read -r line; do
+  echo "$line"
+  case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
+done <<< "$out"
 total=$((pass + fail)); echo "affected tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
