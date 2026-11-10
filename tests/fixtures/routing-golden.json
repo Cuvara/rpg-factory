@@ -1398,6 +1398,40 @@
       ]
     }
   ],
+  "generic delivery is never a lead for an unrelated path": [
+    {
+      "checks": [],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": null,
+        "legs": [],
+        "tech": []
+      },
+      "touched": [
+        "server.root"
+      ]
+    }
+  ],
+  "generic delivery is never a lead for its policy path": [
+    {
+      "checks": [],
+      "repo": "server",
+      "routing": {
+        "ambiguous": false,
+        "co_leads": [],
+        "follow_ups": [],
+        "lead": null,
+        "legs": [],
+        "tech": []
+      },
+      "touched": [
+        "server.root"
+      ]
+    }
+  ],
   "glob path expands to repo-relative forward-slash files": [
     {
       "checks": [

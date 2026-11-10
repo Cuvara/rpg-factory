@@ -115,7 +115,9 @@ The `delivery` skill (`skills/delivery/SKILL.md`, kind core like `factory-core`,
 multi-step delivery policy: the two-level flow (run lead, task leads), agent routing and fallback, cross-model
 review, child worktrees, session release, QA tiers and the plan / verdict / gate pipeline
 (`skills/delivery/references/delivery.md`). Its description names no RPG repo, so it applies to any repository.
-`scripts/factory-pipeline.py` runs without the RPG registry: it reads `skills/delivery/pipeline-defaults.json`.
+`scripts/factory-pipeline.py` runs without the RPG registry: it reads `skills/delivery/pipeline-defaults.json`. The installed
+plugin always ships `registry.json`, so there `--registry none` (or `RPG_FACTORY_PIPELINE_REGISTRY=none`) selects the defaults;
+the commands the script prints for a next session then carry `--registry none`.
 `factory-core` calls `delivery` and keeps only the RPG specifics (`skills/factory-core/references/parallel-work.md`).
 
 To use it outside the UnityIndie workspace, add one line to the global agent instructions:

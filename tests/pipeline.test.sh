@@ -2,10 +2,173 @@
 # factory-pipeline.py on a throwaway workspace (a server repo and a Unity client project): tiers, plan validation
 # (ownership, cycles, cross-model review, the no-worktree rule for Unity projects, exclusive resources), dispatch
 # commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate. Never touches the real workspace.
+# case-map: dogfood tests/dogfood.sh tests/dogfood/*
+# case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
+# case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
+# case-map: model-policy docs/schemas/pipeline-subplan.schema.json
+# case-map: subplan docs/schemas/pipeline-subplan.schema.json
+# case-map: status docs/schemas/pipeline-status.schema.json
+# case-map: cleanup docs/schemas/pipeline-status.schema.json
+# case-map: settled-workers docs/schemas/pipeline-status.schema.json
+# Measured with sys.monitoring and an audit hook over a full run: factory-pipeline.py, registry.json, the plan schema,
+# model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
+# they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged model-routing multiwave qa-tiers cli-selftest'
+usage() {
+  printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
+    'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
+    'Prerequisite cases run automatically; dependencies are documented beside case_deps below.' \
+    'Independent units (the dependency chain, status, recorded-implementer, ...) run as parallel child runs; PIPELINE_TEST_UNITS'     'sets how many at once (default 4). PIPELINE_TEST_TIMES=1 prints section wall times; PIPELINE_TEST_JOBS sets the'     'background case limit (default 4); PIPELINE_TEST_MATCH=check compares the bash matcher with grep -E.'
+}
+SELECTED=; list_cases=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --list-cases) list_cases=1; shift ;;
+    --case|--only)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }
+      SELECTED+=" $2"; shift 2 ;;
+    --case=*|--only=*) SELECTED+=" ${1#*=}"; [ -n "${1#*=}" ] || { usage >&2; exit 2; }; shift ;;
+    *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+# Validate before sourcing helpers or creating any fixture (also with --list-cases).
+SELECTED="${SELECTED//,/ }"
+# a selector that names no case (`--case ,`) is a usage error, never "run everything"
+[ -z "$SELECTED" ] || [ -n "${SELECTED//[[:space:]]/}" ] || { printf 'Empty case selector
+' >&2; usage >&2; exit 2; }
+unique_selected=
+for selected in $SELECTED; do
+  [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
+  [[ " $unique_selected " == *" $selected "* ]] || unique_selected+=" $selected"
+done
+SELECTED="$unique_selected"
+if [ "$list_cases" = 1 ]; then printf '%s\n' $CASES; exit 0; fi
+[ -n "$SELECTED" ] || SELECTED="$CASES"
+case_deps() {
+  case "$1" in
+    subplan) echo validate ;;                      # OK/TOOL plans
+    dispatch) echo subplan ;;                      # EX/SPC plans and reg-nowt
+    model-policy) echo dispatch ;;                 # existing demo-gw worktree and subplans
+    child-dispatch) echo dispatch ;;               # WT and SPC; removes demo-gw afterwards
+    verdict-gate) echo child-dispatch ;;           # demo-gw must have been removed
+    cleanup) echo verdict-gate ;;                  # integrated SG/G candidate and its verdicts
+    settled-workers) echo cleanup ;;              # G and persisted dispatch specs
+    orca-first) echo settled-workers ;;            # fake Orca and integration children to remove
+    review-findings) echo orca-first tier ;;       # integration branches of the chain above, and the ctx helper of tier
+  esac
+}
+# Expand to a fixed point so even the last requested case brings all of its setup.
+pending="$SELECTED"
+while [ -n "$pending" ]; do
+  next_pending=
+  for selected in $pending; do
+    for dependency in $(case_deps "$selected"); do
+      if [[ " $SELECTED " != *" $dependency "* ]]; then SELECTED+=" $dependency"; next_pending+=" $dependency"; fi
+    done
+  done
+  pending="$next_pending"
+done
+has_case() { [[ " $SELECTED " == *" $1 "* ]]; }
+case_start() { CASE_START="$EPOCHREALTIME"; }
+case_end() {
+  if [ "${PIPELINE_TEST_TIMES:-0}" = 1 ]; then
+    local now="$EPOCHREALTIME" elapsed
+    elapsed=$(( ${now/./} - ${CASE_START/./} ))
+    printf 'TIME  %s %d.%03ds\n' "$1" "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
+  fi
+}
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 P="$ROOT/scripts/factory-pipeline.py"
+# Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
+# itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
+# adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
+UNITS='chain status recorded-implementer dogfood cleanup-merged owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
+unit_cases() {
+  case "$1" in
+    chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
+    *) echo "$1" ;;
+  esac
+}
+if [ -z "${PIPELINE_TEST_UNIT:-}" ]; then
+  chosen=()
+  for u in $UNITS; do
+    mine=
+    for c in $(unit_cases "$u"); do has_case "$c" && mine+="${mine:+,}$c"; done
+    [ -z "$mine" ] || chosen+=("$u=$mine")
+  done
+  if [ "${#chosen[@]}" -gt 1 ]; then
+    OUTD="$(mktemp_win)" || exit 1; trap 'wait; rm -rf "$OUTD"' EXIT
+    running=0
+    for entry in "${chosen[@]}"; do
+      [ "$running" -lt "${PIPELINE_TEST_UNITS:-4}" ] || { wait -n; running=$((running - 1)); }
+      ( PIPELINE_TEST_UNIT="${entry%%=*}" bash "${BASH_SOURCE[0]}" --case "${entry#*=}" > "$OUTD/${entry%%=*}.out" 2>&1
+        echo "$?" > "$OUTD/${entry%%=*}.rc" ) &
+      running=$((running + 1))
+    done
+    wait
+    run=0; passed=0; failed=0; reused_total=0; bad=0
+    for entry in "${chosen[@]}"; do
+      u="${entry%%=*}"
+      grep -vE '^(pipeline tests: |capture once: )' "$OUTD/$u.out"
+      sum=$(grep -E '^pipeline tests: [0-9]+ run, [0-9]+ passed, [0-9]+ failed' "$OUTD/$u.out" | tail -n 1)
+      if [[ $sum =~ ^pipeline\ tests:\ ([0-9]+)\ run,\ ([0-9]+)\ passed,\ ([0-9]+)\ failed ]]; then
+        run=$((run + BASH_REMATCH[1])); passed=$((passed + BASH_REMATCH[2])); failed=$((failed + BASH_REMATCH[3]))
+      else bad=1; echo "FAIL  unit $u printed no summary"; fi
+      [ "$(cat "$OUTD/$u.rc" 2>/dev/null)" = 0 ] || bad=1
+      if [[ $(grep -E '^capture once: ' "$OUTD/$u.out") =~ ^capture\ once:\ ([0-9]+) ]]; then reused_total=$((reused_total + BASH_REMATCH[1])); fi
+    done
+    [ "$reused_total" = 0 ] || echo "capture once: $reused_total assertion(s) reused the output of the identical command before them"
+    echo "pipeline tests: $run run, $passed passed, $failed failed"
+    [ "$run" -gt 0 ] && [ "$failed" -eq 0 ] && [ "$bad" = 0 ]
+    exit
+  fi
+fi
+# The case selection itself (its own unit: it needs no fixture). --help exits 0, an unknown argument, an unknown case or
+# an empty selector exits 2 before any run, --list-cases lists every case, and a one-case child run (tier, the cheapest:
+# five assertions after its fixture build) runs only its own section, so fewer assertions than the full run.
+if [ "${SELECTED// /}" = cli-selftest ]; then
+  self="${BASH_SOURCE[0]}"; spass=0; sfail=0
+  sok() { spass=$((spass + 1)); echo "PASS  $1"; }
+  sno() { sfail=$((sfail + 1)); echo "FAIL  $1"; }
+  bash "$self" --help >/dev/null 2>&1 && sok "--help exits 0" || sno "--help did not exit 0"
+  bash "$self" --no-such-option >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && sok "unknown argument exits 2" || sno "unknown argument exited $rc, want 2"
+  bash "$self" --case no-such-case >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] && sok "unknown case exits 2" || sno "unknown case exited $rc, want 2"
+  for sel in ',' '' ' , '; do
+    bash "$self" --case "$sel" >/dev/null 2>&1; rc=$?
+    [ "$rc" -eq 2 ] && sok "empty selector '$sel' exits 2 and runs nothing" || sno "empty selector '$sel' exited $rc, want 2"
+  done
+  listed=$(bash "$self" --list-cases 2>&1); rc=$?
+  want=$(printf '%s
+' $CASES)
+  [ "$rc" -eq 0 ] && [ "$listed" = "$want" ] && sok "--list-cases exits 0 and lists the $(wc -w <<<"$CASES") cases" || sno "--list-cases rc=$rc, listed: $(head -c 200 <<<"$listed")"
+  if [ "${PIPELINE_SELFTEST_CHILD:-0}" != 1 ]; then
+  start="$EPOCHREALTIME"
+  one=$(bash "$self" --case tier 2>&1); rc=$?
+  n_one=$(sed -n 's/^pipeline tests: \([0-9]*\) run.*/\1/p' <<<"$one"); sections=$(grep -c '^-- ' <<<"$one")
+  n_failed=$(sed -n 's/^pipeline tests: [0-9]* run, [0-9]* passed, \([0-9]*\) failed.*/\1/p' <<<"$one")
+  if [ "$rc" -eq 0 ] && [ "$n_failed" = 0 ] && [ "${n_one:-0}" -gt 0 ] && [ "${n_one:-0}" -lt 20 ] && [ "$sections" = 1 ]; then sok "--case tier exits 0 and runs $n_one assertions in $sections section, not the full run"
+  else sno "--case tier rc=$rc, ${n_one:-?} assertions, ${n_failed:-?} failed, $sections sections (want exit 0, zero failures, a few assertions, one section)"; fi
+    for form in comma repeated; do
+      if [ "$form" = comma ]; then args=(--case cli-selftest,cli-selftest)
+      else args=(--case cli-selftest --only cli-selftest); fi
+      duplicate=$(PIPELINE_SELFTEST_CHILD=1 bash "$self" "${args[@]}" 2>&1); rc=$?
+      summary=$(grep -c '^pipeline tests: [0-9]* run, [0-9]* passed, 0 failed$' <<<"$duplicate")
+      marker=$(grep -c '^PASS  --help exits 0$' <<<"$duplicate")
+      if [ "$rc" -eq 0 ] && [ "$summary" = 1 ] && [ "$marker" = 1 ]; then sok "$form duplicate selector runs cli-selftest once"
+      else sno "$form duplicate selector rc=$rc, $summary successful summaries, $marker self-test markers"; fi
+    done
+  elapsed=$(( ${EPOCHREALTIME/./} - ${start/./} ))
+  [ "${PIPELINE_TEST_TIMES:-0}" != 1 ] || printf 'TIME  cli-selftest child run %d.%03ds
+' "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
+  fi
+  total=$((spass + sfail)); echo "pipeline tests: $total run, $spass passed, $sfail failed"
+  [ "$sfail" -eq 0 ]; exit
+fi
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
@@ -41,7 +204,7 @@ pp() {
     fi
     return
   fi
-  OUT=$(python3 -B "$P" "$@" 2>&1); RC=$?
+  python3 -B "$P" "$@" > "$TMP/pp.out" 2>&1; RC=$?; OUT=$(<"$TMP/pp.out")  # no subshell: a fork costs most on Windows
   MEMO_KEY="$key"; MEMO_OUT="$OUT"; MEMO_RC="$RC"; MEMO_SPEC=; MEMO_SRC=
 }
 # pp_spec <args...>: pp, then SPEC and SRC: the persisted Orca spec the one-line prompt names (and the read's exit code)
@@ -56,18 +219,30 @@ print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")
   fi
   SPEC="$MEMO_SPEC"; SRC="$MEMO_SRC"
 }
+# has_ere <text> <ere>: grep -qE on the text without a process (bash regex per line; a fork costs most on Windows).
+# PIPELINE_TEST_MATCH=check also runs grep and fails on any difference between the two.
+CR=$'\r'
+has_ere() {
+  local line found=1
+  while IFS= read -r line; do line=${line%"$CR"}; [[ $line =~ $2 ]] && { found=0; break; }; done <<<"$1"
+  if [ "${PIPELINE_TEST_MATCH:-}" = check ]; then
+    local g=1; grep -qE -- "$2" <<<"$1" && g=0
+    [ "$g" = "$found" ] || { fail=$((fail + 1)); echo "FAIL  matcher differs from grep -E for '$2' (bash $found, grep $g)"; }
+  fi
+  return "$found"
+}
 # expect <name> <rc> <grep-regex|-> <args...>: exit code and (optionally) a line of the combined output
 expect() {
   local name="$1" want="$2" pat="$3"; shift 3
   local out rc; pp "$@"; out="$OUT"; rc="$RC"
-  if [ "$rc" = "$want" ] && { [ "$pat" = - ] || grep -qE -- "$pat" <<<"$out"; }; then pass=$((pass + 1)); echo "PASS  $name"
+  if [ "$rc" = "$want" ] && { [ "$pat" = - ] || has_ere "$out" "$pat"; }; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, want $want, pattern '$pat')"; sed 's/^/      /' <<<"$out" | head -30; fi
 }
 # refute <name> <grep-regex> <args...>: the output must NOT contain the pattern (exit code ignored)
 refute() {
   local name="$1" pat="$2"; shift 2
   local out; pp "$@"; out="$OUT"
-  if grep -qE -- "$pat" <<<"$out"; then fail=$((fail + 1)); echo "FAIL  $name (found '$pat')"; sed 's/^/      /' <<<"$out" | head -20
+  if has_ere "$out" "$pat"; then fail=$((fail + 1)); echo "FAIL  $name (found '$pat')"; sed 's/^/      /' <<<"$out" | head -20
   else pass=$((pass + 1)); echo "PASS  $name"; fi
 }
 # Match a rule in the persisted Orca spec, rather than the one-line launch prompt.
@@ -75,7 +250,7 @@ expect_spec() {
   local name="$1" pat="$2"; shift 2
   local rc spec
   pp_spec "$@"; rc="$RC"; spec="$SPEC"
-  if [ "$rc" = 0 ] && grep -qE -- "$pat" <<<"$spec"; then pass=$((pass + 1)); echo "PASS  $name"
+  if [ "$rc" = 0 ] && has_ere "$spec" "$pat"; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, pattern '$pat')"; head -20 <<<"$spec"; fi
 }
 # refute_spec <name> <grep-regex> <args...>: the persisted Orca spec must NOT contain the pattern (exit 0, spec read)
@@ -83,7 +258,7 @@ refute_spec() {
   local name="$1" pat="$2"; shift 2
   local rc spec src
   pp_spec "$@"; rc="$RC"; spec="$SPEC"; src="$SRC"
-  if [ "$rc" = 0 ] && [ "$src" = 0 ] && [ -n "$spec" ] && ! grep -qE -- "$pat" <<<"$spec"; then pass=$((pass + 1)); echo "PASS  $name"
+  if [ "$rc" = 0 ] && [ "$src" = 0 ] && [ -n "$spec" ] && ! has_ere "$spec" "$pat"; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, spec rc=$src, found or no spec '$pat')"; head -20 <<<"$spec"; fi
 }
 gi() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
@@ -93,6 +268,7 @@ for d in "$S" "$C" "$T"; do mkdir -p "$d"; git init -q -b develop "$d"; done
 mkdir -p "$C/ProjectSettings" "$T/ProjectSettings"; echo "m_EditorVersion: 6000.0.0f1" > "$C/ProjectSettings/ProjectVersion.txt"
 cp "$C/ProjectSettings/ProjectVersion.txt" "$T/ProjectSettings/"
 for d in "$S" "$C"; do echo base > "$d/README.md"; gi "$d" add -A; gi "$d" commit -qm base; done
+cp -R "$S" "$TMP/base-server"
 HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","topic":"feat/core/demo","deliver":"pr"'
 
 # Independent case groups (model routing, multi-wave currency, QA tiers): every case has its own directories and state
@@ -409,26 +585,20 @@ spec = importlib.util.spec_from_file_location('multiwave_pipeline', root + '/scr
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
 work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
-repo = work / 'repo'; repo.mkdir()
+repo = work / 'repo'
+variant = 'serial' if case.startswith('serial-') else 'subtask' if case.startswith('subtask-') else 'base'
+shutil.copytree(pathlib.Path(tmp) / 'templates' / variant, repo, ignore=shutil.ignore_patterns('*.lock'))
 os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
 def git(*args):
     r = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
                        capture_output=True, text=True)
     assert r.returncode == 0, (args, r.stderr)
     return r.stdout.strip()
-git('init', '-q', '-b', 'main')
 def commit(text, filename='shared.txt'):
     (repo / filename).write_text(text)
     git('add', filename); git('commit', '-qm', text)
     return git('rev-parse', 'HEAD')
-if case.startswith('serial-'):
-    (repo / 'ProjectSettings').mkdir()
-    (repo / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
-    git('add', 'ProjectSettings')
-base = commit('base')
-if case.startswith('subtask-'):
-    commit('outside base', 'outside.txt')
-    base = git('rev-parse', 'HEAD')
+base = git('rev-parse', 'HEAD')
 git('switch', '--no-track', '-c', 'topic')
 plan = {'schema': m.SCHEMA, 'id': 'multiwave-' + case, 'title': 'test', 'topic': 'topic',
         'repos': {'fixture': {'path': str(repo), 'base': 'main'}},
@@ -457,9 +627,28 @@ if case == 'repo-path':
     assert m.repo_info(plan, reg, 'fixture')['path'] == str(repo)
     print(case + ' assertions passed')
     sys.exit(0)
+
+def pipeline_cli(*args):
+    if os.environ.get('PIPELINE_TEST_CLI') == 'process':
+        return subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
+                              capture_output=True, text=True)
+    import contextlib, io
+    out, err = io.StringIO(), io.StringIO()
+    argv = sys.argv
+    try:
+        sys.argv = [root + '/scripts/factory-pipeline.py', *args]
+        m.pr._cache.clear()  # availability probes belong to one CLI invocation
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = m.main()
+            except SystemExit as exc:
+                rc = exc.code
+    finally:
+        sys.argv = argv
+    return subprocess.CompletedProcess(args, rc, out.getvalue(), err.getvalue())
+
 def cli(*args, rc=0):
-    r = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
-                       capture_output=True, text=True)
+    r = pipeline_cli(*args)
     assert r.returncode == rc, (args, r.stdout, r.stderr)
     return r
 def verdict(task, phase, sha, by='claude', extra=()):
@@ -660,7 +849,7 @@ git('init', '-q', '-b', 'main')
 git('add', '.'); git('commit', '-qm', 'base')
 base = git('rev-parse', 'HEAD'); git('switch', '--no-track', '-c', 'topic')
 (repo / 'code.py').write_text('change'); git('commit', '-qam', 'change'); first = git('rev-parse', 'HEAD')
-task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py'],
+task = {'id': 'a', 'repo': 'fixture', 'kind': 'code', 'objective': 'test', 'paths': ['code.py', 'fix.py'],
         'checks': ['bash tests/pipeline.test.sh', 'env -u TMPDIR tests/pipeline.test.sh',
                    'tests/run-all.sh -j 4', 'tests/run-all.sh --affected --only-suites tests/pipeline.test.sh',
                    'python3 -B scripts/build-registry.py --check', 'tests/dogfood.sh',
@@ -721,8 +910,9 @@ with contextlib.redirect_stdout(handoff):
                         'parent': str(work / 'integration'), 'base': 'main'}, 'topic-task',
                         {'model': 'model', 'effort': 'high'})
 commands = handoff.getvalue().splitlines()
-assert len(commands) == 2 and 'worktree add --no-track -b topic-task' in commands[0]
-assert commands[1].startswith('orca agent launch ') and 'path:' in commands[1]
+assert len(commands) == 3 and 'worktree add --no-track -b topic-task' in commands[0]
+assert commands[1].startswith('orca worktree set ') and '--parent-worktree' in commands[1]
+assert commands[2].startswith('orca agent launch ') and 'path:' in commands[2]
 assert 'worktree create' not in handoff.getvalue()
 # without a known suite list, an --only-suites suite path runs as run-all runs it (TMPDIR unset), attributed to its task
 unknown = 'tests/run-all.sh --only-suites tests/session-state.test.sh,tests/r.test.py'
@@ -879,16 +1069,50 @@ for bad in ('tests/run-all.sh', './tests/run-all.sh', 'tests/run-a"ll".sh', 'doc
         assert got[1][-1] == '[a] ' + m.pr.DO_NOT_RUN_FAILED + bad, (bad, got)
         assert not any(e.startswith('[a] env') and 'run-all' in e for e in got[1]), (bad, got)
 assert not m.pr.failed_suite_ok('tests/run-all.sh') and m.pr.failed_suite_ok('tests/orca-wait.test.sh')
+
+def pipeline_cli(*args):
+    if os.environ.get('PIPELINE_TEST_CLI') == 'process':
+        return subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args],
+                              capture_output=True, text=True)
+    import contextlib, io
+    out, err = io.StringIO(), io.StringIO()
+    argv = sys.argv
+    try:
+        sys.argv = [root + '/scripts/factory-pipeline.py', *args]
+        m.pr._cache.clear()  # availability probes belong to one CLI invocation
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = m.main()
+            except SystemExit as exc:
+                rc = exc.code
+    finally:
+        sys.argv = argv
+    return subprocess.CompletedProcess(args, rc, out.getvalue(), err.getvalue())
+
 def cli(*args):
-    p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
+    p = pipeline_cli(*args)
     assert p.returncode == 0, (args, p.stdout, p.stderr)
     return p.stdout
 def cli_fail(*args):
-    p = subprocess.run([sys.executable, '-B', root + '/scripts/factory-pipeline.py', *args], capture_output=True, text=True)
+    p = pipeline_cli(*args)
     assert p.returncode != 0 and '--failed-suites' in p.stderr, (args, p.stdout, p.stderr)
 def dispatch(phase, sha, tid='a'):
     return cli('dispatch', str(pf), '--task', tid, '--phase', phase, '--sha', sha, '--runner', 'print')
 out = dispatch('qa', first)
+assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
+assert 'tier command already passes these cases' not in out, out
+affected = work / 'task' / 'tests' / 'affected.py'
+affected.write_text('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
+                    'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
+                    'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
+                    'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
+case_out = dispatch('qa', first)
+assert ('Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh ALL\n'
+        'tests/routing-properties.test.py ALL\ntests/routing.test.sh --case selection') in case_out, case_out
+assert 'tier command already passes these cases' in case_out, case_out
+bad_out = dispatch('qa', 'bad-sha')
+assert 'Affected cases: not computed (git diff failed)' in bad_out and 'tier command already passes these cases' not in bad_out, bad_out
+affected.unlink()
 command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
 assert out.count(command) == 1, out
@@ -953,10 +1177,14 @@ cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 
 (repo / 'tests' / 'run-all.sh').write_text(runall_src, newline='\n')
 cli('verdict', str(pf), '--task', 'a', '--phase', 'qa', '--sha', first, '--by', 'claude', '--state', 'FAIL',
     '--failed-suites', 'tests/routing.test.sh,tests/routing.test.sh,tests/orca-wait.test.sh')
-(repo / 'code.py').write_text('fix'); git('commit', '-qam', 'fix'); second = git('rev-parse', 'HEAD')
+(repo / 'fix.py').write_text('fix'); git('add', 'fix.py'); git('commit', '-qm', 'fix'); second = git('rev-parse', 'HEAD')
+affected.write_text('import pathlib, sys\nassert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["fix.py"]\n'
+                    'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
 out = dispatch('qa', second)
 assert ('--base ' + first + ' --only-suites tests/pipeline.test.sh,tests/routing-properties.test.py,'
         'tests/routing.test.sh -j 2') in out, out
+assert 'tests/routing.test.sh ALL' in out and 'not computed' not in out, out
+affected.unlink()
 # a failed suite run-all does not run (exit 2 under --only-suites) is an extra command instead
 assert 'orca-wait' not in out.split('QA tier command:\n')[1].split('\n')[0], out
 assert '[a] env -u TMPDIR bash tests/orca-wait.test.sh' in out.split('Extra commands:')[1], out
@@ -984,28 +1212,64 @@ plan['tier'] = 'S'; save()
 assert 'no separate QA session' in dispatch('qa', second)
 print('QA tier command, dedup, extras, warnings, review, integration, re-QA and S/M gate assertions passed')
 QA_TIERS
+if has_case multiwave; then
+python3 -B - "$TMP" <<'TEMPLATES'
+import pathlib, shutil, subprocess, sys
+folder = pathlib.Path(sys.argv[1]) / 'templates'; folder.mkdir()
+base = folder / 'base'; base.mkdir()
+# No auto maintenance: a detached `git maintenance run --auto` after a commit holds .git/objects/maintenance.lock,
+# which vanished mid-copytree on Linux CI (templates/serial missing). Lock files are never copied either.
+def git(repo, *args):
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', '-c', 'maintenance.auto=false',
+                    '-c', 'gc.auto=0', *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+def copy(src, dst):
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns('*.lock'))
+git(base, 'init', '-q', '-b', 'main')
+(base / 'shared.txt').write_text('base')
+git(base, 'add', '.'); git(base, 'commit', '-qm', 'base')
+sub = folder / 'subtask'; copy(base, sub)
+(sub / 'outside.txt').write_text('outside base'); git(sub, 'add', '.'); git(sub, 'commit', '-qm', 'outside base')
+serial = folder / 'serial'; copy(base, serial)
+(serial / 'ProjectSettings').mkdir()
+(serial / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
+git(serial, 'add', '.'); git(serial, 'commit', '-qm', 'Unity marker')
+TEMPLATES
+fi
 BG="$TMP/bg"; mkdir -p "$BG"
 # bg_case <id> <command...>: run one case, output in $BG/<id>.out, exit code in $BG/<id>.rc
-bg_case() { local id="$1"; shift; "$@" > "$BG/$id.out" 2>&1; echo "$?" > "$BG/$id.rc"; }
+bg_case() {
+  local id="$1" begin="$EPOCHREALTIME" rc now elapsed; shift
+  "$@" > "$BG/$id.out" 2>&1; rc=$?
+  now="$EPOCHREALTIME"; elapsed=$(( ${now/./} - ${begin/./} ))
+  printf '%d.%03d' "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))" > "$BG/$id.time"
+  echo "$rc" > "$BG/$id.rc"
+}
 (
   running=0
   next() {
     [ "$running" -lt "${PIPELINE_TEST_JOBS:-4}" ] || { wait -n; running=$((running - 1)); }
     bg_case "$@" & running=$((running + 1))
   }
+  if has_case model-routing; then
   for c in $ROUTING_CASES; do next "routing-$c" env RPG_FACTORY_STATE_DIR="$TMP/state-routing-$c" python3 -B "$TMP/routing-cases.py" "$ROOT" "$TMP" "$c"; done
+  fi
+  if has_case multiwave; then
   for c in $MULTIWAVE_CASES; do next "multiwave-$c" python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$c"; done
-  next qa-tiers python3 -B "$TMP/qa-tiers.py" "$ROOT" "$TMP"
+  fi
+  if has_case qa-tiers; then next qa-tiers python3 -B "$TMP/qa-tiers.py" "$ROOT" "$TMP"; fi
   wait
 ) &
 BG_PID=$!
 # bg_report <name> <id>: PASS when the background case exited 0, else FAIL with its output
 bg_report() {
   [ -z "$BG_PID" ] || { wait "$BG_PID"; BG_PID=; }
+  if [ "${PIPELINE_TEST_TIMES:-0}" = 1 ]; then printf 'TIME  %s %ss\n' "$2" "$(cat "$BG/$2.time")"; fi
   if [ "$(cat "$BG/$2.rc" 2>/dev/null)" = 0 ]; then pass=$((pass + 1)); echo "PASS  $1"
   else fail=$((fail + 1)); echo "FAIL  $1"; cat "$BG/$2.out" 2>/dev/null; fi
 }
 
+if has_case validate; then
+case_start
 echo "-- validate"
 OK=$(plan ok "{$HEAD,\"tasks\":[
  {\"id\":\"gw\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]},
@@ -1041,6 +1305,11 @@ expect "unknown repo is an error" 1 "neither a registry repo nor in plan.repos" 
 TOOL=$(plan tool "{$HEAD,\"repos\":{\"tool\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"tool\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "unregistered repo with ProjectVersion.txt is a no-worktree repo" 0 "No worktree .*: tool" validate "$TOOL"
 
+case_end validate
+fi
+
+if has_case subplan; then
+case_start
 echo "-- subplan validate"
 # subplan <name> <task> <subtasks JSON> [plan file]: a subplan of the plan $OK, or of the named plan file in $TMP
 # (named relative to the subplan file)
@@ -1189,6 +1458,11 @@ expect "a subplan (and its plan) with a UTF-8 BOM validates" 0 "^OK$" subplan va
 expect "dispatch reads a plan with a UTF-8 BOM" 0 "^Task lead for task gw" dispatch "$TMP/bom.json" --task gw --phase lead
 expect "the task-lead spec names the subplan schema, plan and task" 0 "pipeline-subplan.schema.json; .plan. is .*ok.json, .task. is gw" dispatch "$OK" --task gw --phase lead
 
+case_end subplan
+fi
+
+if has_case dispatch; then
+case_start
 echo "-- dispatch"
 expect "server task lead: git creates a no-track task worktree" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "the task lead is no nested Orca worker (no worker-start)" "^orca orchestration worker-start" dispatch "$OK" --task gw --phase lead --runner orca
@@ -1202,6 +1476,7 @@ expect "the codex task's implement session keeps its implementer" 0 "^orca orche
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("lead_agent",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nolead.json"
 expect "registry without pipeline.lead_agent: the task lead defaults to claude" 0 "^orca agent launch --agent claude " --registry "$TMP/reg-nolead.json" dispatch "$OK" --task c2 --phase lead --runner orca
 expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
+expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, after review PASS the task lead runs the QA tier command itself" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
@@ -1267,6 +1542,7 @@ WT="--worktree '?path:[^' ]*demo-gw'?"
 expect "implement joins the task worktree" 0 "--agent claude $WT" dispatch "$OK" --task gw --phase implement --runner orca
 refute "implement never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase implement --runner orca
 expect "implement sub-session does not commit" 0 "Do NOT commit, stage or stash: one shared index" dispatch "$OK" --task gw --phase implement
+expect "implement runs targeted cases only" 0 "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement
 expect "implement sub-session reports changed paths and check counts to the task lead" 0 "Report to the task lead: changed paths" dispatch "$OK" --task gw --phase implement
 expect "subtask paths narrow the sub-session" 0 '"subtask_paths": \[' dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go
 expect "a subtask session may name its own model" 0 "--agent codex $WT" dispatch "$OK" --task gw --phase implement --paths backend/gateway/x.go --agent codex --runner orca
@@ -1282,6 +1558,7 @@ expect "per-task qa in a worktree repo runs in the task worktree" 0 "--agent cod
 refute "per-task qa never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
 expect "per-task qa names the task" 0 "QA worker .*branch feat/core/demo-gw, task gw" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "a second task lead resumes in the existing task worktree" 0 "^orca agent launch --agent claude $WT" dispatch "$OK" --task gw --phase lead --runner orca
+refute "resuming a task worktree does not set its parent" "orca worktree set" dispatch "$OK" --task gw --phase lead --runner orca
 expect "agent fallback for a codex reviewer starts a fresh Claude session" 0 '"subagent_type": "general-purpose"' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL in the prompt" 0 'SAME_MODEL: this session was planned for codex; the Agent-tool fallback runs Claude only' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL on stderr" 0 "starts a fresh Claude session for this codex session: SAME_MODEL" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
@@ -1326,9 +1603,10 @@ def check(args, key="demo", note=""):
         return r.stdout
     command = run("orca")
     lines = command.splitlines()
-    if len(lines) == 2:
+    if len(lines) == 3:
         assert 'worktree add --no-track -b' in lines[0], command
-        assert lines[1].startswith('orca agent launch '), command
+        assert lines[1].startswith('orca worktree set ') and '--parent-worktree' in lines[1], command
+        assert lines[2].startswith('orca agent launch '), command
     else:
         assert len(lines) == 1, repr(command)
     argv = shlex.split(lines[-1])
@@ -1368,6 +1646,11 @@ assert all(pathlib.Path(path).read_text(encoding="utf-8") == full for path, full
 PY
 then pass=$((pass + 1)); echo "PASS  Orca phases use one-line prompts and complete, immutable persistent specs"
 else fail=$((fail + 1)); echo "FAIL  Orca one-line prompts and persistent specs"; fi
+case_end dispatch
+fi
+
+if has_case model-policy; then
+case_start
 echo "-- model policy (registry pipeline.models, lib/model_policy.py): grades, roles, scope, override file"
 MOD="--model claude-opus-5-5 --effort medium --json$"
 # $OK with task gw owning a gateway directory free of contract and generated paths (backend/gateway/ holds the
@@ -1617,12 +1900,18 @@ for doc, schema_name in ((sys.argv[2], "pipeline-subplan"), (sys.argv[3], "pipel
 PY
 then pass=$((pass + 1)); echo "PASS  plan and subplan schemas know grade and grade_reason"
 else fail=$((fail + 1)); echo "FAIL  plan and subplan schemas: grade"; fi
+case_end model-policy
+fi
+
+if has_case child-dispatch; then
+case_start
 echo "-- dispatch: subplan subtasks and Orca child worktrees"
 CH="^orca orchestration worker-start .*--worktree new-child --name feat/core/demo-gw--"
 expect "subplan placement child: worker-start --worktree new-child from the task branch" 0 "${CH}s2 --base-branch feat/core/demo-gw .*--json$" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect "the child subtask runs its implementer (codex)" 0 "worker-start .*--agent codex --worktree new-child" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect "a child command says the run-all rule (stderr)" 0 "never create or remove a child worktree while a full tests/run-all.sh runs \(shared .git/config\)" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec commits on the child branch" "Commit on your child branch with explicit paths" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
+expect_spec "the child implement spec runs targeted cases only" "Never run a whole slow suite or a full tests/run-all.sh" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec: the task lead merges and removes the child at once" "the task lead merges it into feat/core/demo-gw and removes the child at once" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the child implement spec says the run-all rule" "never create or remove a child worktree while a full tests/run-all.sh runs" dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
 expect_spec "the subtask's paths are in the spec" '"subtask_paths": \["backend/gateway/b.go"\]' dispatch "$OK" --task gw --phase implement --subplan "$SPC" --subtask s2 --runner orca
@@ -1659,7 +1948,7 @@ for args in "--task c1 --phase implement" "--task c1 --phase qa --sha abc1234" "
 done
 git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/demo-gw
 expect "new task worktree without an integration checkout: git no-track" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
-refute "new task worktree without an integration checkout: no --parent-worktree" "--parent-worktree" dispatch "$OK" --task gw --phase lead --runner orca
+expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 expect "lead --placement child without integration checkout uses git" 0 "worktree add --no-track -b feat/core/demo-gw" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 # integration QA joins the checkout of plan.topic; without one it is an error and no worktree is created
@@ -1678,7 +1967,7 @@ expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none i
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
-refute "lead --placement shared has no --parent-worktree" "--parent-worktree" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "new task worktree beside integration checkout --placement child" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "lead --placement child has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 expect "new task worktree launches lead by path" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$OK" --task gw --phase lead --runner orca
@@ -1689,6 +1978,11 @@ git -C "$S" worktree remove "$TMP/demo-int"; git -C "$S" branch -q -D feat/core/
 expect "integration QA in the Unity project: main checkout" 0 "--worktree '?path:[^' ]*IndieRPGMMOAdventure'?" dispatch "$OK" --task integration:client --phase qa --sha abc1234 --runner orca
 expect "planner runs in the lead's checkout (no worktree)" 0 "--worktree current" planner --request "add a thing" --runner orca
 
+case_end child-dispatch
+fi
+
+if has_case tier; then
+case_start
 echo "-- tier"
 ctx() { printf '%s\n' "$2" > "$TMP/ctx-$1.json"; echo "$TMP/ctx-$1.json"; }
 X=$(ctx s '{"repos":[{"repo":"server","touched":["server.gateway"],"files":[{"path":"a","source":"given"}],"contracts":[],"generated_hits":[]}]}')
@@ -1700,6 +1994,11 @@ expect "a contract: L" 0 "above M: contract wire-generated" tier --context-json 
 X=$(ctx l2 '{"repos":[{"repo":"server","touched":["server.a"],"files":[{"path":"a","source":"given"}],"contracts":[],"generated_hits":[]},{"repo":"client","touched":["client.a"],"files":[{"path":"b","source":"given"}],"contracts":[],"generated_hits":[]}]}')
 expect "two repos: L" 0 "^Tier: L" tier --context-json "$X"
 
+case_end tier
+fi
+
+if has_case verdict-gate; then
+case_start
 echo "-- verdict and gate"
 # srv/cli: plan.repos aliases of the fixture checkouts (unregistered: no run-checks); cli is a Unity project by its marker
 G=$(plan gate "{$HEAD,\"repos\":{\"srv\":{\"path\":\"ws/rpg-mmo-server\",\"base\":\"develop\"},\"cli\":{\"path\":\"ws/IndieRPGMMOAdventure\",\"base\":\"develop\"}},\"tasks\":[
@@ -1851,6 +2150,11 @@ python3 -B "$P" verdict "$R" --task integration:server --phase qa --sha "$SG2" -
 expect "--no-run-checks never delivers: UNVERIFIED" 1 "^Gate: UNVERIFIED" gate "$R" --no-run-checks
 refute "UNVERIFIED prints no gh pr create" "gh pr create" gate "$R" --no-run-checks
 
+case_end verdict-gate
+fi
+
+if has_case cleanup; then
+case_start
 echo "-- cleanup"
 expect "before merge the integration branch remains" 0 "^Cleanup: CLEAN" cleanup "$G"
 refute "before merge no integration branch deletion" "branch -d feat/core/demo($| )" cleanup "$G"
@@ -1905,6 +2209,11 @@ expect "cleanup names the plan's dispatch specs as kept state, still CLEAN" 0 "S
 if [ "$n" -gt 0 ] && [ "$(ls "$specs"/*.md | wc -l)" = "$n" ]; then pass=$((pass + 1)); echo "PASS  cleanup never deletes the spec files"
 else fail=$((fail + 1)); echo "FAIL  cleanup spec files ($n before)"; fi
 
+case_end cleanup
+fi
+
+if has_case settled-workers; then
+case_start
 echo "-- cleanup and status: settled Orca workers that are not released"
 # a fake `orca` first on PATH: worker-list prints $FAKE_ORCA_JSON (page 2 when --cursor is given), worktree list
 # prints $FAKE_ORCA_WT (when set), `error` exits 1,
@@ -2069,6 +2378,11 @@ opath "cleanup names the integration QA child" 1 "KEPT  srv: child of integratio
 opath "cleanup names the lineage helper of the integration checkout" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*int-helper" cleanup "$G"
 unset FAKE_ORCA_WT
 
+case_end settled-workers
+fi
+
+if has_case orca-first; then
+case_start
 echo "-- Orca first: --runner agent inside a reachable Orca session needs --orca-unavailable"
 # the fake orca's `status --json` answers reachable unless FAKE_ORCA_REACHABLE=false
 inorca() { PATH="$fpath" ORCA_WORKTREE_ID=x "$@"; }
@@ -2100,6 +2414,11 @@ if python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.integration_children
 then pass=$((pass + 1)); echo "PASS  integration children removed: status lists none"
 else fail=$((fail + 1)); echo "FAIL  integration_children after removal"; fi
 
+case_end orca-first
+fi
+
+if has_case review-findings; then
+case_start
 echo "-- review findings"
 expect "--agent cannot swap the planned implementer" 2 "is planned for claude; set .implementer: codex." dispatch "$OK" --task gw --phase implement --agent codex
 X=$(plan alias "{$HEAD,\"repos\":{\"cli2\":{\"path\":\"ws/IndieRPGMMOAdventure\"}},\"tasks\":[
@@ -2203,6 +2522,11 @@ out=$(cd "$TMP" && python3 -B "$P" dispatch "$TP" --task o --phase lead --runner
 if grep -q "Create your own worktree first" <<<"$out" && ! grep -q '"isolation"' <<<"$out"; then pass=$((pass + 1)); echo "PASS  agent fallback for another repo names repo and base, no isolation"
 else fail=$((fail + 1)); echo "FAIL  agent fallback placement"; head -c 400 <<<"$out"; fi
 
+case_end review-findings
+fi
+
+if has_case tier-plugin; then
+case_start
 echo "-- tier for a repo the registry does not know (the plugin repo)"
 PL=$(plan plug "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"scripts/\"],\"acceptance\":[\"a\"]}]}")
 expect "one file of a plan repo: S from the paths alone" 0 '"tier": "S"' tier --json --plan "$PL" --repo plugin --paths scripts/factory-pipeline.py
@@ -2224,6 +2548,11 @@ expect "tier --plan needs --paths" 2 "needs --repo <plan repo key> and --paths" 
 expect "tier --plan with an unknown repo key fails cleanly" 2 "neither a registry repo nor in plan.repos" tier --plan "$PL" --repo nope --paths x
 expect "--repo without --plan is a usage error" 2 "go with --plan" tier --repo plugin --paths x
 
+case_end tier-plugin
+fi
+
+if has_case status; then
+case_start
 echo "-- status (resume a run from git and the verdicts)"
 # srv: a worktree repo (a, then b); cli: a Unity project (c1, then c2 in the main checkout); topic feat/core/st
 ST=$(plan st "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"st\",\"title\":\"Status\",\"topic\":\"feat/core/st\",
@@ -2403,14 +2732,20 @@ st_phase "a changed task in the plan: its review is no longer counted; review th
 expect "and the stale verdict is named" 0 "review verdict is STALE: the plan's task changed" status "$ST"
 X=$(plan stbad "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "status of an invalid plan: exit 1, next is validate" 1 "^Next: .* validate " status "$X"
-gi "$C" checkout -q feat/core/demo
+# the chain unit creates feat/core/demo; a standalone status unit has no such branch
+git -C "$C" rev-parse -q --verify refs/heads/feat/core/demo >/dev/null && gi "$C" checkout -q feat/core/demo
 git -C "$S" worktree remove "$TMP/st-b"; git -C "$S" worktree remove "$TMP/st-int"
 
+case_end status
+fi
+
+if has_case owned-case; then
+case_start
 echo "-- owned paths in another case (Windows: case-insensitive pathspecs)"
 # The plan owns SRC/ while the commits touch src/a.txt. On Windows (os.name nt, as specs() checks) the owned-path check
 # and the git pathspecs agree case-insensitively: status counts the commit and a later change makes the review STALE.
 # Elsewhere git is case-sensitive: the commit is not the task's own, so the task is still implementing.
-I="$WS/icase"; mkdir -p "$I"; git init -q -b develop "$I"; echo base > "$I/README.md"; gi "$I" add -A; gi "$I" commit -qm base
+I="$WS/icase"; cp -R "$TMP/base-server" "$I"
 IC=$(plan icase '{"schema":"rpg-factory.pipeline-plan/1","id":"icase","title":"Case","topic":"feat/core/ic","deliver":"pr",
  "repos":{"ic":{"path":"ws/icase","base":"develop"}},"tasks":[{"id":"t","repo":"ic","objective":"o","paths":["SRC/"],"acceptance":["a"]}]}')
 gi "$I" checkout -qb feat/core/ic-t; mkdir -p "$I/src"; echo a > "$I/src/a.txt"; gi "$I" add -A; gi "$I" commit -qm "feat: a"; IT=$(git -C "$I" rev-parse HEAD)
@@ -2432,6 +2767,11 @@ else
   ic_phase "case-sensitive host: a commit in src/ is not the task's own for SRC/ (implementing)" implementing
 fi
 
+case_end owned-case
+fi
+
+if has_case dogfood; then
+case_start
 echo "-- dogfood two-level grader (offline, synthetic transcripts)"
 # tl_transcript <file> <bash command> <its result text> [extra tool_use json]: a stream-json run lead transcript that
 # loads factory-core, runs one Bash command (is_error false, as a pipe reports) and finishes with success
@@ -2449,7 +2789,7 @@ tl_transcript() {
 # grade <name> <rc> <grep-regex> <transcript>: tests/dogfood.sh --grade-two-level exit code and result line
 grade() {
   local name="$1" want="$2" pat="$3" out rc; out=$(bash "$ROOT/tests/dogfood.sh" --grade-two-level "$4" 2>&1); rc=$?
-  if [ "$rc" = "$want" ] && grep -qE -- "$pat" <<<"$out"; then pass=$((pass + 1)); echo "PASS  $name"
+  if [ "$rc" = "$want" ] && has_ere "$out" "$pat"; then pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name (rc=$rc, want $want, pattern '$pat')"; sed 's/^/      /' <<<"$out" | head -10; fi
 }
 LEAD_CMD='python3 -B scripts/factory-pipeline.py dispatch plan.json --task t --phase lead --runner print 2>&1 | head -60'
@@ -2472,6 +2812,11 @@ grade "grader: missing transcript: FAIL" 1 "FAIL: no transcript" "$TMP/tl-none.j
 if tail -n 1 "$ROOT/tests/dogfood.sh" | grep -qF '"${tl_fail:-0}" -eq 0'; then pass=$((pass + 1)); echo "PASS  dogfood --all exit status includes the two-level result"
 else fail=$((fail + 1)); echo "FAIL  dogfood --all exit status includes the two-level result (last line of tests/dogfood.sh)"; fi
 
+case_end dogfood
+fi
+
+if has_case recorded-implementer; then
+case_start
 echo "-- recorded implementer"
 # a fallback implementation is recorded: after the model returns, review pairs against the recorded implementer
 R="$TMP/rec"; mkdir -p "$R/ProjectSettings" "$R/code" "$R/docs"; echo 'm_EditorVersion: 6000.0.0f1' > "$R/ProjectSettings/ProjectVersion.txt"
@@ -2602,6 +2947,11 @@ check_reg "check-registry: unknown kind in agent_routing fails" '.pipeline.agent
 check_reg "check-registry: unknown agent in qa_prefer fails" '.pipeline.qa_prefer = "gpt"' "pipeline.qa_prefer: unknown agent"
 check_reg "check-registry: unknown agent in available_agents fails" '.pipeline.available_agents = ["gpt"]' "pipeline.available_agents: unknown agent gpt"
 
+case_end recorded-implementer
+fi
+
+if has_case cleanup-merged; then
+case_start
 echo "-- cleanup after merge to main"
 M="$TMP/merged-repo"; O="$TMP/merged-origin.git"; MW="$TMP/merged-topic"
 git init -q --bare "$O"
@@ -2646,14 +2996,31 @@ git -C "$M" branch -D feat/merged-other >/dev/null
 expect "cleanup is clean after removal" 0 "^Cleanup: CLEAN" cleanup "$MP" --after-merge
 expect "clean cleanup names the next plan" 0 "^Next: start the next plan from main$" cleanup "$MP" --after-merge
 
+case_end cleanup-merged
+fi
+
+if has_case model-routing; then
+case_start
 echo "-- model routing"
 for case in $ROUTING_CASES; do bg_report "routing $case" "routing-$case"; done
 
+case_end model-routing
+fi
+
+if has_case multiwave; then
+case_start
 echo "-- multi-wave currency and verdict provenance"
 for case in $MULTIWAVE_CASES; do bg_report "multiwave $case" "multiwave-$case"; done
 
+case_end multiwave
+fi
+
+if has_case qa-tiers; then
+case_start
 echo "-- QA tiers"
 bg_report "QA tiers regression matrix" qa-tiers
+case_end qa-tiers
+fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
 [ "$total" -gt 0 ] && [ "$fail" -eq 0 ]
