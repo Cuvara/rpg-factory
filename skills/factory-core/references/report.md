@@ -45,6 +45,14 @@ Runner: `run-checks.py --repo <key> --paths ...` · `--status` at report time: <
 |---|---|---|---|---|---|---|---|---|---|---|
 <!-- Then: tier (and any --tier override), `factory-pipeline.py gate` state with its blockers, SAME_MODEL reviews, Unity test waits, PR URL or "READY_FOR_PR, deliver not requested". -->
 
+### Cost
+| Task | Session role | Model | Effort | Tokens / cost | Source |
+|---|---|---|---|---|---|
+| <task> | <implementer / reviewer / qa / task lead> | <model> | <effort> | <tokens or cost | NOT_AVAILABLE> | <`/cost` / session footer / Codex usage line / Orca | n/a> |
+| run lead (total) | run lead | <model> | <effort> | <tokens or cost | NOT_AVAILABLE> | <source | n/a> |
+<!-- Values come from the runtime (Claude Code `/cost` or the session footer, the Codex usage line, Orca if it reports it), else NOT_AVAILABLE. Never an estimate shown as measured. -->
+<!-- Limitations and follow-ups of this report go to the backlog (in this plugin `docs/plans/backlog.md`, one topic each); every new operating lesson goes to the file the learning-loop rule names (`.claude/CLAUDE.md` "Learning loop"), both in the integration commit. -->
+
 ## Pending (cross-repo / release)
 - `factory-status.py` pending items this task created or left: <item -> owning skill> | none
 - Release state: <READY_TO_TAG repo vX.Y.Z (lead tags) | tagged vX.Y.Z + release URL (authorized in this task) | n/a>

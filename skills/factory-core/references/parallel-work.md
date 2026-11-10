@@ -58,4 +58,4 @@ slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --i
 - The run lead's waiter is `scripts/orca-wait.sh --run <id>`; its suite runs inside `tests/parallel-policy.test.sh`.
 - The run report is `docs/plans/<plan>/report.md` (`docs/plans/README.md`); verdicts and specs stay in the
   per-machine state dir, so a new machine re-runs review and QA. The report layout is `report.md` in this folder's
-  `references/`.
+  `references/`; it includes the Cost table (`skills/delivery/references/delivery.md` section 8).
