@@ -211,7 +211,7 @@ if has_case policy-markers; then
 POLICY_IDS=(run-lead-never-implements only-task-lead-commits no-worktree-repo task-lead-claude speed-rule placement-table
   child-merge-remove child-no-run-all which-model subagents-read-only single-verify)
 declare -A POLICY_SENTENCE=(
-  [run-lead-never-implements]='The run lead never edits task files; an S-tier task is a one-task plan with its own task lead.'
+  [run-lead-never-implements]='The run lead never edits task files, except in a tier XS task (section 10 step 1); an S-tier task is a one-task plan with its own task lead.'
   [only-task-lead-commits]='Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.'
   [no-worktree-repo]='A no-worktree repo (registry `worktrees: false` or a configured no-worktree marker, for example a Unity project) never gets a worktree; its task lead and all its sessions run in its main checkout.'
   [task-lead-claude]="The task lead is a Claude session (registry pipeline.lead_agent), whatever the task's implementer, and Codex only when Claude is unavailable; implementation, review and QA sessions keep the cross-model pairing."
@@ -304,7 +304,13 @@ done
 s_mutate "canonical sentence changed (task lead follows the implementer)" "sentence changed under policy:task-lead-claude" \
   'sed -i "s/^The task lead is a Claude session (registry pipeline\.lead_agent), whatever/The task lead runs on the implementer model, whatever/" "$F"'
 s_mutate "canonical sentence changed (S tier shortcut allowed)" "sentence changed under policy:run-lead-never-implements" \
-  'sed -i "s/^The run lead never edits task files; an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
+  'sed -i "s/^The run lead never edits task files, except in a tier XS task (section 10 step 1); an S-tier task is a one-task plan with its own task lead\.$/The run lead never edits task files, except for an S-tier task, which it implements in its own session./" "$F"'
+s_mutate "canonical sentence changed (XS exception dropped)" "sentence changed under policy:run-lead-never-implements" \
+  'sed -i "s/^The run lead never edits task files, except in a tier XS task (section 10 step 1);/The run lead never edits task files;/" "$F"'
+s_mutate "canonical sentence changed (XS exception widened to S)" "sentence changed under policy:run-lead-never-implements" \
+  'sed -i "s/^The run lead never edits task files, except in a tier XS task (section 10 step 1);/The run lead never edits task files, except in a tier XS or S task (section 10 step 1);/" "$F"'
+s_mutate "canonical sentence changed (base rule dropped)" "sentence changed under policy:run-lead-never-implements" \
+  'sed -i "s/^The run lead never edits task files, except in a tier XS task/The run lead may edit task files in a tier XS task/" "$F"'
 s_mutate "canonical sentence changed (sub-sessions may commit)" "sentence changed under policy:only-task-lead-commits" \
   'sed -i "s/^Sub-sessions in the shared task worktree never commit, stage or stash;/Sub-sessions may commit;/" "$F"'
 s_mutate "canonical sentence changed (single verify blocks on a code subtask)" "sentence changed under policy:single-verify" \

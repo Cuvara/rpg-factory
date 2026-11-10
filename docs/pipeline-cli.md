@@ -7,8 +7,12 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 
 ## tier and planner
 
-- `tier -- --repo <key> --paths <files>` prints S, M or L and the flow. An S task is still a one-task `plan.json`
+- `tier -- --repo <key> --paths <files>` prints XS, S, M or L and the flow. An S task is still a one-task `plan.json`
   with its own task lead (the task worktree, or the main checkout of a no-worktree repo).
+- XS applies only when every path is prose (`pipeline_route.prose_path`, see "dispatch" below), no path is a contract
+  or generated path, and the change stays within `pipeline.tiers.XS` (`max_files`, `max_changed_lines`). An XS task
+  has no task lead, task worktree or implement session: the run lead itself edits and commits it on the plan `topic`
+  branch, dispatches one cross-model review and runs the task tier command (delivery.md section 10 step 1).
 - `tier --plan plan.json --repo <key> --paths <files>` is the form for `--registry none` and for repos the plan names
   by path: the repo is read from the plan's `repos` entry, not from the registry.
 - `planner --request <text> --runner orca` starts the L-tier planner worker. Planning is read-only and runs in the
@@ -29,6 +33,8 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   reviewer is of the other model. It prints the waves (one subtask per wave in a no-worktree repo) and refuses
   `placement: child` in a no-worktree repo. It warns like `validate` on a missing `reason` or one model for 3 or more
   subtasks.
+- `validate` accepts tier XS only for a one-task plan whose owned paths are all prose and within the XS thresholds;
+  a non-prose path, a second task or a threshold exceeded is an error.
 - Both reject an unknown grade or one the model policy cannot resolve, and print the resolved model and effort per
   task or subtask.
 
@@ -58,6 +64,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   finding is a FAIL and no test runs). When the paired model is unavailable it records the same-model fallback for
   that SHA. `status` names `--phase verify` after the last subtask; after a FAIL it names `--phase lead`, which
   resumes the task lead in its worktree (or the main checkout of a no-worktree repo) for the fix.
+- XS task: `--phase lead` starts no session; it says the run lead edits the task on the `topic` branch and prints the
+  review command. `--phase review --sha <sha>` then needs no task worktree: the reviewer reads the topic checkout, and
+  the implementer is recorded as the run lead's model, so the review goes to the other model.
 - `dispatch ... --phase review --sha <sha>` and `--phase qa --sha <sha>` start one of the two alone, for a lead that
   needs only one of them. `--phase qa` (like `--phase verify`) prints the tier command (never a full run) and the case
   list for its base and suite selection (`ALL` for explicit suites). `--task integration:<repo>` targets the
@@ -128,6 +137,16 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase veri
   fallback does not change who reviews. No subtask needs a review of its own: the task's verify review covers every
   subtask, and the gate lists a code subtask written by the reviewer's model as an accepted
   `SAME_MODEL (single verify)` note (delivery.md section 10, `policy:single-verify`).
+- An XS task needs its review PASS on the run lead's commit and the lead-run QA verdict (note starting `tier XS`); the
+  gate blocks it when the committed diff exceeds the XS thresholds (files, changed lines).
+
+## Orca commands
+
+The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca orchestration task-create`,
+`orca orchestration worker-start`, `orca orchestration check`, `orca orchestration reply`, `orca orchestration send`,
+`orca orchestration worker-show`, `orca orchestration worker-read`, `orca orchestration worker-list`,
+`orca orchestration worker-release`, `orca agent launch`, `orca worktree list`, `orca worktree create`,
+`orca worktree rm`. `scripts/orca-wait.sh` allows one waiter per Run through a lock file in the state dir.
 
 ## agents
 
