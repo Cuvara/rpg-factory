@@ -200,6 +200,14 @@
               "max_files": {
                 "type": "integer"
               },
+              "max_changed_lines": {
+                "type": "integer",
+                "description": "Largest committed diff (added plus deleted lines) a task may have at this tier"
+              },
+              "prose_only": {
+                "type": "boolean",
+                "description": "true: every owned path of a task must be prose (scripts/lib/pipeline_route.py prose_path)"
+              },
               "contracts": {
                 "type": "boolean",
                 "description": "false: a task that touches a contract is above this tier"

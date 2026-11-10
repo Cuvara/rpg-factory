@@ -26,11 +26,12 @@
     },
     "tier": {
       "enum": [
+        "XS",
         "S",
         "M",
         "L"
       ],
-      "description": "From `factory-pipeline.py tier`; an override is named in the report."
+      "description": "From `factory-pipeline.py tier`; an override is named in the report. XS = prose-only one-task plan within registry pipeline.tiers.XS."
     },
     "topic": {
       "type": "string",
@@ -189,7 +190,16 @@
               "standard",
               "heavy"
             ],
-            "description": "Model grade of the task (registry pipeline.models.rubric). Default: derived from its tier (S light, M standard, L or contract/generated paths heavy). Its implement sessions run with the grade's profile; a heavy task's review runs with the heavy profile."
+            "description": "Model grade of the task (registry pipeline.models.rubric). Default: derived from its tier (XS and S light, M standard, L or contract/generated paths heavy). Its implement sessions run with the grade's profile; a heavy task's review runs with the heavy profile."
+          },
+          "tier": {
+            "enum": [
+              "XS",
+              "S",
+              "M",
+              "L"
+            ],
+            "description": "The task's own tier, read like the plan's `tier`. XS (the run lead edits and commits on `topic`, no task lead) holds only in a one-task plan whose owned paths fit registry pipeline.tiers.XS; S marks it for lead QA."
           },
           "grade_reason": {
             "type": "string",

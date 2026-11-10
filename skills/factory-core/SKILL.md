@@ -56,6 +56,7 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
 6. **Plan (M).** Load `rpg-factory:delivery`; it owns the flow (delivery.md section 10 steps 1-3, resume with `status plan.json`).
    The registry adds the tier call, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`,
    and the repo's `worktrees` flag (Unity: main checkout, in sequence). RPG specifics: `references/parallel-work.md`.
+   Tier XS (prose only, within `pipeline.tiers.XS`): the run lead itself edits and commits, gets one cross-model review, runs QA (step 1).
 7. **Implement (M, task lead).** Delivery.md section 10 step 3 (sub-sessions) and section 4 (placement). The registry adds:
    requested scope only, the touched modules' rules, generated paths via their generator.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
