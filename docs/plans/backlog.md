@@ -98,6 +98,44 @@ Seen while running plan plugin-flow-2, not reproduced yet: a Codex session's sta
 unsubmitted in its terminal, and Codex under PowerShell resolves `bash` to WSL instead of Git Bash (CLAUDE.md
 "Operating lessons": Git Bash, never WSL). Find the cause; make dispatch detect or prevent each one.
 
+### released-worker-wsl-leftovers
+
+Seen in plan plugin-subagent-rules (2026-11-10): after the registry task's Codex workers were stopped and released
+(codex down), three orphaned `wsl.exe -d Ubuntu --exec sleep infinity` processes (with their `wslhost.exe` and
+`conhost.exe`; parent process gone) kept the task worktree directory busy, so `orca worktree rm` left an empty
+directory and an Orca record shown as "Delete failed". No plugin code starts `sleep infinity`; the likely source is
+the Codex CLI or its sandbox. `cleanup` checks that a released worker's CLI exited but does not find this kind of
+leftover. Confirmed: with the user's approval the three `wsl.exe` processes were stopped, and the directory and
+its Orca record could then be removed at once. Find the starter, make `cleanup` name such processes (PID, command, start time) for a busy task
+directory, and have the task lead stop the processes its own workers started before it releases them. Never kill
+a process the run cannot prove it started.
+
+### bare-bash-probes
+
+`tests/affected.py` runs a bare `["bash", "--version"]` for its hash version probe; on Windows that is the WSL
+launcher. Use `scripts/lib/shells.py` `find_bash()`, and add "no bare `bash` in a test or script subprocess" to the
+review checklist (PR #91 failed on windows-2025 CI for the same reason in `tests/subagent-policy.test.py`).
+
+### tier-plan-arg
+
+`factory-pipeline.py tier <plan>` errors with `factory-context: unknown argument <plan path>` (seen by the
+ci-windows-bash task lead in plan plugin-subagent-rules). `tier` takes `-- --repo <key> --paths <files>`; accept a
+plan or print a usage error that names the right form.
+
+### generic-explorer-name
+
+`skills/delivery/pipeline-defaults.json` and the generic `skills/delivery/references/delivery.md` name the
+RPG plugin's agent type `rpg-factory:factory-explorer`. The generic copy should name the subagent type through the
+registry (`pipeline.subagents.models.claude.agent`) only, with a neutral default for a project without the plugin
+agent.
+
+### codex-subagent-model-enforce
+
+`orca orchestration worker-start` and `orca agent launch` take no Codex `-c` override, so a Codex dispatch cannot set
+`agents.default_subagent_model`; doctor only warns (`codex-subagents`). Ask Orca for a pass-through of agent CLI
+config, or write the model into the session prompt as a hard rule, and re-check doctor's reach (project
+`.codex/config.toml`, active Codex profile).
+
 ## Covered
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,
