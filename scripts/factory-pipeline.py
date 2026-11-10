@@ -168,6 +168,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1260,7 +1261,12 @@ def emit_lead_handoff(reg, agent, prompt, place, branch, m):
     if place.get("new"):
         checkout = place["repo"][len("path:"):]
         path = os.path.join(os.path.dirname(place.get("parent") or checkout), branch.replace("/", "-"))
+        trees, rc = git(checkout, "worktree", "list", "--porcelain")
+        main = trees.splitlines()[0][len("worktree "):] if not rc and trees and trees.startswith("worktree ") else checkout
         print(orca_cmd.quote(["git", "-C", checkout, "worktree", "add", "--no-track", "-b", branch, path, place["base"]]))
+        print(orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
+                              f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
+                              "--workspace-status", "in-progress"]))
         place = {"worktree": f"path:{path}"}
     argv = ["orca", "agent", "launch", "--agent", entry["orca_agent"], "--worktree", place["worktree"], "--prompt", prompt,
             *flags, "--json"]
@@ -1304,7 +1310,9 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"orca` ({reviewer} for {impl}; a subtask by the other model: add `--subplan <subplan.json> --subtask <id>` and "
         "record it with `verdict --subtask <id>`; SAME_MODEL fallback only when the pair is unavailable, named in the "
         f"report) and QA `{d} --phase qa --sha <HEAD> --runner orca`. Keep HEAD at the candidate while they run. A FAIL "
-        "goes to a fresh fix session, then review and QA on the new HEAD.",
+        "goes to a fresh fix session, then review and QA on the new HEAD. For tier S and docs-only tasks, after review "
+        "PASS the task lead runs the QA tier command itself and records `verdict --phase qa --state PASS --by <lead model> "
+        "--note 'tier S: lead ran task suites'` instead of a QA session.",
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
@@ -1349,6 +1357,34 @@ def runall_suites(path):
 
 
 QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when the registry has no pipeline.qa_tiers
+
+
+def affected_case_lines(path, base, sha, suites):
+    """Report the checkout's own case selection; failure is advisory, never a dispatch failure."""
+    script = os.path.join(path, "tests", "affected.py")
+    if not os.path.isfile(script):
+        return "Affected cases: not computed (tests/affected.py missing)"
+    changed, rc = git(path, "diff", "--name-only", f"{base}...{sha}")
+    if rc:
+        return "Affected cases: not computed (git diff failed)"
+    if suites is None or suites is False:
+        return "Affected cases: not computed (suite list unavailable)"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            names = os.path.join(tmp, "changed.txt")
+            with open(names, "w", encoding="utf-8", newline="\n") as f:
+                f.write(changed + "\n" if changed else "")
+            r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        if r.returncode:
+            return "Affected cases: not computed (tests/affected.py cases failed)"
+        lines = []
+        for line in r.stdout.splitlines():
+            suite, cases = line.split("\t", 1)
+            lines.append(f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}")
+        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return "Affected cases: not computed (tests/affected.py cases failed)"
 
 
 def tier_command(level, base, suites, task=False):
@@ -1593,6 +1629,9 @@ def cmd_dispatch(a, reg):
         edit = "the subtask_paths" if paths else "the owned paths"
         report = ("Report to the task lead: changed paths, each check with exact counts (or NOT_RUN with command and "
                   "reason), limitations, out-of-scope findings. Never merge or push.")
+        checks = ("Run only the targeted checks of your spec. For a slow suite with cases (--list-cases works), run only "
+                  "the cases your change touches via --case; list them with `python3 -B tests/affected.py cases "
+                  "<changed-file-list> <suite>`. Never run a whole slow suite or a full tests/run-all.sh.\n")
         if placement == "child":
             # a child has its own index: the sub-session commits there and the task lead merges the child branch
             prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md) in an Orca child "
@@ -1609,6 +1648,7 @@ def cmd_dispatch(a, reg):
                       + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
+        prompt += "\n" + checks
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -1633,16 +1673,21 @@ def cmd_dispatch(a, reg):
     title = f"{a.phase} {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else "")
     if a.phase == "qa":  # per-task QA: in the task worktree (or a child of it), or the main checkout of a no-worktree repo
         base, _ = review_base(info, plan["topic"], spec["base"], a.sha)
+        case_base = base
         previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
         stale = previous and previous.get("fingerprint") != scope_fingerprint(plan, reg, task["id"])
         failed = []
         if (previous and not stale and previous.get("state") == "FAIL" and previous.get("failed_suites")
                 and previous.get("sha") != git(info["path"], "rev-parse", a.sha)[0]):
             base, failed = previous["sha"], previous["failed_suites"]
+        suites = runall_suites(home or info["path"])
+        cases = affected_case_lines(home or info["path"], case_base, a.sha, suites)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
-                            runall=runall_suites(home or info["path"]), tiers=pipe.get("qa_tiers"))
+                            runall=suites, tiers=pipe.get("qa_tiers"))
+                  + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives suites with a case map --case."
+                                      if suites is not False else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")

@@ -115,7 +115,10 @@ drain
 PLAN
 X="$TMP/subset-slow"; rm -rf "$X"; mkdir -p "$X"
 out=$(X="$X" ROOT_UNDER_TEST="$ROOT" timeout 90 bash "$TMP/subset-slow.sh" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(grep -vc '^args' "$X/start" | tr -d ' ')" = 4 ] && [ "$(grep -v '^args' "$X/start" | tr '\n' ' ')" = 'first mid subset tail ' ] \
+# first and mid start together at -j 2, so their order in the start file is free; subset must start before tail
+[ "$rc" = 0 ] && [ "$(grep -vc '^args' "$X/start" | tr -d ' ')" = 4 ] \
+  && [ "$(grep -v '^args' "$X/start" | head -n 2 | sort | tr '\n' ' ')" = 'first mid ' ] \
+  && [ "$(grep -v '^args' "$X/start" | tail -n 2 | tr '\n' ' ')" = 'subset tail ' ] \
   && grep -q '^PASS  subset (cases alpha)' <<<"$out" && grep -qx 'args --case alpha' "$X/start" \
   && good "a case subset keeps its SLOW start slot at -j 2" || no "subset SLOW slot (rc=$rc): $(tr '\n' ' ' < "$X/start")" "$out"
 

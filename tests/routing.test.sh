@@ -123,6 +123,10 @@ for old in sorted(others, key=os.path.getmtime, reverse=True)[3:]:
 
 if has_case tasks; then
 echo "== task scenarios"
+assert "generic delivery is never a lead for an unrelated path" server \
+  '(.routing.lead != "delivery") and ((.routing.co_leads | index("delivery")) == null)' docs/unrelated.md
+assert "generic delivery is never a lead for its policy path" server \
+  '(.routing.lead != "delivery") and ((.routing.co_leads | index("delivery")) == null)' skills/delivery/references/delivery.md
 assert "tick-rate knob -> server-realtime leads, server-ops leg, server-knobs contract" server \
   "$(lead server-realtime) and $(leg server-ops) and $(contract server-knobs)" \
   backend/gameserver-dotnet/GameServer/ServerEnv.cs backend/gameserver-dotnet/GameServer/Server/ServerDefaults.cs \
