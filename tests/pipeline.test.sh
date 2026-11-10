@@ -587,7 +587,7 @@ reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
 work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
 repo = work / 'repo'
 variant = 'serial' if case.startswith('serial-') else 'subtask' if case.startswith('subtask-') else 'base'
-shutil.copytree(pathlib.Path(tmp) / 'templates' / variant, repo)
+shutil.copytree(pathlib.Path(tmp) / 'templates' / variant, repo, ignore=shutil.ignore_patterns('*.lock'))
 os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
 def git(*args):
     r = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
@@ -1210,15 +1210,19 @@ python3 -B - "$TMP" <<'TEMPLATES'
 import pathlib, shutil, subprocess, sys
 folder = pathlib.Path(sys.argv[1]) / 'templates'; folder.mkdir()
 base = folder / 'base'; base.mkdir()
+# No auto maintenance: a detached `git maintenance run --auto` after a commit holds .git/objects/maintenance.lock,
+# which vanished mid-copytree on Linux CI (templates/serial missing). Lock files are never copied either.
 def git(repo, *args):
-    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', '-c', 'maintenance.auto=false',
+                    '-c', 'gc.auto=0', *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+def copy(src, dst):
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns('*.lock'))
 git(base, 'init', '-q', '-b', 'main')
 (base / 'shared.txt').write_text('base')
 git(base, 'add', '.'); git(base, 'commit', '-qm', 'base')
-sub = folder / 'subtask'; shutil.copytree(base, sub)
+sub = folder / 'subtask'; copy(base, sub)
 (sub / 'outside.txt').write_text('outside base'); git(sub, 'add', '.'); git(sub, 'commit', '-qm', 'outside base')
-serial = folder / 'serial'; shutil.copytree(base, serial)
+serial = folder / 'serial'; copy(base, serial)
 (serial / 'ProjectSettings').mkdir()
 (serial / 'ProjectSettings/ProjectVersion.txt').write_text('m_EditorVersion: 6000.0.0f1')
 git(serial, 'add', '.'); git(serial, 'commit', '-qm', 'Unity marker')
