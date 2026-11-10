@@ -4,6 +4,7 @@ This directory contains accepted architecture decisions and plans for rpg-factor
 
 ## Documents
 
+- [Overview](overview.md): how the plugin fits together and the repository layout.
 - [Multi-discipline factory](multi-discipline-factory.md): domain ownership, routing, shared artifacts, approvals, and rollout phases.
 - [Routing, handoffs and ownership](routing.md): entry points, dependency graphs, conflict rules and downstream invalidation.
 - [UI skills](ui-skills.md): UI request planning, progressive skill loading, the five UI tech skills and their boundaries.

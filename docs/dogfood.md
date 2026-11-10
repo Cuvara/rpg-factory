@@ -2,7 +2,7 @@
 
 `tests/dogfood.sh` (Claude Code) and `tests/dogfood-codex.sh` (Codex CLI) run real headless sessions and grade
 their transcripts. They spend tokens, are not part of `tests/run-all.sh`, and a release runs
-`tests/dogfood.sh --installed` on the release commit (`.claude/CLAUDE.md` "Releases").
+`tests/dogfood.sh --installed` on the release commit (`docs/releasing.md`).
 
 ## Nondeterministic failures are normal; report them honestly
 

@@ -51,8 +51,8 @@ validate. The registry edit lands in the fragment the skill's domain names (`reg
 ## 4. Touchpoints
 
 `python3 -B scripts/skill-touchpoints.py <name>` lists every other place to update: factory-core
-"Skills" (table row or tech list), the skill-contract diagram, README diagram and tables, `.claude/CLAUDE.md`
-"Skills:" (names and counts), `plugin.json`/`marketplace.json` lead count, a routing scenario
+"Skills" (table row or tech list), the skill-contract diagram, README diagram and tables, `docs/architecture/overview.md`
+"How it fits together" "Skills:" (names and counts), `plugin.json`/`marketplace.json` lead count, a routing scenario
 (`$(lead <name>)` / `$(tech <name>)` in `tests/routing.test.sh`), a dogfood scenario (`tests/dogfood.sh`
 `EXPECT`), and an eval with `graders/<name>-fired.md` (`evals/`). Repeat until it prints OK.
 
