@@ -6,7 +6,8 @@
   <topic>-<task> --workspace-status in-progress` before `orca agent launch`, with the integration (else main) checkout
   as parent; a child worktree a task lead makes gets the task worktree as parent. Documented in `delivery.md` section 4
   ("Orca visibility"); `tests/pipeline.test.sh` asserts the line and `tests/parallel-policy.test.sh` has a mutation case.
-- **Routing scenario** in `tests/routing.test.sh` for the new QA wiring.
+- **Routing scenarios** in `tests/routing.test.sh`: the generic `delivery` skill is never routed as lead or co-lead,
+  neither for an unrelated path nor for its own `delivery.md`.
 
 ### Changed
 
