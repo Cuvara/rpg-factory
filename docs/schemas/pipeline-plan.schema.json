@@ -26,11 +26,12 @@
     },
     "tier": {
       "enum": [
+        "XS",
         "S",
         "M",
         "L"
       ],
-      "description": "From `factory-pipeline.py tier`; an override is named in the report."
+      "description": "From `factory-pipeline.py tier`; an override is named in the report. XS = prose-only one-task plan within registry pipeline.tiers.XS."
     },
     "topic": {
       "type": "string",
