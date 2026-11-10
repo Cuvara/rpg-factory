@@ -14,7 +14,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers cli-selftest'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -85,7 +85,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
+UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -1253,6 +1253,139 @@ plan['tier'] = 'S'; save()
 assert 'no separate QA session' in dispatch('qa', second)
 print('QA tier command, dedup, extras, warnings, review, integration, re-QA and S/M gate assertions passed')
 QA_TIERS
+# tier XS: a prose-only change within registry pipeline.tiers.XS; the run lead edits and commits on plan.topic, one
+# cross-model review, the lead's own QA, gate. One section per acceptance: tier, validate, dispatch, gate.
+cat > "$TMP/tier-xs.py" <<'TIER_XS'
+import contextlib, importlib.util, io, json, os, pathlib, subprocess, sys
+root, tmp, section = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('xs_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+rule = reg['pipeline']['tiers']['XS']
+assert rule['max_files'] == 3 and rule['max_changed_lines'] == 40 and rule['prose_only'] is True, rule
+work = pathlib.Path(tmp) / ('tier-xs-' + section); work.mkdir()
+repo = work / 'repo'; repo.mkdir()
+os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
+os.environ['RPG_FACTORY_AGENTS'] = 'claude,codex'
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, (args, p.stderr)
+    return p.stdout.strip()
+def write(rel, lines):
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(''.join(f'line {i}\n' for i in range(lines)), newline='\n')
+git('init', '-q', '-b', 'main')
+write('docs/guide.md', 10); write('code.py', 1); write('changelog.d/README.md', 1)
+git('add', '.'); git('commit', '-qm', 'base')
+topic = 'feat/docs/xs'
+git('switch', '-q', '--no-track', '-c', topic)
+task = {'id': 'doc', 'repo': 'fixture', 'objective': 'o', 'paths': ['docs/guide.md', 'changelog.d/'], 'acceptance': ['a']}
+plan = {'schema': m.SCHEMA, 'id': 'xs-' + section, 'title': 'XS', 'topic': topic, 'tier': 'XS',
+        'repos': {'fixture': {'path': str(repo), 'base': 'main'}}, 'tasks': [task]}
+pf = work / 'plan.json'
+def save(): pf.write_text(json.dumps(plan))
+save()
+def cli(*args, rc=0):
+    out, err = io.StringIO(), io.StringIO()
+    argv = sys.argv
+    try:
+        sys.argv = [root + '/scripts/factory-pipeline.py', *[str(x) for x in args]]
+        m.pr._cache.clear()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                got = m.main()
+            except SystemExit as exc:
+                got = exc.code
+    finally:
+        sys.argv = argv
+    assert (got or 0) == rc, (args, got, out.getvalue(), err.getvalue())
+    return out.getvalue() + err.getvalue()
+def tier(*paths):
+    return cli('tier', '--plan', pf, '--repo', 'fixture', '--paths', *paths)
+def errors(**change):
+    p = json.loads(json.dumps(plan)); p['tasks'][0].update(change.pop('task', {})); p.update(change)
+    p['_path'] = str(pf)
+    return m.validate(p, reg)['errors']
+
+if section == 'tier':
+    write('docs/guide.md', 12)  # 2 changed lines, uncommitted
+    out = tier('docs/guide.md')
+    assert out.startswith('Tier: XS ') and '2 changed line(s)' in out and 'above XS' not in out, out
+    assert '"tier": "XS"' in cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md', 'changelog.d/x.md')
+    # one path that is not prose is never XS: the S rule takes it
+    out = tier('docs/guide.md', 'code.py')
+    assert not out.startswith('Tier: XS') and 'above XS: not prose: code.py' in out, out
+    out = tier('docs/schema.json')
+    assert out.startswith('Tier: S ') and 'not prose: docs/schema.json' in out, out
+    # an oversize change is never XS: changed lines (untracked files count whole) and files above the thresholds
+    write('docs/big.md', 45)
+    out = tier('docs/big.md')
+    assert out.startswith('Tier: S ') and 'above XS: 45 changed lines > 40' in out, out
+    out = tier('a.md', 'b.md', 'c.md', 'd.md')
+    assert out.startswith('Tier: S ') and '4 files > 3' in out, out
+    assert m.pr.above_xs(rule, ['a.md', 'skills/x/'], 40) == []
+    assert m.pr.above_xs(rule, ['a.md'], 41) == ['41 changed lines > 40']
+    print('tier: XS printed only for prose within the thresholds')
+
+if section == 'validate':
+    assert errors() == [], errors()
+    lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
+    out = cli('validate', pf)
+    assert f'grade light (tier XS of the owned paths): implement {lead} ' in out and f', review {pair} ' in out, out
+    assert any('not prose: code.py' in e for e in errors(task={'paths': ['docs/guide.md', 'code.py']})), 'non-prose'
+    # a task-level tier XS is held to the same rule
+    assert any('not prose: code.py' in e for e in errors(tier='M', task={'tier': 'XS', 'paths': ['code.py']}))
+    assert any('4 files > 3' in e for e in errors(task={'paths': ['a.md', 'b.md', 'c.md', 'd.md']})), 'oversize'
+    two = dict(task, id='more', paths=['other.md'])
+    assert any('exactly one task, this one has 2' in e for e in errors(tasks=[task, two])), 'multi-task'
+    assert any('tier must be XS, S, M or L' in e for e in errors(tier='XL'))
+    # XS grades light, and the run lead's model (pipeline.lead_agent) is its implementer: the review is the pair
+    assert m.TIER_GRADE['XS'] == 'light'
+    p = dict(plan, _path=str(pf))
+    assert m.implementer_of(reg['pipeline'], p, task)[0] == reg['pipeline']['lead_agent']
+    print('validate: XS one-task prose plan only')
+
+if section in ('dispatch', 'gate'):
+    out = cli('dispatch', pf, '--task', 'doc', '--phase', 'lead', '--runner', 'print')
+    assert 'Tier XS: task doc starts no task lead, task worktree or implement session' in out, out
+    assert '--task doc --phase review --sha <sha>' in out and 'tier XS: lead ran task suites' in out, out
+    assert 'git add -- docs/guide.md changelog.d/' in out and 'gate ' in out and '# agent' not in out, out
+    assert 'worktree add' not in out and len(git('worktree', 'list').splitlines()) == 1, out
+    assert 'tier XS' in cli('dispatch', pf, '--task', 'doc', '--phase', 'implement', '--runner', 'print', rc=2)
+    write('docs/guide.md', 13); git('add', '--', 'docs/guide.md'); git('commit', '-qm', 'docs: guide')
+    sha = git('rev-parse', 'HEAD')
+    out = cli('dispatch', pf, '--task', 'doc', '--phase', 'review', '--sha', sha, '--runner', 'print')
+    lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
+    assert f'Review worker ({pair}) for code written by {lead}' in out, out
+    assert f'Tier XS: the run lead committed it on {topic}' in out and 'no worktree of' not in out, out
+    if section == 'dispatch':
+        print('dispatch: lead prints the run lead steps, review reads the topic checkout')
+    else:
+        def verdicts(at):
+            cli('verdict', pf, '--task', 'doc', '--phase', 'review', '--sha', at, '--by', pair, '--state', 'PASS')
+            cli('verdict', pf, '--task', 'doc', '--phase', 'qa', '--sha', at, '--by', lead, '--state', 'PASS',
+                '--note', 'tier XS: lead ran task suites')
+        verdicts(sha)
+        out = cli('gate', pf, '--no-run-checks')
+        assert out.startswith('Gate: READY_FOR_PR') and 'tier XS lead ran task suites' in out, out
+        # an oversize committed diff blocks the gate, so does a path that is not prose
+        write('docs/guide.md', 60); git('commit', '-qam', 'docs: more'); big = git('rev-parse', 'HEAD')
+        verdicts(big)
+        out = cli('gate', pf, '--no-run-checks', rc=1)
+        assert 'BLOCKER doc: tier XS, but the committed diff is above XS: 50 changed lines > 40' in out, out
+        git('reset', '-q', '--hard', sha)
+        write('code.py', 2); git('commit', '-qam', 'fix: code'); code = git('rev-parse', 'HEAD')
+        verdicts(code)
+        out = cli('gate', pf, '--no-run-checks', rc=1)
+        assert 'above XS: not prose: code.py' in out, out
+        # a 'tier XS' lead QA counts only for a tier-XS task
+        git('reset', '-q', '--hard', sha)
+        plan['tier'] = 'S'; save(); verdicts(sha)
+        cli('verdict', pf, '--task', 'integration:fixture', '--phase', 'qa', '--sha', sha, '--by', pair, '--state', 'PASS')
+        out = cli('gate', pf, '--no-run-checks', rc=1)
+        assert 'QA recorded as tier XS lead QA, but the task is not tier XS' in out, out
+        print('gate: READY_FOR_PR for XS with review PASS and lead QA; oversize or non-prose diff blocks')
+TIER_XS
 if has_case multiwave; then
 python3 -B - "$TMP" <<'TEMPLATES'
 import pathlib, shutil, subprocess, sys
@@ -1298,6 +1431,9 @@ bg_case() {
   for c in $MULTIWAVE_CASES; do next "multiwave-$c" python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$c"; done
   fi
   if has_case qa-tiers; then next qa-tiers python3 -B "$TMP/qa-tiers.py" "$ROOT" "$TMP"; fi
+  if has_case tier-xs; then
+  for c in tier validate dispatch gate; do next "tier-xs-$c" python3 -B "$TMP/tier-xs.py" "$ROOT" "$TMP" "$c"; done
+  fi
   wait
 ) &
 BG_PID=$!
@@ -1914,7 +2050,7 @@ X=$(plan handoff "{$HEAD,\"tasks\":[
  {\"id\":\"feature\",\"repo\":\"authoring\",\"objective\":\"o\",\"paths\":[\"design/features/example.md\"],\"acceptance\":[\"a\"]},
  {\"id\":\"brief\",\"repo\":\"authoring\",\"objective\":\"o\",\"paths\":[\"art2d/briefs/example.md\"],\"acceptance\":[\"a\"]}]}")
 expect "validate: a handoff source task is heavy" 0 "^Model: task feature grade heavy \(tier L of the owned paths, contract or generated path\)" validate "$X"
-expect "validate: the copy-side task beside it stays light" 0 "^Model: task brief grade light \(tier S of the owned paths\): implement claude claude-sonnet-5-5 high" validate "$X"
+expect "validate: the copy-side task beside it stays light" 0 "^Model: task brief grade light \(tier XS of the owned paths\): implement claude claude-sonnet-5-5 high" validate "$X"
 expect_spec "dispatch of the copy-side task: light, as validate says" '"grade": "light"' dispatch "$X" --task brief --phase lead --runner orca
 expect_spec "dispatch of the handoff source task: heavy, as validate says" '"grade": "heavy"' dispatch "$X" --task feature --phase lead --runner orca
 # parity: validate's batch and a one-task call (dispatch, subplan) give every task the same grade
@@ -3328,6 +3464,16 @@ case_start
 echo "-- QA tiers"
 bg_report "QA tiers regression matrix" qa-tiers
 case_end qa-tiers
+fi
+
+if has_case tier-xs; then
+case_start
+echo "-- tier XS"
+bg_report "tier XS: tier prints XS only for prose-only changes within the thresholds" tier-xs-tier
+bg_report "tier XS: validate accepts a one-task prose plan; non-prose, multi-task and oversize are errors" tier-xs-validate
+bg_report "tier XS: dispatch lead prints the run lead's steps, no implement session, review reads the topic checkout" tier-xs-dispatch
+bg_report "tier XS: gate READY_FOR_PR with review PASS and lead QA; an oversize or non-prose diff blocks" tier-xs-gate
+case_end tier-xs
 fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"
