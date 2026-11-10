@@ -127,8 +127,10 @@ script prints for a next session then carries `--registry none`. A plan may set 
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
-        paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
-        fast checks are PASS and not STALE, every change sits in some task's owned paths, verdicts match the
+        paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
+        a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
+        integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
+        paths (the plan file and its report.md belong to the run lead and are never stray), verdicts match the
         current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
@@ -156,6 +158,12 @@ script prints for a next session then carries `--registry none`. A plan may set 
         `orca orchestration worker-release --dispatch <id>` per unreleased worker, names each leftover child worktree
         as "child of <task>" (`orca worktree rm` once merged), names the rest, and reminds to
         release every worker session. Orca unavailable: NOT_AVAILABLE, the state is unchanged. Exit 0 CLEAN, 1 LEFTOVER.
+        A task worktree git lists as prunable (its directory is gone), a leftover task directory (empty or not, named
+        <topic>-<id> with / as -, no longer a git worktree) and an Orca record of such a removed worktree are
+        LEFTOVER, never CLEAN: `git -C <repo> worktree prune`, then `orca worktree rm --worktree path:<dir>` once the
+        directory is free (a process holds a directory Windows reports busy: the user decides, cleanup names no PID it
+        cannot see and never stops a process). Before a task worktree is removed it names the Orca terminals bound to it
+        (read-only `orca terminal list`) and tells the task lead to confirm each released worker's CLI exited.
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
@@ -1996,6 +2004,14 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     topic edits and conflict resolutions changed against every parent have no owner.
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
+    A path whose content at target equals its content at sha is never changed, and the
+    side commits of a merge of the repo's default branch (origin/<b>, else <b>, for b the
+    plan base unless it is a SHA, the registry default_branch, then main) are nobody's
+    task work: only that merge's own conflict resolutions count. A commit counts as
+    default-branch work only when such a merge brought it in (a side commit not already
+    in the merge's first parent); a first-parent topic commit made after the review stays
+    task work even when it reached the default branch later through another PR (so a
+    fast-forward of the topic to the default branch is STALE: fails safe).
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2046,6 +2062,28 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
                     if paths:
                         siblings.append((dict(paths=paths), rec, start))
     bad = set()
+    net_out, net_rc = git(path, "diff", "--name-only", sha, target, "--", *specs(task["paths"]))
+    if net_rc == 0 and not (net_out or "").strip():
+        return []
+    net = set(net_out.splitlines()) if net_rc == 0 else None
+    branches = [b for b in (info["base"], ((reg.get("repos") or {}).get(info["registry"] or task["repo"]) or {}).get("default_branch"), "main")
+                if b and not re.fullmatch(r"[0-9a-f]{7,40}", b)]
+    default_tip = next((t for b in dict.fromkeys(branches) for r in ("remotes/origin", "heads")
+                        for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t), None)
+    def merges_default(c):
+        """c is a merge and all its parents but the first are on the default branch."""
+        ps = (git(path, "show", "-s", "--format=%P", c)[0] or "").split()
+        return len(ps) > 1 and all(is_ancestor(path, q, default_tip) for q in ps[1:])
+    default_side = set()
+    if default_tip:
+        for m in (git(path, "rev-list", "--merges", f"{sha}..{target}")[0] or "").splitlines():
+            ps = (git(path, "show", "-s", "--format=%P", m)[0] or "").split()
+            if len(ps) > 1 and merges_default(m) and not is_ancestor(path, m, default_tip):  # not a PR merge on the default branch
+                default_side.update((git(path, "rev-list", *ps[1:], "--not", ps[0])[0] or "").splitlines())
+    def from_default(c):
+        """c came in from the default branch: it is a commit a merge of the default branch brought in, or such a merge itself.
+        A first-parent topic commit is task work even when it reached the default branch later through another PR."""
+        return bool(default_tip) and (c in default_side or merges_default(c))
     chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
     if rc != 0:
         return list(task["paths"])
@@ -2064,7 +2102,7 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             introduced, rc = git(path, "rev-list", *parents[1:], "--not", parents[0])
             if rc != 0:
                 return list(task["paths"])
-            commits = (introduced or "").splitlines()
+            commits = [] if from_default(merge) else (introduced or "").splitlines()
         else:
             commits = [merge]
         for commit in commits:
@@ -2074,7 +2112,13 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             if rc != 0:
                 return list(task["paths"])
             ps = (parent_text or "").split()
-            touched = files(ps[0], commit) if ps else set(task["paths"])
+            if from_default(commit):
+                if is_ancestor(path, commit, default_tip):
+                    continue
+                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
+                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
+            else:
+                touched = files(ps[0], commit) if ps else set(task["paths"])
             for f in touched:
                 covered = any(owns(s, f) and is_ancestor(path, start, commit)
                               and not is_ancestor(path, commit, start)
@@ -2095,7 +2139,7 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
                     break
                 if not covered:
                     bad.add(f)
-    return sorted(bad)
+    return sorted(bad if net is None else {f for f in bad if f in net})
 
 
 def fallback_matches(rec, agent):
@@ -2269,10 +2313,12 @@ def cmd_verdict(a, reg):
 
 # ---------------------------------------------------------------- gate
 
-def worktree_for(path, branch):
+def worktree_records(path):
+    """Every `git worktree list --porcelain` record of the repo (main checkout first): path, branch, prunable (the
+    directory is gone but git still keeps the record)."""
     out, rc = git(path, "worktree", "list", "--porcelain")
     if rc != 0 or out is None:
-        return None, []
+        return []
     trees, cur = [], {}
     for line in out.splitlines() + [""]:
         if not line:
@@ -2283,8 +2329,33 @@ def worktree_for(path, branch):
             cur["path"] = line[9:]
         elif line.startswith("branch "):
             cur["branch"] = line[7:].replace("refs/heads/", "", 1)
+        elif line == "prunable" or line.startswith("prunable "):
+            cur["prunable"] = True
+    return trees
+
+
+def worktree_for(path, branch):
+    trees = worktree_records(path)
+    if not trees:
+        return None, []
     home = next((t["path"] for t in trees if t.get("branch") == branch), None)
     return home, trees[1:]
+
+
+def run_lead_files(plan, repo_path):
+    """Repo-relative files the run lead owns on the integration branch: the plan file and its report (its own path when
+    it sits inside the repo, else docs/plans/<id>.json); never task work and never stray."""
+    names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
+    own = plan.get("_path")
+    if own and repo_path:
+        try:
+            rel = os.path.relpath(os.path.realpath(own), os.path.realpath(repo_path)).replace("\\", "/")
+        except ValueError:  # another drive
+            rel = ".."
+        if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
+            names.add(rel)
+    names |= {os.path.splitext(n)[0] + "/report.md" for n in names}
+    return {norm_path(n) for n in names}
 
 
 def gate(plan, reg, allow_same_model=False, run_checks=True):
@@ -2345,8 +2416,9 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             changed, rc = git(info["path"], "diff", "--name-only", mb, head)
             # every plan alias of this checkout shares the integration branch: their tasks' changes are not stray
             owned = [norm_path(p).rstrip("/") for t in plan["tasks"] if same_repo(plan, reg, t["repo"], key) for p in t["paths"]]
-            stray = [f for f in (changed or "").splitlines()
-                     if not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
+            lead_files = run_lead_files(plan, info["path"])
+            stray = [f for f in (changed or "").splitlines() if norm_path(f) not in lead_files
+                     and not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
             if rc != 0 or stray:
                 blockers.append(f"{key}: changes outside every task's owned paths: {', '.join(stray[:5]) or 'git diff failed'}")
         qa = read_verdict(plan, reg, f"integration:{key}", "qa", blockers)
@@ -2539,10 +2611,54 @@ def session_lines(sessions):
     return lines
 
 
+def orca_worktree_paths():
+    """Normalised paths of every record in the read-only `orca worktree list --json`; None when orca cannot say
+    (not on PATH, failing: no opinion, never an error)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True,
+                           timeout=60, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["worktrees"] if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return {norm_wt(w["path"]) for w in rows if isinstance(w, dict) and w.get("path")}
+
+
+def orca_terminals(path):
+    """(handle, title) of the live Orca terminals bound to the worktree at `path` (read-only `orca terminal list`);
+    [] when orca cannot say (no opinion)."""
+    exe = shutil.which("orca")
+    if not exe:
+        return []
+    try:
+        r = subprocess.run([exe, "terminal", "list", "--worktree", f"path:{path}", "--limit", "100", "--json"],
+                           capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["terminals"] if r.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [(str(t.get("handle") or "?"), str(t.get("title") or "")) for t in rows if isinstance(t, dict)]
+
+
+BEFORE_REMOVAL = ("before a task worktree is removed no session may still use it: the task lead confirms that each "
+                  "released worker's CLI exited (a released Codex worker: its codex process is gone); a process the "
+                  "run did not start is named to the user (PID, command) and left to the user's decision, never "
+                  "stopped by the run")
+BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being used by another process'), a process "
+             "holds it: name its PID and command to the user and leave the decision to them")
+
+
 def cleanup(plan, reg, orca_run=None, after_merge=False):
     """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
     Orca workers of the task leads' Runs that are not released."""
-    left, commands, kept = [], [], []
+    left, commands, kept, leftovers, users = [], [], [], [], []
+    orca_paths = []  # the Orca records, read once and only when a task worktree path is no git worktree any more
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
         info = repo_info(plan, reg, key)
         if not info["path"] or not os.path.isdir(info["path"]):
@@ -2566,7 +2682,17 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         parents.append((f"integration:{key}", topic))
         parents = [(tid, pb, worktree_for(info["path"], pb)[0]) for tid, pb in parents]
         lineage = Lineage(pb for _, pb, _ in parents)
+        prune = orca_cmd.quote(["git", "-C", command_repo, "worktree", "prune"])
         for wt in trees:
+            if wt.get("prunable") and str(wt.get("branch", "")).startswith(topic + "-"):
+                # the directory is gone but git keeps the record: `git branch -d` of its branch fails ('used by worktree')
+                left.append(wt["path"])
+                leftovers.append({"kind": "prunable", "path": wt["path"], "commands": [prune]})
+                kept.append(f"{key}: LEFTOVER worktree record {wt['path']} ({wt['branch']}) is prunable (its directory "
+                            "is gone): prune it before deleting the branch")
+                if prune not in commands:
+                    commands.append(prune)
+                continue
             owner = next(((tid, pb, pp) for tid, pb, pp in parents
                           if info["worktrees"] and norm_wt(wt["path"]) != norm_wt(pp) and is_child(wt, pb, pp, lineage)), None)
             if owner:
@@ -2592,6 +2718,37 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                 continue
             left.append(wt["path"])
             commands.append(orca_cmd.quote(["git", "-C", command_repo, "worktree", "remove", wt["path"]]))
+            for handle, title in orca_terminals(wt["path"]):
+                users.append({"path": wt["path"], "terminal": handle, "title": title})
+                kept.append(f"{key}: worktree {wt['path']} is still bound to Orca terminal {handle}"
+                            + (f" ({title})" if title else "") + ": release or close it before the removal")
+            if f"{key}: {BEFORE_REMOVAL}" not in kept:
+                kept.append(f"{key}: {BEFORE_REMOVAL}")
+        if info["worktrees"]:
+            # a task worktree directory (<topic>-<id>, beside the integration or repo checkout) that is no git worktree
+            # any more, and an Orca record of it: git prunes it, Orca removes it once no process holds the directory
+            registered = {norm_wt(t["path"]) for t in worktree_records(info["path"])}
+            parent = worktree_for(info["path"], topic)[0]
+            beside = list(dict.fromkeys(os.path.dirname(p.rstrip("/\\")) for p in (parent, info["path"], command_repo) if p))
+            for t in (t for t in plan["tasks"] if t.get("repo") == key):
+                name = task_branch(plan, info, t).replace("/", "-")
+                for d in dict.fromkeys(os.path.join(b, name) for b in beside):
+                    if norm_wt(d) in registered:
+                        continue
+                    if not orca_paths:
+                        orca_paths.append(orca_worktree_paths() or set())
+                    on_disk, record = os.path.exists(d), norm_wt(d) in orca_paths[0]
+                    if not on_disk and not record:
+                        continue
+                    left.append(d)
+                    rm = orca_cmd.quote(["orca", "worktree", "rm", "--worktree", f"path:{d}"])
+                    leftovers.append({"kind": "directory" if on_disk else "orca_record", "path": d,
+                                      "orca_record": record, "commands": [prune, rm]})
+                    what = (f"directory {d} (no git worktree any more" + (", with an Orca record" if record else "") + ")"
+                            if on_disk else f"Orca record of the removed task worktree {d}")
+                    kept.append(f"{key}: LEFTOVER {what}: `git worktree prune`, then `orca worktree rm` once the "
+                                f"directory is free (check it is the old task worktree first); {BUSY_NOTE}")
+                    commands.extend(c for c in (prune, rm) if c not in commands)
         refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
         if after_merge and integrated:
             refs = (refs or "") + "\n" + topic
@@ -2635,7 +2792,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
             left.append(f"orca:{u['dispatch']}")
             commands.append(u["command"])
     return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
-            "workers": workers,
+            "leftovers": leftovers, "terminals": users, "workers": workers,
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
                         + ("" if workers else "; name the task leads' Runs (task `orca_run` or --orca-run) to check them")}

@@ -14,7 +14,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged model-routing multiwave qa-tiers cli-selftest'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -85,7 +85,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
+UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -1558,7 +1558,7 @@ expect "per-task qa in a worktree repo runs in the task worktree" 0 "--agent cod
 refute "per-task qa never creates a worktree" "new-top-level|--base-branch" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
 expect "per-task qa names the task" 0 "QA worker .*branch feat/core/demo-gw, task gw" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "a second task lead resumes in the existing task worktree" 0 "^orca agent launch --agent claude $WT" dispatch "$OK" --task gw --phase lead --runner orca
-refute "resuming a task worktree does not set its parent" "orca worktree set" dispatch "$OK" --task gw --phase lead --runner orca
+refute "a resumed task lead prints no worktree add and no orca worktree set" "worktree add|worktree set|worktree create" dispatch "$OK" --task gw --phase lead --runner orca
 expect "agent fallback for a codex reviewer starts a fresh Claude session" 0 '"subagent_type": "general-purpose"' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL in the prompt" 0 'SAME_MODEL: this session was planned for codex; the Agent-tool fallback runs Claude only' dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
 expect "agent fallback for a codex reviewer says SAME_MODEL on stderr" 0 "starts a fresh Claude session for this codex session: SAME_MODEL" dispatch "$OK" --task gw --phase review --sha abc1234 --runner agent
@@ -1968,6 +1968,8 @@ expect "new task worktree beside integration checkout" 0 "^git -C .* worktree ad
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+refute "lead prints no orca worktree create beside the integration checkout (any placement)" "orca worktree create" dispatch "$OK" --task gw --phase lead --placement child --runner orca
+refute "no-worktree repo (Unity project): no worktree add and no orca worktree set" "worktree add|worktree set" dispatch "$OK" --task c1 --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement child" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "lead --placement child has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 expect "new task worktree launches lead by path" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$OK" --task gw --phase lead --runner orca
@@ -2229,6 +2231,8 @@ if sys.argv[1:3] == ["status", "--json"]:
     print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
 if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
     print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
+if sys.argv[1:3] == ["terminal", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_TERMS"):
+    print(open(os.environ["FAKE_ORCA_TERMS"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] != ["orchestration", "worker-list"] or mode == "error":
     print("error: run not found", file=sys.stderr); sys.exit(1)
 if mode == "garbage":
@@ -2271,8 +2275,8 @@ opath "the run line counts unreleased, released and running" 1 "WORKERS UNRELEAS
 oref "a released worker is no finding" "dispatch ctx_rel( |$)" cleanup "$GO"
 oref "a running worker is no finding" "dispatch ctx_run( |$)" cleanup "$GO"
 opath "--orca-run names a Run for a plan without orca_run" 1 "worker-release --dispatch ctx_ret" cleanup "$G" --orca-run run_T
-if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^orchestration worker-list --run run_T --limit 100 --json( --cursor c2)?$" "$FAKE_ORCA_LOG"
-then pass=$((pass + 1)); echo "PASS  only read-only worker-list calls, run:<id> normalised"
+if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^(orchestration worker-list --run run_T --limit 100 --json( --cursor c2)?|worktree list --limit 10000 --json)$" "$FAKE_ORCA_LOG"
+then pass=$((pass + 1)); echo "PASS  only read-only worker-list and worktree list calls, run:<id> normalised"
 else fail=$((fail + 1)); echo "FAIL  orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 PATH="$fpath" python3 -B "$P" cleanup --json "$GO" > "$TMP/cleanup-orca.json" 2>&1
 if jq -e '.state == "LEFTOVER" and (.workers[0].unreleased | length) == 4 and any(.left[]; . == "orca:ctx_ret")' "$TMP/cleanup-orca.json" >/dev/null
@@ -2331,7 +2335,7 @@ opath "Orca lineage: the merged child gets its orca worktree rm command" 1 "^  o
 if PATH="$fpath" python3 -B "$P" status --json "$G" 2>/dev/null | jq -e '.tasks[] | select(.id == "gw") | (.children | length) == 1 and .children[0].branch == "isolated-qa"' >/dev/null
 then pass=$((pass + 1)); echo "PASS  Orca lineage: status lists the isolated-qa child"
 else fail=$((fail + 1)); echo "FAIL  Orca lineage: status children"; fi
-if grep -q "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && ! grep -qvE "^(worktree list --limit 10000 --json|orchestration worker-list .*)$" "$FAKE_ORCA_LOG"
+if grep -q "^worktree list --limit 10000 --json$" "$FAKE_ORCA_LOG" && ! grep -qvE "^(worktree list --limit 10000 --json|terminal list --worktree path:[^ ]+ --limit 100 --json|orchestration worker-list .*)$" "$FAKE_ORCA_LOG"
 then pass=$((pass + 1)); echo "PASS  Orca lineage is read with the read-only worktree list only"
 else fail=$((fail + 1)); echo "FAIL  Orca lineage calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 jq '.result.worktrees |= map(if .id == "r::qa" then .parentWorktreeId = null elif .id == "r::gw" then .childWorktreeIds = ["r::qa"] else . end)' "$FAKE_ORCA_WT" > "$FAKE_ORCA_WT.2"; mv "$FAKE_ORCA_WT.2" "$FAKE_ORCA_WT"
@@ -2344,10 +2348,82 @@ unset FAKE_ORCA_WT
 git -C "$S" worktree remove "$TMP/isolated-qa"; git -C "$S" worktree remove "$TMP/srv-gw"
 git -C "$S" branch -q -D isolated-qa feat/core/demo-gw
 expect "lineage children removed: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+echo "-- cleanup: plain task worktree, prunable record, leftover directory, stale Orca record, bound terminals"
+NOKILL="kill|taskkill|Stop-Process|--force"
+# a plain git task worktree: removed with `git worktree remove` (no --force)
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+opath "plain task worktree: git worktree remove without --force" 1 "^  git -C .* worktree remove [^ ]*srv-gw'?$" cleanup "$G"
+oref "plain task worktree: no --force, no process kill anywhere in the output" "$NOKILL" cleanup "$G"
+# terminals bound to it (read-only orca terminal list) and the CLI-exit reminder
+export FAKE_ORCA_TERMS="$TMP/orca-terms.json"
+jq -n '{ok:true,result:{terminals:[{handle:"term_codex1",title:"codex implementer"}]}}' > "$FAKE_ORCA_TERMS"
+opath "a bound Orca terminal is named before the removal" 1 "KEPT  srv: worktree .*srv-gw is still bound to Orca terminal term_codex1 \(codex implementer\)" cleanup "$G"
+opath "the removal still prints git worktree remove" 1 "worktree remove .*srv-gw" cleanup "$G"
+opath "the task lead confirms each released worker's CLI exited (codex process gone)" 1 "confirms that each released worker's CLI exited \(a released Codex worker: its codex process is gone\)" cleanup "$G"
+opath "a process the run did not start is named to the user, never stopped" 1 "named to the user \(PID, command\) and left to the user's decision, never stopped by the run" cleanup "$G"
+FAKE_ORCA_MODE=error opath "terminal list failing: no opinion, no traceback, still LEFTOVER" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+FAKE_ORCA_MODE=error oref "terminal list failing: no terminal line, no traceback" "bound to Orca terminal|Traceback" cleanup "$G"
+unset FAKE_ORCA_TERMS
+git -C "$S" worktree remove "$TMP/srv-gw"; git -C "$S" branch -q -d feat/core/demo-gw
+# a prunable record (directory gone, git still lists the worktree): `git branch -d` fails until git worktree prune
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+rm -rf "$TMP/srv-gw"
+if ! git -C "$S" branch -d feat/core/demo-gw >/dev/null 2>&1; then pass=$((pass + 1)); echo "PASS  precondition: a prunable record blocks git branch -d"
+else fail=$((fail + 1)); echo "FAIL  precondition: git branch -d succeeded on a prunable record"; fi
+opath "a prunable task worktree record is LEFTOVER, never CLEAN" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+opath "the prunable record is named" 1 "KEPT  srv: LEFTOVER worktree record .*srv-gw .*feat/core/demo-gw.* is prunable" cleanup "$G"
+opath "git worktree prune is printed" 1 "^  git -C .* worktree prune$" cleanup "$G"
+PATH="$fpath" python3 -B "$P" cleanup "$G" > "$TMP/cleanup-prune.txt" 2>&1
+if [ "$(grep -n 'worktree prune$' "$TMP/cleanup-prune.txt" | head -1 | cut -d: -f1)" -lt "$(grep -n 'branch -d feat/core/demo-gw' "$TMP/cleanup-prune.txt" | head -1 | cut -d: -f1)" ] 2>/dev/null
+then pass=$((pass + 1)); echo "PASS  git worktree prune comes before git branch -d"
+else fail=$((fail + 1)); echo "FAIL  prune order"; sed 's/^/      /' "$TMP/cleanup-prune.txt" | head -12; fi
+git -C "$S" worktree prune
+if git -C "$S" branch -q -d feat/core/demo-gw 2>/dev/null; then pass=$((pass + 1)); echo "PASS  after git worktree prune the task branch deletes with -d"
+else fail=$((fail + 1)); echo "FAIL  git branch -d after prune"; fi
+expect "after prune and branch delete: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+# a leftover task directory (empty, then with a file), no git worktree any more: LEFTOVER with prune then orca worktree rm
+LD="$WS/feat-core-demo-gw"; mkdir -p "$LD"
+opath "an empty leftover task directory is LEFTOVER, never CLEAN" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+opath "the leftover directory is named" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw \(no git worktree any more\)" cleanup "$G"
+opath "the leftover directory gets git worktree prune" 1 "^  git -C .* worktree prune$" cleanup "$G"
+opath "then orca worktree rm of the directory" 1 "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw'?$" cleanup "$G"
+opath "a busy directory: a process holds it, the user decides" 1 "reports the directory busy .*name its PID and command to the user and leave the decision to them" cleanup "$G"
+refute "an empty leftover directory is never CLEAN" "^Cleanup: CLEAN" cleanup "$G"
+PATH="$fpath" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-left.json" 2>&1
+if jq -e '.state == "LEFTOVER" and any(.leftovers[]; .kind == "directory" and (.path | test("feat-core-demo-gw$")) and (.commands | length) == 2 and (.commands[0] | test("worktree prune$")) and (.commands[1] | test("orca worktree rm")))' "$TMP/cleanup-left.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json carries the leftover directory with its commands"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json leftovers"; head -c 1500 "$TMP/cleanup-left.json"; fi
+echo x > "$LD/file.txt"
+opath "a non-empty leftover task directory is LEFTOVER too" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw" cleanup "$G"
+oref "cleanup output never kills a process" "$NOKILL" cleanup "$G"
+# a stale Orca record of a removed task worktree (directory gone): LEFTOVER with the same commands
+rm -rf "$LD"
+export FAKE_ORCA_WT="$TMP/orca-wt-stale.json"
+jq -n --arg p "$LD" '{ok:true,result:{worktrees:[{id:"r::gw",path:$p,parentWorktreeId:null}]}}' > "$FAKE_ORCA_WT"
+opath "a stale Orca record of a removed task worktree is LEFTOVER" 1 "KEPT  srv: LEFTOVER Orca record of the removed task worktree .*feat-core-demo-gw: .git worktree prune., then .orca worktree rm." cleanup "$G"
+opath "the stale record gets prune then orca worktree rm" 1 "^  orca worktree rm --worktree '?path:[^ ]*feat-core-demo-gw'?$" cleanup "$G"
+oref "a stale Orca record is never CLEAN" "^Cleanup: CLEAN" cleanup "$G"
+oref "the stale record output never kills a process" "$NOKILL" cleanup "$G"
+FAKE_ORCA_MODE=error opath "orca failing: no opinion on records, CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+PATH="$noorca" expect "orca missing: no opinion on records, CLEAN" 0 "^Cleanup: CLEAN" cleanup "$G"
+unset FAKE_ORCA_WT
+opath "no leftover directory and no record: CLEAN again" 0 "^Cleanup: CLEAN" cleanup "$G"
+# no printed dispatch or cleanup command is an orca worktree create (it writes branch.<name>.base into the shared .git/config)
+: > "$FAKE_ORCA_LOG"
+git -C "$S" worktree add -q "$TMP/srv-gw" -b feat/core/demo-gw "$SG" 2>/dev/null
+for c in "dispatch $G --task gw --phase lead --runner orca" "dispatch $G --task gw --phase lead --placement child --runner orca" "cleanup $G" "cleanup $G --after-merge"; do
+  out=$(PATH="$fpath" python3 -B "$P" $c 2>&1)
+  if ! grep -q "worktree create" <<<"$out"; then pass=$((pass + 1)); echo "PASS  no orca worktree create printed: $c" | sed "s#$TMP/##g"
+  else fail=$((fail + 1)); echo "FAIL  orca worktree create printed: $c"; fi
+done
+git -C "$S" worktree remove "$TMP/srv-gw"; git -C "$S" branch -q -d feat/core/demo-gw
+if ! grep -qE "worktree (create|set|rm)|terminal (close|send)" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  dispatch and cleanup only read Orca: no worktree create, set or rm, no terminal close"
+else fail=$((fail + 1)); echo "FAIL  orca write call"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 # a new task worktree is an Orca child of the integration checkout ($S on feat/core/demo); dispatch only prints it
 : > "$FAKE_ORCA_LOG"
 opath "fake orca: git creates the task worktree" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw" dispatch "$G" --task gw --phase lead --runner orca
 oref "fake orca: a new task worktree under the integration checkout has no --no-parent" "--no-parent" dispatch "$G" --task gw --phase lead --runner orca
+opath "fake orca: orca worktree set names the integration checkout as parent, printed (not run)" 0 "^orca worktree set --worktree '?path:[^' ]*feat-core-demo-gw'? --parent-worktree '?path:[^' ]*rpg-mmo-server'? --display-name " dispatch "$G" --task gw --phase lead --runner orca
 opath "fake orca: shared placement launches the lead" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$G" --task gw --phase lead --placement shared --runner orca
 if ! grep -q "worktree create" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  fake orca: dispatch --phase lead only prints the worktree create"
 else fail=$((fail + 1)); echo "FAIL  fake orca: dispatch ran orca worktree create"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
@@ -3013,6 +3089,92 @@ echo "-- multi-wave currency and verdict provenance"
 for case in $MULTIWAVE_CASES; do bg_report "multiwave $case" "multiwave-$case"; done
 
 case_end multiwave
+fi
+
+if has_case gate-merge; then
+case_start
+echo "-- gate after a merge of the default branch"
+# A merge of the default branch into the topic after the reviews keeps them current (the owned paths' content on the
+# default branch is nobody's task work), a real later change to an owned path still makes them STALE, and the run lead's
+# plan file and report.md are never stray.
+GM="$TMP/gm-repo"; git init -q -b main "$GM"
+mkdir -p "$GM/own"; echo v1 > "$GM/AGENTS.md"; echo a > "$GM/own/a.txt"; gi "$GM" add -A; gi "$GM" commit -qm base
+gi "$GM" checkout -qb feat/gm
+echo t > "$GM/own/t.txt"; gi "$GM" add -A; gi "$GM" commit -qm "feat: task"
+GP=$(plan gm "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"gm\",\"title\":\"Gm\",\"topic\":\"feat/gm\",\"deliver\":\"pr\",\"repos\":{\"r\":{\"path\":\"$GM\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/\",\"AGENTS.md\"],\"acceptance\":[\"a\"]}]}")
+gmv() { python3 -B "$P" verdict "$GP" "$@" >/dev/null || echo "verdict failed: $*"; }
+# gmqa: integration QA PASS on the current HEAD
+gmqa() { gmv --task integration:r --phase qa --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; }
+GM0=$(git -C "$GM" rev-parse HEAD)
+gmv --task t --phase review --sha "$GM0" --by codex --state PASS; gmqa
+expect "gate-merge: reviewed and QA'd: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# the default branch changes an owned path (AGENTS.md) and the topic merges it
+git -C "$GM" worktree add -q "$TMP/gm-main" main
+echo v2 > "$TMP/gm-main/AGENTS.md"; gi "$TMP/gm-main" commit -qam "docs: agents v2"
+gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm"; gmqa
+expect "gate-merge: a merge of the default branch after the review keeps it current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no STALE after the default-branch merge" "STALE" gate "$GP" --no-run-checks
+# a task branch that merged the default branch, itself merged into the topic (the main-sync shape)
+echo v3 > "$TMP/gm-main/AGENTS.md"; gi "$TMP/gm-main" commit -qam "docs: agents v3"
+gi "$GM" checkout -q -b feat/gm-sync; gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm-sync"
+gi "$GM" checkout -q feat/gm; gi "$GM" merge -q --no-ff feat/gm-sync -m "Merge task sync"; gmqa
+expect "gate-merge: a task branch merge that brought the default branch keeps the review current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: nested default-branch merge is not STALE" "STALE" gate "$GP" --no-run-checks
+# content equal to the reviewed commit: changed and changed back after the review
+echo x >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: tweak"; git -C "$GM" checkout -q "$GM0" -- own/t.txt; gi "$GM" commit -qm "fix: revert tweak"; gmqa
+expect "gate-merge: an owned path with the reviewed content is not STALE" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# a real later change to an owned path
+echo real >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: real change"; gmqa
+expect "gate-merge: a real later change to an owned path makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+expect "gate-merge: a new review clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# the run lead's plan file and report.md are never stray; any other unowned file still is
+mkdir -p "$GM/docs/plans/gm"; cp "$GP" "$GM/docs/plans/gm.json"; echo r > "$GM/docs/plans/gm/report.md"
+gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): gm plan and report"; gmqa
+expect "gate-merge: the plan file and its report.md are not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans" "changes outside every task's owned paths" gate "$GP" --no-run-checks
+# a plan file inside the repo under another name: its own path and its sibling directory's report.md
+mkdir -p "$GM/runlead/other"; cp "$GP" "$GM/runlead/other.json"; echo r > "$GM/runlead/other/report.md"
+gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): in-repo plan"; gmqa
+GP2="$GM/runlead/other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+refute "gate-merge: a plan file inside the repo is not stray" "changes outside every task's owned paths: .*runlead" gate "$GP2" --no-run-checks
+echo o > "$GM/other.txt"; gi "$GM" add other.txt; gi "$GM" commit -qm "chore: stray"
+expect "gate-merge: another unowned file is still stray" 1 "BLOCKER r: changes outside every task's owned paths: other.txt$" gate "$GP2" --no-run-checks
+git -C "$GM" worktree remove --force "$TMP/gm-main"
+# gm_fixture <dir> <branch> <default> <plan id> <repo key> <base>: a repo with own/t.txt reviewed and QA'd on the topic; sets GX, GXP
+gm_fixture() {
+  GX="$TMP/$1"; git init -q -b "$3" "$GX"; mkdir -p "$GX/own"; echo a > "$GX/own/t.txt"; gi "$GX" add -A; gi "$GX" commit -qm base
+  gi "$GX" checkout -qb "$2"; echo t1 > "$GX/own/t.txt"; gi "$GX" commit -qam "feat: task"
+  local base="$6"; [ "$base" = HEAD ] && base="$(git -C "$GX" rev-parse HEAD)"
+  GXP=$(plan "$4" "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"$4\",\"title\":\"X\",\"topic\":\"$2\",\"deliver\":\"pr\",\"repos\":{\"$5\":{\"path\":\"$GX\",\"base\":\"$base\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"$5\",\"objective\":\"o\",\"paths\":[\"own/\"],\"acceptance\":[\"a\"]}]}")
+  gxv "$GXP" --task t --phase review --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS; gxqa "$GXP" "$5"
+}
+gxv() { local plan="$1"; shift; python3 -B "$P" verdict "$plan" "$@" >/dev/null || echo "verdict failed: $*"; }
+gxqa() { gxv "$1" --task "integration:$2" --phase qa --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS; }
+# a default-branch merge whose own conflict resolution edits an owned path to new content is task-owned work: STALE
+gm_fixture gm-conf feat/gc main gc r main
+git -C "$GX" worktree add -q "$TMP/gm-conf-main" main; echo m > "$TMP/gm-conf-main/own/t.txt"; gi "$TMP/gm-conf-main" commit -qam "fix: main edits t"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gc" >/dev/null 2>&1; echo resolved > "$GX/own/t.txt"; gi "$GX" add own/t.txt; gi "$GX" commit -qm "Merge main into feat/gc"; gxqa "$GXP" r
+expect "gate-merge: a default-branch merge whose conflict resolution edits an owned path is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-conf-main"
+# a registry default branch other than main, with the plan base pinned to a SHA: the merge of develop keeps the review current
+gm_fixture gm-dev feat/gd develop gd server HEAD
+git -C "$GX" worktree add -q "$TMP/gm-dev-main" develop; mkdir -p "$TMP/gm-dev-main/own"; echo d > "$TMP/gm-dev-main/own/d.txt"
+gi "$TMP/gm-dev-main" add -A; gi "$TMP/gm-dev-main" commit -qm "feat: develop adds own/d.txt"
+gi "$GX" merge -q --no-ff develop -m "Merge develop into feat/gd"; gxqa "$GXP" server
+expect "gate-merge: a merge of the registry default branch (plan base a SHA) keeps the review current (registered repo: checks not graded)" 1 "^Gate: UNVERIFIED" gate "$GXP" --no-run-checks
+refute "gate-merge: no STALE after the develop merge with a SHA base" "STALE|BLOCKER" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-dev-main"
+# a topic commit made after the review that later lands on the default branch through another PR stays task work: STALE
+gm_fixture gm-late feat/gl main gl r main
+echo late > "$GX/own/t.txt"; gi "$GX" commit -qam "fix: after review"
+git -C "$GX" worktree add -q "$TMP/gm-late-main" main; gi "$TMP/gm-late-main" merge -q --no-ff feat/gl -m "Merge PR: feat/gl"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gl"; gxqa "$GXP" r
+expect "gate-merge: a post-review topic commit that also landed on the default branch is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-late-main"
+
+case_end gate-merge
 fi
 
 if has_case qa-tiers; then

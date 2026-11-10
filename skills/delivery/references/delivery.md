@@ -136,7 +136,9 @@ noticed.
   `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`
   with the integration checkout (else the main checkout) as `<parent>`. A child worktree a task lead makes gets the
   task worktree as its parent. `dispatch --phase lead` prints this line before the launch, and so does every other
-  place that prints a worktree creation.
+  place that prints a worktree creation. An integration checkout the run lead creates itself gets the main checkout
+  as `<parent>`. Lineage goes through `orca worktree set` only, never `orca worktree create` (it writes
+  `branch.<name>.base` into the shared `.git/config`; `set` leaves the config hash unchanged).
 
 ### Child worktrees
 
@@ -269,10 +271,17 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 
 1. **Worktrees.** The run lead removes every task worktree its own run created once the task's review PASS is
    recorded and the task is integrated, and the tree is clean (no-worktree repo: nothing to remove):
-   `git worktree remove <path>` without `--force` (an Orca-created one: `orca worktree rm`, item 2). A leftover
+   `git worktree remove <path>` without `--force` (an Orca-created one: `orca worktree rm`, item 2). A plain git
+   task worktree (made by `git worktree add`) is removed the same way, or with `orca worktree rm`
+   followed by `git worktree prune`: `orca worktree rm` deletes the directory but can leave a prunable git worktree
+   record, and then `git branch -d` of the task branch fails ("used by worktree"). A leftover
    child (section 4) is merged into its parent branch, then removed with `orca worktree rm --worktree path:<child>`. A worktree with uncommitted or unintegrated work is not
    removed: report it instead. Never remove the main checkout, the integration branch's checkout before its PR is
    open, or a worktree another coordinator owns (section 2).
+   **Before removing a task worktree, check that no live session or process still uses it:** the task lead's Orca Run
+   has no unreleased worker, no Orca terminal is bound to the worktree, and the task lead confirms that each released
+   worker's CLI exited (a released Codex worker: its `codex` process is gone). A directory Windows reports busy
+   ("being used by another process") is held by such a process.
 2. **Task branches.** A task branch whose commits are in the integration
    branch is deleted with its worktree (`git branch -d`, never `-D`). The integration branch stays until its PR is
    merged: it carries the PR (item 5). `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged (see
@@ -280,11 +289,16 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 3. **Agent sessions.** End every Claude and Codex session the run started: each task lead releases its own
    workers (`orca orchestration worker-release` for each settled Orca worker: it closes only that worker's
    terminal and keeps its output readable), the run lead ends each task-lead session once its report is in, and
-   any background Agent-tool session still running is stopped. No idle session outlives its task.
+   any background Agent-tool session still running is stopped. No idle session outlives its task. A released
+   worker's CLI must also have exited (a released Codex worker: its `codex` process is gone), or it keeps the task
+   directory busy (item 1; "Releasing a session does not stop its test processes" below).
 4. **Check.** `factory-pipeline.py cleanup plan.json` lists what is left (worktrees and task branches of the
    plan, leftover children, and settled Orca workers not released in each task lead's Run: task `orca_run` or `--orca-run <id>`,
    read-only `worker-list`; no orca is NOT_AVAILABLE) and prints the commands; it must report CLEAN before the
-   final report. The report's Cleanup column
+   final report. A leftover task directory (empty or not) or an Orca record of a removed worktree is LEFTOVER, never
+   CLEAN, with the exact commands: `git worktree prune`, then `orca worktree rm --worktree path:<dir>` once the
+   directory is free. A directory Windows reports busy is held by a process: name it (PID, command) and leave the
+   decision to the user; never kill a process the run did not start. The report's Cleanup column
    names what was removed and what was kept and why.
 5. **After the integration PR is merged into main.** The run lead finishes the run's cleanup:
    - removes the integration checkout or worktree (`git worktree remove <path>`, or `orca worktree rm`), never the
@@ -336,7 +350,11 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
   `worker-release` close the worker's terminal, but test processes it started (a suite runner and its children)
   keep running, reparented, and load the machine. Before a worker that runs tests is released, it stops its own
   test process tree; the lead then checks for leftover test processes whose cwd is the task worktree and stops only
-  those.
+  those. Releasing a worker does not end its CLI either: a Codex CLI started for a session that was stopped when
+  codex went down can keep the task directory open, so `orca worktree rm` leaves an empty directory Windows reports
+  busy and an Orca record shown as "Delete failed". Before the worktree is removed, the task lead confirms that each
+  released worker's CLI exited. The lead stops only a process this run started; for any other it names the process
+  (PID, command) and leaves the decision to the user. Never kill a process the run did not start.
 - **Review and QA run in their own fresh sessions** (section 6, section 10 steps 4 and 6): never in an
   implementation session, never in a lead's session, and never reused across tasks or candidate SHAs.
 - **Few sessions at once.** Under memory pressure Claude Code reaps background shells, which kills long test runs
