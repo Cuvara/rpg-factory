@@ -168,20 +168,21 @@
       "kind": "code",
       "grade": "heavy",
       "grade_reason": "changes a deliberate policy marker, tier logic, validate and gate acceptance; gate regressions are costly",
-      "objective": "User decision 2026-11-10: add tier XS. A tiny change still costs ~4 sessions today (run lead, task lead, implementer, reviewer). XS: every owned path is prose (scripts/lib/pipeline_route.py prose_path) and the change is within a registry threshold (registry/core.json pipeline.tiers.XS: max_files 3, max_changed_lines 40, contracts false, generated false; mirror in skills/delivery/pipeline-defaults.json; registry.json rebuilt with python3 -B scripts/build-registry.py; docs/registry.schema.json). Flow: the run lead writes a one-task plan with tier XS, edits the files itself on the plan topic branch, commits with explicit paths, then dispatches one cross-model review (dispatch --phase review --sha <sha>; the implementer recorded as the run lead's model) and runs the task QA tier command itself, recording 'verdict --phase qa --state PASS --by <lead model> --note \"tier XS: lead ran task suites\"'. No task lead, no task worktree, no implement session. Code: 'tier' prints XS when it applies; 'validate' accepts a one-task XS plan and rejects XS when a path is not prose, more than one task, or a threshold is exceeded; 'dispatch --phase lead' on an XS task says the run lead edits it and prints the review command; 'dispatch --phase review' works without a task worktree for XS (reads the topic checkout); 'gate' accepts the XS review plus the lead-run QA and blocks when the committed diff exceeds the thresholds. Policy: the '<!-- policy:run-lead-never-implements -->' sentence gains the XS exception (update its mutation case in tests/parallel-policy.test.sh), delivery.md section 1 and section 10 step 1 and the QA tiers table name XS, factory-core SKILL.md step 6 names XS (one line each). Tests in tests/pipeline.test.sh: XS tier printed, XS plan validates, non-prose path never XS, oversize diff never XS (validate and gate), gate READY_FOR_PR for an XS task with review PASS and lead QA. Changelog fragment changelog.d/tier-xs.md.",
+      "objective": "User decision 2026-11-10: add tier XS. A tiny change still costs ~4 sessions today (run lead, task lead, implementer, reviewer). XS: every owned path is prose (scripts/lib/pipeline_route.py prose_path) and the change is within a registry threshold (registry/core.json pipeline.tiers.XS: max_files 3, max_changed_lines 40, contracts false, generated false; mirror in skills/delivery/pipeline-defaults.json; registry.json rebuilt with python3 -B scripts/build-registry.py; docs/registry.schema.json). Flow: the run lead writes a one-task plan with tier XS, edits the files itself on the plan topic branch, commits with explicit paths, then dispatches one cross-model review (dispatch --phase review --sha <sha>; the implementer recorded as the run lead's model) and runs the task QA tier command itself, recording 'verdict --phase qa --state PASS --by <lead model> --note \"tier XS: lead ran task suites\"'. No task lead, no task worktree, no implement session. Code: 'tier' prints XS when it applies; 'validate' accepts a one-task XS plan and rejects XS when a path is not prose, more than one task, or a threshold is exceeded; 'dispatch --phase lead' on an XS task says the run lead edits it and prints the review command; 'dispatch --phase review' works without a task worktree for XS (reads the topic checkout); 'gate' accepts the XS review plus the lead-run QA and blocks when the committed diff exceeds the thresholds. Policy: the '<!-- policy:run-lead-never-implements -->' sentence gains the XS exception (update its mutation case in tests/parallel-policy.test.sh), delivery.md section 1 and section 10 step 1 and the QA tiers table name XS, factory-core SKILL.md step 6 names XS (one line each). Tests in tests/pipeline.test.sh: XS tier printed, XS plan validates, non-prose path never XS, oversize diff never XS (validate and gate), gate READY_FOR_PR for an XS task with review PASS and lead QA. Changelog fragment changelog.d/tier-xs.md. Also: the integrated delivery.md is 33400 bytes after task report-loop and fails tests/delivery-generic.test.sh check \"delivery.md size cap\" (<= 32768): bring it back under the cap by moving detail to docs/pipeline-cli.md or compressing, losing no rule and keeping every policy marker, before adding the XS text; tests/delivery-generic.test.sh stays green.",
       "paths": [
-        "scripts/factory-pipeline.py",
-        "scripts/lib/pipeline_route.py",
-        "registry/core.json",
-        "registry.json",
-        "skills/delivery/pipeline-defaults.json",
+        "changelog.d/tier-xs.md",
+        "docs/pipeline-cli.md",
         "docs/registry.schema.json",
         "docs/schemas/pipeline-plan.schema.json",
+        "registry.json",
+        "registry/core.json",
+        "scripts/factory-pipeline.py",
+        "scripts/lib/pipeline_route.py",
+        "skills/delivery/pipeline-defaults.json",
         "skills/delivery/references/delivery.md",
         "skills/factory-core/SKILL.md",
         "tests/parallel-policy.test.sh",
-        "tests/pipeline.test.sh",
-        "changelog.d/tier-xs.md"
+        "tests/pipeline.test.sh"
       ],
       "deps": [
         "base-health",
@@ -189,6 +190,7 @@
         "report-loop"
       ],
       "checks": [
+        "env -u TMPDIR tests/delivery-generic.test.sh",
         "python3 -B scripts/build-registry.py --check",
         "scripts/check-registry.sh",
         "env -u TMPDIR tests/pipeline.test.sh --case <cases the change touches>",
@@ -199,7 +201,8 @@
         "tier prints XS only for prose-only changes within the thresholds",
         "an XS plan reaches READY_FOR_PR with the run lead's commit, one cross-model review and the lead-run QA",
         "the run-lead-never-implements marker states the XS exception and its mutation test bites",
-        "affected suites 0 failed"
+        "affected suites 0 failed",
+        "delivery.md at most 32768 bytes; delivery-generic 0 failed"
       ]
     },
     {
