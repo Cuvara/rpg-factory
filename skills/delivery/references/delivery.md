@@ -164,8 +164,8 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - **Orca first inside Orca.** In an Orca session (`ORCA_WORKTREE_ID` or `ORCA_AGENT_HOOK_ENDPOINT` set) with the
   runtime reachable, `factory-pipeline.py planner` and `dispatch` default to `--runner orca` and refuse
   `--runner agent` (exit 2, naming `--runner orca`) unless `--orca-unavailable <reason>` is given; the reason goes
-  into the session prompt so its report names it (Agent-tool task leads with plain git worktrees are invisible in
-  Orca).
+  into the session prompt so its report names it (Agent-tool task leads with plain git worktrees
+  are invisible in Orca).
 - **Fallback:** outside Orca, or when it cannot do an operation, use Claude Code background agents (`--runner agent`)
   and name the limitation. They are Claude only: a session planned for Codex counts as SAME_MODEL (section 10 step 4).
   Orca's absence never blocks progress.
