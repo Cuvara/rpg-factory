@@ -1493,6 +1493,10 @@ def load_subtask(a, plan, reg, task):
     return s
 
 
+SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something "
+                 "the spec does not cover.")
+
+
 def cmd_dispatch(a, reg):
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
@@ -1550,6 +1554,7 @@ def cmd_dispatch(a, reg):
                 print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
                       "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
+                  + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
@@ -1667,7 +1672,7 @@ def cmd_dispatch(a, reg):
                   "<changed-file-list> <suite>`. Never run a whole slow suite or a full tests/run-all.sh.\n")
         if placement == "child":
             # a child has its own index: the sub-session commits there and the task lead merges the child branch
-            prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md) in an Orca child "
+            prompt = (f"Implementation sub-session of task {task['id']} in an Orca child "
                       f"worktree of {home}, on its own branch {child_name} from {branch}. Edit only {edit}. Commit on "
                       "your child branch with explicit paths (`git add -- <paths>`, Conventional Commits); the task lead "
                       f"merges it into {branch} and removes the child at once. {orca_cmd.CHILD_RULE.split(';')[0]}.\n"
@@ -1676,13 +1681,13 @@ def cmd_dispatch(a, reg):
         else:
             # a non-committing sub-session of the task lead, also in a no-worktree repo without --paths: only the task
             # lead commits (one shared index); there is no committing implementation worker in a shared checkout
-            prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md). Work in "
+            prompt = (f"Implementation sub-session of task {task['id']}. Work in "
                       f"{home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit only "
                       f"{edit}. Do NOT commit, stage or stash: one shared index; the task lead commits.\n{report}\n"
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt += "\n" + checks
+        prompt += "\n" + SPEC_COMPLETE + "\n" + checks
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -1717,7 +1722,7 @@ def cmd_dispatch(a, reg):
         explicit, _, _ = pr.qa_checks([task], suites, failed)
         cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
-                  + (f", subtask {sub['id']}" if sub else "") + ".\n"
+                  + (f", subtask {sub['id']}" if sub else "") + ".\n" + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
                             runall=suites, tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
@@ -1730,15 +1735,19 @@ def cmd_dispatch(a, reg):
     if agent == sub_impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
     base, base_note = review_base(info, plan["topic"], spec["base"], a.sha)
+    plugin_repo = task["repo"] == "plugin" or (info["path"] and os.path.isfile(
+        os.path.join(info["path"], ".claude-plugin", "plugin.json")))
+    checklist = ("skills/factory-core/references/plugin-review.md" if plugin_repo
+                 else "the routed lead skill's review checklist")
     prompt = (f"Review worker ({agent}) for code written by {sub_impl}"
               + (f" (subtask {sub['id']}; record with `verdict --subtask {sub['id']}`)" if sub else "")
               + ". Read-only: edit nothing, commit nothing. Run no suites; only a minimal repro when needed.\n"
-              + subagent_rule(a, reg, "review", agent) + "\n"
+              + SPEC_COMPLETE + "\n" + subagent_rule(a, reg, "review", agent) + "\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
               + (f" ({base_note})" if base_note else "")
-              + " against the spec: scope (a change outside the owned paths is a finding), correctness, safety rules, the "
-              "routed lead skill's review checklist, tests per behaviour change, conventions.\n"
+              + " against the spec: scope (a change outside the owned paths is a finding), correctness, safety rules, "
+              + checklist + ", tests per behaviour change, conventions.\n"
               + spec_json(spec)
               + "\nReport: `path:line severity problem fix` per finding, then `VERDICT: PASS|FAIL`."
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
