@@ -7,7 +7,7 @@
   "repos": {
     "plugin": {
       "path": "../..",
-      "base": "8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7"
+      "base": "5e2c5daf2dd5329ed35922fb482653db8bd87a81"
     }
   },
   "tasks": [
