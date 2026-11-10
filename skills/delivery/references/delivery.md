@@ -229,6 +229,13 @@ A task is done when integrated with its review and QA recorded; the run, when th
 - **Run report in the repo.** At integration the run lead commits `docs/plans/<plan>/report.md`: sessions per task
   (role, model, Orca Run), verdicts (phase, SHA, model, result), checks with exact counts, limitations. Verdicts and specs stay per machine; a
   new machine re-runs review and QA.
+- **Cost ledger.** The run report has a "Cost" table: one row per session (task, role, model, effort, tokens or cost)
+  taken from what the runtime shows (Claude Code `/cost` or the session footer, the Codex usage line, Orca if it
+  reports it), else `NOT_AVAILABLE`; plus a row for the run lead's own total. Never estimate a number and present it
+  as measured.
+- **Learning loop.** In the integration commit, the report's limitations and follow-ups go to the project's backlog
+  (one topic each) and every new operating lesson to the file the project's learning-loop rule names (for example
+  `docs/plans/backlog.md` and the Operating lessons in the repo's `CLAUDE.md`).
 - **Plan edits are atomic.** Edit a copy, `validate` it, replace the plan.
 
 ### Session lifecycle

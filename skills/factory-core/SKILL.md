@@ -69,6 +69,8 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
     checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist).
 12. **Gate, PR, cleanup, report (M, run lead).** Delivery.md section 10 steps 7-9 and section 8 own the gate, PR and cleanup.
     The registry adds the final report (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
+    The run report's limitations and follow-ups go to the backlog (in this plugin `docs/plans/backlog.md`, one topic each)
+    and every new operating lesson to the file the learning-loop rule names, in the integration commit (delivery.md section 8).
 
 ## Validation states (from run-checks.py)
 
