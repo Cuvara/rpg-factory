@@ -67,6 +67,7 @@ Each lesson names its reason. Delivery-flow lessons (Orca, Codex, sessions, load
 - **Task worktrees must be visible in Orca** (maintainer, 2026-11-09): a `git worktree add --no-track` worktree has no Orca lineage and lands in the hidden section. Run `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress` before `orca agent launch` (`delivery.md` section 4 "Orca visibility"). Never `orca worktree create` for lineage: it writes `branch.<name>.base` into the shared `.git/config`.
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file:** backticks inside a double-quoted argument (an `orca orchestration send --body`) are command substitution and the message loses the example.
+- **Never stop a process by pattern (`pkill -f <name>`):** a worker that did so to stop its own duplicate skills-lint run may have killed other sessions' runs; stop only the PID you started.
 - **Learning loop:** a new lesson goes here or into its policy file (`parallel-work.md`, `docs/dogfood.md`, `git-safety.md`) with its reason and a test when possible. Private agent memory only points here: Codex, other machines and new sessions never see it.
 
 ## Commands

@@ -73,7 +73,7 @@ EXTRA = {
     "tests/skills-lint.sh": SKILL_TEXT + ["commands/*", "agents/*", "scripts/checks/*"],
     "tests/parallel-policy.test.sh": SKILL_TEXT + ["tests/skills-lint.sh", "scripts/orca-wait.sh", "tests/orca-wait.test.sh"],
     "tests/new-skill.test.sh": SKILL_TEXT + ["scripts/new-skill.py", "scripts/skill-touchpoints.py", "tests/routing.test.sh",
-                                             "evals/*", "tests/skills-lint.sh"],
+                                             "evals/*", "tests/skills-lint.sh", "docs/architecture/overview.md"],
     "scripts/checks/english-only.py": ["*"],
     "tests/english-only.test.sh": ["scripts/checks/english-only.py"],
     "tests/routing.test.sh": SKILL_TEXT + ["scripts/factory_session.py"],

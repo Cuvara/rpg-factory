@@ -599,7 +599,7 @@ Architecture documentation and decision records are indexed in `docs/architectur
 - Releases of this plugin: `python3 -B scripts/release-check.py` (read-only) gates the tag - versions agree,
   the CHANGELOG section exists, `[Unreleased]` is empty and `changelog.d/` holds no fragment, the tag is new locally and on origin, HEAD is the
   `origin/main` merge commit, the tree is clean; `--verify-tag` checks the annotated tag afterwards and
-  `--notes` prints the release notes. Order: `.claude/CLAUDE.md` "Releases".
+  `--notes` prints the release notes. Order: `docs/releasing.md`.
 - Skill line citations are checked against the code: `python3 -B scripts/checks/skill-citations.py
   [--skill <s>] [--suggest]` resolves every `path:line` at the repos' integration branches and fails on a
   moved symbol, an unanchored citation or a line past the end (`--suggest` prints the corrected line).

@@ -686,7 +686,7 @@ cmver=""; [ -f .agents/plugins/marketplace.json ] && cmver=$(jq -r '[.version?, 
   || bad "version consistency" "VERSION=$fver plugin=$ver marketplace=$mver README=${rver:-none} codex=$cver codex-marketplace=${cmver:-none} changelog section missing?"
 # release policy wording: tags and releases are the lead's by default and the agent's only with explicit release
 # authorization in the current task - no authoritative text may state the absolute "agents never tag" rule again
-policy_files=(.claude/CLAUDE.md README.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
+policy_files=(.claude/CLAUDE.md README.md docs/releasing.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
               skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/gitguard.py scripts/lib/guard/*.py
               scripts/lib/context.py scripts/lib/procrun.py scripts/lib/snapshot_render.py
               .claude-plugin/plugin.json .claude-plugin/marketplace.json)
