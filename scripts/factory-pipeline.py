@@ -2012,6 +2012,11 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     in the merge's first parent); a first-parent topic commit made after the review stays
     task work even when it reached the default branch later through another PR (so a
     fast-forward of the topic to the default branch is STALE: fails safe).
+    A task branch can sync the topic into itself (a merge whose non-first parents are all on
+    the target's first-parent chain). What such a sync merge brings in is topic work the
+    first-parent walk attributes on its own (direct topic commits and task merges), so
+    counting it again on the task branch double-attributes it: only the sync merge's own
+    conflict resolutions count, and a later task that owns them and depends on the task covers them.
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2087,6 +2092,10 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
     if rc != 0:
         return list(task["paths"])
+    topic_text, topic_rc = git(path, "rev-list", "--first-parent", target)
+    if topic_rc != 0:
+        return list(task["paths"])
+    topic_chain = set((topic_text or "").splitlines())
     for merge in (chain or "").splitlines():
         if is_ancestor(path, merge, sha):
             continue
@@ -2115,6 +2124,9 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             if from_default(commit):
                 if is_ancestor(path, commit, default_tip):
                     continue
+                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
+                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
+            elif len(ps) > 1 and all(q in topic_chain for q in ps[1:]):
                 cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
                 touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
             else:
