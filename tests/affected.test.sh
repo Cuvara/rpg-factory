@@ -46,6 +46,27 @@ printf '%s\n' registry/core.json > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" tests/changelog.test.sh tests/pipeline.test.sh)
 if [ "$got" = $'tests/changelog.test.sh\ntests/pipeline.test.sh' ]; then pass=$((pass + 1)); echo "PASS  select-many: a global change selects every suite"
 else fail=$((fail + 1)); echo "FAIL  select-many: a global change selects every suite: got [$got]"; fi
+mapfile -t suites < <(bash "$ROOT/tests/run-all.sh" --list-suites)
+printf '%s\n' tests/run-all.sh > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
+if [ "$got" = $'tests/affected.test.sh\ntests/run-all-parallel.test.sh' ]; then
+  pass=$((pass + 1)); echo "PASS  runner change selects only runner and selector suites"
+else fail=$((fail + 1)); echo "FAIL  runner change selects only runner and selector suites: got [$got]"; fi
+printf '%s\n' tests/affected.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
+if [ "$got" = 'tests/affected.test.sh' ]; then
+  pass=$((pass + 1)); echo "PASS  selector change selects only selector suite"
+else fail=$((fail + 1)); echo "FAIL  selector change selects only selector suite: got [$got]"; fi
+printf '%s\n' tests/affected.test.sh > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
+if [ "$got" = $'scripts/checks/english-only.py\ntests/affected.test.sh' ]; then
+  pass=$((pass + 1)); echo "PASS  suite change selects itself and the global English check"
+else fail=$((fail + 1)); echo "FAIL  suite change selects itself and the global English check: got [$got]"; fi
+printf '%s\n' tests/parallel-policy.test.sh > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
+if [[ "$got" == *tests/parallel-policy.test.sh* ]] && [[ "$got" != *tests/git-guard.test.sh* ]]; then
+  pass=$((pass + 1)); echo "PASS  parallel policy suite change skips git guard"
+else fail=$((fail + 1)); echo "FAIL  parallel policy suite change skips git guard: got [$got]"; fi
 R="$TMP/r"; git init -q -b main "$R"; echo a > "$R/a"; git -C "$R" add a; git -C "$R" -c user.email=t@t -c user.name=t commit -qm a
 git -C "$R" checkout -qb topic; echo b > "$R/b"; git -C "$R" add b; git -C "$R" -c user.email=t@t -c user.name=t commit -qm b; echo c > "$R/c"
 out=$(cd "$R" && python3 -B - "$A" <<'PY'
