@@ -32,8 +32,8 @@ Claude Code plugin providing Factory Core for the UnityIndie RPG MMO workspace. 
   integration QA runs `tests/run-all.sh --workspace-only` (what CI cannot run) and must report 0 failed; after the
   PR opens, CI (`gh pr checks <pr> --watch`) must be green before merging, and while CI runs, start the next task. The full `tests/run-all.sh --release`
   and `tests/dogfood.sh --installed` run only for releases. Report the pass count. Tiers (with typical times):
-  `delivery.md` section 10 "QA tiers". An implementer runs only its spec's targeted checks and, in a slow suite,
-  only the cases its change touches (`--case`, `tests/affected.py cases`); tier S and docs-only tasks get lead QA.
+  `delivery.md` section 10 "QA tiers". Implementers run no suites (syntax check only); one verify session per task
+  (review, then the tier command once, with `--case` in a slow suite, `tests/affected.py cases`); tier S and docs-only tasks get lead QA.
   CI (`.github/workflows/tests.yml`) runs only `--no-workspace --no-claude`, so `--workspace-only` covers the rest.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - New or changed skills follow `skills/factory-core/references/skill-contract.md`; `tests/skills-lint.sh`
