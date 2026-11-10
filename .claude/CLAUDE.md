@@ -87,9 +87,6 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
   run-all's shared-config check fails when it changes mid-run (a new worktree or tracking branch writes to it).
 - **Create branches with `git switch --no-track -c <branch>`.** A tracking branch writes `branch.<name>.*` into
   the shared `.git/config`, which races with other sessions' runs.
-- **Task worktree lineage goes through `orca worktree set --worktree path:<task> --parent-worktree path:<integration checkout>`,
-  never `orca worktree create`.** `create` writes `branch.<name>.base` into the shared `.git/config`; `set` writes only
-  Orca metadata (config hash unchanged). `dispatch --phase lead` prints it after `git worktree add --no-track`, before the launch.
 - **Git Bash, never WSL, on Windows** (every agent runtime). A WSL git run once wrote `core.worktree=/mnt/c/...`
   into the shared config and broke every checkout of the repo.
 - **Fix citation drift right before a release gate:** `python3 -B scripts/checks/skill-citations.py --fix`.
@@ -105,7 +102,8 @@ sessions, load limits) live only in `skills/factory-core/references/parallel-wor
 - **Task worktrees must be visible in Orca** (maintainer, 2026-11-09). A `git worktree add --no-track` worktree has
   no Orca lineage and lands in Orca's hidden section: run `orca worktree set --worktree path:<dir>
   --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress` before
-  `orca agent launch` (`delivery.md` section 4 "Orca visibility"; `dispatch --phase lead` prints it).
+  `orca agent launch` (`delivery.md` section 4 "Orca visibility"; `dispatch --phase lead` prints it). Never `orca worktree
+  create` for lineage: it writes `branch.<name>.base` into the shared `.git/config`; `set` writes only Orca metadata.
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the
   script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file.** Backticks inside a double-quoted

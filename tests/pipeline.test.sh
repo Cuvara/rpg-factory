@@ -3142,6 +3142,37 @@ refute "gate-merge: a plan file inside the repo is not stray" "changes outside e
 echo o > "$GM/other.txt"; gi "$GM" add other.txt; gi "$GM" commit -qm "chore: stray"
 expect "gate-merge: another unowned file is still stray" 1 "BLOCKER r: changes outside every task's owned paths: other.txt$" gate "$GP2" --no-run-checks
 git -C "$GM" worktree remove --force "$TMP/gm-main"
+# gm_fixture <dir> <branch> <default> <plan id> <repo key> <base>: a repo with own/t.txt reviewed and QA'd on the topic; sets GX, GXP
+gm_fixture() {
+  GX="$TMP/$1"; git init -q -b "$3" "$GX"; mkdir -p "$GX/own"; echo a > "$GX/own/t.txt"; gi "$GX" add -A; gi "$GX" commit -qm base
+  gi "$GX" checkout -qb "$2"; echo t1 > "$GX/own/t.txt"; gi "$GX" commit -qam "feat: task"
+  local base="$6"; [ "$base" = HEAD ] && base="$(git -C "$GX" rev-parse HEAD)"
+  GXP=$(plan "$4" "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"$4\",\"title\":\"X\",\"topic\":\"$2\",\"deliver\":\"pr\",\"repos\":{\"$5\":{\"path\":\"$GX\",\"base\":\"$base\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"$5\",\"objective\":\"o\",\"paths\":[\"own/\"],\"acceptance\":[\"a\"]}]}")
+  gxv "$GXP" --task t --phase review --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS; gxqa "$GXP" "$5"
+}
+gxv() { local plan="$1"; shift; python3 -B "$P" verdict "$plan" "$@" >/dev/null || echo "verdict failed: $*"; }
+gxqa() { gxv "$1" --task "integration:$2" --phase qa --sha "$(git -C "$GX" rev-parse HEAD)" --by codex --state PASS; }
+# a default-branch merge whose own conflict resolution edits an owned path to new content is task-owned work: STALE
+gm_fixture gm-conf feat/gc main gc r main
+git -C "$GX" worktree add -q "$TMP/gm-conf-main" main; echo m > "$TMP/gm-conf-main/own/t.txt"; gi "$TMP/gm-conf-main" commit -qam "fix: main edits t"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gc" >/dev/null 2>&1; echo resolved > "$GX/own/t.txt"; gi "$GX" add own/t.txt; gi "$GX" commit -qm "Merge main into feat/gc"; gxqa "$GXP" r
+expect "gate-merge: a default-branch merge whose conflict resolution edits an owned path is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-conf-main"
+# a registry default branch other than main, with the plan base pinned to a SHA: the merge of develop keeps the review current
+gm_fixture gm-dev feat/gd develop gd server HEAD
+git -C "$GX" worktree add -q "$TMP/gm-dev-main" develop; mkdir -p "$TMP/gm-dev-main/own"; echo d > "$TMP/gm-dev-main/own/d.txt"
+gi "$TMP/gm-dev-main" add -A; gi "$TMP/gm-dev-main" commit -qm "feat: develop adds own/d.txt"
+gi "$GX" merge -q --no-ff develop -m "Merge develop into feat/gd"; gxqa "$GXP" server
+expect "gate-merge: a merge of the registry default branch (plan base a SHA) keeps the review current (registered repo: checks not graded)" 1 "^Gate: UNVERIFIED" gate "$GXP" --no-run-checks
+refute "gate-merge: no STALE after the develop merge with a SHA base" "STALE|BLOCKER" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-dev-main"
+# a topic commit made after the review that later lands on the default branch through another PR stays task work: STALE
+gm_fixture gm-late feat/gl main gl r main
+echo late > "$GX/own/t.txt"; gi "$GX" commit -qam "fix: after review"
+git -C "$GX" worktree add -q "$TMP/gm-late-main" main; gi "$TMP/gm-late-main" merge -q --no-ff feat/gl -m "Merge PR: feat/gl"
+gi "$GX" merge -q --no-ff main -m "Merge main into feat/gl"; gxqa "$GXP" r
+expect "gate-merge: a post-review topic commit that also landed on the default branch is STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GXP" --no-run-checks
+git -C "$GX" worktree remove --force "$TMP/gm-late-main"
 
 case_end gate-merge
 fi

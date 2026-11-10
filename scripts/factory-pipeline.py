@@ -2005,8 +2005,13 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
     A path whose content at target equals its content at sha is never changed, and the
-    side commits of a merge of the repo's default branch (origin/<base>, else <base>)
-    are nobody's task work: only that merge's own conflict resolutions count.
+    side commits of a merge of the repo's default branch (origin/<b>, else <b>, for b the
+    plan base unless it is a SHA, the registry default_branch, then main) are nobody's
+    task work: only that merge's own conflict resolutions count. A commit counts as
+    default-branch work only when such a merge brought it in (a side commit not already
+    in the merge's first parent); a first-parent topic commit made after the review stays
+    task work even when it reached the default branch later through another PR (so a
+    fast-forward of the topic to the default branch is STALE: fails safe).
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2061,14 +2066,24 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     if net_rc == 0 and not (net_out or "").strip():
         return []
     net = set(net_out.splitlines()) if net_rc == 0 else None
-    default_tip = next((t for b in dict.fromkeys([info["base"] or "main", "main"]) for r in ("remotes/origin", "heads")
+    branches = [b for b in (info["base"], ((reg.get("repos") or {}).get(info["registry"] or task["repo"]) or {}).get("default_branch"), "main")
+                if b and not re.fullmatch(r"[0-9a-f]{7,40}", b)]
+    default_tip = next((t for b in dict.fromkeys(branches) for r in ("remotes/origin", "heads")
                         for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t), None)
-    def from_default(c):
-        """c is on the default branch, or merges it in (all parents but the first are): not task work."""
-        if not default_tip:
-            return False
+    def merges_default(c):
+        """c is a merge and all its parents but the first are on the default branch."""
         ps = (git(path, "show", "-s", "--format=%P", c)[0] or "").split()
-        return is_ancestor(path, c, default_tip) or (len(ps) > 1 and all(is_ancestor(path, q, default_tip) for q in ps[1:]))
+        return len(ps) > 1 and all(is_ancestor(path, q, default_tip) for q in ps[1:])
+    default_side = set()
+    if default_tip:
+        for m in (git(path, "rev-list", "--merges", f"{sha}..{target}")[0] or "").splitlines():
+            ps = (git(path, "show", "-s", "--format=%P", m)[0] or "").split()
+            if len(ps) > 1 and merges_default(m) and not is_ancestor(path, m, default_tip):  # not a PR merge on the default branch
+                default_side.update((git(path, "rev-list", *ps[1:], "--not", ps[0])[0] or "").splitlines())
+    def from_default(c):
+        """c came in from the default branch: it is a commit a merge of the default branch brought in, or such a merge itself.
+        A first-parent topic commit is task work even when it reached the default branch later through another PR."""
+        return bool(default_tip) and (c in default_side or merges_default(c))
     chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
     if rc != 0:
         return list(task["paths"])
@@ -2732,7 +2747,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     what = (f"directory {d} (no git worktree any more" + (", with an Orca record" if record else "") + ")"
                             if on_disk else f"Orca record of the removed task worktree {d}")
                     kept.append(f"{key}: LEFTOVER {what}: `git worktree prune`, then `orca worktree rm` once the "
-                                f"directory is free; {BUSY_NOTE}")
+                                f"directory is free (check it is the old task worktree first); {BUSY_NOTE}")
                     commands.extend(c for c in (prune, rm) if c not in commands)
         refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
         if after_merge and integrated:

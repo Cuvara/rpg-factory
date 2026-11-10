@@ -272,7 +272,7 @@ when the PR is open (or, without `deliver: pr`, when the gate reports READY_FOR_
 1. **Worktrees.** The run lead removes every task worktree its own run created once the task's review PASS is
    recorded and the task is integrated, and the tree is clean (no-worktree repo: nothing to remove):
    `git worktree remove <path>` without `--force` (an Orca-created one: `orca worktree rm`, item 2). A plain git
-   task worktree (made by `git worktree add`) is removed with `git worktree remove <path>`, or with `orca worktree rm`
+   task worktree (made by `git worktree add`) is removed the same way, or with `orca worktree rm`
    followed by `git worktree prune`: `orca worktree rm` deletes the directory but can leave a prunable git worktree
    record, and then `git branch -d` of the task branch fails ("used by worktree"). A leftover
    child (section 4) is merged into its parent branch, then removed with `orca worktree rm --worktree path:<child>`. A worktree with uncommitted or unintegrated work is not
