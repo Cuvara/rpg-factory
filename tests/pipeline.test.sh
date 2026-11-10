@@ -1304,6 +1304,30 @@ X=$(plan unknown "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\
 expect "unknown repo is an error" 1 "neither a registry repo nor in plan.repos" validate "$X"
 TOOL=$(plan tool "{$HEAD,\"repos\":{\"tool\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"tool\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "unregistered repo with ProjectVersion.txt is a no-worktree repo" 0 "No worktree .*: tool" validate "$TOOL"
+# known_failing: [{check, reason}], checks that already fail at the task base
+KFT='"tasks":[{"id":"a","repo":"server","objective":"o","paths":["backend/gateway/"],"acceptance":["a"]}]'
+X=$(plan kf-ok "{$HEAD,\"known_failing\":[{\"check\":\"tests/foo.test.sh\",\"reason\":\"fails on base\"}],$KFT}")
+expect "known_failing: a good plan validates and warns" 0 "^WARN  known failing at base: tests/foo.test.sh - fails on base$" validate "$X"
+refute "known_failing: the warning is no error" "^ERROR|INVALID" validate "$X"
+X=$(plan kf-str "{$HEAD,\"known_failing\":\"x\",$KFT}")
+expect "known_failing: a string is rejected" 1 "known_failing must be an array of \{check, reason\} objects" validate "$X"
+for bad in '[{"check":"a"}]' '["a"]' '[{"check":"","reason":"r"}]'; do
+  X=$(plan kf-bad "{$HEAD,\"known_failing\":$bad,$KFT}")
+  expect "known_failing $bad: rejected" 1 "known_failing\[0\]: needs non-empty string check and reason" validate "$X"
+done
+X=$(plan kf-key "{$HEAD,\"known_failing\":[{\"check\":\"a\",\"reason\":\"r\",\"x\":1}],$KFT}")
+expect "known_failing: an unknown key is rejected" 1 "known_failing\[0\]: unknown key x" validate "$X"
+# the schema carries the same shape: items need check and reason, nothing else
+if python3 -B - "$ROOT" <<'PY'
+import json, pathlib, sys
+kf = json.loads(pathlib.Path(sys.argv[1], 'docs/schemas/pipeline-plan.schema.json').read_text(encoding='utf-8'))['properties']['known_failing']
+item = kf['items']
+assert kf['type'] == 'array' and item['type'] == 'object', kf
+assert item['required'] == ['check', 'reason'] and item['additionalProperties'] is False, item
+assert all(item['properties'][k]['type'] == 'string' and item['properties'][k]['minLength'] == 1 for k in ('check', 'reason')), item
+PY
+then pass=$((pass + 1)); echo "PASS  schema: known_failing items require a non-empty check and reason, no other key"
+else fail=$((fail + 1)); echo "FAIL  schema: known_failing shape"; fi
 
 case_end validate
 fi
@@ -1598,6 +1622,21 @@ expect_spec "plugin manifest review names plugin checklist" 'skills/factory-core
 rm "$T/.claude-plugin/plugin.json"; rmdir "$T/.claude-plugin"
 expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
 refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
+# known_failing: the lead and QA specs name the checks and the FAIL_AT_BASE rule; a plan without it adds nothing
+KFP=$(plan kf-spec "{$(sed 's/"id":"demo"/"id":"demokf"/' <<<"$HEAD"),\"known_failing\":[{\"check\":\"tests/foo.test.sh\",\"reason\":\"fails on base\"}],\"tasks\":[{\"id\":\"gw\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]}]}")
+for ph in "--phase lead" "--phase qa --sha abc1234"; do
+  expect_spec "known_failing: the $ph spec lists the checks" "^Known failing at base \(plan known_failing\):$" dispatch "$KFP" --task gw $ph --runner orca
+  expect_spec "known_failing: the $ph spec names the check and reason" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task gw $ph --runner orca
+  expect_spec "known_failing: the $ph spec carries FAIL_AT_BASE" "FAIL_AT_BASE" dispatch "$KFP" --task gw $ph --runner orca
+  refute_spec "no known_failing: the $ph spec has no known-failing text" "Known failing at base|FAIL_AT_BASE" dispatch "$OK" --task gw $ph --runner orca
+done
+# base health hint: print only, for a repo with a GitHub remote
+refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+git -C "$S" remote add origin https://github.com/x/y.git
+expect "base health hint: a GitHub remote prints the gh command" 0 'base health: run `gh run list --branch [^ ]+ --limit 1`' dispatch "$OK" --task gw --phase lead --runner orca
+git -C "$S" remote set-url origin https://example.com/x/y.git
+refute "base health hint: none for a non-GitHub remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+git -C "$S" remote remove origin
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
 for ph in "--task gw --phase lead" "--task gw --phase implement" "--task gw --phase review --sha abc1234" "--task gw --phase qa --sha abc1234"; do
   expect "registry without pipeline.subagents: dispatch $ph exits 1 and names the policy" 1 "subagent policy: registry pipeline.subagents is missing. Nothing was dispatched" --registry "$TMP/reg-nosub.json" dispatch "$OK" $ph --runner orca
@@ -1978,6 +2017,7 @@ refute "integration QA never creates a worktree" "new-top-level|--base-branch|wo
 expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "You share the integration checkout .*demo-int with the run lead" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner agent
+expect_spec "known_failing: the integration QA spec lists the checks" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA: spec is complete" "$SPEC_RULE" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task integration:client --phase qa --sha abc1234
