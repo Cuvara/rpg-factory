@@ -14,7 +14,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged model-routing multiwave qa-tiers cli-selftest'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -85,7 +85,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
+UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -3089,6 +3089,61 @@ echo "-- multi-wave currency and verdict provenance"
 for case in $MULTIWAVE_CASES; do bg_report "multiwave $case" "multiwave-$case"; done
 
 case_end multiwave
+fi
+
+if has_case gate-merge; then
+case_start
+echo "-- gate after a merge of the default branch"
+# A merge of the default branch into the topic after the reviews keeps them current (the owned paths' content on the
+# default branch is nobody's task work), a real later change to an owned path still makes them STALE, and the run lead's
+# plan file and report.md are never stray.
+GM="$TMP/gm-repo"; git init -q -b main "$GM"
+mkdir -p "$GM/own"; echo v1 > "$GM/AGENTS.md"; echo a > "$GM/own/a.txt"; gi "$GM" add -A; gi "$GM" commit -qm base
+gi "$GM" checkout -qb feat/gm
+echo t > "$GM/own/t.txt"; gi "$GM" add -A; gi "$GM" commit -qm "feat: task"
+GP=$(plan gm "{\"schema\":\"rpg-factory.pipeline-plan/1\",\"id\":\"gm\",\"title\":\"Gm\",\"topic\":\"feat/gm\",\"deliver\":\"pr\",\"repos\":{\"r\":{\"path\":\"$GM\",\"base\":\"main\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"r\",\"objective\":\"o\",\"paths\":[\"own/\",\"AGENTS.md\"],\"acceptance\":[\"a\"]}]}")
+gmv() { python3 -B "$P" verdict "$GP" "$@" >/dev/null || echo "verdict failed: $*"; }
+# gmqa: integration QA PASS on the current HEAD
+gmqa() { gmv --task integration:r --phase qa --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; }
+GM0=$(git -C "$GM" rev-parse HEAD)
+gmv --task t --phase review --sha "$GM0" --by codex --state PASS; gmqa
+expect "gate-merge: reviewed and QA'd: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# the default branch changes an owned path (AGENTS.md) and the topic merges it
+git -C "$GM" worktree add -q "$TMP/gm-main" main
+echo v2 > "$TMP/gm-main/AGENTS.md"; gi "$TMP/gm-main" commit -qam "docs: agents v2"
+gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm"; gmqa
+expect "gate-merge: a merge of the default branch after the review keeps it current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no STALE after the default-branch merge" "STALE" gate "$GP" --no-run-checks
+# a task branch that merged the default branch, itself merged into the topic (the main-sync shape)
+echo v3 > "$TMP/gm-main/AGENTS.md"; gi "$TMP/gm-main" commit -qam "docs: agents v3"
+gi "$GM" checkout -q -b feat/gm-sync; gi "$GM" merge -q --no-ff main -m "Merge main into feat/gm-sync"
+gi "$GM" checkout -q feat/gm; gi "$GM" merge -q --no-ff feat/gm-sync -m "Merge task sync"; gmqa
+expect "gate-merge: a task branch merge that brought the default branch keeps the review current" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: nested default-branch merge is not STALE" "STALE" gate "$GP" --no-run-checks
+# content equal to the reviewed commit: changed and changed back after the review
+echo x >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: tweak"; git -C "$GM" checkout -q "$GM0" -- own/t.txt; gi "$GM" commit -qm "fix: revert tweak"; gmqa
+expect "gate-merge: an owned path with the reviewed content is not STALE" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# a real later change to an owned path
+echo real >> "$GM/own/t.txt"; gi "$GM" commit -qam "fix: real change"; gmqa
+expect "gate-merge: a real later change to an owned path makes the review STALE" 1 "BLOCKER t: review is STALE - owned paths changed after .*own/t.txt" gate "$GP" --no-run-checks
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS
+expect "gate-merge: a new review clears it" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+# the run lead's plan file and report.md are never stray; any other unowned file still is
+mkdir -p "$GM/docs/plans/gm"; cp "$GP" "$GM/docs/plans/gm.json"; echo r > "$GM/docs/plans/gm/report.md"
+gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): gm plan and report"; gmqa
+expect "gate-merge: the plan file and its report.md are not stray" 0 "^Gate: READY_FOR_PR" gate "$GP" --no-run-checks
+refute "gate-merge: no stray line for docs/plans" "changes outside every task's owned paths" gate "$GP" --no-run-checks
+# a plan file inside the repo under another name: its own path and its sibling directory's report.md
+mkdir -p "$GM/runlead/other"; cp "$GP" "$GM/runlead/other.json"; echo r > "$GM/runlead/other/report.md"
+gi "$GM" add -A; gi "$GM" commit -qm "docs(plans): in-repo plan"; gmqa
+GP2="$GM/runlead/other.json"; gmv() { python3 -B "$P" verdict "$GP2" "$@" >/dev/null || echo "verdict failed: $*"; }
+gmv --task t --phase review --sha "$(git -C "$GM" rev-parse HEAD)" --by codex --state PASS; gmqa
+refute "gate-merge: a plan file inside the repo is not stray" "changes outside every task's owned paths: .*runlead" gate "$GP2" --no-run-checks
+echo o > "$GM/other.txt"; gi "$GM" add other.txt; gi "$GM" commit -qm "chore: stray"
+expect "gate-merge: another unowned file is still stray" 1 "BLOCKER r: changes outside every task's owned paths: other.txt$" gate "$GP2" --no-run-checks
+git -C "$GM" worktree remove --force "$TMP/gm-main"
+
+case_end gate-merge
 fi
 
 if has_case qa-tiers; then

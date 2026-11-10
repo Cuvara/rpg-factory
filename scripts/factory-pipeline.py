@@ -127,8 +127,10 @@ script prints for a next session then carries `--registry none`. A plan may set 
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
-        paths did not change since, QA is PASS on each integration HEAD, the integration trees are clean,
-        fast checks are PASS and not STALE, every change sits in some task's owned paths, verdicts match the
+        paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
+        a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
+        integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
+        paths (the plan file and its report.md belong to the run lead and are never stray), verdicts match the
         current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
@@ -2002,6 +2004,9 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     topic edits and conflict resolutions changed against every parent have no owner.
     Recursion checks the covering review itself, so a post-review edit cannot hide
     behind an earlier task's review. Serial checkouts use their QA-delimited starts.
+    A path whose content at target equals its content at sha is never changed, and the
+    side commits of a merge of the repo's default branch (origin/<base>, else <base>)
+    are nobody's task work: only that merge's own conflict resolutions count.
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2052,6 +2057,18 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
                     if paths:
                         siblings.append((dict(paths=paths), rec, start))
     bad = set()
+    net_out, net_rc = git(path, "diff", "--name-only", sha, target, "--", *specs(task["paths"]))
+    if net_rc == 0 and not (net_out or "").strip():
+        return []
+    net = set(net_out.splitlines()) if net_rc == 0 else None
+    default_tip = next((t for b in dict.fromkeys([info["base"] or "main", "main"]) for r in ("remotes/origin", "heads")
+                        for t in [git(path, "rev-parse", "--verify", "--quiet", f"refs/{r}/{b}")[0]] if t), None)
+    def from_default(c):
+        """c is on the default branch, or merges it in (all parents but the first are): not task work."""
+        if not default_tip:
+            return False
+        ps = (git(path, "show", "-s", "--format=%P", c)[0] or "").split()
+        return is_ancestor(path, c, default_tip) or (len(ps) > 1 and all(is_ancestor(path, q, default_tip) for q in ps[1:]))
     chain, rc = git(path, "rev-list", "--first-parent", f"{sha}..{target}")
     if rc != 0:
         return list(task["paths"])
@@ -2070,7 +2087,7 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             introduced, rc = git(path, "rev-list", *parents[1:], "--not", parents[0])
             if rc != 0:
                 return list(task["paths"])
-            commits = (introduced or "").splitlines()
+            commits = [] if from_default(merge) else (introduced or "").splitlines()
         else:
             commits = [merge]
         for commit in commits:
@@ -2080,7 +2097,13 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
             if rc != 0:
                 return list(task["paths"])
             ps = (parent_text or "").split()
-            touched = files(ps[0], commit) if ps else set(task["paths"])
+            if from_default(commit):
+                if is_ancestor(path, commit, default_tip):
+                    continue
+                cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
+                touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
+            else:
+                touched = files(ps[0], commit) if ps else set(task["paths"])
             for f in touched:
                 covered = any(owns(s, f) and is_ancestor(path, start, commit)
                               and not is_ancestor(path, commit, start)
@@ -2101,7 +2124,7 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
                     break
                 if not covered:
                     bad.add(f)
-    return sorted(bad)
+    return sorted(bad if net is None else {f for f in bad if f in net})
 
 
 def fallback_matches(rec, agent):
@@ -2304,6 +2327,22 @@ def worktree_for(path, branch):
     return home, trees[1:]
 
 
+def run_lead_files(plan, repo_path):
+    """Repo-relative files the run lead owns on the integration branch: the plan file and its report (its own path when
+    it sits inside the repo, else docs/plans/<id>.json); never task work and never stray."""
+    names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
+    own = plan.get("_path")
+    if own and repo_path:
+        try:
+            rel = os.path.relpath(os.path.realpath(own), os.path.realpath(repo_path)).replace("\\", "/")
+        except ValueError:  # another drive
+            rel = ".."
+        if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
+            names.add(rel)
+    names |= {os.path.splitext(n)[0] + "/report.md" for n in names}
+    return {norm_path(n) for n in names}
+
+
 def gate(plan, reg, allow_same_model=False, run_checks=True):
     coverage_cache = {}
     pipe = settings(reg)
@@ -2362,8 +2401,9 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             changed, rc = git(info["path"], "diff", "--name-only", mb, head)
             # every plan alias of this checkout shares the integration branch: their tasks' changes are not stray
             owned = [norm_path(p).rstrip("/") for t in plan["tasks"] if same_repo(plan, reg, t["repo"], key) for p in t["paths"]]
-            stray = [f for f in (changed or "").splitlines()
-                     if not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
+            lead_files = run_lead_files(plan, info["path"])
+            stray = [f for f in (changed or "").splitlines() if norm_path(f) not in lead_files
+                     and not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
             if rc != 0 or stray:
                 blockers.append(f"{key}: changes outside every task's owned paths: {', '.join(stray[:5]) or 'git diff failed'}")
         qa = read_verdict(plan, reg, f"integration:{key}", "qa", blockers)
