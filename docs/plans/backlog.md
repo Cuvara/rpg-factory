@@ -105,7 +105,8 @@ Seen in plan plugin-subagent-rules (2026-11-10): after the registry task's Codex
 `conhost.exe`; parent process gone) kept the task worktree directory busy, so `orca worktree rm` left an empty
 directory and an Orca record shown as "Delete failed". No plugin code starts `sleep infinity`; the likely source is
 the Codex CLI or its sandbox. `cleanup` checks that a released worker's CLI exited but does not find this kind of
-leftover. Find the starter, make `cleanup` name such processes (PID, command, start time) for a busy task
+leftover. Confirmed: with the user's approval the three `wsl.exe` processes were stopped, and the directory and
+its Orca record could then be removed at once. Find the starter, make `cleanup` name such processes (PID, command, start time) for a busy task
 directory, and have the task lead stop the processes its own workers started before it releases them. Never kill
 a process the run cannot prove it started.
 
