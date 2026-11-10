@@ -200,6 +200,39 @@
         "the run-lead-never-implements marker states the XS exception and its mutation test bites",
         "affected suites 0 failed"
       ]
+    },
+    {
+      "id": "slim-followups",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "light",
+      "grade_reason": "pointer fixes after the CLAUDE.md move plus two small test-map entries",
+      "objective": "Follow-ups found by the slim-claude-md task after CLAUDE.md moved 'How it fits together'/'Layout' to docs/architecture/overview.md and the release procedure to docs/releasing.md: (1) .claude/skills/skill-author/SKILL.md (around line 54) cites the CLAUDE.md 'Skills:' bullet that now lives in docs/architecture/overview.md: repoint it; (2) README.md (around line 602), docs/dogfood.md (around line 5) and docs/architecture/multi-discipline-factory.md (around line 427) point to the moved CLAUDE.md sections: repoint to docs/releasing.md or docs/architecture/overview.md; (3) docs/architecture/README.md index lists overview.md; (4) tests/affected.py maps docs/architecture/overview.md to the suites that read it (tests/new-skill.test.sh, through scripts/skill-touchpoints.py); (5) tests/run-all.sh policy_files (release policy check) includes docs/releasing.md; (6) new operating lesson in .claude/CLAUDE.md 'Operating lessons', one line with its reason: never stop a process by pattern (pkill -f <name>) - a worker that did so to stop its own duplicate skills-lint run may have killed other sessions' runs; stop only the PID you started. Changelog fragment changelog.d/slim-followups.md.",
+      "paths": [
+        ".claude/skills/skill-author/SKILL.md",
+        "README.md",
+        "docs/dogfood.md",
+        "docs/architecture/multi-discipline-factory.md",
+        "docs/architecture/README.md",
+        "tests/affected.py",
+        "tests/run-all.sh",
+        ".claude/CLAUDE.md",
+        "changelog.d/slim-followups.md"
+      ],
+      "deps": [
+        "slim-claude-md"
+      ],
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check",
+        "tests/run-all.sh --affected --base 8c8b3c9afc3634d71682d5994fbb8ea04f46a6d7 -j 2"
+      ],
+      "acceptance": [
+        "no doc or skill points to a CLAUDE.md section that moved",
+        "affected.py selects the new-skill suite for docs/architecture/overview.md",
+        "release policy check reads docs/releasing.md",
+        "affected suites 0 failed"
+      ]
     }
   ]
 }
