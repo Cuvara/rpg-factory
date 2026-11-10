@@ -340,6 +340,15 @@ def named(path):
 
 
 @lru_cache(None)
+def run_all_suites():
+    """Paths named on run-all's run lines, without running the suite list command."""
+    raw = contents("tests/run-all.sh") or b""
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    return {p for line in lines if re.search(r"\brun(?:p|l|1)?\s+", line.split("#", 1)[0])
+            for p in PATH_RE.findall(line.split("#", 1)[0])}
+
+
+@lru_cache(None)
 def owners(path, conservative=False):
     """Code files whose tree holds a file (deleted ones too): every file but an index doc and a code file with a
     caller edge. conservative (reuse hashes): a code file with a caller edge is tree data too, except a library
@@ -350,7 +359,7 @@ def owners(path, conservative=False):
         if conservative:
             if path.startswith("scripts/lib/") and named(path) or tree(path) == ("tests/", False):
                 return ()
-        elif named(path):
+        elif named(path) or tree(path) == ("tests/", False) and path in run_all_suites():
             return ()
     return tuple(p for root, code in code_trees().items() if in_tree(path, root) for p in code if p != path)
 
