@@ -56,15 +56,15 @@ candidate SHA. Read-only unless its spec says otherwise.
 **Review worker** - checks architecture, scope isolation, safety rules and conventions. Read-only; it runs no
 suites, only a repro test when a finding needs one (section 10 "QA tiers").
 
-Task leads and their sessions never redefine the plan's scope, never merge and never declare the run done. A session
-that finds out-of-scope work reports it to its task lead, and the task lead to the run lead.
+Task leads and their sessions never redefine the plan's scope, never merge, and never declare the overall run
+done. A session that finds out-of-scope work reports it to its task lead, and the task lead to the run lead.
 
 ## 2. Before delegating
 
 - Take the project snapshot (registered workspace: `factory-context.sh`) and `git worktree list` in each touched repo.
 - With Orca, `orca worktree ps` and `orca orchestration run-list` show other coordinators' runs and worktrees: never
   bind to them, message their workers or edit their trees.
-- Tasks (and subtasks) that write the same file, generated path or contract end overlap and run in sequence.
+- Tasks and subtasks writing the same file, generated path or contract end overlap and run in sequence.
 - Record per task: base branch and SHA, integration target, dependencies.
 
 ## 3. Task spec (every dispatch)
@@ -168,26 +168,27 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
   Orca).
 - **Fallback:** outside Orca, or when it cannot do an operation, use Claude Code background agents (`--runner agent`)
   and name the limitation. They are Claude only: a session planned for Codex counts as SAME_MODEL (section 10 step 4).
-  The absence of Orca never blocks progress.
+  Orca's absence never blocks progress.
 
 ## 6. Parallel QA and review
 
-- Start QA and review on a **stable candidate commit**: record its SHA and give it to both workers, never a tree that
-  is still changing. A task's candidate is the task lead's HEAD with every subtask committed; the task lead keeps HEAD
-  there while review and QA run.
-- A task's review and QA workers are fresh, read-only sessions the task lead starts in the task's worktree, which
-  holds the candidate commit (`orca orchestration worker-start --worktree path:<task worktree>`), or in a
-  child at that SHA when the placement table (section 4) says child; never in any other new worktree. The worker first
-  checks that `git rev-parse HEAD` is that SHA; a result from a changing tree or another HEAD is not independent.
+- Start QA and review on a **stable candidate commit**: record its SHA and give it to both workers. Never
+  point them at a tree that is still changing. A task's candidate is the task lead's HEAD with every subtask
+  committed; the task lead keeps HEAD there while review and QA run.
+- A task's review and QA workers are fresh, read-only sessions the task lead starts in the task's own worktree,
+  which holds the candidate commit (`orca orchestration worker-start --worktree path:<task worktree>`), or in a
+  child at that SHA when the placement table (section 4) says child; never in any other new worktree. The worker first checks that `git rev-parse HEAD` is that SHA; a result from a changing tree, or
+  with HEAD on another commit, is reported as not independent.
 - Integration QA is the run lead's: it runs in the existing checkout of the integration branch, or in a child of
-  that checkout at the integration HEAD (section 4), never in a task worktree (it may be removed); with no such
-  checkout the dispatch is an error and no worktree is created.
+  that checkout at the integration HEAD (section 4), never in a task worktree (which may already be removed); with
+  no such checkout the dispatch is an error and no worktree is created.
 - Exception: in a no-worktree repo (section 4) review and QA run in the main checkout, one at a time, while no
   other task of that repo runs.
-- When the candidate moves (a fix lands), list the findings and results of the old SHA and re-run only those.
+- When the candidate moves (a fix lands), list which findings and results refer to the old SHA and must be
+  redone; re-run only those.
 - Verdicts are PASS, FAIL, NOT_RUN or BLOCKED. NOT_RUN is never a pass.
-- Neither lead relies on self-reports: the task lead re-runs the key checks on its candidate, the run lead on the
-  task's result and the integrated tree, with the suite the spec names (a registered workspace: also
+- Neither lead relies on self-reports: the task lead re-runs the key checks on its candidate, and the run lead on
+  the task's result and the integrated tree, with the suite the spec names (a registered workspace: also
   `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <files> --status`).
 
 ## 7. Integration checklist (the run lead, per contribution)
@@ -228,7 +229,7 @@ A task is done when integrated with its review and QA recorded; the run, when th
 - **Run report in the repo.** At integration the run lead commits `docs/plans/<plan>/report.md`: sessions per task
   (role, model, Orca Run), verdicts (phase, SHA, model, result), checks with exact counts, limitations. Verdicts and specs stay per machine; a
   new machine re-runs review and QA.
-- **Plan edits are atomic.** Edit a copy, `validate` it, then replace the plan.
+- **Plan edits are atomic.** Edit a copy, `validate` it, replace the plan.
 
 ### Session lifecycle
 
@@ -241,20 +242,20 @@ A task is done when integrated with its review and QA recorded; the run, when th
 - **Releasing a session does not stop its test processes.** On Windows a suite runner a released worker started
   keeps running: a worker stops its own test process tree first, and the lead stops leftovers whose cwd is the task
   worktree. A leftover `codex` CLI keeps the directory busy, so `orca worktree rm` fails ("Delete failed"). Before a
-  task worktree is removed, its Run has no unreleased worker, no Orca terminal is bound to it, and each released
-  worker's CLI exited. Never kill a process the run did not start: name it (PID, command) for the user.
-- **Few sessions at once:** memory pressure kills background shells and their test runs.
+  task worktree is removed, its Run has no unreleased worker, no Orca terminal bound to it, and each released
+  worker's CLI exited. Never kill a process the run did not start: name it (PID, command) to the user.
+- **Few sessions:** memory pressure kills background shells and test runs.
 - **Each lead keeps only its state** (plan or subplan, branch, SHAs, verdicts), no transcript.
 - **Handoff.** After a wave, or when its context grows long, the run lead ends its session with the wave settled; the
-  next resumes from `factory-pipeline.py status plan.json`. A handoff adds no gate.
+  next resumes from `factory-pipeline.py status plan.json`.
 
 ### In-session subagents
 
 <!-- policy:subagents-read-only -->
 In-session subagents are read-only scouts; parallel writes are subtasks dispatched with --phase implement.
 
-An in-session subagent (the Agent tool, Codex `multi_agent`) is not recorded: its edits could not be paired with a
-review and would race the task lead's commits. Registry `pipeline.subagents` holds this table's values.
+An in-session subagent (the Agent tool, Codex `multi_agent`) is not recorded: its edits get no paired
+review and race the task lead's commits. Registry `pipeline.subagents` holds this table's values.
 
 | Role | Access | When | Max parallel | Limits |
 |---|---|---|---|---|
