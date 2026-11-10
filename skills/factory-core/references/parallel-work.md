@@ -81,6 +81,13 @@ The QA tiers table of delivery.md carries this repo's commands (registry `pipeli
   invocation (an optional `env -u TMPDIR` and `bash` prefix, plain flag tokens, `--affected` or `--only-suites`
   among them); every other check that mentions run-all, a plain full run included, is printed `DO NOT RUN` and the
   QA session reports it NOT_RUN. No check is dropped.
+- **Test-run slots.** The generic rule is in delivery.md section 10 ("QA tiers"). Here: `RPG_FACTORY_TEST_SLOTS` (default
+  2, `0` disables the cap, a non-integer exits 2) caps the targeted runs, the slots are `locks/run-all-slots/<n>` in
+  the persistent state dir, the wait line is `run-all: waiting for a test slot (<n> in use: <holders>)`, `--no-wait`
+  exits 3 and a dead holder is taken over (`run-all: taking over stale test slot <n> (<pid>)`).
+- **Case selection.** `pipeline.test.sh`, `parallel-policy.test.sh`, `routing.test.sh` and `git-guard.test.sh` take
+  `--case NAMES` and `--list-cases`; `--affected` passes the cases `tests/affected.py cases` selects (case maps are
+  `# case-map:` header lines of each suite), and an explicit `--only-suites` name runs all its cases.
 - **Release.** `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for a release.
 
 ## RPG Orca notes (delivery.md section 5)
