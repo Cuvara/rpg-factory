@@ -49,11 +49,12 @@ anything unsure runs. A miss there is caught by integration QA, whose suite reus
 outside a suite line (skill citations, `factory-context.sh`, pin status, pin plan, package ready, Netcode headless)
 are selected like suites by that script path, else they count as not affected; `--only-suites` may name such a script
 (`tests/run-all.sh` usage header). `--only-suites` exits 2 on a name run-all does not run; `tests/run-all.sh
---list-suites` (read-only) prints the names it accepts, and `dispatch --phase qa` folds into `--only-suites` only the
-checks that list names (other checks stay extra commands). A check that mentions `tests/run-all.sh` is folded only
-when it is one plain standalone scoped invocation (an optional `env -u TMPDIR` and `bash` prefix, plain flag tokens,
-`--affected` or `--only-suites` among them); every other check that mentions run-all, a plain full run included, is
-printed `DO NOT RUN` and the QA session reports it NOT_RUN. No check is dropped.
+--list-suites` (read-only) prints the names it accepts, and `dispatch --phase verify` (or `--phase qa`) folds into
+`--only-suites` only the checks that list names (other checks stay extra commands). A check that mentions
+`tests/run-all.sh` is folded only when it is one plain standalone scoped invocation (an optional `env -u TMPDIR` and
+`bash` prefix, plain flag tokens, `--affected` or `--only-suites` among them); every other check that mentions
+run-all, a plain full run included, is printed `DO NOT RUN` and the verify or QA session reports it NOT_RUN. No check
+is dropped.
 
 ## Test-run slots
 

@@ -53,14 +53,20 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   a task worktree the dispatch fails (run `--phase lead` first). It records the model it started, per task and per
   subtask, and prints `--worktree path:<task worktree>` or `new-child` (run from the task worktree).
   `dispatch` refuses `placement: child` in a no-worktree repo.
-- `dispatch ... --phase review --sha <sha>` starts the review on the candidate in the task worktree; a subtask
-  written by the other model gets its own review with `--subtask <sid> --agent <its pair>`. When the paired model is
-  unavailable it records the same-model fallback for that SHA. After a FAIL, `status` names `--phase lead`, which
+- `dispatch ... --phase verify --sha <sha>` starts ONE read-only session of the reviewing model on the candidate in
+  the task worktree: its prompt holds the review checklist first and the task tier command second (a blocking review
+  finding is a FAIL and no test runs). When the paired model is unavailable it records the same-model fallback for
+  that SHA. `status` names `--phase verify` after the last subtask; after a FAIL it names `--phase lead`, which
   resumes the task lead in its worktree (or the main checkout of a no-worktree repo) for the fix.
-- `dispatch ... --phase qa --sha <sha>` prints the tier command (never a full run), the case list for its base and
-  suite selection (`ALL` for explicit suites) and marks tier S tasks. `--task integration:<repo>` targets the
+- `dispatch ... --phase review --sha <sha>` and `--phase qa --sha <sha>` start one of the two alone, for a lead that
+  needs only one of them. `--phase qa` (like `--phase verify`) prints the tier command (never a full run) and the case
+  list for its base and suite selection (`ALL` for explicit suites). `--task integration:<repo>` targets the
   integration HEAD (a child of the integration checkout with `--placement child`); in a no-worktree repo `--task <id>`
   also runs per task, before the next task starts.
+- Tier S: `--phase verify` and `--phase qa` mark a task tier S when the plan or the task has tier S or every owned
+  path is prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/`
+  directory path (no dot in its last segment). A non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/`
+  are machine inputs, not prose: `docs/` alone does not make a task tier S.
 - `dispatch` prints each role's model and why as `model: <role> -> <agent> (<why>)`; `status` prints
   `model: <task> <role> -> <agent> (<why>)`.
 - `--runner orca|agent|print` picks the runner; inside Orca `--runner agent` needs `--orca-unavailable <reason>`
@@ -71,22 +77,30 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
 ## verdict
 
 ```
-factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase review|qa --sha <sha> --by <agent>
+factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase verify|review|qa --sha <sha> --by <agent>
   --state PASS|FAIL --report <file> [--note TEXT] [--implementer AGENT] [--fallback '<model> unavailable']
-  [--failed-suites <tests/a.sh,...>] [--model ID] [--effort LEVEL]
+  [--failed-at review|qa] [--failed-suites <tests/a.sh,...>] [--model ID] [--effort LEVEL]
 ```
 
+- `--phase verify` (per task, never `integration:<repo>`) records the review and the QA verdict of one SHA in one
+  call. A FAIL names where it failed: `--failed-at review` (the review blocked the candidate, no test ran) writes the
+  review FAIL and no QA record, so the next verify keeps the original base and the task's checks;
+  `--failed-at qa [--failed-suites <tests/a.sh,...>]` records review PASS and QA FAIL (`--failed-suites` alone implies
+  `qa`). A QA-only FAIL is recorded the same way with `--phase qa`.
+
 - `--report` names an existing file; `--note` takes free text.
-- `--subtask <sid>` records a subtask's own review (a subtask written by the other model) apart from the task review.
+- `--subtask <sid>` records a subtask's own review apart from the task review; the gate needs none (single verify).
 - `--implementer` declares the true implementer and is refused when it conflicts with the one the dispatch recorded.
-- `--failed-suites` goes with a QA FAIL; the next `dispatch --phase qa` reruns those suites.
+- `--failed-suites` goes with a QA FAIL. The next `dispatch --phase verify` (or `--phase qa`) on a new candidate prints
+  `--affected --base <that FAIL's candidate>` with only those suites in `--only-suites`, not the task's own check
+  suites; a repo without `tests/run-all.sh` keeps its task check commands.
 - `--model` and `--effort` are optional and stored with the verdict.
 
 ## Fallback reviews
 
-- `verdict` stamps `SAME_MODEL (fallback: <model> unavailable)` only when that SHA's review dispatch was a recorded
-  fallback and `--by` is its reviewer, never from availability at verdict time. A subtask's fallback review is noted
-  `SAME_MODEL (fallback: <pair> unavailable)`.
+- `verdict` stamps `SAME_MODEL (fallback: <model> unavailable)` only when that SHA's verify or review dispatch was a
+  recorded fallback and `--by` is its reviewer, never from availability at verdict time. A subtask's fallback review
+  is noted `SAME_MODEL (fallback: <pair> unavailable)`.
 - Retrospective form: a same-model review made before dispatch recorded fallbacks (for example during an outage of
   the paired model) is recorded after the fact for a subtask review only, with
   `verdict --subtask <sid> --fallback '<model> unavailable' --note <why>`: `--subtask` and `--note` are required and
@@ -99,10 +113,10 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase revi
 ## gate
 
 - `gate plan.json` is a read-only report. READY_FOR_PR needs every task integrated, reviewed PASS by its paired model
-  on a commit whose owned paths have not changed since, QA PASS on each integration HEAD, clean integration trees,
-  fast checks PASS and not STALE (`run-checks.py --status` in a registered workspace), and no pipeline worktree in a
-  no-worktree repo. Anything else is a listed blocker. With `deliver: pr` it prints the push, PR and
-  `gh pr checks <pr> --watch` commands.
+  on a commit whose owned paths have not changed since (the verify verdict records review and QA of a task), QA PASS
+  on each integration HEAD, clean integration trees, fast checks PASS and not STALE (`run-checks.py --status` in a
+  registered workspace), and no pipeline worktree in a no-worktree repo. Anything else is a listed blocker. With
+  `deliver: pr` it prints the push, PR and `gh pr checks <pr> --watch` commands.
 - The gate credits a later wave's changes under an earlier task's or subtask's paths only through the merge commits
   on the topic's first-parent chain, each later task with its own current PASS review (and QA where required). A
   fast-forward or squash leaves those changes unattributed and the earlier review STALE.
@@ -111,10 +125,9 @@ factory-pipeline.py verdict plan.json --task <id> [--subtask <sid>] --phase revi
   `status` after any plan edit.
 - Review, QA, `verdict` and the gate pair against the implementer `dispatch --phase implement` recorded (the
   planned routing when none is recorded), never against current availability: a model that comes back after a
-  fallback does not change who reviews. A subtask whose recorded implementer differs from the task implementer (or
-  is the task reviewer's model) needs its own review, PASS by its pair or a dispatch-recorded fallback review;
-  without it the gate blocks, naming the subtask, its recorded implementer and the reviewer it needs. The task
-  review never covers it.
+  fallback does not change who reviews. No subtask needs a review of its own: the task's verify review covers every
+  subtask, and the gate lists a code subtask written by the reviewer's model as an accepted
+  `SAME_MODEL (single verify)` note (delivery.md section 10, `policy:single-verify`).
 
 ## agents
 

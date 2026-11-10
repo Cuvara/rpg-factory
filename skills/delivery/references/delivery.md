@@ -18,7 +18,7 @@ Prefer many short, focused parallel sessions over one long session; every spec s
 4. gives each task one worktree and starts ONE task-lead session in it (section 4, section 10 step 3);
 5. answers the task leads' questions and follows their progress (`factory-pipeline.py status`);
 6. assigns shared exclusive resources, one task at a time;
-7. reviews every task's result and re-verifies the key checks itself;
+7. reads every task's result and verify report (section 6);
 8. decides when a contribution is ready and integrates it (section 7), then runs integration QA (section 6);
 9. writes the final report with the parallel-work ledger and cleans up (section 8).
 It does not start a task's sub-sessions or edit task files (policy below).
@@ -34,27 +34,26 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
    reused for another subtask;
 3. reviews each sub-session's diff and commits that subtask itself with explicit paths (a child subtask: merges
    the child branch into the task branch and removes the child, section 4);
-4. with every subtask committed, starts a fresh cross-model review session and a QA session on that HEAD in the
-   same worktree (a tier S or prose-only task: no QA session, the task lead runs the task QA command itself after the
-   review PASS, section 10 "QA tiers"); a FAIL goes to a fresh fix session;
+4. with every subtask committed, starts ONE fresh verify session on that HEAD in the same worktree (section 6; tier S
+   or prose-only: section 10 "QA tiers"); a FAIL goes to a fresh fix session, then one fresh re-verify session;
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
-6. reports to the run lead (section 3) and records the review and QA verdicts.
+6. reports to the run lead (section 3) and records the verify verdict (`verdict --phase verify`).
 It never pushes, merges, tags or removes its worktree.
 
 <!-- policy:task-lead-claude -->
 The task lead is a Claude session (registry pipeline.lead_agent), whatever the task's implementer, and Codex only when Claude is unavailable; implementation, review and QA sessions keep the cross-model pairing.
 
-**Implementation sub-session** - edits only its subtask's paths in the task worktree, runs the targeted checks
-from its spec, and reports to the task lead. Commits: the policy below. A sub-session in a child worktree
-(section 4) commits its paths on its own child branch and nothing else.
+**Implementation sub-session** - edits only its subtask's paths in the task worktree, runs no test suites (only a
+syntax check of the files it edited), and reports to the task lead. Commits: the policy below; a sub-session in a
+child worktree (section 4) commits its paths on its own child branch and nothing else.
 
 <!-- policy:only-task-lead-commits -->
 Sub-sessions in the shared task worktree never commit, stage or stash; only the task lead commits there, with explicit paths.
 
-**QA worker** - checks acceptance criteria, test coverage, regressions, edge and failure cases on a recorded
-candidate SHA. Read-only unless its spec says otherwise.
-**Review worker** - checks architecture, scope isolation, safety rules and conventions. Read-only; it runs no
-suites, only a repro test when a finding needs one (section 10 "QA tiers").
+**Verify worker** - one read-only session per task candidate (section 6): reviews the diff (architecture, scope,
+safety rules, conventions, acceptance, test coverage, edge and failure cases), then runs the task tier command once.
+**QA worker** and **Review worker** - the same checks as two read-only sessions, when only one is needed
+(integration QA, a review without tests); a reviewer runs no suites, only a repro test when a finding needs one.
 
 Task leads and their sessions never redefine the plan's scope, never merge, and never declare the overall run
 done. A session that finds out-of-scope work reports it to its task lead, and the task lead to the run lead.
@@ -75,7 +74,7 @@ task-lead rules; a sub-session's narrows it to its paths. No step lists.
 
 A sub-session reports changed paths; each check with exact counts and log path (or NOT_RUN with command and reason);
 limitations; out-of-scope findings. The task lead's report adds outcome, worktree path, branch, base and HEAD SHA,
-each subtask with its commit, and the review and QA verdicts (state, SHA, model).
+each subtask with its commit, and the verify verdict (state, SHA, model).
 
 ## 4. Worktrees
 
@@ -88,8 +87,8 @@ each subtask with its commit, and the review and QA verdicts (state, SHA, model)
 - Never edit another task's worktree. One mutating command per worktree at a time: parallel sub-sessions edit
   disjoint files and run no git write.
 - **No-worktree repos** (section 10; a root file in `no_worktree_markers`, of the pipeline settings or the plan's own,
-  also marks one): the task lead runs on the plan `topic` branch; subtasks, review and QA run there one at a time,
-  tasks in turn after each QA verdict.
+  also marks one): the task lead runs on the plan `topic` branch; subtasks and verify run there one at a time,
+  tasks in turn after each verify verdict.
 - **Shared exclusive resources** (pipeline settings `exclusive_resources`: an editor or test runner, a container
   stack, a test lab, fixed ports) go to one task at a time; a task without one reports the check `NOT_RUN` with the
   exact command and reason.
@@ -103,7 +102,8 @@ each subtask with its commit, and the review and QA verdicts (state, SHA, model)
   Orca's hidden section (maintainer rule, 2026-11-09: never), so before `orca agent launch --worktree path:<path>`
   its creator runs exactly
   `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`
-  (`<parent>`: the integration checkout, else the main checkout; a task lead's child: the task worktree). Every
+  (`<parent>`: the integration checkout, else - and for the integration checkout itself - the main checkout; a task
+  lead's child: the task worktree). Every
   printed worktree creation prints this line.
 
 ### Child worktrees
@@ -170,26 +170,26 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
   and name the limitation. They are Claude only: a session planned for Codex counts as SAME_MODEL (section 10 step 4).
   Orca's absence never blocks progress.
 
-## 6. Parallel QA and review
+## 6. Verify (review + QA, one session)
 
-- Start QA and review on a **stable candidate commit**: record its SHA and give it to both workers. Never
-  point them at a tree that is still changing. A task's candidate is the task lead's HEAD with every subtask
-  committed; the task lead keeps HEAD there while review and QA run.
-- A task's review and QA workers are fresh, read-only sessions the task lead starts in the task's own worktree,
-  which holds the candidate commit (`orca orchestration worker-start --worktree path:<task worktree>`), or in a
-  child at that SHA when the placement table (section 4) says child; never in any other new worktree. The worker first checks that `git rev-parse HEAD` is that SHA; a result from a changing tree, or
-  with HEAD on another commit, is reported as not independent.
-- Integration QA is the run lead's: it runs in the existing checkout of the integration branch, or in a child of
-  that checkout at the integration HEAD (section 4), never in a task worktree (which may already be removed); with
-  no such checkout the dispatch is an error and no worktree is created.
-- Exception: in a no-worktree repo (section 4) review and QA run in the main checkout, one at a time, while no
-  other task of that repo runs.
-- When the candidate moves (a fix lands), list which findings and results refer to the old SHA and must be
-  redone; re-run only those.
+- Verify a **stable candidate commit** (its SHA recorded): the task lead's HEAD with every subtask committed, kept
+  there while the session runs; never a tree that is still changing.
+- One verify session per candidate, never a review and a QA session in parallel. It reviews the diff first; a
+  blocking finding is a FAIL and no test runs. Else it runs the task tier command once (section 10 "QA tiers") and
+  reports counts and log paths. After a FAIL and a fix, a fresh re-verify reviews only the fix delta and runs the
+  failed suites plus what the fix touched.
+- The task lead starts the verify worker, fresh and read-only, in the task's own worktree
+  (`orca orchestration worker-start --worktree path:<task worktree>`), or in a child at that SHA when the placement
+  table (section 4) says child; never in any other new worktree. It first checks that `git rev-parse HEAD` is that
+  SHA; a result from a changing tree, or with HEAD on another commit, is reported as not independent.
+- Integration QA is the run lead's: in the existing checkout of the integration branch, or a child of it at the
+  integration HEAD (section 4), never in a task worktree; with no such checkout the dispatch is an error and no
+  worktree is created. A no-worktree repo (section 4) verifies in the main checkout while no other task of it runs.
+- When the candidate moves (a fix lands), list which findings and results refer to the old SHA; redo only those.
 - Verdicts are PASS, FAIL, NOT_RUN or BLOCKED. NOT_RUN is never a pass.
-- Neither lead relies on self-reports: the task lead re-runs the key checks on its candidate, and the run lead on
-  the task's result and the integrated tree, with the suite the spec names (a registered workspace: also
-  `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <files> --status`).
+- The leads read the verify report (counts, log paths, verdict) and do not re-run its checks.
+  The run lead keeps only the integration QA on the integrated tree, with the suite the spec names (a registered
+  workspace: also `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <files> --status`).
 
 ## 7. Integration checklist (the run lead, per contribution)
 
@@ -235,7 +235,7 @@ A task is done when integrated with its review and QA recorded; the run, when th
 
 - **One task, one task lead; one subtask, one fresh session.** Every dispatch starts a new session, never reused for
   another task, subtask, phase, wave or candidate SHA: a fix is a new implementation session, a resumed task lead a
-  fresh `--phase lead` session. Review and QA never run in an implementation or lead session.
+  fresh `--phase lead` session. Verify, review and QA never run in an implementation or lead session.
 - **Release each session as soon as it reports**, in every repo: in the turn it reports (`worker_done`, final report
   or verdict) it is released (`orca orchestration worker-release`, or the agent stopped); the worktree stays. A
   settled session never waits for a later wave; one whose candidate is superseded is released at once.
@@ -289,8 +289,8 @@ grades state. Plan format: `docs/schemas/pipeline-plan.schema.json`; command for
 <!-- policy:no-worktree-repo -->
 A no-worktree repo (registry `worktrees: false` or a configured no-worktree marker, for example a Unity project) never gets a worktree; its task lead and all its sessions run in its main checkout.
 
-**Which model.** Implementer: the explicit `implementer`, else `agent_routing[kind]`, else
-`agent_routing.default`, else `default_implementer`, then availability:
+**Which model.** Implementer (a plan task carries a `kind`; a subtask an `implementer` or a `kind`): the explicit
+`implementer`, else `agent_routing[kind]`, else `agent_routing.default`, else `default_implementer`, then availability:
 
 <!-- policy:which-model -->
 | Role or kind | Model | Registry |
@@ -310,11 +310,13 @@ A no-worktree repo (registry `worktrees: false` or a configured no-worktree mark
   available model, which then implements, reviews, runs QA and, for Codex, leads; no command fails because a model is
   missing (the fallback review: step 4).
 - **Recorded implementer.** `dispatch --phase implement` records the model it started, per task and subtask; review,
-  QA, `verdict` and the gate pair against it, never current availability. A subtask on another model than its task
-  needs its own review.
+  QA, `verdict` and the gate pair against it, never current availability; no subtask needs a review of its own.
+
+<!-- policy:single-verify -->
+One verify session reviews the whole task diff: a prose subtask written by the verifier's model is covered, and a code subtask written by the verifier's model is listed by the gate as `SAME_MODEL (single verify)`, never blocking.
 
 1. **Tier.** `factory-pipeline.py tier -- --repo <key> --paths <files>` prints S, M or L.
-   S: the run lead writes a `plan.json` with one task and dispatches its task lead (step 3); steps 4-8 follow.
+   S: the run lead writes a one-task `plan.json` and dispatches its task lead (step 3); steps 4-8 follow.
    M: the run lead writes `plan.json`. L: a read-only planner worker writes it (`planner --request <text>`).
 2. **Plan.** `validate plan.json` must print OK.
 3. **Task lead.** Per ready task the run lead runs
@@ -322,23 +324,23 @@ A no-worktree repo (registry `worktrees: false` or a configured no-worktree mark
    handoff). The task lead writes `subplan.json` until `subplan validate` prints OK, records each subtask's
    `placement` (section 4, "Child worktrees"), dispatches each with `--phase implement --subtask <sid>`, reviews each
    diff and commits it with explicit paths, or merges and removes a child.
-4. **Cross-model review.** Each model's code is reviewed by the other (`review_pairing`), a subtask by the other
-   model in its own review. The task lead runs `dispatch ... --phase review --sha <sha>` on the stable candidate and
-   records `verdict` (`docs/pipeline-cli.md`); a FAIL gets a scoped fix in a fresh session, a new candidate.
+4. **Verify (cross-model review, then QA, one session).** Each model's code is reviewed by the other
+   (`review_pairing`): on the stable candidate the task lead runs `dispatch ... --phase verify --sha <sha>` once
+   (section 6) and records `verdict --phase verify`; a FAIL gets a scoped fix in a fresh session and one fresh
+   `--phase verify` on the new candidate. `--phase review` and `--phase qa` serve a lead that needs only one of them
+   (integration QA, step 6).
    `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
    `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
-   merges and removes the child.
-   Without the paired model a fresh same-model session reviews, carrying
-   `SAME_MODEL (fallback: <model> unavailable)`, which `dispatch --phase review` records for the SHA and the gate
-   accepts (other forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then task QA (`--phase qa --sha <sha>`) and
-   the report (section 3).
+   merges and removes the child. Without the paired model a fresh same-model session verifies, carrying
+   `SAME_MODEL (fallback: <model> unavailable)`, which the dispatch records for the SHA and the gate accepts (other
+   forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then the report (section 3).
 5. **Integrate** (section 7) in wave order into the `topic` branch with `git merge --no-ff <task branch>`; a
    fast-forward or squash leaves earlier reviews STALE (`docs/pipeline-cli.md`, "gate").
 6. **QA.** Once per repo on the integration HEAD, in its checkout
    (`dispatch ... --task integration:<repo> --phase qa --sha <head>`, "QA tiers" below); a no-worktree repo also per
    task. The worker fills `${CLAUDE_PLUGIN_ROOT}/templates/pipeline/qa-report.md`; the lead records the verdict.
 7. **READY_FOR_PR.** `gate plan.json` is a read-only report (`docs/pipeline-cli.md`, "gate"); fix each blocker and
-   re-run only the affected review or QA.
+   re-run only the affected verify, review or QA.
 8. **PR.** With `deliver: pr` (plan `deliver: "pr"`) and READY_FOR_PR, the run lead pushes the integration branch
    and opens the PR with the gate's commands, body = the final report (the delivery exception to "push only on
    request"). CI green (`gh pr checks <pr> --watch`) is the merge gate. Merging stays with the user; without
@@ -346,51 +348,42 @@ A no-worktree repo (registry `worktrees: false` or a configured no-worktree mark
 9. **Cleanup.** Section 8, until `cleanup plan.json` reports CLEAN.
 
 **QA tiers.** No identical tree is tested twice and a task never runs the whole suite: each role runs one command,
-which `dispatch --phase qa` prints. Pipeline settings `qa_tiers` only name the level of each tier (task
-`affected`, integration `ci+workspace`); they hold no commands. A repo that has `tests/run-all.sh` gets the
-run-all commands of the table below. A repo without it gets its task checks as the QA commands (and, for a registry
-repo, the run-checks fast tier). The policy is the shape: a task runs only the suites its changes reach,
-integration runs what CI cannot, CI is the full gate, a release runs everything.
-
-The table lists the commands for a repo that has `tests/run-all.sh` (this plugin).
+which `dispatch --phase verify` (or `--phase qa`) prints. Settings `qa_tiers` name only each tier's level (task
+`affected`, integration `ci+workspace`), no commands. A repo with `tests/run-all.sh` (this plugin) gets the commands
+of the table below; one without it gets its task checks (a registry repo: plus the run-checks fast tier). The shape:
+implementers run no suites, one verify session per task runs only the suites its changes reach, integration runs
+what CI cannot, CI is the full gate, a release runs everything.
 
 <!-- policy:qa-tiers -->
 | When | Runs | Who | Typical time |
 |---|---|---|---|
-| Task QA, each candidate | `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once. Explicit suites run all cases; affected-only suites with a case map run only affected cases. Other checks are extra commands; never a full run | a fresh QA session in the task worktree | 2-5 min for a narrow change (one-file schema change 119 s, one-file skill change 288 s); a change to a global input (the runner, `tests/affected.py`) selects every suite and takes about an hour with a slot wait |
-| Re-QA after a FAIL | the failed suites recorded with `verdict --failed-suites`, with the task check suites, plus `--affected --base <previous FAIL candidate>` | a fresh QA session on the fix candidate | as task QA |
-| Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task QA command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only | as task QA, no session of its own |
-| Implementer | only the targeted checks the spec names, and of a slow suite only the cases its change touches (`--case <names>`, `tests/affected.py cases <file> <suite>`); never a whole slow suite | the implementation session | seconds to 2 min (a full `pipeline.test.sh` is about 150 s on a quiet machine) |
-| Reviewer | no suites; only a repro test when a finding needs one | the review session | none |
+| Implementer | no test suites; only a syntax check of the files it edited (`bash -n`, `python -m py_compile`, a JSON parse) | the implementation session | seconds |
+| Verify, once per candidate | the diff review first (a blocking finding is a FAIL and no test runs); then `tests/run-all.sh --affected --base <review base> [--only-suites <check suites>] -j 2`: the suites the task's checks name (only those `tests/run-all.sh --list-suites` lists) plus the suites `tests/affected.py` maps to its changed files, each suite once. Explicit suites run all cases; affected-only suites with a case map run only affected cases. Other checks are extra commands; never a full run | one fresh verify session in the task worktree, started by the task lead | 2-5 min for a narrow change (one-file schema change 119 s, one-file skill change 288 s); a change to a global input of `tests/affected.py` selects every suite and takes about an hour with a slot wait |
+| Re-verify after a FAIL | review of the fix delta only; then only the failed suites recorded with `verdict --phase verify --state FAIL --failed-at qa --failed-suites`, plus `--affected --base <previous FAIL candidate>`; a review-only FAIL (`--failed-at review`) ran no test, so the original base and checks stay | one fresh verify session on the fix candidate | as verify |
+| Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory) | the task tier command, after the review PASS; no QA session | the task lead: `verdict --phase qa --state PASS --by <lead> --note 'tier S: lead ran task suites'`; a lead-run QA verdict counts for tier S only | as verify, no session of its own |
 | Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the full suite in the background while the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` (unchanged) | the release session | the slowest tier, release only |
 
 - **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide test slots
-  (default 2, kept in the state dir, `RPG_FACTORY_TEST_SLOTS`; `0` disables the cap) and, when every slot is busy,
-  waits with a message (`run-all: waiting for a test slot`) instead of slowing every suite 2-4x; `--no-wait` exits 3.
-  A slot whose holder died is taken over. A full run keeps its own per-machine lock (section 4). The slot belongs to
-  the run, not the session: stop a QA worker's test run before abandoning it.
-- **Implementers run less than QA.** An implementation session runs only the targeted checks of its spec, and of a
-  suite with cases (`--list-cases`) only the cases its change touches; the task QA runs the affected suites, the
-  integration QA what CI cannot. `dispatch --phase implement` says so in its spec and `dispatch --phase qa` prints
-  the case list for the tier command's base and suite selection, including `ALL` for explicit suites. Frozen copies of a suite go under a temp dir, never into the
-  suite folder.
+  and, when all are busy, waits instead of slowing every suite 2-4x (`--no-wait` exits 3); a dead
+  holder's slot is taken over. A full run keeps its own lock (section 4). The slot belongs to the run, not the
+  session: stop a QA worker's test run before abandoning it.
+- **Implementers run no suites** (table above); `dispatch --phase implement` says so in its spec. `dispatch --phase
+  verify` (and `--phase qa`) prints the case list for the tier command (`ALL` for explicit suites); a slow suite with
+  cases runs only the cases the change touches. Frozen copies of a suite go under a temp dir, never into its folder.
 - **CI is the full gate.** No full local run before a PR: CI runs the full suite, and the integration QA command
   covers what CI cannot, before the PR. After the PR opens, CI green (`gh pr checks <pr> --watch`) is the merge
   gate; while CI runs, start the next task, then come back and fix a red check before merging. Only a release runs
   the full local suite.
-- **Tier S.** `dispatch --phase qa` marks a task tier S when the plan or the task has tier S or every owned path is
-  prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/` directory
-  path (no dot in its last segment). A non-`.md` file under `skills/`, `docs/*.json` and `docs/schemas/` are machine
-  inputs, not prose: `docs/` alone does not make a task tier S. The gate accepts a QA verdict the task lead ran
-  itself (no QA session, note starting `tier S`) only for such a task. A QA PASS from a fresh QA session is accepted
-  as before for every tier: by the other model, or by the implementer's model as the one-model fallback of the Token
-  rule.
-- **Re-QA.** A QA FAIL is recorded with `verdict --phase qa --state FAIL --failed-suites <tests/a.sh,...>`. The next
-  `dispatch --phase qa` on a new candidate prints `--affected --base <that FAIL's candidate>` with those suites
-  and the task check suites in `--only-suites`.
+- **Tier S.** `dispatch --phase verify` (and `--phase qa`) marks a task tier S when the plan or the task says so or
+  every owned path is prose (`docs/pipeline-cli.md`, "dispatch"). The gate accepts a QA verdict the task lead ran
+  itself (note starting `tier S`) only for such a task, and a fresh QA session's PASS for every tier (the other
+  model, or the implementer's as the Token rule's one-model fallback).
+- **Re-verify.** The table row above; flags (`--failed-at review|qa`, `--failed-suites`): `docs/pipeline-cli.md`,
+  "verdict". A repo without `tests/run-all.sh` keeps its task check commands (a failed-suites list cannot name them).
 - **Plans.** A task's `checks` name its own suites or the affected-suites command, never a full run, and
   its acceptance never requires a full run: `validate` warns on either ("full runs belong to integration QA").
+  `checks` run in the verify session: `validate` warns when a check would make an implementer run a suite.
 - The run-all lock, suite reuse and selection rules of this plugin repo's runner are in `tests/README.md`.
 
 This policy introduces no tripwire, no latch and no new confirmation step.
