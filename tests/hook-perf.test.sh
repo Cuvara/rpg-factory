@@ -2,7 +2,7 @@
 # What a hook call costs before it does any work (lib/hookspeed.py, lib/workspace.py), in a throwaway workspace:
 #   - a file-guard Read (and a plain Write) never loads the git guard
 #   - git-guard.py is a small entry: every guard name stays importable from it; the helpers come from lib/workspace.py
-#   - lib/guard/ is loaded by path as `rpgf_guard`: no module named `guard` is ever imported
+#   - lib/rpgf_guard/ is loaded by path as `rpgf_guard`: no module named `guard` is imported or importable
 #   - compiled bytecode goes to <state>/pycache, never into the plugin tree, and a second call reuses it
 #   - the gitlinks of a repo are cached per index stat: used on the next write, recomputed when .git/index changes
 #   - doctor names a `python3` that is the Windows Store alias (detection only)
@@ -59,9 +59,14 @@ print("shared", "ok" if not shared else shared)
 print("session", "ok" if factory_session.guard() is gitguard else "other")
 print("context", "ok" if context.native_abs is workspace.native_abs else "own copy")
 print("package", "ok" if "rpgf_guard.git" in sys.modules and not [m for m in sys.modules if m == "guard" or m.startswith("guard.")] else sorted(m for m in sys.modules if "guard" in m))
+lib = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), "lib")
+if lib not in sys.path:
+    sys.path.insert(0, lib)
+import importlib.util as iu
+print("noguardspec", "ok" if iu.find_spec("guard") is None else "found " + str(iu.find_spec("guard").origin))
 PY
 )
-for k in names shared session context package; do grep -q "^$k ok$" <<<"$out" && ok "git-guard $k" || no "git-guard $k" "$out"; done
+for k in names shared session context package noguardspec; do grep -q "^$k ok$" <<<"$out" && ok "git-guard $k" || no "git-guard $k" "$out"; done
 
 echo "-- bytecode: state dir, never the plugin tree"
 before=$(find "$ROOT" -name __pycache__ -not -path '*/.git/*' 2>/dev/null | sort)
@@ -74,7 +79,7 @@ PC="$TMP/state/pycache"
 for m in gitguard workspace factory_session pluginroot; do  # fstate and hookspeed load before the prefix is set
   [ -n "$(find "$PC" -name "$m.*.pyc" 2>/dev/null)" ] && ok "pycache holds $m" || no "pycache lacks $m" "$(find "$PC" -name '*.pyc' 2>/dev/null | head -5)"
 done
-[ -n "$(find "$PC" -path '*guard*' -name "git.*.pyc" 2>/dev/null)" ] && ok "pycache holds the guard package (lib/guard/git.py)" || no "pycache lacks lib/guard/git.py" "$(find "$PC" -name '*.pyc' 2>/dev/null | head -5)"
+[ -n "$(find "$PC" -path '*guard*' -name "git.*.pyc" 2>/dev/null)" ] && ok "pycache holds the guard package (lib/rpgf_guard/git.py)" || no "pycache lacks lib/rpgf_guard/git.py" "$(find "$PC" -name '*.pyc' 2>/dev/null | head -5)"
 pyc=$(find "$PC" -name 'gitguard.*.pyc' | head -1); m1=$(python3 -B -c 'import os,sys; print(os.stat(sys.argv[1]).st_mtime_ns)' "$pyc" 2>/dev/null)
 jq -cn --arg d "$C" '{tool_name:"Bash",tool_input:{command:"git status"},cwd:$d,session_id:"hp"}' | python3 -B "$GG" >/dev/null
 m2=$(python3 -B -c 'import os,sys; print(os.stat(sys.argv[1]).st_mtime_ns)' "$pyc" 2>/dev/null)
