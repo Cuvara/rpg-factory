@@ -90,6 +90,9 @@ json_quote() {
   value=${value//$'\t'/\\t}; value=${value//$'\b'/\\b}; value=${value//$'\f'/\\f}
   REPLY="\"$value\""
 }
+now_ms() { # NOW = milliseconds (EPOCHREALTIME when bash has it, else whole seconds)
+  if [ -n "${EPOCHREALTIME:-}" ]; then local t=${EPOCHREALTIME/[.,]/}; NOW=$((10#$t / 1000)); else NOW=$((SECONDS * 1000)); fi
+}
 check() { # expected cwd command [env] [tool]
   local expected="$1" cwd="$2" cmd="$3" envset="${4:-}" tool="${5:-Bash}" payload out got rc
   if [ "$real_checks" -le 0 ] && [ -z "$envset" ]; then
@@ -108,11 +111,16 @@ check() { # expected cwd command [env] [tool]
   if [ -z "$envset" ]; then real_checks=$((real_checks - 1)); real_hook_cases=$((real_hook_cases + 1)); fi
   payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')
   # The hook fails open: an internal error can mean empty output, even with rc=0.
-  # Retry only a missing expected advisory, never a wrong/nonempty decision.
-  if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload"); rc=$?
-  else out=$(guard_command <<<"$payload"); rc=$?; fi
+  # Known cause (proved by the nogit repro below): a git probe that fails or times out (workspace.git_out: 5 s) returns "",
+  # so the branch is unknown and the advisory that needed it is never produced. Retry only a missing expected advisory,
+  # never a wrong/nonempty decision. The first try's rc, stderr and elapsed time go into the RETRY line as evidence.
+  now_ms; t0=$NOW
+  if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload" 2>"$TMP/guard-stderr"); rc=$?
+  else out=$(guard_command <<<"$payload" 2>"$TMP/guard-stderr"); rc=$?; fi
+  now_ms; elapsed=$((NOW - t0))
   if [ -z "$out" ] && [ "$expected" != allow ]; then
-    printf 'RETRY %s: empty guard output (first try rc=%s)\n' "$cmd" "$rc"
+    errtxt=$(tr '\r\n' '  ' < "$TMP/guard-stderr" 2>/dev/null); errtxt=${errtxt:0:300}
+    printf 'RETRY %s: empty guard output (first try rc=%s, elapsed=%sms, stderr=%s)\n' "$cmd" "$rc" "$elapsed" "${errtxt:-<empty>}"
     if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload")
     else out=$(guard_command <<<"$payload"); fi
   fi
@@ -135,7 +143,7 @@ retry_selftest() (
     n=$((n + 1)); printf '%s\n' "$n" > "$count_file"
     if [ "$mode" = recovered ] && [ "$n" -eq 2 ]; then
       printf '%s\n' '{"hookSpecificOutput":{"additionalContext":"rpg-factory advisory (warn): stub"}}'
-    else return 7; fi
+    else printf '%s\n' 'stub probe timed out' >&2; return 7; fi
   }
   if [ "$mode" = allowed ]; then check allow "$SERVER" 'retry-selftest'
   else check warn "$SERVER" 'retry-selftest'; fi
@@ -151,10 +159,22 @@ for mode in recovered empty allowed; do
     allowed) want='RESULT calls=1 pass=1 fail=0';;
   esac
   if [[ "$result" == *"$want" ]] && {
-    [ "$mode" = allowed ] || [[ "$result" == *'RETRY retry-selftest: empty guard output (first try rc=7)'* ]]
+    # the RETRY line keeps its literal prefix (tests/run-all.sh matches it) and now carries the first try's evidence
+    [ "$mode" = allowed ] || [[ "$result" =~ 'RETRY retry-selftest: empty guard output (first try rc=7, elapsed='[0-9]+'ms, stderr=stub probe timed out)' ]]
   }; then pass=$((pass + 1))
   else fail=$((fail + 1)); printf 'FAIL retry self-test %s: %s\n' "$mode" "$result"; fi
 done
+# Cause of the empty output, reproduced deterministically with the real guard: workspace.git_out returns "" when git fails,
+# is missing or exceeds its 5 s timeout (the same except branch), so `git commit` on develop loses its only advisory
+# ("commit on protected branch") and the hook prints nothing at rc 0. No git on PATH stands in for the timeout without waiting.
+# The trigger under load (a probe really exceeding 5 s) is not reproduced here: the RETRY line records elapsed for that.
+nogit_payload=$(jq -cn --arg d "$SERVER" '{hook_event_name:"PreToolUse", tool_name:"Bash", tool_input:{command:"git commit -m x"}, cwd:$d, session_id:"guardtest"}')
+mkdir -p "$TMP/nogit-bin"
+nogit_py=$(command -v python3)
+with_git=$(guard_command <<<"$nogit_payload" 2>/dev/null)
+nogit_out=$(env PATH="$TMP/nogit-bin" CLAUDE_PLUGIN_ROOT="$ROOT" "$nogit_py" -B "$GUARD" <<<"$nogit_payload" 2>/dev/null); nogit_rc=$?
+if [[ "$with_git" == *'commit on protected branch'* ]] && [ -z "$nogit_out" ] && [ "$nogit_rc" -eq 0 ]; then pass=$((pass + 1))
+else fail=$((fail + 1)); printf 'FAIL empty-output cause repro: with git=%s; without git rc=%s out=%s\n' "${with_git:0:120}" "$nogit_rc" "$nogit_out"; fi
 fi
 
 if has_case skill-read; then
