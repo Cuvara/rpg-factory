@@ -3,9 +3,11 @@
 - **QA runner.** `tests/delivery-generic.test.sh` runs in `tests/run-all.sh` (it was in no suite list) and `tests/affected.py`
   selects it for a change under `skills/delivery/`, to `scripts/factory-pipeline.py` or to `scripts/lib/pipeline_route.py`.
   `tests/affected.test.sh` covers the selection. The `tests/plan-paths.test.sh` suite is wired the same way, but only runs
-  once the file exists.
+  once the file exists: `--list-suites` leaves out a listed suite whose file is absent and `--only-suites` rejects it as
+  unknown (a stand-in `RUNALL_SUITES_FROM` list keeps every name).
 - **QA runner.** `tests/run-all.sh` counts a WARN apart: the summary reads `..., S skipped, W warned` only when `W > 0`,
-  and the exit code ignores it. `tests/run-all-parallel.test.sh` checks this end to end with a config WARN.
+  and the exit code ignores it. `tests/run-all-parallel.test.sh` checks this end to end with a config WARN. A moved skill
+  citation is counted as a warning the same way at `-j 1` and `-j N`; the `--fix` hint is a plain note.
 - **Guard tests.** `tests/git-guard.test.sh` has a deterministic repro for the empty git-guard output: with no `git` on
   `PATH` the guard's git probe returns an empty string, the branch is unknown, the `commit on protected branch` advisory
   is never produced and the hook prints nothing at rc 0.

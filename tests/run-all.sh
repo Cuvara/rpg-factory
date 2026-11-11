@@ -305,9 +305,12 @@ python_path_fast() {
 }
 list_suites() { # file: every suite or gated script a run/runl/runp/run1 line or a gated guard in <file> names, as
   # suite_of returns it (first tests/, testlab/ or scripts/ argument of the command); syntax checks and paths built
-  # from variables (the bash -n / py_compile loops) are not suites
-  python3 -B - "$1" "$workspace_only" <<'PY'
-import re, shlex, sys
+  # from variables (the bash -n / py_compile loops) are not suites. For run-all's own run lines a listed path that is
+  # absent from the tree (a suite behind an `if [ -f ... ]` line) is not listed: --list-suites must not print it and
+  # --only-suites must reject it. A stand-in list (RUNALL_SUITES_FROM) names suites that do not exist: all are kept.
+  local present=false; [ -n "${RUNALL_SUITES_FROM:-}" ] || present=true
+  python3 -B - "$1" "$workspace_only" "$present" <<'PY'
+import os, re, shlex, sys
 text = re.sub(r'\\\r?\n', ' ', open(sys.argv[1], encoding='utf-8').read())
 lead = {'if', 'elif', 'then', 'else', 'do', 'while', 'until', '!', '{'}
 syntax = ('bash -n:', 'py_compile:', 'json:', 'jq compile:')
@@ -347,7 +350,7 @@ for line in text.splitlines():
             cmd = args[2:] if t == 'runp' else args[1:]
         for a in cmd:
             if a.startswith(('tests/', 'testlab/', 'scripts/')):
-                if '$' not in a and a not in seen:
+                if '$' not in a and a not in seen and (sys.argv[3] != 'true' or os.path.exists(a)):
                     seen.append(a)
                 break
 sys.stdout.buffer.write(''.join(s + '\n' for s in seen).encode())   # LF on Windows too: callers compare lines
@@ -840,8 +843,10 @@ live_citations() {  # MOVED (anchor unique elsewhere) is a warning here and a fa
     cit=$(python3 -B scripts/checks/skill-citations.py 2>&1); citrc=$?
     if [ $citrc -ne 0 ]; then bad "skill line citations point at their symbols (integration branches)" "$cit"
     else ok "skill line citations point at their symbols (integration branches)"
-      while IFS= read -r l; do note "WARN  moved citation: ${l#MOVED }"; done < <(grep '^MOVED ' <<<"$cit")
-      grep -q '^MOVED ' <<<"$cit" && note "WARN  rewrite moved citations: python3 -B scripts/checks/skill-citations.py --fix (fails under --release)"
+      # wrn counts a moved citation the same way at -j 1 (_wrn) and in a -j N block (replay counts its WARN line)
+      while IFS= read -r l; do wrn "moved citation: ${l#MOVED }"; done < <(grep '^MOVED ' <<<"$cit")
+      # the hint is a plain note (no WARN prefix, never counted)
+      grep -q '^MOVED ' <<<"$cit" && note "      hint: rewrite moved citations with python3 -B scripts/checks/skill-citations.py --fix (fails under --release)"
     fi
   fi
 }

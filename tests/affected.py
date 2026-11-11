@@ -91,7 +91,8 @@ EXTRA = {
     "tests/ui-skills.test.sh": ["skills/ui-*", "docs/architecture/*"],
     "tests/orca-commands.test.sh": ["skills/delivery/references/delivery.md", "skills/factory-core/references/parallel-work.md",
                                    "docs/pipeline-cli.md"],
-    # absent until task checks-lows lands: the suite is then not in the tree inventory, so nothing selects or hashes it
+    # absent until task checks-lows lands: run-all lists a suite only when its file exists (list_suites), so while it is
+    # absent --list-suites and --only-suites never name it and no candidate list holds it
     "tests/plan-paths.test.sh": ["scripts/lib/plan_paths.py", "scripts/lib/compat.sh"],
     "tests/delivery-generic.test.sh": ["skills/delivery/*", "scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py"],
     "scripts/checks/skill-citations.py": SKILL_TEXT,

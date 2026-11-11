@@ -111,9 +111,10 @@ check() { # expected cwd command [env] [tool]
   if [ -z "$envset" ]; then real_checks=$((real_checks - 1)); real_hook_cases=$((real_hook_cases + 1)); fi
   payload=$(jq -cn --arg c "$cmd" --arg d "$cwd" --arg t "$tool" '{hook_event_name:"PreToolUse", tool_name:$t, tool_input:{command:$c}, cwd:$d, session_id:"guardtest"}')
   # The hook fails open: an internal error can mean empty output, even with rc=0.
-  # Known cause (proved by the nogit repro below): a git probe that fails or times out (workspace.git_out: 5 s) returns "",
-  # so the branch is unknown and the advisory that needed it is never produced. Retry only a missing expected advisory,
-  # never a wrong/nonempty decision. The first try's rc, stderr and elapsed time go into the RETRY line as evidence.
+  # Mechanism shown (the nogit repro below): a git probe that fails returns "" (workspace.git_out has a 5 s timeout), so the
+  # branch is unknown and the advisory that needed it is never produced. What triggers that under load is unproven: the
+  # repro does not reproduce it. Retry only a missing expected advisory, never a wrong/nonempty decision. The RETRY line
+  # records the first try's rc, elapsed time and stderr so a real occurrence shows its cause.
   now_ms; t0=$NOW
   if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload" 2>"$TMP/guard-stderr"); rc=$?
   else out=$(guard_command <<<"$payload" 2>"$TMP/guard-stderr"); rc=$?; fi

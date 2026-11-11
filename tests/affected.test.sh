@@ -79,14 +79,14 @@ else fail=$((fail + 1)); echo "FAIL  run-all --list-suites runs the generic-deli
 cands=("${suites[@]}" tests/delivery-generic.test.sh)
 printf '%s\n' scripts/factory-pipeline.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
-want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh tests/commands.test.sh tests/orca-wait.test.sh \
+want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh tests/commands.test.sh \
   tests/skills-lint.sh scripts/checks/english-only.py | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(codex-plugin|compat|parallel-policy)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  factory-pipeline.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  factory-pipeline.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
 printf '%s\n' scripts/lib/pipeline_route.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
-want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh scripts/checks/english-only.py | sort)
+want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py | sort)
 if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
 else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi

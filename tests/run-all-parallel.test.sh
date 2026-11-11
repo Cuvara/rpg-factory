@@ -349,6 +349,28 @@ out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites test
 [ "$rc" = 2 ] && grep -q "unknown suite 'tests/handoff-e2e.test.sh'" <<<"$out" && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
   && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
   && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
+# a listed suite that is absent from the tree (a run line behind `if [ -f ... ]`) is not listed for run-all's own
+# run lines and is rejected by --only-suites; a stand-in list (RUNALL_SUITES_FROM) keeps every name it lists
+printf '%s\n' 'run "present" tests/git-guard.test.sh' 'if [ -f tests/zz-absent.test.sh ]; then run "absent" tests/zz-absent.test.sh; fi' \
+  'run "also absent" env -u TMPDIR tests/zz-ghost.test.sh' > "$TMP/absent-plan.sh"
+cat > "$TMP/absent-list.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+echo "real: $(list_suites "$PLAN_FILE" | tr '\n' ' ')"
+RUNALL_SUITES_FROM="$PLAN_FILE"; echo "standin: $(list_suites "$PLAN_FILE" | tr '\n' ' ')"
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" PLAN_FILE="$TMP/absent-plan.sh" env -u RUNALL_SUITES_FROM bash "$TMP/absent-list.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -qx 'real: tests/git-guard.test.sh ' <<<"$out" \
+  && grep -qx 'standin: tests/git-guard.test.sh tests/zz-absent.test.sh tests/zz-ghost.test.sh ' <<<"$out" \
+  && good 'list_suites leaves an absent suite out of run-all'"'"'s own list and keeps it in a stand-in list' || no "absent suite listing (rc=$rc)" "$out"
+if [ ! -e "$ROOT/tests/plan-paths.test.sh" ]; then
+  # the real wiring: tests/plan-paths.test.sh has a guarded run line and no file until task checks-lows lands
+  grep -q 'tests/plan-paths.test.sh' "$ROOT/tests/run-all.sh" && ! grep -qx 'tests/plan-paths.test.sh' <<<"$real" \
+    && out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/plan-paths.test.sh 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q "unknown suite 'tests/plan-paths.test.sh'" <<<"$out" \
+    && good 'an absent plan-paths suite is neither listed nor accepted by --only-suites' || no "absent plan-paths suite (rc=$rc)" "$out"
+else
+  grep -qx 'tests/plan-paths.test.sh' <<<"$real" && good 'the present plan-paths suite is listed' || no 'plan-paths suite present but not listed' "$real"
+fi
 reset_cache
 out=$(cache_plan --affected --only-suites tests/a.sh); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$RUN_LOG")" = 'a b ' ] \
@@ -755,6 +777,20 @@ PASS  r'
   wrun 1
   ! grep -q 'RETRY' <<<"$out" && good "no RETRY line is shown when the suite printed none" || no "stray RETRY line" "$out"
 else no "the tail of tests/run-all.sh (shared-config verdict, summary) was not found for the stand-in plan" "$tail_src"; fi
+# gitcfg_snapshot: a copy that cannot be filled (cp fails) is removed at once and not recorded; the hash still is
+GC="$TMP/gc-repo"; GT="$TMP/gc-tmp"; mkdir -p "$GT"; git init -q "$GC" 2>/dev/null
+cat > "$TMP/gc-snap.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/scripts/lib/gitcfg-guard.sh"
+cp() { return 1; }
+gitcfg_snapshot "$GC_REPO"
+echo "copy=[${GITCFG_COPY:-}] file=[${GITCFG_FILE:+set}] hash=[${GITCFG_HASH:+set}]"
+gitcfg_verify >/dev/null && echo "verify=ok"
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" GC_REPO="$GC" TMPDIR="$GT" bash "$TMP/gc-snap.sh" 2>&1); rc=$?
+left=$(find "$GT" -type f 2>/dev/null | wc -l | tr -d ' ')
+[ "$rc" = 0 ] && grep -qx 'copy=\[\] file=\[set\] hash=\[set\]' <<<"$out" && grep -qx 'verify=ok' <<<"$out" && [ "$left" = 0 ] \
+  && good 'gitcfg_snapshot removes a config copy that could not be filled, keeps the hash, leaves no temp file' \
+  || no "gitcfg_snapshot with a failing cp (rc=$rc, temp files left=$left)" "$out"
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
 printf '#!/usr/bin/env bash
