@@ -22,22 +22,28 @@ usage() {
     'Independent units (the dependency chain, status, recorded-implementer, ...) run as parallel child runs; PIPELINE_TEST_UNITS'     'sets how many at once (default 4). PIPELINE_TEST_TIMES=1 prints section wall times; PIPELINE_TEST_JOBS sets the'     'background case limit (default 4); PIPELINE_TEST_MATCH=check compares the bash matcher with grep -E.'
 }
 SELECTED=; list_cases=0
+# one selector value (the argument of --case/--only) is validated as it is parsed, before the commas become spaces: an
+# empty or whitespace-only value and an empty name inside the list (leading, trailing or doubled comma, `tier,,status`,
+# `,tier`, `tier,`, `tier, ,status`) are usage errors, never silently dropped and never "run everything"
+add_selector() {
+  local compact="${1//[[:space:]]/}"
+  case "$compact" in
+    ''|,*|*,|*,,*) printf 'Empty case name in selector: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  SELECTED+=" ${1//,/ }"
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --list-cases) list_cases=1; shift ;;
     --case|--only)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }
-      SELECTED+=" $2"; shift 2 ;;
-    --case=*|--only=*) SELECTED+=" ${1#*=}"; [ -n "${1#*=}" ] || { usage >&2; exit 2; }; shift ;;
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_selector "$2"; shift 2 ;;
+    --case=*|--only=*) add_selector "${1#*=}"; shift ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 # Validate before sourcing helpers or creating any fixture (also with --list-cases).
-SELECTED="${SELECTED//,/ }"
-# a selector that names no case (`--case ,`) is a usage error, never "run everything"
-[ -z "$SELECTED" ] || [ -n "${SELECTED//[[:space:]]/}" ] || { printf 'Empty case selector
-' >&2; usage >&2; exit 2; }
 unique_selected=
 for selected in $SELECTED; do
   [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
@@ -148,6 +154,14 @@ if [ "${SELECTED// /}" = cli-selftest ]; then
     bash "$self" --case "$sel" >/dev/null 2>&1; rc=$?
     [ "$rc" -eq 2 ] && sok "empty selector '$sel' exits 2 and runs nothing" || sno "empty selector '$sel' exited $rc, want 2"
   done
+  # an empty name inside a list or among repeated selectors is a usage error too, before any run: the selection (child mode
+  # select, which would print "selected:...") must not even be reached
+  for args in '--case|tier,,status' '--case|tier|--case|,' '--case|,tier' '--case|tier,' '--only=tier,' '--case|tier, ,status' '--case=,tier' '--case|tier|--only|'; do
+    IFS='|' read -ra eargs <<<"$args"
+    out=$(PIPELINE_TEST_UNIT= PIPELINE_SELFTEST_CHILD=select bash "$self" "${eargs[@]}" 2>&1); rc=$?
+    if [ "$rc" -eq 2 ] && ! grep -q '^selected:' <<<"$out"; then sok "empty case name in '${args//|/ }' exits 2 and runs nothing"
+    else sno "empty case name in '${args//|/ }' rc=$rc, want 2: $(head -c 200 <<<"$out")"; fi
+  done
   listed=$(bash "$self" --list-cases 2>&1); rc=$?
   want=$(printf '%s
 ' $CASES)
@@ -173,6 +187,13 @@ units:cli-selftest=cli-selftest' ]; then sok "$form duplicate selector selects c
   if [ "$rc" -eq 0 ] && [ "$one" = $'selected:tier
 units:chain=tier' ]; then sok "--case tier selects one case in one unit, not the full run"
   else sno "--case tier rc=$rc, selection: $(head -c 200 <<<"$one")"; fi
+  # a comma list of non-empty names still selects each of them (whitespace around a comma is fine)
+  for list in 'tier,status' 'tier, status'; do
+    two=$(sel --case "$list"); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$two" = $'selected:tier status
+units:chain=tier status=status' ]; then sok "--case '$list' selects both cases in their units"
+    else sno "--case '$list' rc=$rc, selection: $(head -c 200 <<<"$two")"; fi
+  done
   dep=$(sel --case subplan --only subplan); rc=$?
   if [ "$rc" -eq 0 ] && [ "$dep" = $'selected:subplan validate
 units:chain=validate,subplan' ]; then sok "--case subplan brings its prerequisite validate once"
