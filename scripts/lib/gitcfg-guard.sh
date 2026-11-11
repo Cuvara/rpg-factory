@@ -27,6 +27,10 @@ gitcfg_verify() {
   local now; now=$(_gitcfg_hash "$GITCFG_FILE")
   [ "$now" = "$GITCFG_HASH" ] && { [ -n "${GITCFG_COPY:-}" ] && rm -f "$GITCFG_COPY"; return 0; }
   echo "shared git config $GITCFG_FILE changed during the run (sha256 $GITCFG_HASH -> $now)"
-  [ -n "${GITCFG_COPY:-}" ] && diff "$GITCFG_COPY" "$GITCFG_FILE" 2>/dev/null | head -10 | sed 's/^/  /' && echo "  (copy from before the run: $GITCFG_COPY)"
+  if [ -n "${GITCFG_COPY:-}" ]; then
+    # diff exits 1 when the files differ; under pipefail that must not skip the copy line
+    diff "$GITCFG_COPY" "$GITCFG_FILE" 2>/dev/null | head -10 | sed 's/^/  /' || true
+    echo "  (copy from before the run: $GITCFG_COPY)"
+  fi
   return 1
 }
