@@ -4,7 +4,7 @@
 # Cases follow the `# ---- ` groups below; --case NAMES runs only those (tests/affected.py maps changed files to cases).
 # case-map: skill-read skills/*/SKILL.md
 # Selection: only a skills/<name>/SKILL.md change selects a case (skill-read); every other input runs ALL cases - the suite's own
-# file, root files, registry.json, scripts/git-guard.py, scripts/lib/gitguard.py, scripts/lib/guard/*, scripts/factory_session.py,
+# file, root files, registry.json, scripts/git-guard.py, scripts/lib/gitguard.py, scripts/lib/rpgf_guard/* (scripts/lib/guard/* before the rename), scripts/factory_session.py,
 # scripts/factory-context.sh, scripts/lib/compat.sh and tests/affected.py. A guard module has no map line on purpose: every module
 # is imported by another, up to runtime.py, which every case runs through, so no module change is narrower than ALL.
 set -uo pipefail

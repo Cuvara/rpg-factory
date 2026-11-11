@@ -91,6 +91,8 @@ EXTRA = {
     "tests/ui-skills.test.sh": ["skills/ui-*", "docs/architecture/*"],
     "tests/orca-commands.test.sh": ["skills/delivery/references/delivery.md", "skills/factory-core/references/parallel-work.md",
                                    "docs/pipeline-cli.md"],
+    # absent until task checks-lows lands: the suite is then not in the tree inventory, so nothing selects or hashes it
+    "tests/plan-paths.test.sh": ["scripts/lib/plan_paths.py", "scripts/lib/compat.sh"],
     "tests/delivery-generic.test.sh": ["skills/delivery/*", "scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py"],
     "scripts/checks/skill-citations.py": SKILL_TEXT,
     "tests/commands.test.sh": ["commands/*", "scripts/factory-*.py", "scripts/run-checks.py", "scripts/ui/*", "scripts/assetgen/*"],

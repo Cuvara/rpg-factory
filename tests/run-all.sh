@@ -668,7 +668,10 @@ if [ "$json_count" -gt 0 ] && jq empty "${json_files[@]}" >/dev/null 2>&1; then 
 else for f in "${json_files[@]}"; do run "json: $f" jq empty "$f"; done; fi
 [ "$json_count" -ge 4 ] && ok "json files found: $json_count" || bad "json files found: $json_count (expected >= 4)"
 for f in scripts/*.sh scripts/checks/*.sh tests/*.sh; do run "bash -n: $f" bash -n "$f"; done
-for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py scripts/lib/guard/*.py testlab/*.py testlab/lab/*.py testlab/tests/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
+# the guard package is scripts/lib/guard/ or, once renamed, scripts/lib/rpgf_guard/: keep the existing files of either (a glob
+# that matches nothing stays literal in bash and would be a failing check)
+guard_py=(); for f in scripts/lib/guard/*.py scripts/lib/rpgf_guard/*.py; do [ -e "$f" ] && guard_py+=("$f"); done
+for f in scripts/*.py scripts/checks/*.py scripts/lib/*.py ${guard_py[@]+"${guard_py[@]}"} testlab/*.py testlab/lab/*.py testlab/tests/*.py; do run "py_compile: $f" python3 -B -W error::SyntaxWarning -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])" "$f"; done
 run "jq compile: scripts/lib/resolve.jq" \
   jq -e --arg repo server --argjson files '[]' --argjson subst '{}' --argjson tools '{}' -f scripts/lib/resolve.jq registry.json
 find scripts tests -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
@@ -704,7 +707,7 @@ cmver=""; [ -f .agents/plugins/marketplace.json ] && cmver=$(jq -r '[.version?, 
 # release policy wording: tags and releases are the lead's by default and the agent's only with explicit release
 # authorization in the current task - no authoritative text may state the absolute "agents never tag" rule again
 policy_files=(.claude/CLAUDE.md README.md docs/releasing.md registry.json skills/factory-core/SKILL.md skills/factory-core/references/git-safety.md
-              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/gitguard.py scripts/lib/guard/*.py
+              skills/factory-core/references/skill-contract.md skills/unity-package/SKILL.md scripts/git-guard.py scripts/lib/gitguard.py ${guard_py[@]+"${guard_py[@]}"}
               scripts/lib/context.py scripts/lib/procrun.py scripts/lib/snapshot_render.py
               .claude-plugin/plugin.json .claude-plugin/marketplace.json)
 absolute=$(grep -nE -i "agents never tag|never create the tag|tags are never (done|created) by agents|never tag, never publish|; never tag\b" "${policy_files[@]}" 2>/dev/null)
@@ -818,6 +821,8 @@ run "asset-gen engine, core templates, image QA, gen-run quality plugin (temp au
 run "netcode-headless server resolution (fixture repos)" env -u TMPDIR tests/netcode-headless.test.sh
 run "skill scaffolder + touchpoints (throwaway plugin copy)" env -u TMPDIR tests/new-skill.test.sh
 run "parallel-work policy lint bites (throwaway plugin copy)" env -u TMPDIR tests/parallel-policy.test.sh
+# plan paths (task checks-lows): skipped while the suite is absent; the run line stays visible to list_suites
+if [ -f tests/plan-paths.test.sh ]; then run "plan paths (portable plan path validation)" env -u TMPDIR tests/plan-paths.test.sh; fi
 fi
 # workspace-list-begin
 if ! $use_ws; then skp "orca commands cited in parallel-work.md" "--no-workspace"
