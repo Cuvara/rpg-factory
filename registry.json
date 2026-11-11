@@ -353,6 +353,15 @@
   "pipeline": {
     "description": "Delivery pipeline (scripts/factory-pipeline.py, policy skills/delivery/references/delivery.md, RPG specifics in skills/factory-core/references/parallel-work.md): task tiers, the agents that implement and review, cross-model review pairing and shared exclusive resources.",
     "tiers": {
+      "XS": {
+        "max_repos": 1,
+        "max_files": 3,
+        "max_changed_lines": 40,
+        "contracts": false,
+        "generated": false,
+        "prose_only": true,
+        "flow": "run lead writes a one-task plan with tier XS; every owned path is prose; the run lead edits the files itself on the plan topic branch and commits with explicit paths; dispatch --phase review --sha <sha> runs one cross-model review (implementer recorded as the run lead's model); the run lead runs the task tier command and records verdict --phase qa --by <lead model> --note \"tier XS: lead ran task suites\"; gate; PR; no task lead, task worktree or implement session"
+      },
       "S": {
         "max_repos": 1,
         "max_modules": 1,
@@ -434,7 +443,7 @@
       "codex"
     ],
     "models": {
-      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: references/parallel-work.md section 10 'Model choice').",
+      "description": "Model policy: scope = what may run at all (agent -> model -> allowed efforts); profiles = the model and effort of each role and grade; every profile is inside scope. A personal override file may narrow scope and replace profiles (scripts/lib/model_policy.py; policy: skills/delivery/references/delivery.md section 10 'Model choice').",
       "scope": {
         "claude": {
           "claude-opus-5-5": [

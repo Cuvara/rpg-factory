@@ -5,13 +5,17 @@ Policy: skills/delivery/references/delivery.md (generic), skills/factory-core/re
 cross-model review pairing, exclusive resources) and `repos.<key>.worktrees`. Settings fall back to
 skills/delivery/pipeline-defaults.json with `--registry none`, RPG_FACTORY_PIPELINE_REGISTRY=none or a missing registry
 file (the installed plugin always ships registry.json, so there the flag or the variable selects them); every command the
-script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`. Plan format: docs/schemas/pipeline-plan.schema.json.
+script prints for a next session then carries `--registry none`. A plan may set `no_worktree_markers`
+and `known_failing` ([{check, reason}]: checks that already fail at the base; specs name them, QA reports FAIL_AT_BASE). Plan format: docs/schemas/pipeline-plan.schema.json.
 
   tier [--json] [--context-json FILE] [-- <factory-context.sh args>]
-        S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths).
+        XS | S | M | L from the routing snapshot (repos, modules, files, contracts, generated paths). XS (registry
+        pipeline.tiers.XS): every file prose (*.md, changelog.d/, skills/ directories), within max_files and
+        max_changed_lines; `above XS:` names why not.
   tier --plan <plan.json> --repo KEY --paths FILE... [--json]
         the same for a plan repo key; a plan.repos entry the registry does not know (the plugin repo) is tiered
-        from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts.
+        from the paths alone: modules are skills/<name>, scripts/lib or the top-level directory, no contracts. With a
+        checkout, the changed lines are `git diff --numstat HEAD` of the paths plus the lines of untracked ones.
   agents <plan.json> [--down AGENT [--reason TEXT] | --up AGENT] [--json]
         per-run MODEL_UNAVAILABLE marks in <state dir>/pipeline/<plan id>/agents.json, then the availability table.
   validate <plan.json> [--json]
@@ -23,8 +27,9 @@ script prints for a next session then carries `--registry none`. A plan may set 
         pipeline.models, lib/model_policy.py; references/delivery.md section 10 "Model choice"): a task `grade` other
         than light|standard|heavy, a broken policy or override file and a role it cannot resolve are errors; prints the
         model and effort of the task lead and, per task, its grade (the plan's, else derived from the tier of its owned
-        paths alone: S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy work:
-        the heavy profile) and QA sessions.
+        paths alone: XS and S light, M standard, L or a contract or generated path heavy) and its implement, review (heavy
+        work: the heavy profile) and QA sessions. Tier XS (plan or task tier): exactly one task, every owned path prose,
+        at most max_files paths, else an error naming the reason; its implementer is the run lead (pipeline.lead_agent).
   subplan validate <subplan.json> [--plan PATH] [--json]
         a task lead's split of ONE plan task (docs/schemas/pipeline-subplan.schema.json; `plan` is the plan file,
         relative to the subplan, or --plan; `task` the task id): an unknown task, a subtask path outside the task's owned
@@ -66,6 +71,9 @@ script prints for a next session then carries `--registry none`. A plan may set 
         `git worktree add --no-track -b <branch> <path> <base>` for a new task worktree, followed by
         `orca worktree set` with its parent, then `orca agent launch --worktree path:<dir> --prompt ...`;
         existing worktrees use only the launch command.
+        A tier XS task starts no task lead: it prints the run lead's own steps (edit on plan.topic, commit with explicit
+        paths, `dispatch --phase review --sha <sha>`, the task tier command, the `tier XS: lead ran task suites` QA
+        verdict, gate); `--phase implement` on it is a usage error. Its review and QA read the topic checkout.
   dispatch <plan.json> --task ID --phase lead --placement shared|child ...
         Both placements create a task worktree beside the integration checkout (or the repo checkout if absent).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
@@ -134,7 +142,9 @@ script prints for a next session then carries `--registry none`. A plan may set 
         current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
-        QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task. With
+        QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
+        starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
+        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push, `gh pr create`, and `gh pr checks <pr> --watch` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -145,6 +155,9 @@ script prints for a next session then carries `--registry none`. A plan may set 
         run. Schema docs/schemas/pipeline-status.schema.json. Exit 1 when the plan is invalid. Each task row lists
         its leftover Orca child worktrees (`children`: branch or directory `<task branch>--*`) with a note: merge, then
         `orca worktree rm --worktree path:<child>`.
+        A tier XS task, as the gate sees it: its branch is plan.topic (the run lead's edits and commit), a candidate
+        names `--phase review`, after the review PASS the run lead's task tier command and QA record at the topic
+        HEAD, and that QA PASS stands in for the integration QA.
         With a task lead's Orca Run (task `orca_run` in the plan, or --orca-run, repeatable) it also lists the Run's
         settled workers that are not released (`orca orchestration worker-list --run <id> --json`, read-only) and puts
         their `orca orchestration worker-release --dispatch <id>` first in `next`; a running worker is no finding;
@@ -246,13 +259,18 @@ def git(repo, *args):
 
 # ---------------------------------------------------------------- tier
 
-def tier_of(ctx, pipe):
+def tier_of(ctx, pipe, lines=None):
+    """lines: the changed-line count of the change when known (tier --plan with a checkout), else None (counts as 0)."""
     repos = [r for r in ctx.get("repos", []) if r.get("touched") or any(f.get("source") == "given" for f in r.get("files", []))]
     modules = sorted({m for r in repos for m in r.get("touched", [])})
     files = sum(1 for r in repos for f in r.get("files", []) if f.get("source") in ("given", "branch"))
+    # XS judges every file of the change, uncommitted ones included: one path that is not prose is above XS
+    paths = sorted({f.get("path", "") for r in repos for f in r.get("files", [])})
     contracts = sorted({c["id"] for r in repos for c in r.get("contracts", [])})
     generated = sorted({h if isinstance(h, str) else h.get("path", "?") for r in repos for h in r.get("generated_hits", [])})
     facts = {"repos": [r["repo"] for r in repos], "modules": modules, "files": files, "contracts": contracts, "generated": generated}
+    if lines is not None:
+        facts["changed_lines"] = lines
 
     def fits(t):
         rule = pipe["tiers"][t]
@@ -270,6 +288,11 @@ def tier_of(ctx, pipe):
         return why
 
     reasons = {}
+    if "XS" in pipe["tiers"]:  # XS first: prose only, within its file and changed-line thresholds
+        why = fits("XS") + ([] if paths else ["no changed files"])
+        reasons["XS"] = why + [w for w in pr.above_xs(pipe["tiers"]["XS"], paths, lines or 0) if w not in why]
+        if not reasons["XS"]:
+            return {"tier": "XS", "facts": facts, "above": reasons, "flow": pipe["tiers"]["XS"].get("flow", "")}
     for t in ("S", "M"):
         reasons[t] = fits(t)
         if not reasons[t]:
@@ -302,16 +325,18 @@ def plain_context(key, paths):
 
 def cmd_tier(a, reg):
     pipe = settings(reg)
+    lines = None  # the changed-line count, known only for tier --plan with a checkout
     if a.plan:
         if not a.repo or not a.paths:
             die("tier --plan needs --repo <plan repo key> and --paths <files>")
         plan = read_plan(a.plan, reg)
         plan["_path"] = a.plan
         info = repo_info(plan, reg, a.repo)
+        lines = changed_lines(info["path"], a.paths)
         if not info["registry"]:
             if not info["path"]:
                 die(f"repo `{a.repo}` is neither a registry repo nor in plan.repos with a path")
-            out = tier_of(plain_context(a.repo, a.paths), pipe)
+            out = tier_of(plain_context(a.repo, a.paths), pipe, lines)
             out["basis"] = "paths (repo not in the registry)"
             return print_tier(a, out)
         a.rest = ["--repo", info["registry"], "--paths", *a.paths, *a.rest]
@@ -326,7 +351,33 @@ def cmd_tier(a, reg):
         if r.returncode != 0:
             die("factory-context.sh failed: " + (r.stderr or r.stdout).strip()[:400], 1)
         ctx = json.loads(r.stdout)
-    return print_tier(a, tier_of(ctx, pipe))
+    return print_tier(a, tier_of(ctx, pipe, lines))
+
+
+def numstat_lines(out):
+    """Added plus removed lines of `git diff --numstat` output (a binary file counts 0)."""
+    n = 0
+    for line in (out or "").splitlines():
+        added, removed = (line.split("\t") + ["", ""])[:2]
+        n += int(added) + int(removed) if added.isdigit() and removed.isdigit() else 0
+    return n
+
+
+def changed_lines(repo_path, paths):
+    """Changed lines of a working change in `paths` (tier --plan): `git diff --numstat HEAD` plus the lines of the
+    untracked given files. 0 when unknown (no checkout, git fails)."""
+    if not repo_path or not paths or not os.path.isdir(repo_path):
+        return 0
+    out, rc = git(repo_path, "diff", "--numstat", "--no-renames", "HEAD", "--", *paths)
+    n = numstat_lines(out) if rc == 0 else 0
+    untracked, rc = git(repo_path, "ls-files", "--others", "--exclude-standard", "--", *paths)
+    for f in (untracked or "").splitlines() if rc == 0 else []:
+        try:
+            with open(os.path.join(repo_path, f), encoding="utf-8", errors="replace") as fh:
+                n += sum(1 for _ in fh)
+        except OSError:
+            pass
+    return n
 
 
 def print_tier(a, out):
@@ -335,7 +386,8 @@ def print_tier(a, out):
     else:
         f = out["facts"]
         print(f"Tier: {out['tier']}  ({len(f['repos'])} repo(s), {len(f['modules'])} module(s), {f['files']} file(s), "
-              f"contracts: {', '.join(f['contracts']) or 'none'}, generated: {', '.join(f['generated']) or 'none'})")
+              + (f"{f['changed_lines']} changed line(s), " if "changed_lines" in f else "")
+              + f"contracts: {', '.join(f['contracts']) or 'none'}, generated: {', '.join(f['generated']) or 'none'})")
         if out.get("basis"):
             print(f"  basis: {out['basis']}; modules: {', '.join(f['modules'])}")
         for t, why in out["above"].items():
@@ -347,7 +399,8 @@ def print_tier(a, out):
 
 # ---------------------------------------------------------------- model grades
 
-TIER_GRADE = {"S": "light", "M": "standard", "L": "heavy"}
+TIER_GRADE = {"XS": "light", "S": "light", "M": "standard", "L": "heavy"}
+TIERS = tuple(TIER_GRADE)
 ICASE = os.name == "nt"  # the file system folds case: owned paths compare case-insensitively (tests force it on Linux)
 
 
@@ -728,6 +781,53 @@ def task_qa_warnings(task):
     return pr.qa_warnings(dict(task, checks=[c for c in task.get("checks", []) if not tier_only(c)]))
 
 
+def xs_implementer(pipe):
+    """Who implements a tier XS task: the run lead itself (registry pipeline.lead_agent); its review is the pair."""
+    return pipe.get("lead_agent") or "claude"
+
+
+def xs_heavy(plan, reg, rule, repo, paths):
+    """Why `paths` of plan repo `repo` are above tier XS by registry pipeline.tiers.XS `contracts: false` /
+    `generated: false`: the contracts and generated paths their routing snapshot names, as tier_of reports them.
+    Empty when they fit or the snapshot is unknown (jq missing)."""
+    if not paths or (rule.get("contracts") is not False and rule.get("generated") is not False):
+        return []
+    ctx, _ = task_context(plan, reg, {"repo": repo, "paths": list(paths)})
+    if ctx is None:
+        return []
+    repos = ctx.get("repos", [])
+    contracts = sorted({c["id"] for r in repos for c in r.get("contracts", [])})
+    generated = sorted({h if isinstance(h, str) else h.get("path", "?") for r in repos for h in r.get("generated_hits", [])})
+    why = []
+    if rule.get("contracts") is False and contracts:
+        why.append("contract " + ", ".join(contracts))
+    if rule.get("generated") is False and generated:
+        why.append("generated path " + ", ".join(generated))
+    return why
+
+
+def xs_plan_errors(plan, reg, pipe, tasks):
+    """Why a plan or task marked tier XS is not one: XS is a one-task plan whose owned paths are all prose, at most
+    pipeline.tiers.XS max_files and touch no contract or generated path when the rule forbids them (its changed lines
+    are judged on the committed diff by the gate)."""
+    xs = [t for t in tasks if pr.xs_plan(plan, t)]
+    if not xs:
+        return []
+    rule = pipe["tiers"].get("XS")
+    if not rule:
+        return ["tier XS: the registry has no pipeline.tiers.XS rule"]
+    errors = []
+    if len(tasks) != 1:
+        errors.append(f"tier XS: a tier XS plan has exactly one task, this one has {len(tasks)} (use tier S or M)")
+    for t in xs:
+        why = pr.above_xs(rule, t.get("paths") or [])
+        if t.get("repo"):
+            why += xs_heavy(plan, reg, rule, t["repo"], t.get("paths") or [])
+        if why:
+            errors.append(f"task {t.get('id', '?')}: tier XS, but its owned paths are above XS: " + "; ".join(why))
+    return errors
+
+
 def validate(plan, reg):
     pipe = settings(reg)
     errors, warnings = [], pr.warnings(pipe, plan.get("tasks") or [])
@@ -738,13 +838,25 @@ def validate(plan, reg):
             errors.append(f"missing `{k}`")
     if plan.get("id") and plan_dir_name(plan["id"]) == PLANNER_DIR:
         errors.append(f"plan id `{plan['id']}` is reserved: its state directory `{PLANNER_DIR}` holds the planner's specs")
-    if plan.get("tier") and plan["tier"] not in ("S", "M", "L"):
-        errors.append("tier must be S, M or L")
+    if plan.get("tier") and plan["tier"] not in TIERS:
+        errors.append("tier must be XS, S, M or L")
     if plan.get("deliver", "none") not in ("pr", "none"):
         errors.append("deliver must be pr or none")
     if "no_worktree_markers" in plan and (not isinstance(plan["no_worktree_markers"], list) or
             not all(isinstance(m, str) for m in plan["no_worktree_markers"])):
         errors.append("no_worktree_markers must be an array of strings")
+    if "known_failing" in plan:
+        kf = plan["known_failing"]
+        if not isinstance(kf, list):
+            errors.append("known_failing must be an array of {check, reason} objects")
+        else:
+            for i, e in enumerate(kf):
+                if not (isinstance(e, dict) and all(isinstance(e.get(k), str) and e[k].strip() for k in ("check", "reason"))):
+                    errors.append(f"known_failing[{i}]: needs non-empty string check and reason")
+                    continue
+                for k in sorted(set(e) - {"check", "reason"}):
+                    errors.append(f"known_failing[{i}]: unknown key {k}")
+                warnings.append(f"known failing at base: {e['check']} - {e['reason']}")
     tasks = plan.get("tasks") or []
     ids = [t.get("id") for t in tasks]
     for dup in sorted({i for i in ids if ids.count(i) > 1}):
@@ -773,7 +885,10 @@ def validate(plan, reg):
         info = repo_info(plan, reg, t.get("repo"))
         if not info["path"]:
             errors.append(f"task {tid}: repo `{t.get('repo')}` is neither a registry repo nor in plan.repos with a path")
-        impl = pr.route(pipe, t, {a: {"available": True} for a in agents})[0]
+        if "tier" in t and t["tier"] not in TIERS:
+            errors.append(f"task {tid}: tier must be XS, S, M or L")
+        impl = (xs_implementer(pipe) if pr.xs_plan(plan, t) else
+                pr.route(pipe, t, {a: {"available": True} for a in agents})[0])
         if impl not in agents:
             errors.append(f"task {tid}: implementer `{impl}` is not a pipeline agent ({', '.join(agents)})")
         reviewer = t.get("reviewer") or pipe["review_pairing"].get(impl)
@@ -796,6 +911,7 @@ def validate(plan, reg):
                 why = path_problem(p)
                 if why:
                     errors.append(f"task {tid}: {k[:-1]} {p} {why}")
+    errors += xs_plan_errors(plan, reg, pipe, tasks)
     by_id = {t["id"]: t for t in tasks if t.get("id")}
     for i, t in enumerate(tasks):
         for u in tasks[i + 1:]:
@@ -857,7 +973,8 @@ def plan_models(plan, reg, errors):
         if any(t.get(k) is not None and (not isinstance(t[k], str) or t[k] not in pipe["agents"])
                for k in ("implementer", "reviewer")):
             continue  # validation already reports malformed agent fields
-        roles = pr.roles(pipe, t, avail)
+        xs_impl = pr.choose(xs_implementer(pipe), "tier XS: the run lead implements", avail) if pr.xs_plan(plan, t) else None
+        roles = pr.roles(pipe, t, avail, xs_impl)
         impl, reviewer = roles["implement"][0], roles["review"][0]
         if not isinstance(impl, str) or not isinstance(reviewer, str) or impl not in pipe["agents"]                 or reviewer not in pipe["agents"]:
             continue
@@ -1221,6 +1338,8 @@ def implementer_of(pipe, plan, task, subtask=None, item=None):
         models = set(subtask_implementers(plan, task["id"]).values())
         if len(models) == 1:
             return models.pop(), "subtask implementers"
+        if pr.xs_plan(plan, task):
+            return xs_implementer(pipe), "tier XS: the run lead implements"
     agent, why = pr.planned(pipe, item or task)
     return agent, "planned implementer: " + why
 
@@ -1316,6 +1435,32 @@ def spec_json(spec):
     return "{\n" + ",\n".join(f"  {json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()) + "\n}"
 
 
+def known_failing_text(plan):
+    """The plan's `known_failing` block for a lead or QA prompt; '' when the plan lists none."""
+    kf = [e for e in plan.get("known_failing") or [] if isinstance(e, dict)]
+    if not kf:
+        return ""
+    return ("Known failing at base (plan known_failing):\n"
+            + "\n".join(f"- {e.get('check')}: {e.get('reason')}" for e in kf)
+            + "\nA failure of a listed check that also fails at the task base is FAIL_AT_BASE: name it on the QA report's "
+              "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
+
+
+def base_health_hint(info, spec):
+    """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
+    git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
+    if not info.get("path"):
+        return None
+    out, rc = git(info["path"], "remote", "-v")
+    if rc or "github.com" not in (out or ""):
+        return None
+    sha = re.compile(r"^[0-9a-fA-F]{7,40}$")
+    branch = next((b for b in (spec.get("base"), info.get("base")) if b and not sha.match(b)), None)
+    if not branch:
+        return None
+    return f"factory-pipeline: base health: run `gh run list --branch {branch} --limit 1` before starting"
+
+
 def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, policy=None, reg=None, subagents=None):
     """The task-lead spec: the task spec plus the short rules of the second level (references/delivery.md)."""
     me = orca_cmd.quote(pipeline_argv(reg or {}))
@@ -1361,6 +1506,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     return (f"Task lead for task {task['id']} of plan {plan['id']} ({plan['title']}), references/delivery.md. You own "
             f"this task and {where}; the run lead owns the plan, integration and cleanup.\n"
             + spec_json(spec) + "\nRules:\n" + "\n".join(r for r in rules if r)
+            + ("\n" + known_failing_text(plan) if known_failing_text(plan) else "")
             + ("\nGrade rubric:" + rubric_lines(policy, "") if policy else "")
             + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on branch {spec['branch']}; never create a "
                "worktree. Start after the previous task of this repo has its QA verdict. Subtasks, review and QA run "
@@ -1502,6 +1648,49 @@ def load_subtask(a, plan, reg, task):
     return s
 
 
+def xs_task_tier(pipe, plan, task, info, base):
+    """(checkout, task tier command, runs run-all) of a tier XS task: the run lead runs it in its plan.topic checkout
+    (else the repo checkout); a product repo without tests/run-all.sh gets its task checks and the fast tier instead."""
+    path = info["path"] or "<repo checkout>"
+    where = (worktree_for(info["path"], plan["topic"])[0] if info["path"] else None) or path
+    suites = runall_suites(where) if os.path.isdir(where) else None
+    if suites is False:  # a product repo: its task checks and the fast tier
+        return where, ("the task checks (run-checks.py fast tier for registry repos): "
+                       + ("; ".join(task.get("checks") or []) or "none listed")), False
+    return where, tier_command((pipe.get("qa_tiers") or {}).get("task") or QA_TIERS["task"], base,
+                               pr.qa_checks([task], suites)[0], task=True), True
+
+
+def xs_qa_record(cmd, pf, task, lead, sha):
+    """The run lead's QA record of a tier XS task (the gate takes it as the integration QA at plan.topic's HEAD)."""
+    return (f"{cmd} verdict {pf} --task {task['id']} --phase qa --sha {sha} --state PASS --by {lead} "
+            "--note \"tier XS: lead ran task suites\"")
+
+
+def xs_lead_steps(a, reg, pipe, plan, task, info, base):
+    """What `dispatch --phase lead` prints for a tier XS task instead of starting a task lead: the run lead's own steps."""
+    lead = xs_implementer(pipe)
+    cmd = orca_cmd.quote(pipeline_argv(reg))
+    pf, tid, topic = shlex.quote(a.plan), task["id"], plan["topic"]
+    where, tier, _ = xs_task_tier(pipe, plan, task, info, base)
+    paths = " ".join(shlex.quote(p) for p in task["paths"])
+    return "\n".join([
+        f"Tier XS: task {tid} starts no task lead, task worktree or implement session; the run lead ({lead}) edits it.",
+        f"1. In {where} on the plan topic branch {topic} (new: `git switch --no-track -c {topic} {base}`), edit only "
+        f"the owned paths: {', '.join(task['paths'])}.",
+        f"2. Commit with explicit paths: `git add -- {paths}`, then `git commit -m '<type>(<scope>): ...'`; that "
+        "commit is <sha>.",
+        f"3. One cross-model review (implementer: {lead}): {cmd} dispatch {pf} --task {tid} --phase review --sha <sha>",
+        f"4. After the review PASS, run the task tier command in {where}: {tier}",
+        f"5. Record the QA: {xs_qa_record(cmd, pf, task, lead, '<sha>')}",
+        f"6. {cmd} gate {pf}",
+    ])
+
+
+SPEC_COMPLETE = ("Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something "
+                 "the spec does not cover.")
+
+
 def cmd_dispatch(a, reg):
     resolve_runner(a)
     plan = read_plan(a.plan, reg)
@@ -1559,9 +1748,11 @@ def cmd_dispatch(a, reg):
                 print(f"factory-pipeline: {key} takes one task at a time: task {', '.join(open_)} has no QA PASS yet; "
                       "start the integration QA after it", file=sys.stderr)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {key}, branch {plan['topic']}, integrated tree.\n"
+                  + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, tasks, at_head, integration=True, runall=runall_suites(home or info["path"]),
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else ""))
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
+                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1570,15 +1761,18 @@ def cmd_dispatch(a, reg):
     impl = pr.route(pipe, task, pr.available(pipe, plan))[0]
     sub = load_subtask(a, plan, reg, task)
     sid = sub["id"] if sub else None
+    xs = pr.xs_plan(plan, task)  # tier XS: the run lead edits on plan.topic; no task lead, task worktree or implement
     # review and QA pair against the recorded (else planned) implementer; implement and lead forecast from availability
+    # (tier XS: the run lead is the implementer in every phase)
     model_roles = pr.roles(pipe, sub or task, pr.available(pipe, plan),
-                           implementer_of(pipe, plan, task, sid, sub) if a.phase in ("review", "qa", "verify") else None)
+                           implementer_of(pipe, plan, task, sid, sub) if a.phase in ("review", "qa", "verify") or xs
+                           else None)
     for role, (model, why) in model_roles.items():
         print(f"model: {role} -> {model} ({why})", file=sys.stderr)
     placement = a.placement or (sub or {}).get("placement") or "shared"
     if placement == "child" and not info["worktrees"]:
         die(f"--placement child: repo {task['repo']} takes no worktree ({info['reason']}); nothing was printed")
-    branch = task_branch(plan, info, task)
+    branch = plan["topic"] if xs else task_branch(plan, info, task)
     spec = {"plan": plan["id"], "task": task["id"], "repo": task["repo"], "objective": task["objective"],
             "owned_paths": task["paths"], "exclusions": task.get("exclusions", []), "deps": task.get("deps", []),
             "checks": task.get("checks", []), "acceptance": task["acceptance"], "branch": branch,
@@ -1598,7 +1792,16 @@ def cmd_dispatch(a, reg):
         if prev and (verdict_of(plan, reg, prev, "qa")[0] or {}).get("state") != "PASS":
             print(f"factory-pipeline: {task['repo']} takes one task at a time: task {prev} has no QA PASS yet; "
                   f"start {task['id']} after it", file=sys.stderr)
+    if a.phase == "lead" and xs:
+        print(xs_lead_steps(a, reg, pipe, plan, task, info, spec["base"]))
+        return 0
+    if a.phase == "implement" and xs:
+        die(f"task {task['id']} is tier XS: no implement session; the run lead edits the owned paths itself on "
+            f"{plan['topic']} (`dispatch --phase lead` prints the steps)")
     if a.phase == "lead":
+        hint = base_health_hint(info, spec)
+        if hint:
+            print(hint, file=sys.stderr)
         reviewer = task.get("reviewer") or pipe["review_pairing"].get(impl)
         if not info["worktrees"]:
             place = orca_cmd.placement(reg, info["registry"], info["path"], spec["base"], branch)
@@ -1658,12 +1861,19 @@ def cmd_dispatch(a, reg):
             spec["placement_reason"] = sub.get("reason")
     # implement, review and per-task QA join the task lead's worktree or an Orca child of it (a no-worktree repo: its
     # main checkout)
-    home = task_worktree(plan, info, task, branch) if info["worktrees"] else None
+    home_reason = "the task lead's worktree"
+    if xs:  # review and QA read the run lead's topic checkout (else the repo checkout): there is no task worktree
+        topic_home = worktree_for(info["path"], plan["topic"])[0] if info["path"] else None
+        home = topic_home or info["path"]
+        home_reason = (f"tier XS: the run lead's checkout of {plan['topic']}" if topic_home
+                       else "tier XS: the repo checkout (no task worktree)")
+    else:
+        home = task_worktree(plan, info, task, branch) if info["worktrees"] else None
     child_name = child_branch(branch, sub["id"] if sub else None, a.phase, a.sha)
     if placement == "child":
         joined = orca_cmd.child_placement(child_name, branch if a.phase == "implement" else a.sha, home)
     else:
-        joined = {"worktree": f"path:{home}", "new": False, "reason": "the task lead's worktree"} if home else None
+        joined = {"worktree": f"path:{home}", "new": False, "reason": home_reason} if home else None
     if a.phase == "implement":
         spec.pop("checks", None)
         spec.pop("subtask_checks", None)
@@ -1677,7 +1887,7 @@ def cmd_dispatch(a, reg):
                   "JSON parse). The task's verify session runs the tests once.\n")
         if placement == "child":
             # a child has its own index: the sub-session commits there and the task lead merges the child branch
-            prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md) in an Orca child "
+            prompt = (f"Implementation sub-session of task {task['id']} in an Orca child "
                       f"worktree of {home}, on its own branch {child_name} from {branch}. Edit only {edit}. Commit on "
                       "your child branch with explicit paths (`git add -- <paths>`, Conventional Commits); the task lead "
                       f"merges it into {branch} and removes the child at once. {orca_cmd.CHILD_RULE.split(';')[0]}.\n"
@@ -1686,13 +1896,13 @@ def cmd_dispatch(a, reg):
         else:
             # a non-committing sub-session of the task lead, also in a no-worktree repo without --paths: only the task
             # lead commits (one shared index); there is no committing implementation worker in a shared checkout
-            prompt = (f"Implementation sub-session of task {task['id']} (references/delivery.md). Work in "
+            prompt = (f"Implementation sub-session of task {task['id']}. Work in "
                       f"{home or info['path']} on branch {branch}: never switch branches or create a worktree. Edit only "
                       f"{edit}. Do NOT commit, stage or stash: one shared index; the task lead commits.\n{report}\n"
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt += "\n" + checks
+        prompt += "\n" + SPEC_COMPLETE + "\n" + checks
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -1707,6 +1917,10 @@ def cmd_dispatch(a, reg):
         return 0
     if placement == "child":
         at_head = child_at_head(a.sha, home)
+    elif xs:
+        at_head = (f"Candidate SHA: {a.sha}. Tier XS: the run lead committed it on {plan['topic']}; you read its checkout "
+                   f"{home}: first check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. Never "
+                   "check out, stage, commit or stash." if topic_home else None)
     else:
         at_head = (f"Candidate SHA: {a.sha}. You share the task worktree {home} with the task lead, who keeps HEAD at "
                    "the candidate: first check `git rev-parse HEAD` equals it; otherwise report NOT_INDEPENDENT and stop. "
@@ -1727,19 +1941,24 @@ def cmd_dispatch(a, reg):
         explicit, _, _ = pr.qa_checks([task], suites, failed)
         cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
-                  + (f", subtask {sub['id']}" if sub else "") + ".\n"
+                  + (f", subtask {sub['id']}" if sub else "") + ".\n" + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
                             runall=suites, tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + "\n" + cases + ("\nThe tier command already passes these cases: run-all gives affected-only suites with a case map --case."
                                       if cases.startswith("Affected cases (tests/affected.py cases):") else "")
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
-                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else ""))
+                  + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
+                  + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
     if agent == sub_impl:
         print(f"factory-pipeline: reviewer {agent} is the implementer's model: the verdict counts as SAME_MODEL", file=sys.stderr)
     base, base_note = review_base(info, plan["topic"], spec["base"], a.sha)
+    plugin_repo = task["repo"] == "plugin" or (info["path"] and os.path.isfile(
+        os.path.join(info["path"], ".claude-plugin", "plugin.json")))
+    checklist = ("skills/factory-core/references/plugin-review.md" if plugin_repo
+                 else "the routed lead skill's review checklist")
     failed, retry = [], False
     if a.phase == "verify":
         previous = fstate.read_json(verdict_file(plan, task["id"], "qa", sid))
@@ -1751,12 +1970,12 @@ def cmd_dispatch(a, reg):
               + (f" (subtask {sub['id']}; record with `verdict --subtask {sub['id']}`)" if sub else "")
               + (". Read-only: edit nothing, commit nothing. Review before running tests.\n" if a.phase == "verify"
                  else ". Read-only: edit nothing, commit nothing. Run no suites; only a minimal repro when needed.\n")
-              + subagent_rule(a, reg, "review", agent) + "\n"
+              + SPEC_COMPLETE + "\n" + subagent_rule(a, reg, "review", agent) + "\n"
               + (at_head + "\n" if at_head else f"Candidate SHA: {a.sha}. ")
               + f"Review the whole diff `git diff {base}...{a.sha}` (not only the owned paths)"
               + (f" ({base_note})" if base_note else "")
-              + " against the spec: scope (a change outside the owned paths is a finding), correctness, safety rules, the "
-              "routed lead skill's review checklist, tests per behaviour change, conventions.\n"
+              + " against the spec: scope (a change outside the owned paths is a finding), correctness, safety rules, "
+              + checklist + ", tests per behaviour change, conventions.\n"
               + spec_json(spec)
               + "\nReport: `path:line severity problem fix` per finding, then `VERDICT: PASS|FAIL`."
               + (f"\nNo worktree: {info['reason']}. Read the commits from {info['path']}; do not check out anything." if not info["worktrees"] else ""))
@@ -1769,7 +1988,8 @@ def cmd_dispatch(a, reg):
                    "Otherwise run the following QA once.\n"
                    + qa_body(a.sha, [selected_task], at_head, base=base,
                              failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
-                             tiers=pipe.get("qa_tiers")) + "\n" + cases)
+                             tiers=pipe.get("qa_tiers")) + "\n" + cases
+                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
@@ -2018,6 +2238,8 @@ def review_implementer(pipe, plan, task, subtask=None, item=None, disp=None):
         return models.pop(), "subtask implementers"
     if disp and disp.get("implementer") in pipe["agents"]:
         return disp["implementer"], "review dispatch"
+    if not subtask and pr.xs_plan(plan, task):
+        return xs_implementer(pipe), "tier XS: the run lead implements"
     return pr.planned(pipe, item or task)[0], "planned routing"
 
 
@@ -2421,6 +2643,21 @@ def run_lead_files(plan, repo_path):
     return {norm_path(n) for n in names}
 
 
+def xs_diff_above(plan, reg, pipe, task, info, sha):
+    """Why the committed diff of a tier XS task (`git diff <start>...<sha>`, the run lead's plan files left out) is above
+    registry pipeline.tiers.XS: a path that is not prose, too many files or changed lines, a contract or generated path.
+    Empty when it fits."""
+    base, _ = review_base(info, plan["topic"], start_base(plan, info, task), sha)
+    out, rc = git(info["path"], "diff", "--numstat", "--no-renames", f"{base}...{sha}")
+    if rc != 0 or out is None:
+        return [f"`git diff {base}...{sha[:10]}` failed"]
+    lead_files = run_lead_files(plan, info["path"])
+    rows = [r for r in out.splitlines() if r.count("\t") >= 2 and norm_path(r.split("\t", 2)[2]) not in lead_files]
+    rule = pipe["tiers"].get("XS") or {}
+    paths = [r.split("\t", 2)[2] for r in rows]
+    return pr.above_xs(rule, paths, numstat_lines("\n".join(rows))) + xs_heavy(plan, reg, rule, task["repo"], paths)
+
+
 def gate(plan, reg, allow_same_model=False, run_checks=True):
     coverage_cache = {}
     pipe = settings(reg)
@@ -2484,7 +2721,12 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                      and not any(o in ("", ".") or norm_path(f) == o or norm_path(f).startswith(o + "/") for o in owned)]
             if rc != 0 or stray:
                 blockers.append(f"{key}: changes outside every task's owned paths: {', '.join(stray[:5]) or 'git diff failed'}")
-        qa = read_verdict(plan, reg, f"integration:{key}", "qa", blockers)
+        xs_task = next((t for t in plan["tasks"] if t.get("repo") == key and pr.xs_plan(plan, t)), None)
+        if xs_task and not (fstate.read_json(verdict_file(plan, f"integration:{key}", "qa")) or {}).get("sha"):
+            # tier XS: the run lead's own task QA on plan.topic is the QA of the integrated tree
+            qa = read_verdict(plan, reg, xs_task["id"], "qa", blockers)
+        else:
+            qa = read_verdict(plan, reg, f"integration:{key}", "qa", blockers)
         if not qa:
             pass
         elif qa.get("state") != "PASS":
@@ -2514,11 +2756,22 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                 blockers.append(f"{t['id']}: reviewed by {rv.get('by')}, cross-model review needs {want}"
                                 + (" (or --allow-same-model when it is unavailable)" if rv.get("by") == impl else ""))
                 continue
+        if pr.xs_plan(plan, t):
+            above = xs_diff_above(plan, reg, pipe, t, info, rv["sha"])
+            if above:
+                blockers.append(f"{t['id']}: tier XS, but the committed diff is above XS: " + "; ".join(above)
+                                + " (plan it as tier S or M)")
         sub_blockers, sub_notes = subtask_coverage(plan, reg, pipe, t, rv, impl, heads[key], allow_same_model, coverage_cache)
         blockers += sub_blockers
         notes += sub_notes
         tq, tq_stale = verdict_of(plan, reg, t["id"], "qa")
         # QA eligibility is unchanged; only a tier S lead QA (no QA session) is limited to tier S tasks
+        if tq and not tq_stale and tq.get("state") == "PASS" and (tq.get("note") or "").startswith("tier XS"):
+            if pr.xs_plan(plan, t):
+                notes.append(f"{t['id']}: tier XS lead ran task suites")
+            else:
+                blockers.append(f"{t['id']}: QA recorded as tier XS lead QA, but the task is not tier XS; "
+                                "an S/M/L task gets its QA from its task lead or a QA session")
         if tq and not tq_stale and tq.get("state") == "PASS" and (tq.get("note") or "").startswith("tier S"):
             if pr.small_task(plan, t):
                 notes.append(f"{t['id']}: tier S lead ran task suites")
@@ -3036,7 +3289,8 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     """Phase a task reached, derived from git and the recorded verdicts (no context of the session that ran it)."""
     info = repo_info(plan, reg, task["repo"])
     path, topic, paths = info["path"], plan["topic"], task["paths"]
-    branch = task_branch(plan, info, task)
+    xs = pr.xs_plan(plan, task)  # tier XS: the run lead commits on plan.topic itself, there is no task branch
+    branch = topic if xs else task_branch(plan, info, task)
     base = info["base_sha"] or info["base"]
     row = {"id": task["id"], "repo": task["repo"], "branch": branch, "worktree": None, "sha": None,
            "phase": "pending", "review": None, "qa": None, "children": [], "notes": []}
@@ -3046,7 +3300,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     head = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0] or None
     topic_head = git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0] or None
     row["worktree"], trees = worktree_for(path, branch)
-    if info["worktrees"]:
+    if info["worktrees"] and not xs:  # the topic checkout's children are the integration children
         row["children"] = children_of(path, trees, branch, row["worktree"], lineage)
         row["notes"] += [child_note_text(c, branch) for c in row["children"]]
     rv, rv_stale = verdict_of(plan, reg, task["id"], "review")
@@ -3076,10 +3330,10 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
             ahead = "0"
         if int(ahead) > 0:
             row["phase"] = "candidate"
-        elif info["worktrees"] or ((start is not None or not base) and row["worktree"]
+        elif (info["worktrees"] and not xs) or ((start is not None or not base) and row["worktree"]
                                    and git(row["worktree"], "status", "--porcelain", "--", *specs(paths))[0]):
             # a no-worktree task before its serial predecessor's QA PASS has not started: uncommitted work in the
-            # paths they share is the predecessor's
+            # paths they share is the predecessor's; a tier XS task has started when the run lead edits its paths
             row["phase"] = "implementing"
     elif (rv or rv_stale) and topic_head and base and git(path, "rev-list", "--count", f"{base}..{topic_head}", "--", *specs(paths))[0] not in (None, "", "0"):
         # A prior review identifies a task whose branch was removed after integration. Without it, commits on
@@ -3116,13 +3370,36 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     return row, info
 
 
+def xs_qa_next(reg, plan, task, info, row, topic_head, me, pf):
+    """A tier XS task's next step after its review PASS: the run lead runs the task tier command in its topic checkout
+    and records its QA at plan.topic's HEAD, which the gate takes as the integration QA (no QA session)."""
+    pipe = settings(reg)
+    where, tier, runall = xs_task_tier(pipe, plan, task, info, start_base(plan, info, task))
+    record = xs_qa_record(me, pf, task, xs_implementer(pipe), topic_head)
+    row["notes"].append(f"tier XS: the run lead runs the task tier command in {where}"
+                        + ("" if runall else f" ({tier})") + f", then records its QA at {(topic_head or '?')[:10]}")
+    row["next"] = (orca_cmd.quote(["cd", where]) + f" && {tier} && {record}") if runall else record
+
+
 def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
     """Mark repo `key`'s tasks integrated with the integration QA as next command when that QA is not PASS at the
     integration HEAD. `first` is the alias of the same no-worktree checkout whose integration QA was offered already:
-    this one waits for it. Returns the alias offered (or still `first`)."""
+    this one waits for it. Returns the alias offered (or still `first`). A tier XS task's lead QA stands in for the
+    integration QA, as in the gate, while no integration QA is recorded."""
     mine = [t["id"] for t in tasks if t["repo"] == key]
     info = infos[mine[0]]
     topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
+    xs_task = next((t for t in tasks if t["repo"] == key and pr.xs_plan(plan, t)), None)
+    if xs_task and not (fstate.read_json(verdict_file(plan, f"integration:{key}", "qa")) or {}).get("sha"):
+        xq, _ = verdict_of(plan, reg, xs_task["id"], "qa")
+        if xq and xq.get("state") == "PASS" and xq["sha"] == topic_head:
+            return first
+        row = rows[xs_task["id"]]
+        row["phase"] = "integrated"
+        row["notes"].append(f"tier XS lead QA at {(xq or {}).get('sha', '?')[:10]} is not at the integration HEAD "
+                            f"{(topic_head or '?')[:10]}: the gate needs it there")
+        xs_qa_next(reg, plan, xs_task, info, row, topic_head, me, pf)
+        return first
     iq, iq_stale = verdict_of(plan, reg, f"integration:{key}", "qa")
     if iq and iq.get("state") == "PASS" and iq["sha"] == topic_head:
         return first
@@ -3191,9 +3468,16 @@ def status(plan, reg, orca_run=None):
                 # every task starts its task lead: a worktree repo gets the task worktree, a no-worktree repo the
                 # main checkout; the lead runs the subplan, review and QA in either case
                 row["next"] = f"{dispatch} --phase lead --runner orca"
+        elif row["phase"] == "implementing" and pr.xs_plan(plan, t):
+            row["notes"].append(f"tier XS: the run lead edits the owned paths on {row['branch']}"
+                                + (f" in {row['worktree']}" if row["worktree"] else "")
+                                + ": commit them with explicit paths, then dispatch the review of that commit")
         elif row["phase"] == "implementing":
             row["notes"].append(f"implementation worker on {row['branch']}"
                                 + (f" in {row['worktree']}" if row["worktree"] else "") + ": wait for its report")
+        elif row["phase"] == "candidate" and pr.xs_plan(plan, t):
+            # tier XS: no task lead verifies it; the run lead dispatches the one cross-model review itself
+            row["next"] = f"{dispatch} --phase review --sha {row['sha']} --runner orca"
         elif row["phase"] == "candidate":
             row["next"] = f"{dispatch} --phase verify --sha {row['sha']} --runner orca"
         elif row["phase"] == "reviewed" and row["review"]["state"] != "PASS":
@@ -3216,7 +3500,9 @@ def status(plan, reg, orca_run=None):
                                               info["base_sha"] or info["base"] or "main"])
         elif row["phase"] == "integrated":
             topic_head = git(info["path"], "rev-parse", "--verify", "--quiet", f"refs/heads/{plan['topic']}")[0]
-            if not info["worktrees"] and count[t["repo"]] > 1:
+            if pr.xs_plan(plan, t):
+                xs_qa_next(reg, plan, t, info, row, topic_head, me, pf)
+            elif not info["worktrees"] and count[t["repo"]] > 1:
                 row["next"] = f"{dispatch} --phase qa --sha {topic_head} --runner orca"
             else:
                 others = [u["id"] for u in tasks if u["repo"] == t["repo"] and rows[u["id"]]["phase"] not in done]

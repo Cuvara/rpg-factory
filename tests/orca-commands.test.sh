@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every `orca ...` command cited in the delivery and parallel-work policies exists in the installed Orca
+# Every `orca ...` command cited in the delivery and parallel-work policies and docs/pipeline-cli.md exists in the installed Orca
 # CLI: `orca <cmd> <sub>` in `orca --help`, `orca orchestration <sub>` in `orca orchestration --help`, and each
 # `--flag` cited in the same code span in that command's own `--help`. A made-up command or flag must fail the
 # same checker. Prints SKIP and exits 0 when orca is not on PATH (CI).
@@ -59,9 +59,9 @@ for cmd, sub in cmds:
 PY
 }
 
-out=$( { check "$ROOT/skills/delivery/references/delivery.md"; check "$ROOT/skills/factory-core/references/parallel-work.md"; } | sort -u )
+out=$( { check "$ROOT/skills/delivery/references/delivery.md"; check "$ROOT/skills/factory-core/references/parallel-work.md"; check "$ROOT/docs/pipeline-cli.md"; } | sort -u )
 n=$(grep -c '^OK ' <<<"$out"); missing=$(grep '^MISSING ' <<<"$out")
-[ -z "$missing" ] && [ "$n" -ge 10 ] && ok "delivery and parallel-work: $n cited orca commands exist in orca --help ($(orca --version 2>/dev/null | head -1))" \
+[ -z "$missing" ] && [ "$n" -ge 10 ] && ok "delivery, parallel-work and pipeline-cli: $n cited orca commands exist in orca --help ($(orca --version 2>/dev/null | head -1))" \
   || no "policies cite orca commands that do not exist (or too few found: $n)" "$missing"
 grep -q '^OK orca orchestration worker-start$' <<<"$out" && grep -q '^OK orca skills get$' <<<"$out" && grep -q '^OK orca status$' <<<"$out" \
   && ok "the checker saw worker-start, skills get and status" || no "expected commands not extracted" "$out"

@@ -7,5 +7,5 @@ argument-hint: "tier|validate|subplan|planner|dispatch|verdict|gate|cleanup|stat
 !`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-cmd.py pipeline $ARGUMENTS`
 
 Every dispatch carries a model and effort from the registry `pipeline.models` policy (`lib/model_policy.py`; policy:
-`parallel-work.md` section 10, "Model choice"). `planner` and `dispatch` accept `--grade light|standard|heavy`,
+`skills/delivery/references/delivery.md` section 10, "Model choice"; flags: `docs/pipeline-cli.md`). `planner` and `dispatch` accept `--grade light|standard|heavy`,
 `--model ID` and `--effort LEVEL`; a value outside the scope exits 2. `verdict` accepts optional `--model` and `--effort`.

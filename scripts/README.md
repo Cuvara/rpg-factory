@@ -1,7 +1,7 @@
 # scripts/
 
 One line per entrypoint: purpose, then the suite that covers it (`run-all` = an inline check in
-`tests/run-all.sh`). Run Python with `python3 -B`. Behaviour and rules: `.claude/CLAUDE.md`.
+`tests/run-all.sh`). Run Python with `python3 -B`. Rules: `.claude/CLAUDE.md`; architecture: `docs/architecture/overview.md`.
 
 ## Hook entrypoints (`hooks/hooks.json`, Codex through `codex_hook.py`; advisory only, never block)
 
@@ -58,8 +58,8 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   `runtime`), `hookspeed.py` (hook bytecode cache, Store-alias check), `procrun.py` (check processes, timeouts,
   pollution fingerprints), `runchecks_grade.py` (check parser choice and result grading for `run-checks.py`),
   `artifacts.py` (artifact discovery and quality), `orca_cmd.py` (Orca and Agent dispatch
-  argv, with `--model`/`--effort`), `model_policy.py` (model scope, role and grade profiles, personal override; `parallel-work.md`
-  "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
+  argv, with `--model`/`--effort`), `model_policy.py` (model scope, role and grade profiles, personal override; `delivery.md`
+  section 10 "Model choice"), `evidence.py`, `fstate.py` (state paths), `devtools.py`, `tools.py`, `registry_src.py`, `shells.py`,
   `pluginroot.py`, `codexconfig.py`, `compat.sh` and `gitcfg-guard.sh` (sourced by tests).
   `tests/routing-properties.test.py`, `tests/compat.test.sh`, `tests/devtools.test.sh`, `tests/git-env-isolation.test.sh`,
   `tests/hook-perf.test.sh`
@@ -71,3 +71,77 @@ One line per entrypoint: purpose, then the suite that covers it (`run-all` = an 
   `tests/assetgen.test.sh`
 - `adapters/` - optional domain tool adapters (`art2d/provider.py`, `art3d/blender-stats.py` run inside Blender,
   `vfx/unity.py`). `tests/art2d-workflow.test.sh`, `tests/art3d-workflow.test.sh`, `tests/vfx-workflow.test.sh`
+
+## Commands
+
+```bash
+tests/run-all.sh                    # every local suite (releases and manual full runs, under the lock); must end with 0 failed
+tests/run-all.sh --workspace-only   # only what CI cannot run (live-workspace suites and checks, claude plugin validate),
+                                    # with the suite reuse; integration QA before a PR (`gh pr checks <pr> --watch` follows once the PR is open)
+tests/run-all.sh -h | --help        # print the usage header, exit 0; an unknown argument exits 2 and never starts a run
+tests/run-all.sh --no-workspace     # skip checks needing the RPG MMO workspace on disk
+tests/run-all.sh --no-claude        # skip `claude plugin validate`
+tests/run-all.sh --release          # + installed plugin CURRENT, source committed, installed-safety.sh
+tests/run-all.sh --affected [--base REF]  # only suites touched since merge-base (tests/affected.py); not the PR gate
+tests/run-all.sh --only-suites LIST # only the named suites (comma list, unioned with --affected; task QA: the task's checks);
+                                    # with --affected or --only-suites, live blocks and script checks (skill-citations,
+                                    # factory-context, pin-plan, package-ready, netcode-headless...) are gated like suites
+tests/run-all.sh --list-suites      # print the suite names --only-suites accepts (read-only, runs no checks)
+tests/run-all.sh --reuse            # exit 0 at once on a PASS record of the same clean tree and coverage (integration QA)
+tests/run-all.sh --no-wait          # exit 3 instead of waiting when another full run holds the per-machine lock
+tests/run-all.sh --no-reuse         # run every suite; by default a suite whose input hash already passed is reused
+tests/run-all.sh -j 4               # up to 4 suites at once; same lines, order, count and exit code as -j 1 (default);
+                                    # live-workspace checks one at a time, run1 suites alone; CI uses -j 4
+tests/run-all-parallel.test.sh      # run-all -j scheduler on stand-in suites (order, counts, cap, live lane, run1)
+
+# single suites (each standalone; sets its own temp TMPDIR / RPG_FACTORY_STATE_DIR)
+tests/git-guard.test.sh
+env -u TMPDIR tests/session-state.test.sh  # run-all runs session-state/file-guard/commands with TMPDIR unset
+tests/routing.test.sh [--no-history]       # task scenarios (+ real commits replayed read-only)
+python3 -B tests/routing-properties.test.py
+tests/skills-lint.sh                       # skill contract, tech sections, ## Tools vs dev_tools
+env -u TMPDIR tests/devtools.test.sh       # dev tool probes, snapshot/doctor lines, no secrets printed
+scripts/check-registry.sh [--structure-only]
+env -u TMPDIR tests/skill-citations.test.sh  # citation checker on fixture repos
+env -u TMPDIR tests/netcode-headless.test.sh  # netcode-headless.sh server resolution (--server, worktrees)
+python3 -B scripts/checks/skill-citations.py [--skill <s>] [--suggest] [--strict] [--fix]   # skill path:line vs integration branches
+python3 -B scripts/new-skill.py --name <s> --kind tech|repo|cross-repo ... [--dry-run]  # scaffold (see .claude/skills/skill-author)
+python3 -B scripts/skill-touchpoints.py <s>|--all  # every place a skill must appear
+env -u TMPDIR tests/new-skill.test.sh      # scaffolder + touchpoints on a throwaway plugin copy
+env -u TMPDIR tests/parallel-policy.test.sh  # parallel-work lint bites on a throwaway plugin copy
+tests/orca-commands.test.sh                # orca commands cited in delivery.md, parallel-work.md and pipeline-cli.md exist (SKIP without orca)
+env -u TMPDIR tests/release-check.test.sh  # release gate on a throwaway repo with a local bare origin
+tests/changelog.test.sh                    # changelog fragments: validation, preview, release assembly
+tests/registry-fragments.test.sh           # registry/ fragments: build, placement, scaffolder, parallel merge
+python3 -B scripts/build-registry.py [--check|--split]   # registry.json from registry/ (--check read-only)
+python3 -B scripts/changelog.py check|preview|release X.Y.Z [--summary TEXT]   # changelog.d fragments
+tests/codex-plugin.test.sh                 # Codex manifest, marketplace, hook config, codex_hook.py, hook wiring
+python3 -B scripts/release-check.py [--no-remote] [--verify-tag] [--notes]   # read-only release gate
+env -u TMPDIR tests/pipeline.test.sh       # delivery pipeline on a throwaway workspace (server + Unity client)
+python3 -B scripts/factory-pipeline.py tier|agents|validate|subplan|planner|dispatch|verdict|gate|status|cleanup ...  # delivery pipeline (`delivery.md` section 10; flags `docs/pipeline-cli.md`)
+python3 -B scripts/factory-pipeline.py agents <plan> [--down A [--reason T] | --up A]  # per-run MODEL_UNAVAILABLE marks
+
+# routing / state, read-only against the workspace
+scripts/factory-context.sh --repo server --paths backend/shared/proto/wire.proto [--domain <id>] [--explain] [--json]
+scripts/factory-context.sh --domain <id> [--json]
+scripts/factory-context.sh --kind <artifact-kind> [--lead <skill>] [--json]
+python3 -B scripts/factory-status.py
+python3 -B scripts/run-checks.py --repo <key> --paths <files> [--status]
+
+# UI plan, catalog and selection (read-only)
+python3 -B scripts/factory-cmd.py ui [--json] [--project DIR] [--uitoolkit-ref REF] <request>   # UI plan (exit 3 = NEEDS_CONTEXT)
+python3 -B scripts/ui/ui_catalog.py [--uitoolkit DIR] [--ref REF] [--kind K]... [--json]       # com.cuvara.uitoolkit catalog at a ref
+python3 -B scripts/ui/ui_select.py (--screen S | --need N...) [--ref REF] [--json]              # reuse > configure > compose > missing
+python3 -B scripts/ui/figma_env.py --project <unity project> [--json] [--probe-pipeline]       # Figma connector environment check
+tests/ui-catalog.test.sh                   # catalog + selection on a UIToolkit git fixture
+tests/ui-commands.test.sh                  # UI plan: schema, intents, skills per verb, NEEDS_CONTEXT
+env -u TMPDIR tests/ui-skill-routing.test.sh  # UI plan golden matrix, selection, path-scoped routing.tech
+env -u TMPDIR tests/ui-figma-env.test.sh   # figma_env.py on fixture Unity projects
+tests/ui-skills.test.sh                    # UI skills content, docs, snapshot Next line for UI paths
+
+tests/dogfood.sh [--installed]      # real headless Claude sessions; spends tokens, not in run-all
+tests/dogfood-codex.sh [--dry-run]  # real `codex exec` sessions in a throwaway CODEX_HOME; spends tokens, not in run-all
+```
+
+Workspace defaults to `/mnt/c/Workspaces/UnityIndie`; override with `RPG_FACTORY_WORKSPACE`. Python
+scripts are run with `-B` (run-all deletes `__pycache__`).

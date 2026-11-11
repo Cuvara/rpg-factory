@@ -14,7 +14,7 @@
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers cli-selftest'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -85,7 +85,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers cli-selftest'
+UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -1253,6 +1253,203 @@ plan['tier'] = 'S'; save()
 assert 'no separate QA session' in dispatch('qa', second)
 print('QA tier command, dedup, extras, warnings, review, integration, re-QA and S/M gate assertions passed')
 QA_TIERS
+# tier XS: a prose-only change within registry pipeline.tiers.XS; the run lead edits and commits on plan.topic, one
+# cross-model review, the lead's own QA, gate. One section per acceptance: tier, validate, dispatch, gate.
+cat > "$TMP/tier-xs.py" <<'TIER_XS'
+import contextlib, importlib.util, io, json, os, pathlib, subprocess, sys
+root, tmp, section = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('xs_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
+rule = reg['pipeline']['tiers']['XS']
+assert rule['max_files'] == 3 and rule['max_changed_lines'] == 40 and rule['prose_only'] is True, rule
+work = pathlib.Path(tmp) / ('tier-xs-' + section); work.mkdir()
+repo = work / 'repo'; repo.mkdir()
+os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
+os.environ['RPG_FACTORY_AGENTS'] = 'claude,codex'
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, (args, p.stderr)
+    return p.stdout.strip()
+def write(rel, lines):
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(''.join(f'line {i}\n' for i in range(lines)), newline='\n')
+git('init', '-q', '-b', 'main')
+write('docs/guide.md', 10); write('code.py', 1); write('changelog.d/README.md', 1)
+git('add', '.'); git('commit', '-qm', 'base')
+topic = 'feat/docs/xs'
+git('switch', '-q', '--no-track', '-c', topic)
+task = {'id': 'doc', 'repo': 'fixture', 'objective': 'o', 'paths': ['docs/guide.md', 'changelog.d/'], 'acceptance': ['a']}
+plan = {'schema': m.SCHEMA, 'id': 'xs-' + section, 'title': 'XS', 'topic': topic, 'tier': 'XS',
+        'repos': {'fixture': {'path': str(repo), 'base': 'main'}}, 'tasks': [task]}
+pf = work / 'plan.json'
+def save(): pf.write_text(json.dumps(plan))
+save()
+def cli(*args, rc=0):
+    out, err = io.StringIO(), io.StringIO()
+    argv = sys.argv
+    try:
+        sys.argv = [root + '/scripts/factory-pipeline.py', *[str(x) for x in args]]
+        m.pr._cache.clear()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                got = m.main()
+            except SystemExit as exc:
+                got = exc.code
+    finally:
+        sys.argv = argv
+    assert (got or 0) == rc, (args, got, out.getvalue(), err.getvalue())
+    return out.getvalue() + err.getvalue()
+def tier(*paths):
+    return cli('tier', '--plan', pf, '--repo', 'fixture', '--paths', *paths)
+def errors(**change):
+    p = json.loads(json.dumps(plan)); p['tasks'][0].update(change.pop('task', {})); p.update(change)
+    p['_path'] = str(pf)
+    return m.validate(p, reg)['errors']
+
+if section == 'tier':
+    write('docs/guide.md', 12)  # 2 changed lines, uncommitted
+    out = tier('docs/guide.md')
+    assert out.startswith('Tier: XS ') and '2 changed line(s)' in out and 'above XS' not in out, out
+    assert '"tier": "XS"' in cli('tier', '--json', '--plan', pf, '--repo', 'fixture', '--paths', 'docs/guide.md', 'changelog.d/x.md')
+    # one path that is not prose is never XS: the S rule takes it
+    out = tier('docs/guide.md', 'code.py')
+    assert not out.startswith('Tier: XS') and 'above XS: not prose: code.py' in out, out
+    out = tier('docs/schema.json')
+    assert out.startswith('Tier: S ') and 'not prose: docs/schema.json' in out, out
+    # an oversize change is never XS: changed lines (untracked files count whole) and files above the thresholds
+    write('docs/big.md', 45)
+    out = tier('docs/big.md')
+    assert out.startswith('Tier: S ') and 'above XS: 45 changed lines > 40' in out, out
+    out = tier('a.md', 'b.md', 'c.md', 'd.md')
+    assert out.startswith('Tier: S ') and '4 files > 3' in out, out
+    assert m.pr.above_xs(rule, ['a.md', 'skills/x/'], 40) == []
+    assert m.pr.above_xs(rule, ['a.md'], 41) == ['41 changed lines > 40']
+    print('tier: XS printed only for prose within the thresholds')
+
+if section == 'validate':
+    assert errors() == [], errors()
+    lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
+    out = cli('validate', pf)
+    assert f'grade light (tier XS of the owned paths): implement {lead} ' in out and f', review {pair} ' in out, out
+    assert any('not prose: code.py' in e for e in errors(task={'paths': ['docs/guide.md', 'code.py']})), 'non-prose'
+    # a task-level tier XS is held to the same rule
+    assert any('not prose: code.py' in e for e in errors(tier='M', task={'tier': 'XS', 'paths': ['code.py']}))
+    assert any('4 files > 3' in e for e in errors(task={'paths': ['a.md', 'b.md', 'c.md', 'd.md']})), 'oversize'
+    two = dict(task, id='more', paths=['other.md'])
+    assert any('exactly one task, this one has 2' in e for e in errors(tasks=[task, two])), 'multi-task'
+    assert any('tier must be XS, S, M or L' in e for e in errors(tier='XL'))
+    # XS grades light, and the run lead's model (pipeline.lead_agent) is its implementer: the review is the pair
+    assert m.TIER_GRADE['XS'] == 'light'
+    p = dict(plan, _path=str(pf))
+    assert m.implementer_of(reg['pipeline'], p, task)[0] == reg['pipeline']['lead_agent']
+    # contracts: false and generated: false hold for validate as for tier: a prose path the routing snapshot names as a
+    # contract end or a generated path is above XS (the fixture repo has none, so its snapshot is stubbed)
+    real = m.task_context
+    try:
+        m.task_context = lambda pl, rg, t: ({'repos': [{'repo': 'fixture', 'touched': ['docs'], 'files': [],
+                                              'contracts': [{'id': 'wire'}], 'generated_hits': ['docs/guide.md']}]}, None)
+        why = errors()
+        assert any('contract wire' in e and 'generated path docs/guide.md' in e for e in why), why
+        assert errors(tier='M') == [], 'contracts and generated paths only bar tier XS'
+    finally:
+        m.task_context = real
+    print('validate: XS one-task prose plan only, no contract or generated path')
+
+if section in ('dispatch', 'gate'):
+    out = cli('dispatch', pf, '--task', 'doc', '--phase', 'lead', '--runner', 'print')
+    assert 'Tier XS: task doc starts no task lead, task worktree or implement session' in out, out
+    assert '--task doc --phase review --sha <sha>' in out and 'tier XS: lead ran task suites' in out, out
+    assert 'git add -- docs/guide.md changelog.d/' in out and 'gate ' in out and '# agent' not in out, out
+    assert 'worktree add' not in out and len(git('worktree', 'list').splitlines()) == 1, out
+    assert 'tier XS' in cli('dispatch', pf, '--task', 'doc', '--phase', 'implement', '--runner', 'print', rc=2)
+    write('docs/guide.md', 13); git('add', '--', 'docs/guide.md'); git('commit', '-qm', 'docs: guide')
+    sha = git('rev-parse', 'HEAD')
+    out = cli('dispatch', pf, '--task', 'doc', '--phase', 'review', '--sha', sha, '--runner', 'print')
+    lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
+    assert f'Review worker ({pair}) for code written by {lead}' in out, out
+    assert f'Tier XS: the run lead committed it on {topic}' in out and 'no worktree of' not in out, out
+    assert f"(tier XS: the run lead's checkout of {topic})" in out and "task lead's worktree" not in out, out
+    if section == 'dispatch':
+        print('dispatch: lead prints the run lead steps, review reads the topic checkout')
+    else:
+        def verdicts(at):
+            cli('verdict', pf, '--task', 'doc', '--phase', 'review', '--sha', at, '--by', pair, '--state', 'PASS')
+            cli('verdict', pf, '--task', 'doc', '--phase', 'qa', '--sha', at, '--by', lead, '--state', 'PASS',
+                '--note', 'tier XS: lead ran task suites')
+        verdicts(sha)
+        out = cli('gate', pf, '--no-run-checks')
+        assert out.startswith('Gate: READY_FOR_PR') and 'tier XS lead ran task suites' in out, out
+        # a committed path the routing snapshot names as a contract end or generated path blocks it (stubbed snapshot)
+        real = m.task_context
+        try:
+            m.task_context = lambda pl, rg, t: ({'repos': [{'repo': 'fixture', 'touched': ['docs'], 'files': [],
+                                                  'contracts': [], 'generated_hits': ['docs/guide.md']}]}, None)
+            out = cli('gate', pf, '--no-run-checks', rc=1)
+            assert 'BLOCKER doc: tier XS, but the committed diff is above XS: generated path docs/guide.md' in out, out
+        finally:
+            m.task_context = real
+        # an oversize committed diff blocks the gate, so does a path that is not prose
+        write('docs/guide.md', 60); git('commit', '-qam', 'docs: more'); big = git('rev-parse', 'HEAD')
+        verdicts(big)
+        out = cli('gate', pf, '--no-run-checks', rc=1)
+        assert 'BLOCKER doc: tier XS, but the committed diff is above XS: 50 changed lines > 40' in out, out
+        git('reset', '-q', '--hard', sha)
+        write('code.py', 2); git('commit', '-qam', 'fix: code'); code = git('rev-parse', 'HEAD')
+        verdicts(code)
+        out = cli('gate', pf, '--no-run-checks', rc=1)
+        assert 'above XS: not prose: code.py' in out, out
+        # a 'tier XS' lead QA counts only for a tier-XS task
+        git('reset', '-q', '--hard', sha)
+        plan['tier'] = 'S'; save(); verdicts(sha)
+        cli('verdict', pf, '--task', 'integration:fixture', '--phase', 'qa', '--sha', sha, '--by', pair, '--state', 'PASS')
+        out = cli('gate', pf, '--no-run-checks', rc=1)
+        assert 'QA recorded as tier XS lead QA, but the task is not tier XS' in out, out
+        print('gate: READY_FOR_PR for XS with review PASS and lead QA; oversize or non-prose diff blocks')
+
+if section == 'status':
+    # status follows the XS flow like the gate: the run lead's edit and commit on plan.topic, its review dispatch, its
+    # own QA after the review PASS, and that QA at the topic HEAD as the integration QA
+    lead = reg['pipeline']['lead_agent']; pair = reg['pipeline']['review_pairing'][lead]
+    def st():
+        o = json.loads(cli('status', '--json', pf))
+        return o, o['tasks'][0]
+    o, r = st()
+    assert r['phase'] == 'pending' and '--task doc --phase lead' in r['next'] and r['branch'] == topic, r
+    write('docs/guide.md', 13)
+    o, r = st()
+    assert r['phase'] == 'implementing' and any('tier XS: the run lead edits the owned paths' in n for n in r['notes']), r
+    assert not any('implementation worker' in n for n in r['notes']), r
+    git('add', '--', 'docs/guide.md'); git('commit', '-qm', 'docs: guide'); sha = git('rev-parse', 'HEAD')
+    o, r = st()
+    assert r['phase'] == 'candidate' and f'--task doc --phase review --sha {sha}' in r['next'], r
+    assert '--phase verify' not in r['next'], r
+    cli('verdict', pf, '--task', 'doc', '--phase', 'review', '--sha', sha, '--by', pair, '--state', 'PASS')
+    o, r = st()
+    # after the review PASS: the run lead's own QA record, never an integration QA session, and no gate yet
+    assert r['phase'] == 'integrated', r
+    assert (f'--task doc --phase qa --sha {sha} --state PASS --by {lead}' in r['next']
+            and 'tier XS: lead ran task suites' in r['next'] and 'integration:' not in r['next']), r
+    assert any('tier XS: the run lead runs the task tier command' in n and 'the task checks' in n for n in r['notes']), r
+    assert not any(' gate ' in c for c in o['next']), o['next']
+    cli('verdict', pf, '--task', 'doc', '--phase', 'qa', '--sha', sha, '--by', lead, '--state', 'PASS',
+        '--note', 'tier XS: lead ran task suites')
+    o, r = st()
+    # the lead QA at the topic HEAD counts as the integration QA: status says the gate is ready, as the gate does
+    assert r['phase'] == 'qa' and r['next'] is None, r
+    assert not any('the gate needs it' in n for n in r['notes']), r
+    assert any(' gate ' in c for c in o['next']), o['next']
+    assert cli('gate', pf, '--no-run-checks').startswith('Gate: READY_FOR_PR')
+    # a reviewed fix after the QA: the lead QA is not at the new HEAD, so status asks for it again at that HEAD
+    write('docs/guide.md', 14); git('commit', '-qam', 'docs: fix'); fix = git('rev-parse', 'HEAD')
+    o, r = st()
+    assert r['phase'] == 'candidate' and f'--phase review --sha {fix}' in r['next'], r
+    cli('verdict', pf, '--task', 'doc', '--phase', 'review', '--sha', fix, '--by', pair, '--state', 'PASS')
+    o, r = st()
+    assert r['phase'] == 'integrated' and f'--phase qa --sha {fix} ' in r['next'], r
+    assert not any(' gate ' in c for c in o['next']), o['next']
+    print('status: XS steps match the gate: review dispatch, lead QA record, gate ready at the topic HEAD')
+TIER_XS
 if has_case multiwave; then
 python3 -B - "$TMP" <<'TEMPLATES'
 import pathlib, shutil, subprocess, sys
@@ -1298,6 +1495,9 @@ bg_case() {
   for c in $MULTIWAVE_CASES; do next "multiwave-$c" python3 -B "$TMP/multiwave.py" "$ROOT" "$TMP" "$c"; done
   fi
   if has_case qa-tiers; then next qa-tiers python3 -B "$TMP/qa-tiers.py" "$ROOT" "$TMP"; fi
+  if has_case tier-xs; then
+  for c in tier validate dispatch gate status; do next "tier-xs-$c" python3 -B "$TMP/tier-xs.py" "$ROOT" "$TMP" "$c"; done
+  fi
   wait
 ) &
 BG_PID=$!
@@ -1345,6 +1545,30 @@ X=$(plan unknown "{$HEAD,\"tasks\":[{\"id\":\"a\",\"repo\":\"nope\",\"objective\
 expect "unknown repo is an error" 1 "neither a registry repo nor in plan.repos" validate "$X"
 TOOL=$(plan tool "{$HEAD,\"repos\":{\"tool\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"tool\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
 expect "unregistered repo with ProjectVersion.txt is a no-worktree repo" 0 "No worktree .*: tool" validate "$TOOL"
+# known_failing: [{check, reason}], checks that already fail at the task base
+KFT='"tasks":[{"id":"a","repo":"server","objective":"o","paths":["backend/gateway/"],"acceptance":["a"]}]'
+X=$(plan kf-ok "{$HEAD,\"known_failing\":[{\"check\":\"tests/foo.test.sh\",\"reason\":\"fails on base\"}],$KFT}")
+expect "known_failing: a good plan validates and warns" 0 "^WARN  known failing at base: tests/foo.test.sh - fails on base$" validate "$X"
+refute "known_failing: the warning is no error" "^ERROR|INVALID" validate "$X"
+X=$(plan kf-str "{$HEAD,\"known_failing\":\"x\",$KFT}")
+expect "known_failing: a string is rejected" 1 "known_failing must be an array of \{check, reason\} objects" validate "$X"
+for bad in '[{"check":"a"}]' '["a"]' '[{"check":"","reason":"r"}]'; do
+  X=$(plan kf-bad "{$HEAD,\"known_failing\":$bad,$KFT}")
+  expect "known_failing $bad: rejected" 1 "known_failing\[0\]: needs non-empty string check and reason" validate "$X"
+done
+X=$(plan kf-key "{$HEAD,\"known_failing\":[{\"check\":\"a\",\"reason\":\"r\",\"x\":1}],$KFT}")
+expect "known_failing: an unknown key is rejected" 1 "known_failing\[0\]: unknown key x" validate "$X"
+# the schema carries the same shape: items need check and reason, nothing else
+if python3 -B - "$ROOT" <<'PY'
+import json, pathlib, sys
+kf = json.loads(pathlib.Path(sys.argv[1], 'docs/schemas/pipeline-plan.schema.json').read_text(encoding='utf-8'))['properties']['known_failing']
+item = kf['items']
+assert kf['type'] == 'array' and item['type'] == 'object', kf
+assert item['required'] == ['check', 'reason'] and item['additionalProperties'] is False, item
+assert all(item['properties'][k]['type'] == 'string' and item['properties'][k]['minLength'] == 1 for k in ('check', 'reason')), item
+PY
+then pass=$((pass + 1)); echo "PASS  schema: known_failing items require a non-empty check and reason, no other key"
+else fail=$((fail + 1)); echo "FAIL  schema: known_failing shape"; fi
 
 case_end validate
 fi
@@ -1545,6 +1769,7 @@ expect "Unity task lead rule 8: the main checkout is never removed" 0 "^8\. Neve
 expect "task lead: rule 7 is the lead's subagent rule" 0 "^7\. Subagents: read-only scouts only, at most 2 in parallel, only when the task needs a broad search across the worktree.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)\.$" dispatch "$OK" --task gw --phase lead
 expect "task lead: the push rule is now rule 8, after the subagent rule" 0 "^8\. Never push, tag, merge into the integration branch" dispatch "$OK" --task gw --phase lead
 expect_spec "task lead (orca handoff spec): rule 7 is the subagent rule" "^7\. Subagents: read-only scouts only, at most 2 in parallel" dispatch "$OK" --task gw --phase lead --runner orca
+expect_spec "task lead retains delivery reference" "Task lead for task .*references/delivery\.md" dispatch "$OK" --task gw --phase lead --runner orca
 expect "task lead --runner agent runs claude: the claude subagent clause" 0 "7\. Subagents: read-only scouts only, at most 2 in parallel.*use Agent subagent_type rpg-factory:factory-explorer with model sonnet \(claude-sonnet-5-5\)" dispatch "$OK" --task gw --phase lead --runner agent
 expect "Unity task lead: rule 7 is the subagent rule" 0 "^7\. Subagents: read-only scouts only, at most 2 in parallel" dispatch "$OK" --task c1 --phase lead
 refute "Unity task lead prompt has no double period after the reason" "\.\. " dispatch "$OK" --task c1 --phase lead
@@ -1621,8 +1846,40 @@ expect_spec "review (orca spec): the review rule" "^Subagents: read-only scouts 
 expect "task QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself and grades the evidence\)\.$" dispatch "$OK" --task gw --phase qa --sha abc1234
 expect "task QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner agent
 expect_spec "task QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task gw --phase qa --sha abc1234 --runner orca
+SPEC_RULE='Your spec is complete: read skills/delivery/references/delivery\.md only when blocked by something the spec does not cover\.'
+for phase in 'implement' 'implement --placement child' 'review --sha abc1234' 'verify --sha abc1234' 'qa --sha abc1234'; do
+  expect_spec "$phase: spec is complete" "$SPEC_RULE" dispatch "$OK" --task gw --phase $phase --runner orca
+  pp_spec dispatch "$OK" --task gw --phase $phase --runner orca
+  if [ "$RC" = 0 ] && [ "$SRC" = 0 ] && ! grep -vF 'Your spec is complete: read skills/delivery/references/delivery.md only when blocked by something the spec does not cover.' <<<"$SPEC" | grep -q 'delivery\.md'; then
+    pass=$((pass + 1)); echo "PASS  $phase: no other delivery reference"
+  else fail=$((fail + 1)); echo "FAIL  $phase: another delivery reference or missing spec"; fi
+done
+refute_spec "non-plugin review does not name plugin checklist" 'plugin-review\.md' dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
+expect_spec "non-plugin review retains routed checklist" "the routed lead skill's review checklist" dispatch "$OK" --task gw --phase review --sha abc1234 --runner orca
+PLUGIN=$(plan plugin-prompt "{$HEAD,\"repos\":{\"plugin\":{\"path\":\"tool\",\"base\":\"develop\"}},\"tasks\":[{\"id\":\"t\",\"repo\":\"plugin\",\"objective\":\"o\",\"paths\":[\"x/\"],\"acceptance\":[\"a\"]}]}")
+expect_spec "plugin key review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$PLUGIN" --task t --phase review --sha abc1234 --runner orca
+expect_spec "plugin key verify names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$PLUGIN" --task t --phase verify --sha abc1234 --runner orca
+refute_spec "non-plugin verify does not name plugin checklist" 'plugin-review\.md' dispatch "$OK" --task gw --phase verify --sha abc1234 --runner orca
+mkdir -p "$T/.claude-plugin"; printf '{}\n' > "$T/.claude-plugin/plugin.json"
+expect_spec "plugin manifest review names plugin checklist" 'skills/factory-core/references/plugin-review\.md' dispatch "$TOOL" --task t --phase review --sha abc1234 --runner orca
+rm "$T/.claude-plugin/plugin.json"; rmdir "$T/.claude-plugin"
 expect "Unity task QA: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task c1 --phase qa --sha abc1234
 refute "QA never offers a scout" "read-only scouts" dispatch "$OK" --task gw --phase qa --sha abc1234
+# known_failing: the lead, QA and verify specs name the checks and the FAIL_AT_BASE rule; a plan without it adds nothing
+KFP=$(plan kf-spec "{$(sed 's/"id":"demo"/"id":"demokf"/' <<<"$HEAD"),\"known_failing\":[{\"check\":\"tests/foo.test.sh\",\"reason\":\"fails on base\"}],\"tasks\":[{\"id\":\"gw\",\"repo\":\"server\",\"objective\":\"o\",\"paths\":[\"backend/gateway/\"],\"acceptance\":[\"a\"]}]}")
+for ph in "--phase lead" "--phase qa --sha abc1234" "--phase verify --sha abc1234"; do
+  expect_spec "known_failing: the $ph spec lists the checks" "^Known failing at base \(plan known_failing\):$" dispatch "$KFP" --task gw $ph --runner orca
+  expect_spec "known_failing: the $ph spec names the check and reason" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task gw $ph --runner orca
+  expect_spec "known_failing: the $ph spec carries FAIL_AT_BASE" "FAIL_AT_BASE" dispatch "$KFP" --task gw $ph --runner orca
+  refute_spec "no known_failing: the $ph spec has no known-failing text" "Known failing at base|FAIL_AT_BASE" dispatch "$OK" --task gw $ph --runner orca
+done
+# base health hint: print only, for a repo with a GitHub remote
+refute "base health hint: none without a remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+git -C "$S" remote add origin https://github.com/x/y.git
+expect "base health hint: a GitHub remote prints the gh command" 0 'base health: run `gh run list --branch [^ ]+ --limit 1`' dispatch "$OK" --task gw --phase lead --runner orca
+git -C "$S" remote set-url origin https://example.com/x/y.git
+refute "base health hint: none for a non-GitHub remote" "base health" dispatch "$OK" --task gw --phase lead --runner orca
+git -C "$S" remote remove origin
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1],encoding="utf-8")); r["pipeline"].pop("subagents",None); json.dump(r,open(sys.argv[2],"w",encoding="utf-8"))' "$ROOT/registry.json" "$TMP/reg-nosub.json"
 for ph in "--task gw --phase lead" "--task gw --phase implement" "--task gw --phase review --sha abc1234" "--task gw --phase qa --sha abc1234"; do
   expect "registry without pipeline.subagents: dispatch $ph exits 1 and names the policy" 1 "subagent policy: registry pipeline.subagents is missing. Nothing was dispatched" --registry "$TMP/reg-nosub.json" dispatch "$OK" $ph --runner orca
@@ -1857,7 +2114,7 @@ X=$(plan handoff "{$HEAD,\"tasks\":[
  {\"id\":\"feature\",\"repo\":\"authoring\",\"objective\":\"o\",\"paths\":[\"design/features/example.md\"],\"acceptance\":[\"a\"]},
  {\"id\":\"brief\",\"repo\":\"authoring\",\"objective\":\"o\",\"paths\":[\"art2d/briefs/example.md\"],\"acceptance\":[\"a\"]}]}")
 expect "validate: a handoff source task is heavy" 0 "^Model: task feature grade heavy \(tier L of the owned paths, contract or generated path\)" validate "$X"
-expect "validate: the copy-side task beside it stays light" 0 "^Model: task brief grade light \(tier S of the owned paths\): implement claude claude-sonnet-5-5 high" validate "$X"
+expect "validate: the copy-side task beside it stays light" 0 "^Model: task brief grade light \(tier XS of the owned paths\): implement claude claude-sonnet-5-5 high" validate "$X"
 expect_spec "dispatch of the copy-side task: light, as validate says" '"grade": "light"' dispatch "$X" --task brief --phase lead --runner orca
 expect_spec "dispatch of the handoff source task: heavy, as validate says" '"grade": "heavy"' dispatch "$X" --task feature --phase lead --runner orca
 # parity: validate's batch and a one-task call (dispatch, subplan) give every task the same grade
@@ -2003,7 +2260,9 @@ refute "integration QA never creates a worktree" "new-top-level|--base-branch|wo
 expect "integration QA checks HEAD is the candidate in the shared checkout" 0 "You share the integration checkout .*demo-int with the run lead" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA: no subagents" 0 "^Subagents: none in this session \(never: QA runs the checks itself" dispatch "$OK" --task integration:server --phase qa --sha abc1234
 expect "integration QA --runner agent: no subagents" 0 "Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner agent
+expect_spec "known_failing: the integration QA spec lists the checks" "^- tests/foo\.test\.sh: fails on base$" dispatch "$KFP" --task integration:server --phase qa --sha abc1234 --runner orca
 expect_spec "integration QA (orca spec): no subagents" "^Subagents: none in this session" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
+expect_spec "integration QA: spec is complete" "$SPEC_RULE" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca
 expect "integration QA in the Unity project: no subagents" 0 "^Subagents: none in this session" dispatch "$OK" --task integration:client --phase qa --sha abc1234
 expect "new task worktree beside integration checkout" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
@@ -3269,6 +3528,17 @@ case_start
 echo "-- QA tiers"
 bg_report "QA tiers regression matrix" qa-tiers
 case_end qa-tiers
+fi
+
+if has_case tier-xs; then
+case_start
+echo "-- tier XS"
+bg_report "tier XS: tier prints XS only for prose-only changes within the thresholds" tier-xs-tier
+bg_report "tier XS: validate accepts a one-task prose plan; non-prose, multi-task, oversize, contract and generated are errors" tier-xs-validate
+bg_report "tier XS: dispatch lead prints the run lead's steps, no implement session, review reads the topic checkout" tier-xs-dispatch
+bg_report "tier XS: gate READY_FOR_PR with review PASS and lead QA; an oversize, non-prose, contract or generated diff blocks" tier-xs-gate
+bg_report "tier XS: status shows the run lead's review dispatch and QA record, then the gate, as the gate sees it" tier-xs-status
+case_end tier-xs
 fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"

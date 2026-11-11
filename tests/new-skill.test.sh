@@ -67,7 +67,7 @@ grep -q 'demo-tech/SKILL.md:[0-9]* still has a SCAFFOLD: marker' <<<"$fails" && 
 out=$(tp demo-tech); [ $? -eq 1 ] && grep -q "factory-core SKILL.md 'Skills' section does not name this tech skill" <<<"$out" \
   && grep -q 'tests/routing.test.sh has no scenario asserting $(tech demo-tech)' <<<"$out" && grep -q 'no eval grader evals/\*/graders/demo-tech-fired.md' <<<"$out" \
   && grep -qF "'Skills:' says $tech_n tech skills, the registry has $((tech_n + 1))" <<<"$out" \
-  && ok "touchpoints list the author's remaining places (factory-core, routing, evals, CLAUDE.md count, ...)" || no "touchpoints after tech scaffold" "$out"
+  && ok "touchpoints list the author's remaining places (factory-core, routing, evals, overview.md count, ...)" || no "touchpoints after tech scaffold" "$out"
 
 # scaffold a lead that takes over a module
 out=$(ns --name demo-lead --kind repo --repos server --owns-modules server.loadtest --summary "Demo lead"); rc=$?

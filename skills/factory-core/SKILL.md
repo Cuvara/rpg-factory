@@ -29,7 +29,8 @@ Declare it in the skill arguments (`mode: <mode>`) and the Route call (`factory-
 snapshot then prints its contract. The hooks **flag** departures (advisory only, they never block); respect the mode
 yourself and switch only when the user asks (e.g. "now implement it").
 Two levels (load `rpg-factory:delivery` for the generic flow; RPG specifics: `references/parallel-work.md`): the main session is the **run lead** (plans, dispatches,
-integrates, reports; never edits task files); one **task lead** per task does the work. A dispatched session follows its spec.
+integrates, reports; never edits task files, except in a tier XS task); one **task lead** per task (none in tier XS)
+does the work. A dispatched session follows its spec.
 
 ## Workflow
 Steps are **M** mandatory, **O** optional, **H** need the user.
@@ -53,16 +54,12 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    before committing; reuse the **same topic** in every repo of a cross-repo task (factory-status
    links them). Commit, push, PR, merge are **H** (only on request); tags and releases only with the user's
    explicit release authorization in this task (`references/git-safety.md` rule 5).
-6. **Plan (M).** Load `rpg-factory:delivery` (generic flow and policy); this step adds the registry. `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`, then a
-   `plan.json` + `validate` for every tier (S = a one-task plan with its own task lead). Per ready task:
-   `factory-pipeline.py dispatch plan.json --task <id> --phase lead --report-to <run id> --runner orca` (one task lead per
-   task worktree: Claude, Codex only when Claude is unavailable; Unity: main checkout, in sequence).
-   Resume: `status plan.json`. How: delivery.md section 10, RPG specifics `references/parallel-work.md`.
-   Give each task a `kind`; its model follows the "Which model" table in delivery.md section 10.
-7. **Implement (M, task lead).** `subplan validate`, then one short, fresh sub-session per subtask
-   (`--phase implement --subplan subplan.json --subtask <sid>`; shared worktree or an Orca child per its `placement`:
-   delivery.md section 4); the task lead commits or merges each. Requested scope only; module rules; generated paths via their generator.
-   Code goes to Codex, prose to Claude: the "Which model" table (delivery.md section 10); the task lead does not implement; in-session subagents are read-only scouts (delivery.md section 8 "In-session subagents").
+6. **Plan (M).** Load `rpg-factory:delivery`; it owns the flow (delivery.md section 10 steps 1-3, resume with `status plan.json`).
+   The registry adds the tier call, `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/factory-pipeline.py tier -- --repo <key> --paths <files>`,
+   and the repo's `worktrees` flag (Unity: main checkout, in sequence). RPG specifics: `references/parallel-work.md`.
+   Tier XS (prose only, within `pipeline.tiers.XS`): the run lead itself edits and commits, gets one cross-model review, runs QA (step 1).
+7. **Implement (M, task lead).** Delivery.md section 10 step 3 (sub-sessions) and section 4 (placement). The registry adds:
+   requested scope only, the touched modules' rules, generated paths via their generator.
 8. **Obligations (M).** CHANGELOG `[Unreleased]` per touched module, docs, regenerated artifacts,
    both sides of contracts, `.meta` files, version bump (no tag unless the release is authorized).
 9. **Validate (M).** `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-checks.py --repo <key> --paths <changed files>`.
@@ -70,13 +67,12 @@ Steps are **M** mandatory, **O** optional, **H** need the user.
    evidence. Evidence is bound to the tree it ran on: after any further edit, `--status` shows it
    **STALE** - rerun before reporting. Extended checks: ask the user, then `--approve <check-id>`.
 10. **Verify (M).** verify-a-result on every number you report (below).
-11. **Review + QA (M, task lead).** On a frozen SHA, `dispatch ... --phase review --sha <sha>`: Codex reviews Claude's
-    code and Claude reviews Codex's; pair unavailable: the same model, `SAME_MODEL (fallback: <model> unavailable)`, gate accepts a dispatch-recorded fallback.
-    Use the lead's checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist); then `--phase qa`.
-    Record each `verdict`. The run lead integrates (delivery.md section 7) and runs QA on the integration HEAD.
-12. **Gate, PR, cleanup, report (M, run lead).** `gate` READY_FOR_PR + user's `deliver: pr`: push, open the PR (no merge).
-    Remove the run's worktrees, release every Claude/Codex session (delivery.md section 8), `cleanup` until CLEAN; report
-    (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
+11. **Review + QA (M, task lead).** Delivery.md section 10 steps 4-6 own the flow. The registry adds the review input: the lead's
+    checklist and every `routing.tech` review file (e.g. `unity-dots` ECS checklist).
+12. **Gate, PR, cleanup, report (M, run lead).** Delivery.md section 10 steps 7-9 and section 8 own the gate, PR and cleanup.
+    The registry adds the final report (`references/report.md`); releases stop at **READY_TO_TAG** unless explicitly authorized.
+    The run report's limitations and follow-ups go to the backlog (in this plugin `docs/plans/backlog.md`, one topic each)
+    and every new operating lesson to the file the learning-loop rule names, in the integration commit (delivery.md section 8).
 
 ## Validation states (from run-checks.py)
 

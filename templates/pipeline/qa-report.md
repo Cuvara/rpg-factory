@@ -18,6 +18,9 @@ them). Counts, never "tests pass". A Unity test run states when it held the `uni
 ## Regressions
 - Suites outside the owned paths that ran, with counts: <...> | none run - <reason>
 
+Failing at base: <check (FAIL_AT_BASE) - reason, ...> | none
+Fixed: <listed known_failing check that now passes> | none
+
 ## Edge and failure cases
 - <case> - <how it was exercised> - <result>
 

@@ -174,17 +174,39 @@ def warnings(pipe, items):
 
 
 def prose_path(path):
-    """Prose for tier S: a .md file anywhere, changelog.d/, or a skills/ path that is not a non-.md file (a skill
+    """Prose for tiers XS and S: a .md file anywhere, changelog.d/, or a skills/ path that is not a non-.md file (a skill
     directory holds .md files). docs/ alone is not prose: docs/schemas/*.json and docs/*.json are machine inputs."""
     if path.endswith('.md') or path.startswith('changelog.d/'):
         return True
     return path.startswith('skills/') and '.' not in path.rstrip('/').rsplit('/', 1)[-1]
 
 
+def xs_plan(plan, task=None):
+    """Tier XS: the plan's tier or the task's (the run lead implements it, no task lead or task worktree)."""
+    return plan.get('tier') == 'XS' or bool(task) and task.get('tier') == 'XS'
+
+
+def above_xs(rule, paths, changed_lines=0):
+    """Why a change is above tier XS (registry pipeline.tiers.XS): a path that is not prose, more files than max_files,
+    more changed lines than max_changed_lines (0 when unknown). Empty when it fits."""
+    paths = [str(p).replace('\\', '/') for p in paths]
+    why = []
+    if rule.get('prose_only', True):
+        other = [p for p in paths if not prose_path(p)]
+        if other:
+            why.append('not prose: ' + ', '.join(other[:5]) + (' ...' if len(other) > 5 else ''))
+    if 'max_files' in rule and len(paths) > rule['max_files']:
+        why.append(f"{len(paths)} files > {rule['max_files']}")
+    if 'max_changed_lines' in rule and changed_lines > rule['max_changed_lines']:
+        why.append(f"{changed_lines} changed lines > {rule['max_changed_lines']}")
+    return why
+
+
 def small_task(plan, task):
-    """A small plan/task or prose-only ownership permits QA by the lead."""
+    """A small plan/task (tier XS or S) or prose-only ownership permits QA by the lead."""
     paths = task.get('paths') or []
-    return (plan.get('tier') == 'S' or task.get('tier') == 'S' or bool(paths) and all(prose_path(p) for p in paths))
+    return (plan.get('tier') == 'S' or task.get('tier') == 'S' or xs_plan(plan, task)
+            or bool(paths) and all(prose_path(p) for p in paths))
 
 
 SUITE_CHECK = re.compile(r'(?:(?:env -u TMPDIR|bash)\s+)*(?:\./)?(tests/[\w.-]+\.sh)'
