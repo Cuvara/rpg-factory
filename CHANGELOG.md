@@ -4,6 +4,73 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-11
+
+Run-lead visibility (task-lead reports reach the run lead and show in status), CI coverage for the generic delivery suite, hardened checks and a renamed guard package.
+
+### Added
+
+- **QA runner.** `tests/delivery-generic.test.sh` runs in `tests/run-all.sh` (it was in no suite list) and `tests/affected.py`
+  selects it for a change under `skills/delivery/`, to `scripts/factory-pipeline.py` or to `scripts/lib/pipeline_route.py`.
+  `tests/affected.test.sh` covers the selection. The `tests/plan-paths.test.sh` suite is wired the same way, but only runs
+  once the file exists: `--list-suites` leaves out a listed suite whose file is absent and `--only-suites` rejects it as
+  unknown (a stand-in `RUNALL_SUITES_FROM` list keeps every name).
+- **QA runner.** `tests/run-all.sh` counts a WARN apart: the summary reads `..., S skipped, W warned` only when `W > 0`,
+  and the exit code ignores it. `tests/run-all-parallel.test.sh` checks this end to end with a config WARN. A moved skill
+  citation is counted as a warning the same way at `-j 1` and `-j N`; the `--fix` hint is a plain note.
+- **Guard tests.** `tests/git-guard.test.sh` has a deterministic repro for the empty git-guard output: with no `git` on
+  `PATH` the guard's git probe returns an empty string, the branch is unknown, the `commit on protected branch` advisory
+  is never produced and the hook prints nothing at rc 0.
+- **Lead report in status.** The new `factory-pipeline.py report` verb records a task lead's report, and `status <plan>` shows per task the last lead report and READY_FOR_PR, so a run lead polling status sees completion without messages. `delivery.md` section 8 states the rule: the run lead polls status and never relies on messages alone; a task lead records its report before it sends the status message.
+- **Slot holders and busy-directory processes named.** `status` and `cleanup` name the processes that hold a test slot for the plan's worktrees (PID, checkout, start time) and the orphaned processes (`wsl.exe` `sleep infinity` and the like) that keep a released worker's task directory busy (PID, command, start time). They never kill one.
+- **Orca repo visibility.** `dispatch --phase lead` (and child placements) print `orca repo set --repo path:<repo> --external-worktree-visibility show` before the worktree add when `orca repo list --json` shows `hide` for the repo; `delivery.md` section 4 "Orca visibility" and the `.claude/CLAUDE.md` lesson name it.
+- **Model-unavailable probe.** The Codex gateway's 503 wrappers (`[codex/<model>] [429]: The usage limit has been reached`, `[400] ... model_not_found`) map to MODEL_UNAVAILABLE with the upstream reason in the stall and route helpers.
+- **Tier plan usage.** `factory-pipeline.py tier` with a positional plan argument now fails with a usage error instead of misreading it.
+
+### Changed
+
+- **QA runner.** A change to `scripts/factory-pipeline.py` or `scripts/lib/pipeline_route.py` selects only
+  `tests/pipeline.test.sh`, `tests/delivery-generic.test.sh` and a suite that names the file itself, not the ~19 suites its
+  import closure reaches. Only selection is narrowed; the suite-reuse hashes keep the conservative closure.
+- **QA runner.** `RETRY` lines a passing suite printed (a flaky step it retried) are shown under its PASS line, at `-j 1` and
+  in the `-j N` queue. They are no failure and the PASS record is published as before.
+- **Guard tests.** The git-guard `RETRY` line now carries the first try's evidence: `rc`, `elapsed` in ms and the first
+  300 characters of stderr. Its literal prefix is unchanged.
+- **QA runner.** The py_compile and release-policy checks in `tests/run-all.sh` accept the guard package under either
+  `scripts/lib/guard/` or `scripts/lib/rpgf_guard/`, and skip a glob that matches no file.
+- **Waiter message types.** `scripts/orca-wait.sh` receives `status` messages by default, so a task lead's report is no longer dropped, and survives heartbeat batches that carry no `deliveryId`.
+- **Orphaned waiter.** When Claude Code reaps a background waiter's shell, the orphaned `orca-wait.sh` lock holder now exits when its parent dies, and the next waiter names an orphan PID instead of only exiting 3 "already held". A stale acquire guard is reclaimed.
+- **Implementer refusal.** The implementer refusal now covers subtask records, not only plan tasks.
+- **`verdict --fallback` text.** The usage text and the "available now" error state that `--fallback` takes the unavailable agent, not its replacement.
+- **Test speed.** The `cli-selftest` case of `tests/pipeline.test.sh` runs faster (about 61 s before) and its selftest is stronger.
+
+### Fixed
+
+- **Checks.** `tests/fixtures/run-checks-cleanup-failure.py` patches `runner.procrun.signal` (where the SIGKILL lookup
+  lives) and asserts `scripts/run-checks.py` no longer carries a `signal` attribute; the unused `import signal` is gone.
+- **Facts.** `tests/facts.test.sh` checks the return code of `git read-tree`: a HEAD tree that cannot be read is a FAIL
+  for the fact (naming fact and repo) instead of a pass on a missing disposable index. The `git archive` HEAD export
+  omits submodules (empty gitlinks) and leaves LFS-tracked files as pointers; the suite now prints one `NOTE` per repo
+  with both counts and keeps grading the committed HEAD, so the suite stays offline.
+- **UI catalog.** The `ls-tree` failure reason of `scripts/ui/ui_catalog.py` includes git's stderr, so an unreadable
+  ref says why.
+- **Pipeline.** `scripts/lib/plan_paths.py` converts Git Bash (`/c/ws`) and WSL (`/mnt/c/ws`) drive spellings in plan
+  paths and in the workspace root environment variable on Windows Python; other platforms are unchanged.
+- **Guard.** `scripts/lib/guard/` is renamed `scripts/lib/rpgf_guard/`, the name it was already imported under, so
+  nothing called `guard` is importable from `scripts/lib`. Guard behaviour is unchanged.
+- **QA runner.** `tests/affected.py` no longer starts a bare `bash` for its tool-version hash: on Windows that is the WSL
+  launcher. It uses `find_bash()` from `scripts/lib/shells.py`, and records `absent` when no bash is found.
+- **Routing golden.** `tests/routing-golden.test.sh --update` keeps the host-dependent `absolute path (...)` scenarios the
+  host cannot evaluate (the cygpath and `/mnt/c/` forms exist only on Windows) instead of deleting them. A scenario this run
+  recorded takes the new record; an ordinary scenario missing from the run, or a host-dependent one no longer declared in
+  `tests/routing.test.sh`, is dropped. The merge and the comparison are functions with a self-test on small fixtures.
+- **QA runner.** The shared git config copy (`GITCFG_COPY`) is no longer left in the temp directory: it is removed at once
+  when it could not be filled, and after a config WARN `runall_cleanup` removes it.
+- **Released workers.** `status --orca-run` no longer lists released workers as UNRELEASED.
+- **Lead report in a no-worktree repo.** In a repo without task worktrees the task HEAD is the integration branch and moves when the next task commits; a finished task (phase integrated or qa) keeps `READY_FOR_PR: yes` and no stale marker while its lead report is an ancestor of the HEAD. A report at a commit outside the HEAD's history is still stale.
+- **Review findings of the lead-report task.** `status` READY_FOR_PR now honours subtask FAILs and stale reviews; slot holders are named in prefixed and lineage-only child worktrees too; and `tests/pipeline.test.sh` exits 2 on an empty case name inside a list (`--case tier,,status`, `--case ,tier`, `--case tier --case ,`), validated per selector as it is parsed instead of after the commas became spaces.
+- **Repo visibility hint for a linked worktree.** A worker placement whose repo path is a linked worktree gets the `orca repo set ... show` hint for the main checkout, which is what `orca repo list` holds.
+
 ## [1.8.0] - 2026-11-11
 
 Slimmer task workflow (CLAUDE.md and delivery.md split, tier XS, base health, run-report loop), lean QA, in-session subagent rules and generic delivery skill.
