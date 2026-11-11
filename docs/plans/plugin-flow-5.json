@@ -4,7 +4,13 @@
   "title": "Plugin batch 5: CI coverage, run-lead visibility, lows",
   "topic": "plugin-flow-5",
   "tier": "M",
-  "deliver": "pr",
+  "deliver": "pr",
+  "known_failing": [
+    {"check": "tests/run-checks.test.sh", "reason": "Go-dependent fixtures (:75, :458) fail where Go is not on PATH; fails at main 8d64341"},
+    {"check": "tests/registry-fragments.test.sh", "reason": "CRLF round-trip (:67-68) on a Windows autocrlf checkout; fails at main 8d64341"},
+    {"check": "claude plugin validate --strict .", "reason": "unquoted colon in the YAML description of skills/pin-bump/SKILL.md, skills/unity-client-tech/SKILL.md and commands/assetgen.md; fails at main 8d64341"},
+    {"check": "claude plugin validate --strict .claude-plugin/plugin.json", "reason": "same frontmatter errors as the check above; fails at main 8d64341"}
+  ],
   "repos": {
     "plugin": {
       "path": "../..",
@@ -89,6 +95,8 @@
         "scripts/lib/rpgf_guard/",
         "scripts/lib/gitguard.py",
         "tests/plan-paths.test.sh",
+        "tests/hook-perf.test.sh",
+        "scripts/README.md",
         "changelog.d/checks-lows.md"
       ],
       "exclusions": [],

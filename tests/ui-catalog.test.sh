@@ -139,6 +139,7 @@ subprocess.run = run
 c = ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")
 subprocess.run = real
 assert c["status"] == "NOT_AVAILABLE" and "ls-tree" in c["reason"] and "exit 128" in c["reason"], (c["status"], c["reason"])
+assert c["reason"].endswith(": fatal: stub failure") and "\n" not in c["reason"], c["reason"]
 assert c["uitoolkit"] is None and {e["kind"] for e in c["entries"]} == {"unity-builtin"}, c["entries"][:3]
 assert ui_catalog.build(uitoolkit=sys.argv[2], ref="v0.8.0")["status"] == "PASS"
 PY

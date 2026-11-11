@@ -42,12 +42,13 @@ import sys
 
 
 def _load_guard_package():
-    """Load scripts/lib/guard/ as the package `rpgf_guard`, by path and once: a top-level `guard` would be a generic
-    name on sys.path that shadows (or is shadowed by) any other module called `guard`. Its relative imports stay."""
+    """Load scripts/lib/rpgf_guard/ as the package `rpgf_guard`, by path and once. The directory carries the package
+    name, so nothing called `guard` is importable from scripts/lib (a generic name that shadows, or is shadowed by,
+    any other module called `guard`). Its relative imports stay."""
     import importlib.util
     name = "rpgf_guard"
     if name not in sys.modules:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard")
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
         spec = importlib.util.spec_from_file_location(name, os.path.join(path, "__init__.py"),
                                                       submodule_search_locations=[path])
         module = importlib.util.module_from_spec(spec)

@@ -9,6 +9,9 @@ spec = importlib.util.spec_from_file_location("runner", sys.argv[1])
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
+# The SIGKILL lookup lives in procrun; run-checks.py must not carry an unused `import signal` just for patching.
+assert not hasattr(runner, "signal"), "scripts/run-checks.py imports signal again; patch runner.procrun.signal instead"
+
 class FakeProcess:
     pid = 4242
 
@@ -28,7 +31,7 @@ with patch.object(runner.os, "name", "posix"), \
      patch.object(runner.shutil, "which", return_value="bash"), \
      patch.object(runner.subprocess, "Popen", return_value=FakeProcess()), \
      patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
-     patch.object(runner.signal, "SIGKILL", 9, create=True), \
+     patch.object(runner.procrun.signal, "SIGKILL", 9, create=True), \
      patch.object(runner.os, "killpg", side_effect=PermissionError("denied"), create=True):
     code, output, timed_out, cleanup = runner.run_check("sleep", ".", {}, 1)
 
@@ -43,7 +46,7 @@ with patch.object(runner.os, "name", "posix"), \
      patch.object(runner.shutil, "which", return_value="bash"), \
      patch.object(runner.subprocess, "Popen", return_value=FakeProcess()), \
      patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
-     patch.object(runner.signal, "SIGKILL", 9, create=True), \
+     patch.object(runner.procrun.signal, "SIGKILL", 9, create=True), \
      patch.object(runner.os, "killpg", side_effect=group_member, create=True):
     code, output, timed_out, cleanup = runner.run_check("sleep", ".", {}, 1)
 assert code == 124 and timed_out and "failed" in cleanup and "cleanup=failed" in output

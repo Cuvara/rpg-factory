@@ -4,6 +4,7 @@
 # no wall clock), at most 3 suites run at once, a SLOW suite starts first, live-lane suites (runl, block) never
 # overlap each other, a block's lines are counted, a run1 suite runs alone, suites get /dev/null as stdin, runp grades through its handler, and a bad -j exits 2.
 # Killed workers cannot hang the queue; shared config classification permits only whole added branch/worktree sections.
+# A shared-config WARN is counted in the summary (copy removed; kept on FAIL); a passing suite's RETRY lines show under its PASS line.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
@@ -348,6 +349,28 @@ out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites test
 [ "$rc" = 2 ] && grep -q "unknown suite 'tests/handoff-e2e.test.sh'" <<<"$out" && grep -q "unknown suite 'tests/orca-wait.test.sh'" <<<"$out" \
   && ! grep -q "'tests/git-guard.test.sh'" <<<"$out" && ! grep -q '^PASS ' <<<"$out" \
   && good 'run-all.sh --only-suites rejects suites it has no run line for, before any check' || no 'run-all.sh orphan suites' "$out"
+# a listed suite that is absent from the tree (a run line behind `if [ -f ... ]`) is not listed for run-all's own
+# run lines and is rejected by --only-suites; a stand-in list (RUNALL_SUITES_FROM) keeps every name it lists
+printf '%s\n' 'run "present" tests/git-guard.test.sh' 'if [ -f tests/zz-absent.test.sh ]; then run "absent" tests/zz-absent.test.sh; fi' \
+  'run "also absent" env -u TMPDIR tests/zz-ghost.test.sh' > "$TMP/absent-plan.sh"
+cat > "$TMP/absent-list.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/tests/run-all.sh" -j 1
+echo "real: $(list_suites "$PLAN_FILE" | tr '\n' ' ')"
+RUNALL_SUITES_FROM="$PLAN_FILE"; echo "standin: $(list_suites "$PLAN_FILE" | tr '\n' ' ')"
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" PLAN_FILE="$TMP/absent-plan.sh" env -u RUNALL_SUITES_FROM bash "$TMP/absent-list.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -qx 'real: tests/git-guard.test.sh ' <<<"$out" \
+  && grep -qx 'standin: tests/git-guard.test.sh tests/zz-absent.test.sh tests/zz-ghost.test.sh ' <<<"$out" \
+  && good 'list_suites leaves an absent suite out of run-all'"'"'s own list and keeps it in a stand-in list' || no "absent suite listing (rc=$rc)" "$out"
+if [ ! -e "$ROOT/tests/plan-paths.test.sh" ]; then
+  # the real wiring: tests/plan-paths.test.sh has a guarded run line and no file until task checks-lows lands
+  grep -q 'tests/plan-paths.test.sh' "$ROOT/tests/run-all.sh" && ! grep -qx 'tests/plan-paths.test.sh' <<<"$real" \
+    && out=$(env -u RUNALL_SUITES_FROM bash "$ROOT/tests/run-all.sh" --only-suites tests/plan-paths.test.sh 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q "unknown suite 'tests/plan-paths.test.sh'" <<<"$out" \
+    && good 'an absent plan-paths suite is neither listed nor accepted by --only-suites' || no "absent plan-paths suite (rc=$rc)" "$out"
+else
+  grep -qx 'tests/plan-paths.test.sh' <<<"$real" && good 'the present plan-paths suite is listed' || no 'plan-paths suite present but not listed' "$real"
+fi
 reset_cache
 out=$(cache_plan --affected --only-suites tests/a.sh); rc=$?
 [ "$rc" = 0 ] && [ "$(tr '\n' ' ' < "$RUN_LOG")" = 'a b ' ] \
@@ -676,6 +699,98 @@ mkdir -p "$TMP/state/locks/run-all-full"; printf '%s
 TMPDIR="$CT" cache_plan --no-reuse --no-wait >/dev/null; r4=$?; rm -rf "$TMP/state/locks/run-all-full"
 left=$(ls -A "$CT")
 [ "$r1 $r2 $r3 $r4" = '0 2 0 3' ] && [ "$args" = '2 2 2 2 2 ' ] && [ -z "$left" ]   && good 'early exits (--list-suites, unknown suite, bad arguments, release-only suite, --reuse hit, --no-wait) leave no git-config copy'   || no "early-exit temp files (rc $r1 $r2 $r3 $r4, arguments $args)" "$left"
+# A shared-config WARN is counted, the copy is removed on WARN and kept on FAIL, and a passing suite's RETRY lines are
+# shown under its PASS line. End to end: the stand-in plan sources the real scheduler and ends with the real tail of
+# tests/run-all.sh (shared-config verdict, summary line, exit status), in a throwaway repo (never the real shared config).
+tail_src=$(sed -n '/^# ---- the shared git config (common dir) must be byte-identical/,$p' "$ROOT/tests/run-all.sh")
+{ cat <<'PLAN'
+fixture=$1; shift
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+runall_prepare; rc=$?
+[ "$rc" = 0 ] || exit "$rc"
+run w bash tests/w.sh
+run r bash tests/r.sh
+drain
+[ -z "$QD" ] || rm -rf "$QD"
+PLAN
+  printf '%s\n' "$tail_src"; } > "$TMP/warn-plan.sh"
+WF="$TMP/warnrepo"; CT2="$TMP/warntmp"
+warn_fixture() { # a fresh repo per case: a second [branch "x"] section in the same config would be a FAIL
+  rm -rf "$WF"; mkdir -p "$WF/scripts/lib" "$WF/tests" "$WF/testlab"
+  cp "$ROOT/scripts/lib/fstate.py" "$WF/scripts/lib/"
+  cat > "$WF/tests/w.sh" <<'SUITE'
+#!/usr/bin/env bash
+cfg="$(git rev-parse --path-format=absolute --git-common-dir)/config"
+case "${CFG_MODE:-}" in
+  warn) printf '[branch "x"]\n\tremote = origin\n' >> "$cfg" ;;
+  fail) git config rpgtest.during changed ;;
+esac
+[ -z "${RETRY_LINES:-}" ] || printf 'RETRY git status: empty guard output (first try rc=7)\nRETRY second\n'
+echo "w done"
+SUITE
+  printf '#!/usr/bin/env bash\necho "r done"\n' > "$WF/tests/r.sh"
+  git -C "$WF" init -q
+}
+wrun() { # jobs [VAR=value...]: sets out, rc and leaves the temp dir listing in $left
+  local j=$1; shift
+  warn_fixture; reset_cache; rm -rf "$CT2"; mkdir -p "$CT2"
+  out=$(env "$@" TMPDIR="$CT2" ROOT_UNDER_TEST="$ROOT" RUNALL_SUITES_FROM="$TMP/warn-plan.sh" \
+    bash "$TMP/warn-plan.sh" "$WF" -j "$j" --only-suites tests/w.sh,tests/r.sh 2>&1); rc=$?
+  left=$(ls -A "$CT2")
+}
+if [ -n "$tail_src" ] && grep -q 'gitcfg_verify' <<<"$tail_src" && grep -q '^echo "run-all: \$total checks' <<<"$tail_src"; then
+  for j in 1 2; do
+    wrun "$j" CFG_MODE=warn
+    [ "$rc" = 0 ] && grep -q "^WARN  shared git config: only other sessions' branch/worktree sections were added" <<<"$out" \
+      && grep -q '^      +\[branch "x"\]' <<<"$out" \
+      && grep -q '^run-all: 2 checks, 2 passed, 0 failed, 0 skipped, 1 warned' <<<"$out" \
+      && ! grep -q '^FAIL' <<<"$out" && [ -z "$left" ] \
+      && good "shared-config WARN is counted in the summary, exit 0, the config copy is removed (-j $j)" \
+      || no "config WARN (-j $j, rc=$rc, left='$left')" "$out"
+  done
+  wrun 1
+  [ "$rc" = 0 ] && grep -q '^PASS  shared git config unchanged during the run' <<<"$out" \
+    && grep -q '^run-all: 3 checks, 3 passed, 0 failed, 0 skipped' <<<"$out" && ! grep -q 'warned' <<<"$out" \
+    && ! grep -q '^WARN' <<<"$out" && [ -z "$left" ] \
+    && good "an unchanged shared config adds no warned count and leaves no copy" || no "unchanged config (rc=$rc, left='$left')" "$out"
+  wrun 1 CFG_MODE=fail
+  copy=$(sed -n 's/.*(copy from before the run: \(.*\))$/\1/p' <<<"$out")
+  [ "$rc" = 1 ] && grep -q '^FAIL  shared git config changed during the run' <<<"$out" && ! grep -q 'warned' <<<"$out" \
+    && [ -n "$copy" ] && [ -f "$copy" ] && [ -n "$left" ] \
+    && good "a shared-config FAIL keeps the copy its message names and exits 1" || no "config FAIL (rc=$rc, copy='$copy', left='$left')" "$out"
+  rm -rf "$CT2"
+  # RETRY lines of a passing suite: under its PASS line, in order, no failure, the suite PASS records still published
+  want_retry='PASS  w
+      RETRY git status: empty guard output (first try rc=7)
+      RETRY second
+PASS  r'
+  for j in 1 2; do
+    wrun "$j" RETRY_LINES=1
+    got=$(sed -E 's/ \[[0-9]+s\]$//' <<<"$out" | grep -A3 '^PASS  w$')
+    published=$(find "$TMP/state/run-all/suites" -type f 2>/dev/null | wc -l | tr -d ' ')
+    [ "$rc" = 0 ] && [ "$got" = "$want_retry" ] && grep -q '^run-all: 3 checks, 3 passed, 0 failed, 0 skipped' <<<"$out" \
+      && ! grep -q '^FAIL' <<<"$out" && [ "$published" = 2 ] \
+      && good "RETRY lines of a passing suite are shown under its PASS line, not counted, records published (-j $j)" \
+      || no "RETRY lines (-j $j, rc=$rc, published=$published)" "$got"$'\n----\n'"$out"
+  done
+  wrun 1
+  ! grep -q 'RETRY' <<<"$out" && good "no RETRY line is shown when the suite printed none" || no "stray RETRY line" "$out"
+else no "the tail of tests/run-all.sh (shared-config verdict, summary) was not found for the stand-in plan" "$tail_src"; fi
+# gitcfg_snapshot: a copy that cannot be filled (cp fails) is removed at once and not recorded; the hash still is
+GC="$TMP/gc-repo"; GT="$TMP/gc-tmp"; mkdir -p "$GT"; git init -q "$GC" 2>/dev/null
+cat > "$TMP/gc-snap.sh" <<'PLAN'
+. "$ROOT_UNDER_TEST/scripts/lib/gitcfg-guard.sh"
+cp() { return 1; }
+gitcfg_snapshot "$GC_REPO"
+echo "copy=[${GITCFG_COPY:-}] file=[${GITCFG_FILE:+set}] hash=[${GITCFG_HASH:+set}]"
+gitcfg_verify >/dev/null && echo "verify=ok"
+PLAN
+out=$(ROOT_UNDER_TEST="$ROOT" GC_REPO="$GC" TMPDIR="$GT" bash "$TMP/gc-snap.sh" 2>&1); rc=$?
+left=$(find "$GT" -type f 2>/dev/null | wc -l | tr -d ' ')
+[ "$rc" = 0 ] && grep -qx 'copy=\[\] file=\[set\] hash=\[set\]' <<<"$out" && grep -qx 'verify=ok' <<<"$out" && [ "$left" = 0 ] \
+  && good 'gitcfg_snapshot removes a config copy that could not be filled, keeps the hash, leaves no temp file' \
+  || no "gitcfg_snapshot with a failing cp (rc=$rc, temp files left=$left)" "$out"
 # Unit-level WindowsApps shim: only the sourced runner process changes PATH.
 mkdir -p "$TMP/WindowsApps" "$TMP/real-python"
 printf '#!/usr/bin/env bash

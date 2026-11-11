@@ -21,7 +21,7 @@ Prefer many short, focused parallel sessions over one long session; every spec s
 7. reads every task's result and verify report (section 6);
 8. decides when a contribution is ready and integrates it (section 7), then runs integration QA (section 6);
 9. writes the final report with the parallel-work ledger and cleans up (section 8).
-It does not start a task's sub-sessions or edit task files (policy below; tier XS: section 10 step 1).
+It does not start a task's sub-sessions (policy below).
 
 <!-- policy:run-lead-never-implements -->
 The run lead never edits task files, except in a tier XS task (section 10 step 1); an S-tier task is a one-task plan with its own task lead.
@@ -37,7 +37,7 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
 4. with every subtask committed, starts ONE fresh verify session on that HEAD in the same worktree (section 6; tier S
    or prose-only: section 10 "QA tiers"); a FAIL goes to a fresh fix session, then one fresh re-verify session;
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
-6. reports to the run lead (section 3) and records the verify verdict (`verdict --phase verify`).
+6. records the verify verdict (`verdict --phase verify`) and its report (`factory-pipeline.py report`), then sends the status message to the run lead (section 3).
 It never pushes, merges, tags or removes its worktree.
 
 <!-- policy:task-lead-claude -->
@@ -60,7 +60,7 @@ done. A session that finds out-of-scope work reports it to its task lead, and th
 
 ## 2. Before delegating
 
-- Take the project snapshot (registered workspace: `factory-context.sh`) and `git worktree list` in each touched repo.
+- Take the project snapshot (a registered workspace: `factory-context.sh`) and `git worktree list` per touched repo.
 - With Orca, `orca worktree ps` and `orca orchestration run-list` show other coordinators' runs and worktrees: never
   bind to them, message their workers or edit their trees.
 - Tasks and subtasks writing the same file, generated path or contract end overlap and run in sequence.
@@ -91,7 +91,7 @@ each subtask with its commit, and the verify verdict (state, SHA, model).
   tasks in turn after each verify verdict.
 - **Shared exclusive resources** (settings `exclusive_resources`: an editor or test runner, a container stack, a test
   lab, fixed ports) go to one task at a time; a task without one reports the check `NOT_RUN` with command and reason.
-- **Full test runs are a shared resource too.** One full run per machine, never one per session (section 10 "QA
+- **Full test runs are shared:** one per machine, never one per session (section 10 "QA
   tiers"). Never create a worktree or branch while a full run is in flight when the runner checks the shared
   `.git/config`; create a task worktree without touching it ("Orca visibility").
 - **Orca visibility: a plain git worktree has no Orca lineage.** Create a task worktree with
@@ -101,7 +101,10 @@ each subtask with its commit, and the verify verdict (state, SHA, model).
   its creator runs exactly
   `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress`
   (`<parent>`: the integration checkout, else - and for the integration checkout itself - the main checkout; a task
-  lead's child: the task worktree). Every printed worktree creation prints this line.
+  lead's child: the task worktree). Every printed worktree creation includes it. If `orca repo list --json`
+  shows `externalWorktreeVisibility` `hide` for the repo, first run
+  `orca repo set --repo path:<repo> --external-worktree-visibility show` (printed too) before the worktree add:
+  lineage alone leaves it hidden.
 
 ### Child worktrees
 
@@ -117,9 +120,9 @@ not a child):
 - **Run lead.** `dispatch --phase lead` creates, registers and launches the task worktree as in "Orca visibility".
   Integration QA (`--placement child`) or a quick fix may run in a child of the integration checkout.
 - **Task lead.** Each subplan subtask records `placement` (`shared` or `child` + `reason`); `dispatch --subtask`
-  prints the matching `--worktree` (`${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`, "dispatch"; later mentions mean this file).
+  prints the matching `--worktree` (`${CLAUDE_PLUGIN_ROOT}/docs/pipeline-cli.md`, "dispatch").
 - A child session commits on its own child branch (`<task branch>--<subtask or phase>`) with explicit paths. Review
-  and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`, so they never collide.
+  and QA children are named `<parent>--[<subtask>--]<phase>-<sha7>`.
 
 <!-- policy:child-merge-remove -->
 The owner merges a child's branch into its parent branch and removes the child at once (`orca worktree rm --worktree path:<child>`).
@@ -128,7 +131,7 @@ The owner merges a child's branch into its parent branch and removes the child a
 Never create or remove a child worktree while a full tests/run-all.sh runs (the runner of a repo that has one): every checkout shares one .git/config.
 
 - `orca worktree rm` also deletes the checked-out local branch when Orca can prove it is merged: remove a child
-  only after its branch is merged. A no-worktree repo never gets a child.
+  only after its branch is merged.
 
 ## 5. Orca (preferred coordinator when available)
 
@@ -143,12 +146,13 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - **Orca message traps:**
   - Only a dispatched Orca worker can send `--type escalation` or `worker_done` (else "No active Dispatch belongs to
     this message sender"): a task lead reports with `--type status` (asks with `--type question`).
-  - `orca orchestration check --wait --types <types>` still returns heartbeats: a wait loop acks each batch and keeps
-    waiting. The run lead's single waiter is `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (one per Run).
+  - `orca orchestration check --wait --types <types>` still returns heartbeats: `orca-wait.sh` consumes them and keeps
+    waiting. The run lead's single waiter is `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (one per Run;
+    default types include `status`, so a filter without the sender's type drops its messages).
   - A multi-line `--prompt` through `cmd.exe` (Windows) is cut at the first newline: send a one-line prompt naming a
     spec file (`dispatch` does this).
   - After a start or launch with `--agent codex`, read its terminal (`orca orchestration worker-read`) until it shows
-    the prompt being worked on; `input_accepted` alone is no proof (a Codex CLI once sat idle at an empty prompt).
+    the prompt being worked on; `input_accepted` alone is no proof.
 - **Codex, else Claude.** A Codex session that cannot start or never picks up its prompt is marked down
   (`agents --down codex`, section 10 "Which model") and its role dispatched again on Claude; the report names it.
 - Never use `orca orchestration gate-create` for routine work.
@@ -220,8 +224,8 @@ A task is done when integrated with its review and QA recorded; the run, when th
   (role, model, Orca Run), verdicts (phase, SHA, model, result), checks with exact counts, limitations. Verdicts and
   specs stay per machine: a new machine re-runs review and QA.
 - **Cost ledger.** The run report has a "Cost" table: one row per session (task, role, model, effort, tokens or cost)
-  as the runtime shows it (Claude Code `/cost` or the session footer, the Codex usage line, Orca), else
-  `NOT_AVAILABLE`; plus the run lead's own total. Never present an estimate as measured.
+  as the runtime shows it (`/cost`, session footer, Codex usage line, Orca), else
+  `NOT_AVAILABLE`; plus the run lead's own total. Never an estimate as measured.
 - **Learning loop.** In the integration commit, the report's limitations and follow-ups go to the project's backlog
   (one topic each) and every new operating lesson to the file the project's learning-loop rule names (for example
   `docs/plans/backlog.md` and the Operating lessons in the repo's `CLAUDE.md`).
@@ -240,8 +244,10 @@ A task is done when integrated with its review and QA recorded; the run, when th
   (`orca worktree rm`: "Delete failed"): before removal the Run has no unreleased worker, no Orca terminal bound to
   the worktree, and each released worker's CLI exited. Never kill a process the run did not start: name it (PID,
   command) to the user.
-- **Few sessions:** memory pressure kills background shells and test runs. Each lead keeps only its state (plan or
+- **Few sessions:** memory pressure kills background shells and test runs. A lead keeps only its state (plan or
   subplan, branch, SHAs, verdicts), no transcript.
+- **The run lead polls, never trusts messages alone:** each wake and on a timer it reads `factory-pipeline.py status <plan>` (per task: last
+  lead report, READY_FOR_PR).
 - **Handoff.** After a wave, or when its context grows long, the run lead ends its session with the wave settled; the
   next resumes from `factory-pipeline.py status plan.json`.
 

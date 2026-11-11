@@ -22,22 +22,28 @@ usage() {
     'Independent units (the dependency chain, status, recorded-implementer, ...) run as parallel child runs; PIPELINE_TEST_UNITS'     'sets how many at once (default 4). PIPELINE_TEST_TIMES=1 prints section wall times; PIPELINE_TEST_JOBS sets the'     'background case limit (default 4); PIPELINE_TEST_MATCH=check compares the bash matcher with grep -E.'
 }
 SELECTED=; list_cases=0
+# one selector value (the argument of --case/--only) is validated as it is parsed, before the commas become spaces: an
+# empty or whitespace-only value and an empty name inside the list (leading, trailing or doubled comma, `tier,,status`,
+# `,tier`, `tier,`, `tier, ,status`) are usage errors, never silently dropped and never "run everything"
+add_selector() {
+  local compact="${1//[[:space:]]/}"
+  case "$compact" in
+    ''|,*|*,|*,,*) printf 'Empty case name in selector: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  SELECTED+=" ${1//,/ }"
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --list-cases) list_cases=1; shift ;;
     --case|--only)
-      [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 2; }
-      SELECTED+=" $2"; shift 2 ;;
-    --case=*|--only=*) SELECTED+=" ${1#*=}"; [ -n "${1#*=}" ] || { usage >&2; exit 2; }; shift ;;
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      add_selector "$2"; shift 2 ;;
+    --case=*|--only=*) add_selector "${1#*=}"; shift ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 # Validate before sourcing helpers or creating any fixture (also with --list-cases).
-SELECTED="${SELECTED//,/ }"
-# a selector that names no case (`--case ,`) is a usage error, never "run everything"
-[ -z "$SELECTED" ] || [ -n "${SELECTED//[[:space:]]/}" ] || { printf 'Empty case selector
-' >&2; usage >&2; exit 2; }
 unique_selected=
 for selected in $SELECTED; do
   [[ " $CASES " == *" $selected "* ]] || { printf 'Unknown case: %s\n' "$selected" >&2; exit 2; }
@@ -99,6 +105,12 @@ if [ -z "${PIPELINE_TEST_UNIT:-}" ]; then
     for c in $(unit_cases "$u"); do has_case "$c" && mine+="${mine:+,}$c"; done
     [ -z "$mine" ] || chosen+=("$u=$mine")
   done
+  # selection only (cli-selftest): print what would run, run nothing and build no fixture
+  if [ "${PIPELINE_SELFTEST_CHILD:-}" = select ]; then
+    printf 'selected:%s
+units:%s
+' "${SELECTED# }" "${chosen[*]}"; exit 0
+  fi
   if [ "${#chosen[@]}" -gt 1 ]; then
     OUTD="$(mktemp_win)" || exit 1; trap 'wait; rm -rf "$OUTD"' EXIT
     running=0
@@ -127,8 +139,8 @@ if [ -z "${PIPELINE_TEST_UNIT:-}" ]; then
   fi
 fi
 # The case selection itself (its own unit: it needs no fixture). --help exits 0, an unknown argument, an unknown case or
-# an empty selector exits 2 before any run, --list-cases lists every case, and a one-case child run (tier, the cheapest:
-# five assertions after its fixture build) runs only its own section, so fewer assertions than the full run.
+# an empty selector exits 2 before any run, --list-cases lists every case, and the selection itself (the case list and the
+# units, printed by PIPELINE_SELFTEST_CHILD=select without running any) is deduplicated and narrow: no child suite run.
 if [ "${SELECTED// /}" = cli-selftest ]; then
   self="${BASH_SOURCE[0]}"; spass=0; sfail=0
   sok() { spass=$((spass + 1)); echo "PASS  $1"; }
@@ -142,30 +154,53 @@ if [ "${SELECTED// /}" = cli-selftest ]; then
     bash "$self" --case "$sel" >/dev/null 2>&1; rc=$?
     [ "$rc" -eq 2 ] && sok "empty selector '$sel' exits 2 and runs nothing" || sno "empty selector '$sel' exited $rc, want 2"
   done
+  # an empty name inside a list or among repeated selectors is a usage error too, before any run: the selection (child mode
+  # select, which would print "selected:...") must not even be reached
+  for args in '--case|tier,,status' '--case|tier|--case|,' '--case|,tier' '--case|tier,' '--only=tier,' '--case|tier, ,status' '--case=,tier' '--case|tier|--only|'; do
+    IFS='|' read -ra eargs <<<"$args"
+    out=$(PIPELINE_TEST_UNIT= PIPELINE_SELFTEST_CHILD=select bash "$self" "${eargs[@]}" 2>&1); rc=$?
+    if [ "$rc" -eq 2 ] && ! grep -q '^selected:' <<<"$out"; then sok "empty case name in '${args//|/ }' exits 2 and runs nothing"
+    else sno "empty case name in '${args//|/ }' rc=$rc, want 2: $(head -c 200 <<<"$out")"; fi
+  done
   listed=$(bash "$self" --list-cases 2>&1); rc=$?
   want=$(printf '%s
 ' $CASES)
   [ "$rc" -eq 0 ] && [ "$listed" = "$want" ] && sok "--list-cases exits 0 and lists the $(wc -w <<<"$CASES") cases" || sno "--list-cases rc=$rc, listed: $(head -c 200 <<<"$listed")"
-  if [ "${PIPELINE_SELFTEST_CHILD:-0}" != 1 ]; then
-  start="$EPOCHREALTIME"
-  one=$(bash "$self" --case tier 2>&1); rc=$?
-  n_one=$(sed -n 's/^pipeline tests: \([0-9]*\) run.*/\1/p' <<<"$one"); sections=$(grep -c '^-- ' <<<"$one")
-  n_failed=$(sed -n 's/^pipeline tests: [0-9]* run, [0-9]* passed, \([0-9]*\) failed.*/\1/p' <<<"$one")
-  if [ "$rc" -eq 0 ] && [ "$n_failed" = 0 ] && [ "${n_one:-0}" -gt 0 ] && [ "${n_one:-0}" -lt 20 ] && [ "$sections" = 1 ]; then sok "--case tier exits 0 and runs $n_one assertions in $sections section, not the full run"
-  else sno "--case tier rc=$rc, ${n_one:-?} assertions, ${n_failed:-?} failed, $sections sections (want exit 0, zero failures, a few assertions, one section)"; fi
-    for form in comma repeated; do
-      if [ "$form" = comma ]; then args=(--case cli-selftest,cli-selftest)
-      else args=(--case cli-selftest --only cli-selftest); fi
-      duplicate=$(PIPELINE_SELFTEST_CHILD=1 bash "$self" "${args[@]}" 2>&1); rc=$?
-      summary=$(grep -c '^pipeline tests: [0-9]* run, [0-9]* passed, 0 failed$' <<<"$duplicate")
-      marker=$(grep -c '^PASS  --help exits 0$' <<<"$duplicate")
-      if [ "$rc" -eq 0 ] && [ "$summary" = 1 ] && [ "$marker" = 1 ]; then sok "$form duplicate selector runs cli-selftest once"
-      else sno "$form duplicate selector rc=$rc, $summary successful summaries, $marker self-test markers"; fi
-    done
-  elapsed=$(( ${EPOCHREALTIME/./} - ${start/./} ))
-  [ "${PIPELINE_TEST_TIMES:-0}" != 1 ] || printf 'TIME  cli-selftest child run %d.%03ds
-' "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
-  fi
+  # --help prints the usage and runs nothing: no fixture (TMPDIR stays empty), no case, no summary line
+  helpdir=$(mktemp -d "${TMPDIR:-/tmp}/pt-help.XXXXXX") && helpout=$(TMPDIR="$helpdir" bash "$self" --help 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^Usage: pipeline.test.sh' <<<"$helpout" && ! grep -qE '^(PASS|FAIL|-- |pipeline tests: )' <<<"$helpout"      && [ -z "$(ls -A "$helpdir")" ]; then sok "--help prints the usage only: no fixture, no case run"
+  else sno "--help rc=$rc, fixture dir: $(ls -A "$helpdir" | head -c 100), output: $(head -c 200 <<<"$helpout")"; fi
+  rm -rf "$helpdir"
+  # the selection (PIPELINE_SELFTEST_CHILD=select prints it and exits before any unit runs): one case runs once, a repeated
+  # or comma-listed duplicate selector selects it once, a dependent case brings its prerequisites in order, and a
+  # one-case selection is one unit, not the full run
+  sel() { PIPELINE_TEST_UNIT= PIPELINE_SELFTEST_CHILD=select bash "$self" "$@" 2>&1; }
+  for form in comma repeated; do
+    if [ "$form" = comma ]; then args=(--case cli-selftest,cli-selftest)
+    else args=(--case cli-selftest --only cli-selftest); fi
+    duplicate=$(sel "${args[@]}"); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$duplicate" = $'selected:cli-selftest
+units:cli-selftest=cli-selftest' ]; then sok "$form duplicate selector selects cli-selftest once"
+    else sno "$form duplicate selector rc=$rc, selection: $(head -c 200 <<<"$duplicate")"; fi
+  done
+  one=$(sel --case tier); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$one" = $'selected:tier
+units:chain=tier' ]; then sok "--case tier selects one case in one unit, not the full run"
+  else sno "--case tier rc=$rc, selection: $(head -c 200 <<<"$one")"; fi
+  # a comma list of non-empty names still selects each of them (whitespace around a comma is fine)
+  for list in 'tier,status' 'tier, status'; do
+    two=$(sel --case "$list"); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$two" = $'selected:tier status
+units:chain=tier status=status' ]; then sok "--case '$list' selects both cases in their units"
+    else sno "--case '$list' rc=$rc, selection: $(head -c 200 <<<"$two")"; fi
+  done
+  dep=$(sel --case subplan --only subplan); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$dep" = $'selected:subplan validate
+units:chain=validate,subplan' ]; then sok "--case subplan brings its prerequisite validate once"
+  else sno "--case subplan rc=$rc, selection: $(head -c 200 <<<"$dep")"; fi
+  all=$(sel); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(sed -n 's/^selected://p' <<<"$all")" = "$CASES" ]; then sok "no selector selects every case"
+  else sno "no selector rc=$rc, selection: $(head -c 200 <<<"$all")"; fi
   total=$((spass + sfail)); echo "pipeline tests: $total run, $spass passed, $sfail failed"
   [ "$sfail" -eq 0 ]; exit
 fi
@@ -175,6 +210,9 @@ export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
 # (the Orca-first cases below set them on purpose)
 for v in $(compgen -e | grep '^ORCA_'); do unset "$v"; done
+# no real process listing either: cleanup and status read RPG_FACTORY_PROCESS_TABLE (a JSON list; the cases that name
+# processes point it at their own fixture)
+echo '[]' > "$TMP/proc-none.json"; export RPG_FACTORY_PROCESS_TABLE="$TMP/proc-none.json"
 WS="$TMP/ws"; S="$WS/rpg-mmo-server"; C="$WS/IndieRPGMMOAdventure"; T="$TMP/tool"
 pass=0; fail=0
 # Capture once: consecutive assertions on one command (same arguments, directory, PATH and env prefix, no other
@@ -686,6 +724,7 @@ git('switch', '--no-track', '-c', 'topic-a')
 a = commit('a')
 if case.startswith('subtask-'):
     m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
+    m.pr.record(plan, 'a', None, 'implementer', {'agent': 'codex'})  # the task-level implement dispatch the explicit --implementer codex below matches
     verdict('a', 'review', a, by='codex', extra=('--subtask', 's'))
     if case == 'subtask-legacy':
         folder = pathlib.Path(m.verdict_dir(plan)) / 'a'; folder.mkdir()
@@ -748,6 +787,8 @@ elif case in ('report', 'implementer', 'override', 'legacy-implementer'):
         m.pr.record(plan, 'a', 's1', 'implementer', {'agent': 'claude'})
         m.pr.record(plan, 'a', 's2', 'implementer', {'agent': 'claude'})
         extra = ('--implementer', 'codex') if case == 'override' else ()
+        if extra:
+            m.pr.record(plan, 'a', None, 'implementer', {'agent': 'codex'})  # a task-level implement dispatch: the explicit declaration is recorded, not contradicting
         if extra:
             pathlib.Path(m.verdict_file(plan, 'a', 'review')).unlink()  # exercise a fresh explicit declaration, not review preservation
         verdict('a', 'review', a, by='codex', extra=extra)
@@ -1743,6 +1784,7 @@ expect "registry without pipeline.lead_agent: the task lead defaults to claude" 
 expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
 expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
+expect_spec "task lead records its durable report with the report verb before the message" "<pipeline> report <plan> --task gw --sha <HEAD> --body-file <file>.* then report to the run lead \(.orca orchestration send" dispatch "$OK" --task gw --phase lead --report-to R42 --runner orca
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
 expect "--report-to goes only with the lead" 2 "--report-to .* goes with --phase lead" dispatch "$OK" --task gw --phase implement --report-to R42
@@ -2390,7 +2432,8 @@ expect "status keeps the subtask FAIL while its fix is on an unmerged child" 0 "
 git -C "$S" branch -q -D gw-child-fix
 v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s5
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
-expect "manual fallback for an available model is refused" 2 "fallback codex is available now" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS --fallback codex
+expect "manual fallback for an available model is refused, naming what --fallback takes" 2 "--fallback names the paired reviewer that is unavailable, but codex is available now, so it cannot be claimed as unavailable \(did you mean the other agent: --fallback 'claude unavailable'\?\)\. Example: --fallback 'codex unavailable' --by claude" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS --fallback codex
+COLUMNS=250 expect "verdict --help states that --fallback names the unavailable paired reviewer, not the replacement" 0 "the paired reviewer that was unavailable \(not the replacement that reviewed\)" verdict --help
 expect "refused fallback leaves paired evidence intact" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "mark codex down after its implementation was reviewed" 0 "MODEL_UNAVAILABLE" agents "$G" --down codex --reason 401
 expect "cross-model review survives implementer becoming unavailable" 0 "^Gate: READY_FOR_PR" gate "$G"
@@ -2542,8 +2585,12 @@ if sys.argv[1:3] == ["status", "--json"]:
     print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
 if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
     print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
+if sys.argv[1:3] == ["repo", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_REPOS"):
+    print(open(os.environ["FAKE_ORCA_REPOS"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] == ["terminal", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_TERMS"):
     print(open(os.environ["FAKE_ORCA_TERMS"], encoding="utf-8").read()); sys.exit(0)
+if sys.argv[1:3] == ["orchestration", "check"] and mode != "error" and os.environ.get("FAKE_ORCA_CHECK"):
+    print(open(os.environ["FAKE_ORCA_CHECK"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] != ["orchestration", "worker-list"] or mode == "error":
     print("error: run not found", file=sys.stderr); sys.exit(1)
 if mode == "garbage":
@@ -2586,7 +2633,7 @@ opath "the run line counts unreleased, released and running" 1 "WORKERS UNRELEAS
 oref "a released worker is no finding" "dispatch ctx_rel( |$)" cleanup "$GO"
 oref "a running worker is no finding" "dispatch ctx_run( |$)" cleanup "$GO"
 opath "--orca-run names a Run for a plan without orca_run" 1 "worker-release --dispatch ctx_ret" cleanup "$G" --orca-run run_T
-if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^(orchestration worker-list --run run_T --limit 100 --json( --cursor c2)?|worktree list --limit 10000 --json)$" "$FAKE_ORCA_LOG"
+if grep -q -- "--run run_T " "$FAKE_ORCA_LOG" && ! grep -qvE "^(orchestration worker-list --run run_T --limit 100 --full --json( --cursor c2)?|worktree list --limit 10000 --json|orchestration check --run run_T --all --json)$" "$FAKE_ORCA_LOG"
 then pass=$((pass + 1)); echo "PASS  only read-only worker-list and worktree list calls, run:<id> normalised"
 else fail=$((fail + 1)); echo "FAIL  orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
 PATH="$fpath" python3 -B "$P" cleanup --json "$GO" > "$TMP/cleanup-orca.json" 2>&1
@@ -2615,6 +2662,62 @@ jq -n --argjson a "$(w ctx_rel succeeded released settled 2026-11-05)" --argjson
   '{ok:true,result:{workers:[$a,$c],page:{hasMore:false}}}' > "$FAKE_ORCA_JSON"
 opath "every settled worker released: CLEAN" 0 "^Cleanup: CLEAN" cleanup "$GO"
 opath "and the run line is OK" 0 "WORKERS OK  run run_T: 0 settled" cleanup "$GO"
+# both row shapes of the real worker-list: the concise row (no --full: state, liveness, terminal, terminalState only) and
+# the full row (workerState, dispatchStatus, resource, projection). Released is not UNRELEASED in either shape.
+if grep -q -- "worker-list --run run_T --limit 100 --full --json" "$FAKE_ORCA_LOG"
+then pass=$((pass + 1)); echo "PASS  worker-list is asked for --full rows"
+else fail=$((fail + 1)); echo "FAIL  worker-list without --full"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head -5; fi
+cw() { jq -nc --arg d "$1" --arg s "$2" --arg t "$3" '{dispatchId:$d,taskId:"task_x",state:$s,liveness:"exited",terminal:"term_x",terminalState:$t,workspace:"w",host:"local"}'; }
+# fw <dispatch> <ownershipState> <releaseState> <releaseCompletedAt|-> <projection resource state>: a settled full row
+fw() { jq -nc --arg d "$1" --arg o "$2" --arg r "$3" --arg c "$4" --arg p "$5" '{dispatchId:$d,runId:"run_T",workerState:"succeeded",dispatchStatus:"completed",
+  resource:{ownershipState:$o,releaseState:$r,retainedReason:null,releaseCompletedAt:(if $c=="-" then null else $c end)},
+  projection:{stage:{worker:"succeeded",dispatch:"completed",detail:"settled"},resource:{state:$p}}}'; }
+# aw <dispatch> <state> <reason>: a settled full row that never owned a terminal (live: ctx_24828b341e1e of run_386f601a03c7):
+# resource, terminalState and the terminal handle are null, the projection says absent (not_materialized, or a failed terminal_create)
+aw() { jq -nc --arg d "$1" --arg s "$2" --arg r "$3" '{dispatchId:$d,runId:"run_T",workerState:$s,dispatchStatus:(if $s=="failed" then "failed" else "completed" end),
+  terminalState:null,agentTerminalHandle:null,resource:null,
+  projection:{stage:{worker:$s,dispatch:"completed",detail:"settled"},resource:{state:"absent",reason:$r}}}'; }
+jq -n --argjson a "$(cw ctx_c_rel succeeded released)" --argjson b "$(cw ctx_c_ret succeeded retained)" \
+  --argjson c "$(cw ctx_c_act succeeded active)" --argjson d "$(cw ctx_c_run ready active)" \
+  --argjson e "$(fw ctx_f_own released not_requested - owned)" --argjson f "$(fw ctx_f_done owned not_requested '2026-11-11 04:25:03' owned)" \
+  --argjson g "$(fw ctx_f_proj owned not_requested - released)" --argjson h "$(fw ctx_f_ret external retained - retained)" \
+  --argjson i "$(aw ctx_f_abs succeeded not_materialized)" --argjson j "$(aw ctx_f_tcf failed terminal_create_failed)" \
+  '{ok:true,result:{workers:[$a,$b,$c,$d,$e,$f,$g,$h,$i,$j],page:{hasMore:false,nextCursor:null}}}' > "$FAKE_ORCA_JSON"
+opath "concise and full rows: released ones are counted, the rest named" 1 "WORKERS UNRELEASED  run run_T: 3 settled worker\(s\) not released, 4 released, 1 running" cleanup "$GO"
+oref "a concise released row is no finding" "dispatch ctx_c_rel( |$)" cleanup "$GO"
+oref "a full row released by ownershipState is no finding" "dispatch ctx_f_own( |$)" cleanup "$GO"
+oref "a full row with a releaseCompletedAt is no finding" "dispatch ctx_f_done( |$)" cleanup "$GO"
+oref "a full row released by its projection is no finding" "dispatch ctx_f_proj( |$)" cleanup "$GO"
+oref "a concise row of a running worker is no finding" "dispatch ctx_c_run( |$)" cleanup "$GO"
+opath "a concise settled row whose terminal is retained gets its release command" 1 "^  orca orchestration worker-release --dispatch ctx_c_ret$" cleanup "$GO"
+opath "a concise settled row whose terminal is still active is unreleased" 1 "UNRELEASED ctx_c_act \(succeeded, terminal active" cleanup "$GO"
+opath "a full retained row is unreleased" 1 "worker-release --dispatch ctx_f_ret$" cleanup "$GO"
+opath "status counts the same way" 0 "^Workers: UNRELEASED  run run_T: 3 settled worker\(s\) not released, 4 released, 1 running" status "$GO"
+oref "a settled row that never had a terminal (absent, not_materialized) is no finding" "dispatch ctx_f_abs( |$)" cleanup "$GO"
+oref "a failed terminal_create row with an absent resource is no finding" "dispatch ctx_f_tcf( |$)" cleanup "$GO"
+PATH="$fpath" python3 -B "$P" cleanup --json "$GO" > "$TMP/cleanup-abs.json" 2>&1
+if jq -e '([.left[]] | any(test("ctx_f_abs|ctx_f_tcf"))) | not' "$TMP/cleanup-abs.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  rows with an absent resource are not in cleanup's left list"
+else fail=$((fail + 1)); echo "FAIL  absent resource rows in left"; head -c 1200 "$TMP/cleanup-abs.json"; fi
+jq -n --argjson a "$(fw ctx_f_own released not_requested - owned)" --argjson i "$(aw ctx_f_abs succeeded not_materialized)" \
+  --argjson j "$(aw ctx_f_tcf failed terminal_create_failed)" '{ok:true,result:{workers:[$a,$i,$j],page:{hasMore:false,nextCursor:null}}}' > "$FAKE_ORCA_JSON"
+opath "only released and never-had-a-terminal rows: cleanup stays CLEAN" 0 "^Cleanup: CLEAN" cleanup "$GO"
+opath "and the run line is OK with one released worker" 0 "WORKERS OK  run run_T: 0 settled worker\(s\) not released, 1 released, 0 running" cleanup "$GO"
+oref "status prints no release command for them" "worker-release --dispatch ctx_f_(abs|tcf)" status "$GO"
+# a task lead's report: the durable record (`report`) and, with an Orca Run, a 'task done' message of an older lead
+export FAKE_ORCA_CHECK="$TMP/orca-check.json"
+jq -n '{ok:true,result:{messages:[{id:"m1",type:"heartbeat",subject:"alive"},{id:"m2",type:"status",subject:"task done: gw",body:"branch x"}]}}' > "$FAKE_ORCA_CHECK"
+: > "$FAKE_ORCA_LOG"
+opath "status --orca-run: a task done message without a durable record is a note" 0 "note: lead report: task done: gw \(an Orca message only" status "$GO"
+if grep -q "^orchestration check --run run_T --all --json$" "$FAKE_ORCA_LOG" && ! grep -E "orchestration check" "$FAKE_ORCA_LOG" | grep -qE -- "--ack|--peek|--unread|--wait"
+then pass=$((pass + 1)); echo "PASS  the inbox is read with check --all only (never marks a message read)"
+else fail=$((fail + 1)); echo "FAIL  orchestration check call"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head -5; fi
+FAKE_ORCA_MODE=error oref "orca check failing: no opinion, no note, no traceback" "Orca message only|Traceback" status "$GO"
+oref "without an Orca Run the inbox is not read" "Orca message only" status "$G"
+expect "report: records the lead report of gw" 0 "^recorded lead report for gw at ${SG:0:10}: " report "$GO" --task gw --sha "$SG" --body "gw done: all checks pass"
+opath "the durable record is shown with its SHA and summary" 0 "note: lead report: [0-9TZ:-]+ @${SG:0:10} gw done: all checks pass" status "$GO"
+oref "a durable record replaces the message note" "Orca message only" status "$GO"
+unset FAKE_ORCA_CHECK
 for mode in error garbage; do
   FAKE_ORCA_MODE=$mode opath "orca $mode: NOT_AVAILABLE, never a failure" 0 "WORKERS NOT_AVAILABLE  run run_T: orca worker-list exited" cleanup "$GO"
   FAKE_ORCA_MODE=$mode oref "orca $mode: no traceback" "Traceback" status "$GO"
@@ -2704,6 +2807,29 @@ PATH="$fpath" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-left.json" 2>&
 if jq -e '.state == "LEFTOVER" and any(.leftovers[]; .kind == "directory" and (.path | test("feat-core-demo-gw$")) and (.commands | length) == 2 and (.commands[0] | test("worktree prune$")) and (.commands[1] | test("orca worktree rm")))' "$TMP/cleanup-left.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  cleanup --json carries the leftover directory with its commands"
 else fail=$((fail + 1)); echo "FAIL  cleanup --json leftovers"; head -c 1500 "$TMP/cleanup-left.json"; fi
+# the processes that may keep the leftover directory busy (read-only process listing, injected fixture): named with PID,
+# command and start time; the user decides
+jq -n --arg d "$LD" '[{pid:3101,ppid:1,name:"codex.exe",command:("C:/tools/codex.exe --cwd " + $d),started:"2026-11-10T08:00:00"},
+  {pid:3102,ppid:99999,name:"wsl.exe",command:"wsl.exe -d Ubuntu -- sleep infinity",started:"2026-11-09T20:00:00"},
+  {pid:3103,ppid:3101,name:"wsl.exe",command:"wsl.exe -d Ubuntu -- sleep infinity",started:"2026-11-10T08:00:05"},
+  {pid:3104,ppid:1,name:"node.exe",command:"node other.js",started:"2026-11-10T09:00:00"},
+  {pid:3105,ppid:1,name:"node.exe",command:("node " + $d + "2/tool.js"),started:"2026-11-10T09:30:00"},
+  {pid:3106,ppid:1,name:"node.exe",command:("node " + $d + "/sub/tool.js"),started:"2026-11-10T09:40:00"}]' > "$TMP/proc-busy.json"
+export BUSYP="$TMP/proc-busy.json"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "a process whose command line names the leftover directory is listed with PID, command and start" 1 "KEPT  srv: BUSY\? process 3101 \(codex.exe\) started 2026-11-10T08:00:00: .*codex.exe --cwd .*feat-core-demo-gw - its command line names the directory; .*the user decides" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "an orphaned wsl.exe sleep infinity is listed" 1 "BUSY\? process 3102 \(wsl.exe\) started 2026-11-09T20:00:00: .*sleep infinity - orphaned wsl.exe sleep infinity" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "a wsl.exe sleep infinity whose parent is alive is not named" "process 3103" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "an unrelated process is not named" "process 3104" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "a sibling directory with the same prefix (...-gw2) is not named" "process 3105" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "a process inside the directory (path boundary) is named" 1 "BUSY\? process 3106 \(node.exe\) started 2026-11-10T09:40:00: .*sub/tool.js - its command line names the directory" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "busy processes: never a kill command" "$NOKILL" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "busy processes: no traceback" "Traceback" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE=none opath "a process listing that fails names nothing, still LEFTOVER" 1 "^Cleanup: LEFTOVER" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE=none oref "a failing process probe: no BUSY line, no traceback" "BUSY\? process|Traceback" cleanup "$G"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$BUSYP" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-busy.json" 2>&1
+if jq -e 'any(.leftovers[]; .kind == "directory" and (.processes | map(.pid) | sort) == [3101, 3102, 3106] and all(.processes[]; .command != "" and .started != "" and .why != ""))' "$TMP/cleanup-busy.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json lists the busy candidates (PID, command, start) per leftover directory"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json processes"; head -c 1500 "$TMP/cleanup-busy.json"; fi
 echo x > "$LD/file.txt"
 opath "a non-empty leftover task directory is LEFTOVER too" 1 "KEPT  srv: LEFTOVER directory .*feat-core-demo-gw" cleanup "$G"
 oref "cleanup output never kills a process" "$NOKILL" cleanup "$G"
@@ -2738,6 +2864,63 @@ opath "fake orca: orca worktree set names the integration checkout as parent, pr
 opath "fake orca: shared placement launches the lead" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$G" --task gw --phase lead --placement shared --runner orca
 if ! grep -q "worktree create" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  fake orca: dispatch --phase lead only prints the worktree create"
 else fail=$((fail + 1)); echo "FAIL  fake orca: dispatch ran orca worktree create"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
+# Orca lists a worktree it did not create (git worktree add) under "Hidden worktrees" when the repo's
+# externalWorktreeVisibility is hide: dispatch prints `orca repo set ... show` before the worktree add (lead handoff)
+# or the worker-start that creates one (child placement), only for hide; show, inherit, absent, an unlisted repo and a
+# failing orca print nothing. The fake orca only answers the read-only `repo list`.
+export FAKE_ORCA_REPOS="$TMP/orca-repos.json"
+repos() { jq -n --arg p "$1" --arg v "$2" '{ok:true,result:{repos:[{id:"r1",path:$p,externalWorktreeVisibility:(if $v=="" then null else $v end)}]}}' > "$FAKE_ORCA_REPOS"; }
+vis_out() { PATH="$fpath" python3 -B "$P" "$@" 2>&1; }
+SHOW_RE="^orca repo set --repo '?path:[^' ]*rpg-mmo-server'? --external-worktree-visibility show$"
+line_of() { grep -nE "$1" <<<"$2" | head -1 | cut -d: -f1; }
+: > "$FAKE_ORCA_LOG"
+repos "$(wtp "$S")" hide
+out=$(vis_out dispatch "$G" --task gw --phase lead --runner orca)
+repo_ln=$(line_of "$SHOW_RE" "$out"); add_ln=$(line_of "^git -C .* worktree add --no-track" "$out")
+if [ -n "$repo_ln" ] && [ -n "$add_ln" ] && [ "$repo_ln" -lt "$add_ln" ]; then pass=$((pass + 1)); echo "PASS  visibility hide: the lead dispatch prints orca repo set ... show before the worktree add"
+else fail=$((fail + 1)); echo "FAIL  visibility hide: repo set line $repo_ln, worktree add line $add_ln"; sed 's/^/      /' <<<"$out" | head -8; fi
+if grep -qx "repo list --json" "$FAKE_ORCA_LOG" && ! grep -q "^repo set" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  visibility hide: only the read-only repo list ran, repo set is printed, never run"
+else fail=$((fail + 1)); echo "FAIL  visibility hide: orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head -5; fi
+for v in show inherit ""; do
+  repos "$(wtp "$S")" "$v"; out=$(vis_out dispatch "$G" --task gw --phase lead --runner orca)
+  if ! grep -q "orca repo set" <<<"$out" && grep -q "^git -C .* worktree add --no-track" <<<"$out"; then pass=$((pass + 1)); echo "PASS  visibility '${v:-absent}': no repo set line, the worktree add is still printed"
+  else fail=$((fail + 1)); echo "FAIL  visibility '${v:-absent}' printed a repo set line"; sed 's/^/      /' <<<"$out" | head -5; fi
+done
+repos "$TMP/another-repo" hide; out=$(vis_out dispatch "$G" --task gw --phase lead --runner orca)
+if ! grep -q "orca repo set" <<<"$out"; then pass=$((pass + 1)); echo "PASS  visibility hide of another repo: no repo set line"
+else fail=$((fail + 1)); echo "FAIL  visibility hide of another repo printed a repo set line"; fi
+repos "$(wtp "$S")" hide; out=$(FAKE_ORCA_MODE=error vis_out dispatch "$G" --task gw --phase lead --runner orca); rc=$?
+if ! grep -q "orca repo set" <<<"$out" && grep -q "^git -C .* worktree add --no-track" <<<"$out"; then pass=$((pass + 1)); echo "PASS  orca failing: no repo set line, no error"
+else fail=$((fail + 1)); echo "FAIL  orca failing: rc=$rc"; sed 's/^/      /' <<<"$out" | head -5; fi
+repos "$(wtp "$S")" hide
+out=$(vis_out dispatch "$G" --task integration:srv --phase qa --sha "$SG" --placement child --runner orca)
+repo_ln=$(line_of "$SHOW_RE" "$out"); start_ln=$(line_of "^orca orchestration worker-start .*--worktree new-child" "$out")
+if [ -n "$repo_ln" ] && [ -n "$start_ln" ] && [ "$repo_ln" -lt "$start_ln" ]; then pass=$((pass + 1)); echo "PASS  visibility hide: a child placement prints repo set before its worker-start"
+else fail=$((fail + 1)); echo "FAIL  visibility hide, child placement: repo set line $repo_ln, worker-start line $start_ln"; sed 's/^/      /' <<<"$out" | head -8; fi
+# `orca repo list` holds the main checkout: a placement whose repo path (or child parent) is a linked worktree of it
+# still gets the hint, naming the main checkout; show prints nothing
+git -C "$S" worktree add -q "$TMP/vis-link" -b vis-link develop 2>/dev/null
+if PATH="$fpath" python3 -B - "$ROOT" "$(wtp "$S")" "$(wtp "$TMP/vis-link")" "$FAKE_ORCA_REPOS" <<'PY'
+import importlib.util, json, shlex, sys
+spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+main, link, repos = sys.argv[2:5]
+def names_main(line):
+    args = shlex.split(line or "")
+    return args[:3] == ["orca", "repo", "set"] and any(m.norm_wt(a[len("path:"):]) == m.norm_wt(main) for a in args if a.startswith("path:"))
+top = {"worktree": "new-top-level", "new": True, "repo": f"path:{link}", "base": "develop"}
+child = {"worktree": "new-child", "new": True, "child_of": link, "base": "develop"}
+assert names_main(m.place_show_line(top)), m.place_show_line(top)
+assert names_main(m.place_show_line(child)), m.place_show_line(child)
+assert m.place_show_line({"worktree": "current", "new": False}) is None
+assert m.place_show_line({"worktree": "new-top-level", "new": True}) is None
+json.dump({"ok": True, "result": {"repos": [{"id": "r1", "path": main, "externalWorktreeVisibility": "show"}]}}, open(repos, "w"))
+assert m.place_show_line(top) is None
+PY
+then pass=$((pass + 1)); echo "PASS  visibility hide: a repo path that is a linked worktree maps to its main checkout for the hint (show: none)"
+else fail=$((fail + 1)); echo "FAIL  visibility hide: linked-worktree repo path"; fi
+git -C "$S" worktree remove --force "$TMP/vis-link"; git -C "$S" branch -q -D vis-link
+unset FAKE_ORCA_REPOS
 # children of the integration checkout ($S on feat/core/demo): the integration QA child dispatch names
 # (<topic>--qa) and a helper with any name whose Orca lineage parent is the integration checkout; status lists them
 # once per repo in integration_children with cleanup guidance, cleanup names them "child of integration:srv"
@@ -2764,6 +2947,69 @@ opath "status text names the integration child with its rm command" 0 "^  \[inte
 opath "cleanup names the integration QA child" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*feat-core-demo--qa" cleanup "$G"
 opath "cleanup names the lineage helper of the integration checkout" 1 "KEPT  srv: child of integration:srv: leftover child worktree .*int-helper" cleanup "$G"
 unset FAKE_ORCA_WT
+# test slots (tests/run-all.sh lock_publish: <state>/locks/run-all-slots/<n>/{pid,winpid,checkout,started}) held by a run
+# in one of the plan's checkouts are named with PID, checkout, start and liveness; one elsewhere is not; nothing is stopped
+SLOTS="$RPG_FACTORY_STATE_DIR/locks/run-all-slots"; mkdir -p "$SLOTS/1" "$SLOTS/2" "$SLOTS/3"
+printf '4242\n' > "$SLOTS/1/pid"; printf '4242\n' > "$SLOTS/1/winpid"; wtp "$S" > "$SLOTS/1/checkout"; printf '2026-11-11T01:02:03Z\n' > "$SLOTS/1/started"
+printf '5151\n' > "$SLOTS/2/pid"; printf '5151\n' > "$SLOTS/2/winpid"; printf '%s\n' "$TMP/elsewhere" > "$SLOTS/2/checkout"; printf '2026-11-11T02:00:00Z\n' > "$SLOTS/2/started"
+printf '9999\n' > "$SLOTS/3/pid"; printf '9999\n' > "$SLOTS/3/winpid"; printf '%s/sub\n' "$(wtp "$S")" > "$SLOTS/3/checkout"; printf '2026-11-11T03:00:00Z\n' > "$SLOTS/3/started"
+jq -n '[{pid:4242,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T01:02:03"}]' > "$TMP/proc-slots.json"
+export SLOTP="$TMP/proc-slots.json"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "status names the slot held in the plan's checkout, alive" 0 "^Slots: slot 1 held by PID 4242 in .*rpg-mmo-server since 2026-11-11T01:02:03Z \(alive\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "status names a slot whose holder is gone" 0 "^Slots: slot 3 held by PID 9999 in .*rpg-mmo-server/sub since 2026-11-11T03:00:00Z \(not running\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "a slot held in another checkout is not named" "slot 2 held" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "slot lines never carry a kill command" "$NOKILL" status "$G"
+RPG_FACTORY_PROCESS_TABLE=none opath "process listing failing: liveness unknown, never an error" 0 "^Slots: slot 1 held by PID 4242 .*\(liveness unknown\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "cleanup names the slot too" 1 "^  SLOT slot 1 held by PID 4242 in .*rpg-mmo-server since 2026-11-11T01:02:03Z \(alive\)" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "cleanup slot lines never carry a kill command" "$NOKILL" cleanup "$G"
+# winpid equal to pid (slots 1 and 3 above): no "(Windows PID" text in status or cleanup
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "equal winpid: status prints no Windows PID text" "Windows PID" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "equal winpid: cleanup prints no Windows PID text" "Windows PID" cleanup "$G"
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTP" python3 -B "$P" status --json "$G" > "$TMP/so-slots.json" 2> "$TMP/se-slots.txt"; rc=$?
+if [ $rc = 0 ] && jq -e '.valid and (has("_slots") | not)' "$TMP/so-slots.json" >/dev/null && grep -q "^Slots: slot 1 held by PID 4242" "$TMP/se-slots.txt"
+then pass=$((pass + 1)); echo "PASS  status --json: slots on stderr, stdout stays the status schema"
+else fail=$((fail + 1)); echo "FAIL  status --json slots (rc $rc)"; head -5 "$TMP/se-slots.txt"; fi
+PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTP" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-slots.json" 2>&1
+if jq -e '(.slots | map(.slot) | sort) == ["1", "3"] and (.slots[] | select(.slot == "1") | .alive == true and .pid == "4242") and (.slots[] | select(.slot == "3") | .alive == false)' "$TMP/cleanup-slots.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  cleanup --json carries the slot holders"
+else fail=$((fail + 1)); echo "FAIL  cleanup --json slots"; head -c 1200 "$TMP/cleanup-slots.json"; fi
+# a slot whose winpid differs from its pid (MSYS shell PID vs Windows PID) names both; liveness follows the winpid
+mkdir -p "$SLOTS/4"
+printf '6161\n' > "$SLOTS/4/pid"; printf '6262\n' > "$SLOTS/4/winpid"; wtp "$S" > "$SLOTS/4/checkout"; printf '2026-11-11T04:00:00Z\n' > "$SLOTS/4/started"
+jq -n '[{pid:6262,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T04:00:00"}]' > "$TMP/proc-slots-win.json"
+SLOTW="$TMP/proc-slots-win.json"
+RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "status names both PIDs when winpid differs, alive by the Windows PID" 0 "^Slots: slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "cleanup names both PIDs when winpid differs" 1 "^  SLOT slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot (1) still prints no Windows PID text" "slot 1 held by PID 4242 \(Windows PID" status "$G"
+# children of the plan's worktrees count as the plan's checkouts, as `children_of` finds them: a branch with an Orca prefix
+# (codex/<task branch>--qa in a sibling directory) and a child known only through Orca's lineage (any name, any
+# directory); a slot in a checkout that is neither stays unnamed
+git -C "$S" worktree add -q "$TMP/slot-pfx-child" -b codex/feat/core/demo-gw--qa "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b slot-lineage-br "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-unrelated" -b slot-unrelated-br "$SG" 2>/dev/null
+mkdir -p "$SLOTS/5" "$SLOTS/6" "$SLOTS/7"
+for n in 5:slot-pfx-child:7001 6:slot-lineage-child:7002 7:slot-unrelated:7003; do
+  IFS=: read -r sn sd sp <<<"$n"
+  printf '%s\n' "$sp" > "$SLOTS/$sn/pid"; printf '%s\n' "$sp" > "$SLOTS/$sn/winpid"; wtp "$TMP/$sd" > "$SLOTS/$sn/checkout"; printf '2026-11-11T05:0%s:00Z\n' "$sn" > "$SLOTS/$sn/started"
+done
+export FAKE_ORCA_WT="$TMP/orca-wt-slots.json"
+jq -n --arg p "$(wtp "$S")" --arg c "$(wtp "$TMP/slot-lineage-child")" \
+  '{ok:true,result:{worktrees:[{id:"r::int",path:$p,parentWorktreeId:null},{id:"r::lc",path:$c,parentWorktreeId:"r::int"}]}}' > "$FAKE_ORCA_WT"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "status names a slot held in a prefixed child worktree (codex/<task branch>--qa)" 0 "^Slots: slot 5 held by PID 7001 in .*slot-pfx-child since 2026-11-11T05:05:00Z" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "status names a slot held in a lineage-only child worktree" 0 "^Slots: slot 6 held by PID 7002 in .*slot-lineage-child since 2026-11-11T05:06:00Z" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "a slot in an unrelated worktree of the repo is not named" "slot 7 held" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "cleanup names the prefixed child's slot" 1 "^  SLOT slot 5 held by PID 7001 in .*slot-pfx-child" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "cleanup names the lineage-only child's slot" 1 "^  SLOT slot 6 held by PID 7002 in .*slot-lineage-child" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "cleanup does not name the unrelated worktree's slot" "slot 7 held" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "child slot lines never carry a kill command" "$NOKILL" status "$G"
+# Orca unavailable: the naming rule alone still names the prefixed child, never the lineage-only one
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error opath "orca failing: the prefixed child's slot is still named" 0 "^Slots: slot 5 held by PID 7001" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error oref "orca failing: a lineage-only child's slot is not named, no traceback" "slot 6 held|Traceback" status "$G"
+unset FAKE_ORCA_WT
+git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
+git -C "$S" worktree remove --force "$TMP/slot-unrelated"
+git -C "$S" branch -q -D codex/feat/core/demo-gw--qa slot-lineage-br slot-unrelated-br
+rm -rf "$SLOTS"
 
 case_end settled-workers
 fi
@@ -2934,6 +3180,9 @@ expect "seven files of a plan repo: above S" 0 "7 files > 6" tier --plan "$PL" -
 expect "tier --plan needs --paths" 2 "needs --repo <plan repo key> and --paths" tier --plan "$PL" --repo plugin
 expect "tier --plan with an unknown repo key fails cleanly" 2 "neither a registry repo nor in plan.repos" tier --plan "$PL" --repo nope --paths x
 expect "--repo without --plan is a usage error" 2 "go with --plan" tier --repo plugin --paths x
+expect "tier <plan> names the right forms, not a factory-context error" 2 "tier takes no positional argument .*tier --plan <plan.json> --repo <key> --paths <files>.*tier -- --repo <key> --paths <files>" tier "$PL"
+refute "tier <plan> never reaches factory-context.sh" "factory-context: unknown argument" tier "$PL"
+expect "tier <plan> with trailing flags is the same usage error" 2 "tier takes no positional argument" tier --json "$PL" --repo plugin --paths scripts/a.py
 
 case_end tier-plugin
 fi
@@ -2971,6 +3220,14 @@ assert not sys.argv[4] or re.search(sys.argv[4], r["next"] or ""), r' "$out" "$i
     pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
 }
+# st_note <name> <task> <regex>: one of the task's notes in status --json matches
+st_note() {
+  local name="$1" id="$2" pat="$3" out; pp status --json "$ST"; out="$OUT"
+  if python3 -c 'import json,re,sys; o=json.loads(sys.argv[1]); r={t["id"]:t for t in o["tasks"]}[sys.argv[2]]
+assert any(re.search(sys.argv[3], n) for n in r["notes"]), r["notes"]' "$out" "$id" "$pat"; then
+    pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
+}
 st_phase "nothing started in a worktree repo: pending, next starts the task lead" a pending "dispatch .* --task a --phase lead --runner orca"
 st_phase "nothing started in the Unity project: next starts its task lead in the main checkout" c1 pending "dispatch .* --task c1 --phase lead --runner orca"
 st_phase "a dependent task waits (no next command)" b pending '^$'
@@ -2988,11 +3245,35 @@ expect "review FAIL is named with its SHA" 0 "review FAIL@${SA:0:10}" status "$S
 echo a2 >> "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" commit -qam "fix: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "a fix after the FAIL is a new candidate" a candidate "--phase verify --sha $SA"
 expect "and the old review is named STALE" 0 "review at .* is STALE: owned paths changed since" status "$ST"
+# a reported task whose review is not current for the task HEAD is never ready (the review/QA currency test is the
+# phase's own: task_status), even with a lead report at that HEAD
+expect "stale review: the lead reports at the task HEAD" 0 "^recorded lead report for a at ${SA:0:10}: " report "$ST" --task a --sha "$SA" --body "a done"
+st_note "stale review with a lead report at HEAD: READY_FOR_PR: no names the stale review" a '^READY_FOR_PR: no \(review at [0-9a-f]{10} is STALE: owned paths changed since\)$'
+rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
 expect "no integration branch yet: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
+# the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
+st_note "no lead report yet: READY_FOR_PR: no, the first missing thing" a '^READY_FOR_PR: no \(no lead report\)$'
+refute "no lead report: no lead report line" "note: lead report:" status "$ST"
+expect "report: an unknown task is a usage error" 2 "unknown task zz" report "$ST" --task zz --sha "$SA" --body x
+expect "report: a body is required" 2 "one of the arguments --body --body-file is required" report "$ST" --task a --sha "$SA"
+expect "report: an empty body is refused" 2 "report body is empty" report "$ST" --task a --sha "$SA" --body "  "
+expect "report: a SHA that is no commit of the repo is refused" 2 "is not a commit of repo srv" report "$ST" --task a --sha 1234567abcdef --body x
+expect "report: an integration task is refused" 2 "report is per plan task" report "$ST" --task integration:srv --sha "$SA" --body x
+SD=$(git -C "$S" rev-parse develop)
+{ printf 'First line of the lead report %0190d\n' 0; echo 'second line stays in the body'; } > "$TMP/lead-report.txt"
+expect "report --body-file records the report at its SHA" 0 "^recorded lead report for a at ${SD:0:10}: " report "$ST" --task a --sha "$SD" --body-file "$TMP/lead-report.txt"
+if jq -e --arg sha "$SD" '.sha == $sha and .task == "a" and (.summary | length) <= 200 and (.summary | endswith("...")) and (.body | contains("second line stays in the body")) and (.at | test("^[0-9]{4}-"))' "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  the report record keeps SHA, time, a summary capped at 200 characters and the full body"
+else fail=$((fail + 1)); echo "FAIL  report record"; head -c 800 "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"; fi
+st_note "a report at an older commit is shown with the stale marker" a "^lead report: .* @${SD:0:10} First line.*\(stale: task HEAD is ${SA:0:10}\)$"
+st_note "a stale report: READY_FOR_PR: no names both commits" a "^READY_FOR_PR: no \(lead report is for ${SD:0:10}, task HEAD is ${SA:0:10}\)$"
+expect "report: a later report replaces the first one" 0 "^recorded lead report for a at ${SA:0:10}: " report "$ST" --task a --sha "$SA" --body $'Task a done: all green\nsecond line'
+st_note "a report at the task HEAD: no stale marker, first line as summary" a "^lead report: [0-9TZ:-]+ @${SA:0:10} Task a done: all green$"
+st_note "report at HEAD and review PASS, no QA yet: READY_FOR_PR: no (no QA)" a '^READY_FOR_PR: no \(no QA\)$'
 gi "$TMP/st-int" merge -q --no-ff feat/core/st-a -m "merge a"
 st_phase "merged after review PASS: integrated" a integrated '^$'
 # Prior tasks can touch paths a later task also owns. That integration history is not evidence the later
@@ -3052,6 +3333,88 @@ st_phase "every task of the repo integrated: next is the integration QA at its H
 sv --task integration:srv --phase qa --sha "$SI" --by codex --state PASS
 st_phase "QA PASS on a commit containing the review: qa" a qa
 st_phase "and for the second task" b qa
+st_note "report at HEAD, review and QA PASS: READY_FOR_PR: yes (without any message)" a '^READY_FOR_PR: yes$'
+st_note "a task without a lead report is not ready, whatever its verdicts" b '^READY_FOR_PR: no \(no lead report\)$'
+# a current subtask review FAIL at the task HEAD blocks the task in status (next redispatches the lead), so the same
+# status must not call it ready, though the lead report, task review and QA are all PASS at HEAD
+sv --task a --phase review --sha "$SA" --by claude --state FAIL --subtask sx
+st_note "subtask review FAIL at HEAD: READY_FOR_PR: no names the subtask" a '^READY_FOR_PR: no \(subtask sx review FAIL at '
+st_note "and status names the subtask FAIL as a note too" a '^subtask sx review FAIL at '
+st_phase "and next redispatches the task lead, as the same blocker says" a qa "--task a --phase lead --runner orca"
+refute "and status offers no gate while it is open" "^Next: .* gate " status "$ST"
+sv --task a --phase review --sha "$SA" --by claude --state PASS --subtask sx
+st_note "the subtask PASS clears it: READY_FOR_PR: yes again" a '^READY_FOR_PR: yes$'
+# lead_report_notes called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, os, pathlib, subprocess, sys, tempfile
+root, tmp = sys.argv[1:]
+os.environ['RPG_FACTORY_STATE_DIR'] = tempfile.mkdtemp(dir=tmp)
+spec = importlib.util.spec_from_file_location('ready_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+repo = pathlib.Path(tempfile.mkdtemp(dir=tmp))
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+git('init', '-q', '-b', 'main')
+(repo / 'f.txt').write_text('a'); git('add', '.'); git('commit', '-qm', 'A'); a = git('rev-parse', 'HEAD')
+(repo / 'f.txt').write_text('b'); git('commit', '-qam', 'B'); b = git('rev-parse', 'HEAD')
+plan = {'id': 'ready-notes', 'tasks': []}
+task = {'id': 't1', 'repo': 'srv'}
+m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': b, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
+row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
+assert 'READY_FOR_PR: yes' in m.lead_report_notes(plan, row, task, set(), path=str(repo)), 'baseline'
+fails = ['subtask s1 qa FAIL at abcdef1234 by codex (fix it)', 'subtask s2 review FAIL at 1234567890 by claude (fix it)']
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), blockers=fails)
+assert 'READY_FOR_PR: no (subtask s1 qa FAIL at abcdef1234 by codex (fix it) (+1 more))' in notes, notes
+row = dict(row, phase='integrated', qa={'state': 'PASS', 'sha': a}, stale={'qa': 'QA at ' + a[:10] + ' is STALE: owned paths changed on t since'})
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+assert 'READY_FOR_PR: no (QA at ' + a[:10] + ' is STALE: owned paths changed on t since)' in notes, notes
+notes = m.lead_report_notes(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))
+assert 'READY_FOR_PR: no (review at x is STALE: owned paths changed since)' in notes, notes
+notes = m.lead_report_notes(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))
+assert not any(n.startswith('READY_FOR_PR') for n in notes), notes
+PY
+then pass=$((pass + 1)); echo "PASS  lead_report_notes: blockers and stale review/QA are never READY_FOR_PR"
+else fail=$((fail + 1)); echo "FAIL  lead_report_notes blockers and stale"; fi
+# a worktree repo: a report at A with a later commit B on the task branch is superseded, even in the qa phase with
+# review and QA PASS at B (only a no-worktree repo, whose HEAD is the shared topic, accepts a report at an ancestor)
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, os, pathlib, subprocess, sys, tempfile
+root, tmp = sys.argv[1:]
+os.environ['RPG_FACTORY_STATE_DIR'] = tempfile.mkdtemp(dir=tmp)
+spec = importlib.util.spec_from_file_location('report_ancestor_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+repo = pathlib.Path(tempfile.mkdtemp(dir=tmp))
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+git('init', '-q', '-b', 'main')
+(repo / 'f.txt').write_text('a'); git('add', '.'); git('commit', '-qm', 'A'); a = git('rev-parse', 'HEAD')
+(repo / 'f.txt').write_text('b'); git('commit', '-qam', 'B'); b = git('rev-parse', 'HEAD')
+plan = {'id': 'ancestor-report', 'tasks': []}
+task = {'id': 't1', 'repo': 'srv'}
+m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': a, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
+row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=False)
+assert any('(stale: task HEAD is ' + b[:10] + ')' in n for n in notes), notes
+assert 'READY_FOR_PR: no (lead report is for ' + a[:10] + ', task HEAD is ' + b[:10] + ')' in notes, notes
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+assert not any('stale' in n for n in notes) and 'READY_FOR_PR: yes' in notes, notes
+PY
+then pass=$((pass + 1)); echo "PASS  worktree repo: a report at an ancestor of the task HEAD is stale (READY_FOR_PR: no); no-worktree keeps it current"
+else fail=$((fail + 1)); echo "FAIL  worktree repo ancestor report"; fi
+pp status --json "$ST"; echo "$OUT" > "$TMP/so-report.json"
+if python3 - "$ROOT" "$TMP/so-report.json" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1] + "/scripts/checks/artifact-lint.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+schema = json.load(open(sys.argv[1] + "/docs/schemas/pipeline-status.schema.json", encoding="utf-8"))
+assert not m.schema_errors(json.load(open(sys.argv[2], encoding="utf-8")), schema, schema)
+PY
+then pass=$((pass + 1)); echo "PASS  status --json with the lead report notes still matches the status schema"
+else fail=$((fail + 1)); echo "FAIL  status --json lead report notes schema"; fi
 # the Unity project: tasks run on the integration branch in the main checkout
 gi "$C" checkout -qb feat/core/st develop
 mkdir -p "$C/Assets/C"; echo c > "$C/Assets/C/c.cs"
@@ -3075,11 +3438,25 @@ sv --task c1 --phase review --sha "$SC" --by codex --state PASS
 st_phase "Unity review PASS is integrated at once; next is the per-task QA" c1 integrated "--task c1 --phase qa --sha $SC"
 sv --task c1 --phase qa --sha "$SC" --by codex --state PASS
 st_phase "per-task QA PASS: qa" c1 qa
+# a no-worktree repo: the task HEAD is plan.topic, which moves when the next task commits. A finished task keeps
+# READY_FOR_PR: yes and shows no stale marker while its report is an ancestor of the HEAD (phase qa)
+expect "report: the Unity task lead reports at its commit" 0 "^recorded lead report for c1 at ${SC:0:10}: " report "$ST" --task c1 --sha "$SC" --body "c1 done"
+st_note "no-worktree: report at the HEAD, review and QA PASS: READY_FOR_PR: yes" c1 '^READY_FOR_PR: yes$'
 st_phase "and the next Unity task is ready: its task lead" c2 pending "--task c2 --phase lead --runner orca"
 refute "no gate command while c2 is pending" "^Next: .* gate " status "$ST"
 mkdir -p "$C/Assets/D"; echo d > "$C/Assets/D/d.cs"; gi "$C" add Assets/D; gi "$C" commit -qm "feat: c2"; SD=$(git -C "$C" rev-parse HEAD)
+st_phase "no-worktree: the next task committed, c1 is still qa" c1 qa
+st_note "no-worktree: after the next task commits, c1 keeps READY_FOR_PR: yes (report is an ancestor of the HEAD)" c1 '^READY_FOR_PR: yes$'
+st_note "no-worktree: and its report line has no stale marker" c1 "^lead report: [0-9TZ:-]+ @${SC:0:10} c1 done$"
+# a report at a commit that is no ancestor of the HEAD is still stale
+SX=$(gi "$C" commit-tree 'develop^{tree}' -p develop -m "side")
+expect "report: a report at a commit outside the task's history" 0 "^recorded lead report for c1 at ${SX:0:10}: " report "$ST" --task c1 --sha "$SX" --body "c1 done"
+st_note "no-worktree: a report at a non-ancestor is shown stale" c1 "^lead report: [0-9TZ:-]+ @${SX:0:10} c1 done \(stale: task HEAD is ${SD:0:10}\)$"
+st_note "no-worktree: and READY_FOR_PR: no names both commits" c1 "^READY_FOR_PR: no \(lead report is for ${SX:0:10}, task HEAD is ${SD:0:10}\)$"
+expect "report: the Unity task lead reports again at its commit" 0 "^recorded lead report for c1 at ${SC:0:10}: " report "$ST" --task c1 --sha "$SC" --body "c1 done"
 sv --task c2 --phase review --sha "$SD" --by claude --state PASS
 sv --task c2 --phase qa --sha "$SD" --by claude --state PASS
+st_note "no-worktree: every task at QA flips c1 to integrated, yet c1 keeps READY_FOR_PR: yes (its QA is an ancestor of the HEAD)" c1 '^READY_FOR_PR: yes$'
 # agree <name>: status names the gate as next exactly when the gate (no registry checks here) is READY_FOR_PR
 agree() {
   local out g rc
@@ -3258,7 +3635,14 @@ rv --task k --phase review --sha "$RS2" --by claude --state PASS
 expect "unanimous claude subtasks require codex task review by default" 1 "reviewed by claude, cross-model review needs codex" gate "$RSP" --no-run-checks
 expect "explicit subtask implementer cannot contradict dispatch" 2 "--implementer codex conflicts with recorded implementer claude for k subtask s" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --implementer codex
 expect "explicit subtask implementer matching dispatch is accepted" 0 "recorded review PASS for k subtask s" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --implementer claude
-expect "explicit task implementer without dispatch is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+# a task review pairs against the unanimous subtask implementers when the task has no implementer record of its own, so an
+# explicit --implementer that contradicts them is refused too (not only one that contradicts a task-level record)
+expect "explicit task implementer contradicting the unanimous subtask implementers is refused" 2 "--implementer codex conflicts with the recorded subtask implementer claude for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+expect "explicit task implementer matching the unanimous subtask implementers is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state PASS --implementer claude
+# the lead's own task-level implement dispatch (codex, planned for a code task): the record the explicit declarations below match
+rs dispatch "$RSP" --task k --phase implement
+expect "explicit task implementer matching the task-level dispatch is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+expect "explicit task implementer contradicting the task-level dispatch is still refused" 2 "--implementer claude conflicts with recorded implementer codex for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state PASS --implementer claude
 expect "explicit implementer preserves its paired reviewer record" 0 "kept the claude review of k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state FAIL --implementer codex
 if jq -e '.by == "claude" and .state == "PASS" and .implementer == "codex"' "$RSVD/k__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  explicit implementer keeps paired PASS intact"
 else fail=$((fail + 1)); echo "FAIL  explicit implementer keeps paired PASS intact"; fi
