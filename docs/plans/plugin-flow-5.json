@@ -89,6 +89,8 @@
         "scripts/lib/rpgf_guard/",
         "scripts/lib/gitguard.py",
         "tests/plan-paths.test.sh",
+        "tests/hook-perf.test.sh",
+        "scripts/README.md",
         "changelog.d/checks-lows.md"
       ],
       "exclusions": [],
