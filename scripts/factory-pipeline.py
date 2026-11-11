@@ -149,6 +149,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         Then prints the push, `gh pr create`, and `gh pr checks <pr> --watch` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
 
+  report <plan.json> --task ID --sha SHA (--body TEXT | --body-file FILE)
+        the task lead's durable report: <state dir>/pipeline/<plan id>/<task>__lead-report.json (at, sha, summary = the
+        first line capped at 200 characters, the full body). The lead runs it before its Orca `status` message, so the
+        run lead's `status` shows completion even when the message never arrives. Exit 2 on an unknown task, a bad
+        --sha or an empty body.
   status <plan.json> [--orca-run RUN_ID]... [--json]
         how far each task got (pending, implementing, candidate, reviewed, integrated, qa), derived from git and
         the recorded verdicts, with the next command per task and the ready wave: how a new lead session resumes a
@@ -162,7 +167,17 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         settled workers that are not released (`orca orchestration worker-list --run <id> --json`, read-only) and puts
         their `orca orchestration worker-release --dispatch <id>` first in `next`; a running worker is no finding;
         no orca or a failing call is a NOT_AVAILABLE line, never an error. With --json the "Workers:" lines go to
-        stderr (stdout stays the status schema).
+        stderr (stdout stays the status schema). The worker-list call asks for --full rows (the concise row lacks the
+        resource); a worker counts as released by terminalState, resource.releaseState or ownershipState `released`, a
+        releaseCompletedAt, or the projection's resource state.
+        Per task (notes, so the schema is unchanged): `lead report: <at> @<sha10> <summary>` from the `report` record
+        (plus `(stale: task HEAD is <sha10>)` when the task HEAD moved on), and once the task has commits
+        `READY_FOR_PR: yes` (lead report, PASS review and PASS QA at the task HEAD) or `READY_FOR_PR: no (<first
+        missing thing>)`. With an Orca Run (read-only `orca orchestration check --run R --all --json`, never marks a
+        message read; any failure is no opinion) a `task done: <id>` message is shown as a note when no durable record
+        exists. Test slots held by a run in one of the plan's checkouts (`<state dir>/locks/run-all-slots/<n>/`, written
+        by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
+        PID is alive (stderr with --json); status never stops the process and prints no command that would.
 
   cleanup <plan.json> [--after-merge] [--orca-run RUN_ID]... [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
@@ -177,6 +192,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         directory is free (a process holds a directory Windows reports busy: the user decides, cleanup names no PID it
         cannot see and never stops a process). Before a task worktree is removed it names the Orca terminals bound to it
         (read-only `orca terminal list`) and tells the task lead to confirm each released worker's CLI exited.
+        For such a leftover directory it lists `BUSY?` candidates from a read-only process listing (Windows: PowerShell
+        Get-CimInstance Win32_Process, 20 s timeout; elsewhere `ps`): processes whose command line names the directory and
+        an orphaned `wsl.exe ... sleep infinity` (its parent is gone), with PID, command and start time; the user decides,
+        no kill command is ever printed, and a failing probe names nothing. It also prints `SLOT` lines for held test
+        slots in the plan's checkouts, as status does (`slots` in --json).
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
@@ -1494,7 +1514,9 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         "5. Release each session the moment it reports, its candidate is superseded or it stops - not at task end: "
         "`orca orchestration worker-release --dispatch <id>`; `<pipeline> status <plan> --orca-run <your run id>` lists the "
         "unreleased ones.",
-        f"6. Record verdicts with `<pipeline> verdict <plan> ...`. Report to the run lead (`orca orchestration send --to "
+        f"6. Record verdicts with `<pipeline> verdict <plan> ...`. Write your report to a file and record it with "
+        f"`<pipeline> report <plan> --task {task['id']} --sha <HEAD> --body-file <file>` (the run lead's `status` shows it "
+        "and READY_FOR_PR; a message alone can be lost), then report to the run lead (`orca orchestration send --to "
         f"run:{run_id or '<run lead run id>'} --type status --subject \"task done: {task['id']}\" --body <report>`): branch "
         f"{spec['branch']}, HEAD SHA, your Orca Run id, subtasks with commits, review and QA verdicts (state, SHA, model), "
         "checks with exact counts (or NOT_RUN with reason), limitations, out-of-scope findings.",
@@ -2848,13 +2870,15 @@ def orca_runs(plan, extra=None):
 
 
 def orca_workers(run):
-    """(workers, None) from `orca orchestration worker-list --run RUN --json` (every page), or (None, why)."""
+    """(workers, None) from `orca orchestration worker-list --run RUN --full --json` (every page), or (None, why).
+    --full: the concise row has only state/liveness/terminal/terminalState; the full row adds the resource (release
+    state, ownership, release time), the projection and workerState/dispatchStatus."""
     exe = shutil.which("orca")
     if not exe:
         return None, "orca is not on PATH"
     workers, cursor = [], None
     for _ in range(50):
-        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100", "--json"]
+        argv = [exe, "orchestration", "worker-list", "--run", run, "--limit", "100", "--full", "--json"]
         if cursor:
             argv += ["--cursor", cursor]
         try:
@@ -2879,9 +2903,22 @@ def orca_workers(run):
 
 
 def worker_settled(w):
+    """The worker's dispatch settled. Full rows: projection.stage.detail, workerState, dispatchStatus; a concise row
+    (no --full) carries only `state`."""
     stage = ((w.get("projection") or {}).get("stage") or {}) if isinstance(w.get("projection"), dict) else {}
     return (stage.get("detail") == "settled" or str(w.get("workerState", "")).lower() in SETTLED_STATES
-            or str(w.get("dispatchStatus", "")).lower() in SETTLED_STATES)
+            or str(w.get("dispatchStatus", "")).lower() in SETTLED_STATES
+            or str(w.get("state", "")).lower() in SETTLED_STATES)
+
+
+def worker_released(w):
+    """The worker's terminal was released: the concise terminalState, the full resource (releaseState or ownershipState
+    `released`, a releaseCompletedAt), or the projection's resource state."""
+    res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
+    proj = (w.get("projection") or {}).get("resource") if isinstance(w.get("projection"), dict) else None
+    return (w.get("terminalState") == "released" or res.get("releaseState") == "released"
+            or res.get("ownershipState") == "released" or bool(res.get("releaseCompletedAt"))
+            or (isinstance(proj, dict) and proj.get("state") == "released"))
 
 
 def orca_sessions(runs):
@@ -2897,7 +2934,7 @@ def orca_sessions(runs):
         for w in workers:
             res = w.get("resource") if isinstance(w.get("resource"), dict) else {}
             term = w.get("terminalState") or res.get("releaseState") or "unknown"
-            if term == "released" or res.get("releaseState") == "released":
+            if worker_released(w):
                 released += 1
             elif not worker_settled(w):
                 running += 1
@@ -2905,7 +2942,7 @@ def orca_sessions(runs):
                 did = str(w.get("dispatchId") or "?")
                 note = res.get("retainedReason") or (f"release requested at {res['releaseRequestedAt']}"
                                                      if res.get("releaseRequestedAt") else None)
-                unreleased.append({"dispatch": did, "worker": w.get("workerState"), "terminal": term, "note": note,
+                unreleased.append({"dispatch": did, "worker": w.get("workerState") or w.get("state"), "terminal": term, "note": note,
                                    "command": orca_cmd.quote(["orca", "orchestration", "worker-release", "--dispatch", did])})
         out.append({"run": run, "state": "UNRELEASED" if unreleased else "OK", "reason": None, "unreleased": unreleased,
                     "released": released, "running": running})
@@ -2962,12 +2999,160 @@ def orca_terminals(path):
     return [(str(t.get("handle") or "?"), str(t.get("title") or "")) for t in rows if isinstance(t, dict)]
 
 
+# Processes and test slots: read-only. The run names what it sees (PID, command, start) and the user decides; nothing
+# here stops a process or prints a command that would.
+PS_LIST = ("Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; "
+           "ppid = [int]$_.ParentProcessId; name = $_.Name; command = $_.CommandLine; "
+           "started = $(if ($_.CreationDate) { $_.CreationDate.ToString('s') } else { '' }) } } | ConvertTo-Json -Compress")
+PS_LINE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3}\s+\d+ [\d:]{8} \d{4})\s+(.*)$")
+
+
+def process_table():
+    """[{pid, ppid, name, command, started}] of the machine's processes, or None when it cannot be read (no opinion).
+    RPG_FACTORY_PROCESS_TABLE=<json file> replaces the probe (tests): a list of such rows; `none` = cannot be read.
+    Windows: PowerShell Get-CimInstance Win32_Process (20 s timeout); elsewhere `ps`."""
+    fixture = os.environ.get("RPG_FACTORY_PROCESS_TABLE")
+    if fixture:
+        doc = fstate.read_json(fixture) if fixture != "none" else None
+        return [r for r in doc if isinstance(r, dict)] if isinstance(doc, list) else None
+    try:
+        if os.name == "nt":
+            exe = shutil.which("powershell") or shutil.which("pwsh")
+            if not exe:
+                return None
+            r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", PS_LIST], capture_output=True,
+                               text=True, timeout=20, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+            doc = json.loads(r.stdout or "") if r.returncode == 0 else None
+            rows = [doc] if isinstance(doc, dict) else doc
+            return [{"pid": d.get("pid"), "ppid": d.get("ppid"), "name": d.get("name") or "",
+                     "command": d.get("command") or "", "started": d.get("started") or ""}
+                    for d in rows if isinstance(d, dict)] if isinstance(rows, list) else None
+        r = subprocess.run(["ps", "-eo", "pid=,ppid=,lstart=,args="], capture_output=True, text=True, timeout=20,
+                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        if r.returncode != 0:
+            return None
+        out = []
+        for line in r.stdout.splitlines():
+            m = PS_LINE.match(line)
+            if m:
+                cmd = m.group(4)
+                out.append({"pid": int(m.group(1)), "ppid": int(m.group(2)),
+                            "name": cmd.split(" ", 1)[0].rsplit("/", 1)[-1], "command": cmd, "started": m.group(3)})
+        return out
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _canon(p):
+    """A path in one spelling for matching: forward slashes, case-folded, and an MSYS (/c/x) or WSL (/mnt/c/x) drive
+    path as c:/x (a run-all lock records the checkout as its shell sees it)."""
+    p = str(p or "").replace("\\", "/").rstrip("/")
+    m = re.match(r"^(?:/mnt)?/([A-Za-z])(/.*)?$", p)
+    if m:
+        p = f"{m.group(1)}:{m.group(2) or ''}"
+    return p.casefold()
+
+
+def plan_checkouts(plan, reg):
+    """The checkouts of the plan's worktrees (task worktrees, integration checkout, children: branch <topic> or
+    <topic>-*), plus the main checkout of a no-worktree repo. {canonical path: path}."""
+    out, topic = {}, plan["topic"]
+    for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
+        info = repo_info(plan, reg, key)
+        if not info["path"] or not os.path.isdir(info["path"]):
+            continue
+        if not info["worktrees"]:
+            out[_canon(info["path"])] = info["path"]
+        for wt in worktree_records(info["path"]):
+            br = str(wt.get("branch", ""))
+            if br == topic or br.startswith(topic + "-"):
+                out[_canon(wt["path"])] = wt["path"]
+    return out
+
+
+def read_slots():
+    """[{slot, pid, winpid, checkout, started}] of the held test slots `tests/run-all.sh` publishes under
+    <persistent state>/locks/run-all-slots/<n>/{pid,checkout,started,winpid}; [] when none."""
+    root = os.path.join(fstate.persistent(), "locks", "run-all-slots")
+    try:
+        names = sorted(os.listdir(root), key=lambda n: (not n.isdigit(), int(n) if n.isdigit() else 0, n))
+    except OSError:
+        return []
+
+    def get(d, f):
+        try:
+            with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+    out = []
+    for n in names:
+        d = os.path.join(root, n)
+        if os.path.isdir(d) and get(d, "pid"):
+            out.append({"slot": n, "pid": get(d, "pid"), "winpid": get(d, "winpid"), "checkout": get(d, "checkout"),
+                        "started": get(d, "started")})
+    return out
+
+
+def slot_holders(plan, reg):
+    """Test slots held by a run in one of the plan's checkouts: {slot, pid, checkout, started, alive} with alive True,
+    False or None (cannot say). On Windows the slot's shell PID is an MSYS PID: the liveness check uses its winpid and
+    is None without one. Read-only, never stops anything."""
+    mine = plan_checkouts(plan, reg)
+    held = [h for h in read_slots() if any(_canon(h["checkout"]) == c or _canon(h["checkout"]).startswith(c + "/")
+                                           for c in mine)]
+    if not held:
+        return []
+    table = process_table()
+    for h in held:
+        pid = h["winpid"] or (h["pid"] if os.name != "nt" else "")
+        h["alive"] = None if table is None or not pid.isdigit() else any(str(r.get("pid")) == pid for r in table)
+    return held
+
+
+def slot_lines(holders):
+    return [f"slot {h['slot']} held by PID {h['pid']} in {h['checkout']} since {h['started'] or '?'}"
+            + {True: " (alive)", False: " (not running)", None: " (liveness unknown)"}[h["alive"]]
+            + ": the user decides, the run never stops it" for h in holders]
+
+
+def busy_processes(directory):
+    """Processes that may keep `directory` busy: their command line mentions it, and an orphaned `wsl.exe ... sleep
+    infinity` (its parent process is gone). [{pid, name, command, started, why}]; [] when none or when the process
+    table cannot be read (no opinion). Never stops anything."""
+    table = process_table()
+    if not table:
+        return []
+    want, pids, found = _canon(directory), {str(r.get("pid")) for r in table}, []
+    forms = {want} | ({f"/mnt/{want[0]}{want[2:]}", f"/{want[0]}{want[2:]}"} if want[1:3] == ":/" else set())
+    for r in table:
+        cmd = str(r.get("command") or "")
+        if str(r.get("pid")) == str(os.getpid()):
+            continue
+        if want and any(f in cmd.replace("\\", "/").casefold() for f in forms):
+            why = "its command line names the directory"
+        elif (str(r.get("name") or "").casefold().startswith("wsl") and "sleep infinity" in cmd.casefold()
+              and str(r.get("ppid")) not in pids):
+            why = "orphaned wsl.exe sleep infinity (its parent process is gone)"
+        else:
+            continue
+        found.append({"pid": r.get("pid"), "name": r.get("name") or "", "command": cmd[:300],
+                      "started": r.get("started") or "", "why": why})
+    return found
+
+
+def busy_lines(directory, procs):
+    return [f"process {p['pid']} ({p['name'] or '?'}) started {p['started'] or '?'}: {p['command'] or '?'} - {p['why']}; "
+            f"it may keep {directory} busy: the user decides, the run never stops it" for p in procs]
+
+
 BEFORE_REMOVAL = ("before a task worktree is removed no session may still use it: the task lead confirms that each "
                   "released worker's CLI exited (a released Codex worker: its codex process is gone); a process the "
                   "run did not start is named to the user (PID, command) and left to the user's decision, never "
                   "stopped by the run")
 BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being used by another process'), a process "
-             "holds it: name its PID and command to the user and leave the decision to them")
+             "holds it: name its PID and command to the user and leave the decision to them (cleanup lists the "
+             "candidates it sees as BUSY? lines: PID, command, start time)")
 
 
 def cleanup(plan, reg, orca_run=None, after_merge=False):
@@ -3065,6 +3250,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
                     kept.append(f"{key}: LEFTOVER {what}: `git worktree prune`, then `orca worktree rm` once the "
                                 f"directory is free (check it is the old task worktree first); {BUSY_NOTE}")
                     commands.extend(c for c in (prune, rm) if c not in commands)
+                    # a directory the removal may fail on: name the processes that may hold it (read-only; the user decides)
+                    procs = busy_processes(d)
+                    leftovers[-1]["processes"] = procs
+                    kept.extend(f"{key}: BUSY? {line}" for line in busy_lines(d, procs))
         refs, _ = git(info["path"], "for-each-ref", "--format=%(refname:short)", f"refs/heads/{topic}-*")
         if after_merge and integrated:
             refs = (refs or "") + "\n" + topic
@@ -3108,7 +3297,7 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
             left.append(f"orca:{u['dispatch']}")
             commands.append(u["command"])
     return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
-            "leftovers": leftovers, "terminals": users, "workers": workers,
+            "leftovers": leftovers, "terminals": users, "workers": workers, "slots": slot_holders(plan, reg),
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
                         + ("" if workers else "; name the task leads' Runs (task `orca_run` or --orca-run) to check them")}
@@ -3130,6 +3319,8 @@ def cmd_cleanup(a, reg):
             print("  STATE " + k)
         for line in session_lines(out["workers"]):
             print("  WORKERS " + line)
+        for line in slot_lines(out["slots"]):
+            print("  SLOT " + line)
         print("Sessions: " + out["sessions"])
         if out["state"] == "CLEAN":
             print("Next: start the next plan from main")
@@ -3422,6 +3613,78 @@ def _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf):
     return first or key
 
 
+LEAD_REPORT_SUMMARY = 200
+READY_PHASES = ("candidate", "reviewed", "integrated", "qa")
+
+
+def lead_report_file(plan, task):
+    """The task lead's durable report: <task>__lead-report.json beside the verdicts (`report` writes it, status reads it)."""
+    return os.path.join(verdict_dir(plan), f"{safe_name(task)}__lead-report.json")
+
+
+def lead_report_summary(body):
+    first = next((ln.strip() for ln in str(body).splitlines() if ln.strip()), "")
+    return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
+
+
+def lead_report_notes(plan, row, task, orca_done):
+    """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only). `orca_done`: task ids whose 'task done: <id>'
+    message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only)."""
+    rec = fstate.read_json(lead_report_file(plan, task["id"]))
+    rec = rec if isinstance(rec, dict) and rec.get("sha") else None
+    head, notes = row["sha"], []
+    if rec:
+        stale = f" (stale: task HEAD is {head[:10]})" if head and head != rec["sha"] else ""
+        notes.append(f"lead report: {rec.get('at', '?')} @{rec['sha'][:10]} {rec.get('summary', '')}{stale}")
+    elif task["id"] in orca_done:
+        notes.append(f"lead report: task done: {task['id']} (an Orca message only: no durable record, ask the lead to run "
+                     "`report`)")
+    if row["phase"] not in READY_PHASES or pr.xs_plan(plan, task):
+        return notes
+    rv, qa, phase = row["review"], row["qa"], row["phase"]
+    missing = None
+    if not rec:
+        missing = "no lead report"
+    elif rec["sha"] != head:
+        missing = f"lead report is for {rec['sha'][:10]}, task HEAD is {head[:10]}"
+    elif not rv:
+        missing = "no review"
+    elif rv["state"] != "PASS":
+        missing = f"review {rv['state']}"
+    elif rv["sha"] != head and phase not in ("integrated", "qa"):
+        missing = f"review is at {rv['sha'][:10]}, task HEAD is {head[:10]}"
+    elif not qa:
+        missing = "no QA"
+    elif qa["state"] != "PASS":
+        missing = f"QA {qa['state']}"
+    elif qa["sha"] != head and phase != "qa":
+        missing = f"QA is at {qa['sha'][:10]}, task HEAD is {head[:10]}"
+    notes.append("READY_FOR_PR: yes" if missing is None else f"READY_FOR_PR: no ({missing})")
+    return notes
+
+
+def orca_done_tasks(runs):
+    """Task ids named by a 'task done: <id>' message in the Runs' Orca inbox (`orca orchestration check --run R --all
+    --json`: read-only, never marks a message read). Any orca failure (not on PATH, a caller not bound to the Run:
+    consumer_fenced, bad JSON) is no opinion: nothing is shown."""
+    exe = shutil.which("orca")
+    done = set()
+    for run in runs if exe else []:
+        try:
+            r = subprocess.run([exe, "orchestration", "check", "--run", run, "--all", "--json"], capture_output=True,
+                               text=True, timeout=30, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+            doc = json.loads(r.stdout or "") if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+        res = doc.get("result") if isinstance(doc, dict) and doc.get("ok") is not False else None
+        msgs = res.get("messages") if isinstance(res, dict) else res
+        for m in msgs if isinstance(msgs, list) else []:
+            subject = str(m.get("subject") or "") if isinstance(m, dict) else ""
+            if subject.lower().startswith("task done:"):
+                done.add(subject.split(":", 1)[1].strip())
+    return done
+
+
 def status(plan, reg, orca_run=None):
     v = validate(plan, reg)
     me = orca_cmd.quote(pipeline_argv(reg))
@@ -3536,6 +3799,12 @@ def status(plan, reg, orca_run=None):
     # settled Orca workers of the task leads' Runs that still own a terminal: release them now, not at task end
     workers = orca_sessions(orca_runs(plan, orca_run))
     nxt = [u["command"] for s in workers for u in s["unreleased"]] + nxt
+    # what each task lead reported (a durable `report` record), and whether the work is ready for the PR gate: a run lead
+    # polling status sees completion without messages; --orca-run adds the 'task done' messages of older leads
+    runs = orca_runs(plan, orca_run)
+    orca_done = orca_done_tasks(runs) if runs else set()
+    for t in tasks:
+        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done)
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]
@@ -3543,7 +3812,7 @@ def status(plan, reg, orca_run=None):
                                            "children", "next", "notes")})
     return {"schema": STATUS_SCHEMA, "plan": plan.get("id"), "topic": plan.get("topic"), "valid": True, "errors": [],
             "waves": v["waves"], "tasks": out_rows, "integration_children": int_children, "ready_wave": open_waves[0] if open_waves else None,
-            "ready": ready, "next": nxt, "_workers": workers}
+            "ready": ready, "next": nxt, "_workers": workers, "_slots": slot_holders(plan, reg)}
 
 
 def cmd_status(a, reg):
@@ -3565,11 +3834,14 @@ def cmd_status(a, reg):
     if a.json:
         out["models"] = models
     workers = out.pop("_workers", [])
+    slots = out.pop("_slots", [])
     if a.json:
         print(json.dumps(out, indent=2))
-        # the status schema has no workers field: the Run lines (NOT_AVAILABLE, UNRELEASED) go to stderr
+        # the status schema has no workers or slots field: those lines (NOT_AVAILABLE, UNRELEASED, held slots) go to stderr
         for line in session_lines(workers):
             print("Workers: " + line, file=sys.stderr)
+        for line in slot_lines(slots):
+            print("Slots: " + line, file=sys.stderr)
         return 0 if out["valid"] else 1
     print(f"Pipeline {out['plan']} on {out['topic']}" + ("" if out["valid"] else "  INVALID"))
     for e in out["errors"]:
@@ -3589,9 +3861,42 @@ def cmd_status(a, reg):
         print("Every wave is integrated.")
     for line in session_lines(workers):
         print("Workers: " + line)
+    for line in slot_lines(slots):
+        print("Slots: " + line)
     for c in out["next"]:
         print("Next: " + c)
     return 0 if out["valid"] else 1
+
+
+def cmd_report(a, reg):
+    """The task lead's durable report: <state dir>/pipeline/<plan id>/<task>__lead-report.json (at, sha, summary, body).
+    Written before the Orca message, so the run lead's `status` shows completion even when the message is lost."""
+    plan = read_plan(a.plan, reg)
+    plan["_path"] = a.plan
+    if a.task.startswith("integration:"):
+        die("report is per plan task: --task <id>")
+    task = find_task(plan, a.task)
+    if a.body is not None:
+        body = a.body
+    else:
+        try:
+            with open(a.body_file, encoding="utf-8", errors="replace") as fh:
+                body = fh.read()
+        except OSError as e:
+            die(f"--body-file {a.body_file}: {e.strerror or e}")
+    if not body.strip():
+        die("the report body is empty")
+    if len(a.sha) < 7 or any(c not in "0123456789abcdef" for c in a.sha.lower()):
+        die("--sha must be a commit id")
+    full, rc = git(repo_info(plan, reg, task["repo"])["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
+    if rc != 0 or not full:
+        die(f"--sha {a.sha} is not a commit of repo {task['repo']}")
+    rec = {"plan": plan.get("id"), "task": a.task, "sha": full, "at": now_utc(), "summary": lead_report_summary(body),
+           "body": body}
+    path = lead_report_file(plan, a.task)
+    fstate.write_json(path, rec, indent=2)
+    print(f"recorded lead report for {a.task} at {full[:10]}: {path}")
+    return 0
 
 
 def cmd_agents(a, reg):
@@ -3678,6 +3983,13 @@ def main():
     ag.add_argument("--json", action="store_true")
     v.add_argument("--model", metavar="ID")
     v.add_argument("--effort", metavar="LEVEL")
+    rp = sub.add_parser("report", parents=[common])
+    rp.add_argument("plan")
+    rp.add_argument("--task", required=True)
+    rp.add_argument("--sha", required=True)
+    body = rp.add_mutually_exclusive_group(required=True)
+    body.add_argument("--body")
+    body.add_argument("--body-file")
     st = sub.add_parser("status", parents=[common])
     st.add_argument("plan")
     st.add_argument("--json", action="store_true")
@@ -3699,7 +4011,8 @@ def main():
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")
     return {"agents": cmd_agents, "tier": cmd_tier, "validate": cmd_validate, "planner": cmd_planner, "dispatch": cmd_dispatch,
-            "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status}[a.cmd](a, reg)
+            "subplan": cmd_subplan, "verdict": cmd_verdict, "gate": cmd_gate, "cleanup": cmd_cleanup, "status": cmd_status,
+            "report": cmd_report}[a.cmd](a, reg)
 
 
 if __name__ == "__main__":
