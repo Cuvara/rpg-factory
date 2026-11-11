@@ -6,7 +6,8 @@
 # a delivery is the whole FIFO batch, so heartbeats always wake the wait: consumed here, they never pile up for a later one.
 # Frozen stalls are advisory: a worker may be inside a long quiet command.
 # Exit codes: 0 real delivery; 2 usage / NOT_AVAILABLE / invalid receipt or state;
-# 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 6 parent process gone (orphan, lock released);
+# 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 6 parent process gone (orphan, lock released; a real
+# delivery that arrives after the parent died is saved to <lock>.orphan.<pid>.json and named on stderr);
 # 130 INT; 143 TERM.
 set -uo pipefail
 run= timeout=60000 types=worker_done,escalation,question,status stall_poll=180000 stall_ms=900000
@@ -177,7 +178,18 @@ PY
   ) || exit 2
   parsed=${parsed//$'\r'/}
   case "$parsed" in
-    real) cat "$response"; exit 0 ;;
+    real)
+      if parent_gone; then
+        # An orphan blocked in check --wait: stdout is a dead pipe and Orca already marked this batch handled, so keep it.
+        saved="$state.orphan.$$.json"
+        if cp "$response" "$saved" 2>/dev/null; then
+          echo "ERROR: waiter parent pid $parent is gone; delivery for run $run saved to $saved (also: orca orchestration inbox); exiting 6" >&2
+        else
+          echo "ERROR: waiter parent pid $parent is gone and the delivery for run $run could not be saved; read it with: orca orchestration inbox; exiting 6" >&2
+        fi
+        exit 6
+      fi
+      cat "$response"; exit 0 ;;
     ack$'\t'*) ack=${parsed#*$'\t'} ;;
     wait)
       if [ -z "$ack" ] && [ "$stall_poll" -gt 0 ]; then

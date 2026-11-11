@@ -2981,6 +2981,13 @@ def worker_released(w):
             or (isinstance(proj, dict) and proj.get("state") == "released"))
 
 
+def worker_no_terminal(w):
+    """The worker owns no terminal: the full row's projection.resource.state is `absent` (reason not_materialized, or a
+    failed terminal_create; resource, terminalState and the terminal handle are null). There is nothing to release."""
+    proj = (w.get("projection") or {}).get("resource") if isinstance(w.get("projection"), dict) else None
+    return isinstance(proj, dict) and proj.get("state") == "absent"
+
+
 def orca_sessions(runs):
     """Per Run: settled workers that are not released, with the release command; NOT_AVAILABLE when orca cannot say.
     Read-only: worker-list only; a running worker is no finding, and an orca failure is never a failure here."""
@@ -2998,6 +3005,8 @@ def orca_sessions(runs):
                 released += 1
             elif not worker_settled(w):
                 running += 1
+            elif worker_no_terminal(w):
+                continue    # settled without ever owning a terminal (terminal_create failed or never materialized): nothing to release
             else:
                 did = str(w.get("dispatchId") or "?")
                 note = res.get("retainedReason") or (f"release requested at {res['releaseRequestedAt']}"
@@ -3710,7 +3719,7 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False):
     rec = rec if isinstance(rec, dict) and rec.get("sha") else None
     head, notes = row["sha"], []
     report_current = bool(rec) and (rec["sha"] == head or (
-        row["phase"] in ("integrated", "qa") and bool(path) and is_ancestor(path, rec["sha"], head)))
+        no_worktree and row["phase"] in ("integrated", "qa") and bool(path) and is_ancestor(path, rec["sha"], head)))
     if rec:
         stale = f" (stale: task HEAD is {head[:10]})" if head and not report_current else ""
         notes.append(f"lead report: {rec.get('at', '?')} @{rec['sha'][:10]} {rec.get('summary', '')}{stale}")

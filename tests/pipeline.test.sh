@@ -2648,11 +2648,17 @@ cw() { jq -nc --arg d "$1" --arg s "$2" --arg t "$3" '{dispatchId:$d,taskId:"tas
 fw() { jq -nc --arg d "$1" --arg o "$2" --arg r "$3" --arg c "$4" --arg p "$5" '{dispatchId:$d,runId:"run_T",workerState:"succeeded",dispatchStatus:"completed",
   resource:{ownershipState:$o,releaseState:$r,retainedReason:null,releaseCompletedAt:(if $c=="-" then null else $c end)},
   projection:{stage:{worker:"succeeded",dispatch:"completed",detail:"settled"},resource:{state:$p}}}'; }
+# aw <dispatch> <state> <reason>: a settled full row that never owned a terminal (live: ctx_24828b341e1e of run_386f601a03c7):
+# resource, terminalState and the terminal handle are null, the projection says absent (not_materialized, or a failed terminal_create)
+aw() { jq -nc --arg d "$1" --arg s "$2" --arg r "$3" '{dispatchId:$d,runId:"run_T",workerState:$s,dispatchStatus:(if $s=="failed" then "failed" else "completed" end),
+  terminalState:null,agentTerminalHandle:null,resource:null,
+  projection:{stage:{worker:$s,dispatch:"completed",detail:"settled"},resource:{state:"absent",reason:$r}}}'; }
 jq -n --argjson a "$(cw ctx_c_rel succeeded released)" --argjson b "$(cw ctx_c_ret succeeded retained)" \
   --argjson c "$(cw ctx_c_act succeeded active)" --argjson d "$(cw ctx_c_run ready active)" \
   --argjson e "$(fw ctx_f_own released not_requested - owned)" --argjson f "$(fw ctx_f_done owned not_requested '2026-11-11 04:25:03' owned)" \
   --argjson g "$(fw ctx_f_proj owned not_requested - released)" --argjson h "$(fw ctx_f_ret external retained - retained)" \
-  '{ok:true,result:{workers:[$a,$b,$c,$d,$e,$f,$g,$h],page:{hasMore:false,nextCursor:null}}}' > "$FAKE_ORCA_JSON"
+  --argjson i "$(aw ctx_f_abs succeeded not_materialized)" --argjson j "$(aw ctx_f_tcf failed terminal_create_failed)" \
+  '{ok:true,result:{workers:[$a,$b,$c,$d,$e,$f,$g,$h,$i,$j],page:{hasMore:false,nextCursor:null}}}' > "$FAKE_ORCA_JSON"
 opath "concise and full rows: released ones are counted, the rest named" 1 "WORKERS UNRELEASED  run run_T: 3 settled worker\(s\) not released, 4 released, 1 running" cleanup "$GO"
 oref "a concise released row is no finding" "dispatch ctx_c_rel( |$)" cleanup "$GO"
 oref "a full row released by ownershipState is no finding" "dispatch ctx_f_own( |$)" cleanup "$GO"
@@ -2663,6 +2669,17 @@ opath "a concise settled row whose terminal is retained gets its release command
 opath "a concise settled row whose terminal is still active is unreleased" 1 "UNRELEASED ctx_c_act \(succeeded, terminal active" cleanup "$GO"
 opath "a full retained row is unreleased" 1 "worker-release --dispatch ctx_f_ret$" cleanup "$GO"
 opath "status counts the same way" 0 "^Workers: UNRELEASED  run run_T: 3 settled worker\(s\) not released, 4 released, 1 running" status "$GO"
+oref "a settled row that never had a terminal (absent, not_materialized) is no finding" "dispatch ctx_f_abs( |$)" cleanup "$GO"
+oref "a failed terminal_create row with an absent resource is no finding" "dispatch ctx_f_tcf( |$)" cleanup "$GO"
+PATH="$fpath" python3 -B "$P" cleanup --json "$GO" > "$TMP/cleanup-abs.json" 2>&1
+if jq -e '([.left[]] | any(test("ctx_f_abs|ctx_f_tcf"))) | not' "$TMP/cleanup-abs.json" >/dev/null
+then pass=$((pass + 1)); echo "PASS  rows with an absent resource are not in cleanup's left list"
+else fail=$((fail + 1)); echo "FAIL  absent resource rows in left"; head -c 1200 "$TMP/cleanup-abs.json"; fi
+jq -n --argjson a "$(fw ctx_f_own released not_requested - owned)" --argjson i "$(aw ctx_f_abs succeeded not_materialized)" \
+  --argjson j "$(aw ctx_f_tcf failed terminal_create_failed)" '{ok:true,result:{workers:[$a,$i,$j],page:{hasMore:false,nextCursor:null}}}' > "$FAKE_ORCA_JSON"
+opath "only released and never-had-a-terminal rows: cleanup stays CLEAN" 0 "^Cleanup: CLEAN" cleanup "$GO"
+opath "and the run line is OK with one released worker" 0 "WORKERS OK  run run_T: 0 settled worker\(s\) not released, 1 released, 0 running" cleanup "$GO"
+oref "status prints no release command for them" "worker-release --dispatch ctx_f_(abs|tcf)" status "$GO"
 # a task lead's report: the durable record (`report`) and, with an Orca Run, a 'task done' message of an older lead
 export FAKE_ORCA_CHECK="$TMP/orca-check.json"
 jq -n '{ok:true,result:{messages:[{id:"m1",type:"heartbeat",subject:"alive"},{id:"m2",type:"status",subject:"task done: gw",body:"branch x"}]}}' > "$FAKE_ORCA_CHECK"
@@ -3250,6 +3267,34 @@ st_phase "QA PASS on a commit containing the review: qa" a qa
 st_phase "and for the second task" b qa
 st_note "report at HEAD, review and QA PASS: READY_FOR_PR: yes (without any message)" a '^READY_FOR_PR: yes$'
 st_note "a task without a lead report is not ready, whatever its verdicts" b '^READY_FOR_PR: no \(no lead report\)$'
+# a worktree repo: a report at A with a later commit B on the task branch is superseded, even in the qa phase with
+# review and QA PASS at B (only a no-worktree repo, whose HEAD is the shared topic, accepts a report at an ancestor)
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, os, pathlib, subprocess, sys, tempfile
+root, tmp = sys.argv[1:]
+os.environ['RPG_FACTORY_STATE_DIR'] = tempfile.mkdtemp(dir=tmp)
+spec = importlib.util.spec_from_file_location('report_ancestor_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+repo = pathlib.Path(tempfile.mkdtemp(dir=tmp))
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+git('init', '-q', '-b', 'main')
+(repo / 'f.txt').write_text('a'); git('add', '.'); git('commit', '-qm', 'A'); a = git('rev-parse', 'HEAD')
+(repo / 'f.txt').write_text('b'); git('commit', '-qam', 'B'); b = git('rev-parse', 'HEAD')
+plan = {'id': 'ancestor-report', 'tasks': []}
+task = {'id': 't1', 'repo': 'srv'}
+m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': a, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
+row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=False)
+assert any('(stale: task HEAD is ' + b[:10] + ')' in n for n in notes), notes
+assert 'READY_FOR_PR: no (lead report is for ' + a[:10] + ', task HEAD is ' + b[:10] + ')' in notes, notes
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+assert not any('stale' in n for n in notes) and 'READY_FOR_PR: yes' in notes, notes
+PY
+then pass=$((pass + 1)); echo "PASS  worktree repo: a report at an ancestor of the task HEAD is stale (READY_FOR_PR: no); no-worktree keeps it current"
+else fail=$((fail + 1)); echo "FAIL  worktree repo ancestor report"; fi
 pp status --json "$ST"; echo "$OUT" > "$TMP/so-report.json"
 if python3 - "$ROOT" "$TMP/so-report.json" <<'PY'
 import importlib.util, json, sys

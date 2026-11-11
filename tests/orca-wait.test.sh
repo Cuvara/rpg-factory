@@ -280,6 +280,27 @@ if ! kill -0 "$waiter" 2>/dev/null && [ ! -e "$TMP/state/orca-wait/orphan.lock" 
   waiter=
 else no "orphaned waiter kept running or kept its lock"; fi
 
+# An orphan blocked in check --wait that then gets a real delivery: stdout is a dead pipe and Orca already marked the batch
+# handled, so the delivery is saved next to the lock and named on stderr (exit 6).
+rm -f "$TMP/ready" "$TMP/release" "$TMP/orphan.pid"
+FAKE_MODE=hold bash -c 'bash "$1" --run orphan-real --timeout-ms 60000 --stall-poll-ms 0 > "$2" 2> "$3" & echo $! > "$4"; wait' _ \
+  "$ROOT/scripts/orca-wait.sh" "$TMP/orphan-real.out" "$TMP/orphan-real.err" "$TMP/orphan-real.pid" &
+orphan_parent=$!
+for ((i=0; i<200; i++)); do [ ! -f "$TMP/ready" ] || break; sleep 0.05; done
+waiter=$(cat "$TMP/orphan-real.pid" 2>/dev/null)
+kill -KILL "$orphan_parent"
+wait "$orphan_parent" 2>/dev/null
+touch "$TMP/release"
+for ((i=0; i<300; i++)); do kill -0 "$waiter" 2>/dev/null || break; sleep 0.05; done
+saved=$(ls "$TMP/state/orca-wait/"orphan-real.lock.orphan.*.json 2>/dev/null | head -n 1)
+if ! kill -0 "$waiter" 2>/dev/null && [ ! -e "$TMP/state/orca-wait/orphan-real.lock" ] && [ -n "$saved" ] \
+  && grep -q '"deliveryId":"done"' "$saved" && grep -q "delivery for run orphan-real saved to .*orphan-real.lock.orphan" "$TMP/orphan-real.err" \
+  && grep -q 'exiting 6' "$TMP/orphan-real.err" && [ ! -s "$TMP/orphan-real.out" ]; then
+  ok "an orphan that receives a real delivery saves it under the state dir and exits 6"
+  waiter=
+else no "orphan delivery not saved (saved: ${saved:-none}; stderr: $(tr '\n' ' ' < "$TMP/orphan-real.err" 2>/dev/null))"; fi
+rm -f "$TMP/ready" "$TMP/release"
+
 sleep 120 & live=$!
 sleep 0 & dead=$!; wait "$dead"
 printf '%s %s\n' "$live" "$dead" > "$TMP/state/orca-wait/orphaned.lock"
