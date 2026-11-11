@@ -2,7 +2,7 @@
 
 Plugin batch 5, after the 1.8.0 release: CI coverage, run-lead visibility of task leads and workers, and a set of
 lows from earlier plans. Plan: `docs/plans/plugin-flow-5.json`. Integration branch `plugin-flow-5`, integrated HEAD
-`63a44f0` (base main `8d64341`, v1.8.0 plus the plan PR). Run on a second machine; the first-machine state of the
+the final run HEAD (base main `8d64341`, v1.8.0 plus the plan PR). Run on a second machine; the first-machine state of the
 earlier plan workflow-slim was rebuilt retrospectively and is not part of this run.
 
 ## Outcome
@@ -24,19 +24,26 @@ earlier plan workflow-slim was rebuilt retrospectively and is not part of this r
 
 ## Sessions and verdicts
 
-Codex was unavailable for the run (`agents --down codex`): every review is `SAME_MODEL (fallback: codex
-unavailable)`, so `gate --allow-same-model` was needed. Task leads: Claude Opus 5.5 medium.
+Task work ran on Claude, first with Claude reviews (Codex looked unavailable: Orca saw no Codex account, but the
+maintainer uses an API key). After integration the three tasks were reviewed again by Codex (`gpt-6.1-sol`, set with
+`RPG_FACTORY_AGENTS=claude,codex`), so the gate passes without `--allow-same-model`. Task leads: Claude Opus 5.5
+medium.
 
 | Task | Orca Run | Review | QA |
 |---|---|---|---|
-| ci-coverage | run_386f601a03c7 | FAIL 39d8fb8, PASS 6f23784, PASS 38f535e, PASS d1e8660 | FAIL 6f23784, FAIL 38f535e, PASS d1e8660 |
-| lead-report | run_94bb70428dc1 | FAIL 3829178, FAIL 6096585, FAIL db23862, PASS fad325d, FAIL 0ca4187, PASS 3a0d49d | FAIL fad325d, PASS 3a0d49d |
-| checks-lows | run_3fae8fc0082c | FAIL e8ecd46, FAIL 62da9a3, PASS 71dd3c5 | PASS 71dd3c5 |
-| integration:plugin | run_d27e7341bae5 | n/a | PASS 63a44f0 |
+| ci-coverage | run_386f601a03c7 | claude: FAIL 39d8fb8, PASS 6f23784, PASS 38f535e, PASS d1e8660; codex: PASS d1e8660 | FAIL 6f23784, FAIL 38f535e, PASS d1e8660 |
+| lead-report | run_94bb70428dc1, then run_f79b6a23e508 | claude: FAIL 3829178, FAIL 6096585, FAIL db23862, PASS fad325d, FAIL 0ca4187, PASS 3a0d49d; codex: FAIL 3a0d49d (3 P2), PASS b92cfca | FAIL fad325d, PASS 3a0d49d, PASS b92cfca (codex; 4 known_failing) |
+| checks-lows | run_3fae8fc0082c | claude: FAIL e8ecd46, FAIL 62da9a3, PASS 71dd3c5; codex: PASS 71dd3c5 (first run FAIL on a wrong diff base, rerun with base f9f7af7) | PASS 71dd3c5 |
+| integration:plugin | run_d27e7341bae5 | n/a | see Checks |
 
-## Checks (integrated HEAD 63a44f0)
+Codex found three P2 defects that the Claude reviews missed, all in lead-report and fixed in `2d9c0cf` and `b92cfca`:
+READY_FOR_PR ignored subtask FAILs and stale reviews, slot ownership missed Orca-prefixed and lineage-only child
+worktrees, and empty case names inside a comma list exited 0.
 
-Integration QA (`tests/run-all.sh --workspace-only`, `RPG_FACTORY_WORKSPACE` set, `jq` and a real `python3` on PATH):
+## Checks
+
+Integration QA ran twice before the Codex fixes (HEAD `63a44f0` and `91692d2`, both PASS) and once on the final HEAD, whose
+result is the integration verdict note (`integration:plugin` QA). Results of the earlier runs (`tests/run-all.sh --workspace-only`, `RPG_FACTORY_WORKSPACE` set, `jq` and a real `python3` on PATH):
 21 passed, 3 failed, none from this plan: two `claude plugin validate --strict` (frontmatter of `skills/pin-bump`,
 `skills/unity-client-tech`, `commands/assetgen.md`, failing at main too) and `wire-parity` (sibling repo drift: Netcode
 `406a1b6` against server `633a792`). All 10 acceptance criteria and ten extra suites pass with 0 failed: affected 62,
@@ -46,7 +53,10 @@ run-all-parallel 130, routing-golden 12, git-guard 598, orca-wait 51, pipeline 9
 
 ## Limitations
 
-- No cross-model review (Codex down); the integration QA failures above are host or sibling-repo conditions.
+- `dispatch --phase review` diffs `main...<sha>`; for checks-lows (which had merged ci-coverage) that counted nine
+  foreign files as scope findings. The rerun used the merged integration SHA as base.
+- Four baseline failures (run-checks and registry-fragments on this Windows host, two `claude plugin validate
+  --strict`) fail at main; they are declared in the plan `known_failing`.
 - Option A for `checks-lows` (own the three `ci-coverage` files) was rejected by `validate` (overlapping paths);
   the dependency ran through `ci-coverage` instead, so `checks-lows` waited for its integration before its verify.
 - Task QA reported NOT_RUN or `jq: command not found` failures until a PATH shim (`jq` 1.7.1, a `python3` wrapper)
@@ -70,4 +80,4 @@ is merged (`cleanup --after-merge`). Follow-ups: `docs/plans/backlog.md` topic p
 
 ## Gate
 
-`factory-pipeline.py gate --allow-same-model` at 63a44f0: READY_FOR_PR (SAME_MODEL notes only).
+`factory-pipeline.py gate` (no `--allow-same-model`) at the final HEAD: see the PR.
