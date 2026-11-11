@@ -133,6 +133,24 @@ Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md
   report NOT_RUN or fail with `jq: command not found` until a PATH shim was used. Make `doctor` name both.
 - The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
   `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
+- Codex availability: `scripts/lib/pipeline_route.py` marks Codex unavailable when `orca account list` shows no Codex
+  account and no system auth (`hasAuth: false`), but a Codex CLI that runs on an API key is fine. Detect the key
+  (`OPENAI_API_KEY` in the environment) or fall back to a probe before marking it down; until then
+  `RPG_FACTORY_AGENTS=claude,codex` overrides the detection. Seen on the second machine: every review was
+  `SAME_MODEL` until the override, and the Codex cross-model reviews then found three real P2 defects in
+  `lead-report` that the Claude reviews had missed.
+- `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
+  checks-lows, after ci-coverage) then shows nine foreign files as scope findings (a false FAIL). Use the task's
+  recorded base or the integration base it merged.
+- `status` still proposes `git merge --no-ff <task branch>` while the task QA is FAIL; the reviewed phase looks only at
+  the review. Look at the QA verdict too (same class as the READY_FOR_PR fix of `lead-report`).
+- `netcode-headless` (`scripts/checks/netcode-headless.sh`) failed once (1 failed, 0 passed) and passed 720/720 on an
+  immediate rerun in integration QA; its cleanup removed the TRX, so the cause is unknown. Keep the failing TRX
+  (or its tail) when the check fails.
+- The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
+  `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
+- A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
+  spec template should use `"${S:?}"` or a literal path.
 
 ## Covered
 
