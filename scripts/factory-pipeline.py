@@ -1312,9 +1312,7 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
         argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place,
                                      title=title, model=m["model"], effort=m["effort"])
         if place.get("new"):  # worker-start creates the worktree: a hidden repo would list it under "Hidden worktrees"
-            repo = str(place.get("repo") or "").removeprefix("path:")
-            parent = str(place.get("child_of") or "").removeprefix("path:")
-            show = orca_repo_show_line(repo or (main_checkout(parent) if parent else None))
+            show = place_show_line(place)
             if show:
                 print(show)
         print(orca_cmd.quote(argv))
@@ -1464,6 +1462,15 @@ def main_checkout(path):
     """The main checkout of the repo that holds `path` (first `git worktree list` record), else `path`."""
     trees, rc = git(path, "worktree", "list", "--porcelain")
     return trees.splitlines()[0][len("worktree "):] if not rc and trees and trees.startswith("worktree ") else path
+
+
+def place_show_line(place):
+    """The visibility line for a placement that creates a worktree (worker-start): the repo is `place['repo']` or the
+    parent of a child placement. `orca repo list` holds the main checkout, so a repo path that is a linked worktree maps
+    to its main checkout (as emit_lead_handoff does); an unknown repo gives None."""
+    repo = str(place.get("repo") or "").removeprefix("path:")
+    parent = str(place.get("child_of") or "").removeprefix("path:")
+    return orca_repo_show_line(main_checkout(repo or parent) if (repo or parent) else None)
 
 
 def emit_lead_handoff(reg, agent, prompt, place, branch, m):
@@ -3680,14 +3687,18 @@ def lead_report_summary(body):
     return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
 
 
-def lead_report_notes(plan, row, task, orca_done):
+def lead_report_notes(plan, row, task, orca_done, path=None):
     """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only). `orca_done`: task ids whose 'task done: <id>'
-    message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only)."""
+    message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only).
+    `path`: the task's repo checkout. In a no-worktree repo the task HEAD is plan.topic and moves when the next task
+    commits, so in the integrated and qa phases a report at an ancestor of the HEAD still counts (as review and QA do)."""
     rec = fstate.read_json(lead_report_file(plan, task["id"]))
     rec = rec if isinstance(rec, dict) and rec.get("sha") else None
     head, notes = row["sha"], []
+    report_current = bool(rec) and (rec["sha"] == head or (
+        row["phase"] in ("integrated", "qa") and bool(path) and is_ancestor(path, rec["sha"], head)))
     if rec:
-        stale = f" (stale: task HEAD is {head[:10]})" if head and head != rec["sha"] else ""
+        stale = f" (stale: task HEAD is {head[:10]})" if head and not report_current else ""
         notes.append(f"lead report: {rec.get('at', '?')} @{rec['sha'][:10]} {rec.get('summary', '')}{stale}")
     elif task["id"] in orca_done:
         notes.append(f"lead report: task done: {task['id']} (an Orca message only: no durable record, ask the lead to run "
@@ -3698,7 +3709,7 @@ def lead_report_notes(plan, row, task, orca_done):
     missing = None
     if not rec:
         missing = "no lead report"
-    elif rec["sha"] != head:
+    elif not report_current:
         missing = f"lead report is for {rec['sha'][:10]}, task HEAD is {head[:10]}"
     elif not rv:
         missing = "no review"
@@ -3857,7 +3868,8 @@ def status(plan, reg, orca_run=None):
     runs = orca_runs(plan, orca_run)
     orca_done = orca_done_tasks(runs) if runs else set()
     for t in tasks:
-        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done)
+        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done,
+                                                    repo_info(plan, reg, t["repo"])["path"])
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]

@@ -12,9 +12,10 @@
 - **Orphaned waiter.** When Claude Code reaps a background waiter's shell, the orphaned `orca-wait.sh` lock holder now exits when its parent dies, and the next waiter names an orphan PID instead of only exiting 3 "already held". A stale acquire guard is reclaimed.
 - **Implementer refusal.** The implementer refusal now covers subtask records, not only plan tasks.
 - **`verdict --fallback` text.** The usage text and the "available now" error state that `--fallback` takes the unavailable agent, not its replacement.
-- **Test speed.** The `cli-selftest` case of `tests/pipeline.test.sh` runs faster (about 61 s before).
+- **Test speed.** The `cli-selftest` case of `tests/pipeline.test.sh` runs faster (about 61 s before) and its selftest is stronger.
 
 ### Fixed
 
 - **Released workers.** `status --orca-run` no longer lists released workers as UNRELEASED.
-- **`tests/pipeline.test.sh` arguments.** `--help` prints usage and exits 0 without running any suite, and `--case ,` or empty case names exit 2.
+- **Lead report in a no-worktree repo.** In a repo without task worktrees the task HEAD is the integration branch and moves when the next task commits; a finished task (phase integrated or qa) keeps `READY_FOR_PR: yes` and no stale marker while its lead report is an ancestor of the HEAD. A report at a commit outside the HEAD's history is still stale.
+- **Repo visibility hint for a linked worktree.** A worker placement whose repo path is a linked worktree gets the `orca repo set ... show` hint for the main checkout, which is what `orca repo list` holds.

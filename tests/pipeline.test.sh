@@ -2852,6 +2852,29 @@ out=$(vis_out dispatch "$G" --task integration:srv --phase qa --sha "$SG" --plac
 repo_ln=$(line_of "$SHOW_RE" "$out"); start_ln=$(line_of "^orca orchestration worker-start .*--worktree new-child" "$out")
 if [ -n "$repo_ln" ] && [ -n "$start_ln" ] && [ "$repo_ln" -lt "$start_ln" ]; then pass=$((pass + 1)); echo "PASS  visibility hide: a child placement prints repo set before its worker-start"
 else fail=$((fail + 1)); echo "FAIL  visibility hide, child placement: repo set line $repo_ln, worker-start line $start_ln"; sed 's/^/      /' <<<"$out" | head -8; fi
+# `orca repo list` holds the main checkout: a placement whose repo path (or child parent) is a linked worktree of it
+# still gets the hint, naming the main checkout; show prints nothing
+git -C "$S" worktree add -q "$TMP/vis-link" -b vis-link develop 2>/dev/null
+if PATH="$fpath" python3 -B - "$ROOT" "$(wtp "$S")" "$(wtp "$TMP/vis-link")" "$FAKE_ORCA_REPOS" <<'PY'
+import importlib.util, json, shlex, sys
+spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+main, link, repos = sys.argv[2:5]
+def names_main(line):
+    args = shlex.split(line or "")
+    return args[:3] == ["orca", "repo", "set"] and any(m.norm_wt(a[len("path:"):]) == m.norm_wt(main) for a in args if a.startswith("path:"))
+top = {"worktree": "new-top-level", "new": True, "repo": f"path:{link}", "base": "develop"}
+child = {"worktree": "new-child", "new": True, "child_of": link, "base": "develop"}
+assert names_main(m.place_show_line(top)), m.place_show_line(top)
+assert names_main(m.place_show_line(child)), m.place_show_line(child)
+assert m.place_show_line({"worktree": "current", "new": False}) is None
+assert m.place_show_line({"worktree": "new-top-level", "new": True}) is None
+json.dump({"ok": True, "result": {"repos": [{"id": "r1", "path": main, "externalWorktreeVisibility": "show"}]}}, open(repos, "w"))
+assert m.place_show_line(top) is None
+PY
+then pass=$((pass + 1)); echo "PASS  visibility hide: a repo path that is a linked worktree maps to its main checkout for the hint (show: none)"
+else fail=$((fail + 1)); echo "FAIL  visibility hide: linked-worktree repo path"; fi
+git -C "$S" worktree remove --force "$TMP/vis-link"; git -C "$S" branch -q -D vis-link
 unset FAKE_ORCA_REPOS
 # children of the integration checkout ($S on feat/core/demo): the integration QA child dispatch names
 # (<topic>--qa) and a helper with any name whose Orca lineage parent is the integration checkout; status lists them
@@ -3256,9 +3279,22 @@ sv --task c1 --phase review --sha "$SC" --by codex --state PASS
 st_phase "Unity review PASS is integrated at once; next is the per-task QA" c1 integrated "--task c1 --phase qa --sha $SC"
 sv --task c1 --phase qa --sha "$SC" --by codex --state PASS
 st_phase "per-task QA PASS: qa" c1 qa
+# a no-worktree repo: the task HEAD is plan.topic, which moves when the next task commits. A finished task keeps
+# READY_FOR_PR: yes and shows no stale marker while its report is an ancestor of the HEAD (phase qa)
+expect "report: the Unity task lead reports at its commit" 0 "^recorded lead report for c1 at ${SC:0:10}: " report "$ST" --task c1 --sha "$SC" --body "c1 done"
+st_note "no-worktree: report at the HEAD, review and QA PASS: READY_FOR_PR: yes" c1 '^READY_FOR_PR: yes$'
 st_phase "and the next Unity task is ready: its task lead" c2 pending "--task c2 --phase lead --runner orca"
 refute "no gate command while c2 is pending" "^Next: .* gate " status "$ST"
 mkdir -p "$C/Assets/D"; echo d > "$C/Assets/D/d.cs"; gi "$C" add Assets/D; gi "$C" commit -qm "feat: c2"; SD=$(git -C "$C" rev-parse HEAD)
+st_phase "no-worktree: the next task committed, c1 is still qa" c1 qa
+st_note "no-worktree: after the next task commits, c1 keeps READY_FOR_PR: yes (report is an ancestor of the HEAD)" c1 '^READY_FOR_PR: yes$'
+st_note "no-worktree: and its report line has no stale marker" c1 "^lead report: [0-9TZ:-]+ @${SC:0:10} c1 done$"
+# a report at a commit that is no ancestor of the HEAD is still stale
+SX=$(gi "$C" commit-tree 'develop^{tree}' -p develop -m "side")
+expect "report: a report at a commit outside the task's history" 0 "^recorded lead report for c1 at ${SX:0:10}: " report "$ST" --task c1 --sha "$SX" --body "c1 done"
+st_note "no-worktree: a report at a non-ancestor is shown stale" c1 "^lead report: [0-9TZ:-]+ @${SX:0:10} c1 done \(stale: task HEAD is ${SD:0:10}\)$"
+st_note "no-worktree: and READY_FOR_PR: no names both commits" c1 "^READY_FOR_PR: no \(lead report is for ${SX:0:10}, task HEAD is ${SD:0:10}\)$"
+expect "report: the Unity task lead reports again at its commit" 0 "^recorded lead report for c1 at ${SC:0:10}: " report "$ST" --task c1 --sha "$SC" --body "c1 done"
 sv --task c2 --phase review --sha "$SD" --by claude --state PASS
 sv --task c2 --phase qa --sha "$SD" --by claude --state PASS
 # agree <name>: status names the gate as next exactly when the gate (no registry checks here) is READY_FOR_PR
