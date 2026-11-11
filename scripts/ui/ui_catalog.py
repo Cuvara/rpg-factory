@@ -59,9 +59,16 @@ class Unavailable(Exception):
     pass
 
 
-def git(repo, *args):
+def git_full(repo, *args):
+    """(returncode, stdout, stderr) of one git call."""
     p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return p.returncode, p.stdout
+    return p.returncode, p.stdout, p.stderr or ""
+
+
+def git(repo, *args):
+    """(returncode, stdout); callers that need git's stderr use git_full."""
+    rc, out, _ = git_full(repo, *args)
+    return rc, out
 
 
 def registry():
@@ -304,9 +311,10 @@ def build(uitoolkit=None, ref=None, project=None):
         try:
             cat["uitoolkit"] = {"repo": repo, **resolve_ref(repo, ref, project)}
             r = cat["uitoolkit"]["ref"]
-            rc, listing = git(repo, "ls-tree", "-r", "--name-only", r)
+            rc, listing, err = git_full(repo, "ls-tree", "-r", "--name-only", r)
             if rc != 0:
-                raise Unavailable(f"git ls-tree {r} failed in {repo} (exit {rc})")
+                err = " ".join(err.split())
+                raise Unavailable(f"git ls-tree {r} failed in {repo} (exit {rc})" + (f": {err}" if err else ""))
             files = listing.splitlines()
             wanted = [f for f in files if (f.endswith((".cs", ".asmdef")) and f.startswith(("Runtime/", "Editor/")))
                       or f.startswith("Runtime/Theme/Resources/") and f.endswith(".uss")
