@@ -9,26 +9,7 @@ requires a full run: the one full run of a batch is integration QA (`skills/deli
 
 ## In plan
 
-### plugin-flow-5
-
-Plan `docs/plans/plugin-flow-5.json` (written 2026-11-10, not dispatched yet). It runs after the 1.8.0 release, with
-the installed 1.8.0 plugin (single verify per task, `dispatch --phase verify`). Three tasks in one wave, disjoint
-paths:
-
-- `ci-coverage`: wire `tests/delivery-generic.test.sh` into `tests/run-all.sh` and `tests/affected.py` (the
-  generic-delivery follow-up; the routing scenario and the `delivery.md` policy mutations are done),
-  bare-bash-probes, `routing-golden --update` keeping the WSL scenarios on Windows, run-all-robust-lows, and a
-  narrower selection for `scripts/factory-pipeline.py` changes.
-- `lead-report`: task-lead reports that never reach the run lead, completion visible in `status`, released workers
-  shown as UNRELEASED, test-slot holders and released-worker-wsl-leftovers named by `status`/`cleanup`,
-  tier-plan-arg, implementer-refusal-scope, `pipeline.test.sh --help`, orca-wait-lows (with the orphaned waiter
-  that keeps its lock), Orca `externalWorktreeVisibility`, `verdict --fallback` usage text and
-  model-unavailable-probe.
-- `checks-lows`: checks-hygiene-lows, plan-paths-native, guard-package-rename.
-
-Resume: `python3 -B scripts/factory-pipeline.py status docs/plans/plugin-flow-5.json`, then
-`dispatch docs/plans/plugin-flow-5.json --task <id> --phase lead --report-to <run id> --runner orca` per task
-(`delivery.md` section 10). The items stay under "Open" below until the plan merges.
+None. Plan `plugin-flow-5` is in PR review (`docs/plans/plugin-flow-5/report.md`).
 
 ## Open
 
@@ -48,56 +29,12 @@ matched, and the macOS user-home alternative also matches the path part of a URL
 plan". Optional follow-up: a `factory-pipeline.py plan-edit` verb (or a `validate --replace <plan>` mode) that does
 the copy, validation and replace in one step, with a test that an invalid edit never replaces the plan.
 
-### model-unavailable-probe
 
-agent-routing marks a model down by hand (`factory-pipeline.py agents <plan> --down <model> --reason <text>`).
-Optional: a failed dispatch whose terminal shows a 401 or a 5xx from the model gateway is reported as
-`MODEL_UNAVAILABLE` and marks the model down for the run, instead of being a task failure.
 
-### guard-package-rename
 
-`scripts/lib/gitguard.py` loads `scripts/lib/guard/` by path under the name `rpgf_guard` (guard-polish), but
-`importlib.util.find_spec("guard")` still resolves the directory when `scripts/lib` is on `sys.path`. Rename the
-directory to `scripts/lib/rpgf_guard/` (low).
 
-### run-all-robust-lows
 
-Lows from the run-all-robust review and QA (plan plugin-flow-2):
 
-- The shared git config check keeps its `GITCFG_COPY` temp file on the WARN path (`tests/run-all.sh`, the
-  "shared git config" block; `scripts/lib/gitcfg-guard.sh` removes it only when the config is unchanged).
-- No end-to-end test of the config WARN wiring in `tests/run-all.sh`, and a config WARN is not counted in the summary.
-- `RETRY` lines from `tests/git-guard.test.sh` are hidden when the suite passes.
-- The root cause of the empty git-guard output under load is unproven (5 s probe timeouts fail open); the suite
-  only retries the case once.
-
-### checks-hygiene-lows
-
-Lows from the checks-hygiene review and QA (plan plugin-flow-2):
-
-- `tests/fixtures/run-checks-cleanup-failure.py` patches `runner.signal`; patch `runner.procrun.signal`, then drop
-  the unused `import signal` in `scripts/run-checks.py`.
-- `tests/facts.test.sh` does not check the return code of `git read-tree` into the disposable index.
-- The `scripts/ui/ui_catalog.py` reason for a failed `git ls-tree` omits git's stderr.
-- The facts suite exports each repo with `git archive`, which skips submodules and LFS content.
-
-### orca-wait-lows
-
-Lows from the work-state-in-repo review and QA of `scripts/orca-wait.sh`: a stale `.acquire` guard after a SIGKILL;
-the failure tail shows only keepalives; no tests for an interrupt (INT) or a batch that mixes heartbeats with a real
-message; heartbeats pile up unacknowledged between wakes.
-
-### plan-paths-native
-
-`scripts/lib/plan_paths.py` joins the workspace root from the environment with `os.path.abspath` only; a root in a
-Git Bash or WSL drive spelling is not converted to the native form Windows Python needs (low, from the
-work-state-in-repo review).
-
-### implementer-refusal-scope
-
-`verdict --implementer` on a task-level review is refused only when it conflicts with the task-level implementer
-record; it does not check the subtask implementer records that `review_implementer` would otherwise use
-(`scripts/factory-pipeline.py`, `verdict`). Check them too (low, from the gate-multiwave review).
 
 ### agent-runtime-quirks
 
@@ -105,29 +42,8 @@ Seen while running plan plugin-flow-2, not reproduced yet: a Codex session's sta
 unsubmitted in its terminal, and Codex under PowerShell resolves `bash` to WSL instead of Git Bash (CLAUDE.md
 "Operating lessons": Git Bash, never WSL). Find the cause; make dispatch detect or prevent each one.
 
-### released-worker-wsl-leftovers
 
-Seen in plan plugin-subagent-rules (2026-11-10): after the registry task's Codex workers were stopped and released
-(codex down), three orphaned `wsl.exe -d Ubuntu --exec sleep infinity` processes (with their `wslhost.exe` and
-`conhost.exe`; parent process gone) kept the task worktree directory busy, so `orca worktree rm` left an empty
-directory and an Orca record shown as "Delete failed". No plugin code starts `sleep infinity`; the likely source is
-the Codex CLI or its sandbox. `cleanup` checks that a released worker's CLI exited but does not find this kind of
-leftover. Confirmed: with the user's approval the three `wsl.exe` processes were stopped, and the directory and
-its Orca record could then be removed at once. Find the starter, make `cleanup` name such processes (PID, command, start time) for a busy task
-directory, and have the task lead stop the processes its own workers started before it releases them. Never kill
-a process the run cannot prove it started.
 
-### bare-bash-probes
-
-`tests/affected.py` runs a bare `["bash", "--version"]` for its hash version probe; on Windows that is the WSL
-launcher. Use `scripts/lib/shells.py` `find_bash()`, and add "no bare `bash` in a test or script subprocess" to the
-review checklist (PR #91 failed on windows-2025 CI for the same reason in `tests/subagent-policy.test.py`).
-
-### tier-plan-arg
-
-`factory-pipeline.py tier <plan>` errors with `factory-context: unknown argument <plan path>` (seen by the
-ci-windows-bash task lead in plan plugin-subagent-rules). `tier` takes `-- --repo <key> --paths <files>`; accept a
-plan or print a usage error that names the right form.
 
 ### generic-explorer-name
 
@@ -185,6 +101,57 @@ In plan workflow-slim the run lead committed an INVALID plan for about a minute:
 after `validate | grep`, so the exit code was grep's. Fold into plan-edit-verb above: the verb replaces and commits
 the plan only when `validate` itself exits 0, and a test proves an invalid copy is never committed.
 
+### plugin-flow-5-followups
+
+Follow-ups and lows from plan plugin-flow-5 (`docs/plans/plugin-flow-5/report.md`):
+
+- `claude plugin validate --strict` fails on YAML frontmatter in `skills/pin-bump/SKILL.md`,
+  `skills/unity-client-tech/SKILL.md` and `commands/assetgen.md` (it also fails at main, so it is not from this plan).
+  Fix the frontmatter; the two run-all checks then pass.
+- The registry `root_default` (a WSL drive spelling) is not converted by Windows Python (`scripts/lib/workspace.py`); with
+  `RPG_FACTORY_WORKSPACE` unset, 11 workspace checks fail on Windows. Convert it like `plan_paths.py` does.
+- `tests/hook-perf.test.sh:101` writes `"$cf.new"` with no guard; an empty `$cf` creates `.new` in the cwd.
+- LFS: the facts export says "LFS files stay pointers" (`tests/facts.test.sh:37,38,49`, the checks-lows changelog
+  fragment), which is wrong when git-lfs is configured (`git archive` smudges, the suite is then not offline). No
+  product repo has `filter=lfs` today.
+- `scripts/lib/plan_paths.py:57`: a not-yet-existing native path with a `/mnt/<letter>/` segment is rewritten by
+  `native_abs`.
+- The task-lead report and READY_FOR_PR are in `status` notes, not structured fields:
+  `docs/schemas/pipeline-status.schema.json` forbids extra fields (add them).
+- `docs/pipeline-cli.md` lacks the `report` verb, READY_FOR_PR, the slot and BUSY? notes and orca-wait exit 6;
+  `scripts/README.md` line 22 still says the waiter wakes on three message types and leaves messages unacked.
+- `scripts/factory-pipeline.py:3167`: the `slot_holders` docstring omits `winpid`.
+- `tests/orca-wait.test.sh` INT case SKIPs under run-all (a background job ignores SIGINT at entry), so that suite
+  gets no reuse record; an orphaned waiter is detected between checks, so it can lag one wait.
+- `tests/pipeline.test.sh` runs ALL cases for `factory-pipeline.py` and `pipeline_route.py` (its case map is outside
+  the plan task's owned paths); `--list-suites` hides `tests/plan-paths.test.sh` until it is wired.
+- `tests/git-env-isolation.test.sh` re-snapshots the git config without removing the earlier copy.
+- Lesson: a `status` message sent to a dispatch that has already finished creates an Orca follow-up worker (two
+  appeared in this run). Send lead messages only to the run (`--to run:<id>`) of a live task lead, and put context in
+  the start prompt.
+- Machine setup on Windows: `python3` in Git Bash is the Microsoft Store stub and `jq` was absent, which made task QA
+  report NOT_RUN or fail with `jq: command not found` until a PATH shim was used. Make `doctor` name both.
+- The `orca worktree set` call that follows `git worktree add` runs before Orca knows the worktree and sets nothing;
+  `dispatch --phase lead` must wait for or retry until `orca worktree list` shows it.
+- Codex availability: `scripts/lib/pipeline_route.py` marks Codex unavailable when `orca account list` shows no Codex
+  account and no system auth (`hasAuth: false`), but a Codex CLI that runs on an API key is fine. Detect the key
+  (`OPENAI_API_KEY` in the environment) or fall back to a probe before marking it down; until then
+  `RPG_FACTORY_AGENTS=claude,codex` overrides the detection. Seen on the second machine: every review was
+  `SAME_MODEL` until the override, and the Codex cross-model reviews then found three real P2 defects in
+  `lead-report` that the Claude reviews had missed.
+- `dispatch --phase review` diffs `main...<sha>` in its spec. A task that merged another integrated task (here
+  checks-lows, after ci-coverage) then shows nine foreign files as scope findings (a false FAIL). Use the task's
+  recorded base or the integration base it merged.
+- `status` still proposes `git merge --no-ff <task branch>` while the task QA is FAIL; the reviewed phase looks only at
+  the review. Look at the QA verdict too (same class as the READY_FOR_PR fix of `lead-report`).
+- `netcode-headless` (`scripts/checks/netcode-headless.sh`) failed once (1 failed, 0 passed) and passed 720/720 on an
+  immediate rerun in integration QA; its cleanup removed the TRX, so the cause is unknown. Keep the failing TRX
+  (or its tail) when the check fails.
+- The integration QA verdict is not a clean pass on this host: `wire-parity` (Netcode `406a1b6` against server
+  `633a792`) fails because the sibling repos drift. Reconcile Netcode and server before the next workspace gate.
+- A QA worker's permission prompt on `rm -f $S/*.log` (a possibly-empty variable) stalls an unattended run; the QA
+  spec template should use `"${S:?}"` or a literal path.
+
 ## Covered
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,
@@ -215,3 +182,9 @@ the plan only when `validate` itself exits 0, and a test proves an invalid copy 
   `tests/routing.test.sh`, `tests/affected.py` selection for orca-wait, `scripts/orca-wait.sh` in
   `scripts/README.md`, `merge --no-ff` for later waves and the `verdict` options in `parallel-work.md`, now `delivery.md`): plan
   plugin-flow-2 task wave-close.
+- **plugin-flow-5** (`delivery-generic` in run-all and `affected.py`, bare-bash probes, `routing-golden --update`
+  on Windows, run-all-robust lows, narrower selection for `factory-pipeline.py`; task-lead reports reaching the run
+  lead and `status`, released-worker and slot-holder notes, tier-plan-arg, implementer-refusal-scope,
+  `pipeline.test.sh --help`, orca-wait lows, Orca `externalWorktreeVisibility`, `verdict --fallback` text,
+  model-unavailable probe; checks-hygiene lows, plan-paths-native, guard package rename): plan plugin-flow-5, except
+  plugin-flow-5-followups above.
