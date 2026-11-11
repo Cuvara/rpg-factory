@@ -67,6 +67,49 @@ got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}")
 if [[ "$got" == *tests/parallel-policy.test.sh* ]] && [[ "$got" != *tests/git-guard.test.sh* ]]; then
   pass=$((pass + 1)); echo "PASS  parallel policy suite change skips git guard"
 else fail=$((fail + 1)); echo "FAIL  parallel policy suite change skips git guard: got [$got]"; fi
+# delivery-generic is selected by the delivery skill, factory-pipeline.py and pipeline_route.py (real repository selection)
+sel 0 "delivery.md selects the generic-delivery suite" tests/delivery-generic.test.sh skills/delivery/references/delivery.md
+sel 0 "a skills/delivery file selects the generic-delivery suite (EXTRA)" tests/delivery-generic.test.sh skills/delivery/pipeline-defaults.json
+sel 0 "factory-pipeline.py selects the generic-delivery suite" tests/delivery-generic.test.sh scripts/factory-pipeline.py
+sel 0 "pipeline_route.py selects the generic-delivery suite" tests/delivery-generic.test.sh scripts/lib/pipeline_route.py
+if printf '%s\n' "${suites[@]}" | grep -qx tests/delivery-generic.test.sh; then
+  pass=$((pass + 1)); echo "PASS  run-all --list-suites runs the generic-delivery suite"
+else fail=$((fail + 1)); echo "FAIL  run-all --list-suites runs the generic-delivery suite"; fi
+# a pipeline script change selects its mapped suites and the suites that name the file, not the import closure
+cands=("${suites[@]}" tests/delivery-generic.test.sh)
+printf '%s\n' scripts/factory-pipeline.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
+want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh tests/commands.test.sh \
+  tests/skills-lint.sh scripts/checks/english-only.py | sort)
+if [ "$got" = "$want" ] && ! grep -qxE 'tests/(codex-plugin|compat|parallel-policy)[.]test[.]sh' <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  factory-pipeline.py selects the mapped suites and the suites naming it, not the import closure"
+else fail=$((fail + 1)); echo "FAIL  factory-pipeline.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
+printf '%s\n' scripts/lib/pipeline_route.py > "$TMP/many"
+got=$(python3 -B "$A" select-many "$TMP/many" "${cands[@]}" | sort -u)
+want=$(printf '%s\n' tests/pipeline.test.sh tests/delivery-generic.test.sh tests/affected.test.sh scripts/checks/english-only.py | sort)
+if [ "$got" = "$want" ] && ! grep -qxE 'tests/(routing|run-checks|devtools)[.]test[.]sh' <<<"$got"; then
+  pass=$((pass + 1)); echo "PASS  pipeline_route.py selects the mapped suites and the suites naming it, not the import closure"
+else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n' ' ' <<<"$got")]"; fi
+out=$(python3 -B - "$A" <<'PY'
+import ast, importlib.util, sys
+spec = importlib.util.spec_from_file_location("affected", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+def check(label, value): print(("PASS  " if value else "FAIL  ") + label)
+check("a pipeline script runs every case of the pipeline suite", all(m.affected_cases([f], "tests/pipeline.test.sh") == "ALL"
+      for f in ("scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py")))
+import inspect
+check("only selection is narrowed: the import closure still reaches the suites it did, and hashes ignore the table",
+      any(m.selects(p, "tests/codex-plugin.test.sh") for p in m.closure("scripts/factory-pipeline.py"))
+      and "PIPELINE_SUITES" not in inspect.getsource(m.hashes))
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+bare = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Constant) and n.value in ("bash", "bash.exe")]
+check("affected.py runs no bare bash subprocess (find_bash resolves it)", not bare
+      and any(isinstance(n, ast.Name) and n.id == "find_bash" for n in ast.walk(tree)))
+PY
+)
+while IFS= read -r line; do
+  echo "$line"
+  case "$line" in PASS*) pass=$((pass + 1));; *) fail=$((fail + 1));; esac
+done <<< "$out"
 R="$TMP/r"; git init -q -b main "$R"; echo a > "$R/a"; git -C "$R" add a; git -C "$R" -c user.email=t@t -c user.name=t commit -qm a
 git -C "$R" checkout -qb topic; echo b > "$R/b"; git -C "$R" add b; git -C "$R" -c user.email=t@t -c user.name=t commit -qm b; echo c > "$R/c"
 out=$(cd "$R" && python3 -B - "$A" <<'PY'

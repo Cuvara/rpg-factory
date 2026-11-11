@@ -14,6 +14,9 @@
 A suite runs when one of these holds (anything unsure runs):
   - a global input changed (GLOBAL: registry, hooks, manifests) - every suite runs;
   - a runner or selector change runs its explicitly mapped suites;
+  - a change to scripts/factory-pipeline.py or scripts/lib/pipeline_route.py (PIPELINE_SUITES) runs its two mapped
+    suites and a suite that itself names the file (exact path in its text or an EXTRA pattern), not the ~19 suites its import
+    closure reaches; only selection is narrowed, hashes (suite reuse) keep the conservative closure;
   - a library or Python module change reaches a named script or suite through static imports, followed through
     every tracked Python module on the way (unresolved/dynamic libraries, unnamed leaves run all);
   - the suite file itself changed;
@@ -67,6 +70,13 @@ DIRECT_SUITES = {
     "tests/affected.py": {"tests/affected.test.sh"},
 }
 
+# scripts that ~19 suites reach through the import closure but only these suites test: selection stops at the mapped
+# suites and the suites that name the file; the reuse hashes (hashes) still use the conservative closure
+PIPELINE_SUITES = {
+    "scripts/factory-pipeline.py": {"tests/pipeline.test.sh", "tests/delivery-generic.test.sh"},
+    "scripts/lib/pipeline_route.py": {"tests/pipeline.test.sh", "tests/delivery-generic.test.sh"},
+}
+
 SKILL_TEXT = ["skills/*", ".claude/skills/*"]
 # indirect inputs: what a suite reads without naming the file
 EXTRA = {
@@ -81,7 +91,10 @@ EXTRA = {
     "tests/ui-skills.test.sh": ["skills/ui-*", "docs/architecture/*"],
     "tests/orca-commands.test.sh": ["skills/delivery/references/delivery.md", "skills/factory-core/references/parallel-work.md",
                                    "docs/pipeline-cli.md"],
-    "tests/delivery-generic.test.sh": ["skills/delivery/references/delivery.md"],
+    # absent until task checks-lows lands: run-all lists a suite only when its file exists (list_suites), so while it is
+    # absent --list-suites and --only-suites never name it and no candidate list holds it
+    "tests/plan-paths.test.sh": ["scripts/lib/plan_paths.py", "scripts/lib/compat.sh"],
+    "tests/delivery-generic.test.sh": ["skills/delivery/*", "scripts/factory-pipeline.py", "scripts/lib/pipeline_route.py"],
     "scripts/checks/skill-citations.py": SKILL_TEXT,
     "tests/commands.test.sh": ["commands/*", "scripts/factory-*.py", "scripts/run-checks.py", "scripts/ui/*", "scripts/assetgen/*"],
     "tests/assetgen.test.sh": ["scripts/assetgen/*", "templates/assetgen/*", "scripts/checks/domains/assetgen.py",
@@ -401,6 +414,12 @@ def selects(path, suite):
     return path == suite or hit(path, suite_patterns(suite)) or hit(path, EXTRA.get(suite, []))
 
 
+def names(path, suite):
+    """The suite itself names the file: its text holds the exact path, or one of its EXTRA patterns matches. A
+    directory or glob the text mentions (scripts/lib, scripts/*.py) does not name a file in it."""
+    return path == suite or path in suite_patterns(suite) or hit(path, EXTRA.get(suite, []))
+
+
 def always(path):
     return hit(path, GLOBAL) or "/" not in path
 
@@ -413,6 +432,10 @@ def needed(files, suite):
     for f in files:
         if f in DIRECT_SUITES:
             if suite in DIRECT_SUITES[f]:
+                return True
+            continue
+        if f in PIPELINE_SUITES:
+            if suite in PIPELINE_SUITES[f] or names(f, suite):
                 return True
             continue
         reached = closure(f)
@@ -451,7 +474,7 @@ def affected_cases(files, suite):
     for path in files:
         if not needed([path], suite):
             continue
-        reached = closure(path)
+        reached = frozenset([path]) if path in PIPELINE_SUITES else closure(path)
         if reached is None:
             return "ALL"
         # a shared module reaches every file that imports it: each reached file the suite selects must be mapped
@@ -467,7 +490,17 @@ def affected_cases(files, suite):
 
 def hashes(suites):
     versions = [sys.version]
-    for cmd in (["git", "--version"], ["bash", "--version"], ["jq", "--version"]):
+    # a bare "bash" resolves to the WSL launcher on Windows (CreateProcess): find_bash() or absent
+    sys.path.insert(0, os.path.join(ROOT, "scripts", "lib"))
+    try:
+        from shells import find_bash
+        bash = find_bash()
+    finally:
+        sys.path.pop(0)
+    for cmd in (["git", "--version"], [bash, "--version"] if bash else None, ["jq", "--version"]):
+        if cmd is None:
+            versions.append("absent")
+            continue
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=10)
             versions.append(result.stdout.splitlines()[0].decode("utf-8", errors="replace") if result.stdout else "absent")
