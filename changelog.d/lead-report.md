@@ -18,4 +18,5 @@
 
 - **Released workers.** `status --orca-run` no longer lists released workers as UNRELEASED.
 - **Lead report in a no-worktree repo.** In a repo without task worktrees the task HEAD is the integration branch and moves when the next task commits; a finished task (phase integrated or qa) keeps `READY_FOR_PR: yes` and no stale marker while its lead report is an ancestor of the HEAD. A report at a commit outside the HEAD's history is still stale.
+- **Review findings of the lead-report task.** `status` READY_FOR_PR now honours subtask FAILs and stale reviews; slot holders are named in prefixed and lineage-only child worktrees too; and `tests/pipeline.test.sh` exits 2 on an empty case name inside a list (`--case tier,,status`, `--case ,tier`, `--case tier --case ,`), validated per selector as it is parsed instead of after the commas became spaces.
 - **Repo visibility hint for a linked worktree.** A worker placement whose repo path is a linked worktree gets the `orca repo set ... show` hint for the main checkout, which is what `orca repo list` holds.
