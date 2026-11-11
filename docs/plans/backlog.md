@@ -136,6 +136,48 @@ agent.
 config, or write the model into the session prompt as a hard rule, and re-check doctor's reach (project
 `.codex/config.toml`, active Codex profile).
 
+### workflow-slim-followups
+
+Follow-ups and lows from plan workflow-slim (`docs/plans/workflow-slim/report.md`):
+
+- `factory-pipeline.py status` lists another coordinator's worktree (`plugin-qa-lean-qa-lean`, plan plugin-qa-lean)
+  as a leftover child of `integration:plugin`; it must list only worktrees of its own plan.
+- Tier XS is accepted only for a one-task plan. A small prose follow-up found mid-run (final-pointers) had to become
+  a full task with a task lead. Consider an XS task inside a multi-task plan, reviewed and gated like the one-task form.
+- The plain `tier -- --repo` form counts files, not changed lines; only `tier --plan` and the gate measure lines.
+- `validate` warns "checks contain test suites" for every task whose `checks` name suites (single-verify rule of
+  plan plugin-qa-lean), while `docs/plans/backlog.md` and `docs/plans/README.md` still tell plans to name suites in
+  `checks`. Align the plan convention with the verify rule.
+- `skills/delivery/references/delivery.md` is 32420 of its 32768-byte cap (`tests/delivery-generic.test.sh`); the next
+  policy addition needs a move to `docs/pipeline-cli.md` first.
+- `tests/README.md` restates the QA tiers summary and the one-full-run rule of `delivery.md` (low).
+- `factory-pipeline.py` usage text: `verdict` lists no `verify` phase and still says a subtask needs its own review;
+  factory-core `SKILL.md` step 11 is still titled "Review + QA".
+- The base health hint of `dispatch --phase lead` goes to stderr only (the run lead sees it, the task lead does not);
+  `changelog.d/base-health.md` does not say the verify prompt carries `known_failing` too.
+- Three low nits of the base-health review: `known_failing_text(plan)` computed twice per prompt; an entry with an
+  unknown key gets both the error and the warning; the test fixture's origin remote is removed only on success.
+- `orca terminal close --terminal <handle>` of a finished task lead returned `runtime_error`; `orca worktree rm`
+  then deleted the branch a few seconds later (asynchronously), so `git branch -d` right after it failed with
+  "used by worktree". Cleanup should wait for the worktree record to go before deleting the branch.
+- `gate` reports files that came in with a merge of the default branch (`changelog.d/qa-lean.md`,
+  `tests/affected.test.sh` through main-sync) and the run lead's `docs/plans/backlog.md` edit as "changes outside
+  every task's owned paths"; credit both, like the plan file and the run report.
+
+### run-lead-waiter-reaped
+
+Claude Code stopped the run lead's background waiter (`scripts/orca-wait.sh --run <id>`) twice under memory pressure
+in plan workflow-slim, and the rule is not to restart it on its own. Messages then waited until the user nudged the
+session. Write the lesson into `parallel-work.md` (RPG Orca notes): on every wake the run lead runs
+`orca orchestration check --run <id>` and `factory-pipeline.py status` instead of relying on the waiter, and keep
+fewer task leads open at once on a loaded machine.
+
+### plan-edit-commit-guard
+
+In plan workflow-slim the run lead committed an INVALID plan for about a minute: the commit was chained with `&&`
+after `validate | grep`, so the exit code was grep's. Fold into plan-edit-verb above: the verb replaces and commits
+the plan only when `validate` itself exits 0, and a test proves an invalid copy is never committed.
+
 ## Covered
 
 - **child-worktree-when-needed** (Orca child worktrees per subtask, UTF-8 BOM in plan and subplan loaders,
