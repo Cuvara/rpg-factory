@@ -2941,6 +2941,9 @@ RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "slot lines never carry a kill command" 
 RPG_FACTORY_PROCESS_TABLE=none opath "process listing failing: liveness unknown, never an error" 0 "^Slots: slot 1 held by PID 4242 .*\(liveness unknown\)" status "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "cleanup names the slot too" 1 "^  SLOT slot 1 held by PID 4242 in .*rpg-mmo-server since 2026-11-11T01:02:03Z \(alive\)" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "cleanup slot lines never carry a kill command" "$NOKILL" cleanup "$G"
+# winpid equal to pid (slots 1 and 3 above): no "(Windows PID" text in status or cleanup
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "equal winpid: status prints no Windows PID text" "Windows PID" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "equal winpid: cleanup prints no Windows PID text" "Windows PID" cleanup "$G"
 PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTP" python3 -B "$P" status --json "$G" > "$TMP/so-slots.json" 2> "$TMP/se-slots.txt"; rc=$?
 if [ $rc = 0 ] && jq -e '.valid and (has("_slots") | not)' "$TMP/so-slots.json" >/dev/null && grep -q "^Slots: slot 1 held by PID 4242" "$TMP/se-slots.txt"
 then pass=$((pass + 1)); echo "PASS  status --json: slots on stderr, stdout stays the status schema"
@@ -2949,6 +2952,14 @@ PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$SLOTP" python3 -B "$P" cleanup --json 
 if jq -e '(.slots | map(.slot) | sort) == ["1", "3"] and (.slots[] | select(.slot == "1") | .alive == true and .pid == "4242") and (.slots[] | select(.slot == "3") | .alive == false)' "$TMP/cleanup-slots.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  cleanup --json carries the slot holders"
 else fail=$((fail + 1)); echo "FAIL  cleanup --json slots"; head -c 1200 "$TMP/cleanup-slots.json"; fi
+# a slot whose winpid differs from its pid (MSYS shell PID vs Windows PID) names both; liveness follows the winpid
+mkdir -p "$SLOTS/4"
+printf '6161\n' > "$SLOTS/4/pid"; printf '6262\n' > "$SLOTS/4/winpid"; wtp "$S" > "$SLOTS/4/checkout"; printf '2026-11-11T04:00:00Z\n' > "$SLOTS/4/started"
+jq -n '[{pid:6262,ppid:1,name:"bash.exe",command:"bash tests/run-all.sh",started:"2026-11-11T04:00:00"}]' > "$TMP/proc-slots-win.json"
+SLOTW="$TMP/proc-slots-win.json"
+RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "status names both PIDs when winpid differs, alive by the Windows PID" 0 "^Slots: slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "cleanup names both PIDs when winpid differs" 1 "^  SLOT slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot (1) still prints no Windows PID text" "slot 1 held by PID 4242 \(Windows PID" status "$G"
 rm -rf "$SLOTS"
 
 case_end settled-workers
