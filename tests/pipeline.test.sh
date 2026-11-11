@@ -2771,18 +2771,22 @@ else fail=$((fail + 1)); echo "FAIL  cleanup --json leftovers"; head -c 1500 "$T
 jq -n --arg d "$LD" '[{pid:3101,ppid:1,name:"codex.exe",command:("C:/tools/codex.exe --cwd " + $d),started:"2026-11-10T08:00:00"},
   {pid:3102,ppid:99999,name:"wsl.exe",command:"wsl.exe -d Ubuntu -- sleep infinity",started:"2026-11-09T20:00:00"},
   {pid:3103,ppid:3101,name:"wsl.exe",command:"wsl.exe -d Ubuntu -- sleep infinity",started:"2026-11-10T08:00:05"},
-  {pid:3104,ppid:1,name:"node.exe",command:"node other.js",started:"2026-11-10T09:00:00"}]' > "$TMP/proc-busy.json"
+  {pid:3104,ppid:1,name:"node.exe",command:"node other.js",started:"2026-11-10T09:00:00"},
+  {pid:3105,ppid:1,name:"node.exe",command:("node " + $d + "2/tool.js"),started:"2026-11-10T09:30:00"},
+  {pid:3106,ppid:1,name:"node.exe",command:("node " + $d + "/sub/tool.js"),started:"2026-11-10T09:40:00"}]' > "$TMP/proc-busy.json"
 export BUSYP="$TMP/proc-busy.json"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "a process whose command line names the leftover directory is listed with PID, command and start" 1 "KEPT  srv: BUSY\? process 3101 \(codex.exe\) started 2026-11-10T08:00:00: .*codex.exe --cwd .*feat-core-demo-gw - its command line names the directory; .*the user decides" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "an orphaned wsl.exe sleep infinity is listed" 1 "BUSY\? process 3102 \(wsl.exe\) started 2026-11-09T20:00:00: .*sleep infinity - orphaned wsl.exe sleep infinity" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "a wsl.exe sleep infinity whose parent is alive is not named" "process 3103" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "an unrelated process is not named" "process 3104" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "a sibling directory with the same prefix (...-gw2) is not named" "process 3105" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "a process inside the directory (path boundary) is named" 1 "BUSY\? process 3106 \(node.exe\) started 2026-11-10T09:40:00: .*sub/tool.js - its command line names the directory" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "busy processes: never a kill command" "$NOKILL" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "busy processes: no traceback" "Traceback" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE=none opath "a process listing that fails names nothing, still LEFTOVER" 1 "^Cleanup: LEFTOVER" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE=none oref "a failing process probe: no BUSY line, no traceback" "BUSY\?|Traceback" cleanup "$G"
 PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$BUSYP" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-busy.json" 2>&1
-if jq -e 'any(.leftovers[]; .kind == "directory" and (.processes | map(.pid) | sort) == [3101, 3102] and all(.processes[]; .command != "" and .started != "" and .why != ""))' "$TMP/cleanup-busy.json" >/dev/null
+if jq -e 'any(.leftovers[]; .kind == "directory" and (.processes | map(.pid) | sort) == [3101, 3102, 3106] and all(.processes[]; .command != "" and .started != "" and .why != ""))' "$TMP/cleanup-busy.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  cleanup --json lists the busy candidates (PID, command, start) per leftover directory"
 else fail=$((fail + 1)); echo "FAIL  cleanup --json processes"; head -c 1500 "$TMP/cleanup-busy.json"; fi
 echo x > "$LD/file.txt"
@@ -3172,7 +3176,7 @@ refute "no lead report: no lead report line" "note: lead report:" status "$ST"
 expect "report: an unknown task is a usage error" 2 "unknown task zz" report "$ST" --task zz --sha "$SA" --body x
 expect "report: a body is required" 2 "one of the arguments --body --body-file is required" report "$ST" --task a --sha "$SA"
 expect "report: an empty body is refused" 2 "report body is empty" report "$ST" --task a --sha "$SA" --body "  "
-expect "report: a SHA that is no commit of the repo is refused" 2 "is not a commit of repo srv" report "$ST" --task a --sha 1234567abcdef
+expect "report: a SHA that is no commit of the repo is refused" 2 "is not a commit of repo srv" report "$ST" --task a --sha 1234567abcdef --body x
 expect "report: an integration task is refused" 2 "report is per plan task" report "$ST" --task integration:srv --sha "$SA" --body x
 SD=$(git -C "$S" rev-parse develop)
 { printf 'First line of the lead report %0190d\n' 0; echo 'second line stays in the body'; } > "$TMP/lead-report.txt"
@@ -3297,6 +3301,7 @@ st_note "no-worktree: and READY_FOR_PR: no names both commits" c1 "^READY_FOR_PR
 expect "report: the Unity task lead reports again at its commit" 0 "^recorded lead report for c1 at ${SC:0:10}: " report "$ST" --task c1 --sha "$SC" --body "c1 done"
 sv --task c2 --phase review --sha "$SD" --by claude --state PASS
 sv --task c2 --phase qa --sha "$SD" --by claude --state PASS
+st_note "no-worktree: every task at QA flips c1 to integrated, yet c1 keeps READY_FOR_PR: yes (its QA is an ancestor of the HEAD)" c1 '^READY_FOR_PR: yes$'
 # agree <name>: status names the gate as next exactly when the gate (no registry checks here) is READY_FOR_PR
 agree() {
   local out g rc

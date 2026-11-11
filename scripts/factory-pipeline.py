@@ -3176,6 +3176,18 @@ def slot_lines(holders):
             + ": the user decides, the run never stops it" for h in holders]
 
 
+def _names_dir(cmd, form):
+    """`form` (a canonical directory spelling) occurs in `cmd` followed by a path boundary, so x-gw does not name x-gw2."""
+    text = cmd.replace("\\", "/").casefold()
+    at = text.find(form)
+    while at >= 0:
+        end = at + len(form)
+        if end >= len(text) or not (text[end].isalnum() or text[end] in "-_.+@~"):
+            return True
+        at = text.find(form, at + 1)
+    return False
+
+
 def busy_processes(directory):
     """Processes that may keep `directory` busy: their command line mentions it, and an orphaned `wsl.exe ... sleep
     infinity` (its parent process is gone). [{pid, name, command, started, why}]; [] when none or when the process
@@ -3189,7 +3201,7 @@ def busy_processes(directory):
         cmd = str(r.get("command") or "")
         if str(r.get("pid")) == str(os.getpid()):
             continue
-        if want and any(f in cmd.replace("\\", "/").casefold() for f in forms):
+        if want and any(_names_dir(cmd, f) for f in forms):
             why = "its command line names the directory"
         elif (str(r.get("name") or "").casefold().startswith("wsl") and "sleep infinity" in cmd.casefold()
               and str(r.get("ppid")) not in pids):
@@ -3687,11 +3699,13 @@ def lead_report_summary(body):
     return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
 
 
-def lead_report_notes(plan, row, task, orca_done, path=None):
+def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False):
     """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only). `orca_done`: task ids whose 'task done: <id>'
     message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only).
     `path`: the task's repo checkout. In a no-worktree repo the task HEAD is plan.topic and moves when the next task
-    commits, so in the integrated and qa phases a report at an ancestor of the HEAD still counts (as review and QA do)."""
+    commits, so in the integrated and qa phases a report at an ancestor of the HEAD still counts (as review and QA do).
+    `no_worktree`: the repo has no task worktrees; only there does a QA PASS at an ancestor of the HEAD count in the
+    integrated phase (every task of the repo is marked integrated while the integration QA is still due)."""
     rec = fstate.read_json(lead_report_file(plan, task["id"]))
     rec = rec if isinstance(rec, dict) and rec.get("sha") else None
     head, notes = row["sha"], []
@@ -3721,7 +3735,8 @@ def lead_report_notes(plan, row, task, orca_done, path=None):
         missing = "no QA"
     elif qa["state"] != "PASS":
         missing = f"QA {qa['state']}"
-    elif qa["sha"] != head and phase != "qa":
+    elif qa["sha"] != head and phase != "qa" and not (
+            no_worktree and phase == "integrated" and bool(path) and is_ancestor(path, qa["sha"], head)):
         missing = f"QA is at {qa['sha'][:10]}, task HEAD is {head[:10]}"
     notes.append("READY_FOR_PR: yes" if missing is None else f"READY_FOR_PR: no ({missing})")
     return notes
@@ -3868,8 +3883,9 @@ def status(plan, reg, orca_run=None):
     runs = orca_runs(plan, orca_run)
     orca_done = orca_done_tasks(runs) if runs else set()
     for t in tasks:
-        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done,
-                                                    repo_info(plan, reg, t["repo"])["path"])
+        rinfo = repo_info(plan, reg, t["repo"])
+        rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done, rinfo["path"],
+                                                    no_worktree=not rinfo["worktrees"])
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]
