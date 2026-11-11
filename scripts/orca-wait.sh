@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# One consuming waiter per Run. Real deliveries remain unacknowledged for the caller.
+# One consuming waiter per Run. Orca 1.4.250+ marks every batch a check returns as handled and sends no deliveryId, so a
+# printed delivery is already read (`orca orchestration inbox` finds it again). An older Orca sends a deliveryId: a
+# heartbeat-only batch is acked here and a real delivery stays unacknowledged for the caller.
+# The default types include status because task leads report with --type status. --types is only the wake condition and
+# a delivery is the whole FIFO batch, so heartbeats always wake the wait: consumed here, they never pile up for a later one.
 # Frozen stalls are advisory: a worker may be inside a long quiet command.
 # Exit codes: 0 real delivery; 2 usage / NOT_AVAILABLE / invalid receipt or state;
-# 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 130 INT; 143 TERM.
+# 3 lock held / acquisition busy; 4 orca failure; 5 stalled worker; 6 parent process gone (orphan, lock released);
+# 130 INT; 143 TERM.
 set -uo pipefail
-run= timeout=60000 types=worker_done,escalation,question stall_poll=180000 stall_ms=900000
+run= timeout=60000 types=worker_done,escalation,question,status stall_poll=180000 stall_ms=900000
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --run|--timeout-ms|--types|--stall-poll-ms|--stall-ms)
@@ -31,31 +36,78 @@ mkdir -p "$(dirname "$state")" || exit 2
 # Serialize acquisition and stale takeover with a short-lived mkdir guard. A
 # competing acquisition never deletes another waiter's newly acquired lock.
 guard="$state.acquire"
-guard_owned=0 locked=0 child=
+guard_mutex="$guard.reclaim"
+guard_stale_s=60
+guard_owned=0 mutex_owned=0 locked=0 child=
+# bash fixes $PPID at start, so it keeps naming the parent after a reap. 1 is init or a parent outside this shell's
+# process table (a native Windows program): nothing to watch.
+parent=$PPID
+pid_alive() { [[ "$1" =~ ^[1-9][0-9]*$ ]] && kill -0 "$1" 2>/dev/null; }
+parent_gone() { [ "$parent" -gt 1 ] && ! kill -0 "$parent" 2>/dev/null; }
+release_guard() { rm -f "$guard/owner"; rmdir "$guard"; }
 cleanup() {
   if [ -n "$child" ]; then kill "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; fi
   if [ "$locked" -eq 1 ]; then rm -f "$state"; fi
-  if [ "$guard_owned" -eq 1 ]; then rmdir "$guard" 2>/dev/null || :; fi
+  if [ "$mutex_owned" -eq 1 ]; then rm -f "$guard_mutex"; fi
+  if [ "$guard_owned" -eq 1 ]; then release_guard 2>/dev/null || :; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# The owner file is created exclusively: an acquirer paused between mkdir and this write whose guard was reclaimed (and
+# perhaps recreated) fails here and retries, so two waiters never both own the guard.
+claim_guard() {
+  mkdir "$guard" 2>/dev/null || return 1
+  (set -o noclobber; printf '%s\n' "$$" > "$guard/owner") 2>/dev/null || return 1
+  guard_owned=1
+}
+# Stale: no live pid recorded and untouched for guard_stale_s. A recorded live pid is never stale, whatever its age.
+# $1 the path to age, $2 the file holding the owner pid.
+is_stale() {
+  local owner age
+  owner=$(cat "$2" 2>/dev/null)
+  if pid_alive "$owner"; then return 1; fi
+  age=$(python3 -B -c 'import os, sys, time; print(int(time.time() - os.stat(sys.argv[1]).st_mtime))' "$1" 2>/dev/null) || return 1
+  age=${age//$'\r'/}
+  [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -ge "$guard_stale_s" ]
+}
+# A SIGKILL between claiming and releasing leaves the guard behind. The mutex stops two waiters from acting on one
+# staleness decision, and the decision is repeated under it, so a guard that was replaced meanwhile is left alone. A
+# reclaimer killed here leaves only its own mutex, which ages out the same way.
+reclaim_guard() {
+  [ -d "$guard" ] && is_stale "$guard" "$guard/owner" || return 0
+  if is_stale "$guard_mutex" "$guard_mutex"; then rm -f "$guard_mutex"; fi
+  (set -o noclobber; printf '%s\n' "$$" > "$guard_mutex") 2>/dev/null || return 0
+  mutex_owned=1
+  if is_stale "$guard" "$guard/owner"; then
+    if release_guard 2>/dev/null; then echo "WARN: reclaimed stale acquisition guard: $guard" >&2; fi
+  fi
+  rm -f "$guard_mutex"
+  mutex_owned=0
+}
 for ((attempt=0; attempt<100; attempt++)); do
-  if mkdir "$guard" 2>/dev/null; then guard_owned=1; break; fi
+  if claim_guard; then break; fi
+  if [ $((attempt % 20)) -eq 0 ]; then reclaim_guard; fi
   sleep 0.05
 done
 if [ "$guard_owned" -eq 0 ]; then
-  echo "ERROR: waiter acquisition busy: $guard (inspect interrupted acquisition)" >&2; exit 3
+  owner=$(cat "$guard/owner" 2>/dev/null)
+  echo "ERROR: waiter acquisition busy: $guard (owner pid ${owner:-unknown}; a guard with no live owner is reclaimed after ${guard_stale_s}s)" >&2; exit 3
 fi
 if [ -f "$state" ]; then
-  holder=$(cat "$state")
-  if [[ "$holder" =~ ^[1-9][0-9]*$ ]] && kill -0 "$holder" 2>/dev/null; then
+  holder= holder_parent=
+  read -r holder holder_parent < "$state" || :
+  if pid_alive "$holder"; then
+    # Named, never killed: the run cannot prove it started that process, and the holder exits by itself at its next loop.
+    if [[ "$holder_parent" =~ ^[0-9]+$ ]] && [ "$holder_parent" -gt 1 ] && ! kill -0 "$holder_parent" 2>/dev/null; then
+      echo "ERROR: waiter for run $run already held by pid $holder (orphan: parent gone, was pid $holder_parent; it exits at its next poll and releases the lock, retry then)" >&2; exit 3
+    fi
     echo "ERROR: waiter for run $run already held by pid $holder" >&2; exit 3
   fi
 fi
-printf '%s\n' "$$" > "$state" || exit 2
+printf '%s %s\n' "$$" "$parent" > "$state" || exit 2
 locked=1
-rmdir "$guard" || exit 2
+release_guard || exit 2
 guard_owned=0
 
 # Keep output bounded without truncating JSON: reject oversized deliveries so
@@ -63,23 +115,31 @@ guard_owned=0
 response="$state.$$.response"
 stderr="$response.stderr"
 trap 'rm -f "$response" "$stderr"; cleanup' EXIT
+# The tail of a failed check is for the error: Orca's --wait keepalive lines (old alias _heartbeat) would crowd it out.
+failure_tail() { grep -avE '^[[:space:]]*\{"_(keepalive|heartbeat)"' "$1" | tail -n 15 >&2; }
+wake_types=$types
+case ",$types," in *,heartbeat,*) ;; *) wake_types=$types,heartbeat ;; esac
 ack=
 wait_timeout=$timeout
 if [ "$stall_poll" -gt 0 ] && [ "$stall_poll" -lt "$timeout" ]; then wait_timeout=$stall_poll; fi
 while :; do
+  if parent_gone; then
+    echo "ERROR: waiter parent pid $parent is gone; exiting 6 and releasing the lock for run $run" >&2
+    exit 6
+  fi
   args=(orchestration check --run "$run" --json)
   if [ -n "$ack" ]; then
     args+=(--ack "$ack")
   else
-    args+=(--wait --types "$types" --timeout-ms "$wait_timeout")
+    args+=(--wait --types "$wake_types" --timeout-ms "$wait_timeout")
   fi
   orca "${args[@]}" > "$response" 2> "$stderr" &
   child=$!
   wait "$child"; status=$?; child=
   if [ "$status" -ne 0 ]; then
     echo "ERROR: orca check exited $status" >&2
-    tail -n 15 "$stderr" >&2
-    tail -n 15 "$response" >&2
+    failure_tail "$stderr"
+    failure_tail "$response"
     exit 4
   fi
   parsed=$(python3 -B - "$response" <<'PY'
@@ -100,9 +160,12 @@ try:
         raise ValueError('messages must be a list')
     if messages and all(m.get('type') == 'heartbeat' for m in messages):
         delivery = batch.get('deliveryId')
-        if not isinstance(delivery, str) or not delivery or '\n' in delivery or '\r' in delivery:
-            raise ValueError('heartbeat batch has no valid deliveryId')
-        print('ack\t' + delivery)
+        if delivery is None or delivery == '':
+            print('wait')  # Orca 1.4.250+ sends no deliveryId: the check already marked the batch handled
+        elif not isinstance(delivery, str) or '\n' in delivery or '\r' in delivery:
+            raise ValueError('heartbeat batch has an invalid deliveryId')
+        else:
+            print('ack\t' + delivery)
     elif messages:
         print('real')
     else:
@@ -190,6 +253,8 @@ try:
             reason = 'frozen: output unchanged for ' + str(int((now - since) // 60000)) + ' min'
         reason_key = ('frozen' if reason and reason.startswith('frozen:') else
                       'usage limit' if reason and reason.startswith('MODEL_UNAVAILABLE: usage limit') else
+                      'model not found' if reason and reason.startswith('MODEL_UNAVAILABLE: model not found') else
+                      'gateway error' if reason and reason.startswith('MODEL_UNAVAILABLE: gateway error') else
                       'reconnecting' if reason else None)
         prior_reason = prior.get('reported') if isinstance(prior, dict) else None
         if reason_key == 'frozen' and isinstance(prior, dict) and prior.get('hash') != digest:

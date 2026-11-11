@@ -16,6 +16,34 @@ def _safe(x):
     return ''.join(c if c.isalnum() or c in '-_.' else '_' for c in str(x))
 
 
+# The Codex gateway wraps an upstream error in its own status: `unexpected status 503 Service Unavailable: [codex/<model>]
+# [429]: The usage limit has been reached`. Case-sensitive and anchored at the status text (the HTTP reason phrase is
+# title case), so a test name, a log line or a count that holds these numbers does not match.
+_GATEWAY_PREFIX = r'(?:(?:stream )?[Ee]rror:\s*)?'
+_GATEWAY_WRAP = _GATEWAY_PREFIX + r'unexpected status (\d{3})(?: [A-Z][a-z]+)*:'
+_GATEWAY_TAG = re.compile(r'(?:' + _GATEWAY_WRAP + r'\s*|' + _GATEWAY_PREFIX + r')(\[codex/[^\]\s]+\]\s*)?\[(\d{3})\]:?\s*(.*)')
+_GATEWAY_STATUS = re.compile(_GATEWAY_WRAP)
+
+
+def _unavailable_code(code):
+    return code == 401 or 500 <= code <= 599
+
+
+def gateway_detail(status):
+    """The MODEL_UNAVAILABLE detail of a model gateway error, the upstream code first, or None."""
+    tagged = _GATEWAY_TAG.match(status)
+    if tagged:
+        codex, code, body = tagged.group(2), int(tagged.group(3)), tagged.group(4)
+        if code == 429 and (codex or re.search(r'\busage limit\b', body, re.IGNORECASE)):
+            return 'usage limit (429)'
+        if code == 400 and re.search(r'\bmodel_not_found\b', body):
+            return 'model not found'
+        if codex and _unavailable_code(code):
+            return 'gateway error (' + str(code) + ')'
+    wrapped = _GATEWAY_STATUS.match(status)
+    return 'gateway error (' + wrapped.group(1) + ')' if wrapped and _unavailable_code(int(wrapped.group(1))) else None
+
+
 def stall_reason(text):
     """Return a reason for factory-pipeline.py agents --down, if the tail indicates a stall."""
     lines = text.splitlines() if isinstance(text, str) else [line for item in text for line in item.splitlines()]
@@ -30,11 +58,17 @@ def stall_reason(text):
         claude_usage = (r'(?:api error\s*:\s*429\b|api error\b.*(?:rate_limit|overloaded)|'
                         r'claude usage limit reached\b|'
                         r'(?:usage|5-hour) limit reached\b.*\b(?:reset|resets|try again)\b)')
+        gateway = gateway_detail(status)
+        api = re.match(r'api error\s*:\s*(401|5\d\d)\b', error, re.IGNORECASE)
         if re.match(usage, status, re.IGNORECASE) or re.match(claude_usage, error, re.IGNORECASE):
             status = status if re.match(usage, status, re.IGNORECASE) else error
             detail = 'usage limit' + (' (429)' if re.search(r'\b429\b', status) else '')
         elif re.match(r'(?:reconnecting(?:\.\.\.|\u2026|\s+\d+/\d+)|stream disconnected before completion\b)', status, re.IGNORECASE):
             detail = 'reconnecting'
+        elif gateway:
+            detail = gateway
+        elif api:
+            detail = 'gateway error (' + api.group(1) + ')'
         else:
             continue
         return 'MODEL_UNAVAILABLE: ' + detail + ' - ' + line.strip()[:120]
