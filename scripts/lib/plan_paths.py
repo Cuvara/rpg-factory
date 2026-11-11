@@ -5,11 +5,22 @@ paths prefixed with the registry workspace environment variable are workspace-re
 The caller surfaces path_reason when workspace discovery fails.
 
 On Windows Python an absolute path or a workspace root written in the Git Bash (`/c/ws`) or WSL (`/mnt/c/ws`)
-spelling is converted with workspace.native_path first; elsewhere nothing changes.
+spelling is converted with workspace.native_abs first, which also undoes the rewrite Git Bash applies to a WSL
+argument or environment value before Windows Python sees it (`/mnt/c/ws` arrives as `C:/Program Files/Git/mnt/c/ws`);
+elsewhere nothing changes (native_abs would turn `C:/...` into `/mnt/c/...` on POSIX, so it is gated on Windows).
 """
 import os
 
-from workspace import find_workspace, native_path  # scripts/lib is on sys.path (factory-pipeline.py)
+from workspace import find_workspace, native_abs  # scripts/lib is on sys.path (factory-pipeline.py)
+
+
+def _is_nt():
+    return os.name == "nt"
+
+
+def _native(p):
+    """p in this platform's spelling: workspace.native_abs on Windows, p itself elsewhere."""
+    return native_abs(p) if p and _is_nt() else p
 
 
 def _find_workspace_native(plan_dir, registry):
@@ -20,7 +31,7 @@ def _find_workspace_native(plan_dir, registry):
     ancestors of plan_dir, then the registry default) is kept."""
     variable = registry.get("workspace", {}).get("root_env")
     raw = os.environ.get(variable, "") if variable else ""
-    converted = native_path(raw)
+    converted = _native(raw)
     if not variable or converted == raw:
         return find_workspace(plan_dir, registry, env_first=True, use_default=True)
     os.environ[variable] = converted
@@ -43,4 +54,4 @@ def resolve_repo_path(path, plan_file, registry):
                 return None, f"Workspace not found for {variable}"
             suffix = path[len(prefix):].lstrip("/\\").replace("\\", os.sep)
             return os.path.abspath(os.path.join(root, suffix)), None
-    return os.path.abspath(os.path.join(plan_dir, native_path(path))), None
+    return os.path.abspath(os.path.join(plan_dir, _native(path))), None
