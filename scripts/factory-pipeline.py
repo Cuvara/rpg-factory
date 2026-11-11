@@ -3123,19 +3123,35 @@ def _canon(p):
 
 
 def plan_checkouts(plan, reg):
-    """The checkouts of the plan's worktrees (task worktrees, integration checkout, children: branch <topic> or
-    <topic>-*), plus the main checkout of a no-worktree repo. {canonical path: path}."""
+    """The checkouts of the plan's worktrees (task worktrees and the integration checkout: branch <topic> or <topic>-*;
+    their Orca children, as `children_of` and `status` find them: a branch or directory `<task branch>--*` with any
+    Orca prefix, or a child by Orca's lineage in any directory), plus the main checkout of a no-worktree repo.
+    {canonical path: path}. Read-only; Orca's lineage is read (once) only when a worktree is not named by the rule."""
     out, topic = {}, plan["topic"]
-    for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
+    tasks = [t for t in plan.get("tasks", []) if isinstance(t, dict) and t.get("repo")]
+    lineage = None
+    for key in sorted({t["repo"] for t in tasks}):
         info = repo_info(plan, reg, key)
         if not info["path"] or not os.path.isdir(info["path"]):
             continue
         if not info["worktrees"]:
             out[_canon(info["path"])] = info["path"]
-        for wt in worktree_records(info["path"]):
+        trees = worktree_records(info["path"])
+        rest = []
+        for wt in trees:
             br = str(wt.get("branch", ""))
             if br == topic or br.startswith(topic + "-"):
                 out[_canon(wt["path"])] = wt["path"]
+            elif trees and wt is not trees[0]:  # the repo's main checkout is no child
+                rest.append(wt)
+        if not info["worktrees"] or not rest:
+            continue
+        lineage = lineage or Lineage([topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key])
+        for parent in [topic] + [task_branch(plan, info, t) for t in tasks if t["repo"] == key]:
+            home = next((t["path"] for t in trees if t.get("branch") == parent), None)
+            for wt in rest:
+                if norm_wt(wt.get("path")) != norm_wt(home) and is_child(wt, parent, home, lineage):
+                    out[_canon(wt["path"])] = wt["path"]
     return out
 
 
@@ -3567,7 +3583,8 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
     branch = topic if xs else task_branch(plan, info, task)
     base = info["base_sha"] or info["base"]
     row = {"id": task["id"], "repo": task["repo"], "branch": branch, "worktree": None, "sha": None,
-           "phase": "pending", "review": None, "qa": None, "children": [], "notes": []}
+           "phase": "pending", "review": None, "qa": None, "children": [], "notes": [],
+           "stale": {}}  # kind -> why: the one currency test below, which lead_report_notes reuses for READY_FOR_PR
     if not path or not os.path.isdir(path):
         row["notes"].append(f"checkout {path} missing")
         return row, info
@@ -3626,6 +3643,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
         changed = sorted(set(changed) | set(uncovered_changes(plan, reg, task, rv["sha"], row["sha"])))
     if changed:
         row["notes"].append(f"review at {rv['sha'][:10]} is STALE: owned paths changed since: " + ", ".join(changed[:5]))
+        row["stale"]["review"] = f"review at {rv['sha'][:10]} is STALE: owned paths changed since"
         return row, info
     row["phase"] = "reviewed"
     if rv.get("state") != "PASS" or not is_ancestor(path, rv["sha"], topic_head):
@@ -3641,6 +3659,7 @@ def task_status(plan, reg, task, n_in_repo, lineage=None):
         if topic_head != qa["sha"] and uncovered_changes(plan, reg, task, qa["sha"], topic_head):
             row["phase"] = "integrated"
             row["notes"].append(f"QA at {qa['sha'][:10]} is STALE: owned paths changed on {topic} since")
+            row["stale"]["qa"] = f"QA at {qa['sha'][:10]} is STALE: owned paths changed on {topic} since"
     return row, info
 
 
@@ -3710,13 +3729,16 @@ def lead_report_summary(body):
     return first if len(first) <= LEAD_REPORT_SUMMARY else first[:LEAD_REPORT_SUMMARY - 3].rstrip() + "..."
 
 
-def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False):
+def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False, blockers=()):
     """The `lead report:` and `READY_FOR_PR:` notes of a task row (read-only). `orca_done`: task ids whose 'task done: <id>'
     message the run's Orca inbox shows; only used when no durable record exists (an older lead that sent a message only).
     `path`: the task's repo checkout. In a no-worktree repo the task HEAD is plan.topic and moves when the next task
     commits, so in the integrated and qa phases a report at an ancestor of the HEAD still counts (as review and QA do).
     `no_worktree`: the repo has no task worktrees; only there does a QA PASS at an ancestor of the HEAD count in the
-    integrated phase (every task of the repo is marked integrated while the integration QA is still due)."""
+    integrated phase (every task of the repo is marked integrated while the integration QA is still due).
+    `blockers`: what blocks the task in `status` (its current subtask review/QA FAILs, computed once there): the task
+    is not ready while any exists. `row["stale"]` (set by task_status, the one review/QA currency test the phase and
+    `next` use) also keeps it not ready: a review or QA that is not current is never READY_FOR_PR."""
     rec = fstate.read_json(lead_report_file(plan, task["id"]))
     rec = rec if isinstance(rec, dict) and rec.get("sha") else None
     head, notes = row["sha"], []
@@ -3728,7 +3750,10 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False):
     elif task["id"] in orca_done:
         notes.append(f"lead report: task done: {task['id']} (an Orca message only: no durable record, ask the lead to run "
                      "`report`)")
-    if row["phase"] not in READY_PHASES or pr.xs_plan(plan, task):
+    if pr.xs_plan(plan, task):
+        return notes
+    stale = row.get("stale") or {}
+    if row["phase"] not in READY_PHASES:
         return notes
     rv, qa, phase = row["review"], row["qa"], row["phase"]
     missing = None
@@ -3736,6 +3761,8 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False):
         missing = "no lead report"
     elif not report_current:
         missing = f"lead report is for {rec['sha'][:10]}, task HEAD is {head[:10]}"
+    elif stale.get("review"):  # the phase's own currency test: the review no longer covers the owned paths
+        missing = stale["review"]
     elif not rv:
         missing = "no review"
     elif rv["state"] != "PASS":
@@ -3749,6 +3776,10 @@ def lead_report_notes(plan, row, task, orca_done, path=None, no_worktree=False):
     elif qa["sha"] != head and phase != "qa" and not (
             no_worktree and phase == "integrated" and bool(path) and is_ancestor(path, qa["sha"], head)):
         missing = f"QA is at {qa['sha'][:10]}, task HEAD is {head[:10]}"
+    elif stale.get("qa"):
+        missing = stale["qa"]
+    elif blockers:
+        missing = blockers[0] + (f" (+{len(blockers) - 1} more)" if len(blockers) > 1 else "")
     notes.append("READY_FOR_PR: yes" if missing is None else f"READY_FOR_PR: no ({missing})")
     return notes
 
@@ -3877,9 +3908,10 @@ def status(plan, reg, orca_run=None):
         for key in gkeys:
             first = _integration_qa_row(plan, reg, tasks, rows, infos, key, first, me, pf)
     # a current subtask review/QA FAIL blocks the task like a task review FAIL: the task lead fixes it (no gate)
-    blocked = False
+    blocked, task_fails = False, {}  # computed once per task: the READY_FOR_PR note below reuses it
     for t in tasks:
         fails = subtask_failures(plan, reg, t["id"], rows[t["id"]]["sha"]) if rows[t["id"]]["phase"] in ("reviewed", "integrated", "qa") else []
+        task_fails[t["id"]] = fails
         if fails:
             blocked = True
             rows[t["id"]]["notes"] += fails
@@ -3896,7 +3928,7 @@ def status(plan, reg, orca_run=None):
     for t in tasks:
         rinfo = repo_info(plan, reg, t["repo"])
         rows[t["id"]]["notes"] += lead_report_notes(plan, rows[t["id"]], t, orca_done, rinfo["path"],
-                                                    no_worktree=not rinfo["worktrees"])
+                                                    no_worktree=not rinfo["worktrees"], blockers=task_fails[t["id"]])
     out_rows = []
     for t in tasks:
         r = rows[t["id"]]

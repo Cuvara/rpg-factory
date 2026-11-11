@@ -2960,6 +2960,34 @@ SLOTW="$TMP/proc-slots-win.json"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "status names both PIDs when winpid differs, alive by the Windows PID" 0 "^Slots: slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" status "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" opath "cleanup names both PIDs when winpid differs" 1 "^  SLOT slot 4 held by PID 6161 \(Windows PID 6262\) in .*rpg-mmo-server since 2026-11-11T04:00:00Z \(alive\)" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$SLOTW" oref "differing winpid: an equal-winpid slot (1) still prints no Windows PID text" "slot 1 held by PID 4242 \(Windows PID" status "$G"
+# children of the plan's worktrees count as the plan's checkouts, as `children_of` finds them: a branch with an Orca prefix
+# (codex/<task branch>--qa in a sibling directory) and a child known only through Orca's lineage (any name, any
+# directory); a slot in a checkout that is neither stays unnamed
+git -C "$S" worktree add -q "$TMP/slot-pfx-child" -b codex/feat/core/demo-gw--qa "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-lineage-child" -b slot-lineage-br "$SG" 2>/dev/null
+git -C "$S" worktree add -q "$TMP/slot-unrelated" -b slot-unrelated-br "$SG" 2>/dev/null
+mkdir -p "$SLOTS/5" "$SLOTS/6" "$SLOTS/7"
+for n in 5:slot-pfx-child:7001 6:slot-lineage-child:7002 7:slot-unrelated:7003; do
+  IFS=: read -r sn sd sp <<<"$n"
+  printf '%s\n' "$sp" > "$SLOTS/$sn/pid"; printf '%s\n' "$sp" > "$SLOTS/$sn/winpid"; wtp "$TMP/$sd" > "$SLOTS/$sn/checkout"; printf '2026-11-11T05:0%s:00Z\n' "$sn" > "$SLOTS/$sn/started"
+done
+export FAKE_ORCA_WT="$TMP/orca-wt-slots.json"
+jq -n --arg p "$(wtp "$S")" --arg c "$(wtp "$TMP/slot-lineage-child")" \
+  '{ok:true,result:{worktrees:[{id:"r::int",path:$p,parentWorktreeId:null},{id:"r::lc",path:$c,parentWorktreeId:"r::int"}]}}' > "$FAKE_ORCA_WT"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "status names a slot held in a prefixed child worktree (codex/<task branch>--qa)" 0 "^Slots: slot 5 held by PID 7001 in .*slot-pfx-child since 2026-11-11T05:05:00Z" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "status names a slot held in a lineage-only child worktree" 0 "^Slots: slot 6 held by PID 7002 in .*slot-lineage-child since 2026-11-11T05:06:00Z" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "a slot in an unrelated worktree of the repo is not named" "slot 7 held" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "cleanup names the prefixed child's slot" 1 "^  SLOT slot 5 held by PID 7001 in .*slot-pfx-child" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" opath "cleanup names the lineage-only child's slot" 1 "^  SLOT slot 6 held by PID 7002 in .*slot-lineage-child" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "cleanup does not name the unrelated worktree's slot" "slot 7 held" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" oref "child slot lines never carry a kill command" "$NOKILL" status "$G"
+# Orca unavailable: the naming rule alone still names the prefixed child, never the lineage-only one
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error opath "orca failing: the prefixed child's slot is still named" 0 "^Slots: slot 5 held by PID 7001" status "$G"
+RPG_FACTORY_PROCESS_TABLE="$SLOTP" FAKE_ORCA_MODE=error oref "orca failing: a lineage-only child's slot is not named, no traceback" "slot 6 held|Traceback" status "$G"
+unset FAKE_ORCA_WT
+git -C "$S" worktree remove --force "$TMP/slot-pfx-child"; git -C "$S" worktree remove --force "$TMP/slot-lineage-child"
+git -C "$S" worktree remove --force "$TMP/slot-unrelated"
+git -C "$S" branch -q -D codex/feat/core/demo-gw--qa slot-lineage-br slot-unrelated-br
 rm -rf "$SLOTS"
 
 case_end settled-workers
@@ -3171,6 +3199,14 @@ assert not sys.argv[4] or re.search(sys.argv[4], r["next"] or ""), r' "$out" "$i
     pass=$((pass + 1)); echo "PASS  $name"
   else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
 }
+# st_note <name> <task> <regex>: one of the task's notes in status --json matches
+st_note() {
+  local name="$1" id="$2" pat="$3" out; pp status --json "$ST"; out="$OUT"
+  if python3 -c 'import json,re,sys; o=json.loads(sys.argv[1]); r={t["id"]:t for t in o["tasks"]}[sys.argv[2]]
+assert any(re.search(sys.argv[3], n) for n in r["notes"]), r["notes"]' "$out" "$id" "$pat"; then
+    pass=$((pass + 1)); echo "PASS  $name"
+  else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
+}
 st_phase "nothing started in a worktree repo: pending, next starts the task lead" a pending "dispatch .* --task a --phase lead --runner orca"
 st_phase "nothing started in the Unity project: next starts its task lead in the main checkout" c1 pending "dispatch .* --task c1 --phase lead --runner orca"
 st_phase "a dependent task waits (no next command)" b pending '^$'
@@ -3188,20 +3224,17 @@ expect "review FAIL is named with its SHA" 0 "review FAIL@${SA:0:10}" status "$S
 echo a2 >> "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" commit -qam "fix: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "a fix after the FAIL is a new candidate" a candidate "--phase verify --sha $SA"
 expect "and the old review is named STALE" 0 "review at .* is STALE: owned paths changed since" status "$ST"
+# a reported task whose review is not current for the task HEAD is never ready (the review/QA currency test is the
+# phase's own: task_status), even with a lead report at that HEAD
+expect "stale review: the lead reports at the task HEAD" 0 "^recorded lead report for a at ${SA:0:10}: " report "$ST" --task a --sha "$SA" --body "a done"
+st_note "stale review with a lead report at HEAD: READY_FOR_PR: no names the stale review" a '^READY_FOR_PR: no \(review at [0-9a-f]{10} is STALE: owned paths changed since\)$'
+rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
 expect "no integration branch yet: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
-# st_note <name> <task> <regex>: one of the task's notes in status --json matches
-st_note() {
-  local name="$1" id="$2" pat="$3" out; pp status --json "$ST"; out="$OUT"
-  if python3 -c 'import json,re,sys; o=json.loads(sys.argv[1]); r={t["id"]:t for t in o["tasks"]}[sys.argv[2]]
-assert any(re.search(sys.argv[3], n) for n in r["notes"]), r["notes"]' "$out" "$id" "$pat"; then
-    pass=$((pass + 1)); echo "PASS  $name"
-  else fail=$((fail + 1)); echo "FAIL  $name"; head -c 1500 <<<"$out"; echo; fi
-}
 st_note "no lead report yet: READY_FOR_PR: no, the first missing thing" a '^READY_FOR_PR: no \(no lead report\)$'
 refute "no lead report: no lead report line" "note: lead report:" status "$ST"
 expect "report: an unknown task is a usage error" 2 "unknown task zz" report "$ST" --task zz --sha "$SA" --body x
@@ -3281,6 +3314,48 @@ st_phase "QA PASS on a commit containing the review: qa" a qa
 st_phase "and for the second task" b qa
 st_note "report at HEAD, review and QA PASS: READY_FOR_PR: yes (without any message)" a '^READY_FOR_PR: yes$'
 st_note "a task without a lead report is not ready, whatever its verdicts" b '^READY_FOR_PR: no \(no lead report\)$'
+# a current subtask review FAIL at the task HEAD blocks the task in status (next redispatches the lead), so the same
+# status must not call it ready, though the lead report, task review and QA are all PASS at HEAD
+sv --task a --phase review --sha "$SA" --by claude --state FAIL --subtask sx
+st_note "subtask review FAIL at HEAD: READY_FOR_PR: no names the subtask" a '^READY_FOR_PR: no \(subtask sx review FAIL at '
+st_note "and status names the subtask FAIL as a note too" a '^subtask sx review FAIL at '
+st_phase "and next redispatches the task lead, as the same blocker says" a qa "--task a --phase lead --runner orca"
+refute "and status offers no gate while it is open" "^Next: .* gate " status "$ST"
+sv --task a --phase review --sha "$SA" --by claude --state PASS --subtask sx
+st_note "the subtask PASS clears it: READY_FOR_PR: yes again" a '^READY_FOR_PR: yes$'
+# lead_report_notes called directly: blockers and a stale QA (no-worktree, QA at an ancestor with owned paths changed since)
+if python3 -B - "$ROOT" "$TMP" <<'PY'
+import importlib.util, os, pathlib, subprocess, sys, tempfile
+root, tmp = sys.argv[1:]
+os.environ['RPG_FACTORY_STATE_DIR'] = tempfile.mkdtemp(dir=tmp)
+spec = importlib.util.spec_from_file_location('ready_pipeline', root + '/scripts/factory-pipeline.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+repo = pathlib.Path(tempfile.mkdtemp(dir=tmp))
+def git(*args):
+    p = subprocess.run(['git', '-C', str(repo), '-c', 'user.name=test', '-c', 'user.email=t@t', *args], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    return p.stdout.strip()
+git('init', '-q', '-b', 'main')
+(repo / 'f.txt').write_text('a'); git('add', '.'); git('commit', '-qm', 'A'); a = git('rev-parse', 'HEAD')
+(repo / 'f.txt').write_text('b'); git('commit', '-qam', 'B'); b = git('rev-parse', 'HEAD')
+plan = {'id': 'ready-notes', 'tasks': []}
+task = {'id': 't1', 'repo': 'srv'}
+m.fstate.write_json(m.lead_report_file(plan, 't1'), {'sha': b, 'at': '2026-11-11T00:00:00Z', 'summary': 't1 done', 'task': 't1'})
+row = {'sha': b, 'phase': 'qa', 'review': {'state': 'PASS', 'sha': b}, 'qa': {'state': 'PASS', 'sha': b}}
+assert 'READY_FOR_PR: yes' in m.lead_report_notes(plan, row, task, set(), path=str(repo)), 'baseline'
+fails = ['subtask s1 qa FAIL at abcdef1234 by codex (fix it)', 'subtask s2 review FAIL at 1234567890 by claude (fix it)']
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), blockers=fails)
+assert 'READY_FOR_PR: no (subtask s1 qa FAIL at abcdef1234 by codex (fix it) (+1 more))' in notes, notes
+row = dict(row, phase='integrated', qa={'state': 'PASS', 'sha': a}, stale={'qa': 'QA at ' + a[:10] + ' is STALE: owned paths changed on t since'})
+notes = m.lead_report_notes(plan, row, task, set(), path=str(repo), no_worktree=True)
+assert 'READY_FOR_PR: no (QA at ' + a[:10] + ' is STALE: owned paths changed on t since)' in notes, notes
+notes = m.lead_report_notes(plan, dict(row, phase='candidate', stale={'review': 'review at x is STALE: owned paths changed since'}), task, set(), path=str(repo))
+assert 'READY_FOR_PR: no (review at x is STALE: owned paths changed since)' in notes, notes
+notes = m.lead_report_notes(plan, dict(row, phase='implementing', stale={}), task, set(), path=str(repo))
+assert not any(n.startswith('READY_FOR_PR') for n in notes), notes
+PY
+then pass=$((pass + 1)); echo "PASS  lead_report_notes: blockers and stale review/QA are never READY_FOR_PR"
+else fail=$((fail + 1)); echo "FAIL  lead_report_notes blockers and stale"; fi
 # a worktree repo: a report at A with a later commit B on the task branch is superseded, even in the qa phase with
 # review and QA PASS at B (only a no-worktree repo, whose HEAD is the shared topic, accepts a report at an ancestor)
 if python3 -B - "$ROOT" "$TMP" <<'PY'
