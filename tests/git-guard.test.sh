@@ -120,7 +120,9 @@ check() { # expected cwd command [env] [tool]
   else out=$(guard_command <<<"$payload" 2>"$TMP/guard-stderr"); rc=$?; fi
   now_ms; elapsed=$((NOW - t0))
   if [ -z "$out" ] && [ "$expected" != allow ]; then
-    errtxt=$(tr '\r\n' '  ' < "$TMP/guard-stderr" 2>/dev/null); errtxt=${errtxt:0:300}
+    errtxt=$(tr '\r\n' '  ' < "$TMP/guard-stderr" 2>/dev/null)
+    errtxt=${errtxt%"${errtxt##*[![:space:]]}"}   # tr turned the final newline into a space: trim trailing whitespace (all-whitespace becomes empty)
+    errtxt=${errtxt:0:300}; errtxt=${errtxt%"${errtxt##*[![:space:]]}"}
     printf 'RETRY %s: empty guard output (first try rc=%s, elapsed=%sms, stderr=%s)\n' "$cmd" "$rc" "$elapsed" "${errtxt:-<empty>}"
     if [ -n "$envset" ]; then out=$(env "$envset" CLAUDE_PLUGIN_ROOT="$ROOT" python3 "$GUARD" <<<"$payload")
     else out=$(guard_command <<<"$payload"); fi
