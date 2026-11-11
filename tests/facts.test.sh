@@ -26,11 +26,29 @@ while read -r enc; do
          ! (set -o pipefail; git -C "$dir" archive HEAD | tar -xf - -C "$export_dir"); }; then
       fail=$((fail + 1)); echo "FAIL  $id: cannot export committed HEAD for repo $repo"; continue
     fi
-    exports[$repo]="$export_dir"; gitdirs[$repo]="$gitdir"
     touch "$CACHE/ready-$repo"
     # Every probe gets a disposable index, including live drift probes. Optional locks alone
     # do not protect against an explicit index-writing command such as git update-index.
-    GIT_DIR="$gitdir" GIT_INDEX_FILE="$T/index-$repo" GIT_OPTIONAL_LOCKS=0 git read-tree HEAD
+    # A failed read-tree leaves no usable index: FAIL this fact and skip it (the repo is retried by the next one).
+    if ! GIT_DIR="$gitdir" GIT_INDEX_FILE="$T/index-$repo" GIT_OPTIONAL_LOCKS=0 git read-tree HEAD >/dev/null 2>&1; then
+      fail=$((fail + 1)); echo "FAIL  $id: cannot read the HEAD tree into the disposable index for repo $repo"; continue
+    fi
+    exports[$repo]="$export_dir"; gitdirs[$repo]="$gitdir"
+    # git archive leaves submodules as empty directories and LFS files as pointers; probes grade that export.
+    # Report it (read-only git on HEAD, once per repo) instead of materializing them: the suite stays offline.
+    submodules=$(GIT_DIR="$gitdir" GIT_OPTIONAL_LOCKS=0 git ls-tree -r HEAD 2>/dev/null | grep -c '^160000 ' || true)
+    lfs=0
+    if GIT_DIR="$gitdir" GIT_OPTIONAL_LOCKS=0 git grep -q 'filter=lfs' HEAD -- ':(glob)**/.gitattributes' 2>/dev/null; then
+      lfs=$(cd "$export_dir" && GIT_DIR="$gitdir" GIT_WORK_TREE="$export_dir" GIT_INDEX_FILE="$T/index-$repo" GIT_OPTIONAL_LOCKS=0 \
+        git ls-tree -r -z --name-only HEAD 2>/dev/null | GIT_DIR="$gitdir" GIT_WORK_TREE="$export_dir" GIT_INDEX_FILE="$T/index-$repo" GIT_OPTIONAL_LOCKS=0 \
+        git check-attr -z --stdin --cached filter 2>/dev/null | tr '\0' '\n' | awk 'NR % 3 == 0 && $0 == "lfs" { n++ } END { print n + 0 }')
+    fi
+    if [ "${submodules:-0}" -gt 0 ] || [ "${lfs:-0}" -gt 0 ]; then
+      parts=()
+      [ "${submodules:-0}" -gt 0 ] && parts+=("omits $submodules submodule(s) (gitlinks)")
+      [ "${lfs:-0}" -gt 0 ] && parts+=("leaves $lfs LFS-tracked file(s) as pointers")
+      echo "NOTE  repo $repo: HEAD export ${parts[0]}${parts[1]:+ and ${parts[1]}}; probes grade the committed HEAD without them"
+    fi
     dirty[$repo]=0
     if [ -f "$CACHE/dirty-$repo" ]; then
       dirty[$repo]=$(cat "$CACHE/dirty-$repo")
@@ -105,6 +123,48 @@ if [ -z "${RPG_FACTORY_FACTS_REGISTRY:-}" ]; then
      [ "$(cat "$T/ws/client/new-fact.txt")" = untracked ] && [ "$before" = "$(index_stamp)" ]; then
     pass=$((pass + 1)); echo "PASS  untracked-only fixture drift is noted without changing source or index"
   else fail=$((fail + 1)); echo "FAIL  untracked-only fixture drift (rc=$rc): $o"; fi
+  # HEAD export caveats and a failing disposable index, on fixture repos only (never a product repo).
+  fixture_repo() {  # $1 dir: one committed ProjectSettings/EditorSettings.asset
+    mkdir -p "$1/ProjectSettings"; git -C "$1" init -q
+    printf 'm_EnterPlayModeOptionsEnabled: 1\nm_EnterPlayModeOptions: 0\n' > "$1/ProjectSettings/EditorSettings.asset"
+    git -C "$1" add ProjectSettings/EditorSettings.asset
+  }
+  fixture_commit() { git -C "$1" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm fixture; }
+  # A gitlink plus two LFS-tracked files: one NOTE for the repo, naming both counts, and the fact still passes.
+  fixture_repo "$T/ws-caveat/client"
+  git -C "$T/ws-caveat/client" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,vendor/sub
+  printf '*.bin filter=lfs diff=lfs merge=lfs -text\n' > "$T/ws-caveat/client/.gitattributes"
+  mkdir -p "$T/ws-caveat/client/art"
+  printf 'pointer-a\n' > "$T/ws-caveat/client/art/a.bin"; printf 'pointer-b\n' > "$T/ws-caveat/client/b.bin"; printf 'plain\n' > "$T/ws-caveat/client/c.txt"
+  git -C "$T/ws-caveat/client" add .gitattributes art/a.bin b.bin c.txt
+  fixture_commit "$T/ws-caveat/client"
+  o=$(RPG_FACTORY_WORKSPACE="$T/ws-caveat" RPG_FACTORY_FACTS_REGISTRY="$T/fixture.json" bash "$0" 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^PASS  enter-playmode-options = enabled=1 options=0$' <<<"$o" &&
+     [ "$(grep -c '^NOTE ' <<<"$o")" = 1 ] &&
+     grep -q '^NOTE  repo client: HEAD export omits 1 submodule(s) (gitlinks) and leaves 2 LFS-tracked file(s) as pointers; ' <<<"$o"; then
+    pass=$((pass + 1)); echo "PASS  submodule and LFS caveats of the HEAD export are noted once per repo"
+  else fail=$((fail + 1)); echo "FAIL  submodule/LFS NOTE (rc=$rc): $o"; fi
+  # A submodule only: no LFS part in the NOTE. (The clean fixture above proves a repo with neither prints no NOTE.)
+  git -C "$T/ws-caveat/client" rm -q --cached .gitattributes art/a.bin b.bin
+  fixture_commit "$T/ws-caveat/client"
+  o=$(RPG_FACTORY_WORKSPACE="$T/ws-caveat" RPG_FACTORY_FACTS_REGISTRY="$T/fixture.json" bash "$0" 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(grep -c '^NOTE ' <<<"$o")" = 1 ] &&
+     grep -q '^NOTE  repo client: HEAD export omits 1 submodule(s) (gitlinks); probes grade' <<<"$o"; then
+    pass=$((pass + 1)); echo "PASS  a submodule-only repo notes just the submodule"
+  else fail=$((fail + 1)); echo "FAIL  submodule-only NOTE (rc=$rc): $o"; fi
+  # A HEAD tree object that cannot be read makes read-tree fail. A ready cache skips git archive, so the failure
+  # reaches the read-tree check: it must FAIL the fact (naming fact and repo), not pass on a missing index.
+  fixture_repo "$T/ws-broken/client"; fixture_commit "$T/ws-broken/client"
+  sub_oid=$(git -C "$T/ws-broken/client" rev-parse HEAD:ProjectSettings)
+  sub_obj="$T/ws-broken/client/.git/objects/${sub_oid:0:2}/${sub_oid:2}"
+  mkdir -p "$T/cache-broken/export-client"; : > "$T/cache-broken/ready-client"
+  chmod u+w "$sub_obj" 2>/dev/null; rm -f "$sub_obj"
+  o=$(RPG_FACTORY_WORKSPACE="$T/ws-broken" RPG_FACTORY_FACTS_EXPORT_CACHE="$T/cache-broken" RPG_FACTORY_FACTS_REGISTRY="$T/fixture.json" bash "$0" 2>&1); rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -e "$sub_obj" ] &&
+     grep -q '^FAIL  enter-playmode-options: cannot read the HEAD tree into the disposable index for repo client$' <<<"$o" &&
+     ! grep -q '^PASS  enter-playmode-options' <<<"$o"; then
+    pass=$((pass + 1)); echo "PASS  a failing git read-tree is a FAIL for the fact and skips it"
+  else fail=$((fail + 1)); echo "FAIL  read-tree failure not reported (rc=$rc): $o"; fi
   for f in sgl-langversion tick-rates-default enter-playmode-options; do
     jq --arg f "$f" '.facts |= map(select(.id == $f) | .value += "-STALE")' "$R" > "$T/reg.json"
     o=$(RPG_FACTORY_FACTS_EXPORT_CACHE="$CACHE" RPG_FACTORY_FACTS_REGISTRY="$T/reg.json" bash "$0" 2>&1); rc=$?
