@@ -129,7 +129,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         reviewer never replaces the pair's record for the same SHA (stderr note). A subtask review pairs against the
         subtask's recorded implementer, else the one its review dispatch named, else the subtask's routing (--subplan).
         --fallback 'AGENT unavailable' (review only) records a retrospective SAME_MODEL fallback with a required
-        --note explaining the outage. Legacy --fallback AGENT also requires that agent to be unavailable now.
+        --note explaining the outage. AGENT is the paired reviewer that was unavailable, never the replacement that
+        reviewed: --fallback 'codex unavailable' --by claude when codex (the paired reviewer) was down and claude
+        reviewed instead. Legacy --fallback AGENT (no "unavailable") also requires that agent to be unavailable now.
         --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
         scripts)/ .sh or .py paths; never tests/run-all.sh), the next QA dispatch reruns them.
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
@@ -1309,6 +1311,12 @@ def emit(a, reg, agent, prompt, place, title, plan=None, note=None, role=None):
     if a.runner == "orca":
         argv = orca_cmd.worker_start(orca_prompt(a, prompt, plan, note), pipe["agents"][agent]["orca_agent"], place,
                                      title=title, model=m["model"], effort=m["effort"])
+        if place.get("new"):  # worker-start creates the worktree: a hidden repo would list it under "Hidden worktrees"
+            repo = str(place.get("repo") or "").removeprefix("path:")
+            parent = str(place.get("child_of") or "").removeprefix("path:")
+            show = orca_repo_show_line(repo or (main_checkout(parent) if parent else None))
+            if show:
+                print(show)
         print(orca_cmd.quote(argv))
     elif a.runner == "agent":
         alias = model_policy.alias(a.policy, m["model"])
@@ -1427,6 +1435,37 @@ def excluded_by(path, exclusions):
     return any(inside_owned(path, [x]) or inside_owned(x, [path]) for x in exclusions)
 
 
+def orca_repo_visibility_hidden(repo):
+    """True only when the read-only `orca repo list --json` shows externalWorktreeVisibility `hide` for the repo whose
+    path is `repo`. Orca hides the worktrees it did not create (a `git worktree add`) from its sidebar in that case, even
+    with lineage set. Show, inherit, absent, an unlisted repo or any orca failure: False (no opinion, never an error)."""
+    exe = shutil.which("orca")
+    if not exe or not repo:
+        return False
+    try:
+        r = subprocess.run([exe, "repo", "list", "--json"], capture_output=True, text=True, timeout=30,
+                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        rows = json.loads(r.stdout or "")["result"]["repos"] if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return False
+    return isinstance(rows, list) and any(
+        isinstance(x, dict) and norm_wt(x.get("path")) == norm_wt(repo) and x.get("externalWorktreeVisibility") == "hide"
+        for x in rows)
+
+
+def orca_repo_show_line(repo):
+    """The `orca repo set ... --external-worktree-visibility show` line to print before a worktree add, or None."""
+    if not orca_repo_visibility_hidden(repo):
+        return None
+    return orca_cmd.quote(["orca", "repo", "set", "--repo", f"path:{repo}", "--external-worktree-visibility", "show"])
+
+
+def main_checkout(path):
+    """The main checkout of the repo that holds `path` (first `git worktree list` record), else `path`."""
+    trees, rc = git(path, "worktree", "list", "--porcelain")
+    return trees.splitlines()[0][len("worktree "):] if not rc and trees and trees.startswith("worktree ") else path
+
+
 def emit_lead_handoff(reg, agent, prompt, place, branch, m):
     """Launch in an existing checkout or print a no-track git worktree creation first: the task
     lead is not an Orca worker of the run lead (Orca forbids nested workers, max depth 1). `m`: its model and effort."""
@@ -1435,8 +1474,10 @@ def emit_lead_handoff(reg, agent, prompt, place, branch, m):
     if place.get("new"):
         checkout = place["repo"][len("path:"):]
         path = os.path.join(os.path.dirname(place.get("parent") or checkout), branch.replace("/", "-"))
-        trees, rc = git(checkout, "worktree", "list", "--porcelain")
-        main = trees.splitlines()[0][len("worktree "):] if not rc and trees and trees.startswith("worktree ") else checkout
+        main = main_checkout(checkout)
+        show = orca_repo_show_line(main)
+        if show:  # Orca hides a worktree it did not create when the repo's external worktree visibility is hide
+            print(show)
         print(orca_cmd.quote(["git", "-C", checkout, "worktree", "add", "--no-track", "-b", branch, path, place["base"]]))
         print(orca_cmd.quote(["orca", "worktree", "set", "--worktree", f"path:{path}", "--parent-worktree",
                               f"path:{place.get('parent') or main}", "--display-name", branch.replace("/", "-"),
@@ -2555,7 +2596,12 @@ def cmd_verdict(a, reg):
         if retrospective and not a.subtask:
             die("retrospective --fallback requires --subtask; task reviews use dispatch-recorded fallback or current availability")
         if not retrospective and pr.available(pipe, plan).get(unavailable, {}).get("available"):
-            die(f"--fallback {a.fallback} is available now")
+            others = [x for x in pipe["agents"] if x != unavailable]
+            die(f"--fallback names the paired reviewer that is unavailable, but {unavailable} is available now, so it "
+                "cannot be claimed as unavailable"
+                + (f" (did you mean the other agent: --fallback '{others[0]} unavailable'?)" if len(others) == 1 else "")
+                + f". Example: --fallback 'codex unavailable' --by claude --note TEXT when codex, the paired reviewer, was "
+                "down and claude reviewed instead")
         if not (a.note and a.note.strip()):
             die("--fallback requires --note explaining the fallback")
         rec["fallback"] = f"{unavailable} unavailable"
@@ -2579,6 +2625,13 @@ def cmd_verdict(a, reg):
             if recorded and recorded.get("agent") != a.implementer:
                 die(f"--implementer {a.implementer} conflicts with recorded implementer {recorded.get('agent')} "
                     f"for {a.task}" + (f" subtask {a.subtask}" if a.subtask else ""))
+            if not recorded and not a.subtask:
+                # no task-level record: review_implementer takes the subtask records when they are unanimous
+                models = set(subtask_implementers(plan, a.task).values())
+                if len(models) == 1 and a.implementer not in models:
+                    die(f"--implementer {a.implementer} conflicts with the recorded subtask implementer {next(iter(models))} "
+                        f"for {a.task}: a task review pairs against it (record a task-level implement dispatch for "
+                        f"{a.implementer}, or drop --implementer)")
             impl, source = a.implementer, "explicit"
         rec["implementer"] = impl
         rec["implementer_source"] = source
@@ -3973,7 +4026,9 @@ def main():
     v.add_argument("--implementer")
     v.add_argument("--subtask")
     v.add_argument("--subplan")
-    v.add_argument("--fallback")
+    v.add_argument("--fallback", metavar="'AGENT unavailable'",
+                   help="review only: the paired reviewer that was unavailable (not the replacement that reviewed), e.g. "
+                        "--fallback 'codex unavailable' --by claude --note TEXT when codex was down and claude reviewed")
     ag = sub.add_parser("agents", parents=[common])
     ag.add_argument("plan")
     change = ag.add_mutually_exclusive_group()
@@ -4007,6 +4062,10 @@ def main():
     a = ap.parse_args()
     if a.cmd == "tier" and a.rest[:1] == ["--"]:
         a.rest = a.rest[1:]
+    elif a.cmd == "tier" and a.rest and not a.rest[0].startswith("-"):
+        # `tier <plan.json>` once reached factory-context.sh as an unknown argument; tier takes no positional
+        die(f"tier takes no positional argument ({a.rest[0]}). Forms: `tier --plan <plan.json> --repo <key> --paths <files>` "
+            "(a plan repo key) or `tier -- --repo <key> --paths <files>` (the routing snapshot of a registry repo)")
     reg = load_registry(a.registry)
     if getattr(a, "agent", None) and a.agent not in settings(reg)["agents"]:
         die(f"--agent must be one of {', '.join(settings(reg)['agents'])}")

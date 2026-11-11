@@ -99,6 +99,12 @@ if [ -z "${PIPELINE_TEST_UNIT:-}" ]; then
     for c in $(unit_cases "$u"); do has_case "$c" && mine+="${mine:+,}$c"; done
     [ -z "$mine" ] || chosen+=("$u=$mine")
   done
+  # selection only (cli-selftest): print what would run, run nothing and build no fixture
+  if [ "${PIPELINE_SELFTEST_CHILD:-}" = select ]; then
+    printf 'selected:%s
+units:%s
+' "${SELECTED# }" "${chosen[*]}"; exit 0
+  fi
   if [ "${#chosen[@]}" -gt 1 ]; then
     OUTD="$(mktemp_win)" || exit 1; trap 'wait; rm -rf "$OUTD"' EXIT
     running=0
@@ -127,8 +133,8 @@ if [ -z "${PIPELINE_TEST_UNIT:-}" ]; then
   fi
 fi
 # The case selection itself (its own unit: it needs no fixture). --help exits 0, an unknown argument, an unknown case or
-# an empty selector exits 2 before any run, --list-cases lists every case, and a one-case child run (tier, the cheapest:
-# five assertions after its fixture build) runs only its own section, so fewer assertions than the full run.
+# an empty selector exits 2 before any run, --list-cases lists every case, and the selection itself (the case list and the
+# units, printed by PIPELINE_SELFTEST_CHILD=select without running any) is deduplicated and narrow: no child suite run.
 if [ "${SELECTED// /}" = cli-selftest ]; then
   self="${BASH_SOURCE[0]}"; spass=0; sfail=0
   sok() { spass=$((spass + 1)); echo "PASS  $1"; }
@@ -146,26 +152,34 @@ if [ "${SELECTED// /}" = cli-selftest ]; then
   want=$(printf '%s
 ' $CASES)
   [ "$rc" -eq 0 ] && [ "$listed" = "$want" ] && sok "--list-cases exits 0 and lists the $(wc -w <<<"$CASES") cases" || sno "--list-cases rc=$rc, listed: $(head -c 200 <<<"$listed")"
-  if [ "${PIPELINE_SELFTEST_CHILD:-0}" != 1 ]; then
-  start="$EPOCHREALTIME"
-  one=$(bash "$self" --case tier 2>&1); rc=$?
-  n_one=$(sed -n 's/^pipeline tests: \([0-9]*\) run.*/\1/p' <<<"$one"); sections=$(grep -c '^-- ' <<<"$one")
-  n_failed=$(sed -n 's/^pipeline tests: [0-9]* run, [0-9]* passed, \([0-9]*\) failed.*/\1/p' <<<"$one")
-  if [ "$rc" -eq 0 ] && [ "$n_failed" = 0 ] && [ "${n_one:-0}" -gt 0 ] && [ "${n_one:-0}" -lt 20 ] && [ "$sections" = 1 ]; then sok "--case tier exits 0 and runs $n_one assertions in $sections section, not the full run"
-  else sno "--case tier rc=$rc, ${n_one:-?} assertions, ${n_failed:-?} failed, $sections sections (want exit 0, zero failures, a few assertions, one section)"; fi
-    for form in comma repeated; do
-      if [ "$form" = comma ]; then args=(--case cli-selftest,cli-selftest)
-      else args=(--case cli-selftest --only cli-selftest); fi
-      duplicate=$(PIPELINE_SELFTEST_CHILD=1 bash "$self" "${args[@]}" 2>&1); rc=$?
-      summary=$(grep -c '^pipeline tests: [0-9]* run, [0-9]* passed, 0 failed$' <<<"$duplicate")
-      marker=$(grep -c '^PASS  --help exits 0$' <<<"$duplicate")
-      if [ "$rc" -eq 0 ] && [ "$summary" = 1 ] && [ "$marker" = 1 ]; then sok "$form duplicate selector runs cli-selftest once"
-      else sno "$form duplicate selector rc=$rc, $summary successful summaries, $marker self-test markers"; fi
-    done
-  elapsed=$(( ${EPOCHREALTIME/./} - ${start/./} ))
-  [ "${PIPELINE_TEST_TIMES:-0}" != 1 ] || printf 'TIME  cli-selftest child run %d.%03ds
-' "$((elapsed / 1000000))" "$((elapsed / 1000 % 1000))"
-  fi
+  # --help prints the usage and runs nothing: no fixture (TMPDIR stays empty), no case, no summary line
+  helpdir=$(mktemp -d "${TMPDIR:-/tmp}/pt-help.XXXXXX") && helpout=$(TMPDIR="$helpdir" bash "$self" --help 2>&1); rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^Usage: pipeline.test.sh' <<<"$helpout" && ! grep -qE '^(PASS|FAIL|-- |pipeline tests: )' <<<"$helpout"      && [ -z "$(ls -A "$helpdir")" ]; then sok "--help prints the usage only: no fixture, no case run"
+  else sno "--help rc=$rc, fixture dir: $(ls -A "$helpdir" | head -c 100), output: $(head -c 200 <<<"$helpout")"; fi
+  rm -rf "$helpdir"
+  # the selection (PIPELINE_SELFTEST_CHILD=select prints it and exits before any unit runs): one case runs once, a repeated
+  # or comma-listed duplicate selector selects it once, a dependent case brings its prerequisites in order, and a
+  # one-case selection is one unit, not the full run
+  sel() { PIPELINE_TEST_UNIT= PIPELINE_SELFTEST_CHILD=select bash "$self" "$@" 2>&1; }
+  for form in comma repeated; do
+    if [ "$form" = comma ]; then args=(--case cli-selftest,cli-selftest)
+    else args=(--case cli-selftest --only cli-selftest); fi
+    duplicate=$(sel "${args[@]}"); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$duplicate" = $'selected:cli-selftest
+units:cli-selftest=cli-selftest' ]; then sok "$form duplicate selector selects cli-selftest once"
+    else sno "$form duplicate selector rc=$rc, selection: $(head -c 200 <<<"$duplicate")"; fi
+  done
+  one=$(sel --case tier); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$one" = $'selected:tier
+units:chain=tier' ]; then sok "--case tier selects one case in one unit, not the full run"
+  else sno "--case tier rc=$rc, selection: $(head -c 200 <<<"$one")"; fi
+  dep=$(sel --case subplan --only subplan); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$dep" = $'selected:subplan validate
+units:chain=validate,subplan' ]; then sok "--case subplan brings its prerequisite validate once"
+  else sno "--case subplan rc=$rc, selection: $(head -c 200 <<<"$dep")"; fi
+  all=$(sel); rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(sed -n 's/^selected://p' <<<"$all")" = "$CASES" ]; then sok "no selector selects every case"
+  else sno "no selector rc=$rc, selection: $(head -c 200 <<<"$all")"; fi
   total=$((spass + sfail)); echo "pipeline tests: $total run, $spass passed, $sfail failed"
   [ "$sfail" -eq 0 ]; exit
 fi
@@ -2394,7 +2408,8 @@ expect "status keeps the subtask FAIL while its fix is on an unmerged child" 0 "
 git -C "$S" branch -q -D gw-child-fix
 v --task gw --phase review --sha "$SG" --by claude --state PASS --subtask s5
 expect "all verdicts PASS on the integrated tree: READY_FOR_PR" 0 "^Gate: READY_FOR_PR" gate "$G"
-expect "manual fallback for an available model is refused" 2 "fallback codex is available now" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS --fallback codex
+expect "manual fallback for an available model is refused, naming what --fallback takes" 2 "--fallback names the paired reviewer that is unavailable, but codex is available now, so it cannot be claimed as unavailable \(did you mean the other agent: --fallback 'claude unavailable'\?\)\. Example: --fallback 'codex unavailable' --by claude" verdict "$G" --task gw --phase review --sha "$SG" --by claude --state PASS --fallback codex
+COLUMNS=250 expect "verdict --help states that --fallback names the unavailable paired reviewer, not the replacement" 0 "the paired reviewer that was unavailable \(not the replacement that reviewed\)" verdict --help
 expect "refused fallback leaves paired evidence intact" 0 "^Gate: READY_FOR_PR" gate "$G"
 expect "mark codex down after its implementation was reviewed" 0 "MODEL_UNAVAILABLE" agents "$G" --down codex --reason 401
 expect "cross-model review survives implementer becoming unavailable" 0 "^Gate: READY_FOR_PR" gate "$G"
@@ -2546,6 +2561,8 @@ if sys.argv[1:3] == ["status", "--json"]:
     print(json.dumps({"ok": True, "result": {"runtime": {"reachable": reachable}}})); sys.exit(0)
 if sys.argv[1:3] == ["worktree", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_WT"):
     print(open(os.environ["FAKE_ORCA_WT"], encoding="utf-8").read()); sys.exit(0)
+if sys.argv[1:3] == ["repo", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_REPOS"):
+    print(open(os.environ["FAKE_ORCA_REPOS"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] == ["terminal", "list"] and mode != "error" and os.environ.get("FAKE_ORCA_TERMS"):
     print(open(os.environ["FAKE_ORCA_TERMS"], encoding="utf-8").read()); sys.exit(0)
 if sys.argv[1:3] == ["orchestration", "check"] and mode != "error" and os.environ.get("FAKE_ORCA_CHECK"):
@@ -2802,6 +2819,40 @@ opath "fake orca: orca worktree set names the integration checkout as parent, pr
 opath "fake orca: shared placement launches the lead" 0 "^orca agent launch --agent claude --worktree .*feat-core-demo-gw" dispatch "$G" --task gw --phase lead --placement shared --runner orca
 if ! grep -q "worktree create" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  fake orca: dispatch --phase lead only prints the worktree create"
 else fail=$((fail + 1)); echo "FAIL  fake orca: dispatch ran orca worktree create"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head; fi
+# Orca lists a worktree it did not create (git worktree add) under "Hidden worktrees" when the repo's
+# externalWorktreeVisibility is hide: dispatch prints `orca repo set ... show` before the worktree add (lead handoff)
+# or the worker-start that creates one (child placement), only for hide; show, inherit, absent, an unlisted repo and a
+# failing orca print nothing. The fake orca only answers the read-only `repo list`.
+export FAKE_ORCA_REPOS="$TMP/orca-repos.json"
+repos() { jq -n --arg p "$1" --arg v "$2" '{ok:true,result:{repos:[{id:"r1",path:$p,externalWorktreeVisibility:(if $v=="" then null else $v end)}]}}' > "$FAKE_ORCA_REPOS"; }
+vis_out() { PATH="$fpath" python3 -B "$P" "$@" 2>&1; }
+SHOW_RE="^orca repo set --repo '?path:[^' ]*rpg-mmo-server'? --external-worktree-visibility show$"
+line_of() { grep -nE "$1" <<<"$2" | head -1 | cut -d: -f1; }
+: > "$FAKE_ORCA_LOG"
+repos "$(wtp "$S")" hide
+out=$(vis_out dispatch "$G" --task gw --phase lead --runner orca)
+repo_ln=$(line_of "$SHOW_RE" "$out"); add_ln=$(line_of "^git -C .* worktree add --no-track" "$out")
+if [ -n "$repo_ln" ] && [ -n "$add_ln" ] && [ "$repo_ln" -lt "$add_ln" ]; then pass=$((pass + 1)); echo "PASS  visibility hide: the lead dispatch prints orca repo set ... show before the worktree add"
+else fail=$((fail + 1)); echo "FAIL  visibility hide: repo set line $repo_ln, worktree add line $add_ln"; sed 's/^/      /' <<<"$out" | head -8; fi
+if grep -qx "repo list --json" "$FAKE_ORCA_LOG" && ! grep -q "^repo set" "$FAKE_ORCA_LOG"; then pass=$((pass + 1)); echo "PASS  visibility hide: only the read-only repo list ran, repo set is printed, never run"
+else fail=$((fail + 1)); echo "FAIL  visibility hide: orca calls"; sed 's/^/      /' "$FAKE_ORCA_LOG" | head -5; fi
+for v in show inherit ""; do
+  repos "$(wtp "$S")" "$v"; out=$(vis_out dispatch "$G" --task gw --phase lead --runner orca)
+  if ! grep -q "orca repo set" <<<"$out" && grep -q "^git -C .* worktree add --no-track" <<<"$out"; then pass=$((pass + 1)); echo "PASS  visibility '${v:-absent}': no repo set line, the worktree add is still printed"
+  else fail=$((fail + 1)); echo "FAIL  visibility '${v:-absent}' printed a repo set line"; sed 's/^/      /' <<<"$out" | head -5; fi
+done
+repos "$TMP/another-repo" hide; out=$(vis_out dispatch "$G" --task gw --phase lead --runner orca)
+if ! grep -q "orca repo set" <<<"$out"; then pass=$((pass + 1)); echo "PASS  visibility hide of another repo: no repo set line"
+else fail=$((fail + 1)); echo "FAIL  visibility hide of another repo printed a repo set line"; fi
+repos "$(wtp "$S")" hide; out=$(FAKE_ORCA_MODE=error vis_out dispatch "$G" --task gw --phase lead --runner orca); rc=$?
+if ! grep -q "orca repo set" <<<"$out" && grep -q "^git -C .* worktree add --no-track" <<<"$out"; then pass=$((pass + 1)); echo "PASS  orca failing: no repo set line, no error"
+else fail=$((fail + 1)); echo "FAIL  orca failing: rc=$rc"; sed 's/^/      /' <<<"$out" | head -5; fi
+repos "$(wtp "$S")" hide
+out=$(vis_out dispatch "$G" --task integration:srv --phase qa --sha "$SG" --placement child --runner orca)
+repo_ln=$(line_of "$SHOW_RE" "$out"); start_ln=$(line_of "^orca orchestration worker-start .*--worktree new-child" "$out")
+if [ -n "$repo_ln" ] && [ -n "$start_ln" ] && [ "$repo_ln" -lt "$start_ln" ]; then pass=$((pass + 1)); echo "PASS  visibility hide: a child placement prints repo set before its worker-start"
+else fail=$((fail + 1)); echo "FAIL  visibility hide, child placement: repo set line $repo_ln, worker-start line $start_ln"; sed 's/^/      /' <<<"$out" | head -8; fi
+unset FAKE_ORCA_REPOS
 # children of the integration checkout ($S on feat/core/demo): the integration QA child dispatch names
 # (<topic>--qa) and a helper with any name whose Orca lineage parent is the integration checkout; status lists them
 # once per repo in integration_children with cleanup guidance, cleanup names them "child of integration:srv"
@@ -3022,6 +3073,9 @@ expect "seven files of a plan repo: above S" 0 "7 files > 6" tier --plan "$PL" -
 expect "tier --plan needs --paths" 2 "needs --repo <plan repo key> and --paths" tier --plan "$PL" --repo plugin
 expect "tier --plan with an unknown repo key fails cleanly" 2 "neither a registry repo nor in plan.repos" tier --plan "$PL" --repo nope --paths x
 expect "--repo without --plan is a usage error" 2 "go with --plan" tier --repo plugin --paths x
+expect "tier <plan> names the right forms, not a factory-context error" 2 "tier takes no positional argument .*tier --plan <plan.json> --repo <key> --paths <files>.*tier -- --repo <key> --paths <files>" tier "$PL"
+refute "tier <plan> never reaches factory-context.sh" "factory-context: unknown argument" tier "$PL"
+expect "tier <plan> with trailing flags is the same usage error" 2 "tier takes no positional argument" tier --json "$PL" --repo plugin --paths scripts/a.py
 
 case_end tier-plugin
 fi
@@ -3385,7 +3439,14 @@ rv --task k --phase review --sha "$RS2" --by claude --state PASS
 expect "unanimous claude subtasks require codex task review by default" 1 "reviewed by claude, cross-model review needs codex" gate "$RSP" --no-run-checks
 expect "explicit subtask implementer cannot contradict dispatch" 2 "--implementer codex conflicts with recorded implementer claude for k subtask s" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --implementer codex
 expect "explicit subtask implementer matching dispatch is accepted" 0 "recorded review PASS for k subtask s" verdict "$RSP" --task k --subtask s --phase review --sha "$RS2" --by claude --state PASS --implementer claude
-expect "explicit task implementer without dispatch is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+# a task review pairs against the unanimous subtask implementers when the task has no implementer record of its own, so an
+# explicit --implementer that contradicts them is refused too (not only one that contradicts a task-level record)
+expect "explicit task implementer contradicting the unanimous subtask implementers is refused" 2 "--implementer codex conflicts with the recorded subtask implementer claude for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+expect "explicit task implementer matching the unanimous subtask implementers is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state PASS --implementer claude
+# the lead's own task-level implement dispatch (codex, planned for a code task): the record the explicit declarations below match
+rs dispatch "$RSP" --task k --phase implement
+expect "explicit task implementer matching the task-level dispatch is accepted" 0 "recorded review PASS for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by claude --state PASS --implementer codex
+expect "explicit task implementer contradicting the task-level dispatch is still refused" 2 "--implementer claude conflicts with recorded implementer codex for k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state PASS --implementer claude
 expect "explicit implementer preserves its paired reviewer record" 0 "kept the claude review of k" verdict "$RSP" --task k --phase review --sha "$RS2" --by codex --state FAIL --implementer codex
 if jq -e '.by == "claude" and .state == "PASS" and .implementer == "codex"' "$RSVD/k__review.json" >/dev/null; then pass=$((pass + 1)); echo "PASS  explicit implementer keeps paired PASS intact"
 else fail=$((fail + 1)); echo "FAIL  explicit implementer keeps paired PASS intact"; fi
