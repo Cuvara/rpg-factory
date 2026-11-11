@@ -2,6 +2,8 @@
 # run-all.sh — every local validation for the plugin. Read-only against the workspace.
 # Prints one line per check and a final count; exits non-zero if anything failed.
 # Dead parallel workers fail with buffered output; added branch/worktree config sections warn, other mutations fail.
+# A WARN is counted: the summary reads "..., S skipped, W warned" only when W > 0; the exit code ignores it. RETRY lines
+# a passing suite printed (a flaky step it retried) are shown under its PASS line; they are no failure.
 #
 # Usage: tests/run-all.sh [-j N] [--no-workspace] [--no-claude] [--release] [--affected [--base REF]]
 #                         [--only-suites L] [--reuse] [--no-reuse] [--no-wait] [--list-suites]
@@ -71,7 +73,7 @@ if $affected && ! $release; then
   else echo "affected mode: no base, running everything"; rm -rf "${AFF%/*}"; AFF=""; fi
 fi
 
-pass=0; fail=0; skip=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
+pass=0; fail=0; skip=0; warn=0; naff=0; cleanup=(); failures=(); GITCFG_KEEP=""
 STATE=""; LOCK=""; LOCK_TOKEN=""; TREE=""; HEAD_SHA=""; CLEAN_START=false
 SLOT=""; SLOT_TOKEN=""
 HASHES=(); HASH_SUITES=(); CACHE_PATHS=(); CACHE_BEFORE=""
@@ -79,6 +81,18 @@ _ok()   { pass=$((pass + 1)); echo "PASS  $1"; }
 _bad()  { failures+=("$1"); fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
 _skp()  { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
 _note() { echo "$1"; }
+# A WARN is counted apart (never a pass or a fail, the exit code ignores it) and shown in the summary only when non-zero.
+_wrn()  { warn=$((warn + 1)); echo "WARN  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/      /'; }
+# retry_lines <printer> <suite output>: the RETRY lines a suite printed (a flaky-step retry it survived), through
+# <printer> (note at -j 1, _note in the ordered queue), indented under the suite's PASS line. They are no failure:
+# the suite passed, so its PASS record is published as before.
+retry_lines() {
+  local l
+  while IFS= read -r l; do
+    l=${l%$'\r'}
+    case "$l" in "RETRY "*) "$1" "      $l" ;; esac
+  done <<<"$2"
+}
 # Suites read /dev/null, never the caller's stdin. -j 1: every line prints when its check ends. -j N: suites are
 # queued and started in the background (at most N at a time: live-lane suites first, one at a time, one slot for the
 # earliest queued suite, then the SLOW ones, then the rest in order; output buffered in $QD). Every line - suite results and inline checks alike - waits
@@ -116,6 +130,7 @@ queue() { # kind message [detail]
 ok()   { queue ok "$@"; }
 bad()  { queue bad "$@"; }
 skp()  { queue skp "$@"; }
+wrn()  { queue wrn "$@"; }
 note() { queue note "$1"; }
 worker_result() { # synthesize a failure only for a started worker that exited without publishing its result
   local i=$1 pid=${QP[$1]:-}
@@ -127,7 +142,7 @@ worker_result() { # synthesize a failure only for a started worker that exited w
   fi
 }
 flush() { # print the queue up to the first suite still running
-  local i st secs
+  local i st secs suite_out
   while [ "$qnext" -lt "$qn" ]; do
     i=$qnext
     if [ "${QK[i]}" = job ]; then
@@ -136,7 +151,9 @@ flush() { # print the queue up to the first suite still running
       read -r st secs < "$QD/$i.res"
       if [ "$st" = 137 ] && grep -q 'suite worker died without a result' "$QD/$i.out"; then _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"
       elif [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
-      elif [ "$st" = 0 ]; then suite_cache_pass "${QN[i]}" "$(cat "$QD/$i.out")"; _ok "${QM[i]} [${secs}s]"; else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
+      elif [ "$st" = 0 ]; then
+        suite_out=$(cat "$QD/$i.out"); suite_cache_pass "${QN[i]}" "$suite_out"; _ok "${QM[i]} [${secs}s]"; retry_lines _note "$suite_out"
+      else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
       rm -f "$QD/$i.res" "$QD/$i.out"
     else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
     unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QN[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
@@ -195,7 +212,7 @@ gated() { suite_selected "$1" && return 0; not_affected; return 1; }
 replay() { # rc output name: the lines a block printed, counted by their prefix
   local l done=""
   while IFS= read -r l; do
-    case "$l" in "PASS  "*) pass=$((pass + 1)) ;; "FAIL  "*) fail=$((fail + 1)); failures+=("${l#FAIL  }") ;; "SKIP  "*) skip=$((skip + 1)) ;;
+    case "$l" in "PASS  "*) pass=$((pass + 1)) ;; "WARN  "*) warn=$((warn + 1)) ;; "FAIL  "*) fail=$((fail + 1)); failures+=("${l#FAIL  }") ;; "SKIP  "*) skip=$((skip + 1)) ;;
       "<not affected>") skip=$((skip + 1)); naff=$((naff + 1)); continue ;;
       "<end of block>") done=1; continue ;; esac
     printf '%s\n' "$l"
@@ -221,7 +238,7 @@ _run() {
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
     if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
     t0=$(date +%s)
-    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; retry_lines note "$out"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
     return
   fi
   n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QN[n]=$publish; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
@@ -772,6 +789,7 @@ run "factory-status rollout / resume fixture" tests/factory-status.test.sh
 run "install-status stale-install detection" tests/install-status.test.sh
 run "release-check gate (throwaway repo, local bare origin)" env -u TMPDIR tests/release-check.test.sh
 run "delivery pipeline (tier, plan, dispatch, verdicts, gate)" env -u TMPDIR tests/pipeline.test.sh
+run "generic delivery (pipeline on a plain repo, no registry)" env -u TMPDIR tests/delivery-generic.test.sh
 run "run-all --affected suite selection" tests/affected.test.sh
 run "run-all -j scheduler (order, counts, concurrency cap, live lane, run1 alone)" tests/run-all-parallel.test.sh
 run "changelog fragments (changelog.d, scripts/changelog.py; [Unreleased] stays empty)" tests/changelog.test.sh
@@ -1019,8 +1037,8 @@ find scripts tests testlab -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/
 if ! $workspace_only && [ -n "${GITCFG_FILE:-}" ]; then
   if out=$(gitcfg_verify); then ok "shared git config unchanged during the run"
   elif [ -n "${GITCFG_COPY:-}" ] && [ "$(gitcfg_classify "$GITCFG_COPY" "$GITCFG_FILE")" = WARN ]; then
-    note "WARN  shared git config: only other sessions' branch/worktree sections were added during the run"
-    note "$(diff -u "$GITCFG_COPY" "$GITCFG_FILE" | sed 's/^/      /')"
+    # counted (summary line), exit code unaffected; the copy is removed by runall_cleanup (GITCFG_KEEP stays empty)
+    wrn "shared git config: only other sessions' branch/worktree sections were added during the run" "$(diff -u "$GITCFG_COPY" "$GITCFG_FILE")"
   else GITCFG_KEEP=1; bad "shared git config changed during the run" "$out"; fi
 elif ! $workspace_only; then skp "shared git config unchanged during the run" "not inside a git repository"; fi
 
@@ -1028,5 +1046,5 @@ runall_finish
 total=$((pass + fail + skip))
 echo "----"
 echo "wall time: $(( $(date +%s) - t_start ))s (-j $jobs)"
-echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ -n "$AFF$only_suites" ] && echo " ($naff not affected by the change)")"
+echo "run-all: $total checks, $pass passed, $fail failed, $skip skipped$( [ "$warn" -gt 0 ] && echo ", $warn warned")$( [ -n "$AFF$only_suites" ] && echo " ($naff not affected by the change)")"
 [ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
