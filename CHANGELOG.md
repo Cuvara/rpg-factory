@@ -4,6 +4,182 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-11
+
+Slimmer task workflow (CLAUDE.md and delivery.md split, tier XS, base health, run-report loop), lean QA, in-session subagent rules and generic delivery skill.
+
+### Added
+
+- **Pipeline known failures.** A plan may list `known_failing` (`[{check, reason}]`) for checks that already fail at the
+  task base. `validate` warns per entry and rejects malformed ones. The task-lead, task QA and integration QA specs carry
+  the list with the rule: a failure of a listed check that also fails at the base is `FAIL_AT_BASE` (named on the QA
+  report, not a task FAIL), and a listed check that now passes is reported as fixed. `dispatch --phase lead` prints a
+  base health hint (`gh run list --branch <base> --limit 1`, print only) for a repo with a GitHub remote.
+  `templates/pipeline/qa-report.md` gains `Failing at base` and `Fixed` lines.
+- **Tests.** `tests/delivery-generic.test.sh` keeps delivery.md at most 32768 bytes and the Orca lineage command only
+  in section 4 "Orca visibility".
+- **Doctor.** `/rpg-factory:doctor` reports the Codex subagent setup (dev tool `codex-subagents`, probe
+  `codex:subagents`; used by `delivery`, so the routed snapshot does not list it): `codex features list` must show `multi_agent` on, and `agents.default_subagent_model` and
+  `agents.subagent.model` of the Codex config (`CODEX_HOME` or `~/.codex/config.toml`) must be inside
+  `pipeline.models.scope.codex`. Otherwise it is a WARN line that names the fix (`[agents] default_subagent_model` =
+  the `pipeline.subagents` Codex model). Only those two keys are read, a value that is not a model id is never shown,
+  and the config is never written.
+- **Dispatch.** No Orca dispatch change: `orca worker-start` and `orca agent launch` take no Codex `-c` config
+  override, so the subagent model stays a Codex config setting that doctor checks.
+- **Agents.** New read-only plugin agent `factory-explorer` (`agents/factory-explorer.md`): a code locator for Factory
+  sessions that returns a `path:line` table and a short conclusion (at most 200 words). Tools are limited to Read, Grep,
+  Glob and Bash, the model is `sonnet`, and it never edits files, runs git writes, calls Orca or the pipeline dispatch
+  and verdict, or spawns agents.
+- **Delivery.** New skill `rpg-factory:delivery`, usable in any repository or workspace: the two-level flow (run lead,
+  task leads, short sub-sessions), agent routing with model fallback, cross-model review, child worktrees, session
+  release, Orca waiting, QA tiers and the plan/verdict/gate pipeline. Its reference
+  `skills/delivery/references/delivery.md` is the single copy of the generic policy; factory-core loads it for its
+  delivery steps. README gives a one-line pointer for `~/.claude/CLAUDE.md` and Codex `AGENTS.md`.
+- **Pipeline.** `factory-pipeline.py` runs without the RPG registry: with `--registry none`, `RPG_FACTORY_PIPELINE_REGISTRY=none`
+  (a pipeline-only variable) or a missing registry file it reads `skills/delivery/pipeline-defaults.json`, and every command
+  it prints for a next session (task-lead spec, planner spec, `status` next lines) carries `--registry none`.
+  The installed plugin always ships `registry.json`, so there the flag or the variable selects the defaults. A plan may set `no_worktree_markers`
+  to replace the default markers. `tests/delivery-generic.test.sh` covers tier, validate, dispatch, verdict and gate
+  on a throwaway repo outside any workspace.
+- **Plugin review.** Point plugin repository reviewers to the plugin-specific checklist.
+- **Case selection in the slow suites.** `tests/pipeline.test.sh`, `tests/parallel-policy.test.sh`, `tests/routing.test.sh`
+  and `tests/git-guard.test.sh` accept `--case NAMES` (alias `--only`; comma list, repeatable), `--list-cases` and
+  `-h|--help`. `--help` prints the usage and exits 0; an unknown argument or case name exits 2 before any fixture or
+  run starts. No selector still runs every case.
+- **Case maps.** A suite declares which changed files cover which case with `# case-map: <case> <path-or-glob>...`
+  header lines. `tests/affected.py cases FILE SUITE...` prints each selected suite with its affected cases, or `ALL`
+  when the suite has no (or an invalid) map, the suite itself or a global input changed, or a selecting file is not
+  in the map. `tests/run-all.sh --affected` passes `--case A,B` to such a suite and names the cases in the result
+  line, so task QA runs only the cases a change can break. An explicit `--only-suites` name still runs all its cases,
+  and a case subset never writes a suite PASS record (a full-suite PASS record can still satisfy a subset).
+- **Machine-wide test-run slots.** `tests/run-all.sh --affected` and `--only-suites` runs take one of
+  `RPG_FACTORY_TEST_SLOTS` slots (default 2, `0` disables the cap, a non-integer exits 2) under the persistent state
+  directory (`locks/run-all-slots/<n>`). When every slot is busy the run prints `run-all: waiting for a test slot`
+  with the holders and queues, `--no-wait` exits 3 instead, and a slot whose holder died is taken over
+  (`run-all: taking over stale test slot`). Parallel sessions now queue instead of slowing every suite 2-4x. Full
+  runs keep their own lock.
+- **Orca visibility for task worktrees.** A worktree made with `git worktree add --no-track` has no Orca lineage and
+  lands in Orca's hidden section. `factory-pipeline.py dispatch --phase lead` (and every place that prints a worktree
+  creation) now prints `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name
+  <topic>-<task> --workspace-status in-progress` before `orca agent launch`, with the integration (else main) checkout
+  as parent; a child worktree a task lead makes gets the task worktree as parent. Documented in `delivery.md` section 4
+  ("Orca visibility"); `tests/pipeline.test.sh` asserts the line and `tests/parallel-policy.test.sh` has a mutation case.
+- **Routing scenarios** in `tests/routing.test.sh`: the generic `delivery` skill is never routed as lead or co-lead,
+  neither for an unrelated path nor for its own `delivery.md`.
+- **Delivery.** The run report (`delivery.md` section 8) gets a "Cost" table, one row per session plus the run lead's
+  total, filled from what the runtime shows and `NOT_AVAILABLE` when unmeasured (an estimate is never presented as
+  measured). In the integration commit the report's limitations and follow-ups go to the project's backlog, one topic
+  each, and every new operating lesson to the file the project's learning-loop rule names.
+- **Operating lesson.** `.claude/CLAUDE.md` says never to stop a process by pattern (`pkill -f <name>`): a worker that
+  did so to stop its own duplicate skills-lint run may have killed other sessions' runs. Stop only the PID you started.
+- **Delivery.** `skills/delivery/references/delivery.md` section 8 has a new subsection "In-session subagents": a
+  subagent is a read-only scout, never a writer, a review or a QA verdict. It holds the per-role table (access, when,
+  max parallel, limits; the data lives in registry `pipeline.subagents`), the default subagent model (Claude Sonnet 5.5
+  through `rpg-factory:factory-explorer`; Codex uses the `pipeline.subagents` codex model) and the general rules. The
+  canonical sentence sits under the marker `policy:subagents-read-only`, and `tests/parallel-policy.test.sh` checks
+  it (marker deleted, duplicated or changed).
+- **Pipeline.** Every session prompt `scripts/factory-pipeline.py` prints now carries one line with its role's subagent
+  rule, read from the registry `pipeline.subagents` through `scripts/lib/subagent_policy.py` `rule(reg, role, agent)`:
+  the planner, the task lead (a new rule 7; the push rule is now rule 8), implementation sessions (shared and child),
+  review (the reviewer's own model, the verdict stays the reviewer's) and task and integration QA (no subagents). The
+  rule names the agent that actually runs the session: with `--runner agent` that is Claude, so a Codex review turned
+  into a Claude SAME_MODEL review names Claude's Sonnet alias. A registry without `pipeline.subagents` exits 1 with
+  nothing dispatched.
+- **Registry.** New `pipeline.subagents` policy: per role (run_lead, planner, lead, implement, review, qa) the subagent
+  access (`none|read`), `max_parallel` and the one situation that justifies a subagent, plus the forbidden actions and
+  the subagent model per agent. The default subagent model is Claude Sonnet 5.5 (`claude-sonnet-5-5`, alias `sonnet`,
+  agent `rpg-factory:factory-explorer`); Codex uses `gpt-6.1-terra` at effort `medium`. `scripts/lib/subagent_policy.py`
+  `rule(reg, role, agent)` turns one entry into the sentence a dispatch prompt carries.
+- **Checks.** `scripts/check-registry.sh` fails when a subagent model or effort is outside `pipeline.models.scope`, or a
+  Claude alias is not the `pipeline.models.agent_tool_alias` of its model. New suite `tests/subagent-policy.test.py`
+  covers the rule text per role and agent, the missing block and the scope failures. The suite runs `check-registry.sh`
+  through the Git Bash resolver (`scripts/lib/shells.py`), so it also runs on Windows.
+- **Pipeline.** Tier XS for a tiny prose-only change (registry `pipeline.tiers.XS`: every path prose, at most 3 files
+  and 40 changed lines, no contract or generated path). `tier` prints `Tier: XS` when it applies and `above XS:` with
+  the reasons otherwise (`tier --plan` counts the changed lines of the checkout). `validate` accepts a one-task XS plan
+  and rejects a path that is not prose, a second task or too many paths. `dispatch --phase lead` on an XS task starts
+  no task lead: it prints the run lead's own steps (edit and commit on the plan topic branch, one cross-model review,
+  the task tier command, the `tier XS: lead ran task suites` QA verdict, gate); `--phase implement` is refused. Its
+  review reads the topic checkout and pairs against the run lead's model. The gate accepts the XS review plus the
+  lead-run QA and blocks when the committed diff is above the XS thresholds.
+
+### Changed
+
+- **Delivery.** `skills/delivery/references/delivery.md` states each rule once and shrinks from 57813 bytes (main with
+  the single verify flow) to 32727 bytes (the Orca lineage lesson lives only in section 4 "Orca visibility"; session
+  release, "sub-sessions never commit" and the one-full-run-per-machine rule are stated once). The verdict, verify,
+  fallback and model CLI details moved to `docs/pipeline-cli.md`, the tier command details of this repo to
+  `tests/README.md`. `skills/delivery/SKILL.md` and `skills/factory-core/SKILL.md` point to delivery.md section 10
+  instead of restating the flow steps. delivery.md now states that a plan task carries a `kind` for the "Which model"
+  routing, and that the integration checkout itself gets the main checkout as its Orca lineage parent.
+- **Policy.** `skills/factory-core/references/parallel-work.md` keeps only the UnityIndie specifics (Unity no-worktree
+  repos, the `unity-test` resource, registry repos, human gates and release rules) and points to `delivery.md`.
+  Dispatch specs cite `references/delivery.md`.
+- **Pipeline prompts.** Direct implementation, review and QA workers to their complete specs and consult delivery policy only when blocked.
+- **`tests/pipeline.test.sh` is faster.** The multi-wave fixture repositories are built once per run as templates and
+  copied per case, independent cases run as parallel child runs (`PIPELINE_TEST_UNITS`, default 4) whose output is
+  printed in case order, and the assertion helpers match in bash instead of forking a subshell and `grep` per check
+  (`PIPELINE_TEST_MATCH=check` compares both); `PIPELINE_TEST_TIMES=1` prints each section's wall time. On a loaded
+  machine the full run (710 assertions) went from 59m51s to 14m12s, and `--case validate` (12 assertions) takes 17 s.
+- **One verify session per task.** A task is reviewed and tested once, after every subtask is committed. New
+  `factory-pipeline.py dispatch --phase verify --sha <sha>` starts one fresh session of the reviewing model: it reviews
+  the diff first (a blocking finding is a FAIL and no test runs), then runs the task tier command once. After a FAIL and
+  a fix, one fresh re-verify session reviews the fix delta and reruns the failed suites plus what the fix touched.
+  `verdict --phase verify` records the review and QA verdicts of the SHA. `--phase review` and `--phase qa` stay for a
+  lead that needs only one of them, for example integration QA. `status` names `--phase verify` after the last subtask.
+- **Implementers run no suites.** An implementation spec asks for a syntax check of the edited files only. `validate`
+  warns when a task's `checks` would make an implementer run a suite.
+- **No per-subtask review.** The gate no longer blocks on a subtask review. A prose subtask written by the reviewer's
+  model is covered by the verify review. A code subtask written by the reviewer's model is printed as an accepted
+  `SAME_MODEL (single verify)` note.
+- **Leads do not re-run checks.** The task lead and the run lead read the verify report. The run lead keeps only the
+  integration QA and CI.
+- **Narrower selection.** `tests/run-all.sh` and `tests/affected.py` are no longer global inputs of
+  `tests/affected.py`. A runner change selects `tests/run-all-parallel.test.sh` and `tests/affected.test.sh`, and a
+  change to `tests/affected.py` selects `tests/affected.test.sh`. CI still runs every suite.
+- **Policy.** `delivery.md` sections 1, 6 and 10 and the QA tiers table describe the single verify flow (new
+  `policy:single-verify` marker). `parallel-work.md`, `.claude/CLAUDE.md` and the `delivery` skill point to it.
+  `tests/parallel-policy.test.sh` checks the new table rows and that the rule has one copy.
+- **`dispatch --phase qa` prints the case list.** The QA spec names the exact cases `tests/affected.py` selects for the
+  candidate, so task QA runs only the cases a change can break.
+- **`dispatch --phase implement` forbids whole slow suites.** An implementer runs only the targeted checks of its spec
+  and, in a suite with cases, only the cases its change touches (`--case`).
+- **Lead QA for tier S and docs-only tasks.** Those tasks get the task lead's own QA verdict instead of a QA session.
+- **QA tiers carry typical times, and the test-run slot rule replaces the "at most 2 full runs" lesson.** `delivery.md`
+  section 10 and `.claude/CLAUDE.md` describe the machine-wide test slots (`RPG_FACTORY_TEST_SLOTS`, default 2): a busy
+  machine queues targeted runs instead of slowing every suite 2-4x, and a QA worker's background run is stopped before
+  the worker is abandoned. `parallel-work.md` keeps only the RPG slot names and case selection.
+- **Repository guidance.** Slimmed `.claude/CLAUDE.md` from 23 KB to about 8 KB; moved architecture to `docs/architecture/overview.md`, the release procedure to `docs/releasing.md`, and the full command list to the `Commands` section of `scripts/README.md`. Skill touchpoints now read the Skills paragraph from the architecture overview.
+
+### Fixed
+
+- **Tests.** `tests/delivery-generic.test.sh` expected key set now includes `subagents`, as `pipeline-defaults.json`
+  has. The `tests/parallel-policy.test.sh` "rule moved out of section 5" mutation ends its range at the Orca-first
+  rule again instead of deleting to the end of the file.
+- **Delivery pointers.** The delivery and factory-core skills now state the tier XS exception (no task lead, the run lead edits the files) next to the "every tier gets a task lead" rule. Stale pointers that named `parallel-work.md` for delivery policy now point to `delivery.md` (section 5, section 10 "Model choice") or `docs/pipeline-cli.md`, and the full command list is pointed to `scripts/README.md` "Commands". `tests/orca-commands.test.sh` also checks the Orca commands cited in `docs/pipeline-cli.md`. `tests/affected.py` runs `tests/delivery-generic.test.sh` for a change to `skills/delivery/references/delivery.md`, so its size cap is no longer missed by task QA.
+- **Pipeline: gate after a topic sync into a task branch.** A task branch that merged the topic (after the topic took a
+  default-branch merge through another task) no longer makes earlier tasks' reviews STALE. Only that sync merge's own
+  conflict resolutions count; the merging task's current review covers them when it owns the path and depends on the
+  earlier task. A real post-review edit on the topic or in a task branch stays STALE.
+- **Pipeline: cleanup.** `cleanup` reports a leftover task directory (empty or not), an Orca record of a removed worktree and a prunable git worktree record as LEFTOVER, never CLEAN, with `git worktree prune` and `orca worktree rm --worktree path:<dir>`; a plain git task worktree is removed with `git worktree remove` (no `--force`). Before a removal it names the Orca terminals still bound to the worktree and asks the task lead to confirm each released worker's CLI exited. A directory Windows reports busy is named to the user (PID, command) and never killed. `delivery.md` section 8 records these cleanup rules; section 4 names `orca worktree set` as the only lineage step, never `orca worktree create`.
+- **Pipeline: gate after a default-branch merge.** `gate` no longer marks a review STALE when its owned paths have the same content as at the reviewed commit, or when the changes arrived through a merge of the default branch (only that merge's own conflict resolutions count); a real later change still makes it STALE. The plan file and its `report.md` belong to the run lead and are never listed as changes outside every task's owned paths.
+- **Tests: affected.** `tests/affected.py` maps `agents/*` to `tests/skills-lint.sh`, so `run-all --affected` and suite reuse no longer skip the agent lint when only an agent file changes.
+- **Docs: README.** The doctor row lists the dev-tool state WARN next to OK / DOWN / MISSING.
+- **`tests/parallel-policy.test.sh` and `tests/orca-commands.test.sh` read the single policy copy.** After the generic
+  policy moved to `skills/delivery/references/delivery.md` they still read `parallel-work.md` and failed; they now check
+  `delivery.md` and keep their mutation and command checks.
+- **Moved CLAUDE.md sections.** `skill-author`, `README.md` and `docs/dogfood.md` point to `docs/releasing.md` and
+  `docs/architecture/overview.md` instead of sections that moved; `docs/architecture/README.md` lists `overview.md`.
+  `tests/affected.py` maps `docs/architecture/overview.md` to the `new-skill` suite and `tests/run-all.sh` reads
+  `docs/releasing.md` in the release policy check.
+- **Tests.** The marker, which-model, qa-tiers and Orca-first checks in `tests/parallel-policy.test.sh` now read
+  `skills/delivery/references/delivery.md`, where the generic policy moved; the lint-driven mutations stay on
+  `parallel-work.md`.
+- **Tests.** `tests/orca-commands.test.sh` reads the cited Orca commands, the child placements and the "also deletes
+  the checked-out local branch" caveat from `skills/delivery/references/delivery.md`, where split commit 9d21098
+  moved them, and still checks the commands `parallel-work.md` cites.
+- **Delivery.** `delivery.md` is back under its 32 KiB size cap (`tests/delivery-generic.test.sh`).
+
 ## [1.7.0] - 2026-11-09
 
 Agent routing between Claude and Codex with availability fallback, QA tiers (full-run lock, suite reuse, narrower --affected), CI as the full-suite gate with run-all --workspace-only, worker stall detection, multi-wave gate attribution and post-merge cleanup.
