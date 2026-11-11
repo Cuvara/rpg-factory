@@ -146,7 +146,7 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 - **Orca message traps:**
   - Only a dispatched Orca worker can send `--type escalation` or `worker_done` (else "No active Dispatch belongs to
     this message sender"): a task lead reports with `--type status` (asks with `--type question`).
-  - `orca orchestration check --wait --types <types>` still returns heartbeats: a wait loop acks each batch and keeps
+  - `orca orchestration check --wait --types <types>` still returns heartbeats: `orca-wait.sh` consumes them and keeps
     waiting. The run lead's single waiter is `${CLAUDE_PLUGIN_ROOT}/scripts/orca-wait.sh --run <id>` (one per Run;
     default types include `status`, so a filter without the sender's type drops its messages).
   - A multi-line `--prompt` through `cmd.exe` (Windows) is cut at the first newline: send a one-line prompt naming a

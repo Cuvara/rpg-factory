@@ -2096,7 +2096,7 @@ def child_branch(parent, sid, phase, sha=None):
 
 
 def child_note(place):
-    """A child worktree command also says the rule on stderr (stdout stays the one command line)."""
+    """A child worktree command also says the rule on stderr (stdout carries only the commands to run: the repo visibility line when Orca hides it, then the one launch command)."""
     if place.get("worktree") == "new-child":
         where = (f"run the command from {place['child_of']} (Orca makes the child of the worktree it runs in); "
                  if place.get("child_of") else "")
@@ -3180,7 +3180,9 @@ def slot_holders(plan, reg):
 
 
 def slot_lines(holders):
-    return [f"slot {h['slot']} held by PID {h['pid']} in {h['checkout']} since {h['started'] or '?'}"
+    return [f"slot {h['slot']} held by PID {h['pid']}"
+            + (f" (Windows PID {h['winpid']})" if h["winpid"] and h["winpid"] != h["pid"] else "")
+            + f" in {h['checkout']} since {h['started'] or '?'}"
             + {True: " (alive)", False: " (not running)", None: " (liveness unknown)"}[h["alive"]]
             + ": the user decides, the run never stops it" for h in holders]
 

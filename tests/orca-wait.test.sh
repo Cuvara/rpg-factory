@@ -249,19 +249,34 @@ FAKE_MODE=script bash "$ROOT/scripts/orca-wait.sh" --run mixed --timeout-ms 25 -
 status=$?
 [ "$status" -eq 0 ] && grep -q mix-7 "$TMP/hb.out" && ! grep -q -- '--ack' "$TMP/argv" && ok "mixed batch with deliveryId left unacknowledged" || no "mixed batch acked"
 
-# set -m: a plain background job starts with SIGINT ignored, which bash cannot trap.
-rm -f "$TMP/ready" "$TMP/release"
-export FAKE_MODE=hold
-set -m
-bash "$ROOT/scripts/orca-wait.sh" --run interrupted > "$TMP/int.out" 2> "$TMP/int.err" &
-waiter=$!
-set +m
-for ((i=0; i<200; i++)); do [ ! -f "$TMP/ready" ] || break; sleep 0.05; done
-kill -INT "$waiter"
-wait "$waiter"; status=$?; waiter=
-[ "$status" -eq 130 ] && [ ! -e "$TMP/state/orca-wait/interrupted.lock" ] && [ ! -s "$TMP/int.out" ] && ok "INT exits 130 and releases the lock" || no "INT cleanup failed (status $status)"
-touch "$TMP/release"
-unset FAKE_MODE
+# A shell started as a background job (run-all starts suites that way) has SIGINT ignored at entry: bash can neither trap
+# nor reset it, so kill -INT does nothing. Probe that first; the case is skipped there and every wait below is bounded.
+sigint_alive=$(bash -c 'kill -INT $$; echo alive' 2>/dev/null)
+if [ "$sigint_alive" = alive ]; then
+  echo "SKIP  INT exits 130 and releases the lock (SIGINT is ignored at entry: this suite runs as a background job)"
+else
+  rm -f "$TMP/ready" "$TMP/release"
+  export FAKE_MODE=hold
+  set -m
+  bash "$ROOT/scripts/orca-wait.sh" --run interrupted > "$TMP/int.out" 2> "$TMP/int.err" &
+  waiter=$!
+  set +m
+  for ((i=0; i<200; i++)); do [ ! -f "$TMP/ready" ] || break; sleep 0.05; done
+  kill -INT "$waiter" 2>/dev/null
+  for ((i=0; i<100; i++)); do kill -0 "$waiter" 2>/dev/null || break; sleep 0.05; done
+  if kill -0 "$waiter" 2>/dev/null; then
+    kill -TERM "$waiter" 2>/dev/null; touch "$TMP/release"
+    for ((i=0; i<60; i++)); do kill -0 "$waiter" 2>/dev/null || break; sleep 0.05; done
+    kill -0 "$waiter" 2>/dev/null && kill -KILL "$waiter" 2>/dev/null
+    wait "$waiter" 2>/dev/null; waiter=
+    no "INT did not stop the waiter within 5 s"
+  else
+    wait "$waiter"; status=$?; waiter=
+    [ "$status" -eq 130 ] && [ ! -e "$TMP/state/orca-wait/interrupted.lock" ] && [ ! -s "$TMP/int.out" ] && ok "INT exits 130 and releases the lock" || no "INT cleanup failed (status $status)"
+  fi
+  touch "$TMP/release"
+  unset FAKE_MODE
+fi
 
 # The parent is killed outright, as when Claude Code reaps the waiter's shell.
 rm -f "$TMP/step" "$TMP/orphan.pid"

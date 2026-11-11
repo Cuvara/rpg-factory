@@ -703,6 +703,7 @@ git('switch', '--no-track', '-c', 'topic-a')
 a = commit('a')
 if case.startswith('subtask-'):
     m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
+    m.pr.record(plan, 'a', None, 'implementer', {'agent': 'codex'})  # the task-level implement dispatch the explicit --implementer codex below matches
     verdict('a', 'review', a, by='codex', extra=('--subtask', 's'))
     if case == 'subtask-legacy':
         folder = pathlib.Path(m.verdict_dir(plan)) / 'a'; folder.mkdir()
@@ -765,6 +766,8 @@ elif case in ('report', 'implementer', 'override', 'legacy-implementer'):
         m.pr.record(plan, 'a', 's1', 'implementer', {'agent': 'claude'})
         m.pr.record(plan, 'a', 's2', 'implementer', {'agent': 'claude'})
         extra = ('--implementer', 'codex') if case == 'override' else ()
+        if extra:
+            m.pr.record(plan, 'a', None, 'implementer', {'agent': 'codex'})  # a task-level implement dispatch: the explicit declaration is recorded, not contradicting
         if extra:
             pathlib.Path(m.verdict_file(plan, 'a', 'review')).unlink()  # exercise a fresh explicit declaration, not review preservation
         verdict('a', 'review', a, by='codex', extra=extra)
@@ -1760,7 +1763,7 @@ expect "registry without pipeline.lead_agent: the task lead defaults to claude" 
 expect "task lead creates its own Orca Run" 0 "create your OWN Run \(.orca orchestration run-create" dispatch "$OK" --task gw --phase lead
 expect "task lead runs tier S and docs-only QA after review" 0 "For tier S and docs-only tasks, the lead runs the tier command after the review and records QA" dispatch "$OK" --task gw --phase lead
 expect "task lead reports to the run lead's Orca run" 0 "orca orchestration send --to run:R42 --type status --subject .task done: gw" dispatch "$OK" --task gw --phase lead --report-to R42
-expect_spec "task lead records its durable report with the report verb before the message" "<pipeline> report <plan> --task gw --sha <HEAD> --body-file <file>.* then report to the run lead \(.orca orchestration send" dispatch "$OK" --task gw --phase lead --report-to R42
+expect_spec "task lead records its durable report with the report verb before the message" "<pipeline> report <plan> --task gw --sha <HEAD> --body-file <file>.* then report to the run lead \(.orca orchestration send" dispatch "$OK" --task gw --phase lead --report-to R42 --runner orca
 expect "--report-to accepts Orca's run:<id> form" 0 "orca orchestration send --to run:R42 --type status" dispatch "$OK" --task gw --phase lead --report-to run:R42
 refute "--report-to run:<id> never doubles the prefix" "run:run:" dispatch "$OK" --task gw --phase lead --report-to run:R42
 expect "--report-to goes only with the lead" 2 "--report-to .* goes with --phase lead" dispatch "$OK" --task gw --phase implement --report-to R42
@@ -2801,7 +2804,7 @@ RPG_FACTORY_PROCESS_TABLE="$BUSYP" opath "a process inside the directory (path b
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "busy processes: never a kill command" "$NOKILL" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE="$BUSYP" oref "busy processes: no traceback" "Traceback" cleanup "$G"
 RPG_FACTORY_PROCESS_TABLE=none opath "a process listing that fails names nothing, still LEFTOVER" 1 "^Cleanup: LEFTOVER" cleanup "$G"
-RPG_FACTORY_PROCESS_TABLE=none oref "a failing process probe: no BUSY line, no traceback" "BUSY\?|Traceback" cleanup "$G"
+RPG_FACTORY_PROCESS_TABLE=none oref "a failing process probe: no BUSY line, no traceback" "BUSY\? process|Traceback" cleanup "$G"
 PATH="$fpath" RPG_FACTORY_PROCESS_TABLE="$BUSYP" python3 -B "$P" cleanup --json "$G" > "$TMP/cleanup-busy.json" 2>&1
 if jq -e 'any(.leftovers[]; .kind == "directory" and (.processes | map(.pid) | sort) == [3101, 3102, 3106] and all(.processes[]; .command != "" and .started != "" and .why != ""))' "$TMP/cleanup-busy.json" >/dev/null
 then pass=$((pass + 1)); echo "PASS  cleanup --json lists the busy candidates (PID, command, start) per leftover directory"
