@@ -3,7 +3,7 @@
  "title": "Tileable texture",
  "description": "Seamless, opaque surface texture (albedo reference) for materials.",
  "handoff_domain": "art3d",
- "default_template": "image-generate",
+ "default_template": "staged-texture",
  "default_family": "environment",
  "dimensions": [
   "palette",
