@@ -27,7 +27,10 @@
 # proposed -> approved lifecycle, an uncommitted approval HUMAN_REQUIRED in gen-run-style, cross-family anchor
 # warnings and anchor_family_fallback false, drift style-id-mismatch, 1322x1190 square tolerance and allow_swap, the
 # embed stale chunk, the style-field lint WARN), the imaging and style engine self-tests (imaging_selftest.py,
-# style_selftest.py), and no endpoints or credentials in templates/assetgen or scripts/assetgen.
+# style_selftest.py), the advisory spend guard (resolve --max-outputs into spec.budget, default 4, invalid values exit 2;
+# the read-only budget verb: outputs + failed attempts against the limit, ok/at-limit/exceeded/unlimited/invalid and
+# their exits; finalize's budget line and --json key with its exit unchanged), and no endpoints or credentials in
+# templates/assetgen or scripts/assetgen.
 # Usage: tests/assetgen.test.sh [--update-golden]   (standalone; temp authoring git repo; no network)
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
@@ -1539,6 +1542,113 @@ find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$
   && ok "finalize refuses an approved run (exit 1) and writes nothing" || no "finalize approved rc=$rc" "$(cat "$TMP/o"; diff "$TMP/tree0" "$TMP/tree1")"
 f_help=$(AG finalize --help 2>&1); grep -q -- "--force" <<<"$f_help" && grep -q "finalize --run RUN" "$ROOT/scripts/assetgen/assetgen.py" \
   && ok "finalize is a subcommand (--run, --authoring, --force, --json) listed in the assetgen.py usage" || no "finalize usage" "$f_help"
+
+echo "-- budget: advisory spend guard (resolve --max-outputs, budget --run, finalize)"
+lf() { tr -d '\r' < "$1"; }
+# resolve records spec.budget.max_outputs: default 4 (--json and --out), --max-outputs N, invalid values are usage errors
+AG resolve --purpose icon --style pixel-art --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --out "$TMP/bud-spec.json" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c .budget "$TMP/r.json")" = '{"max_outputs":4}' ] && [ "$(jq -c .budget "$TMP/bud-spec.json")" = '{"max_outputs":4}' ] \
+  && lf "$TMP/o" | grep -q "^budget: at most 4 outputs" \
+  && ok "resolve: spec.budget.max_outputs defaults to 4 (--json and the --out spec.json), the summary says 'budget: at most 4 outputs'" \
+  || no "resolve default budget rc=$rc/$rc2 $(jq -c .budget "$TMP/r.json" 2>&1)" "$(cat "$TMP/err" "$TMP/o")"
+AG resolve --purpose icon --style pixel-art --max-outputs 2 --json > "$TMP/r.json" 2>"$TMP/err"; rc=$?
+AG resolve --purpose icon --style pixel-art --max-outputs 2 --out "$TMP/bud-spec2.json" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c .budget "$TMP/r.json")" = '{"max_outputs":2}' ] && [ "$(jq -c .budget "$TMP/bud-spec2.json")" = '{"max_outputs":2}' ] \
+  && lf "$TMP/o" | grep -q "^budget: at most 2 outputs" \
+  && ok "resolve --max-outputs 2 records spec.budget.max_outputs 2 (--json and --out) and prints it" \
+  || no "resolve --max-outputs 2 rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/o")"
+bad=""; i=0
+for v in 0 -1 x 1.5; do
+  i=$((i + 1)); AG resolve --purpose icon --style pixel-art --max-outputs="$v" --out "$TMP/bud-bad-$i.json" > /dev/null 2>"$TMP/err"; rc=$?
+  { [ $rc -eq 2 ] && [ ! -e "$TMP/bud-bad-$i.json" ] && grep -q -- "--max-outputs" "$TMP/err"; } || bad="$bad $v:$rc"
+done
+[ -z "$bad" ] && ok "resolve --max-outputs 0, -1, x, 1.5: usage error (exit 2) naming --max-outputs, --out writes nothing" \
+  || no "resolve invalid --max-outputs:$bad" "$(cat "$TMP/err")"
+# a series bud-icon-NNN: 001 failed (no run.md, counted), 002 finished (run.md, not counted), 003 the run (limit 3),
+# 009 a later attempt and xbud-icon-001 another slug (neither counted)
+for n in bud-icon-001 bud-icon-002 bud-icon-009 xbud-icon-001; do mkdir -p "$RUNS/$n"; done; : > "$RUNS/bud-icon-002/run.md"
+bd="$RUNS/bud-icon-003"; mkrun bud-icon-003 icon --style pixel-art --max-outputs 3 || no "budget: mkrun bud-icon-003"
+cp "$FX/icon-ok.png" "$bd/outputs/a.png"
+bsnap() { { find "$bd" -type f -exec sha256sum {} +; ls -a "$RUNS"; } | sort; }; bs0=$(bsnap)
+AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] \
+  && [ "$(jq -c '[.schema, .run, .outputs, .failed_attempts, .used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" \
+     = '["rpg-factory.assetgen-budget/1","bud-icon-003",1,["bud-icon-001"],2,3,1,"ok",0]' ] \
+  && [ "$(jq -r '.reason | type' "$TMP/b.json")" = string ] \
+  && [ "$(jq -c 'keys' "$TMP/b.json")" = '["allowed","exit","failed_attempts","outputs","reason","remaining","run","schema","state","used"]' ] \
+  && [ "$(lf "$TMP/o" | wc -l)" -eq 1 ] && lf "$TMP/o" | grep -q "^budget ok: .*2 used.*of 3 allowed" \
+  && ok "budget ok: used 2 = 1 output + 1 failed attempt (bud-icon-001; not the finished 002, the later 009 or another slug), allowed 3, remaining 1, exit 0" \
+  || no "budget ok rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+[ "$(bsnap)" = "$bs0" ] && ok "budget is read-only (text and --json: the run dir and the runs dir unchanged)" || no "budget wrote something" "$(diff <(echo "$bs0") <(bsnap))"
+AG budget --run bud-icon-003 --authoring "$AUTH" --json > "$TMP/b2.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -S . "$TMP/b2.json")" = "$(jq -S . "$TMP/b.json")" ] && ok "budget --run RUN-ID --authoring DIR resolves the run like the other verbs" \
+  || no "budget --run id rc=$rc" "$(cat "$TMP/err" "$TMP/b2.json")"
+cp "$FX/icon-ok.png" "$bd/outputs/b.png"
+AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c '[.used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" = '[3,3,0,"at-limit",0]' ] \
+  && lf "$TMP/o" | grep -q "^budget at-limit: .*3 used.*of 3 allowed" \
+  && ok "budget at-limit: used == allowed (3 of 3), remaining 0, exit 0" || no "budget at-limit rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+cp "$FX/icon-ok.png" "$bd/outputs/c.png"
+AG budget --run "$bd" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bd" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 1 ] && [ $rc2 -eq 1 ] && [ "$(jq -c '[.outputs, .failed_attempts, .used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" = '[3,["bud-icon-001"],4,3,0,"exceeded",1]' ] \
+  && lf "$TMP/o" | grep -q "^budget exceeded: .*4 used.*of 3 allowed" \
+  && ok "budget exceeded: used 4 > allowed 3, remaining 0, exit 1 (text and --json)" || no "budget exceeded rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+rm -f "$RUNS/bud-icon-002/run.md"  # the empty marker is no gen-run: the quality plugin loop below parses every runs/*/run.md
+# a spec resolved before the spend guard (no budget key) is unlimited, never a failure
+bo="$RUNS/bud-old-001"; mkrun bud-old-001 icon --style pixel-art || no "budget: mkrun bud-old-001"
+jq 'del(.budget)' "$bo/spec.json" > "$TMP/spec.tmp" && cp "$TMP/spec.tmp" "$bo/spec.json"; cp "$FX/icon-ok.png" "$bo/outputs/a.png"
+AG budget --run "$bo" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bo" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(jq -c '[.used, .allowed, .remaining, .state, .exit]' "$TMP/b.json")" = '[1,null,null,"unlimited",0]' ] \
+  && lf "$TMP/o" | grep -q "^budget unlimited: .*1 used" && ! lf "$TMP/o" | grep -q "allowed" \
+  && ok "budget on a spec.json without budget (resolved before the spend guard): unlimited, allowed and remaining null, exit 0" \
+  || no "budget unlimited rc=$rc/$rc2" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+# a malformed spec.budget is invalid (exit 1): a string, 0, a boolean
+bad=""
+for v in '"4"' 0 true; do
+  jq --argjson v "$v" '.budget = {max_outputs: $v}' "$bo/spec.json" > "$TMP/spec.tmp" && cp "$TMP/spec.tmp" "$bo/spec.json"
+  AG budget --run "$bo" --json > "$TMP/b.json" 2>"$TMP/err"; rc=$?
+  AG budget --run "$bo" > "$TMP/o" 2>>"$TMP/err"; rc2=$?
+  { [ $rc -eq 1 ] && [ $rc2 -eq 1 ] && [ "$(jq -c '[.state, .exit]' "$TMP/b.json")" = '["invalid",1]' ] && lf "$TMP/o" | grep -q "^budget invalid: "; } \
+    || bad="$bad $v:$rc/$rc2"
+done
+[ -z "$bad" ] && ok "budget with a malformed spec.budget.max_outputs (\"4\", 0, true): invalid, exit 1" || no "budget invalid:$bad" "$(cat "$TMP/err" "$TMP/b.json" "$TMP/o")"
+mkdir -p "$RUNS/bud-nospec-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/bud-nospec-001/outputs/a.png"
+AG budget --run "$RUNS/bud-nospec-001" > "$TMP/o" 2>&1; rc=$?
+[ $rc -eq 1 ] && grep -q "spec.json" "$TMP/o" && [ "$(find "$RUNS/bud-nospec-001" -type f | wc -l)" -eq 1 ] \
+  && ok "budget on a run without spec.json: exit 1 naming spec.json, nothing written" || no "budget no spec rc=$rc" "$(cat "$TMP/o")"
+# finalize prints the budget line right before its last line, adds .budget to --json and keeps its exit code
+bf="$RUNS/bud-tile-001"; { mkrun bud-tile-001 texture-tileable --style stylized-painterly && AG render --run "$bf" > /dev/null 2>&1 \
+  && cp "$FX/tile-ok.png" "$bf/outputs/a.png"; } || no "budget: finalize run bud-tile-001"
+AG finalize --run "$bf" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: .*1 used.*of 4 allowed" \
+  && [ "$(lf "$TMP/o" | grep -c "^budget ")" -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] \
+  && ok "finalize text: one 'budget ok' line right before the last 'assetgen finalize: PASS' line, exit 0" || no "finalize budget text rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG finalize --run "$bf" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+AG budget --run "$bf" --json > "$TMP/b.json" 2>>"$TMP/err"
+[ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.exit | tostring)' "$TMP/f.json")" = "PASS 0" ] && [ "$(jq -S .budget "$TMP/f.json")" = "$(jq -S . "$TMP/b.json")" ] \
+  && [ "$(jq -r .budget.schema "$TMP/f.json")" = rpg-factory.assetgen-budget/1 ] \
+  && ok "finalize --json: key budget is the budget --json object" || no "finalize budget json rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+be="$RUNS/bud-over-001"; { mkrun bud-over-001 texture-tileable --style stylized-painterly --max-outputs 1 && AG render --run "$be" > /dev/null 2>&1 \
+  && cp "$FX/tile-ok.png" "$be/outputs/a.png" && cp "$FX/tile-ok.png" "$be/outputs/b.png"; } || no "budget: finalize run bud-over-001"
+AG finalize --run "$be" > "$TMP/o" 2>"$TMP/err"; rc=$?
+AG finalize --run "$be" --json > "$TMP/f.json" 2>>"$TMP/err"; rc2=$?
+[ $rc -eq 0 ] && [ $rc2 -eq 0 ] && [ "$(lf "$TMP/o" | tail -n 1)" = "assetgen finalize: PASS" ] \
+  && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget exceeded: .*2 used.*of 1 allowed" \
+  && [ "$(jq -r '.state + " " + (.exit | tostring) + " " + .budget.state + " " + (.budget.exit | tostring)' "$TMP/f.json")" = "PASS 0 exceeded 1" ] \
+  && ok "finalize on a run over its budget (max 1, two outputs): still PASS exit 0, budget exceeded reported (text and --json)" \
+  || no "finalize exceeded rc=$rc/$rc2" "$(cat "$TMP/o" "$TMP/err" "$TMP/f.json")"
+bq="$RUNS/bud-qafail-001"; finrun bud-qafail-001 icon icon-opaque.png || no "budget: finalize run bud-qafail-001"
+AG finalize --run "$bq" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && lf "$TMP/o" | tail -n 1 | grep -q "^assetgen finalize: FAIL at qa: " && lf "$TMP/o" | tail -n 2 | head -n 1 | grep -q "^budget ok: " \
+  && ok "finalize FAIL at qa: exit 1 unchanged, the budget line still comes right before the last line" || no "finalize fail budget rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+b_help=$(AG budget --help 2>&1); r_help=$(AG resolve --help 2>&1)
+grep -q -- "--run" <<<"$b_help" && grep -q -- "--json" <<<"$b_help" && grep -q -- "--max-outputs" <<<"$r_help" \
+  && ok "budget is a subcommand (--run, --json); resolve has --max-outputs" || no "budget usage" "$b_help $r_help"
 
 echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
 cat > "$TMP/fake-comfy.py" <<'EOF'
