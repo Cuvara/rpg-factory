@@ -50,6 +50,20 @@ How the rpg-factory plugin fits together and where things live. Moved from `.cla
   plugin names only - never config values) → snapshot "Tools for this change" and doctor "Dev tools".
   Every non-core skill's `## Tools` names exactly its `used_by` tools (skills-lint).
 
+## CI
+
+`.github/workflows/tests.yml` runs `--no-workspace --no-claude` only; workspace checks (registry paths, facts, pins,
+wire parity, live context) run locally with `tests/run-all.sh --workspace-only`.
+
+- **`plan` job:** `scripts/ci-plan.py` (which calls `tests/affected.py`) selects the suites a change affects; anything
+  unsure (no base, an error, changed CI plumbing) plans every suite.
+- **`suite` matrix:** one job per `{suite, os}`: every suite on `ubuntu-24.04`, plus `windows-2025` for the suites named
+  in `tests/ci-windows-suites.txt`. A job runs every case of its suite through `tests/run-all.sh --only-suites`.
+- **Inline checks:** `tests/run-all.sh --inline-only` on both OSes, also when no suite is selected.
+- **`ci-ok`:** the single required check; it fails when any needed job failed or was cancelled and passes when the
+  matrix is skipped because nothing is affected.
+- **Full run:** `workflow_dispatch` with `full=true` (the default) runs every suite; releases use it (`docs/releasing.md`).
+
 ## Layout
 
 - `AGENTS.md` (Codex entry: points here, Codex-only notes) - `.claude-plugin/` manifests (Codex: `.codex-plugin/`, `.agents/plugins/`, `docs/codex.md`) - `skills/` - `commands/` - `agents/` (read-only plugin agent `factory-explorer`, auto-discovered) - `scripts/` (index: `scripts/README.md`; + `lib/`, `checks/` read-only evidence
