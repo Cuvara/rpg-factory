@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # factory-pipeline.py on a throwaway workspace (a server repo and a Unity client project): tiers, plan validation
 # (ownership, cycles, cross-model review, the no-worktree rule for Unity projects, exclusive resources), dispatch
-# commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate. Never touches the real workspace.
+# commands for Orca and the Agent fallback, verdicts and the READY_FOR_PR gate, and run-all's --affected python3 guard
+# and suite timings (runall-preflight). Never touches the real workspace.
 # case-map: dogfood tests/dogfood.sh tests/dogfood/*
 # case-map: model-routing docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
 # case-map: recorded-implementer docs/registry.schema.json docs/schemas/kinds/* docs/schemas/pipeline-subplan.schema.json scripts/check-registry.sh
@@ -10,11 +11,13 @@
 # case-map: status docs/schemas/pipeline-status.schema.json
 # case-map: cleanup docs/schemas/pipeline-status.schema.json
 # case-map: settled-workers docs/schemas/pipeline-status.schema.json
+# case-map: runall-preflight tests/run-all.sh
+# case-map: qa-tiers tests/run-all.sh
 # Measured with sys.monitoring and an audit hook over a full run: factory-pipeline.py, registry.json, the plan schema,
 # model_policy.py, orca_cmd.py and plan_paths.py run in every case, and pipeline_route.py and fstate.py in 17 of 20, so
 # they have no map: ALL is the safe fallback for them (and for any file not listed).
 set -uo pipefail
-CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs cli-selftest'
+CASES='validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings tier-plugin status owned-case dogfood recorded-implementer cleanup-merged gate-merge model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
 usage() {
   printf '%s\n' 'Usage: pipeline.test.sh [--case NAMES | --only NAMES] [--list-cases] [-h|--help]' \
     'NAMES is a comma-separated list; selectors may be repeated. No selector runs every case.' \
@@ -91,7 +94,7 @@ P="$ROOT/scripts/factory-pipeline.py"
 # Units: groups of cases that need no state of any other unit. With more than one unit selected the suite re-runs
 # itself once per unit (up to PIPELINE_TEST_UNITS at once, default 4), then prints the outputs in this order and
 # adds the counts; a child (PIPELINE_TEST_UNIT set) runs its own cases inline. The chain is the longest unit, first.
-UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs cli-selftest'
+UNITS='chain status recorded-implementer dogfood cleanup-merged gate-merge owned-case tier-plugin model-routing multiwave qa-tiers tier-xs runall-preflight cli-selftest'
 unit_cases() {
   case "$1" in
     chain) echo 'validate subplan dispatch model-policy child-dispatch tier verdict-gate cleanup settled-workers orca-first review-findings' ;;
@@ -1736,17 +1739,67 @@ assert 'Run no test suites; only a syntax check' in implementation and 'bash tes
 out = dispatch('qa', first)
 assert 'Affected cases: not computed (tests/affected.py missing)' in out, out
 assert 'tier command already passes these cases' not in out, out
+# selection pre-flight (stderr only, advisory): verify and qa print `selected N of M suites` (N: the Affected cases
+# suites, M: the stand-in run-all's --list-suites) and warn when N > --suite-warn (default 40); stdout and the exit
+# code do not change. Without a selection they say why and never warn.
+def dispatch_p(phase, sha, *extra):
+    p = pipeline_cli('dispatch', str(pf), '--task', 'a', '--phase', phase, '--sha', sha, '--runner', 'print', *extra)
+    assert p.returncode == 0, (phase, extra, p.returncode, p.stdout, p.stderr)
+    return p
+SUITE_WARN = 'factory-pipeline: warning: '
+SELECTED_RE = re.compile(r'factory-pipeline: selected \d+ of \d+ suites')
+for phase in ('verify', 'qa'):
+    for extra in ((), ('--suite-warn', '1')):
+        missing = dispatch_p(phase, first, *extra)
+        assert 'factory-pipeline: selected suites: not computed (tests/affected.py missing)\n' in missing.stderr, (phase, extra, missing.stderr)
+        assert SUITE_WARN not in missing.stderr and not SELECTED_RE.search(missing.stderr), (phase, extra, missing.stderr)
+        assert 'not computed (tests/affected.py missing)' in missing.stdout and 'factory-pipeline: selected' not in missing.stdout, missing.stdout
+# --suite-warn below 1 or not an integer is a usage error (exit 2), for both phases, before any prompt
+for phase in ('verify', 'qa'):
+    for bad in ('0', '-1', 'x', ''):
+        p = pipeline_cli('dispatch', str(pf), '--task', 'a', '--phase', phase, '--sha', first, '--runner', 'print',
+                         '--suite-warn', bad)
+        assert p.returncode == 2 and '--suite-warn' in p.stderr and not p.stdout, (phase, bad, p.returncode, p.stdout, p.stderr)
+        assert not SELECTED_RE.search(p.stderr) and 'not computed' not in p.stderr, (phase, bad, p.stderr)
 affected = work / 'task' / 'tests' / 'affected.py'
-affected.write_text('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
-                    'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
-                    'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
-                    'print("tests/routing.test.sh\\tselection")\n', encoding='utf-8')
+stand_in_affected = ('import pathlib, sys\nassert sys.argv[1] == "cases"\n'
+                     'assert pathlib.Path(sys.argv[2]).read_text().splitlines() == ["code.py"]\n'
+                     'print("tests/pipeline.test.sh\\tdispatch,qa-tiers")\n'
+                     'print("tests/routing.test.sh\\tselection")\n')
+affected.write_text(stand_in_affected, encoding='utf-8')
 case_out = dispatch('qa', first)
 assert ('Affected cases (tests/affected.py cases):\ntests/pipeline.test.sh ALL\n'
         'tests/routing-properties.test.py ALL\ntests/routing.test.sh --case selection') in case_out, case_out
 assert 'tier command already passes these cases' in case_out, case_out
+# the three Affected cases suites of the three run-all lists: 3 of 3; no warning at the default (40) nor at
+# --suite-warn 3 (warns only above it), the warning line at --suite-warn 1 and 2; the prompt is the same every time
+SELECTED_3 = 'factory-pipeline: selected 3 of 3 suites (tests/affected.py)\n'
+for phase in ('verify', 'qa'):
+    quiet = dispatch_p(phase, first)
+    assert SELECTED_3 in quiet.stderr and SUITE_WARN not in quiet.stderr and 'not computed' not in quiet.stderr, (phase, quiet.stderr)
+    assert 'Affected cases (tests/affected.py cases):\n' in quiet.stdout and 'factory-pipeline: selected' not in quiet.stdout, (phase, quiet.stdout)
+    assert quiet.stderr.count(SELECTED_3) == 1, (phase, quiet.stderr)
+    at = dispatch_p(phase, first, '--suite-warn', '3')
+    assert SELECTED_3 in at.stderr and SUITE_WARN not in at.stderr, (phase, at.stderr)
+    for threshold in ('1', '2'):
+        loud = dispatch_p(phase, first, '--suite-warn', threshold)
+        want = (SELECTED_3 + SUITE_WARN + f'3 of 3 suites selected (threshold {threshold}): narrow the task paths or '
+                'its checks before QA\n')
+        assert want in loud.stderr and loud.stderr.count(SUITE_WARN) == 1, (phase, threshold, loud.stderr)
+        assert loud.stdout == quiet.stdout == at.stdout, (phase, threshold)
+        assert SUITE_WARN not in loud.stdout, (phase, loud.stdout)
+# N counts the selection, not the list: affected.py naming no suite leaves the two explicit task suites, 2 of 3
+affected.write_text('import sys\nassert sys.argv[1] == "cases"\n', encoding='utf-8')
+for phase in ('verify', 'qa'):
+    two = dispatch_p(phase, first, '--suite-warn', '2')
+    assert 'factory-pipeline: selected 2 of 3 suites (tests/affected.py)\n' in two.stderr and SUITE_WARN not in two.stderr, (phase, two.stderr)
+    two = dispatch_p(phase, first, '--suite-warn', '1')
+    assert SUITE_WARN + '2 of 3 suites selected (threshold 1)' in two.stderr, (phase, two.stderr)
+affected.write_text(stand_in_affected, encoding='utf-8')
 bad_out = dispatch('qa', 'bad-sha')
 assert 'Affected cases: not computed (git diff failed)' in bad_out and 'tier command already passes these cases' not in bad_out, bad_out
+bad_p = dispatch_p('qa', 'bad-sha', '--suite-warn', '1')
+assert 'factory-pipeline: selected suites: not computed (git diff failed)\n' in bad_p.stderr and SUITE_WARN not in bad_p.stderr, bad_p.stderr
 affected.unlink()
 command = ('tests/run-all.sh --affected --base main --only-suites '
            'tests/pipeline.test.sh,tests/routing-properties.test.py -j 2')
@@ -4502,6 +4555,207 @@ bg_report "tier XS: dispatch lead prints the run lead's steps, no implement sess
 bg_report "tier XS: gate READY_FOR_PR with review PASS and lead QA; an oversize, non-prose, contract or generated diff blocks" tier-xs-gate
 bg_report "tier XS: status shows the run lead's review dispatch and QA record, then the gate, as the gate sees it" tier-xs-status
 case_end tier-xs
+fi
+
+if has_case runall-preflight; then
+case_start
+echo "-- run-all: --affected needs a python3 that runs; per-suite timings"
+rp_ok() { pass=$((pass + 1)); echo "PASS  $1"; }
+rp_no() { fail=$((fail + 1)); echo "FAIL  $1"; [ -z "${2:-}" ] || sed 's/^/      /' <<<"$2" | head -30; }
+# A python3 that cannot run, first on PATH: the Microsoft Store stub Git Bash finds on Windows prints this hint and
+# exits 9009; a silent one only has its exit status. --affected exits 2 with the reason before any suite, lock or slot
+# (its own state dir stays empty); --no-wait keeps a regression from queueing behind another session's run.
+RP="$TMP/runall-preflight"; mkdir -p "$RP/stub" "$RP/silent" "$RP/state"
+printf '#!/bin/sh\necho "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases."\nexit 9009\n' > "$RP/stub/python3"
+printf '#!/bin/sh\nexit 1\n' > "$RP/silent/python3"
+chmod +x "$RP/stub/python3" "$RP/silent/python3"
+for kind in stub silent; do
+  rp_out=$(cd "$ROOT" && PATH="$(path_entry "$RP/$kind"):$PATH" RPG_FACTORY_STATE_DIR="$RP/state" \
+    bash tests/run-all.sh --affected --base HEAD --no-wait 2>"$RP/$kind.err"); rp_rc=$?
+  rp_err=$(cat "$RP/$kind.err")
+  if [ "$kind" = stub ]; then rp_why='Python was not found; run without arguments to install from the Microsoft Store'
+  else rp_why='exit status 1'; fi
+  if [ "$rp_rc" = 2 ] && [[ $rp_err == *"run-all: --affected needs python3 to select suites, and python3 cannot run: $rp_why"* ]] \
+      && ! grep -qE '^(PASS|FAIL|SKIP)  |^affected mode:|^run-all: [0-9]+ checks' <<<"$rp_out"$'\n'"$rp_err" \
+      && [ -z "$(ls -A "$RP/state")" ]; then
+    rp_ok "run-all --affected with a $kind python3 exits 2 naming the reason ($rp_why), runs no suite and takes no lock or slot"
+  else rp_no "run-all --affected with a $kind python3: rc=$rp_rc (want 2), state: $(ls -A "$RP/state" | head -c 100)" "$rp_out"$'\n'"$rp_err"; fi
+done
+# without --affected run-all never probes: the stub may break what it runs, but never as the --affected exit 2
+rp_out=$(cd "$ROOT" && PATH="$(path_entry "$RP/stub"):$PATH" RPG_FACTORY_STATE_DIR="$RP/state" bash tests/run-all.sh --list-suites 2>&1); rp_rc=$?
+if [ "$rp_rc" != 2 ] && [[ $rp_out != *"needs python3"* ]]; then rp_ok "run-all --list-suites with the stub python3 does not probe (rc=$rp_rc, not the probe's 2)"
+else rp_no "run-all --list-suites with the stub python3 probed: rc=$rp_rc" "$rp_out"; fi
+
+# Timings: run-all sourced (no checks of its own, like tests/run-all-parallel.test.sh) on stand-in suites - one passing
+# (a case subset), one failing (exit ZZ_FAIL_RC), one graded by a runp handler, and a syntax line that is not timed -
+# at -j 1 and -j 2, then runall_finish, which writes <STATE>/run-all/timings.json. No assertion reads a wall time:
+# seconds are only checked to be integers >= 0, and the [Ns] of the result lines is removed before comparing.
+RT="$RP/timings"; mkdir -p "$RT/fix/tests"
+printf '#!/usr/bin/env bash\necho pass-out\n' > "$RT/fix/tests/zz-pass.sh"
+printf '#!/usr/bin/env bash\necho fail-out\nexit "${ZZ_FAIL_RC:-3}"\n' > "$RT/fix/tests/zz-fail.sh"
+printf '#!/usr/bin/env bash\necho post-out\n' > "$RT/fix/tests/zz-post.sh"
+printf '#!/usr/bin/env bash\necho ran >> "$ZZ_LOG"\n' > "$RT/fix/tests/zz-reuse.sh"
+cat > "$RT/plan.sh" <<'PLAN'
+fixture=$1; state=$2; shift 2
+. "$ROOT_UNDER_TEST/tests/run-all.sh" "$@"
+ROOT=$fixture; cd "$ROOT" || exit 1
+STATE=$state; HEAD_SHA=fixture-head; full_run=false
+CASE_SUITES=(tests/zz-pass.sh); CASE_LISTS=(alpha)
+zz_post() { if [ "$1" -eq 0 ] && grep -q post-out <<<"$2"; then _ok "graded by zz_post"; else _bad "graded by zz_post" "$2"; fi; }
+if [ -n "${ZZ_REUSE_HASH:-}" ]; then   # a recorded suite PASS: reused, so never run and never timed
+  HASH_SUITES=(tests/zz-reuse.sh); HASHES=("$ZZ_REUSE_HASH")
+  suite_cache_file tests/zz-reuse.sh && mkdir -p "${cache_file%/*}" && echo PASS > "$cache_file"
+  run reused bash tests/zz-reuse.sh
+fi
+run pass bash tests/zz-pass.sh
+run fails bash tests/zz-fail.sh
+runp graded zz_post bash tests/zz-post.sh
+run "bash -n: tests/zz-fail.sh" bash -n tests/zz-fail.sh
+drain
+runall_finish
+echo "counts $pass $fail $skip"
+[ "$pass" -gt 0 ] && [ "$fail" -eq 0 ]
+PLAN
+# check.py <timings.json> <want JSON>: want maps each suite to [rc, cases] (a line this run wrote) or to the exact
+# object (a line it must keep); exactly those suites, one valid JSON line each, sorted, LF only
+cat > "$RT/check.py" <<'PY'
+import json, sys
+path, want = sys.argv[1], json.loads(sys.argv[2])
+with open(path, encoding='utf-8', newline='') as f:
+    text = f.read()
+assert text.endswith('\n') and '\r' not in text, repr(text[-120:])
+rows = [json.loads(line) for line in text.split('\n')[:-1]]
+assert [r['suite'] for r in rows] == sorted(want), ([r['suite'] for r in rows], sorted(want))
+for r in rows:
+    w = want[r['suite']]
+    if isinstance(w, dict):
+        assert r == w, (r, w)
+        continue
+    assert set(r) == {'suite', 'seconds', 'rc', 'cases', 'head', 'date'}, r
+    assert type(r['seconds']) is int and r['seconds'] >= 0, r
+    assert r['rc'] == w[0] and r['cases'] == w[1] and r['head'] == 'fixture-head', (r, w)
+    assert isinstance(r['date'], str) and r['date'], r
+PY
+# rp_plan <state> <jobs> [VAR=value...]: RP_OUT (the [Ns] times removed) and RP_RC of the stand-in plan
+rp_plan() {
+  local st="$1" j="$2"; shift 2
+  RP_OUT=$(env "$@" ROOT_UNDER_TEST="$ROOT" ZZ_LOG="$RT/ran" bash "$RT/plan.sh" "$RT/fix" "$st" -j "$j" 2>&1); RP_RC=$?
+  RP_OUT=$(sed -E 's/ \[[0-9]+s\]$//' <<<"$RP_OUT")
+}
+rp_check() { # <name> <timings.json> <want JSON>
+  local o; if o=$(python3 -B "$RT/check.py" "$2" "$3" 2>&1); then rp_ok "$1"; else rp_no "$1" "$o$(printf '\n'; cat "$2" 2>/dev/null)"; fi
+}
+rp_want="PASS  pass (cases alpha)
+FAIL  fails
+      fail-out
+PASS  graded by zz_post
+PASS  bash -n: tests/zz-fail.sh
+counts 3 1 0"
+OTHER='{"suite": "tests/other.sh", "seconds": 7, "rc": 0, "cases": null, "head": "old", "date": "2026-01-01T00:00:00Z"}'
+S1="$RT/state"; mkdir -p "$S1/run-all"
+printf '%s\nnot json\n' "$OTHER" > "$S1/run-all/timings.json"
+rp_plan "$S1" 1
+if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ]; then rp_ok "timings -j 1: result lines, counts (3 1 0) and exit status 1 as without timings"
+else rp_no "timings -j 1: rc=$RP_RC" "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+rp_check "timings -j 1: one JSON line per suite that ran (seconds >= 0, rc, cases), the other suite's line kept, a malformed line dropped" \
+  "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [3, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+[ "$(ls -A "$S1/run-all")" = timings.json ] && rp_ok "timings: the state dir's run-all/ holds only timings.json (no temp file, no suite record)" \
+  || rp_no "timings: run-all/ holds $(ls -A "$S1/run-all" | tr '\n' ' ')"
+# a second run (-j 2) replaces the lines of the suites it ran (zz-fail now exits 4) and adds none
+rp_plan "$S1" 2 ZZ_FAIL_RC=4
+if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ]; then rp_ok "timings -j 2: the same lines, counts and exit status as -j 1"
+else rp_no "timings -j 2: rc=$RP_RC" "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+rp_check "timings -j 2: a suite run again replaces its line (rc 3 -> 4) instead of adding one; the other suite's line stays" \
+  "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [4, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+# an unwritable state dir (its parent is a file) and no state dir at all: the same lines, counts and exit status
+echo blocker > "$RT/blocker"
+for j in 1 2; do
+  for st in "$RT/blocker/state" ""; do
+    rp_plan "$st" "$j"
+    if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ]; then rp_ok "timings -j $j, state '${st:+unwritable}': result lines, counts and exit status unchanged, no timings error shown"
+    else rp_no "timings -j $j, state '$st': rc=$RP_RC" "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+  done
+done
+[ "$(cat "$RT/blocker")" = blocker ] && rp_ok "timings: an unwritable state dir is left as it was" || rp_no "timings: the blocker file changed"
+# suite reuse is unchanged: a recorded PASS is reused (the suite does not run) and gets no timings line
+rp_hash=$(printf '%064d' 0 | tr 0 a)
+rm -f "$RT/ran"; rp_plan "$S1" 2 ZZ_REUSE_HASH="$rp_hash"
+if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "PASS  reused (reused tests/zz-reuse.sh inputs $rp_hash)"$'\n'"${rp_want%counts*}counts 4 1 0" ] && [ ! -e "$RT/ran" ]; then
+  rp_ok "timings: a reused suite still passes from its record without running"
+else rp_no "timings reuse: rc=$RP_RC, ran: $(cat "$RT/ran" 2>/dev/null)" "$RP_OUT"; fi
+rp_check "timings: a reused suite gets no line; the suites that ran replace theirs" \
+  "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [3, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+[ ! -e "$S1/locks/run-all-timings" ] && rp_ok "timings: the lock dir locks/run-all-timings is gone after every write" \
+  || rp_no "timings: the lock dir is left behind: $(ls -A "$S1/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+
+# Concurrent writers serialize on <STATE>/locks/run-all-timings. writer.sh <state> <suite secs rc cases>...: one
+# timings_write of run-all sourced. The test-only barrier RUNALL_TIMINGS_BARRIER orders it without timing: writer A
+# holds the lock after its read (read.<pid>) until go exists; writer B starts then and must find the lock held
+# (waiting.<pid>). Without the lock B would write first and A's stale snapshot would drop B's row. Waits are bounded
+# polls on file existence (600 x 0.1 s), never an assertion on elapsed time.
+cat > "$RT/writer.sh" <<'W'
+state=$1; shift; rows=("$@"); set --
+. "$ROOT_UNDER_TEST/tests/run-all.sh"
+STATE=$state; HEAD_SHA=fixture-head; TIMINGS=("${rows[@]}")
+timings_write
+W
+rp_write() { ROOT_UNDER_TEST="$ROOT" bash "$RT/writer.sh" "$@"; }
+rp_waitfor() { # <path glob>: 0 once a file matches it, 1 after the bounded poll
+  local i; for ((i = 0; i < 600; i++)); do compgen -G "$1" > /dev/null && return 0; sleep 0.1; done; return 1
+}
+S2="$RT/state2"; RB="$RT/barrier"; mkdir -p "$S2" "$RB"
+RUNALL_TIMINGS_BARRIER="$RB" rp_write "$S2" tests/zz-a.sh 5 0 "" & rp_a=$!
+rp_b=""; rp_seen="A never read"
+if rp_waitfor "$RB/read.*"; then
+  RUNALL_TIMINGS_BARRIER="$RB" rp_write "$S2" tests/zz-b.sh 6 1 beta & rp_b=$!
+  if rp_waitfor "$RB/waiting.*"; then rp_seen=""; else rp_seen="B never found the lock held"; fi
+fi
+rp_reads=$(compgen -G "$RB/read.*" | wc -l | tr -d ' ')
+touch "$RB/go"; wait "$rp_a"; [ -z "$rp_b" ] || wait "$rp_b"
+if [ -z "$rp_seen" ] && [ "$rp_reads" = 1 ]; then rp_ok "timings lock: writer B waited while writer A held the lock after its read"
+else rp_no "timings lock barrier: ${rp_seen:-$rp_reads writers read before go (want 1)}" "$(ls -A "$RB" | tr '\n' ' ')"; fi
+rp_check "timings lock: two concurrent writers keep both runs' rows (A's snapshot does not drop B's line)" \
+  "$S2/run-all/timings.json" '{"tests/zz-a.sh": [0, null], "tests/zz-b.sh": [1, "beta"]}'
+[ ! -e "$S2/locks/run-all-timings" ] && rp_ok "timings lock: released after both writes" \
+  || rp_no "timings lock: left behind after both writes: $(ls -A "$S2/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+# a stale lock is taken over once and the write lands: one held by a dead pid (a python3 that has exited), one older
+# than 60 s with no pid file
+S3="$RT/state3"; mkdir -p "$S3/locks/run-all-timings"
+python3 -B -c 'import os; print(os.getpid())' | tr -d '\r' > "$S3/locks/run-all-timings/pid"
+rp_write "$S3" tests/zz-a.sh 2 0 ""
+rp_check "timings lock: a lock dir whose pid is dead is taken over and the write lands" \
+  "$S3/run-all/timings.json" '{"tests/zz-a.sh": [0, null]}'
+[ ! -e "$S3/locks/run-all-timings" ] && rp_ok "timings lock: the taken-over lock is released after the write" \
+  || rp_no "timings lock: the taken-over lock is left: $(ls -A "$S3/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+mkdir -p "$S3/locks/run-all-timings"
+python3 -B -c 'import os, sys, time; t = time.time() - 120; os.utime(sys.argv[1], (t, t))' "$S3/locks/run-all-timings"
+rp_write "$S3" tests/zz-b.sh 3 0 ""
+rp_check "timings lock: a lock dir older than 60 s without a pid is taken over and the write lands" \
+  "$S3/run-all/timings.json" '{"tests/zz-a.sh": [0, null], "tests/zz-b.sh": [0, null]}'
+[ ! -e "$S3/locks/run-all-timings" ] && rp_ok "timings lock: the aged lock is released after the write" \
+  || rp_no "timings lock: the aged lock is left: $(ls -A "$S3/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+# a lock held by a live process: the run waits the bounded 10 s, skips the write and keeps its lines, counts and exit
+# status; the holder's lock and the timings file are left as they were. The holder is a python3 that writes its pid and
+# exits once <stop> exists (bounded), so no process is killed.
+S4="$RT/state4"; mkdir -p "$S4/locks"
+python3 -B -c 'import os, sys, time
+os.mkdir(sys.argv[1])
+with open(os.path.join(sys.argv[1], "pid"), "w") as f: f.write(f"{os.getpid()}\n")
+open(sys.argv[2], "w").close()
+for _ in range(1800):
+    if os.path.exists(sys.argv[3]): break
+    time.sleep(0.1)' "$S4/locks/run-all-timings" "$RT/holder.up" "$RT/holder.stop" & rp_h=$!
+if rp_waitfor "$RT/holder.up"; then
+  rp_held=$(cat "$S4/locks/run-all-timings/pid")
+  rp_plan "$S4" 1
+  if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ] && [ ! -e "$S4/run-all/timings.json" ] \
+      && [ "$(cat "$S4/locks/run-all-timings/pid" 2>/dev/null)" = "$rp_held" ]; then
+    rp_ok "timings lock: a lock held by a live process skips the write after the bounded wait; lines, counts and exit status unchanged, the holder's lock kept"
+  else rp_no "timings lock held: rc=$RP_RC, timings: $(ls -A "$S4/run-all" 2>&1 | tr '\n' ' '), pid: $(cat "$S4/locks/run-all-timings/pid" 2>&1)" \
+    "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+else rp_no "timings lock held: the holder never started"; fi
+touch "$RT/holder.stop"; wait "$rp_h"
+case_end runall-preflight
 fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
 total=$((pass + fail)); echo "pipeline tests: $total run, $pass passed, $fail failed"

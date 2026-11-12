@@ -85,7 +85,7 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
   dispatch <plan.json> --task ID --phase lead --placement shared|child ...
         Both placements create a task worktree beside the integration checkout (or the repo checkout if absent).
   dispatch <plan.json> --task ID --phase implement [--paths P...] [--runner ...] [--agent ID]
-  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID]
+  dispatch <plan.json> --task ID --phase review|qa --sha SHA [--runner ...] [--agent ID] [--suite-warn N]
         implement records the model it started per task/subtask (<task>[@<subtask>]__implementer.model.json); review
         and QA pair against it (else the planned routing), never current availability. review records its reviewer
         and any SAME_MODEL fallback per candidate SHA: the only source `verdict` stamps a fallback from.
@@ -116,6 +116,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         FAIL that recorded --failed-suites: --base <that FAIL's candidate> plus those suites. A tier-S task (plan or
         task tier S, or only *.md, changelog.d/ and skills/ directory paths) needs no QA session: the task lead may
         run the command after the review PASS.
+        verify and qa print on stderr `selected N of M suites (tests/affected.py)` (N: the Affected cases suites,
+        M: `--list-suites`; `selected suites: not computed (<reason>)` when there is no selection) and, when N >
+        --suite-warn N (default 40), a warning to narrow the task paths or its checks. Advisory: the prompt and the
+        exit code are unchanged; --suite-warn below 1 is a usage error (exit 2).
         A no-worktree repo: implement is always a sub-session in the main checkout that does not commit (with or
         without --paths); only the task lead commits. --paths overlapping the task's exclusions is a usage error.
   dispatch <plan.json> --task integration:<repo> --phase qa --sha SHA [--runner ...] [--agent ID]
@@ -1881,15 +1885,16 @@ QA_TIERS = {"task": "affected", "integration": "ci+workspace"}  # fallback when 
 
 
 def affected_case_lines(path, base, sha, suites, explicit):
-    """Report the checkout's own case selection; failure is advisory, never a dispatch failure."""
+    """Report the checkout's own case selection; failure is advisory, never a dispatch failure.
+    Returns (text, counts): counts is (N selected suites, M suites run-all lists), None when not computed."""
     script = os.path.join(path, "tests", "affected.py")
     if not os.path.isfile(script):
-        return "Affected cases: not computed (tests/affected.py missing)"
+        return "Affected cases: not computed (tests/affected.py missing)", None
     changed, rc = git(path, "diff", "--name-only", f"{base}...{sha}")
     if rc:
-        return "Affected cases: not computed (git diff failed)"
+        return "Affected cases: not computed (git diff failed)", None
     if suites is None or suites is False:
-        return "Affected cases: not computed (suite list unavailable)"
+        return "Affected cases: not computed (suite list unavailable)", None
     try:
         with tempfile.TemporaryDirectory() as tmp:
             names = os.path.join(tmp, "changed.txt")
@@ -1898,7 +1903,7 @@ def affected_case_lines(path, base, sha, suites, explicit):
             r = subprocess.run([sys.executable, "-B", script, "cases", names, *sorted(suites)], cwd=path,
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode:
-            return "Affected cases: not computed (tests/affected.py cases failed)"
+            return "Affected cases: not computed (tests/affected.py cases failed)", None
         selected = {}
         for line in r.stdout.splitlines():
             suite, cases = line.split("\t", 1)
@@ -1907,9 +1912,37 @@ def affected_case_lines(path, base, sha, suites, explicit):
         selected.update({suite: "ALL" for suite in explicit})
         lines = [f"{suite} {'ALL' if cases == 'ALL' else '--case ' + cases}"
                  for suite, cases in sorted(selected.items())]
-        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines)
+        return "Affected cases (tests/affected.py cases):\n" + "\n".join(lines), (len(selected), len(suites))
     except (OSError, subprocess.SubprocessError, ValueError):
-        return "Affected cases: not computed (tests/affected.py cases failed)"
+        return "Affected cases: not computed (tests/affected.py cases failed)", None
+
+
+SUITE_WARN = 40  # dispatch --suite-warn default: a task QA selecting more suites than this is wide (slow)
+
+
+def suite_warn_arg(value):
+    """argparse type of dispatch --suite-warn: a positive int (else exit 2, argparse style)."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid positive int value: {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
+def selection_preflight(cases, counts, threshold):
+    """Verify/QA dispatch: how wide the case selection is, on stderr, before it costs an hour. Advisory only: the
+    prompt and the exit code do not change."""
+    if counts is None:
+        reason = cases.split("not computed (", 1)[1].rstrip(")") if "not computed (" in cases else "unknown"
+        print(f"factory-pipeline: selected suites: not computed ({reason})", file=sys.stderr)
+        return
+    n, m = counts
+    print(f"factory-pipeline: selected {n} of {m} suites (tests/affected.py)", file=sys.stderr)
+    if n > threshold:
+        print(f"factory-pipeline: warning: {n} of {m} suites selected (threshold {threshold}): narrow the task paths "
+              "or its checks before QA", file=sys.stderr)
 
 
 def tier_command(level, base, suites, task=False):
@@ -2313,7 +2346,8 @@ def cmd_dispatch(a, reg):
             base, failed = previous["sha"], previous["failed_suites"]
         suites = runall_suites(home or info["path"])
         explicit, _, _ = pr.qa_checks([task], suites, failed)
-        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        selection_preflight(cases, counts, a.suite_warn)
         prompt = (f"QA worker for plan {plan['id']} ({plan['title']}), repo {task['repo']}, branch {branch}, task {task['id']}"
                   + (f", subtask {sub['id']}" if sub else "") + ".\n" + SPEC_COMPLETE + "\n"
                   + qa_body(a.sha, [task], at_head, base=base, failed_suites=failed, small=pr.small_task(plan, task),
@@ -2358,7 +2392,8 @@ def cmd_dispatch(a, reg):
         suites = runall_suites(home or info["path"])
         selected_task = dict(task, checks=retry_checks(task, suites)) if retry else task
         explicit, _, _ = pr.qa_checks([selected_task], suites, failed)
-        cases = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        cases, counts = affected_case_lines(home or info["path"], base, a.sha, suites, explicit)
+        selection_preflight(cases, counts, a.suite_warn)
         prompt += ("\nReview first. If any blocking finding exists, report FAIL and run no tests. "
                    "Otherwise run the following QA once.\n"
                    + qa_body(a.sha, [selected_task], at_head, base=base,
@@ -4599,6 +4634,7 @@ def main():
             d.add_argument("--placement", choices=PLACEMENTS)
             d.add_argument("--subplan")
             d.add_argument("--subtask")
+            d.add_argument("--suite-warn", type=suite_warn_arg, default=SUITE_WARN, metavar="N")
         else:
             d.add_argument("--request", required=True)
         d.add_argument("--runner", choices=("orca", "agent", "print"), default=None)

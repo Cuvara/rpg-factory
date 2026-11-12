@@ -22,6 +22,9 @@
 #                   like a suite by that script path, else it counts as not affected.
 #                   Suites with a case map receive --case A,B for only the affected cases (shown in results).
 #                   An explicit --only-suites name runs all its cases. Case subsets never publish suite PASS records.
+#                   Selection needs python3: when it cannot run (not on PATH, or the Microsoft Store stub that Git Bash
+#                   finds on Windows), --affected prints the reason and exits 2 before any suite, lock or slot instead
+#                   of widening to every suite. A full run never probes python3.
 #   --reuse         reuse a clean PASS full-run record for the same tree and coverage flags
 #   --no-wait       exit 3 when the full-run lock or every targeted test slot is busy
 #   --only-suites L run comma-separated suite paths, unioned with --affected (no full-run lock); a path may also
@@ -40,6 +43,13 @@
 #   Targeted runs (--affected / --only-suites) share RPG_FACTORY_TEST_SLOTS machine-wide slots (default 2;
 #                   0 disables the cap), under the persistent state directory's locks/run-all-slots/<n>.
 #                   Busy slots queue with a wait message; dead holders are reclaimed. Full runs keep their own lock.
+#   Timings: every suite that ran (not a reused PASS record, a syntax line, or a block and the run lines inside it)
+#                   records its wall seconds in <persistent state dir>/run-all/timings.json, JSON Lines, one object
+#                   per suite path ({"suite", "seconds", "rc", "cases": "A,B" or null, "head", "date"}, sorted by
+#                   suite); a suite run again replaces its line, the other suites' lines stay. Estimates only: it never
+#                   changes a count, a line, the exit code or suite reuse, and a timings error is ignored. Concurrent
+#                   runs merge under the lock dir <persistent state dir>/locks/run-all-timings (waited for at most
+#                   10 s, then the write is skipped; a lock older than 60 s or held by a dead pid is taken over).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
@@ -67,6 +77,20 @@ case "$jobs" in ''|*[!0-9]*|0*) echo "run-all: -j/--jobs needs a positive intege
 t_start=$(date +%s)
 AFF=""
 if $affected && ! $release; then
+  # Without a working python3 affected.py cannot select, and the fallback below would widen the run to every suite:
+  # fail loudly instead (Git Bash on Windows may find the Microsoft Store stub, which prints a hint and exits 9009).
+  py_why=""
+  if ! command -v python3 >/dev/null 2>&1; then py_why="not found on PATH"
+  else
+    py_out=$(python3 -B -c 'import sys' 2>&1 < /dev/null); py_rc=$?
+    if [ "$py_rc" -ne 0 ]; then
+      py_why=$(printf '%s\n' "$py_out" | sed -n '/[^[:space:]]/{s/\r$//;p;q;}')
+      [ -n "$py_why" ] || py_why="exit status $py_rc"
+    fi
+  fi
+  if [ -n "$py_why" ]; then
+    echo "run-all: --affected needs python3 to select suites, and python3 cannot run: $py_why" >&2; exit 2
+  fi
   AFF=$(mktemp_win)/changed.txt
   if python3 -B "${RUNALL_AFFECTED_PY:-tests/affected.py}" changed ${base:+"$base"} > "$AFF"; then echo "affected mode: $(wc -l < "$AFF" | tr -d ' ') changed file(s)"
   elif [ -n "$only_suites" ]; then echo "affected mode: no base, running only --only-suites $only_suites"; rm -rf "${AFF%/*}"; AFF=""
@@ -97,7 +121,10 @@ retry_lines() {
 # queued and started in the background (at most N at a time: live-lane suites first, one at a time, one slot for the
 # earliest queued suite, then the SLOW ones, then the rest in order; output buffered in $QD). Every line - suite results and inline checks alike - waits
 # in the queue until the lines before it are out, so the output order, the count and the exit code are those of -j 1.
-QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QN=(); QL=(); QA=(); QP=(); PEND=()
+QD=""; qn=0; qnext=0; nrun=0; nlive=0; nord=0; QK=(); QM=(); QX=(); QC=(); QS=(); QN=(); QL=(); QA=(); QP=(); QT=(); QTC=(); PEND=()
+# timing_add <suite path> <seconds> <rc> [<case list>]: one suite that ran, for timings_write (four fields per suite)
+TIMINGS=()
+timing_add() { TIMINGS+=("$1" "$2" "$3" "${4:-}"); }
 # the longest suites (Windows, -j 1), started early so none of them is the tail of the parallel phase
 SLOW="tests/parallel-policy.test.sh tests/git-guard.test.sh tests/run-checks.test.sh tests/routing-golden.test.sh
       tests/check-registry.test.sh tests/checks-candidate.test.sh tests/factory-status.test.sh tests/new-skill.test.sh
@@ -149,6 +176,7 @@ flush() { # print the queue up to the first suite still running
       worker_result "$i"
       [ -f "$QD/$i.res" ] || return 0
       read -r st secs < "$QD/$i.res"
+      [ -z "${QT[i]:-}" ] || timing_add "${QT[i]}" "$secs" "$st" "${QTC[i]:-}"
       if [ "$st" = 137 ] && grep -q 'suite worker died without a result' "$QD/$i.out"; then _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"
       elif [ -n "${QX[i]}" ]; then "${QX[i]}" "$st" "$(cat "$QD/$i.out")" "${QM[i]}"
       elif [ "$st" = 0 ]; then
@@ -156,7 +184,7 @@ flush() { # print the queue up to the first suite still running
       else _bad "${QM[i]} [${secs}s]" "$(cat "$QD/$i.out")"; fi
       rm -f "$QD/$i.res" "$QD/$i.out"
     else "_${QK[i]}" "${QM[i]}" "${QX[i]}"; fi
-    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QN[i]' 'QL[i]' 'QA[i]' 'QP[i]'; qnext=$((i + 1))
+    unset 'QK[i]' 'QM[i]' 'QX[i]' 'QC[i]' 'QS[i]' 'QN[i]' 'QL[i]' 'QA[i]' 'QP[i]' 'QT[i]' 'QTC[i]'; qnext=$((i + 1))
   done
 }
 running() { # sets nrun (started, not ended), nlive (of them in the live lane), nord (started as the in-order one)
@@ -224,9 +252,11 @@ _run() {
   suite_of "$@"
   if [ -n "$s" ] && ! suite_selected "$s"; then not_affected; return; fi
   # Postprocessors can turn rc=0 into SKIP/FAIL, so they always grade fresh output.
-  local cache_suite="$s"
+  local cache_suite="$s" timed="$s"
   suite_cases_for "$s"; case_list=$suite_cases
-  case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite=""; case_list="" ;; esac
+  case "$name" in 'bash -n:'*|'py_compile:'*|'json:'*|'jq compile:'*) cache_suite=""; case_list=""; timed="" ;; esac
+  # timings: a block (replay) and the run lines inside one are not timed suites (in a -j N block job they could not be)
+  [ "$post" != replay ] && [ -z "$LIVE_BLOCK" ] || timed=""
   # never reused: graded by a handler, live lane (runl, block), inside a block, or reading a workspace
   [ -z "$post$lane$LIVE_BLOCK" ] || cache_suite=""
   case " $* " in *" --no-history "*|*" RPG_FACTORY_WORKSPACE="*) cache_suite="" ;; esac
@@ -236,12 +266,18 @@ _run() {
   local publish=$cache_suite
   if [ -n "$case_list" ]; then set -- "$@" --case "$case_list"; publish=""; fi
   if [ -z "$QD" ] || [ "$mode" = fg ]; then
-    if [ -n "$post" ]; then out=$("$@" 2>&1 < /dev/null); rc=$?; "$post" "$rc" "$out"; return; fi
+    if [ -n "$post" ]; then
+      t0=$(date +%s); out=$("$@" 2>&1 < /dev/null); rc=$?; t1=$(date +%s)
+      [ -z "$timed" ] || timing_add "$timed" "$((t1 - t0))" "$rc" "$case_list"
+      "$post" "$rc" "$out"; return
+    fi
     t0=$(date +%s)
-    if out=$("$@" 2>&1 < /dev/null); then t1=$(date +%s); suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; retry_lines note "$out"; else t1=$(date +%s); bad "$name [$((t1 - t0))s]" "$out"; fi
+    if out=$("$@" 2>&1 < /dev/null); then rc=0; else rc=$?; fi; t1=$(date +%s)
+    [ -z "$timed" ] || timing_add "$timed" "$((t1 - t0))" "$rc" "$case_list"
+    if [ "$rc" -eq 0 ]; then suite_cache_pass "$publish" "$out"; ok "$name [$((t1 - t0))s]"; retry_lines note "$out"; else bad "$name [$((t1 - t0))s]" "$out"; fi
     return
   fi
-  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QN[n]=$publish; QA[n]=$lane; PEND+=("$n"); qn=$((qn + 1))
+  n=$qn; printf -v "QC[$n]" '%q ' "$@"; QK[n]=job; QM[n]=$name; QX[n]=$post; QS[n]=$cache_suite; QN[n]=$publish; QA[n]=$lane; QT[n]=$timed; QTC[n]=$case_list; PEND+=("$n"); qn=$((qn + 1))
   pump; flush
 }
 # Classify conservatively: existing bytes must stay intact, and insertions must be whole new sections.
@@ -629,8 +665,163 @@ runall_prepare() {
   # early exit and once the full-run lock is held: what other sessions change while this run waits is not this run's.
   gitcfg_snapshot "$ROOT"
 }
+# timings_write: merge this run's suite timings into $STATE/run-all/timings.json (JSON Lines, one object per suite,
+# sorted by suite; a suite run again replaces its line, an unreadable or malformed line is dropped). Estimates only:
+# every error is swallowed and nothing is printed, so counts, lines, the exit code and reuse never depend on it.
+# Two targeted runs (the two test slots) may finish together: the read, merge and replace hold the lock directory
+# $STATE/locks/run-all-timings (os.mkdir, the holder's pid in its pid file), or the last writer would drop the other
+# run's rows. A busy lock is retried every 0.1 s for at most 10 s, then the write is given up silently; a lock dir older
+# than 60 s, or whose pid names a dead process, is stale and removed once before retrying; the holder always releases.
+# Test hook RUNALL_TIMINGS_BARRIER=<dir>: the holder touches <dir>/read.<pid> after its read and waits (at most 60 s)
+# for <dir>/go; a writer that finds the lock held touches <dir>/waiting.<pid> once (its lock wait is then 60 s).
+timings_write() {
+  [ -n "$STATE" ] && [ "${#TIMINGS[@]}" -gt 0 ] || return 0
+  python3 -B - "$STATE" "$HEAD_SHA" "${TIMINGS[@]}" > /dev/null 2>&1 <<'PY' || :
+import datetime, json, os, sys, time
+state, head, *flat = sys.argv[1:]
+p = os.path.join(state, 'run-all', 'timings.json')
+lock = os.path.join(state, 'locks', 'run-all-timings')
+lock_pid = os.path.join(lock, 'pid')
+barrier = os.environ.get('RUNALL_TIMINGS_BARRIER', '')
+me = str(os.getpid())
+
+def touch(name):
+    if barrier:
+        try:
+            open(os.path.join(barrier, f'{name}.{me}'), 'a').close()
+        except OSError:
+            pass
+
+def holder():
+    try:
+        with open(lock_pid, encoding='utf-8') as f:
+            return f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return ''
+
+def alive(pid):
+    if os.name == 'nt':   # never os.kill here: on Windows it terminates the process
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL('kernel32', use_last_error=True)
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = k.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() != 87   # 87: no such process; any other error counts as alive
+        try:
+            code = wintypes.DWORD()
+            return not k.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+def stale(pid):
+    try:
+        if time.time() - os.stat(lock).st_mtime > 60:
+            return True
+    except OSError:
+        return False   # gone: the next mkdir takes it
+    # no pid yet: the holder writes it right after its mkdir, so only the age can make it stale
+    return pid.isdigit() and not alive(int(pid))
+
+def acquire():
+    deadline = time.monotonic() + (60 if barrier else 10)
+    waiting = reclaimed = False
+    while True:
+        try:
+            os.mkdir(lock)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                with open(lock_pid, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(me + '\n')
+            except OSError:
+                release()
+                raise
+            return True
+        if not waiting:
+            touch('waiting')
+            waiting = True
+        if not reclaimed:
+            pid = holder()
+            if stale(pid):
+                reclaimed = True
+                if holder() == pid:   # still the holder judged stale, not a new one
+                    try:
+                        if pid:
+                            os.remove(lock_pid)
+                        os.rmdir(lock)
+                    except OSError:
+                        pass
+                continue
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+def release():
+    try:
+        if holder() in (me, ''):   # never remove a lock another writer took over
+            if os.path.exists(lock_pid):
+                os.remove(lock_pid)
+            os.rmdir(lock)
+    except OSError:
+        pass
+
+os.makedirs(os.path.dirname(lock), exist_ok=True)
+if not acquire():
+    sys.exit(0)   # an estimate is not worth blocking a run: give up silently
+try:
+    rows = {}
+    try:
+        with open(p, encoding='utf-8') as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and isinstance(r.get('suite'), str) and r['suite']:
+                    rows[r['suite']] = r
+    except (OSError, UnicodeDecodeError):
+        pass
+    touch('read')
+    if barrier:
+        until = time.monotonic() + 60
+        while not os.path.exists(os.path.join(barrier, 'go')) and time.monotonic() < until:
+            time.sleep(0.05)
+    date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for i in range(0, len(flat) - 3, 4):
+        suite, secs, rc, cases = flat[i:i + 4]
+        try:
+            rows[suite] = dict(suite=suite, seconds=int(secs), rc=int(rc), cases=cases or None, head=head or None, date=date)
+        except ValueError:
+            continue
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + f'.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            for suite in sorted(rows):
+                f.write(json.dumps(rows[suite], sort_keys=False) + '\n')
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+finally:
+    release()
+PY
+}
 runall_finish() {
   local path after
+  timings_write
   if [ -n "$CACHE_BEFORE" ]; then
     after=$(input_snapshot) || after=""
     if [ "$after" = "$CACHE_BEFORE" ]; then
