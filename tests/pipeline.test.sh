@@ -207,6 +207,8 @@ fi
 TMP="$(mktemp_win)" || exit 1; [ -d "$TMP" ] || exit 1; trap 'wait; rm -rf "$TMP"' EXIT
 export RPG_FACTORY_AGENTS=claude,codex
 export RPG_FACTORY_STATE_DIR="$TMP/state" TMPDIR="$TMP" RPG_FACTORY_WORKSPACE="$TMP/ws"
+# a caller's session note must not leak into any dispatch (the session-note cases set it on purpose)
+unset RPG_FACTORY_SESSION_NOTE
 # hermetic inside an Orca terminal: no ORCA_* variable, so the default runner is print and --runner agent is allowed
 # (the Orca-first cases below set them on purpose)
 for v in $(compgen -e | grep '^ORCA_'); do unset "$v"; done
@@ -251,14 +253,18 @@ pp() {
 pp_spec() {
   pp "$@"
   if [ -z "$MEMO_SRC" ] || [ "$REUSE" = check ]; then
-    MEMO_SPEC=$(python3 -c 'import pathlib,shlex,sys
+    MEMO_SPEC=$(read_spec "$OUT"); MEMO_SRC=$?
+  fi
+  SPEC="$MEMO_SPEC"; SRC="$MEMO_SRC"
+}
+# read_spec <output>: the persisted spec named by the output's last one-line prompt (stdout and stderr, exit code)
+read_spec() {
+  python3 -c 'import pathlib,shlex,sys
 lines=[l for l in sys.argv[1].splitlines() if ("--prompt " in l or "--spec " in l) and "Read your task spec at " in l]
 args=shlex.split(lines[-1]); flag="--prompt" if "--prompt" in args else "--spec"
 prompt=args[args.index(flag)+1]
 assert prompt.startswith("Read your task spec at ") and prompt.endswith(" and follow it.")
-print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$OUT" 2>&1); MEMO_SRC=$?
-  fi
-  SPEC="$MEMO_SPEC"; SRC="$MEMO_SRC"
+print(pathlib.Path(prompt[len("Read your task spec at "):-len(" and follow it.")]).read_text(encoding="utf-8"))' "$1" 2>&1
 }
 # has_ere <text> <ere>: grep -qE on the text without a process (bash regex per line; a fork costs most on Windows).
 # PIPELINE_TEST_MATCH=check also runs grep and fails on any difference between the two.
@@ -1975,7 +1981,6 @@ for phase in 'implement' 'verify --sha abc1234' 'qa --sha abc1234'; do
 done
 expect_spec "worktree repo implement spec: the test environment line" "$TEST_ENV" dispatch "$OK" --task gw --phase implement --runner orca
 # Session notes reach each kind of session; the lead also forwards them in its dispatch definition.
-unset RPG_FACTORY_SESSION_NOTE
 for phase in 'implement' 'verify --sha abc1234' 'lead --report-to run:x'; do
   RPG_FACTORY_SESSION_NOTE= expect_spec "$phase spec: first session note" '^Session note: one$' dispatch "$TOOL" --task t --phase $phase --runner orca --note one --note 'two  words'
   RPG_FACTORY_SESSION_NOTE= expect_spec "$phase spec: normalized second session note" '^Session note: two words$' dispatch "$TOOL" --task t --phase $phase --runner orca --note one --note 'two  words'
@@ -1986,10 +1991,41 @@ refute_spec "implement spec: an unset session note adds no note" 'Session note:'
 for phase in 'review --sha abc1234' 'qa --sha abc1234'; do
   RPG_FACTORY_SESSION_NOTE='env note' expect_spec "$phase spec: environment session note" '^Session note: env note$' dispatch "$TOOL" --task t --phase $phase --runner orca
 done
-RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note one --note 'two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
-RPG_FACTORY_SESSION_NOTE='env note' expect_spec "lead spec: dispatch forwards environment note" "<dispatch>.* --note one --note 'env note'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one
+RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: dispatch forwards quoted notes" "<dispatch>.* --note=one '--note=two words'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
+RPG_FACTORY_SESSION_NOTE='env note' expect_spec "lead spec: dispatch forwards environment note" "<dispatch>.* --note=one '--note=env note'" dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one
 RPG_FACTORY_SESSION_NOTE= expect_spec "lead spec: session note forwarding rule" '^9\. Session notes: <dispatch> carries the session notes below as --note; keep them on every session you dispatch\.$' dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note one --note 'two  words'
 RPG_FACTORY_SESSION_NOTE= expect "dispatch: empty session note is rejected" 2 - dispatch "$TOOL" --task t --phase implement --runner orca --note ''
+# note_forward <name> <lead's RPG_FACTORY_SESSION_NOTE> <note>... -- <lead dispatch args...>: the lead spec's <dispatch>
+# definition, its <pipeline> and <plan> placeholders replaced from the same line, runs as an implement dispatch with an
+# empty caller note; it must exit 0 and the implement spec must carry each note unchanged (a note may start with - or --)
+note_forward() {
+  local name="$1" envnote="$2" notes=() n line cmd= out rc spec src found
+  local re='<pipeline> = `([^`]*)`; <plan> = `([^`]*)`; <dispatch> = `([^`]*)`\.'
+  shift 2
+  while [ "$1" != -- ]; do notes+=("$1"); shift; done; shift
+  RPG_FACTORY_SESSION_NOTE="$envnote" pp_spec "$@"
+  while IFS= read -r line; do
+    line=${line%"$CR"}
+    if [[ $line =~ $re ]]; then
+      cmd=${BASH_REMATCH[3]}; cmd=${cmd//<pipeline>/"${BASH_REMATCH[1]}"}; cmd=${cmd//<plan>/"${BASH_REMATCH[2]}"}; break
+    fi
+  done <<<"$SPEC"
+  if [ "$RC" != 0 ] || [ -z "$cmd" ]; then
+    fail=$((fail + 1)); echo "FAIL  $name: no <dispatch> definition in the lead spec (rc=$RC)"; head -20 <<<"$SPEC"; return
+  fi
+  out=$(RPG_FACTORY_SESSION_NOTE= bash -c "$cmd --phase implement --runner orca" 2>&1); rc=$?
+  if [ "$rc" = 0 ]; then pass=$((pass + 1)); echo "PASS  $name: the forwarded <dispatch> runs"
+  else fail=$((fail + 1)); echo "FAIL  $name: the forwarded <dispatch> exits $rc: $cmd"; sed 's/^/      /' <<<"$out" | head -20; return; fi
+  spec=$(read_spec "$out"); src=$?
+  for n in "${notes[@]}"; do
+    found=1
+    while IFS= read -r line; do [ "${line%"$CR"}" = "Session note: $n" ] && { found=0; break; }; done <<<"$spec"
+    if [ "$src" = 0 ] && [ "$found" = 0 ]; then pass=$((pass + 1)); echo "PASS  $name: the implement spec has 'Session note: $n'"
+    else fail=$((fail + 1)); echo "FAIL  $name: no 'Session note: $n' in the implement spec (spec rc=$src)"; head -20 <<<"$spec"; fi
+  done
+}
+note_forward "lead -> implement: notes starting with - and --" '' -x --foo -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca --note=-x --note=--foo
+note_forward "lead -> implement: an environment note starting with -" -e -e -- dispatch "$TOOL" --task t --phase lead --report-to run:x --runner orca
 if python3 -B - "$ROOT" <<'PY'
 import importlib.util, shlex, sys
 spec = importlib.util.spec_from_file_location("fp", sys.argv[1] + "/scripts/factory-pipeline.py")
