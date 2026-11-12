@@ -7,7 +7,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/factory-context.sh:*), Ba
 
 # Asset generation (ComfyUI through comfy-mcp)
 
-> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks.
+> **Prerequisite:** follow `rpg-factory:factory-core` for this task. If it has not run in this task yet, invoke it first. Honour the declared Factory mode: in `analyze`, `plan` and `review` apply this skill's workflow, rules and checklist to produce the analysis, plan or findings - change nothing; in `validate` only run and grade checks. Also invoke `rpg-factory:comfyui` first, in every mode (a `plan` or `analyze` task too, even when nothing will run): the template format, the comfy-mcp sequence and the image node's pitfalls are there, and a plan that skips them is wrong.
 
 Task: $ARGUMENTS
 
