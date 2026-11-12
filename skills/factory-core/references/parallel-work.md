@@ -57,8 +57,9 @@ The stacked-dependent rule is delivery.md section 4, "Stacked dependents" (`poli
 lessons of this repo behind it, each with its reason.
 
 - **Any edit under `scripts/assetgen/*.py` selected every suite:** a leaf file that only an EXTRA pattern of
-  `tests/assetgen.test.sh` covered was unsure, and unsure runs all. Fixed by affected-leaf-fix: `tests/affected.py`
-  counts a leaf an EXTRA pattern covers as named. A verify that selects most suites costs about an hour.
+  `tests/assetgen.test.sh` covered was unsure, and unsure runs all. The fix is plan assetgen-v2-core task
+  affected-leaf-fix (`tests/affected.py` counts a leaf an EXTRA pattern covers as named). A verify that selects most
+  suites costs about an hour.
 - **`scripts/factory-cmd.py` widens the selection:** it reaches a wide import closure and selects many suites, while
   `scripts/factory-pipeline.py` is narrowed by `tests/affected.py` `PIPELINE_SUITES`. Keep a task that touches it
   small; the live number is the pre-flight `selected N of M suites` that `dispatch --phase verify` prints (a warning

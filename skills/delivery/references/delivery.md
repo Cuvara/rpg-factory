@@ -343,11 +343,12 @@ One verify session reviews the whole task diff: a prose subtask written by the v
 4. **Verify (cross-model review, then QA, one session).** Each model's code is reviewed by the other
    (`review_pairing`): on the stable candidate the task lead runs `dispatch ... --phase verify --sha <sha>` once
    (section 6) and records `verdict --phase verify`; a FAIL gets a scoped fix in a fresh session and one fresh
-   `--phase verify` on the new candidate. `--phase implement` in the shared placement starts a sub-session that does
-   not commit, in every repo; with `--placement child` (or a `child` subtask) the session commits on its own child
-   branch only, and the task lead merges and removes the child. Without the paired model a fresh same-model session
-   verifies, carrying `SAME_MODEL (fallback: <model> unavailable)`, which the dispatch records for the SHA and the gate
-   accepts (other forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then the report (section 3).
+   `--phase verify` on the new candidate.
+   `--phase implement` in the shared placement starts a sub-session that does not commit, in every repo; with
+   `--placement child` (or a `child` subtask) the session commits on its own child branch only, and the task lead
+   merges and removes the child. Without the paired model a fresh same-model session verifies, carrying
+   `SAME_MODEL (fallback: <model> unavailable)`, which the dispatch records for the SHA and the gate accepts (other
+   forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then the report (section 3).
 5. **Integrate** (section 7) in wave order into the `topic` branch with `git merge --no-ff <task branch>`; a
    fast-forward or squash leaves earlier reviews STALE (`docs/pipeline-cli.md`, "gate").
 6. **QA.** Once per repo on the integration HEAD, in its checkout
