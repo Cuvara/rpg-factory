@@ -189,7 +189,7 @@ Game Design may draft and propose gameplay values; binding them requires verifie
                                                   UI (paths-scoped, entry ui-orchestrator): ui-orchestrator
                                                   ui-component-selection · ui-figma-import
                                                   ui-toolkit-screen · ui-validation
-                                                  asset generation (paths assetgen/): comfyui
+                                                  asset generation (paths assetgen/): comfyui · comfy-desktop-setup
               └────────────────┬─────────────────┘
                                ▼
          run-checks.py (fast / extended / external, graded states + evidence JSON)
@@ -240,6 +240,7 @@ as `tech` in the routing line when a skill in their `used_by` works on the chang
 | `ui-figma-import` | client-integration | Figma frame to UI Toolkit through the official connector and com.cuvara.uitoolkit 0.8: preflight, env check, headless import, validator, diagnostics, profile, bridge, preset |
 | `ui-toolkit-screen` | client-integration | screens and popups on com.cuvara.uitoolkit 0.8: ScreenCreator, presenters, registration, navigator, codegen, settings, dialogs, theme service |
 | `ui-validation` | client-integration | UI review and evidence: references, bindings, lifecycle, theme, responsive, runtime, tests; the ui-review checklist |
+| `comfy-desktop-setup` | asset-gen | setting up Comfy Desktop, the vendored 9router image node and comfy-mcp for Claude and Codex through `scripts/comfy-desktop-setup.py` (read-only `--check`, `--apply`), the human steps and the traps |
 | `comfyui` | asset-gen, art-2d, art-3d, ui-ux, vfx | comfy-template format and game-layer precedence, comfy-mcp setup and tool sequence, the 9router image node's pitfalls, ComfyUI ports, adding a purpose, style or template |
 
 **Dev tools.** Every repo, cross-repo and tech skill has a `## Tools` section naming the registry

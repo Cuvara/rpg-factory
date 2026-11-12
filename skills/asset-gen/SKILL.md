@@ -61,7 +61,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    it returned>`. `render --run` copies each selected anchor to `<run>/references/anchor-<id>.png` and wires it.
 6. **Generate** (spends image credits: only when the task asks for generation). comfy-mcp: `server_info` (ComfyUI
    up, the image node present; when it shows the `comfyui_9router` node pack outdated, name its version in the
-   report and tell the user - never update or reinstall it) -> `validate_workflow` on `<run>/workflow.json` ->
+   report and tell the user - never update or reinstall it; comfy-mcp or the node missing: `rpg-factory:comfy-desktop-setup`) -> `validate_workflow` on `<run>/workflow.json` ->
    `upload_file` of every `<run>/references/*` file under its name -> `run_workflow` (wait) -> `job` until done ->
    `fetch_outputs` with `out_dir` `<run>/outputs` -> for a purpose with alpha `assetgen.py defringe --run <run>
    [--alpha-floor N]` (bleeds opaque neighbour colour into low-alpha edge pixels, originals in `outputs-raw/`,

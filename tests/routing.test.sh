@@ -281,6 +281,7 @@ done
 assetgen_route="$(lead asset-gen) and $(tech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths assetgen/runs/iron-sword-icon-001/run.md assetgen/templates/image-generate.json 2>&1)
 fexpect 'authoring assetgen path -> asset-gen leads, tech comfyui' "jq -e '.repos[0] | $assetgen_route' <<<\"\$out\" >/dev/null"
+fexpect 'authoring assetgen path -> tech comfy-desktop-setup too (used_by asset-gen)' "jq -e '.repos[0] | $(tech comfy-desktop-setup)' <<<\"\$out\" >/dev/null"
 art2d_nocomfy="$(lead art-2d) and $(notech comfyui)"
 out=$(RPG_FACTORY_WORKSPACE="$FW" bash "$CTX" --repo authoring --json --paths art2d/specs/iron-sword.md 2>&1)
 fexpect 'authoring art2d path -> art-2d leads, no tech comfyui (scoped to assetgen/)' "jq -e '.repos[0] | $art2d_nocomfy' <<<\"\$out\" >/dev/null"
