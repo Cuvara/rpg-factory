@@ -1932,9 +1932,10 @@ check(tier(run("sprite-2d"), {"purposes": {"sprite-2d": "light"}}) == "light", "
 print("end")
 EOF
 while IFS= read -r line; do
+  line=${line%$'\r'}
   case "$line" in "ok "*) ok "${line#ok }" ;; "no "*) no "${line#no }" ;; end) ;; *) no "review_tier: unexpected output" "$line" ;; esac
 done < "$TMP/rt"
-grep -qx end "$TMP/rt" && ok "review_tier cases ran to the end" || no "review_tier cases stopped early" "$(tail -5 "$TMP/rt")"
+tr -d '\r' < "$TMP/rt" | grep -qx end && ok "review_tier cases ran to the end" || no "review_tier cases stopped early" "$(tail -5 "$TMP/rt")"
 RTD="$ROOT/scripts/assetgen/data/review-tiers.json"
 rt_bad=$(jq -r '.purposes | to_entries[] | select(.value != "light" and .value != "full") | .key' "$RTD" 2>&1)
 rt_missing=$(for p in $(jq -r '.purposes | keys[]' "$RTD" 2>/dev/null); do [ -f "$ROOT/templates/assetgen/purposes/$p.json" ] || printf '%s ' "$p"; done)
