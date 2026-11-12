@@ -61,8 +61,8 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    the image node present; an outdated `comfyui_9router` pack: name its version in the report and tell the user, never
    update or reinstall it; comfy-mcp or the node missing: `rpg-factory:comfy-desktop-setup`) -> `validate_workflow` on
    `<run>/workflow.json` -> `upload_file` of every `<run>/references/*` file under its name -> `assetgen.py budget
-   --run <run>` before each `run_workflow` (used: outputs plus the series' failed attempts; exit 1, over the advisory
-   limit of `resolve --max-outputs N`, default 4: stop and ask the user) -> `run_workflow` (wait) -> `job` until done
+   --run <run>` before each `run_workflow` (used: outputs plus the series' failed attempts against `resolve
+   --max-outputs N`, default 4; exit 1 or `remaining 0` (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (wait) -> `job` until done
    -> `fetch_outputs` with `out_dir` `<run>/outputs` -> `assetgen.py finalize --run <run>`: defringe (alpha purposes;
    originals in `outputs-raw/`, `defringe.json`), embed (the UI workflow into each PNG: QA and the reviews hash the
    final file, the PNG restores the graph) and qa, in that fixed order (never `qa` without `embed` first); it stops
@@ -72,9 +72,9 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
    `workflow.ui.json` in ComfyUI and drop the PNGs into `outputs/`, then `finalize`. Never claim an unrun generation.
 7. **Check the images.** `finalize` wrote `qa.json` (exit 0 PASS, 1 FAIL, 3 NOT_AVAILABLE); `style-*` rows are soft
    (`WARN`: report it; a style `FAIL` fails QA). `png-edge-fringe` FAIL (coloured low-alpha edge pixels): `qa.json`
-   binds the outputs, so `assetgen.py finalize --run <run> --force` (lists the reviews it made stale; for an alpha
-   floor `assetgen.py defringe --run <run> --force [--alpha-floor N]`, then `finalize`: `embed`, `qa`), then both image
-   reviews again (`review-cmd --phase image`, `review-image-claude.json`). `review-cmd --phase image --run <run>`, run
+   binds the outputs, so `assetgen.py defringe --run <run> --force [--alpha-floor N]` (lists the records it made
+   stale), then `finalize` (`embed`, `qa`), then both image reviews again (`review-cmd --phase image`,
+   `review-image-claude.json`); `finalize --force` only for bound outputs that were never defringed. `review-cmd --phase image --run <run>`, run
    as printed -> `review-image.json` (SAME_MODEL fallback as step 4): its prompt states each output's true pixel size
    and attaches the anchors, the alpha composites `<run>/review/composite-dark.png` and `-light.png` (edges judged on
    both), a tileable purpose's `tile-2x2.png` (`/rpg-factory:assetgen review-cmd` adds `--no-write`: exit 2 on a
@@ -139,7 +139,7 @@ changes only through a plugin task. Drives the handoffs `assetgen-to-art2d`, `-a
 
 - [ ] Purpose, style and template fit the asset; the game layer was used when it has the id.
 - [ ] `prompt.md` follows purpose and style, no overridden style hint; Codex-reviewed (or a marked SAME_MODEL fallback).
-- [ ] `workflow.json` validated live; `budget` OK before each run; outputs passed through `finalize` (never a skipped embed).
+- [ ] `workflow.json` validated live; `budget` OK (remaining > 0) before each run; outputs passed through `finalize` (never a skipped embed).
 - [ ] QA PASS for every output (alpha: `png-edge-fringe`, edges judged on both composites by both reviews).
 - [ ] Codex image review present; `review-image-claude.json` per the tier; their findings agree or are listed.
 - [ ] Style lock: the project's style (override only on request), anchors uploaded and judged, no anchor activated by an agent.

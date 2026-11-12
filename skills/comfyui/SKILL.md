@@ -70,8 +70,8 @@ lead's workflow asks for in a run directory or the game layer.
 
 - **Run sequence:** `server_info` (version, nodes present) -> `validate_workflow` (`<run>/workflow.json` against the
   live node list) -> `upload_file` (every `<run>/references/*` file under its own name: the image-edit reference and
-  each `anchor-<id>.png`; returns the input-folder name) -> `assetgen.py budget --run <run>` (exit 1: over the limit,
-  no `run_workflow`) -> `run_workflow` (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs`
+  each `anchor-<id>.png`; returns the input-folder name) -> `assetgen.py budget --run <run>` (exit 1 or `remaining 0`
+  (at-limit): no `run_workflow`, stop and ask the user) -> `run_workflow` (`workflow_path`, `wait`) -> `job` (status by prompt id) -> `fetch_outputs`
   (`prompt_id`, `out_dir` `<run>/outputs`) -> `assetgen.py finalize --run <run>` (defringe for a purpose with
   `qa.alpha` required, then embed, then qa, in that fixed order; never `qa` alone). `nodes`, `list_workflow_slots` and
   `set_workflow_slot` inspect or patch; asset-gen renders instead of patching.
@@ -106,7 +106,7 @@ lead's workflow asks for in a run directory or the game layer.
   a 1536x1024 turnaround request with a 2172x724 strip (same pixel count); in the live style-lock e2e of 2026-11-08 it
   returned 1672x941 for both a 1536x1024 and a 1024x1024 request, 1322x1190 for a square sprite and 1024x1536 for a
   1536x1024 request; the batch probe of 2026-11-12 (`docs/plans/assetgen-batch/probe.md`) got 1254x1254 for 1024x1024
-  and one image for `n=2`: the gateway ignores `n` greater than 1, so batch variants are separate calls. Image QA reads
+  and, in its one call (model `cx/gpt-5.6-sol-image`), one image for `n=2`, so batch variants are separate calls. Image QA reads
   the real size from the file, and no core purpose's size QA grades the exact size: it grades orientation, aspect or
   area, a minimum area and short side that real outputs meet (square purposes `icon`, `sprite-2d`, `texture-tileable`:
   `square_tolerance` 0.15, so 1322x1190 is square; `qa.size.allow_swap`, default false, accepts the swapped
@@ -130,10 +130,10 @@ lead's workflow asks for in a run directory or the game layer.
   reviews bind the hash of the embedded file, so `finalize` always embeds before `qa` (`scripts/assetgen/assetgen.py` `embed`).
 - **Transparent outputs carry an edge fringe:** the service leaves orange or red speckled colour in the RGB of pixels
   with alpha 1-31 (and body alpha 251-254), invisible on a checkerboard and visible on a dark background. `finalize`
-  runs `defringe` first (originals in `outputs-raw/`, the step in `defringe.json`; skipped while it still matches; once
-  `qa.json` or an image review binds the outputs, the repair is `finalize --run <run> --force`, then both image reviews
-  again), which bleeds opaque neighbour colour into those pixels, QA's `png-edge-fringe` row (`qa.alpha` required) grades it
+  runs `defringe` first (originals in `outputs-raw/`, the step in `defringe.json`; skipped while it still matches),
+  which bleeds opaque neighbour colour into those pixels, QA's `png-edge-fringe` row (`qa.alpha` required) grades it
   (`scripts/assetgen/qa.py`), and the image reviews see `review/composite-dark.png` and `-light.png`. Both take 8-bit PNGs only (IHDR bit depth): another depth is `skipped` untouched, no preview (`depth_refusal`).
+  A `png-edge-fringe` FAIL once `qa.json` or a review binds the outputs: `assetgen.py defringe --run <run> --force [--alpha-floor N]`, then `finalize` (`embed`, `qa`), then both image reviews again (`review-cmd --phase image`, `review-image-claude.json`); `finalize --force` only for bound outputs never defringed.
 - **SaveImage writes into ComfyUI's output folder** under `filename_prefix`: `resolve --out <run>/spec.json` records
   `assetgen/<run-id>` and `render --run` requires that value and refuses `--param filename_prefix`
   (`scripts/assetgen/assetgen.py` `bind_run`, `render`), so a run directory copied under a new id needs `resolve`
