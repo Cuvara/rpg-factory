@@ -51,6 +51,29 @@ The QA tiers table of delivery.md carries this repo's commands (registry `pipeli
 `tests/run-all.sh --workspace-only` covers what CI cannot, before the PR), suite reuse, `--affected` selection, test-run
 slots and case selection. `tests/run-all.sh --release` and `tests/dogfood.sh --installed` run only for a release.
 
+## Stacked dispatch and test selection in this repo (delivery.md sections 4 and 10)
+
+The stacked-dependent rule is delivery.md section 4, "Stacked dependents" (`policy:stacked-dispatch`); these are the
+lessons of this repo behind it, each with its reason.
+
+- **Any edit under `scripts/assetgen/*.py` selected every suite:** a leaf file that only an EXTRA pattern of
+  `tests/assetgen.test.sh` covered was unsure, and unsure runs all (fixed in affected-leaf-fix: now 26 of 72 suites).
+  A verify that selects most suites costs about an hour.
+- **`scripts/factory-cmd.py` widens the selection:** 19 of 72 suites today, against 6 for
+  `scripts/factory-pipeline.py`, which `tests/affected.py` `PIPELINE_SUITES` narrows. Keep a task that touches it
+  small, and read the pre-flight `selected N of M suites` that `dispatch --phase verify` prints (a warning above
+  `--suite-warn`, default 40) before starting the session.
+- **On Windows Git Bash `python3` can be the Microsoft Store stub:** `tests/run-all.sh --affected` now exits 2
+  instead of silently running every suite (seen in the finalize-verb verify).
+- **A stacked verify waits for the dependency's review PASS:** verifying earlier tests code that may still change, so
+  dispatch exits 2 until the PASS SHA is in HEAD.
+- **Merge, never rebase, the dependency branch:** a rebase rewrites the dependent's commits and drops the stack
+  record's SHA from its history; a merge keeps both, and the gate credits a clean sync merge.
+- **One in-flight dependency only:** two would need two moving bases and an ambiguous own delta.
+- **A sibling worktree beside the integration checkout, never a child of the dependency's worktree:** removing the
+  dependency's worktree after its integration would take a child with it, and a `<dep branch>--*` name reads as the
+  dependency's child in status and cleanup.
+
 ## RPG Orca notes (delivery.md section 5)
 
 - Codex runs the rpg-factory hooks only after the user has trusted them once in Codex (a one-time step outside the
