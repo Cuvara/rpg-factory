@@ -38,7 +38,7 @@ section 4). It is not an Orca worker of the run lead (section 5): it creates its
    or prose-only: section 10 "QA tiers"); a FAIL goes to a fresh fix session, then one fresh re-verify session;
 5. releases every session as soon as it reports (section 8, "Session lifecycle");
 6. records the verify verdict (`verdict --phase verify`) and its report (`factory-pipeline.py report`), then sends the status message to the run lead (section 3).
-In a worktree repo it runs `sync --send` after each new candidate (section 4).
+In a worktree repo it runs `sync --send` after each new candidate (`docs/pipeline-cli.md`, "sync").
 It never pushes, merges, tags or removes its worktree.
 
 <!-- policy:task-lead-claude -->
@@ -343,9 +343,11 @@ One verify session reviews the whole task diff: a prose subtask written by the v
 4. **Verify (cross-model review, then QA, one session).** Each model's code is reviewed by the other
    (`review_pairing`): on the stable candidate the task lead runs `dispatch ... --phase verify --sha <sha>` once
    (section 6) and records `verdict --phase verify`; a FAIL gets a scoped fix in a fresh session and one fresh
-   `--phase verify` on the new candidate. Without the paired model a fresh same-model session verifies, carrying
-   `SAME_MODEL (fallback: <model> unavailable)`, which the dispatch records for the SHA and the gate accepts (other
-   forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then the report (section 3).
+   `--phase verify` on the new candidate. `--phase implement` in the shared placement starts a sub-session that does
+   not commit, in every repo; with `--placement child` (or a `child` subtask) the session commits on its own child
+   branch only, and the task lead merges and removes the child. Without the paired model a fresh same-model session
+   verifies, carrying `SAME_MODEL (fallback: <model> unavailable)`, which the dispatch records for the SHA and the gate
+   accepts (other forms: `docs/pipeline-cli.md`, "Fallback reviews"). Then the report (section 3).
 5. **Integrate** (section 7) in wave order into the `topic` branch with `git merge --no-ff <task branch>`; a
    fast-forward or squash leaves earlier reviews STALE (`docs/pipeline-cli.md`, "gate").
 6. **QA.** Once per repo on the integration HEAD, in its checkout
@@ -375,11 +377,11 @@ integration `ci+workspace`). A repo with `tests/run-all.sh` gets the table's com
 | Integration QA, once per batch before the PR | `tests/run-all.sh --workspace-only` (only what CI cannot run: the live-workspace suites and checks, with the suite reuse), before the PR; after the PR opens, `gh pr checks <pr> --watch`: CI green is the full gate (pipeline settings `qa_tiers` integration `ci+workspace`) | the run lead's integration QA session | once per batch; CI runs the full suite in the background while the next task starts |
 | Release | `tests/run-all.sh --release` and `tests/dogfood.sh --installed` | the release session | the slowest tier, release only |
 
-- **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes one of a few machine-wide test slots
-  and, when all are busy, waits instead of slowing every suite 2-4x. A full run keeps its own lock (section 4). The
-  slot belongs to the run, not the session: stop a QA worker's test run before abandoning it.
+- **Test-run slots.** A targeted run (`--affected` or `--only-suites`) takes a machine-wide test slot and waits
+  when all are busy; a full run keeps its own lock (section 4). The slot belongs to the run, not the session: stop a
+  QA worker's test run before abandoning it.
 - **Pre-flight.** Read the suite count `dispatch --phase verify|qa` prints (`docs/pipeline-cli.md`, "dispatch").
-- **Cases.** A slow suite with cases runs only the cases the change touches (the case list `dispatch` prints).
+- **Cases.** A slow suite with cases runs only the cases the change touches (`dispatch` lists them).
   Frozen copies of a suite go under a temp dir, never into its folder.
 - **CI is the full gate.** No full local run before a PR; while CI runs, start the next task, then fix a red check
   before merging. Only a release runs the full local suite.
