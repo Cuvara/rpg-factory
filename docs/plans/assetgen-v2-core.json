@@ -1,0 +1,133 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "assetgen-v2-core",
+  "title": "asset-gen v2 core: finalize verb, review tiers, spend guard",
+  "topic": "feat/assetgen/v2-core",
+  "goal": "Cut the manual steps and the review load of one asset-gen run without weakening provenance, QA or the human approval gate.",
+  "tier": "M",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "CuongND-sparkon/feat-comfyui-mcp-9router"
+    }
+  },
+  "tasks": [
+    {
+      "id": "finalize-verb",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add assetgen.py finalize --run <run>: after fetch_outputs it runs defringe (only for alpha purposes), embed and qa in that fixed order, so embed can never be skipped before qa. Put the logic in a new module scripts/assetgen/finalize.py with a thin hookup in assetgen.py; extract the qa logic that is inline in main into a function. defringe refuses when qa.json or an image review already binds the outputs, so finalize skips defringe when defringe.json after_pixels_sha256 still equals the current pixels, and passes --force only when the user gives it. Refuse an approved run (rewriting approved bytes fails gen-run-outputs). fail() exits the process, so pre-check conditions instead of catching SystemExit. Print which reviews became stale. Add the verb to the write-verb list in scripts/factory-cmd.py. Existing verbs keep their contracts.",
+      "paths": [
+        "scripts/assetgen/finalize.py",
+        "scripts/assetgen/assetgen.py",
+        "scripts/factory-cmd.py",
+        "tests/assetgen.test.sh",
+        "tests/commands.test.sh",
+        "tests/fixtures/assetgen/",
+        "changelog.d/assetgen-finalize.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/"
+      ],
+      "deps": [],
+      "checks": [
+        "tests/assetgen.test.sh",
+        "tests/commands.test.sh"
+      ],
+      "acceptance": [
+        "finalize runs defringe (alpha purposes only), embed, qa in that order and stops at the first FAIL, naming the step",
+        "a second finalize on an unchanged run is idempotent and does not hit the defringe refusal",
+        "finalize refuses an approved run and prints the stale reviews it caused",
+        "exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE",
+        "defringe, embed and qa keep their individual contracts (existing tests unchanged and passing)",
+        "factory-cmd lists finalize as a write verb"
+      ]
+    },
+    {
+      "id": "review-tiers",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Add review tiers without touching run.md, purpose files or requirements_sha256. A new data file scripts/assetgen/data/review-tiers.json maps purpose ids to tier light (icon, ui-element, texture-tileable); anything else is full, which equals today's behaviour. The quality plugin computes the tier at check time: for a light run the gen-run-claude-review check gives no WARN when review-image-claude.json is missing, but a present file is still validated. A run with selected style-lock anchors is always full. Codex prompt and image reviews are untouched.",
+      "paths": [
+        "scripts/assetgen/data/review-tiers.json",
+        "scripts/checks/domains/assetgen.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-review-tiers.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/",
+        "docs/schemas/kinds/gen-run.schema.json"
+      ],
+      "deps": [
+        "finalize-verb"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "a light-tier run with no review-image-claude.json produces no gen-run-claude-review WARN",
+        "a present but invalid or stale review-image-claude.json is still reported",
+        "a run with anchors is full: the missing Claude review still WARNs",
+        "an old run.md without any tier information gives the same result as before",
+        "no change to the gen-run schema, purpose files or the requirements hash"
+      ]
+    },
+    {
+      "id": "spend-guard",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "The engine has no spend control (only skill prose). Add resolve --max-outputs N (default 4) that records spec.budget.max_outputs in the run's spec.json, and a read-only-by-default assetgen.py budget --run that prints used versus allowed (outputs plus failed attempts) and exits 1 when exceeded. The logic lives in a new scripts/assetgen/budget.py; finalize reports the budget state. Document the limit as advisory: the engine cannot stop comfy-mcp, so the skill runs budget before each run_workflow.",
+      "paths": [
+        "scripts/assetgen/budget.py",
+        "scripts/assetgen/assetgen.py",
+        "tests/assetgen.test.sh",
+        "changelog.d/assetgen-spend-guard.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "review-tiers"
+      ],
+      "checks": [
+        "tests/assetgen.test.sh"
+      ],
+      "acceptance": [
+        "resolve --max-outputs N records the limit; the default is 4 and an invalid value is a usage error (exit 2)",
+        "budget --run reports used, allowed and exits 1 when used exceeds allowed",
+        "finalize prints the budget state without changing its exit code semantics",
+        "runs resolved before this change (no spec.budget) are treated as unlimited, not as failing"
+      ]
+    },
+    {
+      "id": "v2-core-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Update the skills and docs for finalize, tiers and the spend guard. In skills/asset-gen/SKILL.md steps 6-7 replace the defringe, embed, qa chain by finalize, describe the light tier and run budget before each run_workflow; keep the file at most 160 lines by compressing. Mirror the idioms in skills/comfyui/SKILL.md, the domain doc and scripts/README.md, and update evals/asset-gen-icon/criteria.md if it names the old chain.",
+      "paths": [
+        "skills/asset-gen/SKILL.md",
+        "skills/comfyui/SKILL.md",
+        "docs/architecture/domains/assetgen.md",
+        "scripts/README.md",
+        "evals/asset-gen-icon/criteria.md",
+        "changelog.d/assetgen-v2-core-docs.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "finalize-verb",
+        "review-tiers",
+        "spend-guard"
+      ],
+      "grade": "light",
+      "grade_reason": "prose and skill text only; the verbs are tested in the earlier tasks",
+      "checks": [
+        "tests/skills-lint.sh",
+        "python3 -B scripts/changelog.py check"
+      ],
+      "acceptance": [
+        "asset-gen SKILL.md is at most 160 lines and names finalize, the light tier and the budget check",
+        "skills-lint passes and python3 -B scripts/checks/skill-citations.py reports no MOVED or broken citation",
+        "no instruction lets an agent skip embed before qa or approve a run"
+      ]
+    }
+  ]
+}
