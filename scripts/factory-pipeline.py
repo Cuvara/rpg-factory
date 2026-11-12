@@ -1594,7 +1594,8 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
     me = orca_cmd.quote(pipeline_argv(reg or {}))
     pf = orca_cmd.quote([os.path.abspath(plan["_path"])])
     d = "<dispatch>"  # spelled out once, in the rules' first line
-    note_args = "".join(f" --note {orca_cmd.quote([note])}" for note in (notes or []))
+    # one token --note=<value>: a note starting with "-" would be read as an option after a bare --note
+    note_args = "".join(f" {orca_cmd.quote([f'--note={note}'])}" for note in (notes or []))
     run_id = report_to[len("run:"):] if report_to and report_to.startswith("run:") else report_to  # X or run:X
     child = ("placement child (an Orca child worktree): it commits on its child branch; merge that branch into "
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
