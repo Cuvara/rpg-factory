@@ -318,10 +318,10 @@ A no-worktree repo (registry `worktrees: false` or a configured no-worktree mark
 - **Token rule.** The Claude task lead plans and delegates code to Codex and does not implement; QA runs go
   to Codex when Claude implemented, and on the implementer's model only as the one-model fallback, in a fresh QA
   session. An explicit `implementer` against the table needs a `reason` (`validate` warns).
-- **Availability never stops a task.** Agents are detected on PATH and Orca's account list (`RPG_FACTORY_AGENTS`
-  overrides); a runtime MODEL_UNAVAILABLE holds for the run (`agents --down <agent>`). Every role falls back to the
-  available model, which then implements, reviews, runs QA and, for Codex, leads; no command fails because a model is
-  missing (step 4).
+- **Availability never stops a task.** An agent needs its bin on PATH, Codex also one auth source (pipeline-cli.md
+  "agents"; `RPG_FACTORY_AGENTS` overrides); a runtime MODEL_UNAVAILABLE holds for the run (`agents --down <agent>`).
+  Every role falls back to the available model, which then implements, reviews, runs QA and, for Codex, leads;
+  no command fails because a model is missing (step 4).
 - **Recorded implementer.** Review, QA and the gate pair against the model `dispatch --phase implement` recorded,
   never current availability.
 

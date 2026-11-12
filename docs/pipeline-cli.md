@@ -203,11 +203,22 @@ The Orca commands delivery.md relies on: `orca orchestration run-create`, `orca 
 
 ## agents
 
-Available agents are each `agents.<a>.bin` of the pipeline settings on PATH, refined by the Orca account list when
-Orca runs; `RPG_FACTORY_AGENTS` (comma list) overrides the detection. `agents plan.json --down <agent> --reason
-<text>` records a runtime MODEL_UNAVAILABLE (revoked token, 401) for the run; `--up <agent>` clears it. Mark Codex
-down when its session cannot start or never picks up its prompt (a trust prompt for hooks, CLI error, quota, idle
-terminal, a 401), then dispatch the role again.
+An agent is available when its `agents.<a>.bin` of the pipeline settings is on PATH. Codex additionally needs one
+auth source, checked in this order:
+
+- `orca account`: Orca's account list (when Orca runs) has auth for it;
+- `codex login`: `codex login status` exits 0;
+- `api provider <name>`: the active `model_provider` of the Codex config (`$CODEX_HOME/config.toml`, else
+  `~/.codex/config.toml`; top level or the default profile) carries authentication: an `http_headers` Authorization
+  entry, an `env_key` whose variable is set, or `requires_openai_auth` with a `codex login`.
+
+The `orca` and `codex login status` calls time out after 5 s. `agents` prints the source that made Codex available,
+or every reason it is not (e.g. `no Orca account, codex login missing, no authenticated api provider`); it never
+prints, logs or records a header, key or token value, only the source name. `RPG_FACTORY_AGENTS` (comma list)
+overrides the detection, and a runtime MODEL_UNAVAILABLE still wins over any auth source. `agents plan.json --down
+<agent> --reason <text>` records a runtime MODEL_UNAVAILABLE (revoked token, 401) for the run; `--up <agent>` clears
+it. Mark Codex down when its session cannot start or never picks up its prompt (a trust prompt for hooks, CLI error,
+quota, idle terminal, a 401), then dispatch the role again.
 
 ## status and cleanup
 
