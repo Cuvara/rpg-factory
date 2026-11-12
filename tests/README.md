@@ -22,13 +22,14 @@ run only for a release. The rules behind those commands follow.
   `{suite, os}`.
 - Anything unsure plans every suite: a CI plumbing change (`.github/workflows/**`, `.github/actions/**`,
   `tests/run-all.sh`, `tests/affected.py`, `scripts/ci-plan.py`, `tests/ci-windows-suites.txt`), no or an unusable
-  base, or a `schedule` event. `workflow_dispatch` with `full=false` has no base, so it also plans every suite;
-  `full=true` (the default) plans every suite on purpose.
+  base, or a `schedule` event. `workflow_dispatch` with `full=true` (the default) plans every suite on purpose; with
+  `full=false` it plans from its `base` input (a sha or a ref the checkout has, e.g. `origin/main`), and an empty or
+  unusable base plans every suite.
 - Every suite runs on ubuntu-24.04, and also on windows-2025 when `tests/ci-windows-suites.txt` lists it (one suite
   path per line, `#` comments). A line that is not a runnable suite makes `ci-plan.py` exit 2.
 - The inline checks run on both OSes through `tests/run-all.sh --inline-only`, even when no suite is selected.
-- A suite job runs every case of its suite: run-all has no case subset for `--only-suites` (a follow-up), so the
-  planned cases only show in the job summary.
+- A suite job runs only its planned cases: it passes them to run-all with `--only-cases`, and a plan row with `ALL`
+  runs every case. A case subset publishes no suite PASS record.
 - `ci-ok` is the single required check, and branch protection must require only it. It fails on any failed or
   cancelled job and passes when no suite is affected. The old `run-all (no workspace, <os>)` checks no longer exist.
 - `tests/ci-plan.test.sh` tests the plan.
@@ -88,4 +89,5 @@ taken over (`run-all: taking over stale test slot <n> (<pid>)`).
 
 `pipeline.test.sh`, `parallel-policy.test.sh`, `routing.test.sh` and `git-guard.test.sh` take `--case NAMES` and
 `--list-cases`; `--affected` passes the cases `tests/affected.py cases` selects (case maps are `# case-map:` header
-lines of each suite), and an explicit `--only-suites` name runs all its cases.
+lines of each suite), and an explicit `--only-suites` name runs all its cases unless `--only-cases L` names a subset
+(exactly one `--only-suites` suite that has a case map; misuse exits 2; `ALL` or an empty list runs every case).

@@ -6,8 +6,10 @@
 #
 # On pull_request and push the plan job (scripts/ci-plan.py, which calls tests/affected.py) selects only the suites a
 # change affects, one matrix job per {suite, os}. A change to CI plumbing (workflows, actions, run-all, affected.py,
-# the plan itself) or a base that cannot be used plans every suite. workflow_dispatch with `full` (default true)
-# runs every suite. A suite runs on ubuntu-24.04, and also on windows-2025 when tests/ci-windows-suites.txt names
+# the plan itself) or a base that cannot be used plans every suite. workflow_dispatch with `full=true` (the default)
+# runs every suite; `full=false` plans from the `base` input, and no or an unusable base plans every suite. A suite job
+# runs only its planned cases (`tests/run-all.sh --only-cases`; `ALL` runs every case, and a case subset publishes no
+# suite PASS record). A suite runs on ubuntu-24.04, and also on windows-2025 when tests/ci-windows-suites.txt names
 # it. The inline checks (JSON parse, bash -n, py_compile, ...) always run on both OSes, also when no suite is
 # selected. `ci-ok` is the single required check: it fails when any needed job failed or was cancelled and passes
 # when the suite matrix is skipped because nothing is affected.
@@ -20,9 +22,13 @@ on:
   workflow_dispatch:
     inputs:
       full:
-        description: Run every suite (otherwise only the suites affected since the base)
+        description: Run every suite (otherwise only the suites affected since the base input)
         type: boolean
         default: true
+      base:
+        description: A sha or a ref the checkout has (e.g. origin/main); used only when full is false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -63,11 +69,13 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           FULL_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+          DISPATCH_BASE: ${{ github.event_name == 'workflow_dispatch' && inputs.base || '' }}
         run: |
           base=""
           case "$EVENT" in
             pull_request) base="$PR_BASE" ;;
             push) base="$PUSH_BEFORE" ;;
+            workflow_dispatch) [ "$FULL_INPUT" = "true" ] || base="$DISPATCH_BASE" ;;
           esac
           args=(--base "$base" --event "$EVENT" --summary "$GITHUB_STEP_SUMMARY" --github-output "$GITHUB_OUTPUT")
           [ "$FULL_INPUT" = "true" ] && args+=(--full)
@@ -109,13 +117,16 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
           CASES: ${{ matrix.cases }}
-        # Always through run-all: its run line sets the suite's environment (e.g. `env -u TMPDIR`). run-all has no
-        # flag to give --only-suites a case subset (an explicit --only-suites name runs all its cases), so a plan row
-        # with a case subset still runs every case of its suite; the planned cases are shown in the summary.
+        # Always through run-all: its run line sets the suite's environment (e.g. `env -u TMPDIR`). A plan row with a
+        # case subset passes it with --only-cases (run-all hands it to the suite as --case); ALL runs every case.
         run: |
           set -o pipefail
           echo "plan cases: $CASES"
-          tests/run-all.sh --only-suites "$SUITE" --no-workspace --no-claude 2>&1 | tee suite.log
+          args=(--only-suites "$SUITE")
+          if [ -n "$CASES" ] && [ "$CASES" != "ALL" ]; then
+            args+=(--only-cases "$CASES")
+          fi
+          tests/run-all.sh "${args[@]}" --no-workspace --no-claude 2>&1 | tee suite.log
 
       - name: Summary
         if: always()

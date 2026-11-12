@@ -172,6 +172,8 @@ cp "$ROOT/scripts/lib/fstate.py" "$TMP/repo/scripts/lib/"
 printf '#!/usr/bin/env bash\nprintf "a\\n" >> "$RUN_LOG"\n[ "${BREAK_SUITE:-0}" = 0 ]\n' > "$TMP/repo/tests/a.sh"
 cat > "$TMP/repo/tests/b.sh" <<'SUITE'
 #!/usr/bin/env bash
+# case-map: alpha scripts/alpha.py
+# case-map: beta scripts/beta.py
 printf 'b\n' >> "$RUN_LOG"
 [ -z "${CASE_LOG:-}" ] || printf '%s\n' "$*" >> "$CASE_LOG"
 [ "${BREAK_CASE:-0}" = 0 ]
@@ -400,7 +402,37 @@ for j in 1 3; do
   [ "$rc" = 0 ] && [ -z "$(cat "$TMP/case-args")" ] && ! grep -q '(cases ' <<<"$out" \
     && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l)" -eq 1 ] \
     && good "case map ALL runs and records the full suite (-j $j)" || no "case map ALL (-j $j)" "$out"
+  # --only-cases gives the one --only-suites suite a subset (CI passes scripts/ci-plan.py's planned cases): the same
+  # --case argument and result name as an affected subset, and no suite PASS record
+  reset_cache; : > "$TMP/case-args"
+  out=$(CASE_LOG="$TMP/case-args" cache_plan --only-suites tests/b.sh --only-cases alpha,beta -j "$j"); rc=$?
+  [ "$rc" = 0 ] && [ "$(cat "$TMP/case-args")" = '--case alpha,beta' ] && [ "$(cat "$RUN_LOG")" = b ] \
+    && grep -q '^PASS  b (cases alpha,beta)' <<<"$out" && [ -z "$(find "$TMP/state/run-all/suites" -type f 2>/dev/null)" ] \
+    && good "--only-cases subset reaches the suite as --case, named, no suite PASS record (-j $j)" || no "--only-cases subset (-j $j)" "$out"
+  for arg in '--only-cases ALL' '--only-cases='; do
+    reset_cache; : > "$TMP/case-args"
+    # shellcheck disable=SC2086   # the option and its value are two words, or one with =
+    out=$(CASE_LOG="$TMP/case-args" cache_plan --only-suites tests/b.sh $arg -j "$j"); rc=$?
+    [ "$rc" = 0 ] && [ "$(wc -l < "$TMP/case-args" | tr -d ' ')" = 1 ] && [ -z "$(cat "$TMP/case-args")" ] \
+      && ! grep -q '(cases ' <<<"$out" && [ "$(find "$TMP/state/run-all/suites" -type f | wc -l | tr -d ' ')" = 1 ] \
+      && good "'$arg' runs every case and records the full suite (-j $j)" || no "'$arg' (-j $j)" "$out"
+  done
 done
+# --only-cases misuse exits 2 with a message naming the problem, before any suite runs or a lock is taken
+only_cases_misuse() { # message args...
+  local want=$1; shift
+  reset_cache
+  out=$(cache_plan "$@" 2>&1); rc=$?
+  [ "$rc" = 2 ] && grep -q "^run-all: .*$want" <<<"$out" && [ ! -s "$RUN_LOG" ] && ! grep -q '^PASS ' <<<"$out" \
+    && [ ! -d "$TMP/state/locks/run-all-full" ] \
+    && good "--only-cases misuse exits 2: $*" || no "--only-cases misuse (rc=$rc): $*" "$out"
+}
+only_cases_misuse '--only-cases needs --only-suites' --only-cases alpha
+only_cases_misuse "exactly one --only-suites name, got 'tests/a.sh,tests/b.sh'" --only-suites tests/a.sh,tests/b.sh --only-cases alpha
+only_cases_misuse "suite 'tests/a.sh' has no case map" --only-suites tests/a.sh --only-cases alpha
+only_cases_misuse "unknown case(s) 'gamma' in 'tests/b.sh'" --only-suites tests/b.sh --only-cases alpha,gamma
+only_cases_misuse '--only-cases conflicts with --release' --only-suites tests/b.sh --only-cases alpha --release
+only_cases_misuse '--inline-only conflicts with --only-cases' --inline-only --only-cases alpha
 reset_cache
 cache_plan --only-suites tests/a.sh >/dev/null
 out=$(cache_plan --only-suites tests/a.sh -j 3); rc=$?
