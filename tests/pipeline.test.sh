@@ -802,6 +802,9 @@ if case.startswith('stack-'):
     assert '--affected --base ' + a in out and 'git diff ' + a + '...' + bh in out, out
     for other in (base, 'main ', 'topic '):
         assert '--affected --base ' + other not in out, (other, out)
+    # per-task QA of the stacked task: the same own-delta base past the dependency
+    qa = cli('dispatch', str(pf), '--task', 'b', '--phase', 'qa', '--sha', bh, '--runner', 'print').stdout
+    assert '--affected --base ' + a in qa, qa
     # a moves on: status of b names the stack and the dependency's new tip, with the merge as next command
     git('switch', 'topic-a')
     a2 = commit('a2', 'a-extra.txt')
@@ -3334,6 +3337,7 @@ expect "the first Unity task is ready, the second waits for its QA" 0 "note: wai
 expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
 git -C "$S" worktree add -q "$TMP/st-a" -b feat/core/st-a develop 2>/dev/null
 st_phase "task branch and worktree without commits: implementing" a implementing '^$'
+expect "a dependency without commits (implementing) is not stackable: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
 expect "implementing names the worker's worktree" 0 "implementation worker on feat/core/st-a in .*st-a" status "$ST"
 mkdir -p "$TMP/st-a/sa"; echo a > "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" add sa; gi "$TMP/st-a" commit -qm "feat: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase verify --sha $SA --runner orca"
@@ -3350,7 +3354,9 @@ st_note "stale review with a lead report at HEAD: READY_FOR_PR: no names the sta
 rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
-expect "no integration branch yet: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
+# a reviewed (PASS), not integrated: its one in-flight dependency makes b stackable on a's tip, recorded by SHA
+expect "a reviewed dependency: the later-wave task lead stacks on its tip" 0 "worktree add --no-track -b feat/core/st-b .* $SA" dispatch "$ST" --task b --phase lead --runner orca
+expect "the stacked dispatch names the dependency and its SHA" 0 "task b stacks on a@${SA:0:10}" dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
