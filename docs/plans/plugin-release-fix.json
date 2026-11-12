@@ -1,0 +1,73 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "plugin-release-fix",
+  "title": "Release 1.9 gate fixes: skill frontmatter and CRLF-safe checks on Windows",
+  "topic": "plugin-release-fix",
+  "tier": "S",
+  "deliver": "pr",
+  "known_failing": [
+    {
+      "check": "tests/run-checks.test.sh",
+      "reason": "two Go-dependent fixtures (go-vet-integration, worktree path) need a runnable go; this host blocks go.exe by Application Control; fails here at main 60d726d"
+    }
+  ],
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "frontmatter",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "`claude plugin validate --strict .` fails on YAML frontmatter: the `description` of skills/pin-bump/SKILL.md, skills/unity-client-tech/SKILL.md and commands/assetgen.md contains an unquoted colon, so the frontmatter does not parse (the skills are not loaded as written). Fix each description so the frontmatter parses (quote it as a YAML string, or reword without the colon) with no change to its meaning, keep every other frontmatter key as is, then run `claude plugin validate --strict .` and `claude plugin validate --strict .claude-plugin/plugin.json` and report their exit codes. Changelog fragment changelog.d/frontmatter-yaml.md (### Fixed). Do not touch any other skill.",
+      "paths": [
+        "skills/pin-bump/SKILL.md",
+        "skills/unity-client-tech/SKILL.md",
+        "commands/assetgen.md",
+        "changelog.d/frontmatter-yaml.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "claude plugin validate --strict .",
+        "claude plugin validate --strict .claude-plugin/plugin.json",
+        "tests/run-all.sh --affected --base main --only-suites tests/skills-lint.sh -j 2"
+      ],
+      "acceptance": [
+        "both claude plugin validate --strict commands exit 0",
+        "the three descriptions keep their meaning and every other frontmatter key",
+        "skills-lint passes"
+      ],
+      "implementer": "claude",
+      "reviewer": "codex"
+    },
+    {
+      "id": "crlf-hosts",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Four suites fail on a Windows host with git core.autocrlf=true although the code is right; make them line-ending safe. (1) scripts/checks/wire-parity.sh compares the two Wire.cs working-tree files with `cmp`; with autocrlf the server checkout is CRLF and the Netcode checkout LF, so identical committed files report 'differs' (the committed blobs of rpg-mmo-server 633a792 and Netcode 406a1b6 are byte-identical, sha256 5d67a41f81db). Compare with carriage returns removed from both sides (keep comparing the working tree: tests/checks-candidate.test.sh relies on an uncommitted worktree edit failing), print the sha256 of the CR-stripped content in the FAIL line, and say in the header comment that line endings are ignored. Add a test case to tests/checks-candidate.test.sh: same content with CRLF on one side passes, different content still fails. This also fixes the 'server env target is used' case. (2) tests/registry-fragments.test.sh 'split round trip' compares registry.json and the fragments byte for byte against a CRLF working tree: compare with CR removed (diff --strip-trailing-cr, cmp on tr -d CR), keep the check strict otherwise. (3) tests/art2d-workflow.test.sh runs `python3` in a subprocess, which on Windows is the Microsoft Store stub: use sys.executable (and any other bare `python3` subprocess in that test). Changelog fragment changelog.d/crlf-hosts.md (### Fixed). Run no suite beyond a syntax check; one verify session runs the tier command.",
+      "paths": [
+        "scripts/checks/wire-parity.sh",
+        "tests/checks-candidate.test.sh",
+        "tests/registry-fragments.test.sh",
+        "tests/art2d-workflow.test.sh",
+        "changelog.d/crlf-hosts.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all.sh --affected --base main --only-suites tests/checks-candidate.test.sh,tests/registry-fragments.test.sh,tests/art2d-workflow.test.sh -j 2"
+      ],
+      "acceptance": [
+        "wire-parity passes for identical content with CRLF on one side and fails for different content (test)",
+        "checks-candidate, registry-fragments and art2d-workflow pass on a host with autocrlf=true",
+        "no bare python3 subprocess in art2d-workflow.test.sh"
+      ],
+      "implementer": "claude",
+      "reviewer": "codex"
+    }
+  ]
+}
