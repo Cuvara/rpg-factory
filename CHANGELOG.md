@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-12
+
+Fixes the 1.9.0 release gate on Windows hosts: quoted skill frontmatter and CRLF-safe checks. 1.9.0 was merged but never tagged, because its release gate failed on these issues; 1.9.1 is the first tagged release since 1.8.0 and includes everything in 1.9.0.
+
+### Fixed
+
+- **Wire parity.** Ignore line endings when comparing Wire.cs files, preventing false differences on Windows checkouts with autocrlf enabled.
+- **Registry fragments.** Make the split round trip comparison safe for CRLF checkouts.
+- **Art2d workflow.** Use the current Python interpreter for subprocess validation, avoiding the Windows Store python3 stub.
+- **Frontmatter.** The `description` of `skills/pin-bump`, `skills/unity-client-tech` and `commands/assetgen.md` held an unquoted `: `, so the YAML frontmatter did not parse and `claude plugin validate --strict` failed. Each description is now a double-quoted YAML string with the same text.
+
 ## [1.9.0] - 2026-11-11
 
 Run-lead visibility (task-lead reports reach the run lead and show in status), CI coverage for the generic delivery suite, hardened checks and a renamed guard package.
