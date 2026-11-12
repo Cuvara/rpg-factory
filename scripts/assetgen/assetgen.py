@@ -12,6 +12,7 @@ Usage:
   assetgen.py embed --run RUN [--authoring DIR] [--json]
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
+  assetgen.py finalize --run RUN [--force] [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
   assetgen.py promote-anchor --run RUN --output N|PATH --family F --dimensions a,b --strength S [--id ID]
@@ -129,13 +130,25 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       only on the person's explicit word; the person commits run.md and the record in one SSH-signed
                       commit whose signer principal is NAME (until then: present but not committed/signed)
 
+finalize (scripts/assetgen/finalize.py): run it after fetch_outputs. It runs defringe (only for a purpose with qa.alpha
+required), embed and qa in that fixed order, so embed can never be skipped before qa, and stops at the first FAIL naming
+the step. Exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. It refuses (exit 1, nothing written) a run without
+spec.json, outputs/*.png or a readable workflow.ui.json, and an approved run (rewriting approved bytes would fail
+gen-run-outputs). A second finalize on an unchanged run is idempotent: defringe is skipped while defringe.json's
+after_pixels_sha256 still equals every output that needs it (or no output needs it), embed keeps every output, qa is
+rewritten. Outputs that qa.json or an image review already bind and that still need defringe stop it with FAIL at
+defringe (defringe's own refusal) unless --force; --force is passed to defringe only. It prints which image reviews
+(review-image.json, review-image-claude.json) it made stale ("stale now (re-run them): ..."; qa.json is rewritten, so
+never listed). --json: one object, schema rpg-factory.assetgen-finalize/1 (steps, stale, state, exit).
+
 Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
 Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
 these). The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json, references/anchor-*.png),
-defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json), manifest (run.md) and
+defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json), finalize (all of those),
+manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
 the given run dir, approve-record (run.md and <authoring>/approvals/AGEN-<run-id>/), promote-anchor
 (assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and reject
@@ -145,7 +158,7 @@ a tile or composite: it uses each only when it holds the current pixels, else ex
 API (/api/userdata/workflows%2Fassetgen%2F<run-id>.json?overwrite=true) so the run shows in the ComfyUI Workflows
 sidebar under assetgen; it writes nothing locally (unreachable ComfyUI: NOT_AVAILABLE, exit 3). This script never
 runs agents or ComfyUI. Model ids, sizes and other values live in template params data, not here.
-Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa, publish). Options are never abbreviated (--ou
+Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa, finalize, publish). Options are never abbreviated (--ou
 is not --out): allow_abbrev=False on every parser.
 """
 import argparse
@@ -164,6 +177,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import approval  # noqa: E402
+import finalize  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
 import lint  # noqa: E402
@@ -983,6 +997,28 @@ def defringe_line(run_dir, outputs):
         "; STALE, the outputs changed since: " + ", ".join(stale) if stale else "")
 
 
+# -- qa --------------------------------------------------------------------------------------------------------
+
+def qa_run(run_dir):
+    """(report, text, code) of the qa verb: grades every output of the run, writes qa.json (rpg-factory.validation/1),
+    text is the verb's human output, code 0 PASS, 1 FAIL, 3 NOT_AVAILABLE. qa and finalize both call it."""
+    spec = load_spec(os.path.join(run_dir, "spec.json"))
+    size = requested_size(run_dir, spec)
+    results, outputs = qa.run_qa(run_dir, spec, size)
+    purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
+    state = qa.overall(results)
+    counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")}
+    report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(run_dir)),
+              "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size,
+              "style_binding": runfiles.qa_style_binding(spec, lambda rel: os.path.join(run_dir, *rel.split("/"))),
+              "state": state, "results": results, "outputs": outputs, "summary": counts}
+    write_json(os.path.join(run_dir, "qa.json"), report)
+    text = ("\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
+            + "\nassetgen qa: %s (%d PASS, %s%d FAIL, %d NOT_AVAILABLE)" % (
+                state, counts["PASS"], "%d WARN, " % counts["WARN"] if counts["WARN"] else "", counts["FAIL"], counts["NOT_AVAILABLE"]))
+    return report, text, {"PASS": 0, "FAIL": 1}.get(state, 3)
+
+
 # -- publish ---------------------------------------------------------------------------------------------------
 
 def publish(run_dir, comfy_url, timeout=15):
@@ -1421,6 +1457,10 @@ def main(argv=None):
     c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("finalize"); run_arg(c)
+    c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
+                   "already bind (they are stale afterwards: re-run them)")
+    c.add_argument("--json", action="store_true")
     c = sp("promote-anchor"); run_arg(c); c.add_argument("--output", required=True)
     c.add_argument("--family", required=True); c.add_argument("--dimensions", required=True)
     c.add_argument("--strength", required=True, choices=list(stylelock.STRENGTHS)); c.add_argument("--id"); c.add_argument("--json", action="store_true")
@@ -1542,21 +1582,11 @@ def main(argv=None):
             emit(res, a.json, "assetgen publish: %s %s (%s)" % (res["state"], res["workflow"], res["reason"]))
             return {"PASS": 0, "FAIL": 1}.get(res["state"], 3)
         if a.cmd == "qa":
-            spec = load_spec(os.path.join(a.run, "spec.json"))
-            size = requested_size(a.run, spec)
-            results, outputs = qa.run_qa(a.run, spec, size)
-            purpose = spec.get("purpose") if isinstance(spec.get("purpose"), dict) else {}
-            state = qa.overall(results)
-            counts = {s: sum(1 for r in results if r["state"] == s) for s in ("PASS", "WARN", "FAIL", "NOT_AVAILABLE")}
-            report = {"schema": "rpg-factory.validation/1", "tool": "assetgen-qa", "run": os.path.basename(os.path.normpath(a.run)),
-                      "purpose": purpose.get("id"), "purpose_sha256": layers.content_hash(purpose.get("data")), "requested_size": size,
-                      "style_binding": runfiles.qa_style_binding(spec, lambda rel: os.path.join(a.run, *rel.split("/"))),
-                      "state": state, "results": results, "outputs": outputs, "summary": counts}
-            write_json(os.path.join(a.run, "qa.json"), report)
-            emit(report, a.json, "\n".join("%s %s %s: %s" % (r["state"], r["output"], r["check"], "; ".join(r["reasons"])) for r in results)
-                 + "\nassetgen qa: %s (%d PASS, %s%d FAIL, %d NOT_AVAILABLE)" % (
-                     state, counts["PASS"], "%d WARN, " % counts["WARN"] if counts["WARN"] else "", counts["FAIL"], counts["NOT_AVAILABLE"]))
-            return {"PASS": 0, "FAIL": 1}.get(state, 3)
+            report, text, code = qa_run(a.run)
+            emit(report, a.json, text)
+            return code
+        if a.cmd == "finalize":
+            return finalize.run(sys.modules[__name__], a.run, a.force, a.json)
         if a.cmd == "promote-anchor":
             rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)
             emit(rec, a.json, "wrote %s: anchor %s proposed (a person approves it: status active, approved_by, approved_on)"

@@ -1438,6 +1438,106 @@ cp "$FX/icon-ok.png" "$ar/outputs/prop.png"; AG manifest --run "$ar" > "$TMP/o" 
   && [ "$(sed -n '/^---json$/,/^---$/p' "$ar/run.md" | sed '1d;$d' | jq -r .status)" = proposed ] \
   && ok "manifest after the approved outputs changed: proposed, names what the approval no longer binds" || no "manifest reset rc=$rc" "$(cat "$TMP/o")"
 
+echo "-- finalize: defringe (alpha purposes only), embed, qa in one fixed order"
+# finrun NAME PURPOSE PNG [render args...]: a rendered run with the fixture PNG as its only output
+finrun() {
+  local name="$1" p="$2" f="$3"; shift 3
+  mkrun "$name" "$p" --style stylized-painterly && AG render --run "$RUNS/$name" "$@" > /dev/null 2>&1 && cp "$FX/$f" "$RUNS/$name/outputs/prop.png"
+}
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+steps() { grep -E '^(defringe|embed|qa) ' "$1" | cut -d' ' -f1 | tr '\n' ' '; }
+# alpha purpose: defringe, embed, qa in that order; the run ends embedded, defringed and graded
+fz="$RUNS/fin-icon-001"; finrun fin-icon-001 icon fringe.png
+AG finalize --run "$fz" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] && grep -q "^defringe defringed: 1 defringed, 0 skipped, 0 FAIL" "$TMP/o" \
+  && grep -q "^embed done: 1 embedded, 0 replaced, 0 kept, 0 FAIL" "$TMP/o" && grep -qx "assetgen finalize: PASS" "$TMP/o" \
+  && [ "$(jq -r .state "$fz/qa.json")" = PASS ] && [ -f "$fz/defringe.json" ] && [ -f "$fz/outputs-raw/prop.png" ] \
+  && [ "$(sha "$fz/outputs-raw/prop.png")" = "$(sha "$FX/fringe.png")" ] && grep -qa "workflow" "$fz/outputs/prop.png" \
+  && [ "$(jq -r '.outputs[0].sha256' "$fz/qa.json")" = "$(sha "$fz/outputs/prop.png")" ] \
+  && ok "finalize on an alpha purpose: defringe, embed, qa in that order, exit 0 (original kept, workflow embedded, qa.json binds the final bytes)" \
+  || no "finalize alpha rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+# a second finalize on the unchanged run is idempotent: no defringe refusal (qa.json binds the outputs), same bytes
+b1=$(sha "$fz/outputs/prop.png"); d1=$(sha "$fz/defringe.json")
+AG finalize --run "$fz" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.schema + " " + .state + " " + (.exit | tostring) + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" \
+  = "rpg-factory.assetgen-finalize/1 PASS 0 defringe:skipped,embed:done,qa:PASS" ] \
+  && jq -r '.steps[0].reason' "$TMP/f.json" | grep -q "^already defringed" && jq -r '.steps[1].reason' "$TMP/f.json" | grep -q "0 embedded, 0 replaced, 1 kept" \
+  && [ "$(jq -c '[.stale, .failed_at]' "$TMP/f.json")" = '[[],null]' ] \
+  && [ "$(sha "$fz/outputs/prop.png")" = "$b1" ] && [ "$(sha "$fz/defringe.json")" = "$d1" ] && [ "$(jq -r .state "$fz/qa.json")" = PASS ] \
+  && ok "finalize again on an unchanged run: defringe skipped (already defringed), embed kept, qa PASS, bytes unchanged, --json object" \
+  || no "finalize idempotent rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+# a non-alpha purpose never defringes; embed changes the bytes, so the image reviews that bound them are stale; qa.json is not listed
+ft="$RUNS/fin-tile-001"; finrun fin-tile-001 texture-tileable tile-ok.png
+AG qa --run "$ft" > /dev/null 2>&1
+bound "$ft" image PASS codex > "$ft/review-image.json"; bound "$ft" image PASS claude > "$ft/review-image-claude.json"
+AG finalize --run "$ft" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] && grep -q "^defringe skipped: not an alpha purpose" "$TMP/o" \
+  && [ ! -e "$ft/defringe.json" ] && [ ! -e "$ft/outputs-raw" ] && grep -q "^embed done: 1 embedded" "$TMP/o" \
+  && grep -qx "stale now (re-run them): review-image.json, review-image-claude.json" "$TMP/o" \
+  && ok "finalize on a non-alpha purpose: defringe skipped (nothing written), embed, qa PASS; the image reviews it made stale are named, not qa.json" \
+  || no "finalize non-alpha rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+# a run qa and the image reviews already bind: defringe's refusal is a FAIL at defringe (nothing written) unless --force
+fb="$RUNS/fin-force-001"; finrun fin-force-001 icon fringe.png
+AG embed --run "$fb" > /dev/null; AG qa --run "$fb" > /dev/null 2>&1
+bound "$fb" image FAIL codex '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fb/review-image.json"
+bound "$fb" image FAIL claude '[{"rubric": 1, "severity": "major", "text": "orange edge speckle"}]' > "$fb/review-image-claude.json"
+fb0=$(sha "$fb/outputs/prop.png"); q0=$(sha "$fb/qa.json")
+AG finalize --run "$fb" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: .*qa.json, review-image.json, review-image-claude.json already bind(s) the current outputs" "$TMP/o" \
+  && grep -q "pass --force" "$TMP/o" && ! grep -q "^stale now" "$TMP/o" \
+  && [ "$(sha "$fb/outputs/prop.png")" = "$fb0" ] && [ "$(sha "$fb/qa.json")" = "$q0" ] && [ ! -e "$fb/outputs-raw" ] && [ ! -e "$fb/defringe.json" ] \
+  && ok "finalize: outputs the records bind stop at FAIL at defringe without --force (exit 1, nothing written, embed and qa not run)" \
+  || no "finalize bound rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+AG finalize --run "$fb" --force --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && [ "$(jq -r '.state + " " + (.stale | join(","))' "$TMP/f.json")" = "PASS review-image.json,review-image-claude.json" ] \
+  && [ "$(jq -r '.steps[0].state' "$TMP/f.json")" = defringed ] && [ "$(sha "$fb/outputs/prop.png")" != "$fb0" ] && [ "$(sha "$fb/outputs-raw/prop.png")" = "$fb0" ] \
+  && [ "$(jq -r .state "$fb/qa.json")" = PASS ] \
+  && ok "finalize --force: defringe runs, embed and qa PASS, both image reviews listed stale (qa.json is rewritten, not listed)" \
+  || no "finalize force rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+# stops at the first FAIL, naming the step: defringe (an unreadable output of an alpha purpose), embed, qa
+fd="$RUNS/fin-fail-def-001"; finrun fin-fail-def-001 icon not-a-png.png
+AG finalize --run "$fd" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe " ] && grep -q "^assetgen finalize: FAIL at defringe: " "$TMP/o" && [ ! -e "$fd/qa.json" ] && [ "$(sha "$fd/outputs/prop.png")" = "$(sha "$FX/not-a-png.png")" ] \
+  && ok "finalize: a FAIL at defringe stops there (exit 1, embed and qa not run, output untouched)" || no "finalize fail defringe rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+fe="$RUNS/fin-fail-emb-001"; finrun fin-fail-emb-001 texture-tileable not-a-png.png
+AG finalize --run "$fe" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(jq -r '.failed_at + " " + .state + " " + ([.steps[] | .step + ":" + .state] | join(","))' "$TMP/f.json")" = "embed FAIL defringe:skipped,embed:FAIL" ] && [ ! -e "$fe/qa.json" ] \
+  && ok "finalize: a FAIL at embed stops there (exit 1, qa not run, failed_at embed)" || no "finalize fail embed rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+fq="$RUNS/fin-fail-qa-001"; finrun fin-fail-qa-001 icon icon-opaque.png
+AG finalize --run "$fq" > "$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 1 ] && [ "$(steps "$TMP/o")" = "defringe embed qa " ] && grep -q "^defringe skipped: no output needs it" "$TMP/o" && grep -q "^assetgen finalize: FAIL at qa: " "$TMP/o" \
+  && [ "$(jq -r .state "$fq/qa.json")" = FAIL ] \
+  && ok "finalize: a qa FAIL is FAIL at qa, exit 1 (an opaque output needs no defringe)" || no "finalize fail qa rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+# NOT_AVAILABLE (a 16-bit output without Pillow) exits 3 like qa
+fn="$RUNS/fin-na-001"; finrun fin-na-001 image-edit deep16.png --param reference_image=ref.png
+ASSETGEN_NO_PIL=1 AG finalize --run "$fn" --json > "$TMP/f.json" 2>"$TMP/err"; rc=$?
+[ $rc -eq 3 ] && [ "$(jq -r '.state + " " + (.exit | tostring) + " " + (.failed_at | tostring)' "$TMP/f.json")" = "NOT_AVAILABLE 3 null" ] && [ "$(jq -r .state "$fn/qa.json")" = NOT_AVAILABLE ] \
+  && ok "finalize: exit codes follow qa (0 PASS, 1 FAIL, 3 NOT_AVAILABLE)" || no "finalize not available rc=$rc" "$(cat "$TMP/err" "$TMP/f.json")"
+# refusals before anything is written: no spec.json, no outputs, no workflow.ui.json, an approved run
+mkdir -p "$RUNS/fin-nospec-001/outputs"; cp "$FX/icon-ok.png" "$RUNS/fin-nospec-001/outputs/prop.png"
+AG finalize --run "$RUNS/fin-nospec-001" > "$TMP/o" 2>&1; rc1=$?
+mkrun fin-noout-001 icon --style stylized-painterly && AG render --run "$RUNS/fin-noout-001" > /dev/null 2>&1
+AG finalize --run "$RUNS/fin-noout-001" > "$TMP/o2" 2>&1; rc2=$?
+mkrun fin-noui-001 icon --style stylized-painterly && cp "$FX/icon-ok.png" "$RUNS/fin-noui-001/outputs/prop.png"
+AG finalize --run "$RUNS/fin-noui-001" > "$TMP/o3" 2>&1; rc3=$?
+[ $rc1 -eq 1 ] && grep -q "finalize needs .*fin-nospec-001/spec.json" "$TMP/o" && [ $rc2 -eq 1 ] && grep -q "no outputs/\*.png" "$TMP/o2" \
+  && [ $rc3 -eq 1 ] && grep -q "workflow.ui.json" "$TMP/o3" \
+  && [ "$(sha "$RUNS/fin-noui-001/outputs/prop.png")" = "$(sha "$FX/icon-ok.png")" ] && [ ! -e "$RUNS/fin-noui-001/qa.json" ] && [ ! -e "$RUNS/fin-nospec-001/qa.json" ] \
+  && ok "finalize refuses a run without spec.json, outputs or workflow.ui.json (exit 1, nothing written)" || no "finalize refusals rc=$rc1/$rc2/$rc3" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3")"
+FZA="$TMP/fin-approve"; mkdir -p "$FZA/assetgen/runs"; cp -R "$GL/purposes" "$GL/styles" "$GL/templates" "$FZA/assetgen/"
+cp -R "$fz" "$FZA/assetgen/runs/"; fa="$FZA/assetgen/runs/fin-icon-001"
+AG manifest --run "$fa" --prompt-author robin > /dev/null
+git init -q -b main "$FZA" && git -C "$FZA" add -A && git -C "$FZA" "${G[@]}" commit -qm "finalized run"
+AG approve-record --run "$fa" --by Dana > /dev/null 2>"$TMP/err" || no "finalize: approve-record" "$(cat "$TMP/err")"
+find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$TMP/tree0"
+AG finalize --run "$fa" > "$TMP/o" 2>&1; rc=$?
+find "$FZA" -path "$FZA/.git" -prune -o -type f -exec sha256sum {} + | sort > "$TMP/tree1"
+[ $rc -eq 1 ] && grep -q "run.md is approved: finalize would rewrite the approved outputs" "$TMP/o" && cmp -s "$TMP/tree0" "$TMP/tree1" \
+  && [ "$(sed -n '/^---json$/,/^---$/p' "$fa/run.md" | sed '1d;$d' | jq -r .status)" = approved ] \
+  && ok "finalize refuses an approved run (exit 1) and writes nothing" || no "finalize approved rc=$rc" "$(cat "$TMP/o"; diff "$TMP/tree0" "$TMP/tree1")"
+f_help=$(AG finalize --help 2>&1); grep -q -- "--force" <<<"$f_help" && grep -q "finalize --run RUN" "$ROOT/scripts/assetgen/assetgen.py" \
+  && ok "finalize is a subcommand (--run, --authoring, --force, --json) listed in the assetgen.py usage" || no "finalize usage" "$f_help"
+
 echo "-- publish: workflow.ui.json to the ComfyUI Workflows sidebar (fake ComfyUI)"
 cat > "$TMP/fake-comfy.py" <<'EOF'
 import json, os, socket, subprocess, sys, threading
