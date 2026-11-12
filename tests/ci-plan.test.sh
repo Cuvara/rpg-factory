@@ -13,7 +13,7 @@ pass=0; fail=0
 good() { pass=$((pass + 1)); echo "PASS  $1"; }
 no()  { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | head -20 | sed 's/^/      /'; }
 # pj FILE EXPR: evaluate a python expression over the JSON in FILE (as d) and print the result
-pj() { python3 -B -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(eval(sys.argv[2]))' "$1" "$2"; }
+pj() { python3 -B -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(eval(sys.argv[2]))' "$1" "$2" | tr -d '\r'; }
 # changed FILE PATH...: a stand-in changed list
 changed() { local f="$1"; shift; printf '%s\n' "$@" > "$f"; }
 
@@ -119,9 +119,9 @@ print(all(by[s["suite"]] == exp(s["suite"]) == s["os"] for s in d["suites"]) and
 ' "$TMP/all.json" "${WINSUITES[@]}")
 if [ "$ok" = True ]; then good "a windows-listed suite has both OS entries, every other suite only ubuntu-24.04"
 else no "a windows-listed suite has both OS entries, every other suite only ubuntu-24.04"; fi
-if [ "${#WINSUITES[@]}" -gt 0 ] && [ -z "$(comm -23 <(printf '%s\n' "${WINSUITES[@]}" | LC_ALL=C sort -u) <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u))" ]; then
+if [ "${#WINSUITES[@]}" -gt 0 ] && [ -z "$(LC_ALL=C comm -23 <(printf '%s\n' "${WINSUITES[@]}" | LC_ALL=C sort -u) <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u))" ]; then
   good "tests/ci-windows-suites.txt names only runnable suites (${#WINSUITES[@]})"
-else no "tests/ci-windows-suites.txt names only runnable suites" "$(comm -23 <(printf '%s\n' "${WINSUITES[@]}" | LC_ALL=C sort -u) <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u))"; fi
+else no "tests/ci-windows-suites.txt names only runnable suites" "$(LC_ALL=C comm -23 <(printf '%s\n' "${WINSUITES[@]}" | LC_ALL=C sort -u) <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u))"; fi
 if printf '%s\n' "${WINSUITES[@]}" | grep -qx tests/git-guard.test.sh && ! printf '%s\n' "${WINSUITES[@]}" | grep -qx tests/skills-lint.sh; then
   good "the windows list holds the OS-sensitive seed and not the text lints"
 else no "the windows list holds the OS-sensitive seed and not the text lints"; fi
