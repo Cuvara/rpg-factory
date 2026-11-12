@@ -313,7 +313,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -624,7 +624,8 @@ m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 reg = json.loads(pathlib.Path(root + '/registry.json').read_text())
 work = pathlib.Path(tmp) / ('multiwave-' + case); work.mkdir()
 repo = work / 'repo'
-variant = 'serial' if case.startswith('serial-') else 'subtask' if case.startswith('subtask-') else 'base'
+variant = ('serial' if case.startswith('serial-') or case == 'stack-no-worktree'
+           else 'subtask' if case.startswith('subtask-') else 'base')
 shutil.copytree(pathlib.Path(tmp) / 'templates' / variant, repo, ignore=shutil.ignore_patterns('*.lock'))
 os.environ['RPG_FACTORY_STATE_DIR'] = str(work / 'state')
 def git(*args):
@@ -720,8 +721,108 @@ if case.startswith('serial-'):
         assert any(x.startswith('a: QA is STALE') for x in g['blockers']), g
     print(case + ' assertions passed')
     sys.exit(0)
+if case == 'stack-no-worktree':
+    # a no-worktree repo (Unity marker): tasks share plan.topic one at a time, nothing stacks
+    a = commit('a')
+    info = m.repo_info(plan, reg, 'fixture')
+    assert not info['worktrees'], info
+    assert m.stackable(plan, reg, info, plan['tasks'][1]) is None
+    assert m.start_base(plan, info, plan['tasks'][1], reg) == (info['base_sha'] or info['base'])
+    print(case + ' assertions passed')
+    sys.exit(0)
 git('switch', '--no-track', '-c', 'topic-a')
 a = commit('a')
+if case.startswith('stack-'):
+    # stacked dispatch: a dependent task starts on its one in-flight dependency's tip, recorded by SHA
+    info = m.repo_info(plan, reg, 'fixture')
+    tb = plan['tasks'][1]
+    def status_row(tid):
+        return next(r for r in m.status(plan, reg)['tasks'] if r['id'] == tid)
+    if case == 'stack-xs':
+        plan['tier'] = 'XS'; save()
+        assert m.stackable(plan, reg, info, tb) is None
+        assert m.start_base(plan, info, tb, reg) == m.start_base(plan, info, tb) == plan['topic']
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case in ('stack-two-deps', 'stack-one-integrated'):
+        plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                              'paths': ['c.txt'], 'acceptance': ['reviewed']})
+        tb['deps'] = ['a', 'c']; save()
+        git('switch', 'topic'); git('switch', '--no-track', '-c', 'topic-c')
+        c = commit('c', 'c.txt')
+        if case == 'stack-two-deps':
+            # two in-flight dependencies (a and c candidates): the dependent keeps waiting
+            assert m.stackable(plan, reg, info, tb) is None
+            assert m.start_base(plan, info, tb, reg) not in (a, c)
+            row = status_row('b')
+            assert row['phase'] == 'pending' and any(n.startswith('waits for') for n in row['notes']), row
+            assert not any('stackable' in n or 'stacked' in n for n in row['notes']), row
+        else:
+            # c reviewed and merged into plan.topic (integrated), a still a candidate: b stacks on a
+            verdict('c', 'review', c)
+            git('switch', 'topic'); git('merge', '--no-ff', '-m', 'merge c', 'topic-c')
+            assert status_row('c')['phase'] == 'integrated'
+            assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
+        print(case + ' assertions passed')
+        sys.exit(0)
+    assert case == 'stack-base', case
+    # a is a candidate (no review): b is stackable on a's tip and its spec base is that tip
+    assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
+    assert m.start_base(plan, info, tb, reg) == a
+    row = status_row('b')
+    assert row['phase'] == 'pending' and any('stackable on a@' + a[:10] in n for n in row['notes']), row
+    assert row['next'] and '--phase lead' in row['next'], row
+    assert m.stack_record(plan, 'b') is None
+    # the stack record lives outside task_fingerprint: a verdict recorded on b before it stays current
+    verdict('b', 'review', a)
+    fingerprint = m.scope_fingerprint(plan, reg, 'b')
+    lead = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'print')
+    assert '"base": ' + json.dumps(a) in lead.stdout, lead.stdout
+    rec = m.stack_record(plan, 'b')
+    assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a and rec.get('at'), rec
+    assert len(rec['sha']) == 40 and all(ch in '0123456789abcdef' for ch in rec['sha']), rec
+    assert pathlib.Path(m.stack_file(plan, 'b')).is_file()
+    assert m.scope_fingerprint(plan, reg, 'b') == fingerprint
+    kept, stale = m.verdict_of(plan, reg, 'b', 'review')
+    assert kept and kept['sha'] == a and stale is False, (kept, stale)
+    pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()  # b's own review comes later, at its own commit
+    # a stand-in run-all (untracked, excluded) so verify prints the QA tier command with its --affected --base
+    (repo / 'tests').mkdir()
+    (repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/x.test.sh\\n"; exit 0 ;; esac\n'
+                                              'exit 1\n', newline='\n')
+    (repo / '.git' / 'info').mkdir(exist_ok=True)
+    with open(repo / '.git' / 'info' / 'exclude', 'a') as f:
+        f.write('\ntests/\n')
+    git('switch', '--no-track', '-c', 'topic-b', a)
+    bh = commit('b')
+    assert m.own_start(plan, reg, info, tb, bh) == a
+    def verify_out(sha):
+        return cli('dispatch', str(pf), '--task', 'b', '--phase', 'verify', '--sha', sha, '--runner', 'print').stdout
+    out = verify_out(bh)
+    assert '--affected --base ' + a in out and 'git diff ' + a + '...' + bh in out, out
+    for other in (base, 'main ', 'topic '):
+        assert '--affected --base ' + other not in out, (other, out)
+    # per-task QA of the stacked task: the same own-delta base past the dependency
+    qa = cli('dispatch', str(pf), '--task', 'b', '--phase', 'qa', '--sha', bh, '--runner', 'print').stdout
+    assert '--affected --base ' + a in qa, qa
+    # a moves on: status of b names the stack and the dependency's new tip, with the merge as next command
+    git('switch', 'topic-a')
+    a2 = commit('a2', 'a-extra.txt')
+    git('switch', 'topic-b')
+    row = status_row('b')
+    assert row['phase'] == 'candidate', row
+    assert any('stacked on a@' + a[:10] in n for n in row['notes']), row
+    assert any('a now at ' + a2[:10] + ' not in HEAD' in n for n in row['notes']), row
+    assert row['next'] and 'merge' in row['next'] and 'topic-a' in row['next'], row
+    # after merging a's new tip into b, the moved note is gone and the verify base is that tip
+    git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+    merged = git('rev-parse', 'HEAD')
+    row = status_row('b')
+    assert not any('now at' in n for n in row['notes']), row
+    out = verify_out(merged)
+    assert '--affected --base ' + a2 in out and '--affected --base ' + a + ' ' not in out, out
+    print(case + ' assertions passed')
+    sys.exit(0)
 if case.startswith('subtask-'):
     m.pr.record(plan, 'a', 's', 'implementer', {'agent': 'claude', 'paths': ['shared.txt']})
     m.pr.record(plan, 'a', None, 'implementer', {'agent': 'codex'})  # the task-level implement dispatch the explicit --implementer codex below matches
@@ -3236,6 +3337,7 @@ expect "the first Unity task is ready, the second waits for its QA" 0 "note: wai
 expect "status prints the ready wave and its tasks" 0 "^Ready wave: 1  \(dispatch: a, c1\)" status "$ST"
 git -C "$S" worktree add -q "$TMP/st-a" -b feat/core/st-a develop 2>/dev/null
 st_phase "task branch and worktree without commits: implementing" a implementing '^$'
+expect "a dependency without commits (implementing) is not stackable: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
 expect "implementing names the worker's worktree" 0 "implementation worker on feat/core/st-a in .*st-a" status "$ST"
 mkdir -p "$TMP/st-a/sa"; echo a > "$TMP/st-a/sa/a.go"; gi "$TMP/st-a" add sa; gi "$TMP/st-a" commit -qm "feat: a"; SA=$(git -C "$S" rev-parse feat/core/st-a)
 st_phase "commits ahead of the base: candidate, next is the review at that SHA" a candidate "--task a --phase verify --sha $SA --runner orca"
@@ -3252,7 +3354,9 @@ st_note "stale review with a lead report at HEAD: READY_FOR_PR: no names the sta
 rm -f "$RPG_FACTORY_STATE_DIR/pipeline/st/a__lead-report.json"
 sv --task a --phase review --sha "$SA" --by codex --state PASS
 st_phase "review PASS without an integration branch: create it from the base" a reviewed "branch feat/core/st develop"
-expect "no integration branch yet: a later-wave task lead starts from the base" 0 "worktree add --no-track -b feat/core/st-b .* develop" dispatch "$ST" --task b --phase lead --runner orca
+# a reviewed (PASS), not integrated: its one in-flight dependency makes b stackable on a's tip, recorded by SHA
+expect "a reviewed dependency: the later-wave task lead stacks on its tip" 0 "worktree add --no-track -b feat/core/st-b .* $SA" dispatch "$ST" --task b --phase lead --runner orca
+expect "the stacked dispatch names the dependency and its SHA" 0 "task b stacks on a@${SA:0:10}" dispatch "$ST" --task b --phase lead --runner orca
 git -C "$S" worktree add -q "$TMP/st-int" -b feat/core/st develop 2>/dev/null
 st_phase "review PASS: next merges the task branch into the integration worktree" a reviewed "merge --no-ff feat/core/st-a"
 # the task lead's durable report (`report`): status shows it per task with READY_FOR_PR, no message needed
