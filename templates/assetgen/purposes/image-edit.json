@@ -3,7 +3,7 @@
  "title": "Image edit",
  "description": "Edit or restyle an existing image given as a reference image.",
  "handoff_domain": "art2d",
- "default_template": "image-edit",
+ "default_template": "staged-edit",
  "dimensions": [
   "palette",
   "lighting",
