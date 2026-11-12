@@ -148,6 +148,7 @@ def plan(args):
     base = args["base"]
     full, reason = False, ""
     files = []
+    base_ok = base is not None and usable_base(base)
 
     if args["full"]:
         full, reason = True, "--full"
@@ -155,12 +156,12 @@ def plan(args):
         full, reason = True, "schedule event"
     elif base is None and args["changed_file"] is None:
         full, reason = True, "no base"
-    elif base is not None and not usable_base(base):
+    elif base is not None and not base_ok:
         full, reason = True, "unusable base %s" % base
 
     if args["changed_file"] is not None:
         files = read_changed(args["changed_file"])
-    elif base is not None and usable_base(base):
+    elif base_ok:
         found = git_changed(base)
         if found is None:
             if not full:
@@ -240,4 +241,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    for _stream in (sys.stdout, sys.stderr):  # UTF-8 and LF on every platform (Windows pipes default to cp1252, CRLF)
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace", newline="\n")
     sys.exit(main(sys.argv[1:]))

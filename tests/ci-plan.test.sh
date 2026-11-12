@@ -26,7 +26,7 @@ else no "run-all --list-suites lists this suite (register it in tests/run-all.sh
 # 1. one skill file: exactly the suites affected.py select-many gives for it, not full
 changed "$TMP/skill" skills/delivery/SKILL.md
 python3 -B "$PLAN" --changed-file "$TMP/skill" --event pull_request > "$TMP/skill.json"; rc=$?
-want=$(python3 -B "$AFF" select-many "$TMP/skill" "${SUITES[@]}" | tr -d '\r' | sort)
+want=$(python3 -B "$AFF" select-many "$TMP/skill" "${SUITES[@]}" | tr -d '\r' | LC_ALL=C sort)
 got=$(pj "$TMP/skill.json" '"\n".join(sorted(s["suite"] for s in d["suites"]))')
 if [ "$rc" = 0 ] && [ "$(pj "$TMP/skill.json" 'd["full"]')" = False ] && [ -n "$want" ] && [ "$got" = "$want" ]; then
   good "one skill file plans exactly affected.py's suites, not full"
@@ -119,9 +119,9 @@ print(all(by[s["suite"]] == exp(s["suite"]) == s["os"] for s in d["suites"]) and
 ' "$TMP/all.json" "${WINSUITES[@]}")
 if [ "$ok" = True ]; then good "a windows-listed suite has both OS entries, every other suite only ubuntu-24.04"
 else no "a windows-listed suite has both OS entries, every other suite only ubuntu-24.04"; fi
-if [ "${#WINSUITES[@]}" -gt 0 ] && [ -z "$(comm -23 <(printf '%s\n' "${WINSUITES[@]}" | sort -u) <(printf '%s\n' "${SUITES[@]}" | sort -u))" ]; then
+if [ "${#WINSUITES[@]}" -gt 0 ] && [ -z "$(comm -23 <(printf '%s\n' "${WINSUITES[@]}" | LC_ALL=C sort -u) <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u))" ]; then
   good "tests/ci-windows-suites.txt names only runnable suites (${#WINSUITES[@]})"
-else no "tests/ci-windows-suites.txt names only runnable suites" "$(comm -23 <(printf '%s\n' "${WINSUITES[@]}" | sort -u) <(printf '%s\n' "${SUITES[@]}" | sort -u))"; fi
+else no "tests/ci-windows-suites.txt names only runnable suites" "$(comm -23 <(printf '%s\n' "${WINSUITES[@]}" | LC_ALL=C sort -u) <(printf '%s\n' "${SUITES[@]}" | LC_ALL=C sort -u))"; fi
 if printf '%s\n' "${WINSUITES[@]}" | grep -qx tests/git-guard.test.sh && ! printf '%s\n' "${WINSUITES[@]}" | grep -qx tests/skills-lint.sh; then
   good "the windows list holds the OS-sensitive seed and not the text lints"
 else no "the windows list holds the OS-sensitive seed and not the text lints"; fi
