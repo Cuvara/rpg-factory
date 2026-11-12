@@ -94,7 +94,9 @@ else fail=$((fail + 1)); echo "FAIL  pipeline_route.py selection: got [$(tr '\n'
 # suite's EXTRA patterns cover them, so the answer is a short named list, not every suite (finalize.py may not exist yet)
 printf '%s\n' scripts/assetgen/assetgen.py scripts/assetgen/finalize.py > "$TMP/many"
 got=$(python3 -B "$A" select-many "$TMP/many" "${suites[@]}" | sort)
-mention=$(cd "$ROOT" && grep -l 'scripts/assetgen' "${suites[@]}" 2>/dev/null | sort)
+# oracle: the suites whose text names a changed file, the directory itself or its glob; a suite that names only another
+# file under it (scripts/assetgen/data/known-nodes.json in tests/comfy-desktop-setup.test.sh) is rightly not selected
+mention=$(cd "$ROOT" && grep -lE 'scripts/assetgen(/(assetgen|finalize)[.]py|/?[*]|/?[.]?([^A-Za-z0-9_./*-]|$))' "${suites[@]}" 2>/dev/null | sort)
 if grep -qx tests/assetgen.test.sh <<<"$got" && grep -qx tests/commands.test.sh <<<"$got" && [ -z "$(comm -13 <(echo "$got") <(echo "$mention"))" ] \
    && [ "$(wc -l <<<"$got")" -lt "${#suites[@]}" ] && ! grep -qx tests/changelog.test.sh <<<"$got"; then
   pass=$((pass + 1)); echo "PASS  a scripts/assetgen change selects the suites that mention it (assetgen, commands), not every suite"
