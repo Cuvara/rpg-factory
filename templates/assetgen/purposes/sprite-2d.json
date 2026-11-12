@@ -3,7 +3,7 @@
  "title": "2D game sprite",
  "description": "Single in-game sprite on a transparent background, ready for slicing and import.",
  "handoff_domain": "art2d",
- "default_template": "image-generate",
+ "default_template": "staged-sprite",
  "default_family": "characters",
  "dimensions": [
   "palette",
