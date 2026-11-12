@@ -87,7 +87,9 @@ taken over (`run-all: taking over stale test slot <n> (<pid>)`).
 
 ## Case selection
 
-`pipeline.test.sh`, `parallel-policy.test.sh`, `routing.test.sh` and `git-guard.test.sh` take `--case NAMES` and
-`--list-cases`; `--affected` passes the cases `tests/affected.py cases` selects (case maps are `# case-map:` header
-lines of each suite), and an explicit `--only-suites` name runs all its cases unless `--only-cases L` names a subset
-(exactly one `--only-suites` suite that has a case map; misuse exits 2; `ALL` or an empty list runs every case).
+`pipeline.test.sh`, `parallel-policy.test.sh` and `git-guard.test.sh` take `--case NAMES` and `--list-cases`;
+`--affected` passes the cases `tests/affected.py cases` selects (case maps are `# case-map:` header lines of each
+suite), and an explicit `--only-suites` name runs all its cases unless `--only-cases L` names a subset (exactly one
+`--only-suites` suite that has a case map; misuse exits 2; `ALL` or an empty list runs every case).
+`routing.test.sh` also takes `--case` and `--list-cases` when run by hand, but it has no case map: `--affected` always
+runs all its cases and `--only-cases` rejects it.
