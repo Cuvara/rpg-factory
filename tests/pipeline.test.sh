@@ -313,7 +313,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -854,6 +854,150 @@ if case.startswith('stack-'):
                 g = blockers()
                 assert not any('integrated before its dependency' in x or "lacks a's review PASS" in x for x in g), g
                 assert not any(x.startswith(('a: review is STALE', 'b: review is STALE')) for x in g), g
+        elif case == 'stack-sync-verb':
+            # stacked dispatch, part 3: `sync --task a` tells each stacked dependent whose HEAD lacks a's tip
+            import re
+            plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                                  'paths': ['c.txt'], 'acceptance': ['reviewed'], 'deps': ['a']})
+            tb['orca_run'] = 'run_B'; save()
+            leads = {}
+            for tid in ('c', 'b'):  # a is a candidate, topic-b and topic-c do not exist yet: both stack on a
+                leads[tid] = cli('dispatch', str(pf), '--task', tid, '--phase', 'lead', '--runner', 'print').stdout
+                rec = m.stack_record(plan, tid)
+                assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, (tid, rec)
+            leads['a'] = cli('dispatch', str(pf), '--task', 'a', '--phase', 'lead', '--runner', 'print').stdout
+            # the stacked lead merges its dependency's moves at each subtask boundary, never rebases;
+            # every lead in a worktree repo tells its own dependents with `sync --send`
+            lb = leads['b']
+            assert 'at each subtask boundary' in lb and '`git merge topic-a`' in lb and 'never rebase' in lb, lb
+            for tid, out in leads.items():
+                assert re.search(r'sync <plan> --task (' + tid + r'|<id>) --send', out), (tid, out)
+            # b in the main checkout, c in a worktree of its own, each with its own commit on a
+            git('switch', '--no-track', '-c', 'topic-b', a)
+            bh = commit('b', 'b.txt')
+            wtc = work / 'wt-c'
+            git('worktree', 'add', '-b', 'topic-c', str(wtc), a)
+            def gitc(*args):
+                r = subprocess.run(['git', '-C', str(wtc), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                                   capture_output=True, text=True)
+                assert r.returncode == 0, (args, r.stderr)
+                return r.stdout.strip()
+            (wtc / 'c.txt').write_text('c')
+            gitc('add', 'c.txt'); gitc('commit', '-qm', 'c')
+            a2 = fix_a()  # a moves to a2 on topic-a; b's HEAD lacks it
+            gitc('merge', '--no-ff', '-m', 'sync a', 'topic-a')  # c is up to date
+            ch = gitc('rev-parse', 'HEAD')
+            # the fake orca answers `worktree list` with git's own worktree paths (8.3 short paths stay comparable)
+            wt_rows, cur = [], None
+            for line in git('worktree', 'list', '--porcelain').splitlines():
+                if line.startswith('worktree '):
+                    cur = line[len('worktree '):]
+                elif line.startswith('branch ') and line.endswith(('/topic-b', '/topic-c')):
+                    wt_rows.append({'id': 'wt_' + line[-1], 'path': cur})
+            assert sorted(r['id'] for r in wt_rows) == ['wt_b', 'wt_c'], wt_rows
+            fb = work / 'fakebin'; fb.mkdir()
+            orca_log = work / 'orca.log'
+            (fb / 'fake_orca.py').write_text(
+                'import json, os, sys\n'
+                'with open(' + repr(str(orca_log)) + ', "a", encoding="utf-8") as fh:\n'
+                '    fh.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+                'if sys.argv[1:3] == ["worktree", "list"]:\n'
+                '    print(json.dumps({"ok": True, "result": {"worktrees": ' + json.dumps(wt_rows) + '}})); sys.exit(0)\n'
+                'if sys.argv[1:3] == ["orchestration", "send"] and not os.environ.get("FAKE_ORCA_SEND_FAIL"):\n'
+                '    print(json.dumps({"ok": True, "result": {}})); sys.exit(0)\n'
+                'print("error: run not found", file=sys.stderr); sys.exit(1)\n', encoding='utf-8')
+            if os.name == 'nt':
+                (fb / 'orca.cmd').write_text('@"' + sys.executable + '" "%~dp0fake_orca.py" %*\r\n', newline='')
+            else:
+                (fb / 'orca').write_text('#!/bin/sh\nexec "' + sys.executable + '" "$(dirname "$0")/fake_orca.py" "$@"\n')
+                (fb / 'orca').chmod(0o755)
+            old_path = os.environ['PATH']
+            os.environ['PATH'] = str(fb) + os.pathsep + old_path
+            def sends():
+                calls = ([json.loads(x) for x in orca_log.read_text(encoding='utf-8').splitlines()]
+                         if orca_log.exists() else [])
+                return [c for c in calls if c[:2] == ['orchestration', 'send']]
+            def opt(call, name):
+                return call[call.index(name) + 1]
+            def sync(*extra, rc=0):
+                return cli('sync', str(pf), '--task', 'a', *extra, rc=rc).stdout
+            try:
+                # without --send: b's merge command and its send command, c up to date, nothing sent
+                out = sync()
+                lines = out.splitlines()
+                assert lines and lines[0].startswith('sync: a at ' + a2[:10] + ' (topic-a)'), out
+                bl = [x for x in lines if x.startswith('b: a moved to ' + a2[:10] + ', not in HEAD ' + bh[:10])]
+                assert len(bl) == 1 and 'merge topic-a' in bl[0] and 'rebase' not in bl[0], out
+                assert any(x.startswith('  send: orca orchestration send --to run:run_B --type status') for x in lines), out
+                assert 'c: up to date (HEAD ' + ch[:10] + ' contains a@' + a2[:10] + ')' in out, out
+                assert not any(x.startswith('c: a moved') for x in lines) and 'sent to' not in out, out
+                assert sends() == [], sends()
+                rec = m.sync_record(plan, 'b')
+                assert rec and rec['dep'] == 'a' and rec['ref'] == 'topic-a' and rec['sha'] == a2, rec
+                assert 'merge topic-a' in rec['command'] and rec['to'] == 'run:run_B' and not rec['sent'] and rec['at'], rec
+                assert pathlib.Path(m.sync_file(plan, 'b')).is_file()
+                assert m.sync_record(plan, 'c') is None and not pathlib.Path(m.sync_file(plan, 'c')).exists()
+                # with --send: exactly one status message, to b's lead Run
+                out = sync('--send')
+                assert '  sent to run:run_B' in out.splitlines(), out
+                s = sends()
+                assert len(s) == 1, s
+                assert opt(s[0], '--to') == 'run:run_B' and opt(s[0], '--type') == 'status', s
+                assert opt(s[0], '--subject') == 'sync: a moved to ' + a2[:10], s
+                assert 'merge topic-a' in opt(s[0], '--body'), s
+                assert m.sync_record(plan, 'b')['sent'], m.sync_record(plan, 'b')
+                # a failing send is an error (exit 1), never hidden
+                os.environ['FAKE_ORCA_SEND_FAIL'] = '1'
+                try:
+                    r = pipeline_cli('sync', str(pf), '--task', 'a', '--send')
+                finally:
+                    del os.environ['FAKE_ORCA_SEND_FAIL']
+                assert r.returncode == 1 and '  send FAILED (run:run_B): ' in r.stdout + r.stderr, (r.stdout, r.stderr)
+                # without orca_run: b's lead is addressed by its worktree, from orca's worktree list
+                del tb['orca_run']; save()
+                orca_log.unlink()
+                out = sync('--send')
+                assert '  sent to @worktree:wt_b' in out.splitlines(), out
+                s = sends()
+                assert len(s) == 1 and opt(s[0], '--to') == '@worktree:wt_b', s
+                assert m.sync_record(plan, 'b')['to'] == '@worktree:wt_b', m.sync_record(plan, 'b')
+            finally:
+                os.environ['PATH'] = old_path
+            # status shows the sync note on b until b's HEAD contains a2, never on c
+            note = [n for n in status_row('b')['notes'] if n.startswith('sync:')]
+            assert len(note) == 1 and note[0].startswith('sync: a moved to ' + a2[:10]), note
+            assert 'merge topic-a' in note[0] and 'never rebase' in note[0], note
+            assert not any(n.startswith('sync:') for n in status_row('c')['notes'])
+            git('merge', '--no-ff', '-m', 'sync a', 'topic-a')
+            merged = git('rev-parse', 'HEAD')
+            assert not any(n.startswith('sync:') for n in status_row('b')['notes']), status_row('b')
+            out = sync()
+            assert 'b: up to date (HEAD ' + merged[:10] + ' contains a@' + a2[:10] + ')' in out, out
+            assert m.sync_record(plan, 'b') is None and not pathlib.Path(m.sync_file(plan, 'b')).exists()
+        elif case == 'stack-sync-no-orca':
+            # without Orca the verb still prints every command and exits 0; an unknown task is a usage error
+            tb['orca_run'] = 'run_B'; save()
+            bh = stacked_b(False)
+            a2 = fix_a()
+            real_which = shutil.which
+            def which(cmd, *args, **kw):
+                if os.path.splitext(os.path.basename(str(cmd)))[0].lower() == 'orca':
+                    return None
+                return real_which(cmd, *args, **kw)
+            shutil.which = which
+            try:
+                out = cli('sync', str(pf), '--task', 'a', '--send').stdout
+            finally:
+                shutil.which = real_which
+            lines = out.splitlines()
+            assert any(x.startswith('b: a moved to ' + a2[:10] + ', not in HEAD ' + bh[:10]) and 'merge topic-a' in x
+                       for x in lines), out
+            assert any(x.startswith('  send: orca orchestration send') for x in lines), out
+            assert '  not sent: orca is not on PATH' in lines, out
+            rec = m.sync_record(plan, 'b')
+            assert rec and rec['sha'] == a2 and not rec['sent'], rec
+            r = cli('sync', str(pf), '--task', 'zz', rc=2)
+            assert 'unknown task zz' in r.stderr, (r.stdout, r.stderr)
         elif case == 'stack-gate-missing':
             bh = stacked_b(True)
             b_verdict('review', bh)
