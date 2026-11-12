@@ -6,7 +6,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [1.9.2] - 2026-11-12
 
-asset-gen now loads the comfyui skill in every mode, which fixes the dogfood scenario that failed since 1.7.0. 1.9.2 is the release that passes the full gate: tests/run-all.sh --release and tests/dogfood.sh --installed. 1.9.0 and 1.9.1 were merged but not tagged; 1.9.2 includes everything in them.
+asset-gen now loads the comfyui skill in every mode, which fixes the dogfood scenario that failed since 1.7.0. 1.9.0 and 1.9.1 were merged but not tagged (their release gates failed on issues fixed since); 1.9.2 includes everything in them.
 
 ### Fixed
 
