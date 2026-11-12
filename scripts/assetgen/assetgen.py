@@ -5,7 +5,7 @@ Usage:
   assetgen.py list [--kind purpose|style|template] [--authoring DIR] [--json]
   assetgen.py show ID [--kind K] [--authoring DIR] [--json]
   assetgen.py resolve --purpose P [--style S] [--template T] [--family F] [--style-override REASON] [--authoring DIR]
-                      [--out FILE] [--verbose] [--json]
+                      [--max-outputs N] [--out FILE] [--verbose] [--json]
   assetgen.py render (--run RUN | --spec FILE --prompt-file FILE --out FILE) [--param NAME=VALUE]... [--authoring DIR]
   assetgen.py lint [PATH...] [--authoring DIR] [--json]
   assetgen.py review-cmd --phase prompt|image --run RUN [--codex BIN] [--no-write] [--authoring DIR] [--json]
@@ -13,6 +13,7 @@ Usage:
   assetgen.py defringe --run RUN [--alpha-floor N] [--force] [--authoring DIR] [--json]
   assetgen.py qa --run RUN [--authoring DIR] [--json]
   assetgen.py finalize --run RUN [--force] [--authoring DIR] [--json]
+  assetgen.py budget --run RUN [--authoring DIR] [--json]
   assetgen.py manifest --run RUN [--title T] [--prompt-author A] [--generated-by G] [--authoring DIR] [--json]
   assetgen.py publish --run RUN --comfy-url URL [--authoring DIR] [--json]
   assetgen.py promote-anchor --run RUN --output N|PATH --family F --dimensions a,b --strength S [--id ID]
@@ -139,16 +140,23 @@ after_pixels_sha256 still equals every output that needs it (or no output needs 
 rewritten. Outputs that qa.json or an image review already bind and that still need defringe stop it with FAIL at
 defringe (defringe's own refusal) unless --force; --force is passed to defringe only. It prints which image reviews
 (review-image.json, review-image-claude.json) it made stale ("stale now (re-run them): ..."; qa.json is rewritten, so
-never listed). --json: one object, schema rpg-factory.assetgen-finalize/1 (steps, stale, state, exit).
+never listed). --json: one object, schema rpg-factory.assetgen-finalize/1 (steps, stale, state, exit, budget).
+
+Spend guard (scripts/assetgen/budget.py): resolve records spec.budget = {"max_outputs": N} (--max-outputs N, default
+4; not a whole number >= 1: exit 2). budget --run prints used (the run's outputs/*.png + the failed attempts of its
+series), allowed and remaining; it exits 1 only when used exceeds allowed or spec.budget is malformed. A spec.json
+without budget (resolved before the spend guard) is unlimited, never a failure. The limit is advisory: the engine cannot
+stop comfy-mcp, so the asset-gen skill runs budget before each run_workflow. finalize prints the budget line before its
+summary line (--json: key "budget") and keeps its own exit code.
 
 Failed attempts: a run whose generation, QA or review failed for good keeps its directory without run.md; the next
 attempt is <slug>-NNN+1 (fresh resolve, prompt, reviews). manifest of a run lists the lower-numbered sibling dirs of
 its series (same slug) that have no run.md in spec.trace.failed_attempts.
 
 Read-only verbs: list, show, resolve (without --out), lint, drift and review-cmd --no-write (factory-cmd forwards only
-these). The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json, references/anchor-*.png),
-defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json), finalize (all of those),
-manifest (run.md) and
+these), and budget. The others write: resolve/render --out, render --run (workflow.json, workflow.ui.json,
+references/anchor-*.png), defringe (outputs/*.png, outputs-raw/, defringe.json), embed (outputs/*.png), qa (qa.json),
+finalize (all of those), manifest (run.md) and
 review-cmd --phase image (review/tile-2x2.png of a tileable purpose, review/composite-*.png of an output with alpha) in
 the given run dir, approve-record (run.md and <authoring>/approvals/AGEN-<run-id>/), promote-anchor
 (assetgen/styles/<style>/anchors/<id>.json + .png, status proposed only) and reject
@@ -162,8 +170,10 @@ Exit codes: 0 ok/PASS, 1 FAIL or error, 2 usage, 3 NOT_AVAILABLE (qa, finalize, 
 is not --out): allow_abbrev=False on every parser.
 """
 import argparse
+import contextlib
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -177,6 +187,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import approval  # noqa: E402
+import budget  # noqa: E402
 import finalize  # noqa: E402
 import imaging  # noqa: E402
 import layers  # noqa: E402
@@ -1074,6 +1085,36 @@ def failed_attempts(run_dir):
     return out
 
 
+def run_budget(run_dir, spec):
+    """budget.state of a run: its outputs plus the failed attempts of its series (none for a dir not <slug>-NNN)."""
+    name = os.path.basename(os.path.normpath(run_dir))
+    return budget.state(run_dir, spec, failed_attempts(run_dir) if RUN_ID.match(name) else [])
+
+
+def finalize_with_budget(run_dir, force, as_json):
+    """finalize.run plus the budget state (text: a line before the summary line; --json: key "budget"). The exit code
+    stays finalize's; a refusal (SystemExit from its precheck) prints what it printed and is re-raised unchanged."""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = finalize.run(sys.modules[__name__], run_dir, force, as_json)
+    except BaseException:
+        sys.stdout.write(buf.getvalue())
+        sys.stdout.flush()
+        raise
+    out = buf.getvalue()
+    st = run_budget(run_dir, load_spec(os.path.join(run_dir, "spec.json")))
+    if as_json:
+        obj = json.loads(out)
+        obj["budget"] = st
+        print(json.dumps(obj, indent=1, sort_keys=True))
+    else:
+        lines = out.rstrip("\n").split("\n")
+        lines.insert(len(lines) - 1, budget.line(st))
+        print("\n".join(lines))
+    return code
+
+
 def manifest(run_dir, title=None, prompt_author="claude", generated_by="claude"):
     """(front matter, reset, changes): the gen-run front matter; reset when an earlier status other than proposed
     went back to proposed, changes the bound fields that made an approved run proposed (approval.bound_changes).
@@ -1417,6 +1458,9 @@ def resolve_text(spec, verbose):
         warnings.append("filename_prefix %s is not bound to a run: resolve --out <authoring>/assetgen/runs/<run-id>/spec.json"
                         % spec["params"]["filename_prefix"])
     lines += ["warning: " + w for w in warnings]
+    if isinstance(spec.get("budget"), dict) and "max_outputs" in spec["budget"]:
+        lines.append("budget: at most %s outputs per run series (advisory; assetgen.py budget --run)"
+                     % spec["budget"]["max_outputs"])
     lines.append("(sources of every param, hint and field: --verbose or --json)")
     return "\n".join(lines)
 
@@ -1432,6 +1476,8 @@ def main(argv=None):
     c = sp("resolve"); c.add_argument("--purpose", required=True); c.add_argument("--style"); c.add_argument("--template")
     c.add_argument("--family"); c.add_argument("--style-override", metavar="REASON")
     c.add_argument("--authoring"); c.add_argument("--out")
+    c.add_argument("--max-outputs", metavar="N", help="advisory limit of generations per run series, recorded as "
+                   "spec.budget.max_outputs (default %d)" % budget.DEFAULT_MAX_OUTPUTS)
     c.add_argument("--verbose", action="store_true", help="also print the source of every param, hint and field")
     c.add_argument("--json", action="store_true")
     run_help = ("run directory, or run id <slug>-NNN resolved under <authoring>/assetgen/runs/ (--authoring, else the "
@@ -1457,6 +1503,7 @@ def main(argv=None):
     c = sp("publish"); run_arg(c); c.add_argument("--comfy-url", required=True)
     c.add_argument("--json", action="store_true")
     c = sp("qa"); run_arg(c); c.add_argument("--json", action="store_true")
+    c = sp("budget"); run_arg(c); c.add_argument("--json", action="store_true")
     c = sp("finalize"); run_arg(c)
     c.add_argument("--force", action="store_true", help="let defringe rewrite outputs that qa.json or an image review "
                    "already bind (they are stale afterwards: re-run them)")
@@ -1491,7 +1538,14 @@ def main(argv=None):
         if a.cmd == "resolve":
             if a.family is not None and not stylelock.ID.match(a.family):
                 fail("--family %r must be a lowercase id (characters, environment, props, ui, vfx, ...)" % a.family, 2)
+            max_outputs = budget.DEFAULT_MAX_OUTPUTS
+            if a.max_outputs is not None:
+                try:
+                    max_outputs = budget.parse_max(a.max_outputs)
+                except ValueError as exc:
+                    fail("--max-outputs %s: %s" % (a.max_outputs, exc), 2)
             spec = resolve_spec(a.purpose, a.style, a.template, authoring, a.family, a.style_override)
+            spec["budget"] = {"max_outputs": max_outputs}
             run_dir = os.path.dirname(os.path.abspath(a.out)) if a.out else ""
             if a.out and os.path.basename(a.out) == "spec.json" and RUN_ID.match(os.path.basename(run_dir)):
                 spec = bind_run(spec, os.path.basename(run_dir))
@@ -1585,8 +1639,14 @@ def main(argv=None):
             report, text, code = qa_run(a.run)
             emit(report, a.json, text)
             return code
+        if a.cmd == "budget":
+            if not os.path.isfile(os.path.join(a.run, "spec.json")):
+                fail("budget needs <run>/spec.json (resolve --out first)")
+            st = run_budget(a.run, load_spec(os.path.join(a.run, "spec.json")))
+            emit(st, a.json, budget.line(st))
+            return st["exit"]
         if a.cmd == "finalize":
-            return finalize.run(sys.modules[__name__], a.run, a.force, a.json)
+            return finalize_with_budget(a.run, a.force, a.json)
         if a.cmd == "promote-anchor":
             rec = promote_anchor(a.run, a.output, a.family, a.dimensions, a.strength, a.id)
             emit(rec, a.json, "wrote %s: anchor %s proposed (a person approves it: status active, approved_by, approved_on)"
