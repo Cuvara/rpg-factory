@@ -42,7 +42,7 @@ PATH); the result is the integration verdict note. The release itself is gated b
 - A Codex verify worker's first shell call went through WSL bash (`wsl.exe` on PATH). It ran only read-only git
   commands and `core.worktree` was checked afterwards (unset); the rule in `.claude/CLAUDE.md` still holds.
 - `claude plugin validate` prints the non-failing notes LICENSE_MISSING and ICON_MISSING.
-- run-all's default workspace `/mnt/c/Workspaces/UnityIndie` does not resolve from Git Bash; checks need
+- run-all's default workspace (a WSL drive spelling) does not resolve from Git Bash; checks need
   `RPG_FACTORY_WORKSPACE` set to a Windows path.
 
 ### Cost
