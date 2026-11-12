@@ -310,6 +310,8 @@ graph = {}
 for node in ui["nodes"]:
     spec = known[node["type"]]
     assert len(node["pos"]) == 2 and len(node["size"]) == 2 and node["title"]
+    if spec.get("ui_only"):
+        continue
     values, inputs = iter(node["widgets_values"]), {}
     for name, decl in spec["inputs"].items():
         if decl["type"] in WIDGETS:
@@ -351,6 +353,72 @@ u="$RUNS/golden-image-edit-001/workflow.ui.json"
 [ -f "$TMP/wf.ui.json" ] && [ "$(jq -r '.extra.assetgen.run_id' "$TMP/wf.ui.json")" = null ] \
   && [ "$(python3 -B "$TMP/ui2api.py" "$KN" "$TMP/wf.ui.json" "$TMP/wf.json" 2>&1)" = ok ] \
   && ok "render --out X.json also writes X.ui.json (no run id)" || no "render --out ui file"
+
+echo "-- workflow.ui.json: ui block groups, notes, colors"
+cp "$ROOT/tests/fixtures/assetgen/ui-layout.json" "$GL/templates/ui-layout.json"
+mkrun ui-layout-001 icon --style stylized-painterly --authoring "$AUTH" --template ui-layout
+ud="$RUNS/ui-layout-001"
+AG render --run "$ud" >"$TMP/o" 2>"$TMP/err"; rc=$?
+python3 -B - "$ud/workflow.ui.json" "$ud/workflow.json" "$ROOT/tests/fixtures/assetgen/ui-layout.json" >"$TMP/ui-layout-check" 2>&1 <<'EOF'
+import json, sys
+ui, api, fixture = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:])
+groups, nodes = ui["groups"], {n["id"]: n for n in ui["nodes"]}
+settings = fixture["ui"]
+assert [(g["id"], g["title"], g["color"], g["font_size"], g["flags"]) for g in groups] == [
+    (1, "Prompt", "#3f789e", 24, {}), (2, "Generate", "#abc", 24, {}),
+    (3, "Post-process", "#8A8", 24, {}), (4, "Output", "#a1309b", 24, {})]
+notes = [n for n in ui["nodes"] if n["type"] == "Note"]
+assert len(notes) == len(settings["notes"]) == 4
+assert [n["widgets_values"] for n in notes] == [[n["text"]] for n in settings["notes"]]
+assert [n["id"] for n in notes] == list(range(max(map(int, api)) + 1, max(map(int, api)) + 5))
+assert ui["last_node_id"] == max(nodes)
+assert (nodes[1]["color"], nodes[1]["bgcolor"]) == ("#232", "#353")
+assert (nodes[4]["color"], nodes[4]["bgcolor"]) == ("#232", "#353")
+assert nodes[4]["pos"][0] == nodes[5]["pos"][0] and nodes[5]["pos"][1] < nodes[4]["pos"][1]
+def rect(node):
+    x, y = node["pos"]
+    w, h = node["size"]
+    return (x, y - 30, x + w, y + h)
+def bounds(group):
+    x, y, w, h = group["bounding"]
+    return (x, y, x + w, y + h)
+def contains(a, b):
+    return a[0] <= b[0] and a[1] <= b[1] and a[2] >= b[2] and a[3] >= b[3]
+def intersects(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+for group, decl in zip(groups, settings["groups"]):
+    members = {int(n) for n in decl["nodes"]}
+    members.update(n["id"] for n, note in zip(notes, settings["notes"]) if note["group"] == group["title"])
+    box = bounds(group)
+    assert all(contains(box, rect(nodes[n])) for n in members), group
+    assert all(not intersects(box, rect(n)) for nid, n in nodes.items() if nid not in members), group
+for left, right in zip(groups, groups[1:]):
+    assert bounds(left)[2] <= bounds(right)[0], (left, right)
+print("ok")
+EOF
+layout_rc=$?
+out=$(python3 -B "$TMP/ui2api.py" "$KN" "$ud/workflow.ui.json" "$ud/workflow.json" 2>&1)
+[ $rc -eq 0 ] && [ $layout_rc -eq 0 ] && [ "$out" = ok ] \
+  && ok "ui block: group bounds, notes, colors, row order and API round trip" \
+  || no "ui block render rc=$rc layout rc=$layout_rc" "$(cat "$TMP/err" "$TMP/ui-layout-check"); $out"
+cp "$ud/workflow.json" "$TMP/ui-layout-workflow.json"
+cp "$ud/spec.json" "$TMP/ui-layout-spec.json"
+jq 'del(.template.data.ui)' "$TMP/ui-layout-spec.json" > "$ud/spec.json"
+AG render --run "$ud" >"$TMP/o" 2>"$TMP/err"; rc=$?
+[ $rc -eq 0 ] && cmp -s "$TMP/ui-layout-workflow.json" "$ud/workflow.json" \
+  && ok "ui block leaves workflow.json identical" || no "ui block changes workflow.json rc=$rc" "$(cat "$TMP/err")"
+for bad in unknown-node duplicate-node unknown-group; do
+  case "$bad" in
+    unknown-node) filter='.template.data.ui.groups[0].nodes += ["999"]' ;;
+    duplicate-node) filter='.template.data.ui.groups[1].nodes += ["3"]' ;;
+    unknown-group) filter='.template.data.ui.notes[0].group = "Missing"' ;;
+  esac
+  jq "$filter" "$TMP/ui-layout-spec.json" > "$ud/spec.json"
+  AG render --run "$ud" >"$TMP/o" 2>"$TMP/err"; rc=$?
+  [ $rc -eq 1 ] && grep -q 'workflow.ui.json' "$TMP/o" "$TMP/err" \
+    && ok "ui block rejects $bad" || no "ui block $bad rc=$rc" "$(cat "$TMP/o" "$TMP/err")"
+done
+rm -f "$GL/templates/ui-layout.json"
 
 echo "-- filename_prefix: one value in spec.json, workflow.json, review prompts and run.md"
 mkrun prefix-icon-001 icon --style stylized-painterly; pd="$RUNS/prefix-icon-001"; want=assetgen/prefix-icon-001
