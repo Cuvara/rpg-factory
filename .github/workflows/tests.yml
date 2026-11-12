@@ -1,8 +1,16 @@
-# Plugin test suite on clean Linux and Windows (Git Bash) runners. The RPG MMO workspace (server, client, Netcode, UnityDots,
-# UIToolkit) is not available here, so this runs `tests/run-all.sh -j 4 --no-workspace --no-claude`: every
-# check that needs those repos on disk (registry paths, facts, pin-status, wire-parity, package-ready,
-# netcode headless, live context/status) is reported as SKIP, never as PASS. Those still have to be run
-# locally with the workspace (`tests/run-all.sh`) before a release.
+# Plugin test suite on clean Linux and Windows (Git Bash) runners. The RPG MMO workspace (server, client, Netcode,
+# UnityDots, UIToolkit) is not available here, so every run uses `--no-workspace --no-claude`: each check that needs
+# those repos on disk (registry paths, facts, pin-status, wire-parity, package-ready, netcode headless, live
+# context/status) is reported as SKIP, never as PASS. Those still have to be run locally with the workspace
+# (`tests/run-all.sh`) before a release.
+#
+# On pull_request and push the plan job (scripts/ci-plan.py, which calls tests/affected.py) selects only the suites a
+# change affects, one matrix job per {suite, os}. A change to CI plumbing (workflows, actions, run-all, affected.py,
+# the plan itself) or a base that cannot be used plans every suite. workflow_dispatch with `full` (default true)
+# runs every suite. A suite runs on ubuntu-24.04, and also on windows-2025 when tests/ci-windows-suites.txt names
+# it. The inline checks (JSON parse, bash -n, py_compile, ...) always run on both OSes, also when no suite is
+# selected. `ci-ok` is the single required check: it fails when any needed job failed or was cancelled and passes
+# when the suite matrix is skipped because nothing is affected.
 name: tests
 
 on:
@@ -10,6 +18,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      full:
+        description: Run every suite (otherwise only the suites affected since the base)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -18,18 +31,62 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  run-all:
-    name: run-all (no workspace, ${{ matrix.os }})
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+      full: ${{ steps.plan.outputs.full }}
+      inline: ${{ steps.inline.outputs.inline }}
+    steps:
+      - name: LF checkout (shell scripts must not get CRLF on Windows)
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: Plan the suites (scripts/ci-plan.py)
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          FULL_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+        run: |
+          base=""
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+          esac
+          args=(--base "$base" --event "$EVENT" --summary "$GITHUB_STEP_SUMMARY" --github-output "$GITHUB_OUTPUT")
+          [ "$FULL_INPUT" = "true" ] && args+=(--full)
+          python3 -B scripts/ci-plan.py "${args[@]}"
+
+      # The inline checks do not depend on the plan: they run even when no suite is selected.
+      - name: Inline checks always run
+        id: inline
+        run: echo 'inline=true' >> "$GITHUB_OUTPUT"
+
+  suite:
+    name: suite ${{ matrix.suite }} (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.count != '0'
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-2025]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
     steps:
       - name: LF checkout (shell scripts must not get CRLF on Windows)
         run: git config --global core.autocrlf false
@@ -38,48 +95,39 @@ jobs:
         with:
           persist-credentials: false
 
-      # A real python3.exe, not a bash shim: native Python subprocess calls (hooks, checks) must be able to run it.
-      - name: python3 on PATH (Windows runners ship python only)
-        if: runner.os == 'Windows'
-        run: |
-          if ! command -v python3 >/dev/null 2>&1; then
-            dir=$(dirname "$(command -v python)")
-            cp "$dir/python.exe" "$dir/python3.exe"
-          fi
-          python3 -c "import sys; print(sys.executable)"
+      - uses: ./.github/actions/setup-ci
 
-      # The runner's default TEMP is an 8.3 short path (C:\Users\RUNNER~1\...), which git and Python expand
-      # differently. Use the long-named runner temp directory instead.
-      - name: Long temp path (Windows)
-        if: runner.os == 'Windows'
+      - name: Artifact name
+        env:
+          SUITE: ${{ matrix.suite }}
+          OS: ${{ matrix.os }}
         run: |
-          t=$(cygpath -m "$RUNNER_TEMP")
-          { echo "TMPDIR=$t"; echo "TMP=$t"; echo "TEMP=$t"; } >> "$GITHUB_ENV"
+          name=$(printf '%s' "$SUITE" | tr '/.' '--')
+          echo "ARTIFACT=suite-log-$name-$OS" >> "$GITHUB_ENV"
 
-      - name: Tool versions
-        run: |
-          python3 --version
-          jq --version
-          git --version
-
-      - name: Git identity and defaults for test fixtures
-        run: |
-          git config --global user.email ci@example.invalid
-          git config --global user.name ci
-          git config --global init.defaultBranch main
-
-      - name: tests/run-all.sh -j 4 --no-workspace --no-claude
+      - name: Run the suite
+        env:
+          SUITE: ${{ matrix.suite }}
+          CASES: ${{ matrix.cases }}
+        # Always through run-all: its run line sets the suite's environment (e.g. `env -u TMPDIR`). run-all has no
+        # flag to give --only-suites a case subset (an explicit --only-suites name runs all its cases), so a plan row
+        # with a case subset still runs every case of its suite; the planned cases are shown in the summary.
         run: |
           set -o pipefail
-          tests/run-all.sh -j 4 --no-workspace --no-claude 2>&1 | tee run-all.log
+          echo "plan cases: $CASES"
+          tests/run-all.sh --only-suites "$SUITE" --no-workspace --no-claude 2>&1 | tee suite.log
 
       - name: Summary
         if: always()
+        env:
+          SUITE: ${{ matrix.suite }}
+          CASES: ${{ matrix.cases }}
+          OS: ${{ matrix.os }}
         run: |
           {
-            echo '### tests/run-all.sh -j 4 --no-workspace --no-claude'
+            echo "### $SUITE ($OS, cases: $CASES)"
             echo '```'
-            grep -E '^(FAIL|SKIP) |^run-all:|^wall time:' run-all.log || echo 'no run-all.log'
+            grep -E '^(FAIL|SKIP) |^run-all:|^wall time:' suite.log || echo 'no suite.log'
             echo '```'
             echo 'Workspace checks are skipped here; run `tests/run-all.sh` locally with the workspace.'
           } >> "$GITHUB_STEP_SUMMARY"
@@ -87,7 +135,78 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: run-all-log-${{ matrix.os }}
-          path: run-all.log
+          name: ${{ env.ARTIFACT }}
+          path: suite.log
           retention-days: 14
           if-no-files-found: warn
+
+  inline-checks:
+    name: inline checks (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.inline == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: LF checkout (shell scripts must not get CRLF on Windows)
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - name: tests/run-all.sh --inline-only --no-workspace --no-claude
+        run: |
+          set -o pipefail
+          tests/run-all.sh --inline-only --no-workspace --no-claude 2>&1 | tee inline.log
+
+      - name: Summary
+        if: always()
+        env:
+          OS: ${{ matrix.os }}
+        run: |
+          {
+            echo "### inline checks ($OS)"
+            echo '```'
+            grep -E '^(FAIL|SKIP) |^run-all:|^wall time:' inline.log || echo 'no inline.log'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: inline-log-${{ matrix.os }}
+          path: inline.log
+          retention-days: 14
+          if-no-files-found: warn
+
+  # The single required check (branch protection names only `ci-ok`). `always()` keeps it running when a needed job
+  # failed or was skipped: a skipped suite job (count 0, nothing affected) passes, a failed or cancelled job fails.
+  ci-ok:
+    name: ci-ok
+    needs: [plan, suite, inline-checks]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every needed job succeeded or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          plan=$(echo "$NEEDS" | jq -r '.plan.result')
+          bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          if [ "$plan" != "success" ]; then
+            echo "ci-ok: plan is $plan, not success" >&2
+            exit 1
+          fi
+          if [ -n "$bad" ]; then
+            echo "ci-ok: failed or cancelled: $bad" >&2
+            exit 1
+          fi
+          echo "ci-ok: all needed jobs succeeded or were skipped"
