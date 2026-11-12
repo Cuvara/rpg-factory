@@ -87,7 +87,7 @@ lead's workflow asks for in a run directory or the game layer.
   assetgen, writing nothing locally (exit 0 PASS, 1 FAIL: HTTP error, 2 usage: bad run id or URL, 3 `NOT_AVAILABLE`:
   connection refused). An embedded output PNG dragged in restores the graph.
 - **Setup** (once, the user's machine): invoke `rpg-factory:comfy-desktop-setup` (a local Desktop instance, the vendored
-  9router node, comfy-mcp registered with the running port for Claude and Codex; `scripts/comfy-desktop-setup.py --check` first). Headless ComfyUI: install `comfy-mcp` yourself and set `COMFY_LOCAL_URL`. New MCP servers load only in a new session.
+  9router node, comfy-mcp registered with the running port for Claude and Codex; its own `--check` first). Headless ComfyUI: install `comfy-mcp` yourself and set `COMFY_LOCAL_URL`. New MCP servers load only in a new session.
 - **Add a purpose:** copy the closest `templates/assetgen/purposes/*.json` (game layer for one game, core for all),
   keep the schema id, write guidance, both rubrics, `constraints` (only the technical hints of
   `data/precedence.json`; lint fails any other), `qa` (size `mode` exact|min|aspect|orientation|area|any;
