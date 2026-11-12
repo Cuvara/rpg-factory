@@ -65,7 +65,8 @@ Run directory (<authoring>/assetgen/runs/<run-id>/, run-id = <slug>-NNN, e.g. ir
                       render --run refuses a spec.json whose filename_prefix is not assetgen/<run-id> and a
                       --param filename_prefix
   workflow.ui.json    render: the same graph as a ComfyUI frontend (LiteGraph) workflow, run id in extra.assetgen
-                      (uiworkflow.py); written next to workflow.json (render --out X.json: X.ui.json)
+                      (uiworkflow.py); optional template ui supplies groups, ui_only Note nodes, node colors and row
+                      hints, never included in workflow.json; written next to workflow.json (render --out X.json: X.ui.json)
   outputs/*.png       comfy-mcp fetch_outputs out_dir; for a purpose with alpha defringe rewrites them (below); embed
                       then adds a `workflow` tEXt chunk (workflow.ui.json, compact JSON) before IEND of each PNG (prompt
                       chunk kept; a PNG whose chunk is the current workflow.ui.json is kept byte for byte, a stale
@@ -1573,7 +1574,8 @@ def main(argv=None):
             if not errors:
                 try:
                     ui = uiworkflow.to_ui(workflow, lint.known_nodes(),
-                                          {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}})
+                                          {"assetgen": {"run_id": run_id, "workflow": os.path.basename(out)}},
+                                          spec["template"]["data"].get("ui"))
                 except ValueError as exc:
                     errors.append("workflow.ui.json: %s" % exc)
             if errors:
