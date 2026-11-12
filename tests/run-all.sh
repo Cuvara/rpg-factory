@@ -47,7 +47,9 @@
 #                   records its wall seconds in <persistent state dir>/run-all/timings.json, JSON Lines, one object
 #                   per suite path ({"suite", "seconds", "rc", "cases": "A,B" or null, "head", "date"}, sorted by
 #                   suite); a suite run again replaces its line, the other suites' lines stay. Estimates only: it never
-#                   changes a count, a line, the exit code or suite reuse, and a timings error is ignored.
+#                   changes a count, a line, the exit code or suite reuse, and a timings error is ignored. Concurrent
+#                   runs merge under the lock dir <persistent state dir>/locks/run-all-timings (waited for at most
+#                   10 s, then the write is skipped; a lock older than 60 s or held by a dead pid is taken over).
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/compat.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/gitcfg-guard.sh"
@@ -666,41 +668,155 @@ runall_prepare() {
 # timings_write: merge this run's suite timings into $STATE/run-all/timings.json (JSON Lines, one object per suite,
 # sorted by suite; a suite run again replaces its line, an unreadable or malformed line is dropped). Estimates only:
 # every error is swallowed and nothing is printed, so counts, lines, the exit code and reuse never depend on it.
+# Two targeted runs (the two test slots) may finish together: the read, merge and replace hold the lock directory
+# $STATE/locks/run-all-timings (os.mkdir, the holder's pid in its pid file), or the last writer would drop the other
+# run's rows. A busy lock is retried every 0.1 s for at most 10 s, then the write is given up silently; a lock dir older
+# than 60 s, or whose pid names a dead process, is stale and removed once before retrying; the holder always releases.
+# Test hook RUNALL_TIMINGS_BARRIER=<dir>: the holder touches <dir>/read.<pid> after its read and waits (at most 60 s)
+# for <dir>/go; a writer that finds the lock held touches <dir>/waiting.<pid> once (its lock wait is then 60 s).
 timings_write() {
   [ -n "$STATE" ] && [ "${#TIMINGS[@]}" -gt 0 ] || return 0
   python3 -B - "$STATE" "$HEAD_SHA" "${TIMINGS[@]}" > /dev/null 2>&1 <<'PY' || :
-import datetime, json, os, sys
+import datetime, json, os, sys, time
 state, head, *flat = sys.argv[1:]
 p = os.path.join(state, 'run-all', 'timings.json')
-rows = {}
-try:
-    with open(p, encoding='utf-8') as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(r, dict) and isinstance(r.get('suite'), str) and r['suite']:
-                rows[r['suite']] = r
-except (OSError, UnicodeDecodeError):
-    pass
-date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-for i in range(0, len(flat) - 3, 4):
-    suite, secs, rc, cases = flat[i:i + 4]
+lock = os.path.join(state, 'locks', 'run-all-timings')
+lock_pid = os.path.join(lock, 'pid')
+barrier = os.environ.get('RUNALL_TIMINGS_BARRIER', '')
+me = str(os.getpid())
+
+def touch(name):
+    if barrier:
+        try:
+            open(os.path.join(barrier, f'{name}.{me}'), 'a').close()
+        except OSError:
+            pass
+
+def holder():
     try:
-        rows[suite] = dict(suite=suite, seconds=int(secs), rc=int(rc), cases=cases or None, head=head or None, date=date)
-    except ValueError:
-        continue
-os.makedirs(os.path.dirname(p), exist_ok=True)
-tmp = p + f'.{os.getpid()}.tmp'
+        with open(lock_pid, encoding='utf-8') as f:
+            return f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return ''
+
+def alive(pid):
+    if os.name == 'nt':   # never os.kill here: on Windows it terminates the process
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL('kernel32', use_last_error=True)
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = k.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() != 87   # 87: no such process; any other error counts as alive
+        try:
+            code = wintypes.DWORD()
+            return not k.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+def stale(pid):
+    try:
+        if time.time() - os.stat(lock).st_mtime > 60:
+            return True
+    except OSError:
+        return False   # gone: the next mkdir takes it
+    # no pid yet: the holder writes it right after its mkdir, so only the age can make it stale
+    return pid.isdigit() and not alive(int(pid))
+
+def acquire():
+    deadline = time.monotonic() + (60 if barrier else 10)
+    waiting = reclaimed = False
+    while True:
+        try:
+            os.mkdir(lock)
+        except FileExistsError:
+            pass
+        else:
+            try:
+                with open(lock_pid, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(me + '\n')
+            except OSError:
+                release()
+                raise
+            return True
+        if not waiting:
+            touch('waiting')
+            waiting = True
+        if not reclaimed:
+            pid = holder()
+            if stale(pid):
+                reclaimed = True
+                if holder() == pid:   # still the holder judged stale, not a new one
+                    try:
+                        if pid:
+                            os.remove(lock_pid)
+                        os.rmdir(lock)
+                    except OSError:
+                        pass
+                continue
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+def release():
+    try:
+        if holder() in (me, ''):   # never remove a lock another writer took over
+            if os.path.exists(lock_pid):
+                os.remove(lock_pid)
+            os.rmdir(lock)
+    except OSError:
+        pass
+
+os.makedirs(os.path.dirname(lock), exist_ok=True)
+if not acquire():
+    sys.exit(0)   # an estimate is not worth blocking a run: give up silently
 try:
-    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
-        for suite in sorted(rows):
-            f.write(json.dumps(rows[suite], sort_keys=False) + '\n')
-    os.replace(tmp, p)
+    rows = {}
+    try:
+        with open(p, encoding='utf-8') as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and isinstance(r.get('suite'), str) and r['suite']:
+                    rows[r['suite']] = r
+    except (OSError, UnicodeDecodeError):
+        pass
+    touch('read')
+    if barrier:
+        until = time.monotonic() + 60
+        while not os.path.exists(os.path.join(barrier, 'go')) and time.monotonic() < until:
+            time.sleep(0.05)
+    date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    for i in range(0, len(flat) - 3, 4):
+        suite, secs, rc, cases = flat[i:i + 4]
+        try:
+            rows[suite] = dict(suite=suite, seconds=int(secs), rc=int(rc), cases=cases or None, head=head or None, date=date)
+        except ValueError:
+            continue
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + f'.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+            for suite in sorted(rows):
+                f.write(json.dumps(rows[suite], sort_keys=False) + '\n')
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 finally:
-    if os.path.exists(tmp):
-        os.remove(tmp)
+    release()
 PY
 }
 runall_finish() {

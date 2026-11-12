@@ -7,7 +7,8 @@
   the exit code are unchanged; `--suite-warn` below 1 is a usage error (exit 2).
 - **run-all: per-suite timings.** Every suite that ran records its wall seconds, exit status and case list in the
   persistent state dir's `run-all/timings.json` (JSON Lines, one line per suite; a suite run again replaces its line),
-  for later estimates. A reused PASS record, a syntax line or a block is not timed, and a timings error never changes a
+  for later estimates. Two runs finishing together merge under a lock (`locks/run-all-timings`, waited for at most
+  10 s, then the write is skipped), so neither drops the other's lines. A reused PASS record, a syntax line or a block is not timed, and a timings error never changes a
   count, a result line, the exit code or suite reuse.
 
 ### Fixed

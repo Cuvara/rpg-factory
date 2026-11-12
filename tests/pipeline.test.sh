@@ -4685,6 +4685,76 @@ if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "PASS  reused (reused tests/zz-reuse.sh inp
 else rp_no "timings reuse: rc=$RP_RC, ran: $(cat "$RT/ran" 2>/dev/null)" "$RP_OUT"; fi
 rp_check "timings: a reused suite gets no line; the suites that ran replace theirs" \
   "$S1/run-all/timings.json" "{\"tests/other.sh\": $OTHER, \"tests/zz-fail.sh\": [3, null], \"tests/zz-pass.sh\": [0, \"alpha\"], \"tests/zz-post.sh\": [0, null]}"
+[ ! -e "$S1/locks/run-all-timings" ] && rp_ok "timings: the lock dir locks/run-all-timings is gone after every write" \
+  || rp_no "timings: the lock dir is left behind: $(ls -A "$S1/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+
+# Concurrent writers serialize on <STATE>/locks/run-all-timings. writer.sh <state> <suite secs rc cases>...: one
+# timings_write of run-all sourced. The test-only barrier RUNALL_TIMINGS_BARRIER orders it without timing: writer A
+# holds the lock after its read (read.<pid>) until go exists; writer B starts then and must find the lock held
+# (waiting.<pid>). Without the lock B would write first and A's stale snapshot would drop B's row. Waits are bounded
+# polls on file existence (600 x 0.1 s), never an assertion on elapsed time.
+cat > "$RT/writer.sh" <<'W'
+state=$1; shift; rows=("$@"); set --
+. "$ROOT_UNDER_TEST/tests/run-all.sh"
+STATE=$state; HEAD_SHA=fixture-head; TIMINGS=("${rows[@]}")
+timings_write
+W
+rp_write() { ROOT_UNDER_TEST="$ROOT" bash "$RT/writer.sh" "$@"; }
+rp_waitfor() { # <path glob>: 0 once a file matches it, 1 after the bounded poll
+  local i; for ((i = 0; i < 600; i++)); do compgen -G "$1" > /dev/null && return 0; sleep 0.1; done; return 1
+}
+S2="$RT/state2"; RB="$RT/barrier"; mkdir -p "$S2" "$RB"
+RUNALL_TIMINGS_BARRIER="$RB" rp_write "$S2" tests/zz-a.sh 5 0 "" & rp_a=$!
+rp_b=""; rp_seen="A never read"
+if rp_waitfor "$RB/read.*"; then
+  RUNALL_TIMINGS_BARRIER="$RB" rp_write "$S2" tests/zz-b.sh 6 1 beta & rp_b=$!
+  if rp_waitfor "$RB/waiting.*"; then rp_seen=""; else rp_seen="B never found the lock held"; fi
+fi
+rp_reads=$(compgen -G "$RB/read.*" | wc -l | tr -d ' ')
+touch "$RB/go"; wait "$rp_a"; [ -z "$rp_b" ] || wait "$rp_b"
+if [ -z "$rp_seen" ] && [ "$rp_reads" = 1 ]; then rp_ok "timings lock: writer B waited while writer A held the lock after its read"
+else rp_no "timings lock barrier: ${rp_seen:-$rp_reads writers read before go (want 1)}" "$(ls -A "$RB" | tr '\n' ' ')"; fi
+rp_check "timings lock: two concurrent writers keep both runs' rows (A's snapshot does not drop B's line)" \
+  "$S2/run-all/timings.json" '{"tests/zz-a.sh": [0, null], "tests/zz-b.sh": [1, "beta"]}'
+[ ! -e "$S2/locks/run-all-timings" ] && rp_ok "timings lock: released after both writes" \
+  || rp_no "timings lock: left behind after both writes: $(ls -A "$S2/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+# a stale lock is taken over once and the write lands: one held by a dead pid (a python3 that has exited), one older
+# than 60 s with no pid file
+S3="$RT/state3"; mkdir -p "$S3/locks/run-all-timings"
+python3 -B -c 'import os; print(os.getpid())' | tr -d '\r' > "$S3/locks/run-all-timings/pid"
+rp_write "$S3" tests/zz-a.sh 2 0 ""
+rp_check "timings lock: a lock dir whose pid is dead is taken over and the write lands" \
+  "$S3/run-all/timings.json" '{"tests/zz-a.sh": [0, null]}'
+[ ! -e "$S3/locks/run-all-timings" ] && rp_ok "timings lock: the taken-over lock is released after the write" \
+  || rp_no "timings lock: the taken-over lock is left: $(ls -A "$S3/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+mkdir -p "$S3/locks/run-all-timings"
+python3 -B -c 'import os, sys, time; t = time.time() - 120; os.utime(sys.argv[1], (t, t))' "$S3/locks/run-all-timings"
+rp_write "$S3" tests/zz-b.sh 3 0 ""
+rp_check "timings lock: a lock dir older than 60 s without a pid is taken over and the write lands" \
+  "$S3/run-all/timings.json" '{"tests/zz-a.sh": [0, null], "tests/zz-b.sh": [0, null]}'
+[ ! -e "$S3/locks/run-all-timings" ] && rp_ok "timings lock: the aged lock is released after the write" \
+  || rp_no "timings lock: the aged lock is left: $(ls -A "$S3/locks/run-all-timings" 2>&1 | tr '\n' ' ')"
+# a lock held by a live process: the run waits the bounded 10 s, skips the write and keeps its lines, counts and exit
+# status; the holder's lock and the timings file are left as they were. The holder is a python3 that writes its pid and
+# exits once <stop> exists (bounded), so no process is killed.
+S4="$RT/state4"; mkdir -p "$S4/locks"
+python3 -B -c 'import os, sys, time
+os.mkdir(sys.argv[1])
+with open(os.path.join(sys.argv[1], "pid"), "w") as f: f.write(f"{os.getpid()}\n")
+open(sys.argv[2], "w").close()
+for _ in range(1800):
+    if os.path.exists(sys.argv[3]): break
+    time.sleep(0.1)' "$S4/locks/run-all-timings" "$RT/holder.up" "$RT/holder.stop" & rp_h=$!
+if rp_waitfor "$RT/holder.up"; then
+  rp_held=$(cat "$S4/locks/run-all-timings/pid")
+  rp_plan "$S4" 1
+  if [ "$RP_RC" = 1 ] && [ "$RP_OUT" = "$rp_want" ] && [ ! -e "$S4/run-all/timings.json" ] \
+      && [ "$(cat "$S4/locks/run-all-timings/pid" 2>/dev/null)" = "$rp_held" ]; then
+    rp_ok "timings lock: a lock held by a live process skips the write after the bounded wait; lines, counts and exit status unchanged, the holder's lock kept"
+  else rp_no "timings lock held: rc=$RP_RC, timings: $(ls -A "$S4/run-all" 2>&1 | tr '\n' ' '), pid: $(cat "$S4/locks/run-all-timings/pid" 2>&1)" \
+    "$(diff <(echo "$rp_want") <(echo "$RP_OUT"))"; fi
+else rp_no "timings lock held: the holder never started"; fi
+touch "$RT/holder.stop"; wait "$rp_h"
 case_end runall-preflight
 fi
 [ "$reused" = 0 ] || echo "capture once: $reused assertion(s) reused the output of the identical command before them"
