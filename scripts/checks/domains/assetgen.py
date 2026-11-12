@@ -58,6 +58,12 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
   gen-run-refs         purpose, style and template resolve in the core + game layers (content drift = WARN, the
                        record keeps what was used), prompt_sha256 and prompt.md match the recorded prompt, and a
                        handoff contract assetgen-to-<handoff_domain> is registered
+  gen-run-workflow-style
+                       the quality plugin check workflow-style: the run's workflow.ui.json against the workflow style
+                       guide (scripts/assetgen/graphstyle.py ui_violations, node types from
+                       scripts/assetgen/data/known-nodes.json, SaveImage suffixes against assetgen/<run_id>). A first phase: every violation and an unreadable file
+                       are WARN, never FAIL, whatever the run status; no violation is PASS. A run directory without
+                       workflow.ui.json gets no row.
 
 Integrity violations (hash or prompt mismatch, path escape, unmarked same-model review, unresolved ref) always FAIL.
 Missing work (a review, QA, an output file or the model not recorded yet) FAILS once the run claims completeness
@@ -80,12 +86,14 @@ FALLBACK = "SAME_MODEL:"
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
 CLAUDE_REVIEW = "review-image-claude.json"
 REVIEW_TIERS = ROOT / "scripts" / "assetgen" / "data" / "review-tiers.json"
+KNOWN_NODES = ROOT / "scripts" / "assetgen" / "data" / "known-nodes.json"
 _engine = {}
 _review_tiers = []
 
 
 def engine(name):
-    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules; stylelock: anchors and style refs),
+    """scripts/assetgen/<name>.py (layers: the resolver; runfiles: evidence rules; stylelock: anchors and style refs;
+    graphstyle: the workflow style guide),
     loaded once under a private name. stylelock's `import layers` is bound to the private layers module for the load
     only, so sys.modules keeps no engine module under its plain name."""
     if name not in _engine:
@@ -454,7 +462,29 @@ def check(artifact, ctx):
         fails.append("no handoff contract assetgen-to-%s is registered for handoff_domain %r" % (target, target))
     grade("gen-run-refs", fails, todo, warns)
     style_check(artifact, spec, spec_json, lock, recorded, run_id, ctx, grade)
+    ui_file = resolve("workflow.ui.json")
+    if ui_file is not None and ui_file.is_file():
+        grade("gen-run-workflow-style", [], warns=workflow_style_warnings(ui_file, run_id or ui_file.parent.name))
     return results
+
+
+def workflow_style_warnings(ui_file, run_id):
+    """The quality plugin check workflow-style: graphstyle.ui_violations of the run's workflow.ui.json, each a WARN
+    (never FAIL in this first phase, whatever the run status). SaveImage suffixes are checked against the prefix of
+    the run's run_id (assetgen/<run_id>), not the file's own extra.assetgen.run_id."""
+    try:
+        ui = json.loads(ui_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ["workflow.ui.json is not readable JSON"]
+    try:
+        known = json.loads(KNOWN_NODES.read_text(encoding="utf-8"))["nodes"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ["scripts/assetgen/data/known-nodes.json is not readable; the workflow style is not checked"]
+    try:
+        style = engine("graphstyle")
+        return list(style.ui_violations(ui, known, style.RUN_PREFIX + run_id))
+    except Exception as exc:  # a quality check never crashes the run: a graphstyle bug is a WARN naming it
+        return ["the workflow style check failed (%s: %s)" % (type(exc).__name__, exc)]
 
 
 def _git(root, *args):
