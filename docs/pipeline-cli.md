@@ -25,8 +25,9 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   there is no cycle, the waves resolve, a no-worktree repo has no worktree and never two tasks in one wave, and every
   reviewer is of another model than its implementer. It warns (never errors) when one wave shares an exclusive
   resource (queue those runs), when an explicit `implementer` against the "Which model" table has no `reason`, when 3
-  or more tasks all use one model, and when a task's `checks` or acceptance require a full run ("full runs belong to
-  integration QA").
+  or more tasks all use one model, when a task's `checks` or acceptance require a full run ("full runs belong to
+  integration QA"), and when its `checks` contain test suites ("implementers run syntax checks only, verify runs
+  suites").
 - `subplan validate subplan.json` (format: `docs/schemas/pipeline-subplan.schema.json`) prints OK when every
   subtask path is repo-relative (no absolute or `..` path),
   inside the task's owned paths and outside its exclusions, overlapping subtasks are ordered by deps, there is no
@@ -55,13 +56,16 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   integration branch when it exists, because that branch carries the earlier waves. `repos.<key>.base` stays the
   comparison base of `status` and the gate: never point it at the topic (then `base..head` counts nothing and
   integrated tasks show as pending).
-- Stacked task (the rule: delivery.md section 4 "Stacked dependents"): when `status` notes `stackable on <dep>@<sha>`,
+- Stacked task (the rule: delivery.md section 4 "Stacked dependents"): a task stacks when its one in-flight
+  dependency in the same repo is a candidate or reviewed and every other dependency is integrated; two in-flight
+  dependencies, or a pending or implementing one, never stack. When `status` notes `stackable on <dep>@<sha>`,
   `--phase lead` prints `git worktree add --no-track -b <topic>-<id> <path> <dependency tip SHA>` for a sibling beside
   the integration checkout (never a child of the dependency's worktree), `orca worktree set` with the integration
   checkout (else the main checkout) as parent, then the launch; the lead prompt says to implement now and to run no
-  verify, review or QA dispatch before `status` clears it. It records the SHA in `<task>__stack.json` (outside the task
-  fingerprint). A fresh dispatch (no task branch yet) first removes a leftover `<task>__stack.json` and
-  `<task>__sync.json`. Tier XS and no-worktree tasks keep the unchanged handoff.
+  verify, review or QA dispatch before `status` clears it. It records the dependency SHA as the base (a SHA, never a
+  branch name) in `<task>__stack.json`, outside the task fingerprint, so recorded verdicts stay valid. A fresh
+  dispatch (no task branch yet) first removes a leftover `<task>__stack.json` and `<task>__sync.json`. Tier XS and
+  no-worktree tasks keep the unchanged handoff.
 - `dispatch plan.json --task <id> --phase implement --subplan subplan.json --subtask <sid> --runner orca` takes the
   subtask's paths, agent and placement; the ad hoc form is `--paths <subtask paths> [--agent claude|codex]
   [--placement shared|child]`. Paths outside the task's owned paths, or inside its exclusions, are refused; without
@@ -90,7 +94,8 @@ after the verb) reads `skills/delivery/pipeline-defaults.json` instead of the re
   (tests/affected.py)` (N: the Affected cases suites, M: `tests/run-all.sh --list-suites`), or
   `factory-pipeline: selected suites: not computed (<reason>)`, and a warning to narrow the task paths or its checks
   when N is above `--suite-warn N` (default 40; below 1 is a usage error, exit 2). The prompt and exit code do not
-  change. run-all records each suite's wall seconds, exit status and cases in the state dir's
+  change. `tests/run-all.sh --affected` exits 2 when python3 cannot run instead of
+  widening to every suite. run-all records each suite's wall seconds, exit status and cases in the state dir's
   `run-all/timings.json` (JSON Lines).
 - Tier S: `--phase verify` and `--phase qa` mark a task tier S when the plan or the task has tier S or every owned
   path is prose (`pipeline_route.prose_path`): a `.md` file anywhere, a path under `changelog.d/`, or a `skills/`
@@ -139,8 +144,10 @@ factory-pipeline.py sync plan.json --task <id> [--send]
   rebase) and records `<dependent>__sync.json`, the durable signal `status` shows until that HEAD contains the SHA.
   An up-to-date dependent prints `up to date` and its record is removed.
 - `--send` also runs `orca orchestration send --type status` to the dependent's lead: `run:<task orca_run>`, else
-  `@worktree:<its Orca worktree id>`. Without Orca (no address, or orca not on PATH) it prints the command for the
-  lead and exits 0.
+  `@worktree:<its Orca worktree id>`. Without Orca (no address, or no Orca executable on PATH) it prints the command
+  for the lead and exits 0. The message is only a nudge: the durable signal is the `sync` record in `status`.
+- The dependent's task lead, at each subtask boundary, on a `sync:` or `<dep> now at <sha> not in HEAD` note, runs
+  `git merge <dependency branch>` (never a rebase), resolving conflicts only inside its owned paths.
 - Exit 0, 1 when a send failed, 2 usage (`--task integration:<repo>` included).
 
 ## Fallback reviews

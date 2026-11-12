@@ -57,8 +57,9 @@ The stacked-dependent rule is delivery.md section 4, "Stacked dependents" (`poli
 lessons of this repo behind it, each with its reason.
 
 - **Any edit under `scripts/assetgen/*.py` selected every suite:** a leaf file that only an EXTRA pattern of
-  `tests/assetgen.test.sh` covered was unsure, and unsure runs all (fixed in affected-leaf-fix: such an edit now
-  selects only the suites that name or cover the path). A verify that selects most suites costs about an hour.
+  `tests/assetgen.test.sh` covered was unsure, and unsure runs all. The fix (affected-leaf-fix: such an edit selects
+  only the suites that name or cover the path) is on `feat/assetgen/v2-core`, not yet in this topic or main. A verify
+  that selects most suites costs about an hour.
 - **`scripts/factory-cmd.py` widens the selection:** it reaches a wide import closure and selects many suites, while
   `scripts/factory-pipeline.py` is narrowed by `tests/affected.py` `PIPELINE_SUITES`. Keep a task that touches it
   small; the live number is the pre-flight `selected N of M suites` that `dispatch --phase verify` prints (a warning
@@ -67,8 +68,9 @@ lessons of this repo behind it, each with its reason.
   instead of silently running every suite (seen in the finalize-verb verify).
 - **A stacked verify waits for the dependency's review PASS:** verifying earlier tests code that may still change, so
   dispatch exits 2 until the PASS SHA is in HEAD.
-- **Merge, never rebase, the dependency branch:** a rebase rewrites the dependent's commits and drops the stack
-  record's SHA from its history; a merge keeps both, and the gate credits a clean sync merge.
+- **Merge, never rebase, the dependency branch:** a rebase rewrites the dependent's own commits, so the SHAs that its
+  recorded verdicts and the shared worktree name are gone; a clean merge keeps them, and the gate credits it as a
+  sync merge.
 - **One in-flight dependency only:** two would need two moving bases and an ambiguous own delta.
 - **A sibling worktree beside the integration checkout, never a child of the dependency's worktree:** removing the
   dependency's worktree after its integration would take a child with it, and a `<dep branch>--*` name reads as the
