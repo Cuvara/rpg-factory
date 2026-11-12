@@ -141,8 +141,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
         a merge of the default branch, never make a review STALE), QA is PASS on each integration HEAD, the
         integration trees are clean, fast checks are PASS and not STALE, every change sits in some task's owned
-        paths (the plan file and its report.md belong to the run lead and are never stray), verdicts match the
-        current plan (fingerprint), and no worktree of a no-worktree repo was created for the plan. A subtask
+        paths (the plan file, its report.md and the backlog beside it, docs/plans/backlog.md, belong to the run lead
+        and are never stray), verdicts match the current plan (fingerprint), and no worktree of a no-worktree repo
+        was created for the plan. A subtask
         whose recorded implementer is not the one the task review paired against (or is the task reviewer's own
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
@@ -1515,6 +1516,22 @@ def known_failing_text(plan):
               "'Failing at base' line, not as a task FAIL. A listed check that now passes is reported as fixed.")
 
 
+def test_env_line():
+    """The implement, verify and QA specs' test environment line when the run lead's environment sets
+    RPG_FACTORY_WORKSPACE (a worker session may not inherit it); '' when it is unset or empty."""
+    ws = os.environ.get("RPG_FACTORY_WORKSPACE")
+    return (f"Test environment: set RPG_FACTORY_WORKSPACE={shlex.quote(ws)} for every test run (the run lead's "
+            "environment sets it; a worker session may not inherit it).") if ws else ""
+
+
+def with_test_env(prompt):
+    """`prompt` with test_env_line() appended on its own line; unchanged when the line is empty."""
+    line = test_env_line()
+    if not line:
+        return prompt
+    return prompt + ("" if prompt.endswith("\n") else "\n") + line + ("\n" if prompt.endswith("\n") else "")
+
+
 def base_health_hint(info, spec):
     """The lead dispatch's one-line base health hint (stderr), or None: only for a repo with a GitHub remote (local
     git, never a network command) and a base branch name (a SHA base falls back to the repo's base branch)."""
@@ -1826,6 +1843,7 @@ def cmd_dispatch(a, reg):
                             tiers=pipe.get("qa_tiers"), subagents=subagent_rule(a, reg, "qa", agent))
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {plan['topic']}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_test_env(prompt)
         emit(a, reg, agent, prompt, place, f"qa {plan['id']} {key}", plan, role="qa")
         child_note(place)
         return 0
@@ -1980,7 +1998,7 @@ def cmd_dispatch(a, reg):
                       f"{subagent_rule(a, reg, 'implement', agent)}\n" + spec_json(spec)
                       + (f"\nNo worktree: {info['reason']}. Never two sessions editing or importing the project at once."
                          if not info["worktrees"] else ""))
-        prompt += "\n" + SPEC_COMPLETE + "\n" + checks
+        prompt = with_test_env(prompt + "\n" + SPEC_COMPLETE + "\n" + checks)
         why = "explicit --agent" if a.agent else model_roles["implement"][1]
         start = git(home or info["path"], "rev-parse", "--verify", "HEAD")[0]
         started = emit(a, reg, agent, prompt, place, f"implement {plan['id']}/{task['id']}" + (f"/{sub['id']}" if sub else ""), plan, role=grade)
@@ -2027,6 +2045,7 @@ def cmd_dispatch(a, reg):
                   + ("\nSubtask: " + spec_json({k: v for k, v in spec.items() if k.startswith("subtask")}) if sub else "")
                   + (f"\nNo worktree: {info['reason']}. Work in {info['path']} on {branch}." if not info["worktrees"] else "")
                   + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_test_env(prompt)
         emit(a, reg, agent, prompt, place, title, plan, role="qa")
         child_note(place)
         return 0
@@ -2068,6 +2087,7 @@ def cmd_dispatch(a, reg):
                              failed_suites=failed, small=pr.small_task(plan, task), runall=suites,
                              tiers=pipe.get("qa_tiers")) + "\n" + cases
                    + ("\n" + known_failing_text(plan) if known_failing_text(plan) else ""))
+        prompt = with_test_env(prompt)
     fallback = "SAME_MODEL" in model_roles["review"][1] and agent == model_roles["review"][0]
     if fallback:
         prompt = model_roles["review"][1] + "\n" + prompt
@@ -2718,8 +2738,9 @@ def worktree_for(path, branch):
 
 
 def run_lead_files(plan, repo_path):
-    """Repo-relative files the run lead owns on the integration branch: the plan file and its report (its own path when
-    it sits inside the repo, else docs/plans/<id>.json); never task work and never stray."""
+    """Repo-relative files the run lead owns on the integration branch: the plan file (its own path when it sits inside
+    the repo, else docs/plans/<id>.json), its report and the backlog.md beside it (follow-ups); never task work and
+    never stray."""
     names = {f"docs/plans/{plan.get('id')}.json"} if plan.get("id") else set()
     own = plan.get("_path")
     if own and repo_path:
@@ -2729,7 +2750,8 @@ def run_lead_files(plan, repo_path):
             rel = ".."
         if not rel.startswith("../") and rel != ".." and not os.path.isabs(rel):
             names.add(rel)
-    names |= {os.path.splitext(n)[0] + "/report.md" for n in names}
+    names |= ({os.path.splitext(n)[0] + "/report.md" for n in names}
+              | {n.rpartition("/")[0] + "/backlog.md" if "/" in n else "backlog.md" for n in names})
     return {norm_path(n) for n in names}
 
 
