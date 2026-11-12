@@ -1,7 +1,7 @@
 {
   "schema": "rpg-factory.pipeline-plan/1",
   "id": "assetgen-v2-core",
-  "title": "asset-gen v2 core: finalize verb, review tiers, spend guard",
+  "title": "asset-gen v2 core: finalize verb, review tiers, spend guard (plus the independent gateway probe)",
   "topic": "feat/assetgen/v2-core",
   "goal": "Cut the manual steps and the review load of one asset-gen run without weakening provenance, QA or the human approval gate.",
   "tier": "M",
@@ -42,6 +42,31 @@
         "exit codes follow qa: 0 PASS, 1 FAIL, 3 NOT_AVAILABLE",
         "defringe, embed and qa keep their individual contracts (existing tests unchanged and passing)",
         "factory-cmd lists finalize as a write verb"
+      ]
+    },
+    {
+      "id": "batch-probe",
+      "repo": "plugin",
+      "kind": "docs",
+      "objective": "Record whether the image gateway returns more than one image for n greater than 1, and which sizes it returns, with at most 2 low-quality generations that the user approved in the current task. The NineRouterImage node fixes n at 1 and keeps only the first image, so the probe reuses the node's request code outside ComfyUI, reads credentials at run time as the node does and prints none. Result goes to docs/plans/assetgen-batch/probe.md. NOT_RUN (no approval or no gateway) is a valid result and then the optional node-n item stays in the backlog.",
+      "paths": [
+        "docs/plans/assetgen-batch/probe.md",
+        "changelog.d/assetgen-batch-probe.md"
+      ],
+      "exclusions": [
+        "templates/assetgen/comfy-node/"
+      ],
+      "deps": [],
+      "grade": "light",
+      "grade_reason": "a findings document; no product code",
+      "checks": [
+        "python3 -B scripts/changelog.py check",
+        "env -u TMPDIR tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "probe.md states the observed result (images returned, sizes) or NOT_RUN with the reason",
+        "no credential, host address or URL appears in the file",
+        "at most 2 low-quality generations were made, and only on the user's explicit word"
       ]
     },
     {
@@ -102,20 +127,22 @@
       "id": "v2-core-docs",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Update the skills and docs for finalize, tiers and the spend guard. In skills/asset-gen/SKILL.md steps 6-7 replace the defringe, embed, qa chain by finalize, describe the light tier and run budget before each run_workflow; keep the file at most 160 lines by compressing. Mirror the idioms in skills/comfyui/SKILL.md, the domain doc and scripts/README.md, and update evals/asset-gen-icon/criteria.md if it names the old chain.",
+      "objective": "Update the skills and docs for finalize, tiers and the spend guard. In skills/asset-gen/SKILL.md steps 6-7 replace the defringe, embed, qa chain by finalize, describe the light tier and run budget before each run_workflow; keep the file at most 160 lines by compressing. Mirror the idioms in skills/comfyui/SKILL.md, the domain doc and scripts/README.md, and update evals/asset-gen-icon/criteria.md if it names the old chain. Also add the backlog item to docs/plans/backlog.md: an optional n parameter on the NineRouterImage node if docs/plans/assetgen-batch/probe.md shows gateway support, listing what it would touch (node, known-nodes.json, uiworkflow widget order, both templates, goldens, tests/comfy-desktop-setup.test.sh).",
       "paths": [
         "skills/asset-gen/SKILL.md",
         "skills/comfyui/SKILL.md",
         "docs/architecture/domains/assetgen.md",
         "scripts/README.md",
         "evals/asset-gen-icon/criteria.md",
-        "changelog.d/assetgen-v2-core-docs.md"
+        "changelog.d/assetgen-v2-core-docs.md",
+        "docs/plans/backlog.md"
       ],
       "exclusions": [],
       "deps": [
         "finalize-verb",
         "review-tiers",
-        "spend-guard"
+        "spend-guard",
+        "batch-probe"
       ],
       "grade": "light",
       "grade_reason": "prose and skill text only; the verbs are tested in the earlier tasks",

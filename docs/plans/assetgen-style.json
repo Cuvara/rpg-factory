@@ -122,7 +122,7 @@
       "id": "style-skill-scaffold",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Scaffold the new tech skill: python3 -B scripts/new-skill.py --name asset-style --kind tech --repos authoring --domain assetgen --used-by asset-gen --summary <one line>. It writes skills/asset-style/SKILL.md and the registry fragment and rebuilds registry.json. Then update every touchpoint scripts/skill-touchpoints.py names: skills/factory-core/SKILL.md, skills/factory-core/references/skill-contract.md layering diagram, README.md diagram and tech table, docs/architecture/overview.md tech-skill count, and name rpg-factory:asset-style in skills/asset-gen/SKILL.md. The scaffold may keep SCAFFOLD markers until the content task.",
+      "objective": "Scaffold the new tech skill: python3 -B scripts/new-skill.py --name asset-style --kind tech --repos authoring --domain assetgen --used-by asset-gen --summary <one line>. It writes skills/asset-style/SKILL.md and the registry fragment and rebuilds registry.json. Then update every touchpoint scripts/skill-touchpoints.py names: skills/factory-core/SKILL.md, skills/factory-core/references/skill-contract.md layering diagram, README.md diagram and tech table, docs/architecture/overview.md tech-skill count, and name rpg-factory:asset-style in skills/asset-gen/SKILL.md. Replace every SCAFFOLD marker with real, minimal but valid content (the current style-lock facts, citing docs by section), because verify runs skills-lint on the candidate and a marker fails it. The content task expands it later. Registry changes are a global input of tests/affected.py: expect every suite in verify.",
       "paths": [
         "skills/asset-style/SKILL.md",
         "skills/asset-gen/SKILL.md",
@@ -144,7 +144,8 @@
         "asset-style is registered as a tech skill with used_by asset-gen and paths assetgen/; it is not in the module skills list and is never a lead",
         "registry.json equals the build of the fragments (build-registry --check)",
         "README, factory-core, skill-contract and overview name the skill and their counts match the registry",
-        "asset-gen/SKILL.md names rpg-factory:asset-style and stays at most 160 lines"
+        "asset-gen/SKILL.md names rpg-factory:asset-style and stays at most 160 lines",
+        "no SCAFFOLD marker remains and skills-lint passes on the candidate"
       ]
     },
     {

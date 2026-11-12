@@ -3,7 +3,7 @@
   "id": "assetgen-batch",
   "title": "asset-gen batch: several outputs per run, discard, pixel grid, sheet mode",
   "topic": "feat/assetgen/batch",
-  "goal": "Let one run produce and select among several images without regenerating the whole run, and add deterministic pixel-art and sheet post-processing. Batch uses repeated run_workflow into one run; a node n parameter is a later option decided by the gateway probe.",
+  "goal": "Let one run produce and select among several images without regenerating the whole run, and add deterministic pixel-art and sheet post-processing. Batch uses repeated run_workflow into one run; a node n parameter is a later option decided by the gateway probe done in assetgen-v2-core (probe.md).",
   "tier": "M",
   "deliver": "pr",
   "repos": {
@@ -13,31 +13,6 @@
     }
   },
   "tasks": [
-    {
-      "id": "batch-probe",
-      "repo": "plugin",
-      "kind": "docs",
-      "objective": "Record whether the image gateway returns more than one image for n greater than 1, and which sizes it returns, with at most 2 low-quality generations that the user approved in the current task. The NineRouterImage node fixes n at 1 and keeps only the first image, so the probe reuses the node's request code outside ComfyUI, reads credentials at run time as the node does and prints none. Result goes to docs/plans/assetgen-batch/probe.md. NOT_RUN (no approval or no gateway) is a valid result and then the optional node-n item stays in the backlog.",
-      "paths": [
-        "docs/plans/assetgen-batch/probe.md",
-        "changelog.d/assetgen-batch-probe.md"
-      ],
-      "exclusions": [
-        "templates/assetgen/comfy-node/"
-      ],
-      "deps": [],
-      "grade": "light",
-      "grade_reason": "a findings document; no product code",
-      "checks": [
-        "python3 -B scripts/changelog.py check",
-        "env -u TMPDIR tests/parallel-policy.test.sh"
-      ],
-      "acceptance": [
-        "probe.md states the observed result (images returned, sizes) or NOT_RUN with the reason",
-        "no credential, host address or URL appears in the file",
-        "at most 2 low-quality generations were made, and only on the user's explicit word"
-      ]
-    },
     {
       "id": "batch-discard",
       "repo": "plugin",
@@ -129,18 +104,16 @@
       "id": "batch-docs",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Document batch, discard, pixel-grid and sheet mode in skills/asset-gen/SKILL.md, skills/comfyui/SKILL.md (rewrite the one-NineRouterImage pitfall: batch is repeated run_workflow, node n is optional) and skills/asset-style/SKILL.md where pixel art style applies, plus the domain doc. Add a backlog item to docs/plans/backlog.md: optional n parameter on the NineRouterImage node if probe.md shows gateway support, listing what it would touch. Keep every SKILL.md at most 160 lines and citations valid.",
+      "objective": "Document batch, discard, pixel-grid and sheet mode in skills/asset-gen/SKILL.md, skills/comfyui/SKILL.md (rewrite the one-NineRouterImage pitfall: batch is repeated run_workflow, node n is optional) and skills/asset-style/SKILL.md where pixel art style applies, plus the domain doc. Keep every SKILL.md at most 160 lines and citations valid.",
       "paths": [
         "skills/asset-gen/SKILL.md",
         "skills/comfyui/SKILL.md",
         "skills/asset-style/SKILL.md",
         "docs/architecture/domains/assetgen.md",
-        "docs/plans/backlog.md",
         "changelog.d/assetgen-batch-docs.md"
       ],
       "exclusions": [],
       "deps": [
-        "batch-probe",
         "sheet-mode"
       ],
       "grade": "light",
@@ -151,8 +124,7 @@
       ],
       "acceptance": [
         "skills-lint passes and skill-citations reports no MOVED or broken citation",
-        "the comfyui pitfall no longer says batch is impossible and names the repeated run_workflow approach",
-        "backlog.md carries the optional node-n item with the probe result"
+        "the comfyui pitfall no longer says batch is impossible and names the repeated run_workflow approach"
       ]
     }
   ]
