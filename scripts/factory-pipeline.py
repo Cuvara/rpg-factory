@@ -73,7 +73,12 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         nested workers, so --runner orca prints a handoff, not a worker-start:
         `git worktree add --no-track -b <branch> <path> <base>` for a new task worktree, followed by
         `orca worktree set` with its parent, then `orca agent launch --worktree path:<dir> --prompt ...`;
-        existing worktrees use only the launch command.
+        existing worktrees use only the launch command. A stacked task's handoff is the same three lines: the worktree
+        add cuts <topic>-<id> from the dependency's full tip SHA, the new worktree is a sibling beside the integration
+        checkout (never a child of the dependency's worktree, never a `<dep branch>--*` name) and `orca worktree set`
+        names the integration checkout as parent, else the main checkout; its lead prompt says to implement now, in
+        parallel with the dependency's verify, and to run no verify, review or QA dispatch before `status` clears it.
+        A fresh dispatch (no task branch yet) removes a leftover <task>__stack.json and <task>__sync.json first.
         A tier XS task starts no task lead: it prints the run lead's own steps (edit on plan.topic, commit with explicit
         paths, `dispatch --phase review --sha <sha>`, the task tier command, the `tier XS: lead ran task suites` QA
         verdict, gate); `--phase implement` on it is a usage error. Its review and QA read the topic checkout.
@@ -195,6 +200,11 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         exists. Test slots held by a run in one of the plan's checkouts (`<state dir>/locks/run-all-slots/<n>/`, written
         by tests/run-all.sh) print as `Slots: slot <n> held by PID <pid> in <checkout> since <start>` with whether the
         PID is alive (stderr with --json); status never stops the process and prints no command that would.
+        Stacked siblings (a dependency D and the tasks stacked on it, while one of their branches exists and one of
+        them is not integrated) get the note `stacked siblings <ids> on D: sibling worktrees, not children of D's
+        worktree; merge order <D branch>, then <dependent branch> ... into <topic> (dependency first, git merge
+        --no-ff); git branch -d a branch only after its merge` on D's and each dependent's row (a branch already merged
+        or gone is marked so). A `sync:` note shows only for the task's current dependency.
 
   cleanup <plan.json> [--after-merge] [--orca-run RUN_ID]... [--json]
         CLEAN when the run left no worktree or task branch (<topic>-*) and no settled worker of a named Orca Run
@@ -214,6 +224,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         an orphaned `wsl.exe ... sleep infinity` (its parent is gone), with PID, command and start time; the user decides,
         no kill command is ever printed, and a failing probe names nothing. It also prints `SLOT` lines for held test
         slots in the plan's checkouts, as status does (`slots` in --json).
+        Stacked siblings print as `STACK <repo>: stacked siblings ... merge order ...` after the KEPT lines (`stacked`
+        in --json: repo, dep, dependents, order, states merged|not merged|gone, text); they never change the state. A
+        stacked dependent's worktree is a task worktree, never "child of <dependency>".
 
 Read-only against the repos (never fetches, pushes, commits or creates worktrees: the printed commands do). Exit 2 =
 usage error.
@@ -1343,6 +1356,47 @@ def stacked_dependents(plan, reg, dep_id):
     return out
 
 
+def stack_groups(plan, reg):
+    """The stacked siblings of the plan, in plan order of their dependency: [{repo, dep, dependents, order, states,
+    text}] per plan task D with at least one dependent t (stack record naming D, same repo key, t not tier XS, a
+    worktree repo with a checkout). `order` is the merge order into plan.topic: D's task branch, then each
+    dependent's (plan order); `states` per branch: gone (no refs/heads/<branch>), merged (in refs/heads/<topic>) or
+    not merged. A group is listed only while one of its branches exists. Read-only (git only)."""
+    tasks = plan.get("tasks", [])
+    by_id = {t.get("id"): t for t in tasks}
+    on = {}
+    for t in tasks:
+        rec = stack_record(plan, t.get("id"))
+        d = by_id.get(rec.get("dep")) if rec else None
+        if not d or d is t or d.get("repo") != t.get("repo") or pr.xs_plan(plan, t):
+            continue
+        on.setdefault(d["id"], []).append(t["id"])
+    out, topic = [], plan["topic"]
+    for d in tasks:
+        dependents = on.get(d.get("id"))
+        if not dependents:
+            continue
+        info = repo_info(plan, reg, d["repo"])
+        path = info["path"]
+        if not info["worktrees"] or not path:
+            continue
+        order = [task_branch(plan, info, by_id[x]) for x in [d["id"], *dependents]]
+        heads = {b: git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{b}")[0] for b in order}
+        if not any(heads.values()):
+            continue
+        has_topic = bool(git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{topic}")[0])
+        states = {b: "gone" if not heads[b] else
+                  "merged" if has_topic and is_ancestor(path, f"refs/heads/{b}", f"refs/heads/{topic}") else
+                  "not merged" for b in order}
+        items = ", then ".join(b + ("" if states[b] == "not merged" else f" ({states[b]})") for b in order)
+        text = (f"stacked siblings {', '.join(dependents)} on {d['id']}: sibling worktrees, not children of "
+                f"{d['id']}'s worktree; merge order {items} into {topic} (dependency first, git merge --no-ff); "
+                "git branch -d a branch only after its merge")
+        out.append({"repo": d["repo"], "dep": d["id"], "dependents": dependents, "order": order, "states": states,
+                    "text": text})
+    return out
+
+
 def plan_has_task(plan, task_id):
     return any(t.get("id") == task_id for t in plan.get("tasks", []))
 
@@ -1736,12 +1790,24 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
              f"{spec['branch']} and remove the child at once (`orca worktree rm --worktree path:<child>`); "
              f"{orca_cmd.CHILD_RULE.split(';')[0]}." if info["worktrees"] else
              "placement is always shared here (no worktree).")
-    # a stacked task (fresh: spec.stacked_on; resumed: its stack record) merges its moved dependency at subtask
+    # a stacked task (fresh: spec.stacked_on; resumed: its stack record, read only once the task branch exists, so a
+    # leftover record of a removed branch never stacks a fresh dispatch) merges its moved dependency at subtask
     # boundaries; every worktree-repo lead tells its own stacked dependents after each candidate
-    stacked = (spec.get("stacked_on") or stack_record(plan, task["id"])) if info["worktrees"] else None
+    stacked = None
+    if info["worktrees"]:
+        stacked = spec.get("stacked_on") or (
+            stack_record(plan, task["id"]) if info["path"] and git(info["path"], "rev-parse", "--verify", "--quiet",
+                                                                    f"refs/heads/{spec['branch']}")[0] else None)
     sync_in = (f" Stacked on {stacked.get('dep')}: at each subtask boundary run `<pipeline> status <plan>`; when it shows "
                f"`sync: {stacked.get('dep')} moved to <sha>`, run `git merge {stacked.get('branch')}` (never rebase), "
                "resolve conflicts inside your owned paths, then continue." if stacked else "")
+    stack_rule = ""
+    if stacked:  # the implement-now rule: verify, review and QA wait for the dependency's PASS (stack_gate)
+        sdep, ssha = stacked.get("dep"), str(stacked.get("sha") or "")[:10]
+        stack_rule = (f"Stacked on {sdep}: your worktree is a sibling cut from {sdep}@{ssha}, not a child of its "
+                      f"worktree. Implement now, in parallel with {sdep}'s verify; run no verify, review or QA dispatch "
+                      "before `<pipeline> status <plan>` clears it (no `verify waits:` note on this task: "
+                      f"{sdep}'s review PASS SHA must be in your HEAD; until then those dispatches exit 2). ")
     sync_out = (f" After each new candidate (a fix included), run `<pipeline> sync <plan> --task {task['id']} --send`: it "
                 "tells stacked dependents to merge it (no-op without them)." if info["worktrees"] else "")
     rules = [
@@ -1759,7 +1825,7 @@ def lead_prompt(plan, task, spec, info, impl, reviewer, where, report_to=None, p
         f"3. Per subtask ONE fresh session in {where}: `{d} --phase implement --subplan <subplan.json> --subtask <id> "
         "--runner orca`. placement shared (default): it edits only its paths and does NOT commit (one shared index); "
         f"you commit it with explicit paths (`git add -- <paths>`, Conventional Commits). {child}{sync_in}",
-        f"4. Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
+        f"4. {stack_rule}Candidate = HEAD with every subtask committed. Start one verify session `{d} --phase verify --sha <HEAD> "
         f"--runner orca` ({reviewer} for {impl}). Keep HEAD at the candidate. Record both results with "
         "`verdict --phase verify` (a FAIL names `--failed-at review`: no test ran, the next verify keeps the original "
         "tests; or `--failed-at qa [--failed-suites ...]`). On FAIL start a fresh fix session, then a fresh verify on the new HEAD. "
@@ -2100,6 +2166,9 @@ def cmd_dispatch(a, reg):
                 if parent:
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
+                if stk:  # a sibling of the dependency's worktree, never its child
+                    place["reason"] = (f"stacked on {stk['dep']}@{stk['sha'][:10]}: a sibling beside "
+                                       f"{parent or main_checkout(info['path'])}")
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
@@ -2108,11 +2177,16 @@ def cmd_dispatch(a, reg):
             print(f"factory-pipeline: the task lead is {lead} ({model_roles['lead'][1]}); --agent {a.agent} "
                   f"is ignored for --phase lead (implement, review and QA keep their pairing)", file=sys.stderr)
         if fresh:  # any runner: the task branch is cut from spec base, which the record names by SHA
+            try:
+                os.remove(sync_file(plan, task["id"]))  # a leftover of an earlier, removed task branch
+            except FileNotFoundError:
+                pass
             if stk:
                 fstate.write_json(stack_file(plan, task["id"]), {"dep": stk["dep"], "branch": stk["branch"],
                                                                 "sha": stk["sha"], "at": now_utc()}, indent=2)
                 print(f"factory-pipeline: task {task['id']} stacks on {stk['dep']}@{stk['sha'][:10]} "
-                      f"({stk['branch']}): merge its later commits, never rebase", file=sys.stderr)
+                      f"({stk['branch']}): a sibling worktree beside the integration checkout, not a child of "
+                      f"{stk['dep']}'s worktree; merge its later commits, never rebase", file=sys.stderr)
             else:
                 try:
                     os.remove(stack_file(plan, task["id"]))  # a leftover of an earlier, removed task branch
@@ -3550,7 +3624,9 @@ BUSY_NOTE = ("if `orca worktree rm` reports the directory busy (Windows: 'being 
 
 def cleanup(plan, reg, orca_run=None, after_merge=False):
     """Worktrees and task branches the run left (names <topic>-*), with the commands that remove them, and settled
-    Orca workers of the task leads' Runs that are not released."""
+    Orca workers of the task leads' Runs that are not released. `stacked`: the stacked siblings (stack_groups) with
+    their merge order, information only (no effect on state, left, commands or kept). A stacked dependent's worktree
+    is a sibling task worktree, never "child of <dependency>": is_child and Lineage skip the plan's own task branches."""
     left, commands, kept, leftovers, users = [], [], [], [], []
     orca_paths = []  # the Orca records, read once and only when a task worktree path is no git worktree any more
     for key in sorted({t["repo"] for t in plan.get("tasks", []) if t.get("repo")}):
@@ -3689,7 +3765,10 @@ def cleanup(plan, reg, orca_run=None, after_merge=False):
         for u in s["unreleased"]:
             left.append(f"orca:{u['dispatch']}")
             commands.append(u["command"])
-    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept, "state_kept": specs_kept,
+    stacked = [{k: g[k] for k in ("repo", "dep", "dependents", "order", "states", "text")}
+               for g in stack_groups(plan, reg)]
+    return {"state": "CLEAN" if not left else "LEFTOVER", "left": left, "commands": commands, "kept": kept,
+            "stacked": stacked, "state_kept": specs_kept,
             "leftovers": leftovers, "terminals": users, "workers": workers, "slots": slot_holders(plan, reg),
             "sessions": "release every settled worker: `orca orchestration worker-list` then "
                         "`orca orchestration worker-release --dispatch <id>`; stop background Agent workers"
@@ -3708,6 +3787,8 @@ def cmd_cleanup(a, reg):
             print("  " + c)
         for k in out["kept"]:
             print("  KEPT  " + k)
+        for g in out["stacked"]:
+            print(f"  STACK {g['repo']}: {g['text']}")
         for k in out["state_kept"]:
             print("  STATE " + k)
         for line in session_lines(out["workers"]):
@@ -4206,8 +4287,10 @@ def status(plan, reg, orca_run=None):
             stack_notes(plan, reg, info, t, row)  # stacked on D@X; D moved past HEAD: merge it as next
             if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t):
                 # the durable `sync` record; read-only here: the note goes once HEAD contains the SHA (file kept)
-                syn = sync_record(plan, t["id"])
-                if syn and plan_has_task(plan, syn.get("dep")) and not is_ancestor(info["path"], syn["sha"], row["sha"]):
+                # only for the task's current dependency: a leftover record of another dependency shows nothing
+                syn, cur = sync_record(plan, t["id"]), stack_record(plan, t["id"])
+                if (syn and cur and syn.get("dep") == cur.get("dep") and plan_has_task(plan, syn.get("dep"))
+                        and not is_ancestor(info["path"], syn["sha"], row["sha"])):
                     row["notes"].append(f"sync: {syn['dep']} moved to {syn['sha'][:10]} ({syn.get('at')}): at the next "
                                         f"subtask boundary run {syn.get('command')} (never rebase), resolve conflicts "
                                         "inside the owned paths, then continue")
@@ -4226,6 +4309,13 @@ def status(plan, reg, orca_run=None):
                                         "git merge --no-ff")
                     if row["next"] == before:  # keep a dependency merge stack_notes named; never the topic merge
                         row["next"] = None
+    # stacked siblings while one of them is not integrated: sibling worktrees and the merge order (next unchanged)
+    for sg in stack_groups(plan, reg):
+        ids = [sg["dep"], *sg["dependents"]]
+        if any(rows[i]["phase"] not in done for i in ids if i in rows):
+            for i in ids:
+                if i in rows and sg["text"] not in rows[i]["notes"]:
+                    rows[i]["notes"].append(sg["text"])
     # the gate needs the repo's integration QA PASS at the integration HEAD (also after per-task QA of a no-worktree
     # repo): until then the repo's tasks stay integrated and the next command is that QA. A no-worktree checkout is
     # one serial group across every plan alias of it: its integration QA waits until every task of the checkout

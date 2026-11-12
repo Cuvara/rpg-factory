@@ -313,7 +313,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil stack-sync-verb stack-sync-no-orca stack-dispatch-handoff stack-dispatch-order"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -705,6 +705,49 @@ def stale_a(expected):
     if expected:
         assert 'shared.txt' in blockers[0] and 'shared.txt' in stale[0]
     return g, row
+import contextlib, re, shlex
+@contextlib.contextmanager
+def no_orca():
+    """shutil.which finds no orca (in-process CLI): no real Orca is called."""
+    real_which = shutil.which
+    def which(cmd, *args, **kw):
+        if os.path.splitext(os.path.basename(str(cmd)))[0].lower() == 'orca':
+            return None
+        return real_which(cmd, *args, **kw)
+    shutil.which = which
+    try:
+        yield
+    finally:
+        shutil.which = real_which
+def argv_lines(out):
+    """Each printed line split back into its argv (orca_cmd.quote is shell quoting); [] for a line that is no command."""
+    rows = []
+    for line in out.splitlines():
+        try:
+            rows.append(shlex.split(line))
+        except ValueError:
+            rows.append([])
+    return rows
+def arg_of(argv, name):
+    return argv[argv.index(name) + 1]
+def same_path(p, q):
+    return m.norm_wt(os.path.realpath(str(p))) == m.norm_wt(os.path.realpath(str(q)))
+def spec_of(out):
+    """The text of the spec file a printed launch prompt points at, or None."""
+    for argv in argv_lines(out):
+        for x in argv:
+            hit = re.match(r'Read your task spec at (.+?\.md) and follow it\.', x)
+            if hit:
+                return pathlib.Path(hit.group(1)).read_text(encoding='utf-8')
+    return None
+def assert_unstacked_lead(tid='b'):
+    """`dispatch --phase lead --runner orca` of a task that never stacks: the unchanged handoff, no stack record."""
+    with no_orca():
+        r = cli('dispatch', str(pf), '--task', tid, '--phase', 'lead', '--runner', 'orca')
+    assert 'worktree add' not in r.stdout and 'stacks on' not in r.stderr, (r.stdout, r.stderr)
+    for text in (r.stdout, spec_of(r.stdout) or ''):
+        assert 'Implement now' not in text and 'run no verify' not in text, text
+    assert m.stack_record(plan, tid) is None, m.stack_record(plan, tid)
 if case.startswith('serial-'):
     a = commit('a')
     verdict('a', 'review', a); verdict('a', 'qa', a)
@@ -728,6 +771,7 @@ if case == 'stack-no-worktree':
     assert not info['worktrees'], info
     assert m.stackable(plan, reg, info, plan['tasks'][1]) is None
     assert m.start_base(plan, info, plan['tasks'][1], reg) == (info['base_sha'] or info['base'])
+    assert_unstacked_lead()
     print(case + ' assertions passed')
     sys.exit(0)
 git('switch', '--no-track', '-c', 'topic-a')
@@ -742,6 +786,18 @@ if case.startswith('stack-'):
         plan['tier'] = 'XS'; save()
         assert m.stackable(plan, reg, info, tb) is None
         assert m.start_base(plan, info, tb, reg) == m.start_base(plan, info, tb) == plan['topic']
+        # a two-task plan is no tier XS plan: the lead dispatch of the dependent is refused (invalid plan, exit 1),
+        # nothing printed or stacked
+        with no_orca():
+            r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'orca', rc=1)
+        assert not r.stdout and 'plan is invalid' in r.stderr and 'tier XS' in r.stderr, (r.stdout, r.stderr)
+        assert 'worktree add' not in r.stdout + r.stderr and 'stacks on' not in r.stdout + r.stderr, (r.stdout, r.stderr)
+        assert m.stack_record(plan, 'b') is None, m.stack_record(plan, 'b')
+        # a valid tier XS plan (one prose task): the XS lead steps, unchanged
+        plan['tasks'] = [{'id': 'x', 'repo': 'fixture', 'kind': 'docs', 'objective': 'note',
+                          'paths': ['notes.md'], 'acceptance': ['ok']}]
+        save()
+        assert_unstacked_lead('x')
         print(case + ' assertions passed')
         sys.exit(0)
     if case in ('stack-two-deps', 'stack-one-integrated'):
@@ -1039,6 +1095,148 @@ if case.startswith('stack-'):
             else:
                 assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == ['shared.txt']
                 assert stale and 'shared.txt' in stale[0], g
+        print(case + ' assertions passed')
+        sys.exit(0)
+    def trees():
+        """(main checkout, {branch: path}) from git's own `worktree list --porcelain` (8.3 short paths stay comparable)."""
+        main, rows, cur = None, {}, None
+        for line in git('worktree', 'list', '--porcelain').splitlines():
+            if line.startswith('worktree '):
+                cur = line[len('worktree '):]
+                main = main or cur
+            elif line.startswith('branch refs/heads/'):
+                rows[line[len('branch refs/heads/'):]] = cur
+        return main, rows
+    if case == 'stack-dispatch-handoff':
+        # stacked dispatch, part 4: the Orca handoff of a stacked lead cuts a sibling worktree at the dependency's tip
+        tb['paths'] = ['b.txt']; save()
+        sibling = ("task b stacks on a@" + a[:10] + " (topic-a): a sibling worktree beside the integration checkout, "
+                   "not a child of a's worktree")
+        def lead_b():
+            r = cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'orca')
+            rows = argv_lines(r.stdout)
+            def find(pred):
+                hits = [i for i, x in enumerate(rows) if pred(x)]
+                assert len(hits) == 1, (hits, r.stdout)
+                return hits[0]
+            i_add = find(lambda x: x[:2] == ['git', '-C'] and x[3:5] == ['worktree', 'add'])
+            i_set = find(lambda x: x[:3] == ['orca', 'worktree', 'set'])
+            i_launch = find(lambda x: x[:3] == ['orca', 'agent', 'launch'])
+            assert i_add < i_set < i_launch, r.stdout
+            add, wset, launch = rows[i_add], rows[i_set], rows[i_launch]
+            assert add[5:8] == ['--no-track', '-b', 'topic-b'] and len(add) == 10 and add[-1] == a, add
+            assert os.path.basename(add[8].replace('\\', '/').rstrip('/')) == 'topic-b', add
+            assert same_path(arg_of(wset, '--worktree').removeprefix('path:'), add[8]), (wset, add)
+            assert arg_of(wset, '--display-name') == 'topic-b', wset
+            assert arg_of(wset, '--workspace-status') == 'in-progress', wset
+            assert same_path(arg_of(launch, '--worktree').removeprefix('path:'), add[8]), (launch, add)
+            assert 'topic-a--' not in r.stdout + r.stderr, (r.stdout, r.stderr)
+            assert sibling in r.stderr, r.stderr
+            rec = m.stack_record(plan, 'b')
+            assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, rec
+            return r, add, arg_of(wset, '--parent-worktree').removeprefix('path:'), launch
+        with no_orca():
+            # no integration checkout (the main checkout is on topic-a): beside the repo checkout, parent the main checkout
+            main, rows = trees()
+            assert 'topic' not in rows, rows
+            r, add, parent, launch = lead_b()
+            assert same_path(add[8], os.path.join(os.path.dirname(main.rstrip('/\\')), 'topic-b')), (add, main)
+            assert same_path(parent, main), (parent, main)
+            # an integration checkout (topic): the sibling goes beside it and Orca's parent is it, never topic-a's worktree
+            git('worktree', 'add', str(work / 'int'), 'topic')
+            main, rows = trees()
+            integ = rows['topic']
+            assert same_path(integ, work / 'int') and same_path(rows['topic-a'], main), rows
+            leftover = m.sync_file(plan, 'b')  # a sync record of an earlier, removed task branch
+            m.fstate.write_json(leftover, {'dep': 'a', 'ref': 'topic-a', 'sha': a, 'command': 'git merge topic-a',
+                                           'at': 't'})
+            assert pathlib.Path(leftover).is_file()
+            r, add, parent, launch = lead_b()
+            assert not pathlib.Path(leftover).exists(), leftover
+            assert m.sync_record(plan, 'b') is None
+            assert same_path(add[8], os.path.join(os.path.dirname(integ.rstrip('/\\')), 'topic-b')), (add, integ)
+            assert same_path(parent, integ), (parent, integ)
+            assert not same_path(parent, rows['topic-a']), (parent, rows)
+            # the stacked lead implements at once and runs no verify before status clears it
+            text = spec_of(r.stdout)
+            assert text is not None, r.stdout
+            assert ("Stacked on a: your worktree is a sibling cut from a@" + a[:10] + ", not a child of its worktree. "
+                    "Implement now, in parallel with a's verify; run no verify, review or QA dispatch before "
+                    "`<pipeline> status <plan>` clears it") in text, text
+            # an unstacked lead (a) has none of it
+            ra = cli('dispatch', str(pf), '--task', 'a', '--phase', 'lead', '--runner', 'print')
+            assert 'Implement now' not in ra.stdout and 'run no verify' not in ra.stdout, ra.stdout
+        print(case + ' assertions passed')
+        sys.exit(0)
+    if case == 'stack-dispatch-order':
+        # stacked siblings b and c on a: status and cleanup name the merge order, never a child of a's worktree
+        plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                              'paths': ['c.txt'], 'acceptance': ['reviewed'], 'deps': ['a']})
+        tb['paths'] = ['b.txt']; save()
+        order = ['topic-a', 'topic-b', 'topic-c']
+        note = ("stacked siblings b, c on a: sibling worktrees, not children of a's worktree; merge order "
+                "topic-a, then topic-b, then topic-c into topic (dependency first, git merge --no-ff); "
+                "git branch -d a branch only after its merge")
+        def gitw(path, *args):
+            r = subprocess.run(['git', '-C', str(path), '-c', 'user.name=test', '-c', 'user.email=t@t', *args],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, (args, r.stderr)
+            return r.stdout.strip()
+        with no_orca():
+            for tid in ('b', 'c'):  # a is a candidate, topic-b and topic-c do not exist yet: both stack on a
+                cli('dispatch', str(pf), '--task', tid, '--phase', 'lead', '--runner', 'print')
+                rec = m.stack_record(plan, tid)
+                assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, (tid, rec)
+            heads = {}
+            for tid in ('b', 'c'):
+                wt = work / ('wt-' + tid)
+                git('worktree', 'add', '-b', 'topic-' + tid, str(wt), a)
+                (wt / (tid + '.txt')).write_text(tid)
+                gitw(wt, 'add', tid + '.txt'); gitw(wt, 'commit', '-qm', tid)
+                heads[tid] = gitw(wt, 'rev-parse', 'HEAD')
+            for tid in ('a', 'b', 'c'):
+                row = status_row(tid)
+                assert note in row['notes'], (tid, row)
+            groups = m.stack_groups(plan, reg)
+            assert len(groups) == 1, groups
+            g = groups[0]
+            assert g['repo'] == 'fixture' and g['dep'] == 'a' and g['dependents'] == ['b', 'c'], g
+            assert g['order'] == order and g['text'] == note, g
+            out = cli('cleanup', str(pf), rc=1).stdout
+            lines = out.splitlines()
+            assert any(x.startswith("  STACK fixture: stacked siblings b, c on a: ") for x in lines), out
+            assert '  STACK fixture: ' + note in lines, out
+            assert not any('child of a' in x for x in lines), out
+            assert m.cleanup(plan, reg)['stacked'][0]['order'] == order
+            # a sync record naming another dependency (c) than b's stack dependency (a) shows no sync note
+            m.fstate.write_json(m.sync_file(plan, 'b'), {'dep': 'c', 'ref': 'topic-c', 'sha': heads['c'],
+                                                         'command': 'git merge topic-c', 'at': 't'})
+            assert not any(n.startswith('sync:') for n in status_row('b')['notes']), status_row('b')
+            os.remove(m.sync_file(plan, 'b'))
+            # review a, b and c, then integrate in the merge order (dependency first), as the run lead does
+            verdict('a', 'review', a); verdict('b', 'review', heads['b']); verdict('c', 'review', heads['c'])
+            git('switch', 'topic')
+            for branch in order:
+                git('merge', '--no-ff', '-m', 'merge ' + branch, branch)
+            for tid in ('a', 'b', 'c'):
+                row = status_row(tid)
+                assert row['phase'] in ('integrated', 'qa'), (tid, row)
+                assert not any('stacked siblings' in n for n in row['notes']), (tid, row)
+            cl = m.cleanup(plan, reg)
+            assert len(cl['stacked']) == 1 and cl['stacked'][0]['order'] == order, cl['stacked']
+            merged = 'topic-a (merged), then topic-b (merged), then topic-c (merged)'
+            assert merged in cl['stacked'][0]['text'], cl['stacked']
+            assert any(' branch -d topic-a' in x for x in cl['commands']), cl['commands']
+            out = cli('cleanup', str(pf), rc=1).stdout
+            assert any(x.startswith('  STACK fixture: ') and merged in x for x in out.splitlines()), out
+            assert not any('child of a' in x for x in out.splitlines()), out
+            # worktrees removed and branches deleted after their merges: no stack group left
+            for tid in ('b', 'c'):
+                git('worktree', 'remove', str(work / ('wt-' + tid)))
+            git('branch', '-d', *order)
+            assert m.stack_groups(plan, reg) == [], m.stack_groups(plan, reg)
+            r = pipeline_cli('cleanup', str(pf))
+            assert not any(x.startswith('  STACK') for x in r.stdout.splitlines()), r.stdout
         print(case + ' assertions passed')
         sys.exit(0)
     assert case == 'stack-base', case
