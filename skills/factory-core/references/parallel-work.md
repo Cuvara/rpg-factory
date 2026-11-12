@@ -57,12 +57,12 @@ The stacked-dependent rule is delivery.md section 4, "Stacked dependents" (`poli
 lessons of this repo behind it, each with its reason.
 
 - **Any edit under `scripts/assetgen/*.py` selected every suite:** a leaf file that only an EXTRA pattern of
-  `tests/assetgen.test.sh` covered was unsure, and unsure runs all (fixed in affected-leaf-fix: now 26 of 72 suites).
-  A verify that selects most suites costs about an hour.
-- **`scripts/factory-cmd.py` widens the selection:** 19 of 72 suites today, against 6 for
-  `scripts/factory-pipeline.py`, which `tests/affected.py` `PIPELINE_SUITES` narrows. Keep a task that touches it
-  small, and read the pre-flight `selected N of M suites` that `dispatch --phase verify` prints (a warning above
-  `--suite-warn`, default 40) before starting the session.
+  `tests/assetgen.test.sh` covered was unsure, and unsure runs all (fixed in affected-leaf-fix: such an edit now
+  selects only the suites that name or cover the path). A verify that selects most suites costs about an hour.
+- **`scripts/factory-cmd.py` widens the selection:** it reaches a wide import closure and selects many suites, while
+  `scripts/factory-pipeline.py` is narrowed by `tests/affected.py` `PIPELINE_SUITES`. Keep a task that touches it
+  small; the live number is the pre-flight `selected N of M suites` that `dispatch --phase verify` prints (a warning
+  above `--suite-warn`, default 40): read it before starting the session.
 - **On Windows Git Bash `python3` can be the Microsoft Store stub:** `tests/run-all.sh --affected` now exits 2
   instead of silently running every suite (seen in the finalize-verb verify).
 - **A stacked verify waits for the dependency's review PASS:** verifying earlier tests code that may still change, so

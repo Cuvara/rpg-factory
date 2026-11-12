@@ -141,10 +141,10 @@ Never create or remove a child worktree while a full tests/run-all.sh runs (the 
 A dependent task with exactly one in-flight dependency starts from that dependency's tip as a sibling <topic>-<id> worktree, implements in parallel, never verifies before the dependency's review PASS SHA is in its HEAD, merges (never rebases) the dependency branch when told, and is integrated after the dependency.
 
 - **When it stacks.** Its one dependency in the same repo is a candidate or reviewed, every other dependency
-  integrated; `status` notes `stackable on <dep>@<sha>`. Two in-flight dependencies, a pending one, tier XS and
-  no-worktree repos never stack.
-- **Stack record.** `dispatch --phase lead` records the dependency SHA (never a branch name), outside the task
-  fingerprint, so verdicts stay valid.
+  integrated; `status` notes `stackable on <dep>@<sha>`. Two in-flight dependencies, a pending or implementing
+  one, tier XS and no-worktree repos never stack.
+- **Stack record.** `dispatch --phase lead` records the dependency SHA as the base (never a branch name),
+  outside the task fingerprint, so verdicts stay valid.
 - **Sibling, not child.** The worktree sits beside the integration checkout with the integration checkout (else the
   main checkout) as Orca parent; never a child of the dependency's worktree (no `<dep branch>--*`).
 - **Own delta.** Review, verify and QA use the newest dependency SHA in its HEAD as `--affected --base`.
