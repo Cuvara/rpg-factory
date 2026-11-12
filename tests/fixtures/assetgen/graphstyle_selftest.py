@@ -143,6 +143,18 @@ def other_prompt_source(d):
     d["workflow"]["1"]["class_type"] = "PrimitiveString"
 
 
+def literal_prompt_source(d):
+    d["workflow"]["1"]["inputs"]["value"] = "A fixed prompt that bypasses the review."
+
+
+def other_placeholder_source(d):
+    d["workflow"]["1"]["inputs"]["value"] = "{{model}}"
+
+
+def prompt_plus_text_source(d):
+    d["workflow"]["1"]["inputs"]["value"] = "{{prompt}}, highly detailed"
+
+
 def two_image_nodes(d):
     d["workflow"]["7"] = {"class_type": "NineRouterImage", "_meta": {"title": "Second image"},
                           "inputs": {"user_prompt": ["1", 0], "model": "{{model}}", "size": "{{size}}",
@@ -185,6 +197,12 @@ TEMPLATE_FAILS = [
     ("note", "a group without a Note", drop_note, ('group "Output"',)),
     ("prompt", "user_prompt as a literal value", literal_prompt, ("node 3 (NineRouterImage",)),
     ("prompt", "user_prompt linked from a PrimitiveString", other_prompt_source, ("node 3 (NineRouterImage", "node 1 (PrimitiveString")),
+    ("prompt", "the prompt node holding literal text", literal_prompt_source,
+     ("node 3 (NineRouterImage", "node 1 (PrimitiveStringMultiline", "{{prompt}}")),
+    ("prompt", "the prompt node holding another placeholder ({{model}})", other_placeholder_source,
+     ("node 3 (NineRouterImage", "node 1 (PrimitiveStringMultiline", '"{{model}}"')),
+    ("prompt", "the prompt node holding {{prompt}} plus extra text", prompt_plus_text_source,
+     ("node 3 (NineRouterImage", "node 1 (PrimitiveStringMultiline")),
     ("one-image-node", "two NineRouterImage nodes", two_image_nodes, ("2", "3", "7")),
     ("save-suffix", "filename_prefix without a suffix", bare_prefix, ("node 6 (SaveImage",)),
     ("save-suffix", "a suffix holding another placeholder", placeholder_suffix, ("node 6 (SaveImage",)),
@@ -208,6 +226,22 @@ def _template_fail(rule_id, mutate, names):
 
 for _rule, _label, _mutate, _names in TEMPLATE_FAILS:
     case("template %s: %s FAILS, naming %s" % (_rule, _label, " ".join(_names)))(_template_fail(_rule, _mutate, _names))
+
+
+@case("template prompt: the prompt node holding {{prompt}} (also with spaces inside the braces, as render reads it) passes")
+def _():
+    assert template()["workflow"]["1"]["inputs"]["value"] == "{{prompt}}"
+    assert graphstyle.template_violations(template(), KNOWN) == []
+    spaced = template(lambda d: d["workflow"]["1"]["inputs"].__setitem__("value", "{{ prompt }}"))
+    assert graphstyle.template_violations(spaced, KNOWN) == []
+
+
+@case("template prompt: a source of the wrong class gets one prompt violation (the value is not judged twice)")
+def _():
+    data = template(other_prompt_source)
+    data["workflow"]["1"]["inputs"]["value"] = "literal"
+    hits = rule(graphstyle.template_violations(data, KNOWN), "prompt", "node 1 (PrimitiveString")
+    assert len(hits) == 1, hits
 
 
 @case("template one-image-node: no NineRouterImage FAILS with the count")
@@ -400,12 +434,33 @@ for _rule, _label, _mutate, _names, _prefix in UI_FAILS:
     case("UI %s: %s FAILS, naming %s" % (_rule, _label, " ".join(_names)))(_ui_fail(_rule, _mutate, _names, _prefix))
 
 
-@case("UI save-suffix: skipped without a prefix argument and without extra.assetgen.run_id")
+@case("UI save-suffix: without a prefix argument and without extra.assetgen.run_id it FAILS (run prefix unknown), never skips")
 def _():
     ui = ui_form(extra=False)
+    assert "extra" not in ui or not (ui.get("extra") or {}).get("assetgen"), ui.get("extra")
+    hits = rule(graphstyle.ui_violations(ui, KNOWN), "save-suffix", "node 6 (SaveImage", "run prefix is unknown")
+    assert len(hits) == 1, hits
+    row = graphstyle.ui_row(ui, KNOWN, "workflow.ui.json")
+    assert row["state"] == "FAIL", row
     ui_bare_prefix(ui)
-    no_rule(graphstyle.ui_violations(ui, KNOWN), "save-suffix")
-    rule(graphstyle.ui_violations(ui, KNOWN, prefix="assetgen/" + RUN_ID), "save-suffix", "node 6 (SaveImage")
+    rule(graphstyle.ui_violations(ui, KNOWN), "save-suffix", "node 6 (SaveImage", "run prefix is unknown")
+
+
+@case("UI save-suffix: a prefix argument stands in for a missing extra.assetgen.run_id (suffixed PASS, unsuffixed FAIL)")
+def _():
+    ui = ui_form(extra=False)
+    assert graphstyle.ui_violations(ui, KNOWN, prefix="assetgen/" + RUN_ID) == []
+    assert graphstyle.ui_row(ui, KNOWN, "workflow.ui.json", "assetgen/" + RUN_ID)["state"] == "PASS"
+    ui_bare_prefix(ui)
+    hits = rule(graphstyle.ui_violations(ui, KNOWN, prefix="assetgen/" + RUN_ID), "save-suffix", "node 6 (SaveImage")
+    assert not any("unknown" in h for h in hits), hits
+
+
+@case("UI save-suffix: the prefix argument wins over extra.assetgen.run_id")
+def _():
+    ui = ui_form()
+    rule(graphstyle.ui_violations(ui, KNOWN, prefix="assetgen/other-run-001"), "save-suffix", "node 6 (SaveImage",
+         '"assetgen/other-run-001"')
 
 
 @case("UI load-image: skipped (render fills it; a static file name in workflow.ui.json is fine)")

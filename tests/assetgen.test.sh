@@ -704,6 +704,20 @@ jq -c '(.nodes[] | select(.id == 4) | .pos) = [5000, 5000]' "$gsd/workflow.ui.js
 AG graph-lint "$TMP/gs-moved.ui.json" > "$TMP/o" 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q '^FAIL .*gs-moved.ui.json: .*group: node 4 (ImageScale' "$TMP/o" \
   && ok "graph-lint on a frontend workflow with a node outside every group: FAIL naming the node, exit 1" || no "graph-lint moved node rc=$rc" "$(cat "$TMP/o")"
+# a workflow.ui.json that lost extra.assetgen: --run still checks SaveImage suffixes against assetgen/<run dir name>;
+# a bare PATH without a run id FAILS as unchecked (the run prefix is unknown), never a silent skip
+gsx="$TMP/gs-noextra/gs-clean-001"; mkdir -p "$gsx"
+jq -c 'del(.extra.assetgen)' "$gsd/workflow.ui.json" > "$gsx/workflow.ui.json"
+AG graph-lint --run "$gsx" > "$TMP/o" 2>&1; rc=$?
+AG graph-lint "$gsx/workflow.ui.json" > "$TMP/o2" 2>&1; rc2=$?
+jq -c 'del(.extra.assetgen) | (.nodes[] | select(.id == 6) | .widgets_values) = ["assetgen/gs-clean-001"]' "$gsd/workflow.ui.json" > "$gsx/workflow.ui.json"
+AG graph-lint --run "$gsx" > "$TMP/o3" 2>&1; rc3=$?
+[ "$(jq -r '.extra.assetgen // "gone"' "$gsx/workflow.ui.json")" = gone ] && [ $rc -eq 0 ] \
+  && [ $rc2 -eq 1 ] && grep -q '^FAIL .*save-suffix: node 6 (SaveImage.*run prefix is unknown' "$TMP/o2" \
+  && [ $rc3 -eq 1 ] && grep -q '^FAIL .*gs-clean-001/workflow.ui.json: .*save-suffix: node 6 (SaveImage.*"assetgen/gs-clean-001" plus an inline suffix' "$TMP/o3" \
+  && ! grep -q 'run prefix is unknown' "$TMP/o3" \
+  && ok "graph-lint without extra.assetgen: --run checks the suffix against the run (suffixed exit 0, unsuffixed exit 1); a bare PATH FAILS as unchecked" \
+  || no "graph-lint lost extra.assetgen rc=$rc/$rc2/$rc3" "$(cat "$TMP/o" "$TMP/o2" "$TMP/o3")"
 
 echo "-- fixture PNGs"
 FX="$TMP/png"; mkdir -p "$FX"
@@ -2173,6 +2187,9 @@ gsvariant() { local d="$RUNS/$1"; rm -rf "$d"; cp -R "$gsd" "$d"; rm -f "$d/run.
 gsvariant gs-moved-001; jq -c '(.nodes[] | select(.id == 4) | .pos) = [5000, 5000]' "$gsd/workflow.ui.json" > "$RUNS/gs-moved-001/workflow.ui.json"
 AG manifest --run "$RUNS/gs-moved-001" >/dev/null
 gsvariant gs-badjson-001; printf 'not json\n' > "$RUNS/gs-badjson-001/workflow.ui.json"; AG manifest --run "$RUNS/gs-badjson-001" >/dev/null
+gsvariant gs-noextra-001  # lost extra.assetgen and an unsuffixed SaveImage: still checked against the run's run_id
+jq -c 'del(.extra.assetgen) | (.nodes[] | select(.id == 6) | .widgets_values) = ["assetgen/gs-clean-001"]' "$gsd/workflow.ui.json" > "$RUNS/gs-noextra-001/workflow.ui.json"
+AG manifest --run "$RUNS/gs-noextra-001" >/dev/null
 variant qp-uitwin-001                                   # the same run twice: one keeps workflow.ui.json, one has none
 variant qp-noui-001; rm -f "$RUNS/qp-noui-001/workflow.ui.json"; AG manifest --run "$RUNS/qp-noui-001" >/dev/null
 # wired through the registry (artifact-quality --domain assetgen) on a small authoring repo: artifact-quality runs
@@ -2224,6 +2241,10 @@ case_ qp-icon-001 gen-run-workflow-style WARN 'group: node' "legacy-template ren
   || no "clean render workflow-style: $(st AGEN-gs-clean-001 gen-run-workflow-style)" "$(why AGEN-gs-clean-001 gen-run-workflow-style)"
 case_ gs-moved-001 gen-run-workflow-style WARN 'group: node 4 (ImageScale' "workflow.ui.json with a node moved outside every group on a proposed run: WARN naming the node, never FAIL"
 case_ gs-badjson-001 gen-run-workflow-style WARN 'workflow.ui.json is not readable JSON' "unreadable workflow.ui.json: WARN"
+case_ gs-noextra-001 gen-run-workflow-style WARN 'save-suffix: node 6 (SaveImage' "workflow.ui.json without extra.assetgen and an unsuffixed SaveImage: WARN, checked against the run's prefix"
+if why AGEN-gs-noextra-001 gen-run-workflow-style | grep -q 'run prefix is unknown'; then
+  no "gs-noextra-001: the quality check did not pass the run prefix" "$(why AGEN-gs-noextra-001 gen-run-workflow-style)"
+else ok "gen-run-workflow-style passes the run's prefix (no 'run prefix is unknown' without extra.assetgen)"; fi
 checks_of() { jq -r --arg a "AGEN-$1" '[.results[] | select(.artifact == $a) | .check + "=" + .state] | join(" ")' "$TMP/aq.json"; }
 twin=$(checks_of qp-uitwin-001); noui=$(checks_of qp-noui-001)
 [ "$(st AGEN-qp-uitwin-001 gen-run-workflow-style)" = WARN ] && [ -z "$(st AGEN-qp-noui-001 gen-run-workflow-style)" ] \
