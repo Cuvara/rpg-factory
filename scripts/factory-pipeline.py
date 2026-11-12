@@ -99,7 +99,9 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         branch in `git worktree list`, `--worktree path:<it>`), never a new one: no such worktree is an error (exit 1;
         run `--phase lead` first). implement: a sub-session that edits only the owned paths, or the subtask's --paths
         (inside them; it may then name its model with --agent), and does not commit. review/qa need --sha, the frozen
-        candidate the task lead keeps at HEAD, and are read-only; the reviewer is the implementer's pair (another
+        candidate the task lead keeps at HEAD, and are read-only. A stacked task's verify, review and qa dispatch exit 2
+        (nothing printed, recorded or launched) until its dependency has a current review PASS whose SHA is an ancestor
+        of --sha; the reason names the merge (git merge <dependency branch>, never rebase). The reviewer is the implementer's pair (another
         model) unless --agent overrides it; a reviewer runs no suites. Per-task qa runs in the task worktree (a
         no-worktree repo: main checkout); its spec names ONE tier command (registry pipeline.qa_tiers), never a full
         run: `tests/run-all.sh --affected --base <review base> [--only-suites <the checks' suites>] -j 2`. A check
@@ -138,6 +140,8 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         --failed-suites (qa FAIL only): comma-separated suites (names run-all --list-suites prints, or (tests|testlab|
         scripts)/ .sh or .py paths; never tests/run-all.sh), the next QA dispatch reruns them.
         Tier S lead QA: `--phase qa --state PASS --by <lead model> --note 'tier S: lead ran task suites'`.
+        A stacked task: a review or QA PASS (task or --subtask; verify through its review and QA) on a SHA that lacks
+        its dependency's current review PASS is refused (exit 2, nothing written); FAIL and the other states are recorded.
   gate <plan.json> [--allow-same-model] [--no-run-checks] [--json]
         READY_FOR_PR when every task is integrated, reviewed PASS by its paired model on a commit whose task
         paths did not change since (a path with the same content as at the reviewed commit, and the side commits of
@@ -149,7 +153,10 @@ and `known_failing` ([{check, reason}]: checks that already fail at the base; sp
         model) needs its own PASS review by its pair or a dispatch-recorded SAME_MODEL fallback review. A per-task
         QA PASS with a note starting 'tier S' (the lead's own run, no QA session) counts only for a tier-S task, one
         starting 'tier XS' only for a tier-XS task. A tier XS task: its lead QA on plan.topic stands in for the
-        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. With
+        integration QA, and a committed diff (start...reviewed SHA) above pipeline.tiers.XS is a blocker. A stacked
+        task whose review PASS lacks its dependency's review PASS, or that was integrated before or together with its
+        dependency (the order is: git merge --no-ff the dependency, then the task), is a blocker; a clean merge of the
+        dependency into the dependent is a sync merge and never makes the dependency's review STALE. With
         --no-run-checks the state is UNVERIFIED (no delivery commands).
         Then prints the push, `gh pr create`, and `gh pr checks <pr> --watch` commands (run them only when the user authorized
         `deliver: pr` in this task; merging stays with the user). Exit 0 READY, 1 not ready.
@@ -1391,6 +1398,36 @@ def stack_notes(plan, reg, info, task, row):
                                      else ["git", "merge", target])
 
 
+def stack_gate(plan, reg, info, task, sha):
+    """Why a stacked task may not be verified (or pass) at `sha`, or None: {dep, reason, merge}. A stacked task's
+    verify, review and QA dispatch and its review/QA PASS wait until its dependency D has a current review PASS whose
+    SHA X is an ancestor of `sha`; `merge` is what to merge to get there (D's branch when it contains X, else X), None
+    while D has no PASS. Not stacked (tier XS, a no-worktree repo, no stack record, or a record whose dependency is no
+    plan task): None. The task branch need not exist (the gate runs after it may be deleted)."""
+    path = info["path"]
+    if pr.xs_plan(plan, task) or not info["worktrees"] or not path:
+        return None
+    rec = stack_record(plan, task["id"])
+    if not rec or not plan_has_task(plan, rec.get("dep")):
+        return None
+    dep = rec["dep"]
+    full = git(path, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")[0] or sha
+    rv = verdict_of(plan, reg, dep, "review")[0]
+    if not rv or rv.get("state") != "PASS":
+        return {"dep": dep, "merge": None,
+                "reason": f"stacked on {dep}: {dep} has no current review PASS; verify waits until it passes and its "
+                          "PASS SHA is merged in"}
+    x = rv["sha"]
+    if is_ancestor(path, x, full):
+        return None
+    branch = rec.get("branch")
+    target = (branch if branch and git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0]
+              and is_ancestor(path, x, f"refs/heads/{branch}") else x)
+    return {"dep": dep, "merge": target,
+            "reason": f"stacked on {dep}: {dep}'s review PASS {x[:10]} is not in {full[:10]}: merge it "
+                      f"(git merge {target}, never rebase), then verify"}
+
+
 AGENT_FALLBACK = "claude"  # the Claude Code Agent tool starts Claude sessions only
 
 
@@ -2048,6 +2085,12 @@ def cmd_dispatch(a, reg):
         return 0
     if a.phase != "implement" and not a.sha:
         die(f"{a.phase} needs --sha <candidate commit>")
+    if a.phase in ("verify", "review", "qa"):
+        # a stacked task is verified only once its dependency's review PASS is in the candidate: nothing unverified
+        # reaches a PASS through the dependent
+        g = stack_gate(plan, reg, info, task, a.sha)
+        if g:
+            die(f"{a.phase} of {task['id']} at {a.sha[:10]}: {g['reason']}")
     paths = a.paths or ((sub or {}).get("paths") if sub else None)
     if paths:
         bad = [f"{p} {path_problem(p)}" for p in paths if path_problem(p)]
@@ -2491,6 +2534,10 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
     first-parent walk attributes on its own (direct topic commits and task merges), so
     counting it again on the task branch double-attributes it: only the sync merge's own
     conflict resolutions count, and a later task that owns them and depends on the task covers them.
+    The same holds for a merge from a dependency inside a task merge (a stacked task merging its dependency's branch):
+    a merge whose non-first parents are all ancestors of the walked topic merge's first parent brings in only what was
+    on the target before this task merge, so a clean merge of the dependency into the dependent never makes the
+    dependency's review STALE; a conflict resolution in the dependency's files still does.
     """
     info = repo_info(plan, reg, task["repo"])
     path = info["path"]
@@ -2600,7 +2647,8 @@ def _uncovered_changes(plan, reg, task, sha, target, checking, cache):
                     continue
                 cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
                 touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
-            elif len(ps) > 1 and all(q in topic_chain for q in ps[1:]):
+            elif len(ps) > 1 and (all(q in topic_chain for q in ps[1:])
+                                  or (len(parents) > 1 and all(is_ancestor(path, q, parents[0]) for q in ps[1:]))):
                 cc, rc = git(path, "diff-tree", "--cc", "--name-only", "--no-commit-id", "-r", commit, "--", *specs(task["paths"]))
                 touched = set(cc.splitlines()) if rc == 0 else set(task["paths"])
             else:
@@ -2711,6 +2759,11 @@ def cmd_verdict(a, reg):
     full, rc = git(repo_info(plan, reg, key)["path"] or ".", "rev-parse", "--verify", "--quiet", a.sha + "^{commit}")
     if rc != 0 or not full:
         die(f"--sha {a.sha} is not a commit of repo {key}")
+    if task is not None and a.phase in ("review", "qa") and a.state == "PASS":
+        # a stacked task: no PASS on a candidate without its dependency's review PASS (FAIL and the rest are recorded)
+        g = stack_gate(plan, reg, repo_info(plan, reg, key), task, full)
+        if g:
+            die(f"refused: {a.phase} PASS of {a.task} at {a.sha[:10]}: {g['reason']}")
     rec = {"plan": plan.get("id"), "task": a.task, "phase": a.phase, "sha": full, "by": a.by, "state": a.state,
            "fingerprint": scope_fingerprint(plan, reg, a.task),
            "report": os.path.abspath(a.report) if a.report else None,
@@ -2960,6 +3013,23 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
             blockers.append(f"{key}: QA {qa.get('state')} at {qa.get('sha', '')[:10]}")
         elif head != qa.get("sha"):
             blockers.append(f"{key}: QA is STALE (ran on {qa.get('sha', '')[:10]}, integration HEAD is {head[:10]})")
+    by_id = {t.get("id"): t for t in plan.get("tasks", [])}
+    chains = {}  # repo key -> the integration head's first-parent chain, oldest first
+
+    def merged_at(key, path, c):
+        """Position on the first-parent chain of the integration head of the oldest commit that contains c: containment
+        is monotonic along that chain, so a binary search finds it."""
+        if key not in chains:
+            chains[key] = (git(path, "rev-list", "--first-parent", "--reverse", heads[key])[0] or "").splitlines()
+        chain = chains[key]
+        lo, hi = 0, len(chain) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if is_ancestor(path, c, chain[mid]):
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
     for t in plan.get("tasks", []):
         key = t.get("repo")
         if key not in heads:
@@ -3016,10 +3086,29 @@ def gate(plan, reg, allow_same_model=False, run_checks=True):
                     blockers.append(f"{t['id']}: QA ran on {tq['sha'][:10]}, which does not contain the reviewed commit {rv['sha'][:10]}")
                 elif moved:
                     blockers.append(f"{t['id']}: QA is STALE - owned paths changed after {tq['sha'][:10]}")
+        # a stacked task (record of a dependency D in the same repo): its PASS must contain D's review PASS, and D is
+        # integrated first (git merge --no-ff D, then the task)
+        stk = (stack_record(plan, t["id"]) if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t)
+               else None)
+        dep = by_id.get(stk.get("dep")) if stk else None
+        if dep is not None and dep.get("repo") != key:
+            dep = None
+        dep_pass = None
+        if dep is not None:
+            drv = verdict_of(plan, reg, dep["id"], "review")[0]
+            dep_pass = drv["sha"] if drv and drv.get("state") == "PASS" else None
+            if not dep_pass or not is_ancestor(info["path"], dep_pass, rv["sha"]):
+                blockers.append(f"{t['id']}: stacked on {dep['id']}: review {rv['sha'][:10]} lacks {dep['id']}'s review "
+                                f"PASS {dep_pass[:10] if dep_pass else 'none'}: merge {task_branch(plan, info, dep)} into "
+                                f"{task_branch(plan, info, t)}, then verify again")
         _, rc = git(info["path"], "merge-base", "--is-ancestor", rv["sha"], heads[key])
         if rc != 0:
             blockers.append(f"{t['id']}: reviewed commit {rv['sha'][:10]} is not integrated into {plan['topic']}")
             continue
+        if dep is not None and (not dep_pass or not is_ancestor(info["path"], dep_pass, heads[key])
+                                or merged_at(key, info["path"], dep_pass) >= merged_at(key, info["path"], rv["sha"])):
+            blockers.append(f"{t['id']}: integrated before its dependency {dep['id']}: integrate {dep['id']} first "
+                            f"(git merge --no-ff {task_branch(plan, info, dep)}), then {t['id']}")
         changed = uncovered_changes(plan, reg, t, rv["sha"], heads[key], cache=coverage_cache)
         if changed:
             blockers.append(f"{t['id']}: review is STALE - owned paths changed after {rv['sha'][:10]}: "
@@ -4053,7 +4142,23 @@ def status(plan, reg, orca_run=None):
                 else:
                     row["next"] = f"{me} dispatch {pf} --task integration:{t['repo']} --phase qa --sha {topic_head} --runner orca"
         if row["phase"] in ("implementing", "candidate", "reviewed") and row["sha"]:
+            before = row["next"]
             stack_notes(plan, reg, info, t, row)  # stacked on D@X; D moved past HEAD: merge it as next
+            if row["phase"] == "candidate" and not pr.xs_plan(plan, t):
+                g = stack_gate(plan, reg, info, t, row["sha"])
+                if g:  # verify would exit 2: merge the dependency's PASS first, or wait for it
+                    row["notes"].append(f"verify waits: {g['reason']}")
+                    row["next"] = (orca_cmd.quote(["git", "-C", row["worktree"], "merge", g["merge"]] if row["worktree"]
+                                                  else ["git", "merge", g["merge"]]) if g["merge"] else None)
+            elif row["phase"] == "reviewed" and (row["review"] or {}).get("state") == "PASS":
+                stk = (stack_record(plan, t["id"]) if info["worktrees"] and info["path"] and not pr.xs_plan(plan, t)
+                       else None)
+                dep = stk.get("dep") if stk else None
+                if dep in rows and rows[dep]["phase"] not in done:
+                    row["notes"].append(f"integrate {dep} first (dependency first), then merge {row['branch']} with "
+                                        "git merge --no-ff")
+                    if row["next"] == before:  # keep a dependency merge stack_notes named; never the topic merge
+                        row["next"] = None
     # the gate needs the repo's integration QA PASS at the integration HEAD (also after per-task QA of a no-worktree
     # repo): until then the repo's tasks stay integrated and the next command is that QA. A no-worktree checkout is
     # one serial group across every plan alias of it: its integration QA waits until every task of the checkout

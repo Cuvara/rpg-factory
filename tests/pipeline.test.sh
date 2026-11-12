@@ -313,7 +313,7 @@ HEAD='"schema":"rpg-factory.pipeline-plan/1","id":"demo","title":"Demo change","
 # dir, so they run in the background, at most $PIPELINE_TEST_JOBS at once, while the linear scenario runs; each
 # section prints its results at its place, in the original order.
 ROUTING_CASES="model-composition kind-lead kind-plan kind-docs kind-policy kind-design kind-code kind-test kind-fix kind-refactor kind-generated overrides-and-qa availability-claude availability-codex marks-and-empty orca-no-auth orca-system-auth orca-account-auth orca-malformed orca-offline validation followup-validation followup-legacy followup-preview dispatch-claude dispatch-codex status-claude status-codex registry-defaults planned-warning subtask-kind no-probe kinds-single-list enum-copy-original enum-copy-subplan enum-copy-registry"
-MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree"
+MULTIWAVE_CASES="covered direct post-review outside-owner invalid-review missing-review evil-merge task-qa integration-qa report implementer override legacy-implementer serial-covered serial-missing-qa subtask-covered subtask-legacy subtask-direct subtask-post-review subtask-missing-review subtask-evil-merge subtask-same-task subtask-sibling-covered subtask-sibling-pre-start subtask-sibling-unknown-start subtask-sibling-post-review subtask-sibling-outside subtask-sibling-missing subtask-sibling-unpaired subtask-sibling-fingerprint repo-path stack-base stack-two-deps stack-one-integrated stack-xs stack-no-worktree stack-gate-dispatch stack-gate-order stack-gate-correct stack-gate-missing stack-sync-merge stack-sync-evil"
 cat > "$TMP/routing-cases.py" <<'ROUTING'
 import importlib.util, json, os, pathlib, sys
 from unittest.mock import patch
@@ -765,6 +765,138 @@ if case.startswith('stack-'):
             assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
         print(case + ' assertions passed')
         sys.exit(0)
+    if case.startswith(('stack-gate-', 'stack-sync-')):
+        # stacked dispatch, part 2: the stack gate keeps unverified dependency code out; a owns shared.txt, b owns b.txt
+        tb['paths'] = ['b.txt']; save()
+        def stacked_b(review_a):
+            """b's stack record on a (a candidate, or reviewed at a), then topic-b cut at a with b's own commit."""
+            if review_a:
+                verdict('a', 'review', a)
+            cli('dispatch', str(pf), '--task', 'b', '--phase', 'lead', '--runner', 'print')
+            rec = m.stack_record(plan, 'b')
+            assert rec and rec['dep'] == 'a' and rec['branch'] == 'topic-a' and rec['sha'] == a, rec
+            git('switch', '--no-track', '-c', 'topic-b', a)
+            return commit('b', 'b.txt')
+        def b_dispatch(phase, sha, rc=0):
+            return cli('dispatch', str(pf), '--task', 'b', '--phase', phase, '--sha', sha, '--runner', 'print', rc=rc)
+        def b_verdict(phase, sha, state='PASS', rc=0):
+            return cli('verdict', str(pf), '--task', 'b', '--phase', phase, '--sha', sha, '--by', 'claude',
+                       '--state', state, rc=rc)
+        def fix_a():
+            """a fixes shared.txt in a2 on topic-a and passes review there; back on topic-b."""
+            git('switch', 'topic-a')
+            a2 = commit('a2')
+            verdict('a', 'review', a2)
+            git('switch', 'topic-b')
+            return a2
+        def integrate(*branches):
+            git('switch', 'topic')
+            for branch in branches:
+                git('merge', '--no-ff', '-m', 'merge ' + branch, branch)
+            return git('rev-parse', 'HEAD')
+        def blockers():
+            return m.gate(plan, reg)['blockers']
+        if case == 'stack-gate-dispatch':
+            bh = stacked_b(False)
+            # a has no review: verify, review and QA of b wait, and a PASS of b is refused (a FAIL is not)
+            for phase in ('verify', 'review', 'qa'):
+                r = b_dispatch(phase, bh, rc=2)
+                assert 'has no current review PASS' in r.stderr and not r.stdout, (phase, r.stdout, r.stderr)
+            g = m.stack_gate(plan, reg, info, tb, bh)
+            assert g and g['dep'] == 'a' and g['merge'] is None and 'has no current review PASS' in g['reason'], g
+            row = status_row('b')
+            assert row['phase'] == 'candidate', row
+            assert any(n.startswith('verify waits:') and 'has no current review PASS' in n for n in row['notes']), row
+            assert row['next'] is None, row
+            for phase in ('review', 'qa'):
+                r = b_verdict(phase, bh, rc=2)
+                assert 'refused:' in r.stderr and 'has no current review PASS' in r.stderr, (phase, r.stderr)
+                assert m.verdict_of(plan, reg, 'b', phase)[0] is None, phase
+            b_verdict('review', bh, state='FAIL')
+            assert record('b', 'review')['state'] == 'FAIL' and record('b', 'review')['sha'] == bh
+            pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()  # back to an unreviewed candidate
+            # a passes review at a fix a2 that b's HEAD lacks: the gate names the merge of a's branch, never a rebase
+            a2 = fix_a()
+            r = b_dispatch('verify', bh, rc=2)
+            assert 'is not in' in r.stderr and 'git merge topic-a' in r.stderr and not r.stdout, (r.stdout, r.stderr)
+            g = m.stack_gate(plan, reg, info, tb, bh)
+            assert g and g['dep'] == 'a' and g['merge'] == 'topic-a' and a2[:10] in g['reason'], g
+            r = b_verdict('review', bh, rc=2)
+            assert 'refused:' in r.stderr and 'is not in' in r.stderr, r.stderr
+            assert m.verdict_of(plan, reg, 'b', 'review')[0] is None
+            row = status_row('b')
+            assert row['phase'] == 'candidate', row
+            assert any(n.startswith('verify waits:') and 'is not in' in n for n in row['notes']), row
+            assert row['next'] and 'merge' in row['next'] and 'topic-a' in row['next'], row
+            # after the merge of a's PASS into b, verify runs and b's review PASS is recorded
+            git('merge', '--no-ff', '-m', 'merge a', 'topic-a')
+            merged = git('rev-parse', 'HEAD')
+            assert m.stack_gate(plan, reg, info, tb, merged) is None
+            b_dispatch('verify', merged)
+            b_verdict('review', merged)
+            assert record('b', 'review')['state'] == 'PASS' and record('b', 'review')['sha'] == merged
+            assert not any(n.startswith('verify waits:') for n in status_row('b')['notes'])
+        elif case in ('stack-gate-order', 'stack-gate-correct'):
+            bh = stacked_b(True)
+            assert m.stack_gate(plan, reg, info, tb, bh) is None
+            b_verdict('review', bh)
+            # b reviewed while a is not integrated: the dependency integrates first
+            row = status_row('b')
+            assert row['phase'] == 'reviewed', row
+            assert any(n.startswith('integrate a first') and 'git merge --no-ff' in n for n in row['notes']), row
+            assert row['next'] is None, row
+            if case == 'stack-gate-order':
+                integrate('topic-b')  # the dependent first: it carries a in, unintegrated on its own
+                g = blockers()
+                assert any(x.startswith('b: integrated before its dependency a') for x in g), g
+            else:
+                integrate('topic-a', 'topic-b')
+                g = blockers()
+                assert not any('integrated before its dependency' in x or "lacks a's review PASS" in x for x in g), g
+                assert not any(x.startswith(('a: review is STALE', 'b: review is STALE')) for x in g), g
+        elif case == 'stack-gate-missing':
+            bh = stacked_b(True)
+            b_verdict('review', bh)
+            a2 = fix_a()  # a's current PASS moves to a2, which b's reviewed commit lacks
+            g = blockers()
+            assert any(x.startswith('b: stacked on a: review ' + bh[:10]) and "lacks a's review PASS" in x
+                       and a2[:10] in x for x in g), g
+        else:
+            # b syncs a's fix a2 into topic-b: a clean merge is a sync merge, a resolution in a's file is not
+            bh = stacked_b(False)
+            a2 = fix_a()
+            if case == 'stack-sync-merge':
+                git('merge', '--no-ff', '-m', 'sync a', 'topic-a')
+            else:
+                assert case == 'stack-sync-evil', case
+                git('merge', '--no-ff', '--no-commit', 'topic-a')
+                (repo / 'shared.txt').write_text('evil sync resolution')
+                git('add', 'shared.txt'); git('commit', '-qm', 'evil sync a')
+            sync = git('rev-parse', 'HEAD')
+            b_verdict('review', sync)
+            head = integrate('topic-a', 'topic-b')
+            g = blockers()
+            stale = [x for x in g if x.startswith('a: review is STALE')]
+            if case == 'stack-sync-merge':
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == []
+                assert not stale, g
+                # c (after b) edits a's file: the net diff since a2 is no longer empty, so only the sync-merge
+                # credit keeps the clean sync merge in topic-b (before c's start, b does not own shared.txt) off a
+                plan['tasks'].append({'id': 'c', 'repo': 'fixture', 'kind': 'code', 'objective': 'third',
+                                      'paths': ['shared.txt'], 'acceptance': ['reviewed'], 'deps': ['b']})
+                save()
+                git('switch', 'topic'); git('switch', '--no-track', '-c', 'topic-c')
+                c = commit('c')
+                verdict('c', 'review', c)
+                head = integrate('topic-c')
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == []
+                g = blockers()
+                assert not any(x.startswith('a: review is STALE') for x in g), g
+            else:
+                assert m.uncovered_changes(plan, reg, plan['tasks'][0], a2, head) == ['shared.txt']
+                assert stale and 'shared.txt' in stale[0], g
+        print(case + ' assertions passed')
+        sys.exit(0)
     assert case == 'stack-base', case
     # a is a candidate (no review): b is stackable on a's tip and its spec base is that tip
     assert m.stackable(plan, reg, info, tb) == {'dep': 'a', 'branch': 'topic-a', 'sha': a}
@@ -786,6 +918,7 @@ if case.startswith('stack-'):
     kept, stale = m.verdict_of(plan, reg, 'b', 'review')
     assert kept and kept['sha'] == a and stale is False, (kept, stale)
     pathlib.Path(m.verdict_file(plan, 'b', 'review')).unlink()  # b's own review comes later, at its own commit
+    verdict('a', 'review', a)  # the stack gate: b's verify and QA dispatch wait for a's review PASS in b's HEAD
     # a stand-in run-all (untracked, excluded) so verify prints the QA tier command with its --affected --base
     (repo / 'tests').mkdir()
     (repo / 'tests' / 'run-all.sh').write_text('case "$1" in --list-suites) printf "tests/x.test.sh\\n"; exit 0 ;; esac\n'
