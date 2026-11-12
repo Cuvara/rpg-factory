@@ -957,7 +957,7 @@ assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites 
 assert 'QA tier command:\ntests/run-all.sh --workspace-only' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'})
-assert 'CI green is the full-suite gate after the PR opens' in m.qa_body('x', lone, integration=True, runall=listed)
+assert 'CI runs the affected suites and ci-ok must be green before merging' in m.qa_body('x', lone, integration=True, runall=listed)
 handoff = io.StringIO()
 with contextlib.redirect_stdout(handoff):
     m.emit_lead_handoff(reg, 'claude', 'prompt', {'new': True, 'repo': 'path:' + str(repo),

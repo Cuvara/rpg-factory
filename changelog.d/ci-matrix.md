@@ -18,3 +18,6 @@
   `--only-suites` (a follow-up), so the planned cases are only shown in the job summary.
 - **Required check.** `ci-ok` is the single required check: branch protection must require only `ci-ok`. The old
   `run-all (no workspace, <os>)` checks no longer exist, and the per-suite job names change with every plan.
+- **QA policy wording.** `factory-pipeline.py` QA specs and the `qa_tiers` description follow the
+  affected-only CI: CI runs the affected suites per change, `ci-ok` must be green before merging, and
+  `workflow_dispatch` with `full=true` runs every suite.
