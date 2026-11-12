@@ -9,7 +9,7 @@
   "repos": {
     "plugin": {
       "path": "../..",
-      "base": "feat/assetgen/workflows"
+      "base": "feat/assetgen/hybrid"
     }
   },
   "tasks": [
