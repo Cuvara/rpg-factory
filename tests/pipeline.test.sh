@@ -629,13 +629,16 @@ if case == 'no-probe':
         if isinstance(args, (list, tuple)) and list(args[:1]) == ['orca']:
             started.append(args)
             return subprocess.CompletedProcess(args, 0, '{}')
+        if isinstance(args, (list, tuple)) and list(args[:1]) == ['codex']:
+            return subprocess.CompletedProcess(args, 1, '')
         return orig_run(args, *k, **kw)
     env = {k: v for k, v in os.environ.items() if k != 'RPG_FACTORY_AGENTS'}
     env['ORCA_WORKTREE_ID'] = 'fixture'
+    env['CODEX_HOME'] = tmp + '/no-probe-empty-codex-home'
     sub = {'schema': m.SUBPLAN_SCHEMA, 'plan': 'p', 'task': 't', 'subtasks': [
            {'id': 's', 'objective': 'x', 'paths': ['scripts/x'], 'kind': 'code'}]}
     with patch.dict(os.environ, env, clear=True), patch('subprocess.run', spy), \
-         patch('shutil.which', lambda n, *a, **k: '/fake' if n == 'orca' else orig_which(n, *a, **k)):
+         patch('shutil.which', lambda n, *a, **k: '/fake' if n in ('orca', 'codex') else orig_which(n, *a, **k)):
         m.validate(plan, reg)
         m.validate_subplan(sub, plan, reg)
         assert not started, started
