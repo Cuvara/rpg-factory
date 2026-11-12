@@ -5,12 +5,6 @@
   "topic": "plugin-release-fix",
   "tier": "S",
   "deliver": "pr",
-  "known_failing": [
-    {
-      "check": "tests/run-checks.test.sh",
-      "reason": "two Go-dependent fixtures (go-vet-integration, worktree path) need a runnable go; this host blocks go.exe by Application Control; fails here at main 60d726d"
-    }
-  ],
   "repos": {
     "plugin": {
       "path": "../..",
