@@ -276,11 +276,11 @@
       "id": "workflows-docs-eval",
       "repo": "plugin",
       "kind": "docs",
-      "objective": "Update docs/architecture/domains/assetgen.md (purposes and templates lists, the ui block, graph-lint, the node registry and nodesync, the style guide), scripts/README.md (new verbs), and evals/asset-gen-icon/criteria.md for the staged template and graph-lint step. State the limits: API and core image nodes only, no quality gain from extra nodes, PreviewImage behaviour as found in live-e2e or unverified.",
+      "objective": "Update docs/architecture/domains/assetgen.md (purposes and templates lists, the ui block, graph-lint, the node registry and nodesync, the style guide), scripts/README.md (new verbs), and evals/asset-gen-icon/graders/criteria.md for the staged template and graph-lint step. State the limits: API and core image nodes only, no quality gain from extra nodes, PreviewImage behaviour as found in live-e2e or unverified. Carry over from assetgen-v2-core (v2-core-docs could not own these): the eval criteria still say the images are checked with assetgen.py qa and require Claude's own image review; they must name finalize (after fetch_outputs), the budget check before run_workflow and the light review tier (icon, ui-element, texture-tileable: Claude's own review optional). In the domain doc, move the finalize bullet out of the record-field list and make the fringe repair say defringe --force then finalize, as the skills do.",
       "paths": [
         "docs/architecture/domains/assetgen.md",
         "scripts/README.md",
-        "evals/asset-gen-icon/criteria.md",
+        "evals/asset-gen-icon/graders/criteria.md",
         "changelog.d/assetgen-workflows-docs.md"
       ],
       "exclusions": [],
