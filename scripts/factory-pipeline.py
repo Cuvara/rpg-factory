@@ -1888,6 +1888,11 @@ def cmd_dispatch(a, reg):
                 if parent:
                     place["parent"] = parent
                     place["reason"] = f"beside the integration checkout {parent}"
+                else:
+                    print(f"factory-pipeline: Orca parent: no checkout has the topic branch {plan['topic']} checked "
+                          f"out, so the Orca parent of the new task worktree falls back to the main checkout "
+                          f"{info['path']}; set plan.topic to your own integration branch (or check "
+                          f"{plan['topic']} out) before dispatching", file=sys.stderr)
             where = "this task worktree"
         lead = model_roles["lead"][0]
         prompt = lead_prompt(plan, task, spec, info, impl, reviewer, where, a.report_to, a.policy, reg,
