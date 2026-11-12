@@ -957,7 +957,7 @@ assert 'QA tier command:\ntests/run-all.sh --affected --base main --only-suites 
 assert 'QA tier command:\ntests/run-all.sh --workspace-only' in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'gh pr checks' not in m.qa_body('x', lone, integration=True, runall=listed, tiers={})
 assert 'QA tier command:\ntests/run-all.sh --reuse -j 4' in m.qa_body('x', lone, integration=True, runall=listed, tiers={'integration': 'full'})
-assert 'CI green is the full-suite gate after the PR opens' in m.qa_body('x', lone, integration=True, runall=listed)
+assert 'CI runs the affected suites and ci-ok must be green before merging' in m.qa_body('x', lone, integration=True, runall=listed)
 handoff = io.StringIO()
 with contextlib.redirect_stdout(handoff):
     m.emit_lead_handoff(reg, 'claude', 'prompt', {'new': True, 'repo': 'path:' + str(repo),
@@ -2290,6 +2290,13 @@ git -C "$S" worktree remove "$TMP/demo-gw"; git -C "$S" branch -q -D feat/core/d
 expect "new task worktree without an integration checkout: git no-track" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree uses main checkout as parent" 0 "^orca worktree set .*--parent-worktree .*rpg-mmo-server.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --runner orca
 refute "new task worktree does not use Orca create" "orca worktree create" dispatch "$OK" --task gw --phase lead --runner orca
+# topic checked out nowhere: the Orca parent falls back to the main checkout, loudly (stderr only; stdout is unchanged)
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
+err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+if grep -q "^factory-pipeline: Orca parent: no checkout has the topic branch feat/core/demo checked out, .*falls back to the main checkout .*rpg-mmo-server; set plan.topic to your own integration branch" <<<"$err" \
+   && ! grep -q "Orca parent:" <<<"$out" && grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  topic not checked out: stderr hint names the main-checkout fallback, stdout has none and the parent is the main checkout"
+else fail=$((fail + 1)); echo "FAIL  topic not checked out: Orca parent hint"; head -5 <<<"$err"; fi
 expect "lead --placement child without integration checkout uses git" 0 "worktree add --no-track -b feat/core/demo-gw" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 # integration QA joins the checkout of plan.topic; without one it is an error and no worktree is created
 before=$(git -C "$S" worktree list --porcelain); out=$(python3 -B "$P" dispatch "$OK" --task integration:server --phase qa --sha abc1234 --runner orca 2>&1); rc=$?
@@ -2310,6 +2317,11 @@ expect "new task worktree beside integration checkout" 0 "^git -C .* worktree ad
 refute "new task worktree with an integration checkout has no --no-parent" "--no-parent" dispatch "$OK" --task gw --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement shared" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
 expect "lead --placement shared uses integration parent" 0 "^orca worktree set .*--parent-worktree .*demo-int.*--workspace-status in-progress" dispatch "$OK" --task gw --phase lead --placement shared --runner orca
+out=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>/dev/null)
+err=$(python3 -B "$P" dispatch "$OK" --task gw --phase lead --runner orca 2>&1 >/dev/null)
+if ! grep -q "Orca parent:" <<<"$err" && grep -Eq -- "--parent-worktree '?path:[^' ]*demo-int'? " <<<"$out" && ! grep -Eq -- "--parent-worktree '?path:[^' ]*rpg-mmo-server'? " <<<"$out"; then
+  pass=$((pass + 1)); echo "PASS  topic checked out: no Orca parent hint and the parent is the integration checkout"
+else fail=$((fail + 1)); echo "FAIL  topic checked out: Orca parent hint"; head -5 <<<"$err"; fi
 refute "lead prints no orca worktree create beside the integration checkout (any placement)" "orca worktree create" dispatch "$OK" --task gw --phase lead --placement child --runner orca
 refute "no-worktree repo (Unity project): no worktree add and no orca worktree set" "worktree add|worktree set" dispatch "$OK" --task c1 --phase lead --runner orca
 expect "new task worktree beside integration checkout --placement child" 0 "^git -C .* worktree add --no-track -b feat/core/demo-gw .*feat-core-demo-gw'? develop" dispatch "$OK" --task gw --phase lead --placement child --runner orca

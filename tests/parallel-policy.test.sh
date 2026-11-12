@@ -466,7 +466,7 @@ else:
         "Verify, once per candidate": ("diff review first", "--affected", "never a full run"),
         "Re-verify after a FAIL": ("only the failed suites", "--failed-at qa", "plus `--affected", "previous FAIL candidate", "--failed-at review"),
         "Tier S or prose-only task (every owned path a .md file, under changelog.d/ or a skills/ directory)": ("task lead", "after the review PASS", "no QA session", "tier S only"),
-        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green is the full gate", "ci+workspace"),
+        "Integration QA, once per batch before the PR": ("--workspace-only", "gh pr checks", "CI green (ci-ok) is the merge gate", "ci+workspace"),
         "Release": ("--release", "dogfood.sh --installed"),
     }
     for label, phrases in required.items():
@@ -530,7 +530,7 @@ q_mutate "QA tiers integration row back to a full local run" "qa-tiers row chang
 q_mutate "QA tiers integration row drops the CI watch" "qa-tiers row changed: Integration QA, once per batch before the PR" \
   'sed -i "/^| Integration QA,/s/gh pr checks/gh pr view/" "$F"'
 q_mutate "QA tiers integration row drops the CI gate statement" "qa-tiers row changed: Integration QA, once per batch before the PR" \
-  'sed -i "/^| Integration QA,/s/CI green is the full gate/a green CI helps/" "$F"'
+  'sed -i "/^| Integration QA,/s/CI green (ci-ok) is the merge gate/a green CI helps/" "$F"'
 q_mutate "QA tiers section 10 heading renamed" "section 10 missing" \
   'sed -i "s/^## 10\. /## Ten. /" "$F"'
 q_mutate "QA tiers table copied into a skill" "qa-tiers table copied outside" \

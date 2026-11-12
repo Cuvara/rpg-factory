@@ -29,9 +29,10 @@ Architecture and layout: `docs/architecture/overview.md`. Release procedure: `do
 - QA: while iterating and in task QA run the tier command (`tests/run-all.sh --affected --base <base> -j 2`, or
   `--only-suites`); a task never runs the full suite. Implementers run no suites (syntax check only); one verify
   session per task runs review, then the tier command once (`--case` in a slow suite, `tests/affected.py cases`).
-  CI is the full-suite gate (`--no-workspace --no-claude` only): before a PR, integration QA runs
-  `tests/run-all.sh --workspace-only` with 0 failed; CI (`gh pr checks <pr> --watch`) must be green before merging,
-  and while it runs start the next task. Full `--release` and `tests/dogfood.sh --installed` run only for releases.
+  CI runs only the suites a change affects (`scripts/ci-plan.py`, one matrix job per suite,
+  `--no-workspace --no-claude`) and every suite through `workflow_dispatch` with `full=true`; `ci-ok` is the single
+  required check. Before a PR, integration QA runs `tests/run-all.sh --workspace-only` with 0 failed; CI
+  (`gh pr checks <pr> --watch`) must be green before merging, and while it runs start the next task. Full `--release` and `tests/dogfood.sh --installed` run only for releases.
   Report the pass count. Tiers: `delivery.md` section 10 "QA tiers"; tier S and docs-only tasks get lead QA.
 - English only. Conventional Commits (`feat(core): ...`, `fix(guard): ...`, `docs(registry): ...`).
 - Skills follow `skills/factory-core/references/skill-contract.md` (`tests/skills-lint.sh` enforces the mechanical
@@ -66,6 +67,7 @@ Each lesson names its reason. Delivery-flow lessons (Orca, Codex, sessions, load
 - **Targeted runs take a test slot** (`RPG_FACTORY_TEST_SLOTS`, default 2, machine-wide): a busy machine waits instead of slowing every suite 2-4x. The slot belongs to the run, not the session: stop a QA worker's background run before abandoning it (an abort once held a slot 45 min). Frozen suite copies go under a temp dir, never into `tests/`.
 - **Task worktrees must be visible in Orca** (maintainer, 2026-11-09): a `git worktree add --no-track` worktree has no Orca lineage and lands in the hidden section. Run `orca worktree set --worktree path:<dir> --parent-worktree path:<parent> --display-name <topic>-<task> --workspace-status in-progress` before `orca agent launch` (`delivery.md` section 4 "Orca visibility"). Never `orca worktree create` for lineage: it writes `branch.<name>.base` into the shared `.git/config`. When `orca repo list --json` shows `externalWorktreeVisibility` `hide` for the repo (the default here; maintainer, 2026-11-10: worktrees landed in "Hidden worktrees" even with lineage set), first run `orca repo set --repo path:<repo> --external-worktree-visibility show`, before the worktree add (`dispatch --phase lead` prints it).
 - **Completion must be visible in `factory-pipeline.py status`, not only in messages:** a waiter filter that omits the sender's type silently drops its messages (plugin-flow-4: both task-lead "task done" reports went unseen for ~7 h while the run lead sat idle). A task lead records `factory-pipeline.py report` before it sends the status message, and the run lead polls `status <plan>` (`delivery.md` section 8 "Session lifecycle").
+- **Branch protection requires only `ci-ok`:** the suite matrix is built per change by `scripts/ci-plan.py`, so its job names (`suite <path> (<os>)`) differ per run and a skipped matrix reports no check; a required check must exist on every run, and only `ci-ok` does (it fails on any failed or cancelled job). The old `run-all (no workspace, <os>)` checks no longer exist.
 - **On Windows `chmod +x` does not set git's executable bit:** use `git update-index --chmod=+x <file>`, or the script is committed as 100644 and fails on Linux CI.
 - **Quote shell examples in messages in single quotes, or put them in a file:** backticks inside a double-quoted argument (an `orca orchestration send --body`) are command substitution and the message loses the example.
 - **Never stop a process by pattern (`pkill -f <name>`):** a worker that did so to stop its own duplicate skills-lint run may have killed other sessions' runs; stop only the PID you started.
