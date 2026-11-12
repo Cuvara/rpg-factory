@@ -23,8 +23,12 @@ A gen-run is <authoring>/assetgen/runs/<run_id>/run.md, written by scripts/asset
                        Claude's own visual review, review-image-claude.json (same schema and binding as the image
                        review, by claude), recorded as spec.claude_image_review. It never replaces the independent
                        image review and never grades PASS for it. run.md must equal the file (else FAIL: re-run
-                       manifest); a missing, invalid, unbound or stale file, or a reviewer other than claude, is a
-                       WARN; a FAIL verdict is missing work (the agent regenerates or the run stays draft).
+                       manifest); an invalid, unbound or stale file, or a reviewer other than claude, is a WARN; a
+                       FAIL verdict is missing work (the agent regenerates or the run stays draft). A missing file is
+                       a WARN only in the full review tier: review_tier computes the tier at check time from
+                       scripts/assetgen/data/review-tiers.json (light purposes icon, ui-element, texture-tileable; any
+                       other purpose is full; a run with selected style-lock anchors is always full) and never records
+                       it. In the light tier a missing file grades PASS; a present file is graded as in the full tier.
   gen-run-qa           qa.json is the evidence: it hashed the recorded output bytes, run.md's qa equals its state and
                        results (else FAIL: re-run manifest), its state is PASS, and every recorded output has a PASS
                        row for each check the purpose requires (runfiles.required_checks of the run's spec.json
@@ -75,7 +79,9 @@ LENIENT = {"draft", "rejected", "blocked", "superseded", "deprecated"}
 FALLBACK = "SAME_MODEL:"
 REVIEW_FILES = {"prompt": "review-prompt.json", "image": "review-image.json"}
 CLAUDE_REVIEW = "review-image-claude.json"
+REVIEW_TIERS = ROOT / "scripts" / "assetgen" / "data" / "review-tiers.json"
 _engine = {}
+_review_tiers = []
 
 
 def engine(name):
@@ -99,6 +105,34 @@ def engine(name):
             spec.loader.exec_module(module)
         _engine[name] = module
     return _engine[name]
+
+
+def review_tiers():
+    """data/review-tiers.json, loaded once; None when it is unreadable or not JSON (every run is then full)."""
+    if not _review_tiers:
+        try:
+            _review_tiers.append(json.loads(REVIEW_TIERS.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            _review_tiers.append(None)
+    return _review_tiers[0]
+
+
+def review_tier(spec, table=None):
+    """The review tier of a run, "light" or "full", computed at check time and never recorded: a run with selected
+    style-lock anchors is full; else the tier table[purposes][spec.purpose.id] (table defaults to
+    data/review-tiers.json). Anything other than "light" (unknown or missing purpose, malformed table) is full."""
+    try:
+        if not isinstance(spec, dict) or engine("runfiles").style_lock_references(spec):
+            return "full"
+        table = review_tiers() if table is None else table
+        purpose = spec.get("purpose")
+        pid = purpose.get("id") if isinstance(purpose, dict) else None
+        tiers = table.get("purposes") if isinstance(table, dict) else None
+        if isinstance(pid, str) and isinstance(tiers, dict) and tiers.get(pid) == "light":
+            return "light"
+    except Exception:
+        pass
+    return "full"
 
 
 def layers():
@@ -239,8 +273,9 @@ def check(artifact, ctx):
     rv = spec.get("claude_image_review") if isinstance(spec.get("claude_image_review"), dict) else None
     rf = resolve(CLAUDE_REVIEW)
     if rf is None or not rf.is_file():
-        warns.append("%s is missing: record Claude's own visual review (review schema, by claude, the binding of "
-                     "review-cmd --phase image --json), then assetgen.py manifest" % CLAUDE_REVIEW)
+        if review_tier(spec) != "light":  # light tier: Claude's own review is optional, a present file is still graded
+            warns.append("%s is missing: record Claude's own visual review (review schema, by claude, the binding of "
+                         "review-cmd --phase image --json), then assetgen.py manifest" % CLAUDE_REVIEW)
         if rv is not None and rv.get("state") not in (None, "NOT_RUN"):
             fails.append("run.md claude_image_review is %s but %s is missing; re-run assetgen.py manifest"
                          % (rv.get("state"), CLAUDE_REVIEW))

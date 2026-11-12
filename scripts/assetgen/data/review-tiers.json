@@ -1,0 +1,10 @@
+{
+  "schema": "rpg-factory.assetgen-review-tiers/1",
+  "note": "light: Claude's own visual review (review-image-claude.json) is optional, but a present file is still validated; full: today's behaviour, a missing file is a WARN. Any purpose not listed is full, a run with selected style-lock anchors is always full, and the Codex prompt and image reviews are required in every tier.",
+  "default": "full",
+  "purposes": {
+    "icon": "light",
+    "ui-element": "light",
+    "texture-tileable": "light"
+  }
+}
