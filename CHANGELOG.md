@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-11-12
+
+asset-gen now loads the comfyui skill in every mode, which fixes the dogfood scenario that failed since 1.7.0. 1.9.0 and 1.9.1 were merged but not tagged (their release gates failed on issues fixed since); 1.9.2 includes everything in them.
+
+### Fixed
+
+- **asset-gen loads comfyui in every mode.** The skill told the session to invoke `rpg-factory:comfyui` only in step 1 of
+  its workflow, so a `plan` or `analyze` task (and the dogfood scenario `asset-gen`, which failed with "expected comfyui
+  not invoked" since 1.7.0) answered without it. The prerequisite block now asks for it first, in every mode.
+
 ## [1.9.1] - 2026-11-12
 
 Fixes the 1.9.0 release gate on Windows hosts: quoted skill frontmatter and CRLF-safe checks. 1.9.0 was merged but never tagged, because its release gate failed on these issues; 1.9.1 is the first tagged release since 1.8.0 and includes everything in 1.9.0.
