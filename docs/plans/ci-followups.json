@@ -1,0 +1,115 @@
+{
+  "schema": "rpg-factory.pipeline-plan/1",
+  "id": "ci-followups",
+  "title": "Follow-ups of ci-matrix: CI case subsets, dispatch base input, pipeline gate and worker environment, orca-wait stall",
+  "topic": "ci-followups",
+  "deliver": "pr",
+  "repos": {
+    "plugin": {
+      "path": "../..",
+      "base": "main"
+    }
+  },
+  "tasks": [
+    {
+      "id": "ci-cases",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Plan ci-matrix follow-ups 1 and 2 (docs/plans/ci-matrix/report.md 'Follow-ups'). (1) The CI suite job runs every case of a selected suite because 'tests/run-all.sh --only-suites' has no case subset; scripts/ci-plan.py already plans 'cases' (ALL or a comma list from tests/affected.py). Add a run-all option that gives one --only-suites suite a case subset (for example '--only-cases A,B', valid only with exactly one --only-suites name and a suite that has a case map; it passes --case A,B to that suite exactly as --affected does today; ALL or an empty value runs every case), reuse the existing --case plumbing of the affected path, and keep the rule that case subsets never publish suite PASS records. Pass the planned cases from .github/workflows/tests.yml (only when not ALL) and drop the comment that says the subset is ignored. (2) workflow_dispatch full=false has no base, so it plans every suite: add a 'base' input (a ref or sha, default empty) used when full is false, with ci-plan.py's existing fail-safe (no or unusable base plans every suite). Tests: tests/run-all-parallel.test.sh cases for the new option (subset reaches the suite as --case, ALL runs all, misuse exits 2, no PASS record for a subset); tests/ci-plan.test.sh only if ci-plan.py changes. Update tests/README.md (CI section, the option) and add changelog.d/ci-cases.md (### Changed).",
+      "paths": [
+        "tests/run-all.sh",
+        "tests/run-all-parallel.test.sh",
+        ".github/workflows/tests.yml",
+        "scripts/ci-plan.py",
+        "tests/ci-plan.test.sh",
+        "tests/README.md",
+        "changelog.d/ci-cases.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/run-all-parallel.test.sh",
+        "tests/ci-plan.test.sh",
+        "tests/affected.test.sh"
+      ],
+      "acceptance": [
+        "a suite with a case map runs only the planned cases in CI, and ALL runs every case",
+        "workflow_dispatch full=false with a base plans only the affected suites",
+        "case subsets publish no suite PASS record"
+      ]
+    },
+    {
+      "id": "pipeline-followups",
+      "repo": "plugin",
+      "kind": "code",
+      "objective": "Plan ci-matrix follow-ups 3, 5, 6 and 8 (docs/plans/ci-matrix/report.md 'Follow-ups'), all in scripts/factory-pipeline.py and tests/pipeline.test.sh. (3) tests/pipeline.test.sh asserts only the integration QA clause of the CI wording; add an assertion for the task QA clause the verify and QA specs print. (5) Worker sessions on Windows failed live suites because RPG_FACTORY_WORKSPACE was unset in the worker: when the run lead's environment sets RPG_FACTORY_WORKSPACE, the dispatched implement, verify and QA specs carry it as an instruction to set it for every test run (no change when it is unset). (6) pp_spec in tests/pipeline.test.sh shlex-splits combined stdout and stderr, so any quote character in a dispatch stderr line breaks it: make pp_spec parse only the command line it needs (the orca or agent line) so stderr text cannot break it, and keep the existing cases green. (8) delivery.md section 8 says follow-ups go to docs/plans/backlog.md in the integration commit, but gate counts a run lead's backlog.md change as outside every task's owned paths: treat docs/plans/backlog.md like the plan file and its report.md (never stray) and cover it with a gate case. Changelog fragment changelog.d/pipeline-followups.md (### Fixed).",
+      "paths": [
+        "scripts/factory-pipeline.py",
+        "tests/pipeline.test.sh",
+        "changelog.d/pipeline-followups.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/pipeline.test.sh",
+        "tests/delivery-generic.test.sh"
+      ],
+      "acceptance": [
+        "gate does not block a run lead's docs/plans/backlog.md change",
+        "a dispatch stderr line with a quote character no longer breaks pp_spec",
+        "specs carry RPG_FACTORY_WORKSPACE when the run lead has it set",
+        "pipeline.test.sh asserts both CI clauses"
+      ]
+    },
+    {
+      "id": "orca-wait-stall",
+      "repo": "plugin",
+      "kind": "code",
+      "grade": "light",
+      "grade_reason": "one option's zero value in one script plus its test case",
+      "objective": "Plan ci-matrix follow-up 7: scripts/orca-wait.sh --stall-ms 0 reports an immediate stall instead of disabling the stall check. Make 0 disable it (as --stall-poll-ms 0 presumably does; check), state that in the usage line, add a case to tests/orca-wait.test.sh, and add changelog.d/orca-wait-stall.md (### Fixed).",
+      "paths": [
+        "scripts/orca-wait.sh",
+        "tests/orca-wait.test.sh",
+        "changelog.d/orca-wait-stall.md"
+      ],
+      "exclusions": [],
+      "deps": [],
+      "checks": [
+        "tests/orca-wait.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "--stall-ms 0 never reports a stall",
+        "orca-wait.test.sh has a case for it"
+      ]
+    },
+    {
+      "id": "followups-docs",
+      "repo": "plugin",
+      "kind": "docs",
+      "grade": "light",
+      "grade_reason": "prose updates in three files after the follow-ups landed",
+      "objective": "After this plan's tasks landed: (1) the unreleased fragment changelog.d/ci-matrix.md still says the CI suite job runs every case of a suite and that workflow_dispatch full=false has no base (around lines 15-18); remove or reword those limitations so the release notes do not contradict changelog.d/ci-cases.md. (2) docs/plans/ci-matrix/report.md section 'Follow-ups': mark items 1 (case subsets), 2 (full=false base), 3 (task QA clause test), 5 (workspace variable, python3 shim still manual), 6 (pp_spec) and 7 (orca-wait --stall-ms 0) and the gate/backlog item as covered by plan ci-followups, keeping item 4 (delivery.md size cap) and the python3 shim open. (3) Add a backlog topic 'ci-matrix-followups' to docs/plans/backlog.md (Open section) holding only what stays open: delivery.md size cap, python3 shim note on Windows workers, and the free-form session notes gap in dispatch. (4) tests/README.md lists routing.test.sh as taking --case although it has no case map; fix that line.",
+      "paths": [
+        "changelog.d/ci-matrix.md",
+        "docs/plans/ci-matrix/report.md",
+        "docs/plans/backlog.md",
+        "tests/README.md"
+      ],
+      "exclusions": [],
+      "deps": [
+        "ci-cases"
+      ],
+      "checks": [
+        "tests/changelog.test.sh",
+        "tests/parallel-policy.test.sh"
+      ],
+      "acceptance": [
+        "changelog.py check passes",
+        "no fragment states a limitation this plan removed"
+      ],
+      "implementer": "claude"
+    }
+  ]
+}
