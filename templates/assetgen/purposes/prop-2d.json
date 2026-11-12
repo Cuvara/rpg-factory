@@ -3,7 +3,7 @@
  "title": "2D prop or item",
  "description": "A single game item or prop as a clean 2D cut-out on a transparent background, for inventory, pickups and scene dressing.",
  "handoff_domain": "art2d",
- "default_template": "image-generate",
+ "default_template": "staged-icon",
  "default_family": "props",
  "dimensions": [
   "palette",
